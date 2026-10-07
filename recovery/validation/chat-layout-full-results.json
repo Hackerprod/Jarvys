@@ -1,0 +1,70 @@
+{
+  "command_log": "chat-layout-focused-full-rerun.log",
+  "suite": [
+    {
+      "name": "com.jarvys.agent.ui.shell.ChatLayoutRecoveryTest",
+      "tests": "6",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0",
+      "timestamp": "2026-10-07T23:11:38.580Z"
+    },
+    {
+      "name": "com.jarvys.agent.ui.shell.JarvysShellFrameUx3Test",
+      "tests": "2",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0",
+      "timestamp": "2026-10-07T23:11:46.891Z"
+    },
+    {
+      "name": "com.jarvys.agent.ui.chat.ChatComposerUx3Test",
+      "tests": "1",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0",
+      "timestamp": "2026-10-07T23:11:50.530Z"
+    },
+    {
+      "name": "com.jarvys.agent.ui.chat.ComposerModelRecoveryTest",
+      "tests": "2",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0",
+      "timestamp": "2026-10-07T23:11:50.749Z"
+    },
+    {
+      "name": "com.jarvys.agent.ChatMessageListComposeTest",
+      "tests": "6",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0",
+      "timestamp": "2026-10-07T23:11:49.649Z"
+    },
+    {
+      "name": "com.jarvys.agent.ChatScrollPolicyTest",
+      "tests": "4",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0",
+      "timestamp": "2026-10-07T23:11:50.105Z"
+    },
+    {
+      "name": "com.jarvys.agent.ui.RouteTopBarResponsiveTest",
+      "tests": "2",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0",
+      "timestamp": "2026-10-07T23:11:50.206Z"
+    },
+    {
+      "name": "com.jarvys.agent.MessageReactionSubmissionTest",
+      "tests": "1",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0",
+      "timestamp": "2026-10-07T23:11:50.112Z"
+    }
+  ],
+  "verification": "Robolectric API34 native rendering and physical pointer events; IME WindowInsetsCompat injected into real Compose host. Not a physical OEM keyboard test."
+}

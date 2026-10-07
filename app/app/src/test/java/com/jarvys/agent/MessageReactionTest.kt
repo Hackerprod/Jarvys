@@ -165,6 +165,21 @@ class MessageReactionTest {
         assertFalse(tool.execute(args(first, "👍"), token).success)
     }
 
+    @Test fun failedInitialProviderRequestRetainsTargetAndSuccessfulContinuationCannotReExposeIt() {
+        val id = store.appendConversationMessage(session, "user", "Continue.")
+        val tool = MessageReactionTool(store, session)
+        val firstAttempt = tool.prepareModelMetadata(emptyList(), "Continue.")
+        assertTrue(firstAttempt.contains(id))
+        assertEquals(firstAttempt, tool.prepareModelMetadata(emptyList(), "Continue."))
+        tool.modelRequestCompleted()
+        val afterCompaction = tool.prepareModelMetadata(listOf(ConversationTurn.compactionSummary("past", 1)), "Continue.")
+        assertFalse(afterCompaction.contains(id))
+        assertFalse(tool.execute(args(id, "👍"), token).success)
+        val restored = tool.prepareModelMetadata(listOf(ConversationTurn("user", "Continue.", 0)), "Continue.")
+        assertTrue(restored.contains(id))
+        assertFalse(restored.contains("separate from the transcript"))
+    }
+
     @Test fun repeatedEqualTextUsesDifferentStableIdsAndCompactionDoesNotRenumber() {
         val first = store.appendConversationMessage(session, "user", "same")
         store.appendConversationMessage(session, "assistant", "answer")
@@ -253,6 +268,13 @@ class MessageReactionTest {
         val tool = MessageReactionTool(store, session)
         val compactor = ConversationCompactor(session, null, store)
         var calls = 0
+        val toolStages = mutableListOf<String>()
+        val listener = object : CoreAgentLoop.ProgressListener {
+            override fun onProgress(node: String, message: String) = Unit
+            override fun onToolProgress(stage: String, callId: String, displayName: String, detail: String?, previewId: String?, reflectionSource: String?, auditDetail: String?) {
+                toolStages.add(stage)
+            }
+        }
         val model = object : CoreAgentLoop.Model {
             override fun complete(transcript: List<ConversationTurn>, prompt: String, tools: List<ToolSpec>, runToken: CancellationToken): ModelReply {
                 calls++
@@ -266,9 +288,51 @@ class MessageReactionTest {
             }
         }
         val result = CoreAgentLoop(model, CoreToolRegistry(listOf(tool)), MessageReactionTool.GUIDANCE,
-            session, CorePromptBudget.standard(), compactor).run("Great news", emptyList(), token, null)
+            session, CorePromptBudget.standard(), compactor).run("Great news", emptyList(), token, listener)
         assertEquals(2, calls)
+        assertTrue("Successful reactions have no duplicate activity rows", toolStages.isEmpty())
         assertTrue(result.text.contains("Here is the answer"))
         assertEquals(1, store.conversationMessageCount(session))
     }
+    @Test fun failedReactionStillEmitsVisibleErrorThroughRealLoopListener() {
+        store.appendConversationMessage(session, "user", "hello")
+        val tool = tool()
+        val stages = mutableListOf<String>()
+        var calls = 0
+        val model = object : CoreAgentLoop.Model {
+            override fun complete(transcript: List<ConversationTurn>, prompt: String, tools: List<ToolSpec>, runToken: CancellationToken): ModelReply {
+                calls++
+                return if (calls == 1) ModelReply("", listOf(ModelReply.Call("bad-reaction", MessageReactionTool.NAME, args("foreign", "👍"))))
+                else ModelReply("Could not react; here is your answer.", emptyList())
+            }
+        }
+        val listener = object : CoreAgentLoop.ProgressListener {
+            override fun onProgress(node: String, message: String) = Unit
+            override fun onToolProgress(stage: String, callId: String, displayName: String, detail: String?, previewId: String?, reflectionSource: String?, auditDetail: String?) { stages.add(stage) }
+        }
+        CoreAgentLoop(model, CoreToolRegistry(listOf(tool)), "system", session).run("hello", emptyList(), token, listener)
+        assertEquals(listOf("tool_error"), stages)
+        assertEquals("", store.readConversationTimeline(session).single().reactionEmoji)
+    }
+
+    @Test fun duplicateAcrossUserAndAssistantIdsIsNotExposed() {
+        val id = store.appendConversationMessage(session, "user", "hello")
+        ledger().appendText(JSONObject().put("role", "assistant").put("content", "answer").put("messageId", id).toString() + "\n")
+        val tool = MessageReactionTool(store, session)
+        assertFalse(tool.prepareModelMetadata(store.loadConversationContext(session), "hello").contains(id))
+        assertFalse(tool.execute(args(id, "👍"), token).success)
+    }
+
+    @Test fun specialChatAndProactiveThreadRowsKeepLegacyIdentityAndCannotReact() {
+        listOf("jarvys-proactive", "jarvys-tasks").forEach { id ->
+            File(root, "jarvys/conversations/$id.jsonl").writeText("""{"role":"user","content":"legacy","timestamp":1}
+""")
+            assertEquals("", store.readConversationTimeline(id).single().messageId)
+        }
+        ledger().writeText("""{"role":"user","content":"legacy","timestamp":1,"proactiveThreadKey":"thread"}
+""")
+        assertEquals("", store.readConversationTimeline(session).single().messageId)
+        assertFalse(tool().prepareModelMetadata(store.loadConversationContext(session), "legacy").contains("legacy-"))
+    }
+
 }

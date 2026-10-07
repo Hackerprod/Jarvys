@@ -1,6 +1,9 @@
 package com.jarvys.agent
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -34,6 +37,9 @@ import kotlinx.coroutines.launch
 /** Measured full overlay height of the floating chat composer, including system-bar padding. */
 val LocalChatComposerInset = compositionLocalOf { 0.dp }
 
+/** Header overlays history while this inset keeps the oldest item below its controls. */
+val LocalChatHeaderInset = compositionLocalOf { 0.dp }
+
 /** Reverse-layout conversation timeline: item zero is the stable bottom/tail anchor. */
 @Composable
 internal fun <T> ChatMessageList(
@@ -44,6 +50,7 @@ internal fun <T> ChatMessageList(
     isUserMessage: (T) -> Boolean,
     modifier: Modifier = Modifier,
     composerInset: Dp = LocalChatComposerInset.current,
+    headerInset: Dp = LocalChatHeaderInset.current,
     listState: LazyListState = rememberLazyListState(),
     targetMessage: (T) -> Boolean = { false },
     itemContent: @Composable (T) -> Unit,
@@ -93,7 +100,7 @@ internal fun <T> ChatMessageList(
             state = listState,
             reverseLayout = true,
             modifier = Modifier.fillMaxSize().testTag("chat-message-list"),
-            contentPadding = PaddingValues(start = 18.dp, top = 18.dp, end = 18.dp,
+            contentPadding = PaddingValues(start = 18.dp, top = 18.dp + headerInset, end = 18.dp,
                 bottom = 18.dp + composerInset),
             verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.Top),
         ) {
@@ -109,9 +116,11 @@ internal fun <T> ChatMessageList(
                 followingBeforeDataChange = decision.followEnd
                 coroutineScope.launch { listState.animateScrollToItem(0) }
             },
-            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = composerInset + 14.dp)
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = composerInset + 12.dp)
+                .size(48.dp).border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
                 .testTag("chat-jump-to-end"),
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            shape = CircleShape,
+            containerColor = MaterialTheme.colorScheme.surface,
             contentColor = MaterialTheme.colorScheme.onSurface,
         ) {
             Icon(LucideIcons.ChevronDown, contentDescription = stringResource(R.string.chat_scroll_to_latest))
