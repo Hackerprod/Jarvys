@@ -24,6 +24,10 @@ No se incluyen APK, dependencias descompiladas, claves, tokens ni datos privados
 - En curso: proyectos de programación y diarios; perfiles/checkpoints Crew; adjuntos e imágenes; integración de runtime y UI.
 - Pendiente: compilación completa, pruebas y verificación funcional de la aplicación reconstruida.
 
+## Desarrollo sin firma
+
+Durante la recuperación se usa `cd app && ./build_apk.sh --unsigned`. El parámetro Gradle `-PunsignedBuild=true` elimina la configuración de firma de ambos sabores debug. Los resultados llevan sufijo `-unsigned.apk` y no se deben instalar como actualización de la app existente. La ruta se ha validado por sintaxis; la primera compilación completa sigue pendiente de la integración.
+
 ## Firma y pruebas
 
 La clave privada original no está en el APK. No se generará una nueva ni se sustituirá la app instalada durante la recuperación. La compilación y las pruebas de fuentes pueden ejecutarse sin firmar un APK. Un paquete firmado con otra clave no puede actualizar directamente la instalación anterior.
