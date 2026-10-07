@@ -3,6 +3,8 @@ package com.jarvys.agent;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.net.Uri;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.InputType;
 import android.util.Base64;
 import android.view.ViewGroup;
@@ -11,10 +13,13 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import androidx.browser.customtabs.CustomTabsIntent;
+import com.jarvys.agent.ui.JarvysNativeTheme;
 
 import org.json.JSONObject;
+import org.json.JSONException;
 
 import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.BufferedWriter;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -34,6 +39,7 @@ import java.security.SecureRandom;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
@@ -42,9 +48,13 @@ public final class CodexOAuthManager {
     public interface Listener {
         void onSuccess(String accountId);
         void onFailure(String message);
+        default void onExchanging() { }
+        default void onDiagnostic(CodexAuthDiagnostic diagnostic) { }
     }
 
-    /** HTTP seam used only by the additive device-code token exchange. */
+    public interface CredentialCommitGate { void commit(Runnable persist); }
+
+    /** Injectable token transport, also used by deterministic sign-in tests. */
     public interface DeviceCodeTokenTransport {
         DeviceCodeTokenResponse request(String endpoint, Map<String, String> form, CancellationToken token) throws Exception;
     }
@@ -52,10 +62,16 @@ public final class CodexOAuthManager {
     public static final class DeviceCodeTokenResponse {
         public final int statusCode;
         public final JSONObject body;
+        public final CodexAuthDiagnostic diagnostic;
 
         public DeviceCodeTokenResponse(int statusCode, JSONObject body) {
+            this(statusCode, body, null);
+        }
+
+        public DeviceCodeTokenResponse(int statusCode, JSONObject body, CodexAuthDiagnostic diagnostic) {
             this.statusCode = statusCode;
             this.body = body == null ? new JSONObject() : body;
+            this.diagnostic = diagnostic;
         }
     }
 
@@ -67,6 +83,8 @@ public final class CodexOAuthManager {
     public static final String SCOPE = "openid profile email offline_access";
     private static final int CALLBACK_PORT = 1455;
     private static final long TOKEN_REFRESH_SKEW_MS = TimeUnit.MINUTES.toMillis(1);
+    private static final long UNKNOWN_TOKEN_REFRESH_INTERVAL_MS = TimeUnit.DAYS.toMillis(8);
+    private static final Object REFRESH_LOCK = new Object();
     private static final ExecutorService AUTH_EXECUTOR = Executors.newSingleThreadExecutor(r -> {
         Thread thread = new Thread(r, "JarvysCodexOAuth");
         thread.setDaemon(true);
@@ -74,62 +92,90 @@ public final class CodexOAuthManager {
     });
 
     private final SecretStore secrets;
+    private final DeviceCodeTokenTransport browserTransport;
+    private final Object authorizationLock = new Object();
     private volatile ServerSocket activeServer;
+    private volatile CancellationToken activeAuthorization;
+    private volatile CodexAuthDiagnostic lastDiagnostic;
 
-    public CodexOAuthManager(SecretStore secrets) {
+    public CodexOAuthManager(SecretStore secrets) { this(secrets, null); }
+
+    CodexOAuthManager(SecretStore secrets, DeviceCodeTokenTransport browserTransport) {
         this.secrets = secrets;
+        this.browserTransport = browserTransport;
     }
 
     public void authorize(Activity activity, Listener listener) {
+        cancelAuthorization();
+        lastDiagnostic = null;
         OAuthFlow flow = createFlow();
-        ServerSocket server;
+        CancellationToken cancellation = CancellationToken.cancellable();
+        synchronized (authorizationLock) { activeAuthorization = cancellation; }
+        ServerSocket server = null;
         try {
             server = new ServerSocket();
             server.setReuseAddress(true);
             server.bind(new InetSocketAddress(InetAddress.getByName("127.0.0.1"), CALLBACK_PORT), 1);
             server.setSoTimeout((int) TimeUnit.MINUTES.toMillis(5));
-            activeServer = server;
-            AUTH_EXECUTOR.execute(() -> waitForCallbackAndExchange(activity, server, flow, listener));
-            try {
-                launchCustomTab(activity, flow.authorizationUrl);
-            } catch (RuntimeException browserFailure) {
-                cancelAuthorization();
-                activity.runOnUiThread(() -> listener.onFailure(activity.getString(R.string.oauth_browser_missing)));
+            synchronized (authorizationLock) {
+                cancellation.throwIfCancelled();
+                activeServer = server;
             }
+        } catch (CancellationException cancelled) {
+            closeServer(server);
+            return;
         } catch (Exception bindFailure) {
-            showManualCallbackFallback(activity, flow, listener, bindFailure);
+            closeServer(server);
+            showManualCallbackFallback(activity, flow, listener, cancellation);
+            return;
+        }
+        final ServerSocket callbackServer = server;
+        AUTH_EXECUTOR.execute(() -> waitForCallbackAndExchange(activity, callbackServer, flow, listener, cancellation));
+        try {
+            launchCustomTab(activity, flow.authorizationUrl);
+        } catch (RuntimeException browserFailure) {
+            notifyCurrentFailure(activity, listener, cancellation, activity.getString(R.string.oauth_browser_missing),
+                    CodexAuthDiagnostic.failure(CodexAuthDiagnostic.Stage.BROWSER_LAUNCH, browserFailure));
         }
     }
 
     public void cancelAuthorization() {
-        ServerSocket server = activeServer;
-        activeServer = null;
-        if (server != null) {
-            try { server.close(); } catch (Exception ignored) { }
+        synchronized (authorizationLock) {
+            CancellationToken cancellation = activeAuthorization;
+            activeAuthorization = null;
+            if (cancellation != null) cancellation.cancel();
+            ServerSocket server = activeServer;
+            activeServer = null;
+            closeServer(server);
         }
     }
 
-    /** Exchanges OpenAI's device-code authorization response and stores credentials identically to browser PKCE. */
-    public synchronized String exchangeDeviceAuthorizationCode(
-            String authorizationCode,
-            String codeVerifier,
-            String redirectUri,
-            CancellationToken token,
-            DeviceCodeTokenTransport transport) throws Exception {
-        if (authorizationCode == null || authorizationCode.isEmpty()
-                || codeVerifier == null || codeVerifier.isEmpty()
-                || !DEVICE_REDIRECT_URI.equals(redirectUri) || transport == null) {
-            throw new IllegalArgumentException("Invalid OpenAI device authorization response");
+    private static void closeServer(ServerSocket server) {
+        if (server != null) try { server.close(); } catch (Exception ignored) { }
+    }
+
+    /** The gate serializes credential saving with cancellation/replacement of the device-code attempt. */
+    public synchronized String exchangeDeviceAuthorizationCode(String authorizationCode, String codeVerifier,
+            String redirectUri, CancellationToken token, DeviceCodeTokenTransport transport) throws Exception {
+        return exchangeDeviceAuthorizationCode(authorizationCode, codeVerifier, redirectUri, token, transport, Runnable::run);
+    }
+
+    public synchronized String exchangeDeviceAuthorizationCode(String authorizationCode, String codeVerifier,
+            String redirectUri, CancellationToken token, DeviceCodeTokenTransport transport,
+            CredentialCommitGate commitGate) throws Exception {
+        if (authorizationCode == null || authorizationCode.isEmpty() || codeVerifier == null || codeVerifier.isEmpty()
+                || !DEVICE_REDIRECT_URI.equals(redirectUri) || transport == null || commitGate == null) {
+            throw new CodexAuthDiagnostic.Failure(CodexAuthDiagnostic.validation(
+                    CodexAuthDiagnostic.Stage.TOKEN_EXCHANGE, "invalid_device_response"));
         }
-        TokenReply tokens = exchangeCode(authorizationCode, codeVerifier, redirectUri, token, transport);
-        token.throwIfCancelled();
-        String accountId = extractAccountId(tokens.accessToken);
-        token.throwIfCancelled();
-        secrets.saveCodexTokens(tokens.accessToken, tokens.refreshToken, tokens.expiresAtMillis, accountId);
-        if (secrets.getCodexCredentials() == null) {
-            throw new IllegalStateException("ChatGPT credentials could not be stored");
-        }
-        return accountId;
+        CancellationToken cancellation = token == null ? CancellationToken.uncancellable() : token;
+        TokenReply tokens = exchangeCode(authorizationCode, codeVerifier, redirectUri, cancellation, transport);
+        cancellation.throwIfCancelled();
+        commitGate.commit(() -> {
+            cancellation.throwIfCancelled();
+            persistTokens(tokens);
+        });
+        return tokens.accountId;
     }
 
     /** Returns a valid access token and rotates/persists the refresh token when expiring. */
@@ -147,112 +193,218 @@ public final class CodexOAuthManager {
 
     public synchronized SecretStore.CodexCredentials getValidCredentials(boolean forceRefresh,
                                                                           CancellationToken token) {
-        if (token != null) token.throwIfCancelled();
-        SecretStore.CodexCredentials current = secrets.getCodexCredentials();
-        if (current == null) throw new IllegalStateException("Sign in with ChatGPT before selecting OpenAI Codex");
-        if (!forceRefresh && current.expiresAtMillis - System.currentTimeMillis() > TOKEN_REFRESH_SKEW_MS) {
-            return current;
+        synchronized (REFRESH_LOCK) {
+            if (token != null) token.throwIfCancelled();
+            SecretStore.CodexCredentials current = secrets.getCodexCredentials();
+            if (current == null) throw new IllegalStateException("Sign in with ChatGPT before selecting OpenAI Codex");
+            if (!forceRefresh && current.expiresAtMillis - System.currentTimeMillis() > TOKEN_REFRESH_SKEW_MS) return current;
+            TokenReply refreshed = refreshToken(current, token);
+            if (token != null) token.throwIfCancelled();
+            synchronized (secrets) {
+                SecretStore.CodexCredentials latest = secrets.getCodexCredentials();
+                if (latest == null) throw new IllegalStateException("ChatGPT session was disconnected");
+                if (!current.accessToken.equals(latest.accessToken) || !current.refreshToken.equals(latest.refreshToken)
+                        || !current.accountId.equals(latest.accountId) || current.expiresAtMillis != latest.expiresAtMillis) return latest;
+                persistTokens(refreshed);
+                return secrets.getCodexCredentials();
+            }
         }
-        TokenReply refreshed = refreshToken(current.refreshToken, token);
-        String account = extractAccountId(refreshed.accessToken);
-        secrets.saveCodexTokens(refreshed.accessToken, refreshed.refreshToken,
-                refreshed.expiresAtMillis, account);
-        return secrets.getCodexCredentials();
     }
 
-    private void waitForCallbackAndExchange(Activity activity, ServerSocket server, OAuthFlow flow, Listener listener) {
+    private void waitForCallbackAndExchange(Activity activity, ServerSocket server, OAuthFlow flow,
+                                            Listener listener, CancellationToken cancellation) {
         try (ServerSocket closeable = server) {
             long deadline = System.currentTimeMillis() + TimeUnit.MINUTES.toMillis(5);
             while (System.currentTimeMillis() < deadline) {
+                cancellation.throwIfCancelled();
                 try (Socket client = closeable.accept()) {
                     if (!client.getInetAddress().isLoopbackAddress()) continue;
                     client.setSoTimeout(5000);
-                    String request = readRequestLine(client);
-                    Callback callback = parseCallback(request);
+                    Callback callback = parseCallback(readRequestLine(client));
                     if (callback == null) {
                         writeHttpResponse(client, 404, "Not found");
                         continue;
-                    }
-                    if (callback.error != null) {
-                        writeHttpResponse(client, 400, "Authorization was not completed. You may close this tab.");
-                        throw new IllegalStateException("ChatGPT sign-in returned " + callback.error);
                     }
                     if (!constantTimeEquals(flow.state, callback.state)) {
                         writeHttpResponse(client, 400, "Authorization state did not match. Return to Jarvys and retry.");
                         continue;
                     }
+                    if (callback.error != null) {
+                        notifyCurrentFailure(activity, listener, cancellation, activity.getString(R.string.oauth_callback_denied),
+                                CodexAuthDiagnostic.validation(CodexAuthDiagnostic.Stage.CALLBACK, "denied"));
+                        writeHttpResponse(client, 400, callbackPage(activity, false));
+                        return;
+                    }
                     if (callback.code == null || callback.code.isEmpty()) {
                         writeHttpResponse(client, 400, "The authorization response did not include a code.");
                         continue;
                     }
-                    writeHttpResponse(client, 200,
-                            "<html><meta name='viewport' content='width=device-width,initial-scale=1'>"
-                                    + "<body style='font-family:sans-serif;padding:2rem'>"
-                                    + "<h2>Jarvys sign-in received</h2><p>Return to Jarvys to continue.</p></body></html>");
-                    finishExchange(activity, listener, callback.code, flow.verifier);
+                    boolean connected = finishExchange(activity, listener, callback.code, flow.verifier, cancellation);
+                    try { writeHttpResponse(client, connected ? 200 : 400, callbackPage(activity, connected)); }
+                    catch (java.io.IOException ignored) { }
                     return;
                 } catch (java.net.SocketTimeoutException ignored) {
-                    break;
+                    // A malformed local request must not terminate the still-current authorization attempt.
                 }
             }
-            notifyFailure(activity, listener, "Timed out waiting for the ChatGPT OAuth callback. Retry sign-in.");
+            notifyCurrentFailure(activity, listener, cancellation, activity.getString(R.string.oauth_callback_timeout),
+                    CodexAuthDiagnostic.validation(CodexAuthDiagnostic.Stage.CALLBACK, "expired"));
+        } catch (CancellationException ignored) {
         } catch (Exception error) {
-            if (!server.isClosed()) {
-                AgentErrorReporter.report(activity, "OPENAI_CODEX_OAUTH", "oauth-callback", null,
-                        null, safeMessage(error), error.getClass().getSimpleName(),
-                        android.util.Log.getStackTraceString(error));
-                notifyFailure(activity, listener, safeMessage(error));
-            }
+            notifyCurrentFailure(activity, listener, cancellation, activity.getString(R.string.oauth_exchange_failed),
+                    CodexAuthDiagnostic.failure(CodexAuthDiagnostic.Stage.CALLBACK, error));
         } finally {
-            if (activeServer == server) activeServer = null;
+            synchronized (authorizationLock) { if (activeServer == server) activeServer = null; }
         }
     }
 
-    private void finishExchange(Activity activity, Listener listener, String code, String verifier) {
+    private boolean finishExchange(Activity activity, Listener listener, String code, String verifier,
+                                   CancellationToken cancellation) {
         try {
-            TokenReply tokens = exchangeCode(code, verifier);
-            String accountId = extractAccountId(tokens.accessToken);
-            secrets.saveCodexTokens(tokens.accessToken, tokens.refreshToken, tokens.expiresAtMillis, accountId);
-            boolean readBack = secrets.getCodexCredentials() != null;
-            AgentErrorReporter.report(activity, "OPENAI_CODEX_OAUTH", "oauth-exchange", null, null,
-                    "OAuth exchange succeeded, saved, readBack=" + readBack + ", accountId=" + accountId,
-                    "OAuthExchangeSucceeded", "");
-            activity.runOnUiThread(() -> listener.onSuccess(accountId));
+            cancellation.throwIfCancelled();
+            activity.runOnUiThread(() -> { if (isCurrent(cancellation)) listener.onExchanging(); });
+            TokenReply tokens = exchangeCode(code, verifier, REDIRECT_URI, cancellation, browserTransport);
+            synchronized (authorizationLock) {
+                cancellation.throwIfCancelled();
+                if (activeAuthorization != cancellation) return false;
+                persistTokens(tokens);
+                activity.runOnUiThread(() -> {
+                    synchronized (authorizationLock) {
+                        if (isCurrent(cancellation)) {
+                            activeAuthorization = null;
+                            listener.onSuccess(tokens.accountId);
+                        }
+                    }
+                });
+            }
+            return true;
+        } catch (CancellationException ignored) {
+            return false;
         } catch (Exception error) {
-            AgentErrorReporter.report(activity, "OPENAI_CODEX_OAUTH", "oauth-exchange", null,
-                    null, safeMessage(error), error.getClass().getSimpleName(),
-                    android.util.Log.getStackTraceString(error));
-            notifyFailure(activity, listener, safeMessage(error));
+            notifyCurrentFailure(activity, listener, cancellation, activity.getString(signInErrorResource(error)),
+                    CodexAuthDiagnostic.failure(CodexAuthDiagnostic.Stage.TOKEN_EXCHANGE, error));
+            return false;
         }
     }
 
-    private void showManualCallbackFallback(Activity activity, OAuthFlow flow, Listener listener, Exception bindFailure) {
+    public static int signInErrorResource(Exception error) {
+        if (error instanceof TokenFormatException) return R.string.oauth_exchange_invalid_response;
+        if (error instanceof CredentialStorageException) return R.string.oauth_storage_failed;
+        return R.string.oauth_exchange_failed;
+    }
+
+    private boolean isCurrent(CancellationToken cancellation) {
+        return activeAuthorization == cancellation && !cancellation.isCancellationRequested();
+    }
+
+    private void notifyCurrentFailure(Activity activity, Listener listener, CancellationToken cancellation,
+                                      String message, CodexAuthDiagnostic diagnostic) {
+        synchronized (authorizationLock) {
+            if (!isCurrent(cancellation)) return;
+            lastDiagnostic = diagnostic;
+        }
         activity.runOnUiThread(() -> {
-            EditText callbackUrl = new EditText(activity);
+            synchronized (authorizationLock) {
+                if (isCurrent(cancellation)) {
+                    activeAuthorization = null;
+                    cancellation.cancel();
+                    closeServer(activeServer);
+                    activeServer = null;
+                    listener.onDiagnostic(diagnostic);
+                    listener.onFailure(message);
+                }
+            }
+        });
+    }
+
+    private String callbackPage(Activity activity, boolean connected) {
+        String title = activity.getString(connected ? R.string.oauth_callback_success_title : R.string.oauth_callback_failed_title);
+        String body = activity.getString(connected ? R.string.oauth_callback_success_body : R.string.oauth_callback_failed_body);
+        String diagnostic = connected || lastDiagnostic == null ? "" : "<pre style='font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere'>"
+                + html(lastDiagnostic.toDisplayText("browser")) + "</pre>";
+        return "<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
+                + "<meta name='color-scheme' content='light dark'><title>Jarvys</title><style>"
+                + JarvysNativeTheme.callbackPageCss() + "</style></head><body><main><small>JARVYS</small><h1>"
+                + html(title) + "</h1><p>" + html(body) + "</p>" + diagnostic + "</main></body></html>";
+    }
+
+    private static String html(String text) {
+        return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;");
+    }
+
+    private void persistTokens(TokenReply tokens) {
+        try {
+            synchronized (secrets) {
+                secrets.saveCodexTokens(tokens.accessToken, tokens.refreshToken, tokens.expiresAtMillis, tokens.accountId);
+                SecretStore.CodexCredentials saved = secrets.getCodexCredentials();
+                if (saved == null || !tokens.accessToken.equals(saved.accessToken) || !tokens.refreshToken.equals(saved.refreshToken)
+                        || !tokens.accountId.equals(saved.accountId) || tokens.expiresAtMillis != saved.expiresAtMillis) {
+                    throw new CredentialStorageException(CodexAuthDiagnostic.validation(CodexAuthDiagnostic.Stage.SAVE_SESSION, "readback_failed"));
+                }
+            }
+        } catch (CredentialStorageException error) {
+            throw error;
+        } catch (RuntimeException error) {
+            throw new CredentialStorageException(CodexAuthDiagnostic.storage(error));
+        }
+    }
+
+    private void showManualCallbackFallback(Activity activity, OAuthFlow flow, Listener listener,
+                                             CancellationToken cancellation) {
+        activity.runOnUiThread(() -> {
+            if (!isCurrent(cancellation)) return;
+            android.content.Context context = JarvysNativeTheme.dialogContext(activity);
+            EditText callbackUrl = new EditText(context);
             callbackUrl.setHint(activity.getString(R.string.oauth_callback_input_hint));
             callbackUrl.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-            TextView explanation = new TextView(activity);
+            TextView explanation = new TextView(context);
             explanation.setText(activity.getString(R.string.oauth_callback_fallback_body, CALLBACK_PORT));
-            LinearLayout content = new LinearLayout(activity);
+            LinearLayout content = new LinearLayout(context);
             content.setOrientation(LinearLayout.VERTICAL);
             content.setPadding(48, 24, 48, 8);
-            content.addView(explanation, new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-            content.addView(callbackUrl, new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-            new AlertDialog.Builder(activity).setTitle(R.string.oauth_chatgpt_signin_title)
-                    .setView(content)
-                    .setNeutralButton(R.string.oauth_open_signin, (dialog, which) -> launchCustomTab(activity, flow.authorizationUrl))
-                    .setNegativeButton(R.string.oauth_cancel, (dialog, which) -> listener.onFailure(
-                            activity.getString(R.string.oauth_callback_listener_unavailable, safeMessage(bindFailure))))
-                    .setPositiveButton(R.string.oauth_validate_continue, (dialog, which) -> {
-                        Callback callback = parseCallbackInput(callbackUrl.getText().toString());
-                        if (callback == null || callback.code == null || !constantTimeEquals(flow.state, callback.state)) {
-                            listener.onFailure(activity.getString(R.string.oauth_callback_invalid));
-                        } else {
-                            AUTH_EXECUTOR.execute(() -> finishExchange(activity, listener, callback.code, flow.verifier));
-                        }
-                    }).show();
+            content.addView(explanation, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            content.addView(callbackUrl, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            Runnable denied = () -> notifyCurrentFailure(activity, listener, cancellation, activity.getString(R.string.oauth_callback_denied),
+                    CodexAuthDiagnostic.validation(CodexAuthDiagnostic.Stage.CALLBACK, "denied"));
+            AlertDialog dialog = new AlertDialog.Builder(context).setTitle(R.string.oauth_chatgpt_signin_title)
+                    .setView(content).setNeutralButton(R.string.oauth_open_signin, null)
+                    .setOnCancelListener(ignored -> denied.run())
+                    .setNegativeButton(R.string.oauth_cancel, (ignored, which) -> denied.run())
+                    .setPositiveButton(R.string.oauth_validate_continue, null).create();
+            dialog.setOnShowListener(ignored -> {
+                JarvysNativeTheme.applyDialog(activity, dialog, explanation);
+                dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(view -> {
+                    if (!isCurrent(cancellation)) { dialog.dismiss(); return; }
+                    try { launchCustomTab(activity, flow.authorizationUrl); }
+                    catch (RuntimeException error) {
+                        notifyCurrentFailure(activity, listener, cancellation, activity.getString(R.string.oauth_browser_missing),
+                                CodexAuthDiagnostic.failure(CodexAuthDiagnostic.Stage.BROWSER_LAUNCH, error));
+                        dialog.dismiss();
+                    }
+                });
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
+                    Callback callback = parseCallbackInput(callbackUrl.getText().toString());
+                    if (callback == null || callback.code == null || callback.code.isEmpty() || callback.error != null
+                            || !constantTimeEquals(flow.state, callback.state)) {
+                        callbackUrl.setError(activity.getString(R.string.oauth_callback_invalid));
+                        JarvysNativeTheme.styleInputError(activity, callbackUrl);
+                    } else if (isCurrent(cancellation)) {
+                        callbackUrl.setText("");
+                        dialog.dismiss();
+                        AUTH_EXECUTOR.execute(() -> finishExchange(activity, listener, callback.code, flow.verifier, cancellation));
+                    }
+                });
+            });
+            dialog.show();
+            Runnable unregister = cancellation.registerCancelAction(() -> activity.runOnUiThread(dialog::dismiss));
+            dialog.setOnDismissListener(ignored -> unregister.run());
+            new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                if (dialog.isShowing() && isCurrent(cancellation)) {
+                    notifyCurrentFailure(activity, listener, cancellation, activity.getString(R.string.oauth_callback_timeout),
+                            CodexAuthDiagnostic.validation(CodexAuthDiagnostic.Stage.CALLBACK, "expired"));
+                    dialog.dismiss();
+                }
+            }, TimeUnit.MINUTES.toMillis(5));
         });
     }
 
@@ -313,90 +465,139 @@ public final class CodexOAuthManager {
                 : tokenRequest(body, "authorization-code exchange", token, transport);
     }
 
-    private TokenReply refreshToken(String refresh, CancellationToken token) {
+    private TokenReply refreshToken(SecretStore.CodexCredentials current, CancellationToken token) {
         Map<String, String> body = new LinkedHashMap<>();
         body.put("grant_type", "refresh_token");
-        body.put("refresh_token", refresh);
+        body.put("refresh_token", current.refreshToken);
         body.put("client_id", CLIENT_ID);
         try {
-            return tokenRequest(body, "refresh", token);
-        } catch (java.util.concurrent.CancellationException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new IllegalStateException("ChatGPT token refresh failed; sign in again. " + safeMessage(e));
+            return browserTransport == null ? tokenRequest(body, "refresh", token, current)
+                    : tokenRequest(body, "refresh", token, browserTransport, current);
+        } catch (CancellationException cancelled) {
+            throw cancelled;
+        } catch (Exception error) {
+            throw new CodexAuthDiagnostic.Failure(CodexAuthDiagnostic.failure(CodexAuthDiagnostic.Stage.REFRESH, error));
         }
     }
 
-    private static TokenReply tokenRequest(Map<String, String> form, String operation,
-                                           CancellationToken token) throws Exception {
-        HttpURLConnection connection = (HttpURLConnection) new URL(TOKEN_URL).openConnection();
+    private static TokenReply tokenRequest(Map<String, String> form, String operation, CancellationToken token) throws Exception {
+        return tokenRequest(form, operation, token, (SecretStore.CodexCredentials) null);
+    }
+
+    private static TokenReply tokenRequest(Map<String, String> form, String operation, CancellationToken token,
+                                          SecretStore.CodexCredentials previous) throws Exception {
+        return CodexAuthConnectionRetry.execute(token, () -> executeTokenRequest(
+                (HttpURLConnection) new URL(TOKEN_URL).openConnection(), form, operation, token, previous));
+    }
+
+    private static TokenReply executeTokenRequest(HttpURLConnection connection, Map<String, String> form,
+            String operation, CancellationToken token, SecretStore.CodexCredentials previous) throws Exception {
+        CodexAuthDiagnostic.Stage stage = "refresh".equals(operation) ? CodexAuthDiagnostic.Stage.REFRESH : CodexAuthDiagnostic.Stage.TOKEN_EXCHANGE;
         Runnable unregister = () -> { };
         try {
             if (token != null) unregister = token.registerCancelAction(connection::disconnect);
             connection.setRequestMethod("POST");
             connection.setConnectTimeout(15000);
             connection.setReadTimeout(20000);
+            connection.setInstanceFollowRedirects(false);
             connection.setDoOutput(true);
+            connection.setRequestProperty("Accept", "application/json");
             connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
             StringBuilder encoded = new StringBuilder();
             for (Map.Entry<String, String> entry : form.entrySet()) {
                 if (encoded.length() > 0) encoded.append('&');
-                encoded.append(URLEncoder.encode(entry.getKey(), "UTF-8"))
-                        .append('=')
+                encoded.append(URLEncoder.encode(entry.getKey(), "UTF-8")).append('=')
                         .append(URLEncoder.encode(entry.getValue(), "UTF-8"));
             }
+            // Never mark failures from outputStream, write, or response reads as safe to retry.
+            CodexAuthConnectionRetry.connectBeforeBody(connection, stage, token);
+            try (OutputStream output = connection.getOutputStream()) { output.write(encoded.toString().getBytes(StandardCharsets.UTF_8)); }
             if (token != null) token.throwIfCancelled();
-            try (OutputStream output = connection.getOutputStream()) {
-                output.write(encoded.toString().getBytes(StandardCharsets.UTF_8));
-            }
             int status = connection.getResponseCode();
             if (status < 200 || status >= 300) {
-                closeQuietly(connection.getErrorStream());
-                throw new IllegalStateException("ChatGPT OAuth " + operation + " returned HTTP " + status);
+                JSONObject errorBody = null;
+                try { InputStream error = connection.getErrorStream(); if (error != null) errorBody = new JSONObject(readText(error, 128 * 1024)); }
+                catch (Exception ignored) { if (token != null) token.throwIfCancelled(); }
+                throw new CodexAuthDiagnostic.Failure(CodexAuthDiagnostic.http(stage, status, errorBody));
             }
             String response = readText(connection.getInputStream(), 128 * 1024);
             if (token != null) token.throwIfCancelled();
-            return parseTokenReply(new JSONObject(response), operation);
+            try { return parseTokenReply(new JSONObject(response), previous); }
+            catch (JSONException invalid) { throw new CodexAuthDiagnostic.Failure(CodexAuthDiagnostic.invalidJson(CodexAuthDiagnostic.Stage.TOKEN_RESPONSE, status)); }
+        } catch (CancellationException cancelled) {
+            throw cancelled;
+        } catch (CodexAuthDiagnostic.Failure failure) {
+            throw failure;
+        } catch (Exception error) {
+            if (token != null) token.throwIfCancelled();
+            throw new CodexAuthDiagnostic.Failure(CodexAuthDiagnostic.failure(stage, error));
         } finally {
             unregister.run();
             connection.disconnect();
         }
     }
 
-    private static TokenReply tokenRequest(Map<String, String> form, String operation,
-                                           CancellationToken token, DeviceCodeTokenTransport transport) throws Exception {
+    private static TokenReply tokenRequest(Map<String, String> form, String operation, CancellationToken token,
+                                           DeviceCodeTokenTransport transport) throws Exception {
+        return tokenRequest(form, operation, token, transport, null);
+    }
+
+    private static TokenReply tokenRequest(Map<String, String> form, String operation, CancellationToken token,
+            DeviceCodeTokenTransport transport, SecretStore.CodexCredentials previous) throws Exception {
         if (token != null) token.throwIfCancelled();
         DeviceCodeTokenResponse response = transport.request(TOKEN_URL, form, token);
         if (token != null) token.throwIfCancelled();
         if (response.statusCode < 200 || response.statusCode >= 300) {
-            throw new IllegalStateException("ChatGPT OAuth " + operation + " returned HTTP " + response.statusCode);
+            throw new CodexAuthDiagnostic.Failure(response.diagnostic != null ? response.diagnostic
+                    : CodexAuthDiagnostic.http("refresh".equals(operation) ? CodexAuthDiagnostic.Stage.REFRESH
+                    : CodexAuthDiagnostic.Stage.TOKEN_EXCHANGE, response.statusCode, response.body));
         }
-        return parseTokenReply(response.body, operation);
+        return parseTokenReply(response.body, previous);
     }
 
-    private static TokenReply parseTokenReply(JSONObject json, String operation) {
-        String access = json.optString("access_token", "");
-        String refresh = json.optString("refresh_token", "");
+    private static TokenReply parseTokenReply(JSONObject json, SecretStore.CodexCredentials previous) {
+        String access = json.optString("access_token", previous == null ? "" : previous.accessToken);
+        String refresh = json.optString("refresh_token", previous == null ? "" : previous.refreshToken);
+        if (access.isEmpty()) throw new TokenFormatException("missing_access_token");
+        if (refresh.isEmpty()) throw new TokenFormatException("missing_refresh_token");
+        JSONObject accessClaims = jwtClaims(access);
+        String account = accountId(jwtClaims(json.optString("id_token", "")));
+        if (account.isEmpty()) account = accountId(accessClaims);
+        if (account.isEmpty() && previous != null) account = previous.accountId;
+        if (account.isEmpty()) throw new TokenFormatException("missing_account");
+        long now = System.currentTimeMillis();
+        long jwtExpiry = accessClaims == null ? 0L : accessClaims.optLong("exp", 0L);
         long expiresIn = json.optLong("expires_in", 0L);
-        if (access.isEmpty() || refresh.isEmpty() || expiresIn <= 0) {
-            throw new IllegalStateException("ChatGPT OAuth " + operation + " response omitted required token fields");
-        }
-        return new TokenReply(access, refresh, System.currentTimeMillis() + expiresIn * 1000L);
+        if ((accessClaims != null && accessClaims.has("exp") && jwtExpiry <= 0)
+                || (json.has("expires_in") && !json.isNull("expires_in") && expiresIn <= 0)) throw new TokenFormatException("invalid_expiry");
+        try {
+            long expiresAt = jwtExpiry > 0 ? Math.multiplyExact(jwtExpiry, 1000L)
+                    : expiresIn > 0 ? Math.addExact(now, Math.multiplyExact(expiresIn, 1000L))
+                    : Math.addExact(now, UNKNOWN_TOKEN_REFRESH_INTERVAL_MS);
+            return new TokenReply(access, refresh, expiresAt, account);
+        } catch (ArithmeticException error) { throw new TokenFormatException("invalid_expiry"); }
     }
 
-    private static String extractAccountId(String accessToken) {
+    private static JSONObject jwtClaims(String token) {
         try {
-            String[] parts = accessToken.split("\\.");
-            if (parts.length != 3) throw new IllegalStateException("OAuth access token is not a JWT");
+            String[] parts = token.split("\\.");
+            if (parts.length != 3) return null;
             byte[] payload = Base64.decode(parts[1], Base64.URL_SAFE | Base64.NO_WRAP | Base64.NO_PADDING);
-            JSONObject root = new JSONObject(new String(payload, StandardCharsets.UTF_8));
-            JSONObject auth = root.optJSONObject("https://api.openai.com/auth");
-            String account = auth == null ? "" : auth.optString("chatgpt_account_id", "");
-            if (account.isEmpty()) throw new IllegalStateException("JWT omitted chatgpt_account_id claim");
-            return account;
-        } catch (Exception e) {
-            throw new IllegalStateException("Could not extract ChatGPT account id from OAuth access token", e);
-        }
+            return new JSONObject(new String(payload, StandardCharsets.UTF_8));
+        } catch (Exception ignored) { return null; }
+    }
+
+    private static String accountId(JSONObject claims) {
+        JSONObject auth = claims == null ? null : claims.optJSONObject("https://api.openai.com/auth");
+        return auth == null ? "" : auth.optString("chatgpt_account_id", "");
+    }
+
+    private static final class TokenFormatException extends CodexAuthDiagnostic.Failure {
+        TokenFormatException(String reason) { super(CodexAuthDiagnostic.validation(CodexAuthDiagnostic.Stage.TOKEN_RESPONSE, reason)); }
+    }
+
+    private static final class CredentialStorageException extends CodexAuthDiagnostic.Failure {
+        CredentialStorageException(CodexAuthDiagnostic diagnostic) { super(diagnostic); }
     }
 
     private static String readRequestLine(Socket socket) throws Exception {
@@ -447,35 +648,22 @@ public final class CodexOAuthManager {
         socket.getOutputStream().flush();
     }
 
-    private static void notifyFailure(Activity activity, Listener listener, String message) {
-        activity.runOnUiThread(() -> listener.onFailure(message));
-    }
-
     private static boolean constantTimeEquals(String a, String b) {
         if (a == null || b == null) return false;
         return MessageDigest.isEqual(a.getBytes(StandardCharsets.UTF_8), b.getBytes(StandardCharsets.UTF_8));
     }
 
-    private static String safeMessage(Exception error) {
-        return error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
-    }
-
     private static String readText(InputStream input, int limit) throws Exception {
-        try (Reader reader = new InputStreamReader(input, StandardCharsets.UTF_8)) {
-            StringBuilder result = new StringBuilder();
-            char[] buffer = new char[4096];
+        try (InputStream stream = input; ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[4096];
             int count;
-            while ((count = reader.read(buffer)) != -1) {
-                if (result.length() + count > limit) throw new IllegalStateException("OAuth response exceeded limit");
-                result.append(buffer, 0, count);
+            while ((count = stream.read(buffer)) != -1) {
+                if (output.size() + count > limit) throw new CodexAuthDiagnostic.Failure(
+                        CodexAuthDiagnostic.validation(CodexAuthDiagnostic.Stage.TOKEN_RESPONSE, "oversized_response"));
+                output.write(buffer, 0, count);
             }
-            return result.toString();
+            return new String(output.toByteArray(), StandardCharsets.UTF_8);
         }
-    }
-
-    private static void closeQuietly(InputStream input) {
-        if (input == null) return;
-        try { input.close(); } catch (Exception ignored) { }
     }
 
     private static final class OAuthFlow {
@@ -500,10 +688,12 @@ public final class CodexOAuthManager {
         final String accessToken;
         final String refreshToken;
         final long expiresAtMillis;
-        TokenReply(String accessToken, String refreshToken, long expiresAtMillis) {
+        final String accountId;
+        TokenReply(String accessToken, String refreshToken, long expiresAtMillis, String accountId) {
             this.accessToken = accessToken;
             this.refreshToken = refreshToken;
             this.expiresAtMillis = expiresAtMillis;
+            this.accountId = accountId;
         }
     }
 }
