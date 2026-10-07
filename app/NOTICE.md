@@ -41,3 +41,7 @@ JVM unit tests use `org.json:json` version 20240303 to exercise the same JSON co
 `app/src/main/java/com/jarvys/agent/BrandIcons.kt` is generated from official SVG paths and brand colors in Simple Icons 16.33.0 ([project](https://github.com/simple-icons/simple-icons)), distributed under CC0-1.0. Brand logos, names, and colors remain identifiers of their respective owners and are used nominatively only to identify the corresponding service available for connection; this use does not imply endorsement. Canva has no Simple Icons mark in this catalog and uses only a colored initial-letter fallback. Generation script: `/root/generate_brand_icons_compose.py`.
 
 Only the Full flavor uses `com.google.android.gms:play-services-auth:22.0.0` for Google Identity `AuthorizationClient` (`Gmail`/`Drive`). Its Maven POM identifies the [Android Software Development Kit License](https://developer.android.com/studio/terms.html). The dependency is declared as `fullImplementation`; Play does not package it.
+
+## Unicode emoji data
+
+The message reaction validator derives its Unicode 16.0 emoji forms from https://unicode.org/Public/emoji/16.0/emoji-test.txt. Copyright © 2024 Unicode, Inc. Distributed under Unicode License v3; see UNICODE-LICENSE.txt. No Unicode fonts are bundled.

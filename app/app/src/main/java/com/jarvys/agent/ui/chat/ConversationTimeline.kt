@@ -16,6 +16,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
@@ -51,10 +52,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.role
@@ -79,6 +82,7 @@ import com.jarvys.agent.JarvysMotion
 import com.jarvys.agent.JarvysSectionLabel
 import com.jarvys.agent.JarvysTag
 import com.jarvys.agent.LucideIcons
+import com.jarvys.agent.MessageReactionEmoji
 import com.jarvys.agent.R
 import com.jarvys.agent.ScrollableDialogContent
 import com.jarvys.agent.skills.SkillFileLink
@@ -295,18 +299,39 @@ private fun TimelineArrival(animateEntry: Boolean, content: @Composable () -> Un
 }
 
 @Composable
-private fun IntentMessage(event: AgentRunUiEvent, sessionId: String) {
+internal fun IntentMessage(event: AgentRunUiEvent, sessionId: String = "") {
     val context = LocalContext.current
-    Row(Modifier.fillMaxWidth().semantics {
-        contentDescription = context.getString(R.string.chat_user_message_accessibility)
-    }, horizontalArrangement = Arrangement.End) {
-        Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(18.dp)) {
-            Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (event.attachments.isNotEmpty()) UserChatAttachments(event.attachments, sessionId, Modifier.widthIn(max = 320.dp))
-                if (event.text.isNotBlank()) SelectionContainer {
-                    Text(event.text, color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        style = MaterialTheme.typography.bodyLarge)
+    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
+        Row(Modifier.fillMaxWidth().semantics {
+            contentDescription = context.getString(R.string.chat_user_message_accessibility)
+        }, horizontalArrangement = Arrangement.End) {
+            Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(18.dp),
+                modifier = Modifier.testTag("user-message-bubble-${event.id}")) {
+                Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (event.attachments.isNotEmpty()) UserChatAttachments(event.attachments, sessionId, Modifier.widthIn(max = 320.dp))
+                    if (event.text.isNotBlank()) SelectionContainer {
+                        Text(event.text, color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            style = MaterialTheme.typography.bodyLarge)
+                    }
                 }
+            }
+        }
+        if (event.kind == "user" && event.proactiveThreadKey.isNullOrEmpty() && !event.proactiveNotice &&
+            MessageReactionEmoji.isValid(event.reactionEmoji)) {
+            val description = stringResource(R.string.chat_message_reaction_accessibility, event.reactionEmoji)
+            // A read-only status outside selection and attachment hit targets. Empty reactions add no space.
+            Surface(
+                modifier = Modifier.padding(top = 4.dp)
+                    .testTag("user-message-reaction-${event.id}")
+                    .clearAndSetSemantics { contentDescription = description },
+                shape = RoundedCornerShape(50),
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                    .compositeOver(MaterialTheme.colorScheme.surface),
+                contentColor = MaterialTheme.colorScheme.onSurface,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.36f)),
+            ) {
+                Text(event.reactionEmoji, Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+                    fontSize = 16.sp, lineHeight = 20.sp)
             }
         }
     }

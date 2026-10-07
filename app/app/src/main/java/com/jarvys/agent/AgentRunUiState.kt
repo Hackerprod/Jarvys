@@ -64,9 +64,12 @@ data class AgentRunUiEvent(
     val generatedImageError: String? = null,
     val attachments: List<ChatAttachment> = emptyList(),
     val toolAuditDetail: String? = null,
+    val reactionEmoji: String = "",
  ) {
     fun copyMetadata(messageId: String, durationMs: Long): AgentRunUiEvent =
         copy(messageId = messageId, durationMs = durationMs)
+    fun copyReaction(emoji: String): AgentRunUiEvent =
+        copy(reactionEmoji = if (kind == "user" && proactiveThreadKey.isNullOrEmpty()) emoji else "")
     fun copyStage(stage: String?): AgentRunUiEvent = copy(stage = stage)
     fun copyAttachments(attachments: List<ChatAttachment>): AgentRunUiEvent =
         copy(attachments = if (kind == "user" && proactiveThreadKey.isNullOrEmpty()) attachments.toList() else emptyList())
@@ -230,6 +233,27 @@ object AgentRunUiState {
             compacting = false,
             compactionStatus = null,
         )
+    }
+
+    /** Bind the optimistic row once persistence returns its identity; never match reactions by text. */
+    @JvmStatic
+    fun bindCurrentUserMessage(sessionId: String, messageId: String) = synchronized(lock) {
+        val current = _state.value
+        if (current.sessionId != sessionId || messageId.isBlank()) return@synchronized
+        val index = current.events.indexOfLast { it.kind == "user" }
+        if (index < 0 || current.events[index].messageId.isNotEmpty()) return@synchronized
+        _state.value = current.copy(events = current.events.mapIndexed { i, event ->
+            if (i == index) event.copy(messageId = messageId) else event
+        })
+    }
+
+    @JvmStatic
+    fun messageReactionChanged(sessionId: String, messageId: String, emoji: String) = synchronized(lock) {
+        val current = _state.value
+        if (current.sessionId != sessionId) return@synchronized
+        _state.value = current.copy(events = current.events.map { event ->
+            if (event.kind == "user" && event.messageId == messageId) event.copyReaction(emoji) else event
+        })
     }
 
     @JvmStatic

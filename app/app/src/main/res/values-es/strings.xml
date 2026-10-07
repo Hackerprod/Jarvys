@@ -684,6 +684,7 @@ description: Preferencias explícitas sobre idioma, tono, estilo y forma de ayud
     <string name="connector_location_disabled">La ubicación del dispositivo está desactivada. Actívala para usar el conector Ubicación.</string>
     <string name="connector_location_settings">Ajustes de ubicación</string>
     <string name="chat_user_message_accessibility">Tu mensaje</string>
+    <string name="chat_message_reaction_accessibility">Jarvys reaccionó con %1$s</string>
     <string name="chat_assistant_message_accessibility">Respuesta del asistente</string>
     <string name="chat_assistant_error_accessibility">Error del asistente</string>
     <string name="chat_toast_provider_saved">Se guardaron el proveedor y el modelo.</string>

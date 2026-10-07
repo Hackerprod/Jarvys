@@ -684,6 +684,7 @@ description: Explicit preferences about language, tone, style, and how to help t
     <string name="connector_location_disabled">Device location is turned off. Turn it on to use the Location connector.</string>
     <string name="connector_location_settings">Location settings</string>
     <string name="chat_user_message_accessibility">Your message</string>
+    <string name="chat_message_reaction_accessibility">Jarvys reacted %1$s</string>
     <string name="chat_assistant_message_accessibility">Assistant response</string>
     <string name="chat_assistant_error_accessibility">Assistant error</string>
     <string name="chat_toast_provider_saved">Provider and model saved.</string>

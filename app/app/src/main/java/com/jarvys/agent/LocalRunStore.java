@@ -725,6 +725,49 @@ public final class LocalRunStore {
         return messageId != null && messageId.equals(latestId);
     }
 
+    /** Append-only reaction state; original message rows, indices and compaction boundaries stay intact. */
+    public synchronized boolean setMessageReaction(String sessionId, String messageId, String emoji) {
+        if (!MessageReactionTool.isOrdinaryChat(sessionId) || emoji == null
+                || !emoji.isEmpty() && !MessageReactionEmoji.isValid(emoji))
+            throw new IllegalArgumentException("Invalid chat reaction");
+        synchronized (SESSION_TITLE_LOCK) {
+            List<JSONObject> messages = readConversationMessages(sessionId);
+            int matches = 0;
+            boolean user = false;
+            for (int index = 0; index < messages.size(); index++) {
+                JSONObject message = messages.get(index);
+                if (MessageReactionTool.stableMessageId(sessionId, message, index).equals(messageId)) {
+                    matches++;
+                    user = "user".equals(message.optString("role")) && message.optString("proactiveThreadKey").isEmpty();
+                }
+            }
+            if (matches != 1 || !user) throw new IllegalArgumentException("Reaction target is not a unique user message in this chat");
+            String previous = readMessageReactions(readConversationRows(sessionId)).getOrDefault(messageId, "");
+            if (previous.equals(emoji)) return false;
+            JSONObject row = new JSONObject();
+            try {
+                row.put("type", "message_reaction");
+                row.put("version", 1);
+                row.put("messageId", messageId);
+                row.put("emoji", emoji);
+                row.put("timestamp", System.currentTimeMillis() / 1000.0);
+            } catch (org.json.JSONException error) { throw new IllegalStateException("Could not create reaction record", error); }
+            appendSessionRowLocked(conversationFile(sessionId), row);
+            return true;
+        }
+    }
+
+    private static Map<String, String> readMessageReactions(List<JSONObject> rows) {
+        Map<String, String> reactions = new LinkedHashMap<>();
+        for (JSONObject row : rows) {
+            if (!"message_reaction".equals(row.optString("type")) || row.optInt("version") != 1
+                    || !(row.opt("emoji") instanceof String)) continue;
+            String emoji = row.optString("emoji");
+            if (emoji.isEmpty() || MessageReactionEmoji.isValid(emoji)) reactions.put(row.optString("messageId"), emoji);
+        }
+        return reactions;
+    }
+
     public synchronized List<JSONObject> readConversationMessages(String sessionId) {
         File ledger = conversationFile(sessionId);
         List<JSONObject> messages = new ArrayList<>();
@@ -1160,17 +1203,27 @@ public final class LocalRunStore {
                 latestTranslation.put(row.optString("messageId", ""), rowIndex);
             }
         }
+        Map<String, String> reactions = MessageReactionTool.isOrdinaryChat(sessionId)
+                ? readMessageReactions(rows) : java.util.Collections.emptyMap();
+        int messageIndex = 0;
         long id = 1;
         for (int rowIndex = 0; rowIndex < rows.size(); rowIndex++) {
             JSONObject row = rows.get(rowIndex);
             String role = row.optString("role");
             String type = row.optString("type");
             String messageId = row.optString("messageId", "");
+            if (("user".equals(role) || "assistant".equals(role)) && row.has("content")) {
+                if ("user".equals(role) && MessageReactionTool.isOrdinaryChat(sessionId)
+                        && row.optString("proactiveThreadKey").isEmpty())
+                    messageId = MessageReactionTool.stableMessageId(sessionId, row, messageIndex);
+                messageIndex++;
+            }
             if ("user".equals(role)) {
                 String threadKey = row.optString("proactiveThreadKey", "");
                 long timestamp = (long) (row.optDouble("timestamp", 0) * 1000);
                 events.add(threadKey.isEmpty()
                         ? AgentRunUiEvent.messageEvent(id++, role, row.optString("content", ""), timestamp).copyMetadata(messageId, 0L).copyAttachments(attachmentsForRow(sessionId, row))
+                                .copyReaction(reactions.getOrDefault(messageId, ""))
                         : AgentRunUiEvent.proactiveMessageEvent(id++, role, row.optString("content", ""),
                                 timestamp, messageId, threadKey, java.util.Collections.emptyList(), false, 0L, null, false));
             } else if ("assistant".equals(role)) {

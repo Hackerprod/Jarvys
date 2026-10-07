@@ -590,6 +590,7 @@ public final class AgentForegroundService extends Service {
         userMessageId = conversationStore.latestUserMessageId(sessionId);
       }
       userMessageRecorded = true;
+      AgentRunUiState.bindCurrentUserMessage(sessionId, userMessageId);
       SkillRepository skills = SkillRepository.Companion.get(this);
       List<SkillEntry> enabledSkills =
           selectedSkillIds == null || selectedSkillIds.isEmpty()

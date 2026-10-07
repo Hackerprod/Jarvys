@@ -262,6 +262,8 @@ public final class CoreAgentRuntime {
       available.remove("list_image_references");
       toolRegistry = toolRegistry.subset(available);
     }
+    final MessageReactionTool reactionTool = reactionToolForRun(mainChat);
+    if (reactionTool != null) toolRegistry = toolRegistry.with(Collections.singletonList(reactionTool));
     CrewMode mode = crewMode();
     final CoreAgentModel model = new CoreAgentModel(context, sessionId);
     CrewManager crewManager = null;
@@ -289,7 +291,7 @@ public final class CoreAgentRuntime {
           depth == 0 && context != null
               ? new ConversationCompactor(sessionId, model, new LocalRunStore(context))
               : null;
-      final String runInstructions = instructions();
+      final String runInstructions = instructions() + (reactionTool == null ? "" : "\n\n" + MessageReactionTool.GUIDANCE);
       CoreAgentLoop.Model scopedModel =
           new CoreAgentLoop.Model() {
             @Override
@@ -298,20 +300,20 @@ public final class CoreAgentRuntime {
                 String prompt,
                 List<ToolSpec> declarations,
                 CancellationToken runToken) {
-              if (mainChat
-                  && context != null
-                  && new LocalRunStore(context)
-                      .conversationHasPrivateImagesOrAttachments(sessionId)) {
-                try (AgentErrorReporter.AttachmentScope ignored =
-                    AgentErrorReporter.suppressForAttachments()) {
-                  return model.completeMainChat(
-                      runInstructions, transcript, prompt, declarations, runToken);
+              String requestInstructions = runInstructions + (reactionTool == null ? ""
+                  : reactionTool.prepareModelMetadata(transcript, prompt));
+              ModelReply reply;
+              if (mainChat && context != null
+                  && new LocalRunStore(context).conversationHasPrivateImagesOrAttachments(sessionId)) {
+                try (AgentErrorReporter.AttachmentScope ignored = AgentErrorReporter.suppressForAttachments()) {
+                  reply = model.completeMainChat(requestInstructions, transcript, prompt, declarations, runToken);
                 }
+              } else {
+                reply = mainChat ? model.completeMainChat(requestInstructions, transcript, prompt, declarations, runToken)
+                    : model.complete(requestInstructions, transcript, prompt, declarations, runToken);
               }
-              return mainChat
-                  ? model.completeMainChat(
-                      runInstructions, transcript, prompt, declarations, runToken)
-                  : model.complete(runInstructions, transcript, prompt, declarations, runToken);
+              if (reactionTool != null) reactionTool.modelRequestCompleted();
+              return reply;
             }
 
             @Override
@@ -346,6 +348,12 @@ public final class CoreAgentRuntime {
 
   static boolean lambda$runInternal$0(String name) {
     return ("generate_image".equals(name) || "list_image_references".equals(name)) ? false : true;
+  }
+
+  /** Run-bound interactive capability, never part of inherited generic or Crew tool inventories. */
+  MessageReactionTool reactionToolForRun(boolean mainChat) {
+    return mainChat && depth == 0 && context != null && MessageReactionTool.isOrdinaryChat(sessionId)
+        ? new MessageReactionTool(new LocalRunStore(context), sessionId) : null;
   }
 
   private CrewManager configureCrewManager(

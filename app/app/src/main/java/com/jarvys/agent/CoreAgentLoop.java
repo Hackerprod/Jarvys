@@ -550,17 +550,20 @@ public final class CoreAgentLoop {
                 for (int index = 0; index < callCount; index++) {
                     token.throwIfCancelled();
                     ModelReply.Call call = reply.calls.get(index);
+                    // A persisted reaction badge is its success UI; keep failures and the model transcript.
+                    boolean quietReaction = MessageReactionTool.NAME.equals(call.name)
+                            && tools.get(call.name) instanceof MessageReactionTool;
                     String displayName = WebSearchTools.displayLabel(call.name, call.arguments);
                     if (displayName.equals(call.name)) displayName = tools.displayName(call.name);
                     String argumentsKey = loopDetector.argumentsKey(call);
                     int recentCalls = loopDetector.recentCallCount(call.name, argumentsKey);
                     String reflectionSource = tools.reflectionSource(call.name);
                     String auditDetail = tools.auditDetail(call.name, call.arguments);
-                    if (listener != null) listener.onToolProgress("tool_call", call.id, displayName, null, null, reflectionSource, auditDetail);
+                    if (listener != null && !quietReaction) listener.onToolProgress("tool_call", call.id, displayName, null, null, reflectionSource, auditDetail);
                     toolLifecycle.put(call.id, "STARTED");
                     updateTranscriptSnapshot(transcript);
                     CoreToolResult result = tools.invoke(call.name, call.arguments, token, (message)->{
-                        if (listener != null && message != null && !message.isEmpty()) {
+                        if (listener != null && !quietReaction && message != null && !message.isEmpty()) {
                             listener.onToolProgress("tool_progress", call.id, message, null, null, reflectionSource, auditDetail);
                         }
                     });
@@ -599,7 +602,7 @@ public final class CoreAgentLoop {
                     transcript.add(ConversationTurn.toolResult(call.id, call.name, content));
                     updateTranscriptSnapshot(transcript);
                     if (result.finishRun && result.success) terminalText = rawContent;
-                    if (listener != null) listener.onToolProgress(result.success ? "tool_result" : "tool_error", call.id, displayName, content, result.previewId, reflectionSource, auditDetail);
+                    if (listener != null && (!quietReaction || !result.success)) listener.onToolProgress(result.success ? "tool_result" : "tool_error", call.id, displayName, content, result.previewId, reflectionSource, auditDetail);
                 }
                 for (int index = callCount; index < reply.calls.size(); index++) {
                     ModelReply.Call call = reply.calls.get(index);
