@@ -25,7 +25,9 @@ class LinuxFlavorSurfaceTest {
                 mainTools.map { it.declaration().name })
             assertNotNull(mainPrompt)
             assertTrue(mainPrompt!!.contains("PRoot is not a sandbox"))
-            assertTrue(mainPrompt.contains("Every command requires individual user approval"))
+            // v28 retains per-command approval by default and adds the user's explicit Allow always opt-in.
+            assertTrue(mainPrompt.contains("Every command requires user approval unless the user has enabled Allow always."))
+            assertTrue(mainPrompt.contains("linux_setup asks for explicit consent."))
         } else {
             assertTrue(mainTools.isEmpty())
             assertNull(mainPrompt)

@@ -62,7 +62,8 @@ manifest = {
     "play_sha256": sha256(os.environ["PLAY_APK"]),
     "built_at": datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat(),
 }
-with open("helper_manifest.json", "w", encoding="utf-8", newline="\n") as output:
+manifest_path = "helper_manifest.unsigned.json" if os.environ["UNSIGNED"] == "true" else "helper_manifest.json"
+with open(manifest_path, "w", encoding="utf-8", newline="\n") as output:
     json.dump(manifest, output, indent=2)
     output.write("\n")
 print(json.dumps(manifest, indent=2))

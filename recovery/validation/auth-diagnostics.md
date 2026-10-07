@@ -1,3 +1,5 @@
+> Registro de un hito anterior. El resultado vigente está en [FINAL.md](FINAL.md).
+
 # Diagnóstico de autenticación recuperado
 
 Se conserva PKCE/state y el destino oficial de autenticación. El diagnóstico muestra únicamente campos sanitizados y allowlists de categoría/etapa/código. No se imprimen tokens, cuerpos, códigos ni IDs de cuenta.

@@ -15,6 +15,7 @@ import org.json.JSONObject;
 
 /** Allowlisted authentication metadata. Never retains response bodies, URLs, or exception messages. */
 public final class CodexAuthDiagnostic {
+    public static final String METHOD_BROWSER = "browser";
     private static final Set<String> OAUTH_CODES = new HashSet<>(Arrays.asList(
             "invalid_request", "invalid_client", "invalid_grant", "unauthorized_client",
             "unsupported_grant_type", "invalid_scope", "access_denied", "authorization_pending",

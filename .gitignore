@@ -10,3 +10,6 @@ pending/.current_session
 app/.build-logs/
 app/.kotlin/
 *.log
+
+# Unsigned local development receipts
+app/helper_manifest.unsigned.json

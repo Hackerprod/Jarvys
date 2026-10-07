@@ -17,6 +17,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.json.JSONObject;
+import org.junit.Before;
+import org.junit.After;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
@@ -30,6 +32,32 @@ import org.robolectric.annotation.GraphicsMode;
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 public class AttachmentModelContextRecoveryTest {
     @Rule public TemporaryFolder temp = new TemporaryFolder();
+    private final java.lang.reflect.Field[] serviceFields = new java.lang.reflect.Field[3];
+    private final Object[] previousServices = new Object[3];
+
+    @Before public void installTestSecretStorage() throws Exception {
+        // WorkspaceStore initializes the existing skills/MCP services. Robolectric has no
+        // AndroidKeyStore, so use SecretStore's explicit SharedPreferences test seam and
+        // keep these services scoped to this test's private files directory.
+        serviceFields[0] = SecretStore.class.getDeclaredField("singleton");
+        serviceFields[1] = com.jarvys.agent.mcp.McpServerRepository.class.getDeclaredField("instance");
+        serviceFields[2] = com.jarvys.agent.skills.SkillRepository.class.getDeclaredField("instance");
+        for (int index = 0; index < serviceFields.length; index++) {
+            serviceFields[index].setAccessible(true);
+            previousServices[index] = serviceFields[index].get(null);
+        }
+        serviceFields[0].set(null, new SecretStore(context().getSharedPreferences(
+                "attachment-model-test-secrets-" + UUID.randomUUID(), Context.MODE_PRIVATE)));
+        serviceFields[1].set(null, null);
+        serviceFields[2].set(null, null);
+    }
+
+    @After public void restoreServices() throws Exception {
+        for (int index = serviceFields.length - 1; index >= 0; index--) {
+            if (serviceFields[index] != null) serviceFields[index].set(null, previousServices[index]);
+        }
+    }
+
     private Context context() {
         Context base = ApplicationProvider.getApplicationContext();
         return new ContextWrapper(base) {
@@ -60,7 +88,8 @@ public class AttachmentModelContextRecoveryTest {
         assertEquals(1, prepared.images.size());
         assertEquals(4, prepared.images.get(0).width);
         assertTrue(prepared.modelContent.contains("attachment:" + image.id));
-        assertTrue(prepared.modelContent.contains("attachments/" + file.relativePath));
+        assertTrue(prepared.modelContent.contains("workspace_path="
+                + JSONObject.quote("attachments/" + file.relativePath)));
         assertTrue(prepared.modelContent.contains("untrusted data"));
         assertFalse(prepared.modelContent.contains("base64"));
         assertEquals(original.attachments, prepared.attachments);

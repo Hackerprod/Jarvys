@@ -1,3 +1,5 @@
+> Registro de un hito anterior. El resultado vigente está en [FINAL.md](FINAL.md).
+
 # Linux: recuperación de ejecución de proyectos
 
 Restauradas herramientas project_environment_status, project_exec y project_jobs; diario duradero, identidad de propietario, paginación UTF-8 de logs, redacción de credenciales, cancelación/timeouts, incertidumbre después de reinicio y ausencia de repetición automática. El lanzamiento conserva intención antes del proceso y verifica identidad PID antes de cancelarlo. Los errores al persistir salida se propagan.

@@ -1,0 +1,23 @@
+{
+  "version_code": 28,
+  "version_name": "1.2.22-UX13-recovery",
+  "new_signing_key_created": false,
+  "apks": [
+    {
+      "file": "Jarvys-unsigned.apk",
+      "bytes": 18771165,
+      "sha256": "270afea20ee1faff87f98cdae1805291b04b6b190b75a9fdda823d3e591d4a20",
+      "unsigned": true,
+      "zip_integrity": "pass",
+      "dex_files": 17
+    },
+    {
+      "file": "Jarvys-play-unsigned.apk",
+      "bytes": 17425290,
+      "sha256": "15a4ad1804fff8233a849870d396be38a5382e881c42fa0126c651b7ccb2f8c6",
+      "unsigned": true,
+      "zip_integrity": "pass",
+      "dex_files": 16
+    }
+  ]
+}

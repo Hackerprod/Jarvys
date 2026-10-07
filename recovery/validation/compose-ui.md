@@ -1,3 +1,5 @@
+> Registro de un hito anterior. El resultado vigente está en [FINAL.md](FINAL.md).
+
 # Interfaz Compose recuperada
 
 Restaurados: selección/copia/preparación/envío de adjuntos, vista previa y geometría de imágenes, acciones de conversación, archivo/fijado/nombre, controles de modelo/esfuerzo, temas nativos/contraste, editor de perfil Coding, recuperación explícita de Crew y diagnóstico/copia sanitizada de autenticación.

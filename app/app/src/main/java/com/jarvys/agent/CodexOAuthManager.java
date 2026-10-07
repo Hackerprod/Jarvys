@@ -321,7 +321,7 @@ public final class CodexOAuthManager {
         String title = activity.getString(connected ? R.string.oauth_callback_success_title : R.string.oauth_callback_failed_title);
         String body = activity.getString(connected ? R.string.oauth_callback_success_body : R.string.oauth_callback_failed_body);
         String diagnostic = connected || lastDiagnostic == null ? "" : "<pre style='font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere'>"
-                + html(lastDiagnostic.toDisplayText("browser")) + "</pre>";
+                + html(lastDiagnostic.toDisplayText(CodexAuthDiagnostic.METHOD_BROWSER)) + "</pre>";
         return "<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
                 + "<meta name='color-scheme' content='light dark'><title>Jarvys</title><style>"
                 + JarvysNativeTheme.callbackPageCss() + "</style></head><body><main><small>JARVYS</small><h1>"

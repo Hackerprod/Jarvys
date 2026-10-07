@@ -1,45 +1,29 @@
-# Recuperación progresiva de Jarvys v28
+# Jarvys v28: recuperación integrada
 
-Rama de trabajo: `recovery/v28-20261007`. La rama original permanece intacta.
+La reconstrucción está integrada en `recovery/v28-20261007` y compilada como **1.2.22-UX13-recovery** (código 28).
+
+## Verificado
+
+- Full: **923 pruebas aprobadas**, sin fallos/errores/omitidas.
+- Play: **839 pruebas aprobadas**, sin fallos/errores/omitidas.
+- Ambos APK de desarrollo construidos **sin firma**, sin generar otra clave.
+- 48 nuevas fuentes identificadas en el APK representadas en el proyecto; mapa en `new-source-coverage.json`.
+- [Resultados finales y límites](validation/FINAL.md), [resultados de pruebas](validation/test-results.json) y [hashes de APK unsigned](validation/unsigned-apks.json).
+
+## Restaurado
+
+Adjuntos y referencias de imagen; almacenamiento/metadatos y acciones de conversaciones; proyectos coding y diarios idempotentes; perfiles/checkpoints e inbox duradero de Crew; jobs Linux con permisos explícitos, cancelación e incertidumbre honesta; autenticación diagnosticable sin filtrar secretos; UI Compose, modelo/esfuerzo, contraste y recuperación explícita. La edición Play no anuncia ejecución Linux ni finge resultados de trabajos no verificables.
 
 ## Procedencia
 
 - Base original: `110a059cf63577a5d92d828b09e8f4b20768a0a9`.
-- APK de referencia: `Jarvys-UX13-full-v28.apk`, versión 28 / `1.2.22-UX13`, full/debug.
-- SHA-256 del APK: `43d2cf85b4843a212aa129868d3111e46a71e21c0c61489dd7305a09e3b6964f`.
+- APK de referencia: `Jarvys-UX13-full-v28.apk`, 28 / `1.2.22-UX13`, full/debug.
+- SHA-256: `43d2cf85b4843a212aa129868d3111e46a71e21c0c61489dd7305a09e3b6964f`.
 - Certificado público: `ad6f699ffdcbc57c0cf0631c772e8323ca678b47bb67f4e09cfd8442e61b39ee`.
-- ZIP, checksums de los 17 DEX y firma APK v2 verificados.
-- Evidencia: JADX 1.5.6 en modo principal, simple y fallback; Apktool 3.0.3.
+- ZIP, 17 DEX y firma APK v2 de referencia verificados. Análisis con JADX 1.5.6 y Apktool 3.0.3.
 
-## Criterio de restauración
+## Desarrollo
 
-Se incorpora código legible a la aplicación, contrastando los errores del descompilador con instrucciones DEX/smali. El material generado no se presenta como el Kotlin original. Los avances se comprueban y se guardan en commits pequeños.
+`cd app && ./build_apk.sh --unsigned` produce Full y Play unsigned. El helper histórico `tools/build_apk_bigheap.sh` usa el mismo contrato seguro. El build firmado exige la clave original existente y nunca la reemplaza automáticamente.
 
-No se incluyen APK, dependencias descompiladas, claves, tokens ni datos privados de una instalación del teléfono. Las vistas de análisis se conservan por separado.
-
-## Avance actual
-
-- Restaurados los cambios de recursos de texto propios de v28, con su procedencia en `resource-restoration.json`.
-- Protegido `app/build_apk.sh`: si falta la clave original, se detiene en lugar de generar otra silenciosamente.
-- Restauradas 13 clases del módulo de proyectos de programación y cinco clases de pruebas. Compilan con destino Java 8 contra Android 36; 41 pruebas JVM enfocadas aprobadas. Ver `validation/coding-host.md` para límites.
-- Restauradas las rutas de adjuntos/imágenes, metadatos y almacenamiento de conversaciones, con transporte de imágenes y aislamiento. 27 aserciones host aprobadas; suite Android pendiente. Ver `validation/attachments-host.md`.
-- Restaurados perfiles/checkpoints Crew y recuperación explícita; 39 pruebas agregadas, aún pendientes de ejecución completa.
-- Producción Full compila (Kotlin y Java) en la integración de trabajo; suite completa en curso.
-- Restaurado el runtime Linux de proyectos, con estados persistentes, cancelación, paginación y permisos explícitos. Pruebas agregadas, ejecución Android en curso.
-- Restaurada la integración del runtime principal, delegación con capacidades restringidas, carga de skills revisada en cada uso y servicio de chat con adjuntos duraderos.
-- Restaurado el diagnóstico de autenticación, cancelación y reintento DNS antes de enviar cuerpo; pruebas sin red agregadas.
-- Restaurada la UI Compose de adjuntos, conversaciones, modelo/esfuerzo, perfiles/resume de Crew y diagnósticos de autenticación.
-- Los 48 nombres de fuente añadidos identificados en el APK están representados en la reconstrucción (`new-source-coverage.json`); esto no certifica igualdad del Kotlin original ni equivalencia de todos los comportamientos.
-- Primer APK Full unsigned generado sin crear ninguna keystore.
-- Suite Full: 923 pruebas ejecutadas, 916 aprobadas y 7 fallos en corrección. Auth (25) y nuevos checkpoints/Crew (39) aprobados. Falta rerun final y validación Play.
-- Pendiente: compilación completa, pruebas y verificación funcional de la aplicación reconstruida.
-
-## Desarrollo sin firma
-
-Durante la recuperación se usa `cd app && ./build_apk.sh --unsigned`. El parámetro Gradle `-PunsignedBuild=true` elimina la configuración de firma de ambos sabores debug. Los resultados llevan sufijo `-unsigned.apk` y no se deben instalar como actualización de la app existente. La ruta se ha validado por sintaxis; la primera compilación completa sigue pendiente de la integración.
-
-## Firma y pruebas
-
-La clave privada original no está en el APK. No se generará una nueva ni se sustituirá la app instalada durante la recuperación. La compilación y las pruebas de fuentes pueden ejecutarse sin firmar un APK. Un paquete firmado con otra clave no puede actualizar directamente la instalación anterior.
-
-Este documento se actualizará con resultados de pruebas reales y tareas que queden pendientes. Una recuperación parcial no se considerará una v28 terminada.
+La recuperación no es el Kotlin original exacto ni una prueba en dispositivo real. No se generó una clave, no se instaló nada y no se tocaron los datos de la instalación del teléfono. Los informes de hitos anteriores son históricos; el estado vigente está en `validation/FINAL.md`.

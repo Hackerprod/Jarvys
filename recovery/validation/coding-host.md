@@ -1,3 +1,5 @@
+> Registro de un hito anterior. El resultado vigente está en [FINAL.md](FINAL.md).
+
 # Validación parcial del módulo coding
 
 - 13 clases de producción compiladas con javac de JDK 21, destino Java 8, API Android 36 y contratos Core existentes.

@@ -1,3 +1,5 @@
+> Registro de un hito anterior. El resultado vigente está en [FINAL.md](FINAL.md).
+
 # Adjuntos e imágenes: verificación de recuperación
 
 - Compilación independiente con javac de ChatAttachment, ConversationImageReference, ImageEditInput y AttachmentStore.

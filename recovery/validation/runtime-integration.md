@@ -1,3 +1,5 @@
+> Registro de un hito anterior. El resultado vigente está en [FINAL.md](FINAL.md).
+
 # Runtime y aislamiento
 
 El runtime principal y el servicio de chat enlazan los módulos recuperados: checkpoints/perfiles de Crew, herramientas coding, ejecución Linux, adjuntos e imágenes.

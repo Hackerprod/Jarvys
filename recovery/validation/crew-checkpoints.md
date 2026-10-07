@@ -1,3 +1,5 @@
+> Registro de un hito anterior. El resultado vigente está en [FINAL.md](FINAL.md).
+
 # Crew y checkpoints: estado de restauración
 
 Restaurados perfiles schema 2, checkpoints con hashes, artefactos grandes paginados y redacción de credenciales, mensajes duraderos, compacción, estado de trabajos y recuperación explícita.

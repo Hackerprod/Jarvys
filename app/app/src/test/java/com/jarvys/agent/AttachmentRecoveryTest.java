@@ -4,6 +4,7 @@ import static org.junit.Assert.*;
 import android.content.ContentProvider;
 import android.content.ContentValues;
 import android.content.Context;
+import android.content.pm.ProviderInfo;
 import android.database.Cursor;
 import android.database.MatrixCursor;
 import android.graphics.Bitmap;
@@ -64,7 +65,11 @@ public class AttachmentRecoveryTest {
         File source = temp.newFile("source");
         Files.write(source.toPath(), new byte[]{1, 2, 3});
         FixtureProvider provider = new FixtureProvider(source);
-        ShadowContentResolver.registerProviderInternal("attachment.fixture", provider);
+        ProviderInfo info = new ProviderInfo();
+        info.authority = "attachment.fixture";
+        info.exported = false;
+        provider.attachInfo(context(), info);
+        ShadowContentResolver.registerProviderInternal(info.authority, provider);
         AttachmentStore store = new AttachmentStore(temp.newFolder("jarvys"), context().getContentResolver());
         Uri uri = Uri.parse("content://attachment.fixture/file");
         for (String name : new String[]{"../../x", "", "hello\0world", null, "repeat", "repeat"}) {
