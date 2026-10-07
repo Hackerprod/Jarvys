@@ -1322,7 +1322,10 @@ public final class LocalRunStore {
         synchronized (SESSION_TITLE_LOCK) { appendSessionRowLocked(conversationFile(sessionId), row); }
     }
 
-    private static void appendSessionRowLocked(File ledger, JSONObject row) {
+    private void appendSessionRowLocked(File ledger, JSONObject row) {
+        String sessionId = ledger.getName().substring(0, ledger.getName().length() - ".jsonl".length());
+        if (conversationMetadata.read(sessionId).deleted) throw new IllegalStateException("This chat has been deleted");
+        conversationFile(sessionId);
         byte[] record = (row.toString() + "\n").getBytes(StandardCharsets.UTF_8);
         try (FileOutputStream output = new FileOutputStream(ledger, true)) {
             output.write(record);

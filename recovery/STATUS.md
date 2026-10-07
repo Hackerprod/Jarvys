@@ -26,7 +26,8 @@ No se incluyen APK, dependencias descompiladas, claves, tokens ni datos privados
 - Restaurados perfiles/checkpoints Crew y recuperación explícita; 39 pruebas agregadas, aún pendientes de ejecución completa.
 - Producción Full compila (Kotlin y Java) en la integración de trabajo; suite completa en curso.
 - Restaurado el runtime Linux de proyectos, con estados persistentes, cancelación, paginación y permisos explícitos. Pruebas agregadas, ejecución Android en curso.
-- En curso: publicación progresiva de runtime/UI y diagnóstico de autenticación.
+- Restaurada la integración del runtime principal, delegación con capacidades restringidas, carga de skills revisada en cada uso y servicio de chat con adjuntos duraderos.
+- En curso: publicación de UI y autenticación; suite Android completa con runner validado.
 - Pendiente: compilación completa, pruebas y verificación funcional de la aplicación reconstruida.
 
 ## Desarrollo sin firma
