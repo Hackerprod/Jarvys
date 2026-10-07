@@ -1,5 +1,12 @@
-build/
-*.idsig
-.gradle/
-*.class
-.DS_Store
+# local reference sources (not part of the project)
+.tmp/
+.temp/
+
+# local runtime data
+tools/error_reports.jsonl
+pending/.current_session
+
+# build/work artefacts
+app/.build-logs/
+app/.kotlin/
+*.log

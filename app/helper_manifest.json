@@ -1,0 +1,9 @@
+{
+  "package": "com.jarvys.agent",
+  "version_code": 6,
+  "version_name": "1.2.0",
+  "flavor": "full",
+  "sha256": "bab03b97500683c986f10d8054fc05d88803b89f3958ff49d0db756b7044a407",
+  "play_sha256": "068a8dcec83b63e75597670404df9916760743152c42416b1bc8f6ab5a12f4f5",
+  "built_at": "2026-10-07T00:07:57+00:00"
+}

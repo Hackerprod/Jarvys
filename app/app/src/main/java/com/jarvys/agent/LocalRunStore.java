@@ -1,0 +1,1655 @@
+package com.jarvys.agent;
+
+import android.content.Context;
+import android.util.Base64;
+
+import com.jarvys.agent.device.ScreenData;
+import com.jarvys.agent.crew.CrewMissionSnapshot;
+import com.jarvys.agent.crew.CrewProcessIdentity;
+import com.jarvys.agent.proactive.ProactiveReplyClaim;
+import com.jarvys.agent.proactive.ProactiveSuggestedReply;
+import com.jarvys.agent.UserDecisionOption;
+import com.jarvys.agent.UserDecisionRole;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.FileOutputStream;
+import java.nio.charset.StandardCharsets;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.List;
+import java.util.Locale;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.HashSet;
+import java.util.Set;
+
+/** App-private append-only run records and notes for graph/history tools. */
+public final class LocalRunStore {
+    private static final Object SESSION_TITLE_LOCK = new Object();
+    private static final Set<String> SESSION_TITLES_IN_PROGRESS = new HashSet<>();
+    private static final Map<String, String> CREW_SNAPSHOT_DIGESTS = new LinkedHashMap<>();
+    private final File root;
+    private final File notes;
+    private final File conversations;
+    private final Map<String, File> runDirectories = new LinkedHashMap<>();
+    private String activeRunId;
+    private File activeRunDirectory;
+
+    public static final class ReflectionPayload {
+        public final String text;
+        public final String endMessageId;
+        public final List<String> compactionIds;
+        public final int completedAssistantSteps;
+        public final int userCharacters;
+        public final int messageCount;
+        public final boolean hasMoreMessages;
+        ReflectionPayload(String text, String endMessageId, List<String> compactionIds,
+                          int completedAssistantSteps, int userCharacters, int messageCount,
+                          boolean hasMoreMessages) {
+            this.text = text;
+            this.endMessageId = endMessageId;
+            this.compactionIds = java.util.Collections.unmodifiableList(new ArrayList<>(compactionIds));
+            this.completedAssistantSteps = completedAssistantSteps;
+            this.userCharacters = userCharacters;
+            this.messageCount = messageCount;
+            this.hasMoreMessages = hasMoreMessages;
+        }
+    }
+
+    public LocalRunStore(Context context) {
+        this(context.getFilesDir());
+    }
+
+    LocalRunStore(File filesDirectory) {
+        File jarvys = new File(filesDirectory, "jarvys");
+        root = new File(jarvys, "runs");
+        notes = new File(jarvys, "notes");
+        conversations = new File(jarvys, "conversations");
+        ensureDirectory(root);
+        ensureDirectory(notes);
+        ensureDirectory(conversations);
+    }
+
+    public synchronized String beginRun(String goal) {
+        return beginRun(goal, null);
+    }
+
+    public synchronized String beginRun(String goal, String sessionId) {
+        String stamp = new SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(new Date());
+        activeRunId = stamp + "_" + Long.toHexString(System.nanoTime());
+        activeRunDirectory = new File(root, activeRunId);
+        ensureDirectory(activeRunDirectory);
+        runDirectories.put(activeRunId, activeRunDirectory);
+        JSONObject start = new JSONObject();
+        try {
+            start.put("event", "run_start");
+            start.put("run_id", activeRunId);
+            if (sessionId != null && !sessionId.trim().isEmpty()) start.put("session_id", sessionId);
+            start.put("goal", goal);
+            start.put("timestamp", System.currentTimeMillis() / 1000.0);
+        } catch (Exception e) {
+            throw new IllegalStateException("Could not create run metadata", e);
+        }
+        appendJson(start);
+        return activeRunId;
+    }
+
+    public synchronized String appendConversationMessage(String sessionId, String role, String content) {
+        return appendConversationMessage(sessionId, role, content, null, "", "", "");
+    }
+
+    public synchronized String appendConversationMessage(String sessionId, String role, String content,
+                                                          Long durationMs, String runId, String userMessageId) {
+        return appendConversationMessage(sessionId, role, content, durationMs, runId, userMessageId, "");
+    }
+
+    /** Append a versioned, recoverable Crew snapshot to the existing per-conversation JSONL ledger. */
+    public synchronized void appendCrewMissionSnapshot(CrewMissionSnapshot snapshot) {
+        if (snapshot == null || snapshot.conversationId == null || snapshot.conversationId.trim().isEmpty()) {
+            throw new IllegalArgumentException("Crew snapshot requires a conversation id");
+        }
+        JSONObject row = snapshot.toJson();
+        String digest;
+        try {
+            byte[] hash = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(row.toString().getBytes(StandardCharsets.UTF_8));
+            StringBuilder encoded = new StringBuilder(hash.length * 2);
+            for (byte value : hash) encoded.append(String.format(Locale.ROOT, "%02x", value & 0xff));
+            digest = encoded.toString();
+        } catch (Exception error) { throw new IllegalStateException("Could not fingerprint Crew snapshot", error); }
+        try { row.put("timestamp", System.currentTimeMillis() / 1000.0); }
+        catch (Exception error) { throw new IllegalStateException("Could not create Crew ledger row", error); }
+        String key = snapshot.conversationId + "\u0000" + snapshot.missionId;
+        synchronized (SESSION_TITLE_LOCK) {
+            if (digest.equals(CREW_SNAPSHOT_DIGESTS.get(key))) return;
+            appendSessionRowLocked(conversationFile(snapshot.conversationId), row);
+            CREW_SNAPSHOT_DIGESTS.put(key, digest);
+        }
+    }
+
+    /** Reads the latest schema-supported Crew snapshot for each mission, preserving insertion order. */
+    public synchronized List<CrewMissionSnapshot> readCrewMissionSnapshots(String sessionId) {
+        Map<String, CrewMissionSnapshot> latest = new LinkedHashMap<>();
+        for (JSONObject row : readConversationRows(sessionId)) {
+            if (!"crew_snapshot".equals(row.optString("type"))) continue;
+            CrewMissionSnapshot snapshot = CrewMissionSnapshot.fromJson(row);
+            if (snapshot != null && sessionId.equals(snapshot.conversationId)) latest.put(snapshot.missionId, snapshot);
+        }
+        return new ArrayList<>(latest.values());
+    }
+
+    /** Legacy conversations have no Crew rows and remain untouched. Active rows from an older process are interrupted, never resumed. */
+    public synchronized List<CrewMissionSnapshot> recoverCrewMissions(String sessionId) {
+        List<CrewMissionSnapshot> recovered = new ArrayList<>();
+        for (CrewMissionSnapshot snapshot : readCrewMissionSnapshots(sessionId)) {
+            CrewMissionSnapshot value = snapshot.processId.equals(CrewProcessIdentity.ID) ? snapshot : snapshot.interrupted();
+            if (value != snapshot) appendCrewMissionSnapshot(value);
+            recovered.add(value);
+        }
+        return recovered;
+    }
+
+    public synchronized String appendConversationMessage(String sessionId, String role, String content,
+                                                          Long durationMs,
+                                                          String runId, String userMessageId, String status) {
+        return appendConversationMessage(sessionId, role, content, durationMs, runId, userMessageId, status, null);
+    }
+
+    public synchronized String appendConversationMessage(String sessionId, String role, String content,
+                                                          Long durationMs, String runId, String userMessageId,
+                                                          String status, String proactiveThreadKey) {
+        File ledger = conversationFile(sessionId);
+        if (!"user".equals(role) && !"assistant".equals(role)) {
+            throw new IllegalArgumentException("Conversation role must be user or assistant");
+        }
+        JSONObject row = new JSONObject();
+        String messageId = java.util.UUID.randomUUID().toString();
+        try {
+            row.put("role", role);
+            row.put("content", content == null ? "" : content);
+            row.put("messageId", messageId);
+            if ("assistant".equals(role)) {
+                if (status != null && !status.isEmpty()) row.put("status", status);
+                if (runId != null && !runId.isEmpty()) row.put("runId", runId);
+                if (userMessageId != null && !userMessageId.isEmpty()) row.put("userMessageId", userMessageId);
+                if (durationMs != null && durationMs > 0) row.put("durationMs", durationMs);
+            }
+            if (proactiveThreadKey != null && !proactiveThreadKey.isEmpty()) row.put("proactiveThreadKey", proactiveThreadKey);
+            row.put("timestamp", System.currentTimeMillis() / 1000.0);
+            synchronized (SESSION_TITLE_LOCK) {
+                appendSessionRowLocked(ledger, row);
+            }
+            return messageId;
+        } catch (Exception error) {
+            throw new IllegalStateException("Could not persist conversation message", error);
+        }
+    }
+
+    /** Idempotent system-authored assistant message for the dedicated Proactive conversation. */
+    public synchronized String appendProactiveAssistantMessageIfAbsent(String sessionId, String decisionId,
+                                                                          String content) {
+        return appendProactiveAssistantMessageIfAbsent(sessionId, decisionId, content, null, "");
+    }
+
+    public synchronized String appendProactiveAssistantMessageIfAbsent(String sessionId, String decisionId,
+                                                                          String content,
+                                                                          List<ProactiveSuggestedReply> replies,
+                                                                          String threadKey) {
+        if (decisionId == null || decisionId.trim().isEmpty()) {
+            throw new IllegalArgumentException("A proactive decision id is required");
+        }
+        File ledger = conversationFile(sessionId);
+        synchronized (SESSION_TITLE_LOCK) {
+            for (JSONObject existing : readConversationRows(sessionId)) {
+                if (decisionId.equals(existing.optString("proactiveDecisionId"))) {
+                    return existing.optString("messageId", "");
+                }
+            }
+            String messageId = java.util.UUID.randomUUID().toString();
+            JSONObject row = new JSONObject();
+            try {
+                row.put("role", "assistant");
+                row.put("content", content == null ? "" : content);
+                row.put("messageId", messageId);
+                row.put("status", "COMPLETED");
+                row.put("type", "proactive_message");
+                row.put("proactiveDecisionId", decisionId);
+                row.put("proactiveThreadKey", threadKey == null ? "" : threadKey);
+                JSONArray replyRows = new JSONArray();
+                if (replies != null) for (ProactiveSuggestedReply reply : replies) {
+                    replyRows.put(new JSONObject().put("label", reply.getLabel()).put("text", reply.getText()));
+                }
+                row.put("suggestedReplies", replyRows);
+                row.put("timestamp", System.currentTimeMillis() / 1000.0);
+                appendSessionRowLocked(ledger, row);
+                return messageId;
+            } catch (Exception error) {
+                throw new IllegalStateException("Could not persist proactive conversation message", error);
+            }
+        }
+    }
+
+    /** Appends the user-selected proactive reply before dispatching an ordinary agent turn. */
+    public synchronized String appendProactiveUserMessage(String sessionId, String content, String threadKey,
+                                                           String replyToMessageId) {
+        if (content == null || content.trim().isEmpty() || threadKey == null || threadKey.trim().isEmpty()) {
+            throw new IllegalArgumentException("A proactive user reply and thread key are required");
+        }
+        String messageId = java.util.UUID.randomUUID().toString();
+        JSONObject row = new JSONObject();
+        try {
+            row.put("role", "user");
+            row.put("content", content);
+            row.put("messageId", messageId);
+            row.put("proactiveThreadKey", threadKey);
+            row.put("proactiveReplyToMessageId", replyToMessageId == null ? "" : replyToMessageId);
+            row.put("timestamp", System.currentTimeMillis() / 1000.0);
+        } catch (Exception error) {
+            throw new IllegalStateException("Could not create proactive reply message", error);
+        }
+        synchronized (SESSION_TITLE_LOCK) { appendSessionRowLocked(conversationFile(sessionId), row); }
+        return messageId;
+    }
+
+    /** Atomically consumes every quick reply on a proactive message and returns only the selected text. */
+    public synchronized ProactiveReplyClaim claimProactiveSuggestedReply(String sessionId, String messageId, int index) {
+        synchronized (SESSION_TITLE_LOCK) {
+            List<JSONObject> rows = readConversationRows(sessionId);
+            for (JSONObject row : rows) {
+                if ("proactive_reply_used".equals(row.optString("type")) && messageId.equals(row.optString("messageId"))) return null;
+            }
+            JSONObject message = null;
+            for (JSONObject row : rows) {
+                if ("proactive_message".equals(row.optString("type")) && messageId.equals(row.optString("messageId"))) {
+                    message = row; break;
+                }
+            }
+            if (message == null || index < 0) return null;
+            JSONArray replies = message.optJSONArray("suggestedReplies");
+            if (replies == null || index >= replies.length()) return null;
+            JSONObject reply = replies.optJSONObject(index);
+            if (reply == null) return null;
+            String text = reply.optString("text").trim();
+            String threadKey = message.optString("proactiveThreadKey").trim();
+            if (text.isEmpty() || threadKey.isEmpty()) return null;
+            JSONObject claimed = new JSONObject();
+            try {
+                claimed.put("type", "proactive_reply_used");
+                claimed.put("messageId", messageId);
+                claimed.put("timestamp", System.currentTimeMillis() / 1000.0);
+            } catch (Exception error) { throw new IllegalStateException("Could not claim proactive reply", error); }
+            appendSessionRowLocked(conversationFile(sessionId), claimed);
+            return new ProactiveReplyClaim(text, threadKey, "");
+        }
+    }
+
+    public synchronized String proactiveThreadKeyForUserMessage(String sessionId, String userMessageId) {
+        if (userMessageId == null || userMessageId.isEmpty()) return null;
+        synchronized (SESSION_TITLE_LOCK) {
+            for (JSONObject row : readConversationRows(sessionId)) {
+                if ("user".equals(row.optString("role")) && userMessageId.equals(row.optString("messageId"))) {
+                    String key = row.optString("proactiveThreadKey", "");
+                    return key.isEmpty() ? null : key;
+                }
+            }
+        }
+        return null;
+    }
+
+    public synchronized String readConversationMessage(String sessionId, String messageId) {
+        if (messageId == null || messageId.isEmpty()) return null;
+        synchronized (SESSION_TITLE_LOCK) {
+            for (JSONObject row : readConversationRows(sessionId)) {
+                if ("user".equals(row.optString("role")) && messageId.equals(row.optString("messageId"))) {
+                    return row.optString("content", "");
+                }
+            }
+        }
+        return null;
+    }
+
+    public synchronized void appendAssistantTranslation(String sessionId, String messageId,
+                                                         String language, String translation) {
+        JSONObject row = new JSONObject();
+        try {
+            row.put("type", "assistant_translation");
+            row.put("messageId", messageId);
+            row.put("language", language);
+            row.put("content", translation == null ? "" : translation);
+            row.put("timestamp", System.currentTimeMillis() / 1000.0);
+        } catch (Exception error) {
+            throw new IllegalStateException("Could not create translation record", error);
+        }
+        synchronized (SESSION_TITLE_LOCK) { appendSessionRowLocked(conversationFile(sessionId), row); }
+    }
+
+    /** Durable chat-card data so an interrupted choice can be shown as unanswered, never resumed. */
+    public synchronized void appendUserDecisionRequest(String sessionId, String decisionId, String title,
+                                                        String body, List<UserDecisionOption> options,
+                                                        boolean allowDismiss) {
+        JSONObject row = new JSONObject();
+        JSONArray choices = new JSONArray();
+        try {
+            for (UserDecisionOption option : options) {
+                JSONObject item = new JSONObject();
+                item.put("id", option.getId());
+                item.put("label", option.getLabel());
+                item.put("description", option.getDescription());
+                item.put("role", option.getRole().name().toLowerCase(Locale.ROOT));
+                choices.put(item);
+            }
+            row.put("type", "user_decision_request");
+            row.put("decisionId", decisionId);
+            row.put("title", title);
+            row.put("body", body);
+            row.put("options", choices);
+            row.put("allowDismiss", allowDismiss);
+            row.put("timestamp", System.currentTimeMillis() / 1000.0);
+            synchronized (SESSION_TITLE_LOCK) { appendSessionRowLocked(conversationFile(sessionId), row); }
+        } catch (Exception error) {
+            throw new IllegalStateException("Could not persist user decision card", error);
+        }
+    }
+
+    public synchronized void appendUserDecisionResolution(String sessionId, String decisionId, String status,
+                                                           String optionId, String optionLabel) {
+        JSONObject row = new JSONObject();
+        try {
+            row.put("type", "user_decision_resolution");
+            row.put("decisionId", decisionId);
+            row.put("status", status);
+            if (optionId != null) row.put("optionId", optionId);
+            if (optionLabel != null) row.put("optionLabel", optionLabel);
+            row.put("timestamp", System.currentTimeMillis() / 1000.0);
+            synchronized (SESSION_TITLE_LOCK) { appendSessionRowLocked(conversationFile(sessionId), row); }
+        } catch (Exception error) {
+            throw new IllegalStateException("Could not persist user decision result", error);
+        }
+    }
+
+    public synchronized void appendAssistantRegenerated(String sessionId, String messageId) {
+        appendMessageMarker(sessionId, "assistant_regenerated", messageId);
+    }
+
+    public synchronized void appendAssistantDeleted(String sessionId, String messageId) {
+        appendMessageMarker(sessionId, "assistant_deleted", messageId);
+    }
+
+    public synchronized void appendAssistantTranslationHidden(String sessionId, String messageId) {
+        appendMessageMarker(sessionId, "assistant_translation_hidden", messageId);
+    }
+
+    /** Persists an image reference and prompt only; raw image bytes stay in GeneratedImageStore. */
+    public synchronized void appendGeneratedImageEvent(String sessionId, String relativePath,
+                                                        String prompt, String revisedPrompt,
+                                                        String size, String mimeType) {
+        new GeneratedImageStore(root.getParentFile()).resolve(sessionId, relativePath);
+        JSONObject row = new JSONObject();
+        try {
+            row.put("type", "generated_image");
+            row.put("imagePath", relativePath);
+            row.put("prompt", prompt == null ? "" : prompt);
+            row.put("revisedPrompt", revisedPrompt == null ? "" : revisedPrompt);
+            row.put("size", size == null ? "" : size);
+            row.put("mimeType", mimeType == null ? "image/png" : mimeType);
+            row.put("status", "COMPLETED");
+            row.put("timestamp", System.currentTimeMillis() / 1000.0);
+            synchronized (SESSION_TITLE_LOCK) { appendSessionRowLocked(conversationFile(sessionId), row); }
+        } catch (Exception error) {
+            throw new IllegalStateException("Could not persist generated image reference", error);
+        }
+    }
+
+    public synchronized void appendGeneratedImageFailure(String sessionId, String prompt, String error) {
+        JSONObject row = new JSONObject();
+        try {
+            row.put("type", "generated_image");
+            row.put("prompt", prompt == null ? "" : prompt);
+            row.put("revisedPrompt", "");
+            row.put("size", "");
+            row.put("mimeType", "image/png");
+            row.put("status", "FAILED");
+            row.put("error", error == null ? "Image generation failed." : error);
+            row.put("timestamp", System.currentTimeMillis() / 1000.0);
+            synchronized (SESSION_TITLE_LOCK) { appendSessionRowLocked(conversationFile(sessionId), row); }
+        } catch (Exception failure) {
+            throw new IllegalStateException("Could not persist generated image failure", failure);
+        }
+    }
+
+    /** Removes a conversation ledger and only that conversation's generated image directory. */
+    public synchronized boolean deleteConversation(String sessionId) {
+        File ledger = conversationFile(sessionId);
+        boolean ledgerDeleted;
+        synchronized (SESSION_TITLE_LOCK) {
+            SESSION_TITLES_IN_PROGRESS.remove(sessionId);
+            ledgerDeleted = !ledger.exists() || ledger.delete();
+        }
+        boolean imagesDeleted = new GeneratedImageStore(root.getParentFile()).deleteSession(sessionId);
+        return ledgerDeleted && imagesDeleted;
+    }
+
+    private void appendMessageMarker(String sessionId, String type, String messageId) {
+        if (messageId == null || messageId.isBlank()) throw new IllegalArgumentException("A message ID is required");
+        JSONObject row = new JSONObject();
+        try {
+            row.put("type", type);
+            row.put("messageId", messageId);
+            for (JSONObject message : readConversationMessages(sessionId)) {
+                if (messageId.equals(message.optString("messageId"))) {
+                    String runId = message.optString("runId", "");
+                    if (!runId.isEmpty()) row.put("runId", runId);
+                    String userMessageId = message.optString("userMessageId", "");
+                    if (!userMessageId.isEmpty()) row.put("userMessageId", userMessageId);
+                    break;
+                }
+            }
+            row.put("timestamp", System.currentTimeMillis() / 1000.0);
+        } catch (Exception error) { throw new IllegalStateException(error); }
+        synchronized (SESSION_TITLE_LOCK) { appendSessionRowLocked(conversationFile(sessionId), row); }
+    }
+
+    /** Persists only a trust marker; connector/MCP/workspace result bodies never enter reflection storage. */
+    public synchronized void appendReflectionToolEvent(String sessionId, String userMessageId,
+                                                       String toolName, String source, String stage, String callId) {
+        String normalizedSource = source == null ? "tool" : source.toLowerCase(Locale.ROOT);
+        JSONObject row = new JSONObject();
+        try {
+            row.put("type", "reflection_tool");
+            row.put("userMessageId", userMessageId == null ? "" : userMessageId);
+            row.put("toolName", toolName == null ? "tool" : toolName);
+            row.put("callId", callId == null ? "" : callId);
+            row.put("source", normalizedSource);
+            row.put("stage", stage == null ? "tool_result" : stage);
+            row.put("marker", normalizedSource.startsWith("connector")
+                    ? "[connector result omitted as sensitive, untrusted data]"
+                    : normalizedSource.equals("mcp")
+                        ? "[MCP result omitted as untrusted external data]"
+                        : "[tool result omitted; only user-confirmed facts may be reflected]");
+            row.put("timestamp", System.currentTimeMillis() / 1000.0);
+        } catch (Exception error) { throw new IllegalStateException("Could not create reflection tool marker", error); }
+        synchronized (SESSION_TITLE_LOCK) { appendSessionRowLocked(conversationFile(sessionId), row); }
+    }
+
+    public static final class RegenerationPrompt {
+        public final String text;
+        public final String userMessageId;
+        RegenerationPrompt(String text, String userMessageId) {
+            this.text = text;
+            this.userMessageId = userMessageId;
+        }
+    }
+
+    public synchronized RegenerationPrompt findUserMessageBeforeAssistant(String sessionId, String messageId) {
+        List<JSONObject> messages = readConversationMessages(sessionId);
+        int assistantIndex = -1;
+        for (int index = 0; index < messages.size(); index++) {
+            JSONObject row = messages.get(index);
+            if ("assistant".equals(row.optString("role")) && messageId.equals(row.optString("messageId"))) {
+                assistantIndex = index;
+                break;
+            }
+        }
+        if (assistantIndex < 0) return null;
+        for (int index = assistantIndex - 1; index >= 0; index--) {
+            JSONObject row = messages.get(index);
+            if ("user".equals(row.optString("role"))) {
+                return new RegenerationPrompt(row.optString("content", ""), row.optString("messageId", ""));
+            }
+        }
+        return null;
+    }
+
+    public synchronized boolean isLatestActiveAssistant(String sessionId, String messageId) {
+        List<JSONObject> messages = readConversationMessages(sessionId);
+        Set<String> hidden = hiddenAssistantIds(readConversationRows(sessionId));
+        String latestId = null;
+        for (JSONObject row : messages) {
+            if ("assistant".equals(row.optString("role")) && !hidden.contains(row.optString("messageId"))) {
+                latestId = row.optString("messageId", "");
+            }
+        }
+        return messageId != null && messageId.equals(latestId);
+    }
+
+    public synchronized List<JSONObject> readConversationMessages(String sessionId) {
+        File ledger = conversationFile(sessionId);
+        List<JSONObject> messages = new ArrayList<>();
+        if (!ledger.isFile()) return messages;
+        synchronized (SESSION_TITLE_LOCK) {
+        try (BufferedReader reader = new BufferedReader(new FileReader(ledger))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                try {
+                    JSONObject row = new JSONObject(line);
+                    String role = row.optString("role");
+                    if (("user".equals(role) || "assistant".equals(role)) && row.has("content")) messages.add(row);
+                } catch (Exception ignored) { }
+            }
+        } catch (Exception error) {
+            throw new IllegalStateException("Could not read conversation messages", error);
+        }
+        }
+        return messages;
+    }
+
+    /** Loads model context as the latest summary plus the raw tail after its persisted boundary. */
+    public synchronized List<ConversationTurn> loadConversationContext(String sessionId) {
+        List<JSONObject> rows = readConversationRows(sessionId);
+        List<JSONObject> messages = new ArrayList<>();
+        JSONObject latestCompaction = null;
+        int latestCompactionRow = -1;
+        int latestAssistantInvalidationRow = -1;
+        Set<String> hidden = hiddenAssistantIds(rows);
+        for (int rowIndex = 0; rowIndex < rows.size(); rowIndex++) {
+            JSONObject row = rows.get(rowIndex);
+            String type = row.optString("type");
+            String role = row.optString("role");
+            if (("user".equals(role) || "assistant".equals(role)) && row.has("content")) messages.add(row);
+            else if ("compaction".equals(type)) {
+                latestCompaction = row;
+                latestCompactionRow = rowIndex;
+            } else if ("assistant_regenerated".equals(type) || "assistant_deleted".equals(type)) {
+                latestAssistantInvalidationRow = rowIndex;
+            }
+        }
+        // A prior summary may contain the now-replaced response. Rebuild from raw active rows
+        // until a newer compaction is appended from the filtered context.
+        if (latestAssistantInvalidationRow > latestCompactionRow) latestCompaction = null;
+        List<ConversationTurn> context = new ArrayList<>();
+        int firstKept = 0;
+        if (latestCompaction != null) {
+            firstKept = Math.max(0, Math.min(messages.size(), latestCompaction.optInt("firstKept", 0)));
+            String summary = latestCompaction.optString("summary", "");
+            if (!summary.isEmpty()) context.add(ConversationTurn.compactionSummary(summary,
+                    latestCompaction.optInt("summarizedMessages", firstKept)));
+        }
+        for (int index = firstKept; index < messages.size(); index++) {
+            JSONObject row = messages.get(index);
+            if ("assistant".equals(row.optString("role"))
+                    && hidden.contains(row.optString("messageId", ""))) continue;
+            context.add(new ConversationTurn(row.optString("role"), row.optString("content", ""), index));
+        }
+        return context;
+    }
+
+    public synchronized int latestUserMessageIndex(String sessionId) {
+        List<JSONObject> messages = readConversationMessages(sessionId);
+        for (int index = messages.size() - 1; index >= 0; index--) {
+            if ("user".equals(messages.get(index).optString("role"))) return index;
+        }
+        return -1;
+    }
+
+    public synchronized String latestUserMessageId(String sessionId) {
+        List<JSONObject> messages = readConversationMessages(sessionId);
+        for (int index = messages.size() - 1; index >= 0; index--) {
+            JSONObject row = messages.get(index);
+            if ("user".equals(row.optString("role"))) return row.optString("messageId", "");
+        }
+        return "";
+    }
+
+    private List<JSONObject> readConversationRows(String sessionId) {
+        File ledger = conversationFile(sessionId);
+        List<JSONObject> rows = new ArrayList<>();
+        if (!ledger.isFile()) return rows;
+        synchronized (SESSION_TITLE_LOCK) {
+            try (BufferedReader reader = new BufferedReader(new FileReader(ledger))) {
+                String line;
+                while ((line = reader.readLine()) != null) try { rows.add(new JSONObject(line)); }
+                catch (Exception ignored) { }
+            } catch (Exception error) {
+                throw new IllegalStateException("Could not read conversation ledger", error);
+            }
+        }
+        return rows;
+    }
+
+    private static Set<String> hiddenAssistantIds(List<JSONObject> rows) {
+        Set<String> hidden = new HashSet<>();
+        for (int rowIndex = 0; rowIndex < rows.size(); rowIndex++) {
+            JSONObject row = rows.get(rowIndex);
+            String type = row.optString("type");
+            if ("assistant_regenerated".equals(type) || "assistant_deleted".equals(type)) {
+                String id = row.optString("messageId", "");
+                if (!id.isEmpty()) hidden.add(id);
+            }
+        }
+        return hidden;
+    }
+
+    public synchronized List<JSONObject> readActiveConversationMessages(String sessionId) {
+        List<JSONObject> rows = readConversationRows(sessionId);
+        Set<String> hidden = hiddenAssistantIds(rows);
+        List<JSONObject> active = new ArrayList<>();
+        for (JSONObject row : rows) {
+            String role = row.optString("role");
+            if (("user".equals(role) || "assistant".equals(role))
+                    && !("assistant".equals(role) && hidden.contains(row.optString("messageId", "")))) {
+                active.add(row);
+            }
+        }
+        return active;
+    }
+
+    public synchronized ReflectionPayload buildReflectionPayload(String sessionId) {
+        return buildReflectionPayload(sessionId, null, false);
+    }
+
+    /** Snapshot an automatic post-turn payload through its completed assistant message, excluding later turns. */
+    // Message-id checkpoint and bounded unreflected slice follow reflection-transcript.ts:30-37,1644-1677.
+    public synchronized ReflectionPayload buildReflectionPayload(String sessionId, String throughMessageId) {
+        return buildReflectionPayload(sessionId, throughMessageId, false);
+    }
+
+    public synchronized ReflectionPayload buildReflectionPayload(String sessionId, String throughMessageId,
+                                                                  boolean replayAll) {
+        List<JSONObject> rows = readConversationRows(sessionId);
+        List<JSONObject> messages = new ArrayList<>();
+        Map<String, Integer> indexById = new LinkedHashMap<>();
+        Map<JSONObject, Integer> indexByRow = new java.util.IdentityHashMap<>();
+        Map<String, Integer> rowIndexByMessageId = new LinkedHashMap<>();
+        Set<String> hidden = hiddenAssistantIds(rows);
+        JSONObject latestCheckpoint = null;
+        for (int rowIndex = 0; rowIndex < rows.size(); rowIndex++) {
+            JSONObject row = rows.get(rowIndex);
+            String role = row.optString("role");
+            if ("user".equals(role) || "assistant".equals(role)) {
+                int index = messages.size();
+                JSONObject copy;
+                try { copy = new JSONObject(row.toString()); }
+                catch (Exception error) { throw new IllegalStateException("Could not copy reflection transcript row", error); }
+                if (copy.optString("messageId").isEmpty()) {
+                    try { copy.put("messageId", "legacy-" + index); } catch (Exception ignored) { }
+                }
+                messages.add(copy);
+                indexByRow.put(row, index);
+                indexById.put(copy.optString("messageId"), index);
+                rowIndexByMessageId.put(copy.optString("messageId"), rowIndex);
+            } else if ("reflection_checkpoint".equals(row.optString("type"))
+                    || "reflection_commit".equals(row.optString("type"))) {
+                latestCheckpoint = row;
+            }
+        }
+        int checkpointIndex = replayAll ? -1 : latestCheckpoint == null ? -1
+                : indexById.getOrDefault(latestCheckpoint.optString("throughMessageId", ""), -1);
+        int maxRowIndex = throughMessageId == null || throughMessageId.isEmpty()
+                ? rows.size() - 1 : rowIndexByMessageId.getOrDefault(throughMessageId, -1);
+        int endIndex = -1;
+        for (int index = messages.size() - 1; index >= 0; index--) {
+            JSONObject message = messages.get(index);
+            if (rowIndexByMessageId.getOrDefault(message.optString("messageId"), Integer.MAX_VALUE) <= maxRowIndex
+                    && !("assistant".equals(message.optString("role")) && hidden.contains(message.optString("messageId")))) {
+                endIndex = index;
+                break;
+            }
+        }
+        String endMessageId = endIndex < 0 ? "" : messages.get(endIndex).optString("messageId", "");
+        if (endIndex <= checkpointIndex) {
+            return new ReflectionPayload("[]", "", java.util.Collections.emptyList(), 0, 0, 0, false);
+        }
+        Set<String> connectorDerivedUsers = new HashSet<>();
+        for (int rowIndex = 0; rowIndex <= maxRowIndex && rowIndex < rows.size(); rowIndex++) {
+            JSONObject row = rows.get(rowIndex);
+            if (!"reflection_tool".equals(row.optString("type"))) continue;
+            String source = row.optString("source", "");
+            if (source.startsWith("connector") || "mcp".equals(source) || "delegate".equals(source) || "web".equals(source)) {
+                String userId = row.optString("userMessageId", "");
+                if (!userId.isEmpty()) connectorDerivedUsers.add(userId);
+            }
+        }
+
+        List<ReflectionTranscriptBuilder.Entry> transcript = new ArrayList<>();
+        for (int rowIndex = 0; rowIndex <= maxRowIndex && rowIndex < rows.size(); rowIndex++) {
+            JSONObject row = rows.get(rowIndex);
+            String role = row.optString("role");
+            if ("user".equals(role) || "assistant".equals(role)) {
+                String id = row.optString("messageId", "");
+                int index = indexByRow.getOrDefault(row, -1);
+                if (id.isEmpty() && index >= 0) id = "legacy-" + index;
+                if (index <= checkpointIndex || index > endIndex) continue;
+                if ("assistant".equals(role) && hidden.contains(id)) continue;
+                String text = row.optString("content", "");
+                if ("assistant".equals(role) && connectorDerivedUsers.contains(row.optString("userMessageId", ""))) {
+                    text = "[assistant response following connector/MCP data omitted; use user-authored confirmation only]";
+                }
+                String safe = ReflectionTranscriptBuilder.sanitize(text);
+                transcript.add(new ReflectionTranscriptBuilder.Entry(role, safe,
+                        "assistant".equals(role) ? "context_only" : "user_authored",
+                        id, reflectionTimestamp(row), "", "", true));
+            } else if ("reflection_tool".equals(row.optString("type"))) {
+                String userId = row.optString("userMessageId", "");
+                int userIndex = indexById.getOrDefault(userId, -1);
+                if (userIndex <= checkpointIndex || userIndex > endIndex) continue;
+                transcript.add(new ReflectionTranscriptBuilder.Entry("tool_call", row.optString("marker", "[tool result omitted]"),
+                        row.optString("source", "tool"), userId, reflectionTimestamp(row),
+                        row.optString("toolName", "tool"), row.optString("callId", ""),
+                        "tool_result".equals(row.optString("stage"))));
+            }
+        }
+        String serialized = ReflectionTranscriptBuilder.build(transcript);
+        String includedEndMessageId = ReflectionTranscriptBuilder.lastMessageId(serialized);
+        int includedEndIndex = indexById.getOrDefault(includedEndMessageId, -1);
+        if (includedEndIndex < 0) {
+            return new ReflectionPayload(serialized, "", java.util.Collections.emptyList(), 0, 0, 0, endIndex >= 0);
+        }
+        boolean hasMoreMessages = includedEndIndex < endIndex;
+        int userCharacters = 0;
+        int messageCount = 0;
+        int completedSteps = 0;
+        for (int index = checkpointIndex + 1; index <= includedEndIndex; index++) {
+            JSONObject message = messages.get(index);
+            String role = message.optString("role");
+            if ("assistant".equals(role) && hidden.contains(message.optString("messageId", ""))) continue;
+            String text = ReflectionTranscriptBuilder.sanitize(message.optString("content", ""));
+            if ("user".equals(role) && !text.startsWith("[message omitted:")) userCharacters += text.length();
+            if ("assistant".equals(role) && (message.optString("status").isEmpty()
+                    || "COMPLETED".equals(message.optString("status")))) completedSteps++;
+            messageCount++;
+        }
+        int checkpointRowIndex = rowIndexByMessageId.getOrDefault(includedEndMessageId, -1);
+        int compactionBoundary = hasMoreMessages ? checkpointRowIndex + 1 : maxRowIndex + 1;
+        List<String> compacted = checkpointRowIndex < 0 ? java.util.Collections.emptyList()
+                : pendingCompactionIds(rows.subList(0, Math.max(0, Math.min(rows.size(), compactionBoundary))));
+        return new ReflectionPayload(serialized, includedEndMessageId, compacted,
+                completedSteps, userCharacters, messageCount, hasMoreMessages);
+    }
+
+    public synchronized List<String> listConversationSessionIds() {
+        File[] files = conversations.listFiles((directory, name) -> name.endsWith(".jsonl"));
+        if (files == null) return java.util.Collections.emptyList();
+        List<String> ids = new ArrayList<>();
+        for (File file : files) ids.add(file.getName().substring(0, file.getName().length() - ".jsonl".length()));
+        java.util.Collections.sort(ids);
+        return ids;
+    }
+
+    public synchronized void appendReflectionCheckpoint(String sessionId, ReflectionPayload payload,
+                                                        String reflectionId, String result) {
+        if (payload == null || payload.endMessageId.isEmpty()) throw new IllegalArgumentException("Reflection checkpoint has no message boundary");
+        JSONObject row = new JSONObject();
+        try {
+            row.put("type", "reflection_checkpoint");
+            row.put("throughMessageId", payload.endMessageId);
+            row.put("reflectionId", reflectionId);
+            row.put("completedAssistantSteps", payload.completedAssistantSteps);
+            row.put("result", result == null ? "" : result);
+            row.put("acknowledgedCompactionIds", new JSONArray(payload.compactionIds));
+            row.put("timestamp", System.currentTimeMillis() / 1000.0);
+        } catch (Exception error) { throw new IllegalStateException("Could not create reflection checkpoint", error); }
+        synchronized (SESSION_TITLE_LOCK) { appendSessionRowLocked(conversationFile(sessionId), row); }
+    }
+
+    /** One append-only record commits a reflection checkpoint, learned-summary row, and group identity together. */
+    public synchronized void appendReflectionCommit(String sessionId, ReflectionPayload payload, String reflectionId,
+                                                    String summary, List<Long> revisionIds, String status, String trigger) {
+        if (payload == null || payload.endMessageId.isEmpty()) throw new IllegalArgumentException("Reflection checkpoint has no message boundary");
+        JSONObject row = new JSONObject();
+        try {
+            row.put("type", "reflection_commit");
+            row.put("throughMessageId", payload.endMessageId);
+            row.put("reflectionId", reflectionId);
+            row.put("summary", summary == null ? "" : summary);
+            row.put("status", status == null ? "completed" : status);
+            row.put("trigger", trigger == null ? "manual" : trigger);
+            row.put("completedAssistantSteps", payload.completedAssistantSteps);
+            row.put("acknowledgedCompactionIds", new JSONArray(payload.compactionIds));
+            JSONArray ids = new JSONArray();
+            if (revisionIds != null) for (Long revisionId : revisionIds) if (revisionId != null) ids.put(revisionId);
+            row.put("revisionIds", ids);
+            row.put("timestamp", System.currentTimeMillis() / 1000.0);
+        } catch (Exception error) { throw new IllegalStateException("Could not create reflection commit", error); }
+        synchronized (SESSION_TITLE_LOCK) { appendSessionRowLocked(conversationFile(sessionId), row); }
+    }
+
+    public synchronized void advanceReflectionCheckpoint(String sessionId, String reason) {
+        advanceReflectionCheckpoint(sessionId, reason, null);
+    }
+
+    public synchronized void advanceReflectionCheckpoint(String sessionId, String reason, String throughMessageId) {
+        ReflectionPayload payload = buildReflectionPayload(sessionId, throughMessageId);
+        if (payload.endMessageId.isEmpty()) {
+            if (!payload.compactionIds.isEmpty()) appendCompactionReflectionAcknowledgement(sessionId, payload.compactionIds);
+            return;
+        }
+        appendReflectionCheckpoint(sessionId, payload, "skipped", reason);
+    }
+
+    public synchronized void appendReflectionEvent(String sessionId, String reflectionId, String summary,
+                                                   List<Long> revisionIds, String status) {
+        JSONObject row = new JSONObject();
+        try {
+            row.put("type", "reflection_event");
+            row.put("reflectionId", reflectionId);
+            row.put("summary", summary == null ? "" : summary);
+            row.put("status", status == null ? "completed" : status);
+            JSONArray ids = new JSONArray();
+            if (revisionIds != null) for (Long id : revisionIds) if (id != null) ids.put(id);
+            row.put("revisionIds", ids);
+            row.put("timestamp", System.currentTimeMillis() / 1000.0);
+        } catch (Exception error) { throw new IllegalStateException("Could not create reflection event", error); }
+        synchronized (SESSION_TITLE_LOCK) { appendSessionRowLocked(conversationFile(sessionId), row); }
+    }
+
+    public synchronized void appendReflectionUndoEvent(String sessionId, String reflectionId) {
+        JSONObject row = new JSONObject();
+        try { row.put("type", "reflection_undo"); row.put("reflectionId", reflectionId); row.put("timestamp", System.currentTimeMillis() / 1000.0); }
+        catch (Exception error) { throw new IllegalStateException("Could not create reflection undo event", error); }
+        synchronized (SESSION_TITLE_LOCK) { appendSessionRowLocked(conversationFile(sessionId), row); }
+    }
+
+    public synchronized boolean hasReflectionCommit(String sessionId, String reflectionId) {
+        for (JSONObject row : readConversationRows(sessionId)) {
+            if ("reflection_commit".equals(row.optString("type"))
+                    && reflectionId.equals(row.optString("reflectionId"))) return true;
+        }
+        return false;
+    }
+
+    public synchronized List<String> pendingCompactionIds(String sessionId) {
+        return pendingCompactionIds(readConversationRows(sessionId));
+    }
+
+    private static List<String> pendingCompactionIds(List<JSONObject> rows) {
+        Set<String> pending = new java.util.LinkedHashSet<>();
+        for (int index = 0; index < rows.size(); index++) {
+            JSONObject row = rows.get(index);
+            if ("compaction".equals(row.optString("type"))) {
+                pending.add(compactionId(row, index));
+            } else if ("reflection_checkpoint".equals(row.optString("type"))
+                    || "reflection_commit".equals(row.optString("type"))) {
+                JSONArray acked = row.optJSONArray("acknowledgedCompactionIds");
+                if (acked != null) for (int i = 0; i < acked.length(); i++) pending.remove(acked.optString(i));
+            } else if ("compaction_reflection_consumed".equals(row.optString("type"))) {
+                JSONArray ids = row.optJSONArray("compactionIds");
+                if (ids == null) {
+                    String id = row.optString("compactionId", "");
+                    if (id.isEmpty()) pending.clear(); else pending.remove(id);
+                } else for (int i = 0; i < ids.length(); i++) pending.remove(ids.optString(i));
+            }
+        }
+        return new ArrayList<>(pending);
+    }
+
+    private static String reflectionTimestamp(JSONObject row) {
+        long millis = (long) (row.optDouble("timestamp", 0.0) * 1_000.0);
+        java.text.SimpleDateFormat format = new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.ROOT);
+        format.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+        return format.format(new Date(millis));
+    }
+
+    private static String compactionId(JSONObject row, int index) {
+        String value = row.optString("compactionId", "");
+        return value.isEmpty() ? "legacy-" + row.optString("timestamp", "") + "-" + index : value;
+    }
+
+    /** UI timeline preserves every original user/assistant row and inserts read-only compaction notices. */
+    public synchronized List<AgentRunUiEvent> readConversationTimeline(String sessionId) {
+        List<AgentRunUiEvent> events = new ArrayList<>();
+        List<JSONObject> rows = readConversationRows(sessionId);
+        Map<String, CrewMissionSnapshot> latestCrew = new LinkedHashMap<>();
+        Map<String, Integer> latestCrewRow = new LinkedHashMap<>();
+        Set<String> consumedProactiveReplies = new HashSet<>();
+        for (int index = 0; index < rows.size(); index++) {
+            JSONObject row = rows.get(index);
+            if ("proactive_reply_used".equals(row.optString("type"))) {
+                String usedMessageId = row.optString("messageId", "");
+                if (!usedMessageId.isEmpty()) consumedProactiveReplies.add(usedMessageId);
+            }
+            if (!"crew_snapshot".equals(row.optString("type"))) continue;
+            CrewMissionSnapshot snapshot = CrewMissionSnapshot.fromJson(row);
+            if (snapshot != null && sessionId.equals(snapshot.conversationId)) {
+                latestCrew.put(snapshot.missionId, snapshot);
+                latestCrewRow.put(snapshot.missionId, index);
+            }
+        }
+        Set<String> hiddenMessages = hiddenAssistantIds(rows);
+        Map<String, Integer> latestInvalidatedToolTurnRow = new LinkedHashMap<>();
+        int latestInvalidationRow = -1;
+        Set<String> undoneReflectionIds = new HashSet<>();
+        Map<String, JSONObject> userDecisionResolutions = new LinkedHashMap<>();
+        for (int index = 0; index < rows.size(); index++) {
+            JSONObject row = rows.get(index);
+            String type = row.optString("type");
+            if ("user_decision_resolution".equals(type)) {
+                String decisionId = row.optString("decisionId", "");
+                if (!decisionId.isEmpty()) userDecisionResolutions.put(decisionId, row);
+            }
+            if ("assistant_regenerated".equals(type) || "assistant_deleted".equals(type)) {
+                latestInvalidationRow = index;
+                String userMessageId = row.optString("userMessageId", "");
+                if (!userMessageId.isEmpty()) latestInvalidatedToolTurnRow.put(userMessageId, index);
+            }
+            if ("reflection_undo".equals(type)) undoneReflectionIds.add(rows.get(index).optString("reflectionId", ""));
+        }
+        Map<String, Integer> translationHiddenAt = new LinkedHashMap<>();
+        Map<String, Integer> latestTranslation = new LinkedHashMap<>();
+        for (int rowIndex = 0; rowIndex < rows.size(); rowIndex++) {
+            JSONObject row = rows.get(rowIndex);
+            if ("assistant_translation_hidden".equals(row.optString("type"))) {
+                translationHiddenAt.put(row.optString("messageId", ""), rowIndex);
+            } else if ("assistant_translation".equals(row.optString("type"))) {
+                latestTranslation.put(row.optString("messageId", ""), rowIndex);
+            }
+        }
+        long id = 1;
+        for (int rowIndex = 0; rowIndex < rows.size(); rowIndex++) {
+            JSONObject row = rows.get(rowIndex);
+            String role = row.optString("role");
+            String type = row.optString("type");
+            String messageId = row.optString("messageId", "");
+            if ("user".equals(role)) {
+                String threadKey = row.optString("proactiveThreadKey", "");
+                long timestamp = (long) (row.optDouble("timestamp", 0) * 1000);
+                events.add(threadKey.isEmpty()
+                        ? AgentRunUiEvent.messageEvent(id++, role, row.optString("content", ""), timestamp).copyMetadata(messageId, 0L)
+                        : AgentRunUiEvent.proactiveMessageEvent(id++, role, row.optString("content", ""),
+                                timestamp, messageId, threadKey, java.util.Collections.emptyList(), false, 0L, null, false));
+            } else if ("assistant".equals(role)) {
+                if (hiddenMessages.contains(messageId)) continue;
+                long timestamp = (long) (row.optDouble("timestamp", 0) * 1000);
+                String threadKey = row.optString("proactiveThreadKey", "");
+                if ("proactive_message".equals(type)) {
+                    events.add(AgentRunUiEvent.proactiveMessageEvent(id++, role, row.optString("content", ""),
+                        timestamp, messageId, threadKey, proactiveSuggestedReplies(row),
+                        consumedProactiveReplies.contains(messageId), row.optLong("durationMs", 0),
+                        AgentRunUiEvent.assistantStageForOutcome(row.optString("status", "")), true));
+                } else if (!threadKey.isEmpty()) {
+                    events.add(AgentRunUiEvent.proactiveMessageEvent(id++, role, row.optString("content", ""),
+                        timestamp, messageId, threadKey, java.util.Collections.emptyList(), false,
+                        row.optLong("durationMs", 0),
+                        AgentRunUiEvent.assistantStageForOutcome(row.optString("status", "")), false));
+                } else {
+                    events.add(AgentRunUiEvent.messageEvent(id++, role, row.optString("content", ""), timestamp)
+                        .copyMetadata(messageId, row.optLong("durationMs", 0)).copyStage(
+                            AgentRunUiEvent.assistantStageForOutcome(row.optString("status", ""))));
+                }
+            } else if ("generated_image".equals(type)) {
+                events.add(AgentRunUiEvent.generatedImageEvent(id++,
+                        row.has("imagePath") ? row.optString("imagePath", null) : null,
+                        row.optString("prompt", ""), row.optString("revisedPrompt", ""),
+                        row.optString("mimeType", "image/png"), row.optString("size", ""),
+                        row.optString("status", "FAILED"), row.optString("error", ""),
+                        (long) (row.optDouble("timestamp", 0) * 1000)));
+            } else if ("reflection_tool".equals(type)) {
+                String userMessageId = row.optString("userMessageId", "");
+                if (userMessageId.isEmpty()
+                        || rowIndex < latestInvalidatedToolTurnRow.getOrDefault(userMessageId, -1)) continue;
+                String stage = row.optString("stage", "tool_result");
+                if (!"tool_result".equals(stage) && !"tool_error".equals(stage)) continue;
+                String toolName = row.optString("toolName", "tool");
+                String callId = row.optString("callId", "");
+                events.add(AgentRunUiEvent.toolEvent(id++, stage, toolName, null,
+                        callId.isEmpty() ? null : callId, null,
+                        (long) (row.optDouble("timestamp", 0) * 1000)));
+            } else if ("compaction".equals(type)) {
+                if (rowIndex < latestInvalidationRow) continue;
+                int count = row.optInt("summarizedMessages", 0);
+                events.add(AgentRunUiEvent.compactionEvent(id++, row.optString("summary", ""), count,
+                        row.optString("mode", "all"), (long) (row.optDouble("timestamp", 0) * 1000)));
+            } else if ("reflection_event".equals(type) || "reflection_commit".equals(type)) {
+                String reflectionId = row.optString("reflectionId", "");
+                JSONArray ids = row.optJSONArray("revisionIds");
+                List<Long> revisionIds = new ArrayList<>();
+                if (ids != null) for (int index = 0; index < ids.length(); index++) revisionIds.add(ids.optLong(index));
+                String status = undoneReflectionIds.contains(reflectionId) ? "undone" : row.optString("status", "completed");
+                if (!revisionIds.isEmpty()) {
+                    events.add(AgentRunUiEvent.reflectionMemoryEvent(id++, row.optString("summary", ""),
+                            reflectionId, revisionIds, status, (long) (row.optDouble("timestamp", 0) * 1000)));
+                }
+            } else if ("assistant_translation".equals(type)) {
+                if (hiddenMessages.contains(messageId)
+                        || rowIndex <= translationHiddenAt.getOrDefault(messageId, -1)
+                        || latestTranslation.getOrDefault(messageId, -1) != rowIndex) continue;
+                events.add(AgentRunUiEvent.translationEvent(id++, row.optString("language"),
+                        row.optString("content", ""), messageId,
+                        (long) (row.optDouble("timestamp", 0) * 1000)));
+            } else if ("crew_snapshot".equals(type)) {
+                CrewMissionSnapshot snapshot = CrewMissionSnapshot.fromJson(row);
+                if (snapshot != null && latestCrewRow.getOrDefault(snapshot.missionId, -1) == rowIndex) {
+                    events.add(AgentRunUiEvent.crewMissionEvent(id++, latestCrew.get(snapshot.missionId)));
+                }
+            } else if ("user_decision_request".equals(type)) {
+                events.add(userDecisionEvent(id++, row, userDecisionResolutions.get(row.optString("decisionId", ""))));
+            }
+        }
+        return events;
+    }
+
+    private static AgentRunUiEvent userDecisionEvent(long id, JSONObject row, JSONObject resolution) {
+        List<UserDecisionOption> options = new ArrayList<>();
+        JSONArray choices = row.optJSONArray("options");
+        if (choices != null) for (int index = 0; index < choices.length(); index++) {
+            JSONObject choice = choices.optJSONObject(index);
+            if (choice == null) continue;
+            String roleName = choice.optString("role", "default").toUpperCase(Locale.ROOT);
+            UserDecisionRole role;
+            try { role = UserDecisionRole.valueOf(roleName); }
+            catch (IllegalArgumentException invalidRole) { role = UserDecisionRole.DEFAULT; }
+            String optionId = choice.optString("id", "").trim();
+            String label = choice.optString("label", "").trim();
+            if (!optionId.isEmpty() && !label.isEmpty()) options.add(new UserDecisionOption(optionId, label,
+                    choice.optString("description", ""), role));
+        }
+        String status = resolution == null ? "UNANSWERED" : resolution.optString("status", "UNANSWERED");
+        return AgentRunUiEvent.userDecisionEvent(id, row.optString("decisionId", ""),
+                row.optString("title", ""), row.optString("body", ""), options,
+                row.optBoolean("allowDismiss", true), status,
+                resolution == null ? null : resolution.optString("optionId", null),
+                resolution == null ? null : resolution.optString("optionLabel", null),
+                (long) (row.optDouble("timestamp", 0) * 1000));
+    }
+
+    public synchronized int conversationMessageCount(String sessionId) {
+        return readConversationMessages(sessionId).size();
+    }
+
+    private static List<ProactiveSuggestedReply> proactiveSuggestedReplies(JSONObject row) {
+        JSONArray values = row.optJSONArray("suggestedReplies");
+        if (values == null) return java.util.Collections.emptyList();
+        List<ProactiveSuggestedReply> replies = new ArrayList<>();
+        for (int index = 0; index < values.length(); index++) {
+            JSONObject item = values.optJSONObject(index);
+            if (item == null) continue;
+            String label = item.optString("label", "");
+            String text = item.optString("text", "");
+            if (!label.trim().isEmpty() && !text.trim().isEmpty()) replies.add(new ProactiveSuggestedReply(label, text));
+        }
+        return replies;
+    }
+
+    /** True while at least one compaction id has not been acknowledged by a reflection checkpoint. */
+    public synchronized boolean hasPendingCompactionReflection(String sessionId) {
+        return !pendingCompactionIds(sessionId).isEmpty();
+    }
+
+    public synchronized void acknowledgePendingCompactionReflection(String sessionId) {
+        appendCompactionReflectionAcknowledgement(sessionId, pendingCompactionIds(sessionId));
+    }
+
+    private void appendCompactionReflectionAcknowledgement(String sessionId, List<String> compactionIds) {
+        JSONObject row = new JSONObject();
+        try {
+            row.put("type", "compaction_reflection_consumed");
+            row.put("compactionIds", new JSONArray(compactionIds));
+            row.put("timestamp", System.currentTimeMillis() / 1000.0);
+        }
+        catch (Exception error) { throw new IllegalStateException(error); }
+        synchronized (SESSION_TITLE_LOCK) { appendSessionRowLocked(conversationFile(sessionId), row); }
+    }
+
+    public synchronized void appendCompaction(String sessionId, String summary, int firstKept,
+                                               String trigger, String mode, int summarizedMessages) {
+        if (summary == null || summary.trim().isEmpty()) throw new IllegalArgumentException("Compaction summary is empty");
+        JSONObject row = new JSONObject();
+        try {
+            row.put("type", "compaction");
+            row.put("summary", summary);
+            row.put("firstKept", Math.max(0, firstKept));
+            row.put("trigger", trigger == null ? "manual" : trigger);
+            row.put("mode", mode == null ? "all" : mode);
+            row.put("timestamp", System.currentTimeMillis() / 1000.0);
+            row.put("summarizedMessages", Math.max(0, summarizedMessages));
+        } catch (Exception error) { throw new IllegalStateException("Could not create compaction record", error); }
+        synchronized (SESSION_TITLE_LOCK) { appendSessionRowLocked(conversationFile(sessionId), row); }
+    }
+
+    private static void appendSessionRowLocked(File ledger, JSONObject row) {
+        byte[] record = (row.toString() + "\n").getBytes(StandardCharsets.UTF_8);
+        try (FileOutputStream output = new FileOutputStream(ledger, true)) {
+            output.write(record);
+            output.flush();
+            output.getFD().sync();
+        } catch (Exception error) {
+            throw new IllegalStateException("Could not append conversation ledger entry", error);
+        }
+    }
+
+    public String readFirstUserMessage(String sessionId) {
+        File ledger = conversationFile(sessionId);
+        if (!ledger.isFile()) return null;
+        synchronized (SESSION_TITLE_LOCK) {
+            try (BufferedReader reader = new BufferedReader(new FileReader(ledger))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    try {
+                        JSONObject row = new JSONObject(line);
+                        if ("user".equals(row.optString("role")) && row.has("content")) {
+                            return row.optString("content", "");
+                        }
+                    } catch (Exception ignored) { }
+                }
+            } catch (Exception error) {
+                throw new IllegalStateException("Could not read first conversation message", error);
+            }
+        }
+        return null;
+    }
+
+    public String readConversationTitle(String sessionId) {
+        File ledger = conversationFile(sessionId);
+        if (!ledger.isFile()) return null;
+        synchronized (SESSION_TITLE_LOCK) {
+            return readConversationTitleLocked(ledger);
+        }
+    }
+
+    public boolean claimConversationTitleGeneration(String sessionId) {
+        File ledger = conversationFile(sessionId);
+        synchronized (SESSION_TITLE_LOCK) {
+            return readConversationTitleLocked(ledger) == null && SESSION_TITLES_IN_PROGRESS.add(sessionId);
+        }
+    }
+
+    public boolean appendConversationTitleIfAbsent(String sessionId, String title) {
+        File ledger = conversationFile(sessionId);
+        String normalizedTitle = title == null ? "" : title.trim();
+        if (normalizedTitle.isEmpty()) return false;
+        synchronized (SESSION_TITLE_LOCK) {
+            if (readConversationTitleLocked(ledger) != null) return false;
+            JSONObject row = new JSONObject();
+            try {
+                row.put("role", "session_title");
+                row.put("content", normalizedTitle);
+                row.put("timestamp", System.currentTimeMillis() / 1000.0);
+                appendSessionRowLocked(ledger, row);
+                return true;
+            } catch (Exception error) {
+                throw new IllegalStateException("Could not persist conversation title", error);
+            }
+        }
+    }
+
+    public void releaseConversationTitleGeneration(String sessionId) {
+        synchronized (SESSION_TITLE_LOCK) {
+            SESSION_TITLES_IN_PROGRESS.remove(sessionId);
+        }
+    }
+
+    private static String readConversationTitleLocked(File ledger) {
+        if (!ledger.isFile()) return null;
+        try (BufferedReader reader = new BufferedReader(new FileReader(ledger))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                try {
+                    JSONObject row = new JSONObject(line);
+                    if ("session_title".equals(row.optString("role"))) {
+                        String title = row.optString("content", "").trim();
+                        if (!title.isEmpty()) return title;
+                    }
+                } catch (Exception ignored) { }
+            }
+        } catch (Exception error) {
+            throw new IllegalStateException("Could not read conversation title", error);
+        }
+        return null;
+    }
+
+    public synchronized String readConversationContext(String sessionId) {
+        List<JSONObject> messages = readActiveConversationMessages(sessionId);
+        StringBuilder context = new StringBuilder();
+        int first = Math.max(0, messages.size() - 16);
+        for (int index = first; index < messages.size(); index++) {
+            JSONObject message = messages.get(index);
+            String content = message.optString("content", "");
+            if (content.length() > 3000) content = content.substring(0, 3000) + "…";
+            if (context.length() + content.length() > 16_000) break;
+            context.append(message.optString("role").toUpperCase(Locale.ROOT)).append(": ")
+                    .append(content).append('\n');
+        }
+        return context.toString();
+    }
+
+    private File conversationFile(String sessionId) {
+        if (sessionId == null || !sessionId.matches("[A-Za-z0-9_.-]{1,100}")) {
+            throw new IllegalArgumentException("Invalid conversation session ID");
+        }
+        return new File(conversations, sessionId + ".jsonl");
+    }
+
+    public synchronized void beginStep(StepRecord step) {
+        if (activeRunDirectory == null) throw new IllegalStateException("No active local run");
+        String prefix = String.format(Locale.ROOT, "step_%04d", step.number);
+        File beforeFile = writeImage(prefix + "_pre.jpg", step.before);
+        JSONObject record = new JSONObject();
+        try {
+            record.put("event", "step_start");
+            record.put("run_id", activeRunId);
+            record.put("step", step.number);
+            record.put("timestamp", step.startedAtMillis / 1000.0);
+            record.put("pre_screenshot", beforeFile.getName());
+            record.put("post_screenshot", JSONObject.NULL);
+            record.put("xml", step.before.uiHierarchyXml == null ? "" : step.before.uiHierarchyXml);
+            record.put("width", step.before.width);
+            record.put("height", step.before.height);
+            record.put("pre_width", step.before.width);
+            record.put("pre_height", step.before.height);
+            record.put("decisions", new JSONArray(step.decisions));
+            appendJson(record);
+        } catch (Exception e) {
+            throw new IllegalStateException("Could not persist execution_check for step " + step.number, e);
+        }
+    }
+
+    public synchronized void finishStep(StepRecord step) {
+        if (activeRunDirectory == null) throw new IllegalStateException("No active local run");
+        String prefix = String.format(Locale.ROOT, "step_%04d", step.number);
+        File afterFile = step.after == null ? null : writeImage(prefix + "_post.jpg", step.after);
+        JSONObject record = new JSONObject();
+        try {
+            record.put("event", "step_result");
+            record.put("run_id", activeRunId);
+            record.put("step", step.number);
+            record.put("post_screenshot", afterFile == null ? JSONObject.NULL : afterFile.getName());
+            record.put("post_width", step.after == null ? 0 : step.after.width);
+            record.put("post_height", step.after == null ? 0 : step.after.height);
+            record.put("success", step.success);
+            record.put("result", step.result == null ? "" : step.result);
+            appendJson(record);
+        } catch (Exception e) {
+            throw new IllegalStateException("Could not persist Validator result for step " + step.number, e);
+        }
+    }
+
+    public synchronized void recordSummary(String runId, int stepNumber, String summary) {
+        File runDirectory = runDirectories.get(runId);
+        if (runDirectory == null) return;
+        JSONObject record = new JSONObject();
+        try {
+            record.put("event", "step_summary");
+            record.put("run_id", runId);
+            record.put("step", stepNumber);
+            record.put("summary", summary);
+            record.put("timestamp", System.currentTimeMillis() / 1000.0);
+            File ledger = new File(runDirectory, "steps.jsonl");
+            try (FileWriter writer = new FileWriter(ledger, true)) {
+                writer.write(record.toString());
+                writer.write('\n');
+                writer.flush();
+            }
+        } catch (Exception e) {
+            throw new IllegalStateException("Could not persist asynchronous step summary", e);
+        }
+    }
+
+    public synchronized void finishRun(AgentState state, String outcome) {
+        if (activeRunDirectory == null) return;
+        JSONObject record = new JSONObject();
+        try {
+            record.put("event", "run_end");
+            record.put("run_id", activeRunId);
+            record.put("outcome", outcome);
+            record.put("turns", state.turn);
+            record.put("steps", state.steps.size());
+            record.put("timestamp", System.currentTimeMillis() / 1000.0);
+            appendJson(record);
+        } catch (Exception e) {
+            throw new IllegalStateException("Could not persist run outcome", e);
+        } finally {
+            activeRunId = null;
+            activeRunDirectory = null;
+        }
+    }
+
+    public synchronized void saveNote(String key, String content) {
+        File file = noteFile(key);
+        writeText(file, content == null ? "" : content, false);
+    }
+
+    public synchronized void appendNote(String key, String content) {
+        File file = noteFile(key);
+        writeText(file, content == null ? "" : content, true);
+    }
+
+    public synchronized String readNote(String key) {
+        return readNote(key, 0, 0);
+    }
+
+    public synchronized String readNote(String key, int startLine, int endLine) {
+        File file = noteFile(key);
+        if (!file.isFile()) return "Note not found: " + key;
+        String content = readText(file);
+        if (startLine <= 0 && endLine <= 0) return content;
+        String[] lines = content.split("\\n", -1);
+        int first = Math.max(1, startLine <= 0 ? 1 : startLine);
+        int last = Math.min(lines.length, endLine <= 0 ? lines.length : endLine);
+        if (first > last) return "";
+        StringBuilder selected = new StringBuilder();
+        for (int i = first; i <= last; i++) selected.append(lines[i - 1]).append('\n');
+        return selected.toString();
+    }
+
+    public synchronized String updateNote(String key, String target, String replacement) {
+        if (target == null || target.isEmpty()) throw new IllegalArgumentException("target must not be empty");
+        File file = noteFile(key);
+        String current = file.isFile() ? readText(file) : "";
+        int at = current.indexOf(target);
+        if (at < 0) return "Target text not found; note was not changed.";
+        String updated = current.substring(0, at) + (replacement == null ? "" : replacement)
+                + current.substring(at + target.length());
+        writeText(file, updated, false);
+        return "Updated note " + key;
+    }
+
+    public synchronized List<String> listNotes() {
+        List<String> keys = new ArrayList<>();
+        File[] files = notes.listFiles((dir, name) -> name.endsWith(".md"));
+        if (files != null) {
+            for (File file : files) keys.add(file.getName().substring(0, file.getName().length() - 3));
+        }
+        java.util.Collections.sort(keys);
+        return keys;
+    }
+
+    public synchronized List<JSONObject> readAllSteps() {
+        Map<String, JSONObject> combined = new LinkedHashMap<>();
+        File[] runs = root.listFiles(File::isDirectory);
+        if (runs == null) return new ArrayList<>();
+        java.util.Arrays.sort(runs, java.util.Comparator.comparing(File::getName));
+        for (File run : runs) {
+            File ledger = new File(run, "steps.jsonl");
+            if (!ledger.isFile()) continue;
+            try (BufferedReader reader = new BufferedReader(new FileReader(ledger))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    JSONObject row;
+                    try {
+                        row = new JSONObject(line);
+                    } catch (Exception incompleteRecord) {
+                        // Another LocalRunStore instance may be appending a row at the same time.
+                        continue;
+                    }
+                    String event = row.optString("event");
+                    if (!"step_start".equals(event) && !"step_result".equals(event)
+                            && !"step_summary".equals(event)) continue;
+                    String id = row.optString("run_id") + ":" + row.optInt("step");
+                    JSONObject merged = combined.get(id);
+                    if (merged == null && "step_start".equals(event)) {
+                        merged = new JSONObject(row.toString());
+                        merged.put("event", "step");
+                        combined.put(id, merged);
+                    } else if (merged != null) {
+                        if ("step_summary".equals(event)) merged.put("summary", row.optString("summary"));
+                        else if ("step_result".equals(event)) {
+                            merged.put("post_screenshot", row.opt("post_screenshot"));
+                            merged.put("post_width", row.optInt("post_width", 0));
+                            merged.put("post_height", row.optInt("post_height", 0));
+                            merged.put("success", row.optBoolean("success", false));
+                            merged.put("result", row.optString("result", ""));
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                throw new IllegalStateException("Cannot read saved execution history: " + e.getMessage(), e);
+            }
+        }
+        return new ArrayList<>(combined.values());
+    }
+
+    /** Recent run headers for the Compose navigation drawer; run ledgers remain append-only. */
+    public synchronized List<JSONObject> listRecentRuns(int limit) {
+        int boundedLimit = Math.max(0, Math.min(limit, 100));
+        List<JSONObject> recent = new ArrayList<>();
+        if (boundedLimit == 0) return recent;
+        File[] runs = root.listFiles(File::isDirectory);
+        if (runs != null) java.util.Arrays.sort(runs, (left, right) -> right.getName().compareTo(left.getName()));
+        if (runs != null) for (File run : runs) {
+            if (recent.size() >= boundedLimit) break;
+            File ledger = new File(run, "steps.jsonl");
+            if (!ledger.isFile()) continue;
+            JSONObject summary = null;
+            try (BufferedReader reader = new BufferedReader(new FileReader(ledger))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    JSONObject row;
+                    try {
+                        row = new JSONObject(line);
+                    } catch (Exception incompleteRecord) {
+                        // A foreground run can append concurrently while the drawer refreshes.
+                        continue;
+                    }
+                    String event = row.optString("event");
+                    if ("run_start".equals(event)) {
+                        summary = new JSONObject()
+                                .put("run_id", row.optString("run_id", run.getName()))
+                                .put("session_id", row.optString("session_id", row.optString("run_id", run.getName())))
+                                .put("goal", row.optString("goal", ""))
+                                .put("timestamp", row.optDouble("timestamp", 0.0))
+                                .put("outcome", "RUNNING")
+                                .put("steps", 0)
+                                .put("turns", 0);
+                    } else if (summary != null && "step_start".equals(event)) {
+                        summary.put("steps", summary.optInt("steps") + 1);
+                    } else if (summary != null && "run_end".equals(event)) {
+                        summary.put("outcome", row.optString("outcome", "UNKNOWN"));
+                        summary.put("turns", row.optInt("turns", 0));
+                    }
+                }
+                if (summary != null) recent.add(summary);
+            } catch (Exception error) {
+                throw new IllegalStateException("Cannot read recent run history: " + error.getMessage(), error);
+            }
+        }
+        File[] chatFiles = conversations.listFiles((directory, name) -> name.endsWith(".jsonl"));
+        if (chatFiles != null) {
+            for (File chatFile : chatFiles) {
+                String fileName = chatFile.getName();
+                String sessionId = fileName.substring(0, fileName.length() - ".jsonl".length());
+                String conversationTitle = readConversationTitle(sessionId);
+                if (conversationTitle == null) {
+                    conversationTitle = ConversationTitle.fromFirstMessage(readFirstUserMessage(sessionId));
+                }
+                List<JSONObject> messages;
+                try {
+                    messages = readActiveConversationMessages(sessionId);
+                } catch (RuntimeException invalidFile) {
+                    continue;
+                }
+                if (messages.isEmpty()) continue;
+                JSONObject latest = messages.get(messages.size() - 1);
+                String latestGoal = "";
+                for (int index = messages.size() - 1; index >= 0; index--) {
+                    if ("user".equals(messages.get(index).optString("role"))) {
+                        latestGoal = messages.get(index).optString("content", "");
+                        break;
+                    }
+                }
+                JSONObject existing = null;
+                for (JSONObject summary : recent) {
+                    if (sessionId.equals(summary.optString("session_id"))) {
+                        existing = summary;
+                        break;
+                    }
+                }
+                try {
+                    if (existing != null) {
+                        if (!latestGoal.isEmpty()) existing.put("goal", latestGoal);
+                        if (conversationTitle != null) existing.put("title", conversationTitle);
+                        existing.put("timestamp", latest.optDouble("timestamp", existing.optDouble("timestamp")));
+                        existing.put("turns", Math.max(existing.optInt("turns"), (messages.size() + 1) / 2));
+                        existing.put("outcome", "CHAT");
+                        existing.put("steps", 0);
+                    } else {
+                        recent.add(new JSONObject()
+                                .put("run_id", "chat_" + sessionId)
+                                .put("session_id", sessionId)
+                                .put("goal", latestGoal)
+                                .put("title", conversationTitle)
+                                .put("timestamp", latest.optDouble("timestamp", 0.0))
+                                .put("outcome", "CHAT")
+                                .put("steps", 0)
+                                .put("turns", (messages.size() + 1) / 2));
+                    }
+                } catch (Exception invalidSummary) {
+                    // A malformed synthetic history row must not hide other conversations.
+                }
+            }
+        }
+        recent.sort((left, right) -> Double.compare(right.optDouble("timestamp"), left.optDouble("timestamp")));
+        if (recent.size() > boundedLimit) return new ArrayList<>(recent.subList(0, boundedLimit));
+        return recent;
+    }
+
+    public synchronized String searchHistory(String query, int startStep, int endStep, int maxResults) {
+        List<JSONObject> rows = readAllSteps();
+        String needle = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
+        List<String> matches = new ArrayList<>();
+        for (JSONObject row : rows) {
+            int number = row.optInt("step");
+            if ((startStep > 0 && number < startStep) || (endStep > 0 && number > endStep)) continue;
+            String text = row.toString();
+            if (needle.isEmpty() || text.toLowerCase(Locale.ROOT).contains(needle)) {
+                matches.add("step " + number + ": " + row.optString("result", "")
+                        + " decisions=" + row.optString("decisions", "[]"));
+                if (matches.size() >= maxResults) break;
+            }
+        }
+        return matches.isEmpty() ? "No stored steps matched the search." : join(matches, "\n");
+    }
+
+    public synchronized String replaySteps(int startStep, int endStep) {
+        int first = Math.min(startStep, endStep);
+        int last = Math.max(startStep, endStep);
+        List<String> matches = new ArrayList<>();
+        for (JSONObject row : readAllSteps()) {
+            int number = row.optInt("step");
+            if (number >= first && number <= last) matches.add(row.toString());
+        }
+        return matches.isEmpty() ? "No stored steps in that range." : join(matches, "\n");
+    }
+
+    public synchronized String readScreenshot(int stepNumber, String which) {
+        if ("overlay".equals(which)) {
+            throw new UnsupportedOperationException("get_step_screenshot(which=overlay) is not implemented: Stage C stores raw pre/post frames but not action-annotated overlays");
+        }
+        if (!"pre".equals(which) && !"post".equals(which)) {
+            throw new IllegalArgumentException("which must be pre, post, or overlay");
+        }
+        List<JSONObject> rows = readAllSteps();
+        String preferredRun = activeRunId;
+        for (int i = rows.size() - 1; i >= 0; i--) {
+            JSONObject row = rows.get(i);
+            if (row.optInt("step") != stepNumber) continue;
+            if (preferredRun != null && !preferredRun.equals(row.optString("run_id"))) continue;
+            return readScreenshotFromRow(row, which, stepNumber);
+        }
+        throw new IllegalArgumentException("History step not found: " + stepNumber);
+    }
+
+    public synchronized Map<String, Object> readScreenshotImage(int stepNumber, String which) {
+        String base64 = readScreenshot(stepNumber, which);
+        List<JSONObject> rows = readAllSteps();
+        String preferredRun = activeRunId;
+        for (int i = rows.size() - 1; i >= 0; i--) {
+            JSONObject row = rows.get(i);
+            if (row.optInt("step") != stepNumber) continue;
+            if (preferredRun != null && !preferredRun.equals(row.optString("run_id"))) continue;
+            boolean post = "post".equals(which);
+            Map<String, Object> image = new LinkedHashMap<>();
+            image.put("mime_type", "image/jpeg");
+            image.put("base64", base64);
+            image.put("width", row.optInt(post ? "post_width" : "pre_width", row.optInt("width", 0)));
+            image.put("height", row.optInt(post ? "post_height" : "pre_height", row.optInt("height", 0)));
+            image.put("label", "step " + stepNumber + " " + which + " screenshot");
+            return image;
+        }
+        throw new IllegalArgumentException("History step not found: " + stepNumber);
+    }
+
+    private String readScreenshotFromRow(JSONObject row, String which, int stepNumber) {
+        String key = "post".equals(which) ? "post_screenshot" : "pre_screenshot";
+        String fileName = row.optString(key, "");
+        if (fileName.isEmpty() || "null".equals(fileName)) {
+            throw new IllegalStateException("No " + which + " screenshot was recorded for step " + stepNumber);
+        }
+        File run = new File(root, row.optString("run_id"));
+        try {
+            return Base64.encodeToString(readBytes(new File(run, fileName)), Base64.NO_WRAP);
+        } catch (Exception e) {
+            throw new IllegalStateException("Could not load screenshot for step " + stepNumber, e);
+        }
+    }
+
+    private File writeImage(String name, ScreenData screen) {
+        File output = new File(activeRunDirectory, name);
+        try (FileOutputStream stream = new FileOutputStream(output)) {
+            stream.write(screen.screenshotBytes);
+            stream.flush();
+            return output;
+        } catch (Exception e) {
+            throw new IllegalStateException("Could not persist screenshot " + name, e);
+        }
+    }
+
+    private void appendJson(JSONObject record) {
+        File ledger = new File(activeRunDirectory, "steps.jsonl");
+        try (FileWriter writer = new FileWriter(ledger, true)) {
+            writer.write(record.toString());
+            writer.write('\n');
+            writer.flush();
+        } catch (Exception e) {
+            throw new IllegalStateException("Could not append local run ledger", e);
+        }
+    }
+
+    private File noteFile(String key) {
+        if (key == null || !key.matches("[A-Za-z0-9_.-]{1,80}")) {
+            throw new IllegalArgumentException("Note key must contain 1-80 letters, digits, dot, underscore or dash");
+        }
+        return new File(notes, key + ".md");
+    }
+
+    private void writeText(File file, String content, boolean append) {
+        try (FileWriter writer = new FileWriter(file, append)) {
+            writer.write(content);
+            writer.flush();
+        } catch (Exception e) {
+            throw new IllegalStateException("Could not write local note: " + e.getMessage(), e);
+        }
+    }
+
+    private String readText(File file) {
+        StringBuilder output = new StringBuilder();
+        try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
+            String line;
+            while ((line = reader.readLine()) != null) output.append(line).append('\n');
+            return output.toString();
+        } catch (Exception e) {
+            throw new IllegalStateException("Could not read local note: " + e.getMessage(), e);
+        }
+    }
+
+    private static byte[] readBytes(File file) throws Exception {
+        try (java.io.FileInputStream input = new java.io.FileInputStream(file);
+             java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream()) {
+            byte[] buffer = new byte[8192];
+            int count;
+            while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
+            return output.toByteArray();
+        }
+    }
+
+    private static void ensureDirectory(File directory) {
+        if (!directory.exists() && !directory.mkdirs()) {
+            throw new IllegalStateException("Could not create app-private storage at " + directory);
+        }
+    }
+
+    private static String join(List<String> lines, String separator) {
+        StringBuilder output = new StringBuilder();
+        for (String line : lines) {
+            if (output.length() > 0) output.append(separator);
+            output.append(line);
+        }
+        return output.toString();
+    }
+}
