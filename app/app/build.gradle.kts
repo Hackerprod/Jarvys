@@ -24,8 +24,8 @@ android {
         applicationId = "com.jarvys.agent"
         minSdk = 24
         targetSdk = 35
-        versionCode = 6
-        versionName = "1.2.0"
+        versionCode = 28
+        versionName = "1.2.22-UX13-recovery"
     }
 
     signingConfigs {

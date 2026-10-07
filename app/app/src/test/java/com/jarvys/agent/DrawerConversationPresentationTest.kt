@@ -32,7 +32,9 @@ class DrawerConversationPresentationTest {
         val row = source.substring(start)
         assertTrue(row.contains("Text(title"))
         assertTrue(row.contains("selected"))
-        assertTrue(row.contains("if (active) Icon(LucideIcons.Circle"))
+        assertTrue(row.contains("if (active) MaterialTheme.colorScheme.primary"))
+        assertTrue(row.contains("ConversationAction.PIN"))
+        assertTrue(row.contains("ConversationAction.DELETE"))
     }
 
     @Test fun sourceDrawerHasNoDateGroupsOrMaterialIconGlyphReferences() {

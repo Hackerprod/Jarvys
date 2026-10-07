@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.clickable
@@ -93,6 +94,7 @@ import com.jarvys.agent.connectors.ApprovalDecision
 import com.jarvys.agent.connectors.ApprovalGate
 import com.jarvys.agent.connectors.ApprovalOutcomeTone
 import com.jarvys.agent.connectors.ConnectorRegistry
+import com.jarvys.agent.connectors.FlavorAutonomyUi
 import com.jarvys.agent.connectors.approvalPrimaryActionResourceId
 import com.jarvys.agent.connectors.approvalStatusPresentation
 import com.jarvys.agent.connectors.approveAndAllowAlways
@@ -255,7 +257,7 @@ private fun JarvysConversationEvent(
     animateEntry: Boolean = false,
 ) {
     when (event.kind) {
-        "user" -> TimelineArrival(animateEntry) { IntentMessage(event) }
+        "user" -> TimelineArrival(animateEntry) { IntentMessage(event, generatedImageSessionId) }
         "assistant" -> TimelineArrival(animateEntry) {
             AssistantReplyView(event, onOpenSkillFile, event.stage == "FAILED",
                 onTranslateAssistant, onRegenerateAssistant, onSpeakAssistant, speakingMessageId, isLastAssistant,
@@ -293,15 +295,19 @@ private fun TimelineArrival(animateEntry: Boolean, content: @Composable () -> Un
 }
 
 @Composable
-private fun IntentMessage(event: AgentRunUiEvent) {
+private fun IntentMessage(event: AgentRunUiEvent, sessionId: String) {
     val context = LocalContext.current
     Row(Modifier.fillMaxWidth().semantics {
         contentDescription = context.getString(R.string.chat_user_message_accessibility)
     }, horizontalArrangement = Arrangement.End) {
         Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(18.dp)) {
-            Text(event.text, Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                style = MaterialTheme.typography.bodyLarge)
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (event.attachments.isNotEmpty()) UserChatAttachments(event.attachments, sessionId, Modifier.widthIn(max = 320.dp))
+                if (event.text.isNotBlank()) SelectionContainer {
+                    Text(event.text, color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        style = MaterialTheme.typography.bodyLarge)
+                }
+            }
         }
     }
 }
@@ -518,6 +524,13 @@ private fun ConnectorActivityLine(
                     Icon(if (expanded) LucideIcons.ChevronUp else LucideIcons.ChevronDown,
                         contentDescription = stringResource(if (expanded) R.string.tool_output_collapse else R.string.tool_output_expand),
                         modifier = Modifier.size(17.dp))
+                }
+            }
+            event.toolAuditDetail?.takeIf(String::isNotBlank)?.let { literalDetail ->
+                SelectionContainer {
+                    Text(literalDetail, Modifier.fillMaxWidth().padding(start = 26.dp, top = 6.dp).testTag("tool-audit-${event.id}"),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
                 }
             }
             inlineLinuxFailureDetail?.let { detail ->
@@ -838,7 +851,9 @@ private fun ApprovalDecisionCard(event: AgentRunUiEvent, connectorRegistry: Conn
                             Text(if (permission == null) context.getString(label) else context.getString(label,
                                 event.approvalPermissionLabel?.resolve(context) ?: permission), softWrap = true)
                         }
-                        if (event.approvalAllowAlwaysAvailable) OutlinedButton(onClick = {
+                        if (event.approvalAllowAlwaysAvailable && FlavorAutonomyUi.handlesApproval(event)) {
+                            FlavorAutonomyUi.ApprovalAction(event) { detail -> AgentRunUiState.updateApprovalDetail(event.approvalId.orEmpty(), detail) }
+                        } else if (event.approvalAllowAlwaysAvailable) OutlinedButton(onClick = {
                             approveAndAllowAlways(
                                 registry = connectorRegistry,
                                 connectorId = event.approvalAutonomyConnectorId,

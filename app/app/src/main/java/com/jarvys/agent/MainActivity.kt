@@ -14,6 +14,12 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.core.content.FileProvider
+import com.jarvys.agent.ui.chat.PendingChatAttachment
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.AnimatedVisibility
@@ -202,9 +208,15 @@ import com.jarvys.agent.ui.chat.ConversationDrawer
 import com.jarvys.agent.ui.shell.JarvysRouteTopBar
 import com.jarvys.agent.ui.shell.JarvysShellFrame
 import com.jarvys.agent.ui.shell.ModelSelectorSheet
+import com.jarvys.agent.ui.shell.quickModelOptions
+import com.jarvys.agent.ui.shell.quickModelDisplayName
+import com.jarvys.agent.ui.shell.modelEffortAppearance
+import com.jarvys.agent.ui.shell.effortDisplayLabel
 import com.jarvys.agent.ui.motion.LocalReducedMotion
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import org.json.JSONObject
@@ -267,6 +279,9 @@ class MainActivity : ComponentActivity() {
     private lateinit var reflectionPreferences: MemoryReflectionPreferences
     private lateinit var skillRepository: SkillRepository
     private lateinit var connectorRegistry: ConnectorRegistry
+    private lateinit var attachmentDrafts: AttachmentDraftViewModel
+    private var attachmentPickerSession: String? = null
+    private var conversationActionPending by mutableStateOf(false)
     private var goalInput by mutableStateOf("")
     private var lastRunReport by mutableStateOf("")
     private var themeMode by mutableStateOf(JarvysThemeMode.SYSTEM)
@@ -339,6 +354,19 @@ class MainActivity : ComponentActivity() {
     private val skillImportLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let(::importSkillMarkdown)
     }
+    private val attachmentPhotosLauncher = registerForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { uris ->
+        val session = attachmentPickerSession
+        attachmentPickerSession = null
+        if (session != null && ::attachmentDrafts.isInitialized) attachmentDrafts.addUris(session, uris, ChatAttachment.Kind.IMAGE)
+    }
+    private val attachmentFilesLauncher = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        val session = attachmentPickerSession
+        attachmentPickerSession = null
+        if (session != null && ::attachmentDrafts.isInitialized) attachmentDrafts.addUris(session, uris)
+    }
+    private val attachmentCameraLauncher = registerForActivityResult(ActivityResultContracts.TakePicture()) { success ->
+        if (::attachmentDrafts.isInitialized) attachmentDrafts.finishCamera(success)
+    }
     private val proactiveNotificationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) {
             refreshProactiveStatus()
@@ -360,6 +388,8 @@ class MainActivity : ComponentActivity() {
         mcpConnectionManager = McpConnectionManager.get(this)
         mcpConnectionManager.connectEnabledServers()
         localRunStore = LocalRunStore(this)
+        attachmentDrafts = ViewModelProvider(this)[AttachmentDraftViewModel::class.java]
+        attachmentPickerSession = savedInstanceState?.getString("attachment_picker_session")
         assistantSpeechController = AssistantSpeechController(
             this,
             onSpeakingChanged = { messageId -> runOnUiThread { speakingMessageId = messageId } },
@@ -426,7 +456,22 @@ class MainActivity : ComponentActivity() {
         restoreConversationSession(conversationSessionId)
         window.statusBarColor = android.graphics.Color.TRANSPARENT
 
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                attachmentDrafts.submissions.collect { submission ->
+                    if (submission.persisted) {
+                        requestConversationTitle(submission.sessionId, submission.text)
+                        refreshRunHistory()
+                    } else if (conversationSessionId == submission.sessionId && goalInput.isBlank()) {
+                        goalInput = submission.text
+                    }
+                    submission.error?.let { toast(it, Toast.LENGTH_LONG) }
+                }
+            }
+        }
         setContent {
+            val pendingAttachments by attachmentDrafts.drafts.collectAsState()
+            val attachmentSending by attachmentDrafts.sending.collectAsState()
             val agentState by AgentRunUiState.state.collectAsState()
             val taskDataRevision by TaskDataChanges.revision.collectAsState()
             val scheduledTasksAvailable = remember(taskDataRevision) {
@@ -506,6 +551,14 @@ class MainActivity : ComponentActivity() {
                     availableSkills = skillEntries.filter { it.enabled && it.validationError == null },
                     selectedSkillIds = selectedSkillIds,
                     onSubmitMessage = ::submitMessage,
+                    pendingAttachments = pendingAttachments,
+                    attachmentSending = attachmentSending,
+                    onRemoveAttachment = attachmentDrafts::remove,
+                    onAttachmentCamera = ::launchAttachmentCamera,
+                    onAttachmentPhotos = ::launchAttachmentPhotos,
+                    onAttachmentFiles = ::launchAttachmentFiles,
+                    conversationActionPending = conversationActionPending,
+                    onConversationAction = ::applyConversationAction,
                     onStopRun = ::stopCurrentWork,
                     onNavControllerReady = { controller ->
                         activeNavController = controller
@@ -640,6 +693,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
+        attachmentPickerSession?.let { outState.putString("attachment_picker_session", it) }
         outState.putString(STATE_GOAL, goalInput)
         outState.putString(STATE_SESSION_ID, conversationSessionId)
         conversationTitle?.let { outState.putString(STATE_SESSION_TITLE, it) }
@@ -670,30 +724,22 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun submitMessage() {
-        val message = goalInput.trim()
-        if (message.isEmpty()) return
+        if (conversationActionPending) return
+        val message = goalInput
+        if (message.isBlank() && attachmentDrafts.drafts.value.isEmpty()) return
+        val state = AgentRunUiState.state.value
+        if (state.running || state.compacting || state.reflecting) return
         val sessionId = conversationSessionId
-        val enabledSkillIds = skillRepository.enabledForRun()
-            .filter { it.metadata.id in selectedSkillIds }
-            .map { it.metadata.id }
+        val enabledSkillIds = skillRepository.enabledForRun().filter { it.metadata.id in selectedSkillIds }.map { it.metadata.id }
         if (conversationTitle == null) conversationTitle = ConversationTitle.fromFirstMessage(message)
-        AgentRunUiState.beginRun(sessionId, message)
-        selectedHistoryRunId = null
-        historyEvents = emptyList()
-        showingNewChat = false
-        try {
-            AgentForegroundService.startRealAgent(this, message, ArrayList(enabledSkillIds), sessionId, chatWithoutMemory)
-        } catch (error: RuntimeException) {
-            AgentRunUiState.failChatTurn(sessionId, "No pude iniciar el mensaje. Vuelve a intentarlo.")
-            return
+        if (attachmentDrafts.submit(sessionId, message, ArrayList(enabledSkillIds), chatWithoutMemory)) {
+            goalInput = ""
+            selectedHistoryRunId = null
+            historyEvents = emptyList()
+            showingNewChat = false
+            captureContextRequested = false
+            selectedSkillIds = emptySet()
         }
-        requestConversationTitle(sessionId, message)
-        goalInput = ""
-        selectedHistoryRunId = null
-        historyEvents = emptyList()
-        showingNewChat = false
-        captureContextRequested = false
-        this.selectedSkillIds = emptySet()
     }
 
     private fun startStopTest() {
@@ -1046,6 +1092,7 @@ ${event.text}
     }
 
     private fun stopCurrentWork() {
+        attachmentDrafts.cancelSubmission()
         ProactiveRunController.cancelAll()
         val state = AgentRunUiState.state.value
         if (state.reflecting && state.reflectionSessionId != null) {
@@ -1088,6 +1135,40 @@ ${event.text}
 
     private fun launchSkillImport() {
         skillImportLauncher.launch(arrayOf("*/*"))
+    }
+
+    private fun canAttachToCurrentChat(): Boolean {
+        if (isManagedSystemConversation(conversationSessionId)) {
+            toast(getString(R.string.chat_attachment_main_only))
+            return false
+        }
+        val state = AgentRunUiState.state.value
+        return !state.running && !state.compacting && !state.reflecting && !attachmentDrafts.sending.value
+    }
+
+    private fun launchAttachmentPhotos() {
+        if (!canAttachToCurrentChat()) return
+        attachmentPickerSession = conversationSessionId
+        runCatching { attachmentPhotosLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+            .onFailure { attachmentPickerSession = null; toast(getString(R.string.chat_attachment_picker_failed), Toast.LENGTH_LONG) }
+    }
+
+    private fun launchAttachmentFiles() {
+        if (!canAttachToCurrentChat()) return
+        attachmentPickerSession = conversationSessionId
+        runCatching { attachmentFilesLauncher.launch(arrayOf("*/*")) }
+            .onFailure { attachmentPickerSession = null; toast(getString(R.string.chat_attachment_picker_failed), Toast.LENGTH_LONG) }
+    }
+
+    private fun launchAttachmentCamera() {
+        if (!canAttachToCurrentChat()) return
+        runCatching {
+            val file = attachmentDrafts.createCameraFile(conversationSessionId)
+            attachmentCameraLauncher.launch(FileProvider.getUriForFile(this, "$packageName.generated-images", file))
+        }.onFailure {
+            attachmentDrafts.finishCamera(false)
+            toast(getString(R.string.chat_attachment_picker_failed), Toast.LENGTH_LONG)
+        }
     }
 
     private fun importSkillMarkdown(uri: Uri) {
@@ -1249,6 +1330,7 @@ ${event.text}
 
     private fun persistConversationSession(sessionId: String) {
         conversationSessionId = sessionId
+        if (::attachmentDrafts.isInitialized) attachmentDrafts.switchSession(sessionId)
         getSharedPreferences("jarvys_chat", MODE_PRIVATE).edit()
             .putString("active_session_id", sessionId)
             .apply()
@@ -1256,11 +1338,65 @@ ${event.text}
         refreshReflectionUiState(sessionId)
     }
 
+    private fun applyConversationAction(sessionId: String, action: ConversationAction, title: String?) {
+        if (conversationActionPending) return
+        if (action == ConversationAction.DELETE && isManagedSystemConversation(sessionId)) {
+            toast(getString(R.string.drawer_system_chat_delete))
+            return
+        }
+        fun blocked() = conversationRemovalBlocked(AgentRunUiState.state.value, attachmentDrafts.sending.value,
+            activeTranslationMessageId != null, StopController.getInstance().isStopped(), CoreAgentRuntime.hasActiveCrewBots()) ||
+            MemoryReflectionRuntime.isAnyRunning()
+        val removal = action == ConversationAction.DELETE || action == ConversationAction.ARCHIVE
+        if (removal && blocked()) { toast(getString(R.string.drawer_busy)); return }
+        conversationActionPending = true
+        historyExecutor.execute {
+            val result = runCatching {
+                check(!removal || !blocked()) { "Active work must finish first" }
+                when (action) {
+                    ConversationAction.PIN -> { localRunStore.setConversationPinned(sessionId, true); true }
+                    ConversationAction.UNPIN -> { localRunStore.setConversationPinned(sessionId, false); true }
+                    ConversationAction.ARCHIVE -> { localRunStore.setConversationArchived(sessionId, true); true }
+                    ConversationAction.RESTORE -> { localRunStore.setConversationArchived(sessionId, false); true }
+                    ConversationAction.RENAME -> { localRunStore.renameConversation(sessionId, title.orEmpty()); true }
+                    ConversationAction.DELETE -> {
+                        val cleaned = localRunStore.deleteConversation(sessionId)
+                        check(cleaned || localRunStore.readConversationMetadata(sessionId).deleted) { "Chat was not deleted" }
+                        cleaned
+                    }
+                }
+            }.recoverCatching { failure ->
+                if (action == ConversationAction.DELETE && runCatching { localRunStore.readConversationMetadata(sessionId).deleted }.getOrDefault(false)) false
+                else throw failure
+            }
+            val updatedTitle = if (result.isSuccess && action == ConversationAction.RENAME)
+                runCatching { localRunStore.readConversationTitle(sessionId) }.getOrNull() else null
+            runOnUiThread {
+                conversationActionPending = false
+                result.onSuccess { cleaned ->
+                    if (conversationActionLeavesCurrent(action, sessionId, conversationSessionId)) {
+                        newChat()
+                        activeNavController?.navigate(Routes.CHAT) {
+                            popUpTo(Routes.CHAT) { inclusive = true }; launchSingleTop = true
+                        }
+                    } else if (action == ConversationAction.RENAME && sessionId == conversationSessionId) conversationTitle = updatedTitle
+                    refreshRunHistory()
+                    when (action) {
+                        ConversationAction.ARCHIVE -> toast(getString(R.string.drawer_archived_notice))
+                        ConversationAction.RESTORE -> toast(getString(R.string.drawer_restored_notice))
+                        ConversationAction.DELETE -> toast(getString(if (cleaned) R.string.drawer_deleted_notice else R.string.drawer_deleted_partial))
+                        else -> Unit
+                    }
+                }.onFailure { toast(getString(R.string.drawer_action_failed), Toast.LENGTH_LONG) }
+            }
+        }
+    }
+
     private fun refreshRunHistory() {
         if (!::localRunStore.isInitialized) return
         historyExecutor.execute {
             val items = runCatching {
-                localRunStore.listRecentRuns(60).asSequence()
+                localRunStore.listConversations().asSequence()
                     .filterNot { it.optString("session_id") == ProactiveConversation.SESSION_ID }
                     .mapNotNull { json ->
                     val id = json.optString("run_id").takeIf(String::isNotBlank) ?: return@mapNotNull null
@@ -1273,6 +1409,8 @@ ${event.text}
                         timestampSeconds = json.optDouble("timestamp", 0.0),
                         sessionId = json.optString("session_id").takeIf(String::isNotBlank) ?: id,
                         title = json.optString("title").takeIf(String::isNotBlank),
+                        pinned = json.optBoolean("pinned", false),
+                        archived = json.optBoolean("archived", false),
                     )
                 }.toList()
                     .distinctBy { it.sessionId }
@@ -1355,6 +1493,14 @@ private fun JarvysApp(
     availableSkills: List<SkillEntry>,
     selectedSkillIds: Set<String>,
     onSubmitMessage: () -> Unit,
+    pendingAttachments: List<PendingChatAttachment>,
+    attachmentSending: Boolean,
+    onRemoveAttachment: (String) -> Unit,
+    onAttachmentCamera: () -> Unit,
+    onAttachmentPhotos: () -> Unit,
+    onAttachmentFiles: () -> Unit,
+    conversationActionPending: Boolean,
+    onConversationAction: (String, ConversationAction, String?) -> Unit,
     onStopRun: () -> Unit,
     onNavControllerReady: (NavHostController) -> Unit,
     onStopTest: () -> Unit,
@@ -1400,6 +1546,15 @@ private fun JarvysApp(
     val providersState by providersRepository.state.collectAsState()
     val model = providersState.activeModel
     val reasoningVariant = providersState.activeReasoningVariant
+    val codexModels by CodexModelCatalog.models.collectAsState()
+    val apiModels by CodexModelCatalog.openAiApiModels.collectAsState()
+    val routerModels by CodexModelCatalog.openRouterModels.collectAsState()
+    val composerModels = quickModelOptions(providersState.activeProvider, codexModels, apiModels, routerModels, providersState.customModels)
+    val composerModelName = quickModelDisplayName(composerModels, model)
+    val composerVariants = if (providersState.activeProvider == ProviderSettings.Provider.OPENAI_CODEX)
+        codexModels.firstOrNull { it.id == model }?.variants.orEmpty() else emptyList()
+    val composerEffortAppearance = modelEffortAppearance(composerVariants, reasoningVariant)
+    val composerEffortLabel = composerEffortAppearance?.let { effortDisplayLabel(composerVariants[it.selectedIndex].id) }.orEmpty()
     LaunchedEffect(providersRepository) {
         providersRepository.feedback.collect { feedback ->
             Toast.makeText(context, context.getString(feedback.resourceId, *feedback.arguments.toTypedArray()), Toast.LENGTH_LONG).show()
@@ -1451,6 +1606,11 @@ private fun JarvysApp(
         it.kind == "crew_mission" && it.crewMissionSnapshot?.missionId == missionId
     }?.crewMissionSnapshot }
     val routeBotName = routeCrewMission?.bots?.firstOrNull { it.id == routeBotId }?.name
+    LaunchedEffect(conversationSessionId) {
+        withContext(Dispatchers.IO) {
+            runCatching { CoreAgentRuntime.prepareCrewHistory(context.applicationContext, conversationSessionId) }
+        }
+    }
     val crewBoard = remember(conversationSessionId) {
         CrewBoard(WorkspaceStore.forCrewBoard(context.applicationContext, conversationSessionId))
     }
@@ -1459,7 +1619,7 @@ private fun JarvysApp(
     var skillImportEntry by remember { mutableStateOf<SkillImportEntryKind?>(null) }
     var skillFileLink by remember { mutableStateOf<SkillFileLink?>(null) }
     var crewBoardReference by remember { mutableStateOf<String?>(null) }
-    val showActiveConversation = agentState.goal.isNotBlank()
+    val showActiveConversation = (agentState.goal.isNotBlank() || agentState.events.any { it.kind == "user" && it.attachments.isNotEmpty() })
         && selectedHistoryRunId == null && !showingNewChat
     LaunchedEffect(agentState.runId, agentState.running) {
         if (!agentState.running && agentState.runId != null) onHistoryUpdated()
@@ -1486,6 +1646,8 @@ private fun JarvysApp(
                 activeSessionVisible = showActiveConversation,
                 selectedHistoryId = selectedHistoryRunId,
                 isChatRoute = route == Routes.CHAT,
+                actionsEnabled = !conversationActionPending,
+                onConversationAction = onConversationAction,
                 onNewConversation = {
                     onNewChat()
                     navController.navigate(Routes.CHAT) { launchSingleTop = true }
@@ -1532,9 +1694,19 @@ private fun JarvysApp(
                     goal = goal,
                     onGoalChange = onGoalChange,
                     onSend = onSubmitMessage,
+                    pendingAttachments = pendingAttachments,
+                    attachmentSessionId = conversationSessionId,
+                    attachmentSending = attachmentSending,
+                    onRemoveAttachment = onRemoveAttachment,
+                    onAttachmentCamera = onAttachmentCamera,
+                    onAttachmentPhotos = onAttachmentPhotos,
+                    onAttachmentFiles = onAttachmentFiles,
                     onStop = onStopRun,
                     onSelectModel = { quickModelProvider = providersState.activeProvider },
-                    modelLabel = "$model · $reasoningVariant",
+                    modelLabel = composerModelName,
+                    effortLabel = composerEffortLabel,
+                    effortAppearance = composerEffortAppearance,
+                    effortMotionActive = quickModelProvider == null && drawerState.isClosed,
                     running = agentState.running || agentState.compacting
                             || agentState.reflecting && agentState.reflectionSessionId == conversationSessionId,
                     captureContextRequested = captureContextRequested,
@@ -1690,12 +1862,22 @@ private fun JarvysApp(
                     board = crewBoard,
                     readOnly = { snapshot -> selectedHistoryRunId != null
                         || CoreAgentRuntime.crewManagerForSession(conversationSessionId) == null
-                        || snapshot == null
-                        || snapshot.bots.none { it.status != "INTERRUPTED" } },
+                        || snapshot == null },
                     missions = { agentState.events.mapNotNull { it.crewMissionSnapshot } },
                     manager = CoreAgentRuntime.crewManagerForSession(conversationSessionId),
                     onStopAll = { com.jarvys.agent.crew.CrewStopActions.stopAll(onStopRun,
                         CoreAgentRuntime.crewManagerForSession(conversationSessionId)) },
+                    onResumeBot = { botId ->
+                        scope.launch {
+                            try {
+                                withContext(Dispatchers.IO) { CoreAgentRuntime.resumeCrewBot(context.applicationContext, conversationSessionId, botId) }
+                                AgentForegroundService.ensureCrewKeepalive(context)
+                            } catch (cancelled: CancellationException) { throw cancelled }
+                            catch (failure: Exception) { Toast.makeText(context, failure.message ?: context.getString(R.string.crew_resume_failed), Toast.LENGTH_LONG).show() }
+                        }
+                    },
+                    crewMode = { crewMode },
+                    onCrewModeChange = onCrewModeChange,
                     initialBoardReference = crewBoardReference,
                     onBoardReferenceConsumed = { crewBoardReference = null },
                     onBoardReference = { _, reference -> crewBoardReference = reference; navController.popBackStack() },

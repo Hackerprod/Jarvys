@@ -28,7 +28,10 @@ No se incluyen APK, dependencias descompiladas, claves, tokens ni datos privados
 - Restaurado el runtime Linux de proyectos, con estados persistentes, cancelación, paginación y permisos explícitos. Pruebas agregadas, ejecución Android en curso.
 - Restaurada la integración del runtime principal, delegación con capacidades restringidas, carga de skills revisada en cada uso y servicio de chat con adjuntos duraderos.
 - Restaurado el diagnóstico de autenticación, cancelación y reintento DNS antes de enviar cuerpo; pruebas sin red agregadas.
-- En curso: publicación de UI; corrección de regresiones de la suite Android completa con runner validado.
+- Restaurada la UI Compose de adjuntos, conversaciones, modelo/esfuerzo, perfiles/resume de Crew y diagnósticos de autenticación.
+- Los 48 nombres de fuente añadidos identificados en el APK están representados en la reconstrucción (`new-source-coverage.json`); esto no certifica igualdad del Kotlin original ni equivalencia de todos los comportamientos.
+- Primer APK Full unsigned generado sin crear ninguna keystore.
+- Suite Full: 923 pruebas ejecutadas, 916 aprobadas y 7 fallos en corrección. Auth (25) y nuevos checkpoints/Crew (39) aprobados. Falta rerun final y validación Play.
 - Pendiente: compilación completa, pruebas y verificación funcional de la aplicación reconstruida.
 
 ## Desarrollo sin firma

@@ -17,8 +17,11 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -60,6 +63,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -88,6 +92,7 @@ import com.jarvys.agent.JarvysTopAppBar
 import com.jarvys.agent.JarvysUiTokens
 import com.jarvys.agent.LucideIcons
 import com.jarvys.agent.R
+import com.jarvys.agent.ui.readableThemeInk
 import com.jarvys.agent.ui.motion.LocalReducedMotion
 import com.jarvys.agent.ui.motion.rememberLifecycleVisible
 import com.jarvys.agent.ui.motion.rememberMotionViewport
@@ -145,6 +150,7 @@ fun CrewBotAvatar(
     reducedMotionOverride: Boolean? = null,
     modifier: Modifier = Modifier.size(42.dp),
     testTag: String? = null,
+    background: Color = MaterialTheme.colorScheme.background,
 ) {
     val visual = remember(status, waitingReason) { BotVisualState.from(status, waitingReason) }
     val design = remember(roleId) { BotAvatarDesign.forRole(roleId) }
@@ -162,9 +168,10 @@ fun CrewBotAvatar(
                 stateDescription = stateText
             }
     val surface = MaterialTheme.colorScheme.surface
-    if (motion) AnimatedCrewBotGlyph(avatarModifier, design, visual, baseColor, surface)
+    val onSurface = MaterialTheme.colorScheme.onSurface
+    if (motion) AnimatedCrewBotGlyph(avatarModifier, design, visual, baseColor, surface, background, onSurface)
     else Canvas(avatarModifier) {
-        drawBotFace(design, visual, baseColor, surface, phase = 0f, animated = false)
+        drawBotFace(design, visual, baseColor, surface, background, onSurface, phase = 0f, animated = false)
     }
 }
 
@@ -195,20 +202,27 @@ private fun AnimatedCrewBotGlyph(
     state: BotVisualState,
     baseColor: Color,
     surface: Color,
+    background: Color,
+    onSurface: Color,
 ) {
     val cycleMillis = if (state.mode == BotVisualState.Mode.RUNNING) JarvysMotion.BotPulseCycleMillis
         else JarvysMotion.AntennaCycleMillis
     val phase = rememberInfiniteTransition(label = "crew-bot-animation").animateFloat(
         0f, 1f, infiniteRepeatable(tween(cycleMillis, easing = androidx.compose.animation.core.LinearEasing),
             RepeatMode.Restart), label = "crew-bot-phase")
-    Canvas(modifier) { drawBotFace(design, state, baseColor, surface, phase.value, animated = true) }
+    Canvas(modifier) { drawBotFace(design, state, baseColor, surface, background, onSurface, phase.value, animated = true) }
 }
+
+internal fun crewAvatarStrokeInk(identity: Color, face: Color, background: Color, onSurface: Color): Color =
+    readableThemeInk(readableThemeInk(identity, face, onSurface, 3.2), background, onSurface, 3.2)
 
 private fun DrawScope.drawBotFace(
     design: BotAvatarDesign,
     state: BotVisualState,
     base: Color,
     surface: Color,
+    background: Color,
+    onSurface: Color,
     phase: Float,
     animated: Boolean,
 ) {
@@ -216,6 +230,9 @@ private fun DrawScope.drawBotFace(
     val radius = size.minDimension * 0.31f
     val line = 1.5.dp.toPx()
     val alpha = if (state.mode == BotVisualState.Mode.INTERRUPTED) 0.52f else 1f
+    val faceColor = surface.copy(alpha = 0.98f).compositeOver(background)
+    val stroke = crewAvatarStrokeInk(base.copy(alpha = alpha), faceColor, background, onSurface)
+    fun faceInk(opacity: Float = 1f) = readableThemeInk(base.copy(alpha = opacity), faceColor, onSurface, 3.2)
     val head = Path().apply {
         repeat(design.sides) { index ->
             val angle = ((design.rotationDegrees + index * 360f / design.sides) * (PI / 180f)).toFloat()
@@ -225,16 +242,16 @@ private fun DrawScope.drawBotFace(
         close()
     }
     drawPath(head, surface, alpha = 0.98f)
-    drawPath(head, base.copy(alpha = alpha), style = Stroke(line, cap = StrokeCap.Round))
+    drawPath(head, stroke, style = Stroke(line, cap = StrokeCap.Round))
 
     val top = Offset(center.x, center.y - radius)
     val antennaTip = Offset(center.x + (design.antennaStyle - 1) * radius * 0.3f,
         top.y - size.height * 0.17f)
-    drawLine(base.copy(alpha = alpha), top, antennaTip, line, cap = StrokeCap.Round)
+    drawLine(stroke, top, antennaTip, line, cap = StrokeCap.Round)
     if (design.antennaStyle == 1) {
-        drawLine(base.copy(alpha = alpha), antennaTip, Offset(antennaTip.x - radius * 0.26f, antennaTip.y - radius * 0.22f),
+        drawLine(stroke, antennaTip, Offset(antennaTip.x - radius * 0.26f, antennaTip.y - radius * 0.22f),
             line, cap = StrokeCap.Round)
-        drawLine(base.copy(alpha = alpha), antennaTip, Offset(antennaTip.x + radius * 0.26f, antennaTip.y - radius * 0.22f),
+        drawLine(stroke, antennaTip, Offset(antennaTip.x + radius * 0.26f, antennaTip.y - radius * 0.22f),
             line, cap = StrokeCap.Round)
     }
     val pulse = if (animated) (0.72f + 0.28f * sin(phase * 2f * PI.toFloat())).coerceIn(0.42f, 1f) else 0.72f
@@ -244,28 +261,28 @@ private fun DrawScope.drawBotFace(
     val eyeDistance = radius * design.eyeSpacing
     val eyeShift = if (animated && state.mode == BotVisualState.Mode.RUNNING)
         sin(phase * 2f * PI.toFloat()) * 1.2.dp.toPx() else 0f
-    drawCircle(base.copy(alpha = alpha), 1.75.dp.toPx(), Offset(center.x - eyeDistance + eyeShift, eyeY))
-    drawCircle(base.copy(alpha = alpha), 1.75.dp.toPx(), Offset(center.x + eyeDistance + eyeShift, eyeY))
+    drawCircle(stroke, 1.75.dp.toPx(), Offset(center.x - eyeDistance + eyeShift, eyeY))
+    drawCircle(stroke, 1.75.dp.toPx(), Offset(center.x + eyeDistance + eyeShift, eyeY))
 
     when (state.mode) {
         BotVisualState.Mode.ERROR -> {
-            drawLine(base, Offset(center.x - 3.dp.toPx(), center.y + radius * 0.42f),
+            drawLine(faceInk(), Offset(center.x - 3.dp.toPx(), center.y + radius * 0.42f),
                 Offset(center.x + 3.dp.toPx(), center.y + radius * 0.42f), line, cap = StrokeCap.Round)
         }
-        BotVisualState.Mode.INTERRUPTED -> drawLine(base.copy(alpha = 0.8f),
+        BotVisualState.Mode.INTERRUPTED -> drawLine(faceInk(0.8f),
             Offset(center.x - radius * 0.55f, center.y + radius * 0.5f),
             Offset(center.x + radius * 0.55f, center.y - radius * 0.5f), line, cap = StrokeCap.Round)
         BotVisualState.Mode.DONE -> {
-            drawLine(base, Offset(center.x - 3.dp.toPx(), center.y + radius * 0.38f),
+            drawLine(faceInk(), Offset(center.x - 3.dp.toPx(), center.y + radius * 0.38f),
                 Offset(center.x - 0.3.dp.toPx(), center.y + radius * 0.64f), line, cap = StrokeCap.Round)
-            drawLine(base, Offset(center.x - 0.3.dp.toPx(), center.y + radius * 0.64f),
+            drawLine(faceInk(), Offset(center.x - 0.3.dp.toPx(), center.y + radius * 0.64f),
                 Offset(center.x + 4.dp.toPx(), center.y + radius * 0.1f), line, cap = StrokeCap.Round)
         }
         BotVisualState.Mode.WAITING_PROVIDER, BotVisualState.Mode.WAITING_USER ->
-            drawLine(base.copy(alpha = if (animated) pulse else 0.82f),
+            drawLine(faceInk(if (animated) pulse else 0.82f),
                 Offset(center.x - 3.dp.toPx(), center.y + radius * 0.5f),
                 Offset(center.x + 3.dp.toPx(), center.y + radius * 0.5f), line, cap = StrokeCap.Round)
-        else -> drawLine(base.copy(alpha = 0.85f),
+        else -> drawLine(faceInk(0.85f),
             Offset(center.x - 2.6.dp.toPx(), center.y + radius * 0.45f),
             Offset(center.x + 2.6.dp.toPx(), center.y + radius * 0.45f), line, cap = StrokeCap.Round)
     }
@@ -273,13 +290,16 @@ private fun DrawScope.drawBotFace(
 
 @Composable
 fun CrewApprovalAttribution(requester: String, colorKey: String?, modifier: Modifier = Modifier) {
+    val colors = MaterialTheme.colorScheme
+    val background = colors.tertiaryContainer.copy(alpha = 0.46f).compositeOver(colors.background)
     Row(modifier.fillMaxWidth().testTag("crew-approval-attribution"),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         CrewBotAvatar(requester, roleId = colorKey ?: requester, colorKey = colorKey,
             status = "WAITING", waitingReason = "human approval",
-            modifier = Modifier.size(28.dp), testTag = "crew-approval-requester-orb")
+            modifier = Modifier.size(28.dp), testTag = "crew-approval-requester-orb", background = background)
         Text(stringResource(R.string.approval_requested_by_crew_bot, requester),
-            color = CrewOrbPalette.color(colorKey), style = MaterialTheme.typography.labelMedium,
+            color = readableThemeInk(CrewOrbPalette.color(colorKey), background, colors.onSurface),
+            style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.SemiBold)
     }
 }
@@ -329,7 +349,9 @@ fun CrewMissionCard(
             Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 CrewBotAvatar(stringResource(R.string.crew_captain_name), "captain", "periwinkle", "DONE",
-                    modifier = Modifier.size(28.dp), testTag = "crew-orb-captain")
+                    modifier = Modifier.size(28.dp), testTag = "crew-orb-captain",
+                    background = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.54f)
+                        .compositeOver(MaterialTheme.colorScheme.background))
                 Text(stringResource(R.string.crew_synthesized_by, snapshot.bots.size, elapsed),
                     Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurface,
                     style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -355,11 +377,11 @@ fun CrewMissionCard(
                 modifier = Modifier.testTag("crew-orb-row")) {
                 CrewBotAvatar(stringResource(R.string.crew_captain_name), "captain", "periwinkle", snapshot.status,
                     reducedMotionOverride = reducedMotion,
-                    testTag = "crew-orb-captain")
+                    testTag = "crew-orb-captain", background = MaterialTheme.colorScheme.surfaceContainerHigh)
                 snapshot.bots.forEach { bot ->
                     CrewBotAvatar(bot.name, bot.roleId, bot.colorKey, bot.status, bot.waitingReason,
                         reducedMotionOverride = reducedMotion,
-                        testTag = "crew-orb-${bot.id}")
+                        testTag = "crew-orb-${bot.id}", background = MaterialTheme.colorScheme.surfaceContainerHigh)
                 }
             }
             snapshot.bots.forEach { bot ->
@@ -373,7 +395,9 @@ fun CrewMissionCard(
                 Row(Modifier.fillMaxWidth().testTag("crew-status-${bot.id}"), verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                     Box(Modifier.size(7.dp).clip(CircleShape).background(CrewOrbPalette.color(bot.colorKey)))
-                    Text(bot.name, color = CrewOrbPalette.color(bot.colorKey), style = MaterialTheme.typography.labelMedium,
+                    Text(bot.name, color = readableThemeInk(CrewOrbPalette.color(bot.colorKey),
+                        MaterialTheme.colorScheme.surfaceContainerHigh, MaterialTheme.colorScheme.onSurface),
+                        style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.SemiBold, maxLines = 1)
                     Text(status, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall,
                         maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
@@ -407,7 +431,14 @@ fun CrewMissionScreen(
     onStopAll: () -> Unit,
     initialBoardReference: String? = null,
     onBoardReferenceConsumed: () -> Unit = {},
+    crewMode: CrewMode = CrewMode.AUTO,
+    onCrewModeChange: (CrewMode) -> Unit = {},
 ) {
+    var configuringCoding by remember { mutableStateOf(false) }
+    if (configuringCoding) {
+        CrewCodingProfileSettings(onClose = { configuringCoding = false }, conversationId = snapshot?.conversationId)
+        return
+    }
     var tab by remember(snapshot?.missionId) { mutableStateOf(CrewScreenTab.DEBATE) }
     var selectedBoardFile by remember(snapshot?.missionId) { mutableStateOf<String?>(null) }
     var boardFiles by remember(snapshot?.missionId) { mutableStateOf<List<String>>(emptyList()) }
@@ -428,12 +459,16 @@ fun CrewMissionScreen(
             onBoardReferenceConsumed()
         }
     }
-    Column(Modifier.fillMaxSize().testTag("crew-mission-screen")) {
-        if (snapshot == null) {
-            CrewEmptyState()
-            return@Column
+    BoxWithConstraints(Modifier.fillMaxSize().testTag("crew-mission-screen")) {
+        val headerMaxHeight = if (snapshot == null) maxHeight * 0.6f else maxHeight / 3
+        Column(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxWidth().heightIn(max = headerMaxHeight)
+            .verticalScroll(rememberScrollState()).testTag("crew-mission-header")) {
+        CrewModePicker(crewMode, onCrewModeChange, modifier = Modifier.padding(horizontal = JarvysUiTokens.ScreenPadding))
+        TextButton(onClick = { configuringCoding = true }, modifier = Modifier.fillMaxWidth().testTag("crew-configure-coding")) {
+            Text(stringResource(R.string.crew_profile_configure))
         }
-        Row(Modifier.fillMaxWidth().padding(horizontal = JarvysUiTokens.ScreenPadding, vertical = 12.dp),
+        if (snapshot != null) Row(Modifier.fillMaxWidth().padding(horizontal = JarvysUiTokens.ScreenPadding, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             CrewBotAvatar(stringResource(R.string.crew_captain_name), "captain", "periwinkle", snapshot.status,
                 testTag = "crew-orb-captain")
@@ -444,6 +479,11 @@ fun CrewMissionScreen(
                     style = MaterialTheme.typography.bodySmall)
             }
             if (readOnly) JarvysTag(stringResource(R.string.crew_read_only))
+        }
+        }
+        if (snapshot == null) {
+            CrewEmptyState()
+            return@Column
         }
         Row(Modifier.fillMaxWidth().padding(horizontal = JarvysUiTokens.ScreenPadding),
             horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -525,13 +565,14 @@ fun CrewMissionScreen(
         }
         if (showAskPicker && !readOnly) Column(Modifier.fillMaxWidth().padding(horizontal = JarvysUiTokens.ScreenPadding),
             verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                snapshot.bots.filter { it.status != "INTERRUPTED" }.forEach { bot ->
+                snapshot.bots.filter { it.status != "INTERRUPTED" && !it.resumeRequired }.forEach { bot ->
                 TextButton(onClick = { showAskPicker = false; onAskBot(bot.id, "") }, modifier = Modifier.fillMaxWidth()) {
                     Text(stringResource(R.string.crew_ask_named_bot, bot.name))
                 }
             }
         }
     }
+}
 }
 
 @Composable
@@ -544,6 +585,7 @@ fun CrewBotDetailScreen(
     onRedirect: (String, String) -> Unit,
     onStopBot: (String) -> Unit,
     onBoardReference: (String) -> Unit,
+    onResume: (String) -> Unit = {},
 ) {
     val bot = snapshot?.bots?.firstOrNull { it.id == botId }
     var message by remember(botId) { mutableStateOf("") }
@@ -560,7 +602,9 @@ fun CrewBotDetailScreen(
             CrewBotAvatar(bot.name, bot.roleId, bot.colorKey, bot.status, bot.waitingReason,
                 testTag = "crew-bot-detail-orb")
             Column(Modifier.weight(1f)) {
-                Text(bot.name, color = CrewOrbPalette.color(bot.colorKey), style = MaterialTheme.typography.titleMedium,
+                Text(bot.name, color = readableThemeInk(CrewOrbPalette.color(bot.colorKey),
+                    MaterialTheme.colorScheme.background, MaterialTheme.colorScheme.onSurface),
+                    style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold)
                 Text(CrewRoleLabel(bot.roleId, bot.roleName), color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall)
@@ -604,7 +648,9 @@ fun CrewBotDetailScreen(
             modifier = Modifier.weight(1f).fillMaxWidth().testTag("crew-bot-thread"),
             itemContent = { CrewMessageRow(it, snapshot.bots, onBoardReference) },
         )
-        if (!readOnly && bot.status != "INTERRUPTED") Column(Modifier.fillMaxWidth().padding(JarvysUiTokens.ScreenPadding),
+        if (bot.resumeRequired || bot.status == "INTERRUPTED") CrewResumePanel(
+            canResume = !readOnly && bot.canResume, note = bot.recoveryNote, onResume = { onResume(botId) })
+        if (!readOnly && !bot.resumeRequired && bot.status != "INTERRUPTED") Column(Modifier.fillMaxWidth().padding(JarvysUiTokens.ScreenPadding),
             verticalArrangement = Arrangement.spacedBy(8.dp)) {
             JarvysTextField(value = message, onValueChange = { message = it },
                 label = { Text(stringResource(R.string.crew_message_placeholder)) },
@@ -628,12 +674,25 @@ fun CrewBotDetailScreen(
 }
 
 @Composable
-fun CrewModePicker(mode: CrewMode, onChange: (CrewMode) -> Unit, onOpenCrew: () -> Unit) {
-    JarvysGroup(contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp)) {
+fun CrewResumePanel(canResume: Boolean, note: String, onResume: () -> Unit) {
+    Column(Modifier.fillMaxWidth().heightIn(max = 280.dp).verticalScroll(rememberScrollState())
+        .padding(JarvysUiTokens.ScreenPadding).testTag("crew-resume-panel"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(stringResource(if (canResume) R.string.crew_resume_description else R.string.crew_history_description),
+            color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+        if (note.isNotBlank()) Text(note, Modifier.testTag("crew-resume-note"), color = MaterialTheme.colorScheme.error,
+            style = MaterialTheme.typography.bodySmall)
+        if (canResume) JarvysPrimaryButton(stringResource(R.string.crew_resume_action), onResume,
+            Modifier.fillMaxWidth().testTag("crew-resume-action"))
+    }
+}
+
+@Composable
+fun CrewModePicker(mode: CrewMode, onChange: (CrewMode) -> Unit, onOpenCrew: (() -> Unit)? = null, modifier: Modifier = Modifier) {
+    JarvysGroup(modifier = modifier, contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp)) {
         Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 JarvysSectionLabel(stringResource(R.string.crew_mode_title), Modifier.weight(1f))
-                TextButton(onClick = onOpenCrew) { Text(stringResource(R.string.crew_open_workspace)) }
+                if (onOpenCrew != null) TextButton(onClick = onOpenCrew) { Text(stringResource(R.string.crew_open_workspace)) }
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 listOf(CrewMode.OFF to R.string.crew_mode_off, CrewMode.AUTO to R.string.crew_mode_auto,
@@ -663,12 +722,15 @@ private fun CrewMessageRow(message: CrewMessage, bots: List<CrewBotSnapshot>, on
         recipient != null -> recipient.name
         else -> message.to
     }
-    val color = when {
+    val identity = when {
         "chief" == message.from -> CrewOrbPalette.Captain
         "user" == message.from -> MaterialTheme.colorScheme.primary
         sender != null -> CrewOrbPalette.color(sender.colorKey)
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
+    val color = readableThemeInk(identity,
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.52f).compositeOver(MaterialTheme.colorScheme.background),
+        MaterialTheme.colorScheme.onSurface)
     Row(Modifier.fillMaxWidth().testTag("crew-message-${message.id}"),
         horizontalArrangement = if (message.from == "user") Arrangement.End else Arrangement.Start,
         verticalAlignment = Alignment.Top) {

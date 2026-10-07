@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -109,19 +110,35 @@ object JarvysPalette {
     val CanvasLight = Color(0xFFEEF2F8)
     val SurfaceLight = Color(0xFFFBFCFF)
     val RaisedLight = Color(0xFFE3EAF5)
+    val SurfaceDimLight = RaisedLight
+    val SurfaceBrightLight = SurfaceLight
+    val SurfaceContainerLowestLight = SurfaceLight
+    val SurfaceContainerLowLight = Color(0xFFF5F7FC)
+    val SurfaceContainerLight = CanvasLight
+    val SurfaceContainerHighLight = Color(0xFFE9EEF7)
+    val SurfaceContainerHighestLight = RaisedLight
     val InkLight = Color(0xFF15213A)
     val SecondaryInkLight = Color(0xFF55637E)
     val GlassLight = Color(0xFF2757C9)
     val BrassLight = Color(0xFF916319)
+    val WarningInkLight = Color(0xFF895D18)
     val ClayLight = Color(0xFFA83F37)
     val RuleLight = Color(0xFFCBD5E6)
     val CanvasDark = Color(0xFF0E1420)
     val SurfaceDark = Color(0xFF161E2D)
     val RaisedDark = Color(0xFF1F2A3D)
+    val SurfaceDimDark = CanvasDark
+    val SurfaceBrightDark = Color(0xFF273349)
+    val SurfaceContainerLowestDark = CanvasDark
+    val SurfaceContainerLowDark = Color(0xFF121927)
+    val SurfaceContainerDark = SurfaceDark
+    val SurfaceContainerHighDark = Color(0xFF1B2435)
+    val SurfaceContainerHighestDark = RaisedDark
     val InkDark = Color(0xFFE6ECF7)
     val SecondaryInkDark = Color(0xFFAAB6CC)
     val GlassDark = Color(0xFF8DB4FF)
     val BrassDark = Color(0xFFE0B75F)
+    val WarningInkDark = BrassDark
     val ClayDark = Color(0xFFF09889)
     val RuleDark = Color(0xFF2F3C54)
 }
@@ -370,6 +387,7 @@ fun JarvysTextField(
     visualTransformation: VisualTransformation = VisualTransformation.None,
     leadingIcon: @Composable (() -> Unit)? = null,
     trailingIcon: @Composable (() -> Unit)? = null,
+    keyboardActions: KeyboardActions = KeyboardActions.Default,
 ) {
     OutlinedTextField(
         value = value,
@@ -384,6 +402,7 @@ fun JarvysTextField(
         trailingIcon = trailingIcon,
         visualTransformation = visualTransformation,
         keyboardOptions = keyboardOptions,
+        keyboardActions = keyboardActions,
         singleLine = singleLine,
         minLines = minLines,
         maxLines = maxLines,

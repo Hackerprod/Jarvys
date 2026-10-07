@@ -77,17 +77,19 @@ class AppNavigationBackPolicyTest {
         assertTrue(main.contains("providersDestinations(navController, providersRepository)"))
     }
 
-    @Test fun quickModelSelectorContainsOnlyReusableCombosAndLegacyModelCardsAreRemoved() {
+    @Test fun quickModelSelectorUsesCurrentProviderSearchAndEffortWithoutLegacyModelCards() {
         val root = sourceRoot()
         val main = File(root, "com/jarvys/agent/MainActivity.kt").readText()
         val quick = File(root, "com/jarvys/agent/ui/shell/ModelSelectorSheet.kt").readText()
         val providers = File(root, "com/jarvys/agent/providers/ProvidersScreens.kt").readText()
         val english = File(root.parentFile, "res/values/strings.xml").readText()
         val spanish = File(root.parentFile, "res/values-es/strings.xml").readText()
-        assertTrue(quick.contains("JarvysDropdownField"))
-        assertTrue(quick.contains("OpenAiModelFields"))
-        assertTrue(quick.contains("OpenRouterModelField"))
-        listOf("LazyColumn", "JarvysGroup", "JarvysChoiceGroup", "RadioButton", "provider_save_selection")
+        assertTrue(quick.contains("ModelSelectorSheetContent"))
+        assertTrue(quick.contains("quick-model-provider-label"))
+        assertTrue(quick.contains("quick-model-filter"))
+        assertTrue(quick.contains("ModelEffortSlider"))
+        assertFalse(quick.contains("quick-provider-dropdown"))
+        listOf("JarvysGroup", "JarvysChoiceGroup", "provider_save_selection")
             .forEach { assertFalse("old model selector control remains: $it", quick.contains(it)) }
         assertFalse(providers.contains("provider_choose_model_reasoning"))
         listOf("provider_choose_model", "provider_choose_model_reasoning", "provider_save_model", "provider_save_selection", "provider_codex_models")
