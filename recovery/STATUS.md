@@ -21,7 +21,8 @@ No se incluyen APK, dependencias descompiladas, claves, tokens ni datos privados
 
 - Restaurados los cambios de recursos de texto propios de v28, con su procedencia en `resource-restoration.json`.
 - Protegido `app/build_apk.sh`: si falta la clave original, se detiene en lugar de generar otra silenciosamente.
-- En curso: proyectos de programación y diarios; perfiles/checkpoints Crew; adjuntos e imágenes; integración de runtime y UI.
+- Restauradas 13 clases del módulo de proyectos de programación y cinco clases de pruebas. Compilan con destino Java 8 contra Android 36; 41 pruebas JVM enfocadas aprobadas. Ver `validation/coding-host.md` para límites.
+- En curso: perfiles/checkpoints Crew; adjuntos e imágenes; integración de runtime y UI.
 - Pendiente: compilación completa, pruebas y verificación funcional de la aplicación reconstruida.
 
 ## Desarrollo sin firma
