@@ -1,0 +1,59 @@
+{
+  "baseline_package": "com.jarvys.agent",
+  "test_package": "com.jarvys.agent.recoverytest",
+  "only_expected_identity_changes": true,
+  "permissions_unchanged_except_package_scoped_internal_permission": true,
+  "disjoint_provider_authorities": true,
+  "shared_user_id": null,
+  "android_backup": false,
+  "differences": [
+    {
+      "path": "manifest",
+      "attribute": "package",
+      "baseline": "com.jarvys.agent",
+      "test": "com.jarvys.agent.recoverytest"
+    },
+    {
+      "path": "manifest",
+      "attribute": "android:versionName",
+      "baseline": "1.2.22-UX13-recovery",
+      "test": "1.2.22-UX13-recovery-test"
+    },
+    {
+      "path": "manifest/permission[18]",
+      "attribute": "android:name",
+      "baseline": "com.jarvys.agent.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION",
+      "test": "com.jarvys.agent.recoverytest.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+    },
+    {
+      "path": "manifest/uses-permission[19]",
+      "attribute": "android:name",
+      "baseline": "com.jarvys.agent.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION",
+      "test": "com.jarvys.agent.recoverytest.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+    },
+    {
+      "path": "manifest/application[20]",
+      "attribute": "android:label",
+      "baseline": "@ref/0x7f0c001b",
+      "test": "Jarvys Prueba"
+    },
+    {
+      "path": "manifest/application[20]/service[4]",
+      "attribute": "android:label",
+      "baseline": "@ref/0x7f0c0401",
+      "test": "Jarvys Prueba: notificaciones"
+    },
+    {
+      "path": "manifest/application[20]/provider[10]",
+      "attribute": "android:authorities",
+      "baseline": "com.jarvys.agent.generated-images",
+      "test": "com.jarvys.agent.recoverytest.generated-images"
+    },
+    {
+      "path": "manifest/application[20]/provider[15]",
+      "attribute": "android:authorities",
+      "baseline": "com.jarvys.agent.androidx-startup",
+      "test": "com.jarvys.agent.recoverytest.androidx-startup"
+    }
+  ]
+}
