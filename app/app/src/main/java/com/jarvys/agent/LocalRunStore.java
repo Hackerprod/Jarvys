@@ -2,6 +2,10 @@ package com.jarvys.agent;
 
 import android.content.Context;
 import android.util.Base64;
+import java.io.IOException;
+import java.util.Collections;
+import com.jarvys.agent.proactive.ProactiveConversation;
+import com.jarvys.agent.tasks.ScheduledTaskConversation;
 
 import com.jarvys.agent.device.ScreenData;
 import com.jarvys.agent.crew.CrewMissionSnapshot;
@@ -37,6 +41,9 @@ public final class LocalRunStore {
     private static final Set<String> SESSION_TITLES_IN_PROGRESS = new HashSet<>();
     private static final Map<String, String> CREW_SNAPSHOT_DIGESTS = new LinkedHashMap<>();
     private final File root;
+    private final String runBoundary;
+    private final ConversationMetadataStore conversationMetadata;
+    private final Map<String, String> runSessions = new LinkedHashMap<>();
     private final File notes;
     private final File conversations;
     private final Map<String, File> runDirectories = new LinkedHashMap<>();
@@ -73,6 +80,11 @@ public final class LocalRunStore {
         root = new File(jarvys, "runs");
         notes = new File(jarvys, "notes");
         conversations = new File(jarvys, "conversations");
+        conversationMetadata = new ConversationMetadataStore(filesDirectory);
+        try {
+            runBoundary = new File(new File(filesDirectory.getCanonicalFile(), "jarvys"), "runs").getPath();
+            verifyRunPath(root);
+        } catch (IOException error) { throw new IllegalStateException("Unsafe local run directory", error); }
         ensureDirectory(root);
         ensureDirectory(notes);
         ensureDirectory(conversations);
@@ -83,23 +95,29 @@ public final class LocalRunStore {
     }
 
     public synchronized String beginRun(String goal, String sessionId) {
-        String stamp = new SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(new Date());
-        activeRunId = stamp + "_" + Long.toHexString(System.nanoTime());
-        activeRunDirectory = new File(root, activeRunId);
-        ensureDirectory(activeRunDirectory);
-        runDirectories.put(activeRunId, activeRunDirectory);
-        JSONObject start = new JSONObject();
-        try {
-            start.put("event", "run_start");
-            start.put("run_id", activeRunId);
-            if (sessionId != null && !sessionId.trim().isEmpty()) start.put("session_id", sessionId);
-            start.put("goal", goal);
-            start.put("timestamp", System.currentTimeMillis() / 1000.0);
-        } catch (Exception e) {
-            throw new IllegalStateException("Could not create run metadata", e);
+        synchronized (SESSION_TITLE_LOCK) {
+            if (sessionId != null && !sessionId.trim().isEmpty() && conversationMetadata.read(sessionId).deleted) {
+                throw new IllegalStateException("This chat has been deleted");
+            }
+            String stamp = new SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(new Date());
+            activeRunId = stamp + "_" + Long.toHexString(System.nanoTime());
+            activeRunDirectory = new File(root, activeRunId);
+            try { verifyRunPath(activeRunDirectory); }
+            catch (IOException error) { throw new IllegalStateException("Unsafe local run directory", error); }
+            ensureDirectory(activeRunDirectory);
+            runDirectories.put(activeRunId, activeRunDirectory);
+            runSessions.put(activeRunId, sessionId == null || sessionId.trim().isEmpty() ? activeRunId : sessionId);
+            JSONObject start = new JSONObject();
+            try {
+                start.put("event", "run_start");
+                start.put("run_id", activeRunId);
+                if (sessionId != null && !sessionId.trim().isEmpty()) start.put("session_id", sessionId);
+                start.put("goal", goal);
+                start.put("timestamp", System.currentTimeMillis() / 1000.0);
+            } catch (Exception error) { throw new IllegalStateException("Could not create run metadata", error); }
+            appendJson(start);
+            return activeRunId;
         }
-        appendJson(start);
-        return activeRunId;
     }
 
     public synchronized String appendConversationMessage(String sessionId, String role, String content) {
@@ -164,8 +182,26 @@ public final class LocalRunStore {
     }
 
     public synchronized String appendConversationMessage(String sessionId, String role, String content,
+                                                          List<ChatAttachment> attachments) {
+        return appendConversationMessage(sessionId, role, content, null, "", "", "", null, attachments);
+    }
+
+    public synchronized String appendConversationMessage(String sessionId, String role, String content,
                                                           Long durationMs, String runId, String userMessageId,
                                                           String status, String proactiveThreadKey) {
+        return appendConversationMessage(sessionId, role, content, durationMs, runId, userMessageId,
+                status, proactiveThreadKey, Collections.emptyList());
+    }
+
+    public synchronized String appendConversationMessage(String sessionId, String role, String content,
+                                                          Long durationMs, String runId, String userMessageId,
+                                                          String status, String proactiveThreadKey,
+                                                          List<ChatAttachment> attachments) {
+        if (attachments != null && !attachments.isEmpty() && (!"user".equals(role)
+                || (proactiveThreadKey != null && !proactiveThreadKey.isEmpty())
+                || ProactiveConversation.SESSION_ID.equals(sessionId) || ScheduledTaskConversation.SESSION_ID.equals(sessionId))) {
+            throw new IllegalArgumentException("Attachments are supported only in main-chat user messages");
+        }
         File ledger = conversationFile(sessionId);
         if (!"user".equals(role) && !"assistant".equals(role)) {
             throw new IllegalArgumentException("Conversation role must be user or assistant");
@@ -176,6 +212,7 @@ public final class LocalRunStore {
             row.put("role", role);
             row.put("content", content == null ? "" : content);
             row.put("messageId", messageId);
+            if (attachments != null && !attachments.isEmpty()) row.put("attachments", ChatAttachment.toJsonArray(attachments));
             if ("assistant".equals(role)) {
                 if (status != null && !status.isEmpty()) row.put("status", status);
                 if (runId != null && !runId.isEmpty()) row.put("runId", runId);
@@ -428,13 +465,181 @@ public final class LocalRunStore {
     /** Removes a conversation ledger and only that conversation's generated image directory. */
     public synchronized boolean deleteConversation(String sessionId) {
         File ledger = conversationFile(sessionId);
-        boolean ledgerDeleted;
         synchronized (SESSION_TITLE_LOCK) {
+            conversationMetadata.update(sessionId, "deleted", true);
             SESSION_TITLES_IN_PROGRESS.remove(sessionId);
-            ledgerDeleted = !ledger.exists() || ledger.delete();
+            boolean complete = true;
+            try { complete &= !ledger.exists() || ledger.delete(); }
+            catch (RuntimeException failure) { complete = false; }
+            try {
+                verifyRunPath(root);
+                File[] runs = root.listFiles();
+                if (runs == null) complete = false;
+                else for (File run : runs) {
+                    try { if (sessionId.equals(sessionForRunDirectory(run))) complete &= deleteRunTree(run); }
+                    catch (RuntimeException failure) { complete = false; }
+                }
+            } catch (IOException | RuntimeException failure) { complete = false; }
+            try { complete &= new GeneratedImageStore(root.getParentFile()).deleteSession(sessionId); }
+            catch (RuntimeException failure) { complete = false; }
+            try { complete &= new AttachmentStore(root.getParentFile()).deleteSession(sessionId); }
+            catch (RuntimeException failure) { complete = false; }
+            try {
+                complete &= new WorkspaceStore(new File(root.getParentFile(), "workspaces"),
+                        WorkspaceStore.projectIdForSession(sessionId)).deleteImportedAttachments();
+            } catch (RuntimeException failure) { complete = false; }
+            try { complete &= CrewContextArtifacts.deleteConversation(root.getParentFile().getParentFile(), sessionId); }
+            catch (RuntimeException failure) { complete = false; }
+            return complete;
         }
-        boolean imagesDeleted = new GeneratedImageStore(root.getParentFile()).deleteSession(sessionId);
-        return ledgerDeleted && imagesDeleted;
+    }
+
+    public ConversationMetadataStore.Snapshot readConversationMetadata(String sessionId) {
+        return conversationMetadata.read(sessionId);
+    }
+
+    public void renameConversation(String sessionId, String title) {
+        conversationMetadata.update(sessionId, "title", ConversationMetadataStore.normalizeTitle(title));
+    }
+
+    public void setConversationPinned(String sessionId, boolean pinned) {
+        conversationMetadata.update(sessionId, "pinned", pinned);
+    }
+
+    public void setConversationArchived(String sessionId, boolean archived) {
+        conversationMetadata.update(sessionId, "archived", archived);
+    }
+
+    public synchronized List<ChatAttachment> readConversationAttachments(String sessionId, String messageId) {
+        for (JSONObject row : readConversationRows(sessionId)) {
+            if (messageId != null && messageId.equals(row.optString("messageId", ""))) return attachmentsForRow(sessionId, row);
+        }
+        return Collections.emptyList();
+    }
+
+    public synchronized boolean conversationHasAttachments(String sessionId) {
+        for (JSONObject row : readConversationRows(sessionId)) if (!attachmentsForRow(sessionId, row).isEmpty()) return true;
+        return false;
+    }
+
+    public synchronized boolean conversationHasPrivateImagesOrAttachments(String sessionId) {
+        for (JSONObject row : readConversationRows(sessionId)) {
+            if (!attachmentsForRow(sessionId, row).isEmpty() || "generated_image".equals(row.optString("type"))) return true;
+        }
+        return false;
+    }
+
+    public void markConversationHasPrivateCode(String sessionId) {
+        if (!conversationMetadata.read(sessionId).privateCode) conversationMetadata.update(sessionId, "privateCode", true);
+    }
+
+    public boolean conversationHasPrivateCode(String sessionId) {
+        ConversationMetadataStore.Snapshot privacy = conversationMetadata.read(sessionId);
+        return privacy.privateCode || privacy.deleted;
+    }
+
+    synchronized List<ConversationImageReference> readConversationImageReferences(String sessionId) {
+        List<ConversationImageReference> result = new ArrayList<>();
+        if (ProactiveConversation.SESSION_ID.equals(sessionId) || ScheduledTaskConversation.SESSION_ID.equals(sessionId)) return result;
+        String userMessageId = "";
+        for (JSONObject row : readConversationRows(sessionId)) {
+            if ("user".equals(row.optString("role"))) userMessageId = row.optString("messageId", "");
+            for (ChatAttachment attachment : attachmentsForRow(sessionId, row)) {
+                if (attachment.isImage()) result.add(ConversationImageReference.attachment(userMessageId, attachment));
+            }
+            if ("generated_image".equals(row.optString("type")) && "COMPLETED".equals(row.optString("status"))) {
+                ConversationImageReference reference = ConversationImageReference.generated(
+                        userMessageId, row.optString("imagePath", ""), row.optString("prompt", ""));
+                if (reference != null) result.add(reference);
+            }
+        }
+        return Collections.unmodifiableList(result);
+    }
+
+    private static List<ChatAttachment> attachmentsForRow(String sessionId, JSONObject row) {
+        if (ProactiveConversation.SESSION_ID.equals(sessionId) || ScheduledTaskConversation.SESSION_ID.equals(sessionId)
+                || !"user".equals(row.optString("role")) || !row.optString("proactiveThreadKey", "").isEmpty()) {
+            return Collections.emptyList();
+        }
+        return ChatAttachment.fromJsonArray(row.optJSONArray("attachments"));
+    }
+
+    public synchronized void cleanupOrphanAttachments() {
+        Map<String, Set<String>> references = new LinkedHashMap<>();
+        synchronized (SESSION_TITLE_LOCK) {
+            for (String sessionId : listConversationLedgerIds()) {
+                Set<String> paths = new HashSet<>();
+                for (JSONObject row : readConversationRows(sessionId)) {
+                    for (ChatAttachment attachment : attachmentsForRow(sessionId, row)) paths.add(attachment.relativePath);
+                }
+                references.put(sessionId, paths);
+            }
+            new AttachmentStore(root.getParentFile()).cleanupOrphans(references);
+        }
+    }
+
+    private boolean runWasDeleted(String runId) {
+        String sessionId = runSessions.get(runId);
+        return sessionId != null && conversationMetadata.read(sessionId).deleted;
+    }
+
+    private String sessionForRunDirectory(File run) {
+        try {
+            if (!root.getAbsoluteFile().equals(run.getAbsoluteFile().getParentFile())) throw new IOException("Run must be a direct child of private storage");
+            verifyRunPath(run);
+            if (!run.isDirectory()) return null;
+            File ledger = new File(run, "steps.jsonl");
+            verifyRunPath(ledger);
+            if (!ledger.isFile()) return null;
+            try (BufferedReader reader = new BufferedReader(new FileReader(ledger))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    try {
+                        JSONObject row = new JSONObject(line);
+                        if ("run_start".equals(row.optString("event"))) {
+                            String id = row.optString("session_id", "");
+                            if (id.isEmpty()) id = row.optString("run_id", run.getName());
+                            if (id.isEmpty()) id = run.getName();
+                            ConversationMetadataStore.validateSessionId(id);
+                            return id;
+                        }
+                    } catch (Exception incomplete) { }
+                }
+            }
+            return null;
+        } catch (Exception error) { throw new IllegalStateException("Could not safely read run ownership", error); }
+    }
+
+    private void verifyRunPath(File file) throws IOException {
+        String logicalRoot = root.getAbsolutePath();
+        String logical = file.getAbsolutePath();
+        if (!logical.equals(logicalRoot) && !logical.startsWith(logicalRoot + File.separator)) throw new IOException("Run path escapes private storage");
+        String relative = logical.equals(logicalRoot) ? "" : logical.substring(logicalRoot.length() + 1);
+        String expected = relative.isEmpty() ? runBoundary : new File(runBoundary, relative).getPath();
+        if (!root.getCanonicalPath().equals(runBoundary) || !file.getCanonicalPath().equals(expected)) {
+            throw new IOException("Run paths cannot use symbolic links");
+        }
+    }
+
+    /** Keep steps.jsonl until the rest is removed, so a partial cleanup retains verifiable ownership. */
+    private boolean deleteRunTree(File file) {
+        try {
+            verifyRunPath(file);
+            if (file.getAbsoluteFile().equals(root.getAbsoluteFile())) return false;
+            if (!file.exists()) return true;
+            boolean complete = true;
+            if (file.isDirectory()) {
+                File[] children = file.listFiles();
+                if (children == null) return false;
+                File ownership = null;
+                for (File child : children) {
+                    if ("steps.jsonl".equals(child.getName())) ownership = child;
+                    else complete &= deleteRunTree(child);
+                }
+                if (complete && ownership != null) complete = deleteRunTree(ownership);
+            }
+            return complete && file.delete();
+        } catch (IOException | RuntimeException failure) { return false; }
     }
 
     private void appendMessageMarker(String sessionId, String type, String messageId) {
@@ -523,8 +728,8 @@ public final class LocalRunStore {
     public synchronized List<JSONObject> readConversationMessages(String sessionId) {
         File ledger = conversationFile(sessionId);
         List<JSONObject> messages = new ArrayList<>();
-        if (!ledger.isFile()) return messages;
         synchronized (SESSION_TITLE_LOCK) {
+        if (conversationMetadata.read(sessionId).deleted || !ledger.isFile()) return messages;
         try (BufferedReader reader = new BufferedReader(new FileReader(ledger))) {
             String line;
             while ((line = reader.readLine()) != null) {
@@ -576,7 +781,7 @@ public final class LocalRunStore {
             JSONObject row = messages.get(index);
             if ("assistant".equals(row.optString("role"))
                     && hidden.contains(row.optString("messageId", ""))) continue;
-            context.add(new ConversationTurn(row.optString("role"), row.optString("content", ""), index));
+            context.add(ConversationTurn.messageWithAttachments(row.optString("role"), row.optString("content", ""), index, attachmentsForRow(sessionId, row)));
         }
         return context;
     }
@@ -601,8 +806,8 @@ public final class LocalRunStore {
     private List<JSONObject> readConversationRows(String sessionId) {
         File ledger = conversationFile(sessionId);
         List<JSONObject> rows = new ArrayList<>();
-        if (!ledger.isFile()) return rows;
         synchronized (SESSION_TITLE_LOCK) {
+            if (conversationMetadata.read(sessionId).deleted || !ledger.isFile()) return rows;
             try (BufferedReader reader = new BufferedReader(new FileReader(ledger))) {
                 String line;
                 while ((line = reader.readLine()) != null) try { rows.add(new JSONObject(line)); }
@@ -765,11 +970,25 @@ public final class LocalRunStore {
     }
 
     public synchronized List<String> listConversationSessionIds() {
+        synchronized (SESSION_TITLE_LOCK) {
+            List<String> ids = new ArrayList<>();
+            for (String sessionId : listConversationLedgerIds()) {
+                try { if (!conversationMetadata.read(sessionId).deleted) ids.add(sessionId); }
+                catch (RuntimeException unsafeOrUnreadable) { }
+            }
+            return ids;
+        }
+    }
+
+    private List<String> listConversationLedgerIds() {
         File[] files = conversations.listFiles((directory, name) -> name.endsWith(".jsonl"));
-        if (files == null) return java.util.Collections.emptyList();
+        if (files == null) return Collections.emptyList();
         List<String> ids = new ArrayList<>();
-        for (File file : files) ids.add(file.getName().substring(0, file.getName().length() - ".jsonl".length()));
-        java.util.Collections.sort(ids);
+        for (File file : files) {
+            String id = file.getName().substring(0, file.getName().length() - ".jsonl".length());
+            try { conversationFile(id); ids.add(id); } catch (RuntimeException unsafe) { }
+        }
+        Collections.sort(ids);
         return ids;
     }
 
@@ -951,7 +1170,7 @@ public final class LocalRunStore {
                 String threadKey = row.optString("proactiveThreadKey", "");
                 long timestamp = (long) (row.optDouble("timestamp", 0) * 1000);
                 events.add(threadKey.isEmpty()
-                        ? AgentRunUiEvent.messageEvent(id++, role, row.optString("content", ""), timestamp).copyMetadata(messageId, 0L)
+                        ? AgentRunUiEvent.messageEvent(id++, role, row.optString("content", ""), timestamp).copyMetadata(messageId, 0L).copyAttachments(attachmentsForRow(sessionId, row))
                         : AgentRunUiEvent.proactiveMessageEvent(id++, role, row.optString("content", ""),
                                 timestamp, messageId, threadKey, java.util.Collections.emptyList(), false, 0L, null, false));
             } else if ("assistant".equals(role)) {
@@ -1116,8 +1335,8 @@ public final class LocalRunStore {
 
     public String readFirstUserMessage(String sessionId) {
         File ledger = conversationFile(sessionId);
-        if (!ledger.isFile()) return null;
         synchronized (SESSION_TITLE_LOCK) {
+            if (conversationMetadata.read(sessionId).deleted || !ledger.isFile()) return null;
             try (BufferedReader reader = new BufferedReader(new FileReader(ledger))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
@@ -1136,17 +1355,17 @@ public final class LocalRunStore {
     }
 
     public String readConversationTitle(String sessionId) {
-        File ledger = conversationFile(sessionId);
-        if (!ledger.isFile()) return null;
         synchronized (SESSION_TITLE_LOCK) {
-            return readConversationTitleLocked(ledger);
+            ConversationMetadataStore.Snapshot metadata = conversationMetadata.read(sessionId);
+            if (metadata.deleted) return null;
+            return metadata.title != null ? metadata.title : readConversationTitleLocked(conversationFile(sessionId));
         }
     }
 
     public boolean claimConversationTitleGeneration(String sessionId) {
         File ledger = conversationFile(sessionId);
         synchronized (SESSION_TITLE_LOCK) {
-            return readConversationTitleLocked(ledger) == null && SESSION_TITLES_IN_PROGRESS.add(sessionId);
+            return !conversationMetadata.read(sessionId).deleted && readConversationTitle(sessionId) == null && SESSION_TITLES_IN_PROGRESS.add(sessionId);
         }
     }
 
@@ -1155,7 +1374,7 @@ public final class LocalRunStore {
         String normalizedTitle = title == null ? "" : title.trim();
         if (normalizedTitle.isEmpty()) return false;
         synchronized (SESSION_TITLE_LOCK) {
-            if (readConversationTitleLocked(ledger) != null) return false;
+            if (conversationMetadata.read(sessionId).deleted || readConversationTitle(sessionId) != null) return false;
             JSONObject row = new JSONObject();
             try {
                 row.put("role", "session_title");
@@ -1210,10 +1429,16 @@ public final class LocalRunStore {
     }
 
     private File conversationFile(String sessionId) {
-        if (sessionId == null || !sessionId.matches("[A-Za-z0-9_.-]{1,100}")) {
-            throw new IllegalArgumentException("Invalid conversation session ID");
-        }
-        return new File(conversations, sessionId + ".jsonl");
+        ConversationMetadataStore.validateSessionId(sessionId);
+        File ledger = new File(conversations, sessionId + ".jsonl");
+        try {
+            String expectedRoot = new File(new File(runBoundary).getParentFile(), "conversations").getPath();
+            if (!conversations.getCanonicalPath().equals(expectedRoot)
+                    || !ledger.getCanonicalPath().equals(new File(expectedRoot, ledger.getName()).getPath())) {
+                throw new IOException("Conversation paths cannot use symbolic links");
+            }
+        } catch (IOException error) { throw new IllegalArgumentException("Unsafe conversation ledger", error); }
+        return ledger;
     }
 
     public synchronized void beginStep(StepRecord step) {
@@ -1261,23 +1486,24 @@ public final class LocalRunStore {
     }
 
     public synchronized void recordSummary(String runId, int stepNumber, String summary) {
-        File runDirectory = runDirectories.get(runId);
-        if (runDirectory == null) return;
-        JSONObject record = new JSONObject();
-        try {
-            record.put("event", "step_summary");
-            record.put("run_id", runId);
-            record.put("step", stepNumber);
-            record.put("summary", summary);
-            record.put("timestamp", System.currentTimeMillis() / 1000.0);
-            File ledger = new File(runDirectory, "steps.jsonl");
-            try (FileWriter writer = new FileWriter(ledger, true)) {
-                writer.write(record.toString());
-                writer.write('\n');
-                writer.flush();
-            }
-        } catch (Exception e) {
-            throw new IllegalStateException("Could not persist asynchronous step summary", e);
+        synchronized (SESSION_TITLE_LOCK) {
+            File runDirectory = runDirectories.get(runId);
+            if (runDirectory == null || runWasDeleted(runId)) return;
+            JSONObject record = new JSONObject();
+            try {
+                record.put("event", "step_summary");
+                record.put("run_id", runId);
+                record.put("step", stepNumber);
+                record.put("summary", summary);
+                record.put("timestamp", System.currentTimeMillis() / 1000.0);
+                File ledger = new File(runDirectory, "steps.jsonl");
+                verifyRunPath(ledger);
+                try (FileWriter writer = new FileWriter(ledger, true)) {
+                    writer.write(record.toString());
+                    writer.write('\n');
+                    writer.flush();
+                }
+            } catch (Exception error) { throw new IllegalStateException("Could not persist asynchronous step summary", error); }
         }
     }
 
@@ -1351,11 +1577,16 @@ public final class LocalRunStore {
     }
 
     public synchronized List<JSONObject> readAllSteps() {
+        synchronized (SESSION_TITLE_LOCK) {
         Map<String, JSONObject> combined = new LinkedHashMap<>();
         File[] runs = root.listFiles(File::isDirectory);
         if (runs == null) return new ArrayList<>();
         java.util.Arrays.sort(runs, java.util.Comparator.comparing(File::getName));
         for (File run : runs) {
+            try {
+                String sessionId = sessionForRunDirectory(run);
+                if (sessionId == null || conversationMetadata.read(sessionId).deleted) continue;
+            } catch (RuntimeException unsafeOrUnreadable) { continue; }
             File ledger = new File(run, "steps.jsonl");
             if (!ledger.isFile()) continue;
             try (BufferedReader reader = new BufferedReader(new FileReader(ledger))) {
@@ -1388,115 +1619,119 @@ public final class LocalRunStore {
                         }
                     }
                 }
-            } catch (Exception e) {
-                throw new IllegalStateException("Cannot read saved execution history: " + e.getMessage(), e);
-            }
+            } catch (Exception unsafeOrUnreadable) { }
+
         }
         return new ArrayList<>(combined.values());
+        }
     }
 
     /** Recent run headers for the Compose navigation drawer; run ledgers remain append-only. */
+    /** Recent run rows preserve the legacy all-conversations view, including archive metadata. */
     public synchronized List<JSONObject> listRecentRuns(int limit) {
-        int boundedLimit = Math.max(0, Math.min(limit, 100));
-        List<JSONObject> recent = new ArrayList<>();
-        if (boundedLimit == 0) return recent;
-        File[] runs = root.listFiles(File::isDirectory);
-        if (runs != null) java.util.Arrays.sort(runs, (left, right) -> right.getName().compareTo(left.getName()));
-        if (runs != null) for (File run : runs) {
-            if (recent.size() >= boundedLimit) break;
-            File ledger = new File(run, "steps.jsonl");
-            if (!ledger.isFile()) continue;
-            JSONObject summary = null;
-            try (BufferedReader reader = new BufferedReader(new FileReader(ledger))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    JSONObject row;
-                    try {
-                        row = new JSONObject(line);
-                    } catch (Exception incompleteRecord) {
-                        // A foreground run can append concurrently while the drawer refreshes.
-                        continue;
-                    }
-                    String event = row.optString("event");
-                    if ("run_start".equals(event)) {
-                        summary = new JSONObject()
-                                .put("run_id", row.optString("run_id", run.getName()))
-                                .put("session_id", row.optString("session_id", row.optString("run_id", run.getName())))
-                                .put("goal", row.optString("goal", ""))
-                                .put("timestamp", row.optDouble("timestamp", 0.0))
-                                .put("outcome", "RUNNING")
-                                .put("steps", 0)
-                                .put("turns", 0);
-                    } else if (summary != null && "step_start".equals(event)) {
-                        summary.put("steps", summary.optInt("steps") + 1);
-                    } else if (summary != null && "run_end".equals(event)) {
-                        summary.put("outcome", row.optString("outcome", "UNKNOWN"));
-                        summary.put("turns", row.optInt("turns", 0));
-                    }
-                }
-                if (summary != null) recent.add(summary);
-            } catch (Exception error) {
-                throw new IllegalStateException("Cannot read recent run history: " + error.getMessage(), error);
-            }
-        }
-        File[] chatFiles = conversations.listFiles((directory, name) -> name.endsWith(".jsonl"));
-        if (chatFiles != null) {
-            for (File chatFile : chatFiles) {
-                String fileName = chatFile.getName();
-                String sessionId = fileName.substring(0, fileName.length() - ".jsonl".length());
-                String conversationTitle = readConversationTitle(sessionId);
-                if (conversationTitle == null) {
-                    conversationTitle = ConversationTitle.fromFirstMessage(readFirstUserMessage(sessionId));
-                }
-                List<JSONObject> messages;
+        return collectConversationHistory(Math.max(0, Math.min(limit, 100)));
+    }
+
+    public synchronized List<JSONObject> listRecentRuns(int limit, boolean includeArchived) {
+        int bounded = Math.max(0, Math.min(limit, 100));
+        List<JSONObject> result = collectConversationHistory(Integer.MAX_VALUE);
+        if (!includeArchived) result.removeIf(row -> row.optBoolean("archived"));
+        result.sort(LocalRunStore::comparePinnedHistory);
+        return result.size() > bounded ? new ArrayList<>(result.subList(0, bounded)) : result;
+    }
+
+    public synchronized List<JSONObject> listConversations() {
+        Map<String, JSONObject> sessions = new LinkedHashMap<>();
+        for (JSONObject row : collectConversationHistory(Integer.MAX_VALUE)) sessions.putIfAbsent(row.optString("session_id"), row);
+        List<JSONObject> result = new ArrayList<>(sessions.values());
+        result.sort(LocalRunStore::comparePinnedHistory);
+        return result;
+    }
+
+    private static int comparePinnedHistory(JSONObject left, JSONObject right) {
+        int pinned = Boolean.compare(right.optBoolean("pinned"), left.optBoolean("pinned"));
+        return pinned != 0 ? pinned : Double.compare(right.optDouble("timestamp"), left.optDouble("timestamp"));
+    }
+
+    private List<JSONObject> collectConversationHistory(int boundedLimit) {
+        synchronized (SESSION_TITLE_LOCK) {
+            List<JSONObject> recent = new ArrayList<>();
+            if (boundedLimit == 0) return recent;
+            File[] runs = root.listFiles(File::isDirectory);
+            if (runs != null) java.util.Arrays.sort(runs, (left, right) -> right.getName().compareTo(left.getName()));
+            if (runs != null) for (File run : runs) {
                 try {
-                    messages = readActiveConversationMessages(sessionId);
-                } catch (RuntimeException invalidFile) {
-                    continue;
-                }
-                if (messages.isEmpty()) continue;
-                JSONObject latest = messages.get(messages.size() - 1);
-                String latestGoal = "";
-                for (int index = messages.size() - 1; index >= 0; index--) {
-                    if ("user".equals(messages.get(index).optString("role"))) {
-                        latestGoal = messages.get(index).optString("content", "");
-                        break;
+                    String sessionId = sessionForRunDirectory(run);
+                    if (sessionId == null || conversationMetadata.read(sessionId).deleted) continue;
+                    File ledger = new File(run, "steps.jsonl");
+                    JSONObject summary = null;
+                    try (BufferedReader reader = new BufferedReader(new FileReader(ledger))) {
+                        String line;
+                        while ((line = reader.readLine()) != null) {
+                            try {
+                                JSONObject row = new JSONObject(line);
+                                String event = row.optString("event");
+                                if ("run_start".equals(event) && summary == null) {
+                                    summary = new JSONObject().put("run_id", row.optString("run_id", run.getName()))
+                                            .put("session_id", sessionId).put("goal", row.optString("goal", ""))
+                                            .put("timestamp", row.optDouble("timestamp", 0)).put("outcome", "RUNNING")
+                                            .put("steps", 0).put("turns", 0);
+                                } else if (summary != null && "step_start".equals(event)) {
+                                    summary.put("steps", summary.optInt("steps") + 1);
+                                } else if (summary != null && "run_end".equals(event)) {
+                                    summary.put("outcome", row.optString("outcome", "UNKNOWN"));
+                                    summary.put("turns", row.optInt("turns", 0));
+                                }
+                            } catch (Exception incomplete) { }
+                        }
                     }
-                }
-                JSONObject existing = null;
-                for (JSONObject summary : recent) {
-                    if (sessionId.equals(summary.optString("session_id"))) {
-                        existing = summary;
-                        break;
-                    }
-                }
-                try {
-                    if (existing != null) {
-                        if (!latestGoal.isEmpty()) existing.put("goal", latestGoal);
-                        if (conversationTitle != null) existing.put("title", conversationTitle);
-                        existing.put("timestamp", latest.optDouble("timestamp", existing.optDouble("timestamp")));
-                        existing.put("turns", Math.max(existing.optInt("turns"), (messages.size() + 1) / 2));
-                        existing.put("outcome", "CHAT");
-                        existing.put("steps", 0);
-                    } else {
-                        recent.add(new JSONObject()
-                                .put("run_id", "chat_" + sessionId)
-                                .put("session_id", sessionId)
-                                .put("goal", latestGoal)
-                                .put("title", conversationTitle)
-                                .put("timestamp", latest.optDouble("timestamp", 0.0))
-                                .put("outcome", "CHAT")
-                                .put("steps", 0)
-                                .put("turns", (messages.size() + 1) / 2));
-                    }
-                } catch (Exception invalidSummary) {
-                    // A malformed synthetic history row must not hide other conversations.
-                }
+                    if (summary != null) recent.add(summary);
+                } catch (Exception unsafeOrUnreadable) { }
             }
+            for (String sessionId : listConversationLedgerIds()) {
+                try {
+                    if (conversationMetadata.read(sessionId).deleted) continue;
+                    String title = readConversationTitle(sessionId);
+                    if (title == null) title = ConversationTitle.fromFirstMessage(readFirstUserMessage(sessionId));
+                    List<JSONObject> messages = readActiveConversationMessages(sessionId);
+                    if (messages.isEmpty()) continue;
+                    JSONObject latest = messages.get(messages.size() - 1);
+                    String latestGoal = "";
+                    for (int index = messages.size() - 1; index >= 0; index--) {
+                        if ("user".equals(messages.get(index).optString("role"))) {
+                            latestGoal = messages.get(index).optString("content", "");
+                            break;
+                        }
+                    }
+                    boolean found = false;
+                    for (JSONObject summary : recent) {
+                        if (!sessionId.equals(summary.optString("session_id"))) continue;
+                        found = true;
+                        if (!latestGoal.isEmpty()) summary.put("goal", latestGoal);
+                        if (title != null) summary.put("title", title);
+                        summary.put("timestamp", latest.optDouble("timestamp", summary.optDouble("timestamp")));
+                        summary.put("turns", Math.max(summary.optInt("turns"), (messages.size() + 1) / 2));
+                        summary.put("outcome", "CHAT").put("steps", 0);
+                    }
+                    if (!found) recent.add(new JSONObject().put("run_id", "chat_" + sessionId)
+                            .put("session_id", sessionId).put("goal", latestGoal).put("title", title)
+                            .put("timestamp", latest.optDouble("timestamp", 0)).put("outcome", "CHAT")
+                            .put("steps", 0).put("turns", (messages.size() + 1) / 2));
+                } catch (Exception unsafeOrUnreadable) { }
+            }
+            java.util.Iterator<JSONObject> iterator = recent.iterator();
+            while (iterator.hasNext()) {
+                JSONObject row = iterator.next();
+                try {
+                    ConversationMetadataStore.Snapshot metadata = conversationMetadata.read(row.optString("session_id"));
+                    if (metadata.deleted) { iterator.remove(); continue; }
+                    row.put("pinned", metadata.pinned).put("archived", metadata.archived);
+                    if (metadata.title != null) row.put("title", metadata.title);
+                } catch (Exception unsafeOrUnreadable) { iterator.remove(); }
+            }
+            recent.sort((left, right) -> Double.compare(right.optDouble("timestamp"), left.optDouble("timestamp")));
+            return recent.size() > boundedLimit ? new ArrayList<>(recent.subList(0, boundedLimit)) : recent;
         }
-        recent.sort((left, right) -> Double.compare(right.optDouble("timestamp"), left.optDouble("timestamp")));
-        if (recent.size() > boundedLimit) return new ArrayList<>(recent.subList(0, boundedLimit));
-        return recent;
     }
 
     public synchronized String searchHistory(String query, int startStep, int endStep, int maxResults) {
@@ -1566,38 +1801,48 @@ public final class LocalRunStore {
     }
 
     private String readScreenshotFromRow(JSONObject row, String which, int stepNumber) {
-        String key = "post".equals(which) ? "post_screenshot" : "pre_screenshot";
-        String fileName = row.optString(key, "");
-        if (fileName.isEmpty() || "null".equals(fileName)) {
-            throw new IllegalStateException("No " + which + " screenshot was recorded for step " + stepNumber);
-        }
-        File run = new File(root, row.optString("run_id"));
-        try {
-            return Base64.encodeToString(readBytes(new File(run, fileName)), Base64.NO_WRAP);
-        } catch (Exception e) {
-            throw new IllegalStateException("Could not load screenshot for step " + stepNumber, e);
+        synchronized (SESSION_TITLE_LOCK) {
+            String key = "post".equals(which) ? "post_screenshot" : "pre_screenshot";
+            String fileName = row.optString(key, "");
+            if (fileName.isEmpty() || "null".equals(fileName)) throw new IllegalStateException("No " + which + " screenshot was recorded for step " + stepNumber);
+            File run = new File(root, row.optString("run_id"));
+            try {
+                String sessionId = sessionForRunDirectory(run);
+                if (sessionId == null || conversationMetadata.read(sessionId).deleted) throw new IllegalStateException("This chat is no longer available");
+                File screenshot = new File(run, fileName);
+                verifyRunPath(screenshot);
+                return Base64.encodeToString(readBytes(screenshot), Base64.NO_WRAP);
+            } catch (Exception error) { throw new IllegalStateException("Could not load screenshot for step " + stepNumber, error); }
         }
     }
 
     private File writeImage(String name, ScreenData screen) {
-        File output = new File(activeRunDirectory, name);
-        try (FileOutputStream stream = new FileOutputStream(output)) {
-            stream.write(screen.screenshotBytes);
-            stream.flush();
-            return output;
-        } catch (Exception e) {
-            throw new IllegalStateException("Could not persist screenshot " + name, e);
+        synchronized (SESSION_TITLE_LOCK) {
+            if (runWasDeleted(activeRunId)) throw new IllegalStateException("This chat has been deleted");
+            File output = new File(activeRunDirectory, name);
+            try {
+                verifyRunPath(output);
+                try (FileOutputStream stream = new FileOutputStream(output)) {
+                    stream.write(screen.screenshotBytes);
+                    stream.flush();
+                    return output;
+                }
+            } catch (Exception error) { throw new IllegalStateException("Could not persist screenshot " + name, error); }
         }
     }
 
     private void appendJson(JSONObject record) {
-        File ledger = new File(activeRunDirectory, "steps.jsonl");
-        try (FileWriter writer = new FileWriter(ledger, true)) {
-            writer.write(record.toString());
-            writer.write('\n');
-            writer.flush();
-        } catch (Exception e) {
-            throw new IllegalStateException("Could not append local run ledger", e);
+        synchronized (SESSION_TITLE_LOCK) {
+            if (runWasDeleted(activeRunId)) throw new IllegalStateException("This chat has been deleted");
+            File ledger = new File(activeRunDirectory, "steps.jsonl");
+            try {
+                verifyRunPath(ledger);
+                try (FileWriter writer = new FileWriter(ledger, true)) {
+                    writer.write(record.toString());
+                    writer.write('\n');
+                    writer.flush();
+                }
+            } catch (Exception error) { throw new IllegalStateException("Could not append local run ledger", error); }
         }
     }
 

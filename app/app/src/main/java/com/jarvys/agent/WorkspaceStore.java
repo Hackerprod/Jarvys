@@ -1,6 +1,14 @@
 package com.jarvys.agent;
 
 import android.content.Context;
+import com.jarvys.agent.coding.ProjectScope;
+import com.jarvys.agent.coding.ProjectScopeStore;
+import java.io.BufferedInputStream;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.Reader;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
 import com.jarvys.agent.skills.SkillRepository;
 
 import java.io.ByteArrayOutputStream;
@@ -41,6 +49,9 @@ public final class WorkspaceStore {
     private final MemoryStore.Actor memoryActor;
     private final String reflectionGroupId;
     private final boolean memoryOnly;
+    private final boolean attachmentsAllowed;
+    private final boolean delegatedPrivateZonesDenied;
+    private final String expectedAttachmentWorkspaceRoot;
 
     public interface SkillWorkspaceObserver {
         /** Serializes the file write with skill validation, enabled-state initialization, and rescan. */
@@ -57,14 +68,6 @@ public final class WorkspaceStore {
         } catch (Exception error) {
             throw new IllegalStateException("Could not create workspace id", error);
         }
-    }
-
-    /** Minimal shared board workspace: excludes app-wide Skills and all memory capabilities. */
-    public static WorkspaceStore forCrewBoard(Context context, String sessionId) {
-        Context app = context.getApplicationContext();
-        return new WorkspaceStore(new File(new File(app.getFilesDir(), "jarvys"), "workspaces"),
-                projectIdForSession(sessionId), null, null, null, sessionId, false,
-                MemoryStore.Actor.AGENT, null, false);
     }
 
     public WorkspaceStore(Context context, String projectId) {
@@ -128,13 +131,299 @@ public final class WorkspaceStore {
         this.memoryActor = memoryActor == null ? MemoryStore.Actor.AGENT : memoryActor;
         this.reflectionGroupId = reflectionGroupId;
         this.memoryOnly = memoryOnly;
+        this.attachmentsAllowed = true;
+        this.delegatedPrivateZonesDenied = false;
         try {
             canonicalRoot = root.getCanonicalPath();
+            File absoluteWorkspaces = workspacesRoot.getAbsoluteFile();
+            File parent = absoluteWorkspaces.getParentFile();
+            if (parent == null) throw new IllegalArgumentException("Workspace root needs a parent");
+            expectedAttachmentWorkspaceRoot = "workspaces".equals(absoluteWorkspaces.getName())
+                    && "jarvys".equals(parent.getName()) && parent.getParentFile() != null
+                    ? new File(parent.getParentFile().getCanonicalFile(), "jarvys/workspaces/" + projectId).getPath()
+                    : new File(new File(parent.getCanonicalFile(), absoluteWorkspaces.getName()), projectId).getPath();
             canonicalSkillsRoot = skillsRoot == null ? null : skillsRoot.getCanonicalPath();
         } catch (Exception error) {
             throw new IllegalStateException("Could not resolve workspace directory", error);
         }
         projectLock = PROJECT_LOCKS.computeIfAbsent(canonicalRoot, ignored -> new Object());
+    }
+
+    private WorkspaceStore(WorkspaceStore original, boolean attachmentsAllowed, boolean privateZonesDenied) {
+        projectId = original.projectId;
+        root = original.root;
+        canonicalRoot = original.canonicalRoot;
+        expectedAttachmentWorkspaceRoot = original.expectedAttachmentWorkspaceRoot;
+        projectLock = original.projectLock;
+        skillsRoot = privateZonesDenied ? null : original.skillsRoot;
+        canonicalSkillsRoot = privateZonesDenied ? null : original.canonicalSkillsRoot;
+        skillWorkspaceObserver = privateZonesDenied ? null : original.skillWorkspaceObserver;
+        memoryStore = original.memoryStore;
+        conversationId = original.conversationId;
+        memoryAccessAllowed = !privateZonesDenied && original.memoryAccessAllowed;
+        memoryActor = original.memoryActor;
+        reflectionGroupId = original.reflectionGroupId;
+        memoryOnly = original.memoryOnly;
+        this.attachmentsAllowed = attachmentsAllowed;
+        delegatedPrivateZonesDenied = privateZonesDenied || original.delegatedPrivateZonesDenied;
+        ensureDelegatedRoot();
+    }
+
+    public WorkspaceStore withoutAttachments() { return new WorkspaceStore(this, false, false); }
+    public WorkspaceStore forDelegatedAgent() { return new WorkspaceStore(this, false, true); }
+
+    public static WorkspaceStore forCrewBoard(Context context, String sessionId) {
+        Context app = context.getApplicationContext();
+        return new WorkspaceStore(new File(new File(app.getFilesDir(), "jarvys"), "workspaces"),
+                projectIdForSession(sessionId), null, null, null, sessionId, false,
+                MemoryStore.Actor.AGENT, null, false).withoutAttachments();
+    }
+
+    public boolean isCodingProjectPath(String path) {
+        return path != null && (path.equals("/project") || path.startsWith("/project/"));
+    }
+
+    public ProjectScope codingProjectScope() throws IOException {
+        if (delegatedPrivateZonesDenied || memoryOnly || conversationId == null) {
+            throw new IllegalArgumentException("The Coding project namespace is unavailable in this workspace scope");
+        }
+        File workspaces = root.getParentFile();
+        File jarvys = workspaces == null ? null : workspaces.getParentFile();
+        File appFiles = jarvys == null ? null : jarvys.getParentFile();
+        if (appFiles == null || !"workspaces".equals(workspaces.getName()) || !"jarvys".equals(jarvys.getName())) {
+            throw new IllegalArgumentException("A conversation app-files anchor is required for the Coding project");
+        }
+        new LocalRunStore(appFiles).markConversationHasPrivateCode(conversationId);
+        return new ProjectScopeStore(appFiles).open(conversationId);
+    }
+
+    public String codingProjectOwner() {
+        if (conversationId == null) throw new IllegalArgumentException("A conversation owner is required");
+        return "captain:" + conversationId;
+    }
+
+    /** Streams immutable attachment originals into a dedicated zone, without the editable-text size cap. */
+    public String importAttachment(ChatAttachment attachment, InputStream input) throws IOException {
+        if (input == null) throw new IOException("Attachment input is missing");
+        synchronized (projectLock) {
+            File temporary = null;
+            try {
+                String relative;
+                File target;
+                try (InputStream source = input) {
+                    requireAllowedWorkspacePath(null);
+                    if (attachment == null || attachment.kind != ChatAttachment.Kind.FILE) {
+                        throw new IllegalArgumentException("Only file attachments belong in the workspace");
+                    }
+                    relative = "attachments/" + attachment.relativePath;
+                    File directory = new File(root, "attachments");
+                    target = new File(directory, attachment.relativePath);
+                    requireAttachmentImportPath(directory);
+                    requireAttachmentImportPath(target);
+                    if (target.isFile()) return relative;
+                    if (target.exists()) throw new IllegalArgumentException("Attachment destination is not a file");
+                    if (!directory.isDirectory() && !directory.mkdirs()) throw new IOException("Could not create workspace attachment directory");
+                    requireAttachmentImportPath(directory);
+                    temporary = File.createTempFile(".attachment-", ".tmp", directory);
+                    requireAttachmentImportPath(temporary);
+                    try (FileOutputStream output = new FileOutputStream(temporary)) {
+                        AttachmentStore.copyStream(source, output);
+                        output.flush();
+                        output.getFD().sync();
+                    }
+                }
+                requireAttachmentImportPath(target);
+                if (target.isFile()) return relative;
+                if (target.exists() || !temporary.renameTo(target)) throw new IOException("Could not finish workspace attachment import");
+                return relative;
+            } finally {
+                if (temporary != null) {
+                    try { requireAttachmentImportPath(temporary); temporary.delete(); }
+                    catch (RuntimeException ignored) { }
+                }
+            }
+        }
+    }
+
+    public boolean deleteImportedAttachments() {
+        synchronized (projectLock) { return deleteImportedAttachmentTree(new File(root, "attachments")); }
+    }
+
+    private boolean deleteImportedAttachmentTree(File file) {
+        try {
+            requireAttachmentImportPath(file);
+            if (file.isDirectory()) {
+                File[] children = file.listFiles();
+                if (children == null) return false;
+                boolean allDeleted = true;
+                for (File child : children) allDeleted &= deleteImportedAttachmentTree(child);
+                if (!allDeleted) return false;
+            }
+            return !file.exists() || file.delete();
+        } catch (RuntimeException ignored) { return false; }
+    }
+
+    private void requireAttachmentImportPath(File file) {
+        if (!attachmentsAllowed) throw new IllegalArgumentException("Chat attachments are unavailable in this agent scope");
+        try {
+            String logicalRoot = root.getAbsolutePath();
+            String logical = file.getAbsolutePath();
+            if (!logical.startsWith(logicalRoot + File.separator + "attachments" + File.separator)
+                    && !logical.equals(logicalRoot + File.separator + "attachments")) {
+                throw new IllegalArgumentException("Attachment import must stay in workspace attachments/");
+            }
+            if (!root.getCanonicalPath().equals(expectedAttachmentWorkspaceRoot)
+                    || !file.getCanonicalPath().equals(new File(expectedAttachmentWorkspaceRoot,
+                    logical.substring(logicalRoot.length() + 1)).getPath())) {
+                throw new IllegalArgumentException("Workspace attachment paths cannot use symbolic links");
+            }
+        } catch (IOException error) {
+            throw new IllegalArgumentException("Could not resolve workspace attachment path", error);
+        }
+    }
+
+    public static final class AttachmentTextPage {
+        public final boolean hasMore;
+        public final int nextOffset;
+        public final int offset;
+        public final String text;
+        AttachmentTextPage(String text, int offset, boolean hasMore) {
+            this.text = text;
+            this.offset = offset;
+            nextOffset = text.length() + offset;
+            this.hasMore = hasMore;
+        }
+    }
+
+    public AttachmentTextPage readAttachmentPage(String path, int offset, int maxChars) {
+        return readAttachmentPage(path, offset, maxChars, CancellationToken.uncancellable());
+    }
+
+    public AttachmentTextPage readAttachmentPage(String path, int offset, int maxChars, CancellationToken token) {
+        if (offset < 0 || maxChars <= 0) throw new IllegalArgumentException("Invalid attachment text page");
+        token.throwIfCancelled();
+        synchronized (projectLock) {
+            token.throwIfCancelled();
+            String normalized = normalizePath(path);
+            if (memoryRelativePath(normalized) != null || skillRelativePath(normalized) != null) return null;
+            requireAllowedWorkspacePath(null);
+            File file = resolveExisting(normalized);
+            String attachmentRoot = new File(canonicalRoot, "attachments").getPath();
+            if (!file.getPath().startsWith(attachmentRoot + File.separator)) return null;
+            if (!file.isFile()) throw new IllegalArgumentException("Workspace path is not a file");
+            if (file.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".pdf")) throw unsupportedAttachmentText();
+            try (BufferedInputStream input = new BufferedInputStream(new FileInputStream(file))) {
+                input.mark(5);
+                byte[] prefix = new byte[5];
+                int prefixSize = 0;
+                int value;
+                while (prefixSize < prefix.length && (value = input.read()) >= 0) prefix[prefixSize++] = (byte) value;
+                input.reset();
+                if (prefixSize == 5 && prefix[0] == '%' && prefix[1] == 'P' && prefix[2] == 'D'
+                        && prefix[3] == 'F' && prefix[4] == '-') throw unsupportedAttachmentText();
+                try (Reader reader = new InputStreamReader(input, StandardCharsets.UTF_8.newDecoder()
+                        .onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT))) {
+                    return readAttachmentTextPage(reader, offset, maxChars, token);
+                }
+            } catch (CharacterCodingException unsupported) {
+                token.throwIfCancelled();
+                throw unsupportedAttachmentText();
+            } catch (IOException error) {
+                token.throwIfCancelled();
+                throw new IllegalStateException("Could not stream attachment text", error);
+            }
+        }
+    }
+
+    static AttachmentTextPage readAttachmentTextPage(Reader reader, int offset, int maxChars,
+                                                     CancellationToken token) throws IOException {
+        int previous = -1;
+        char[] buffer = new char[8192];
+        int skipped = 0;
+        while (skipped < offset) {
+            token.throwIfCancelled();
+            int count = reader.read(buffer, 0, Math.min(buffer.length, offset - skipped));
+            if (count < 0) throw new IllegalArgumentException("offset is outside the file");
+            if (count == 0) {
+                previous = reader.read();
+                if (previous < 0) throw new IllegalArgumentException("offset is outside the file");
+                requireTextCharacter(previous);
+                skipped++;
+            } else {
+                for (int i = 0; i < count; i++) requireTextCharacter(buffer[i]);
+                previous = buffer[count - 1];
+                skipped += count;
+            }
+        }
+        token.throwIfCancelled();
+        int start = offset;
+        int current = reader.read();
+        requireTextCharacter(current);
+        if (current >= 0 && Character.isLowSurrogate((char) current)
+                && previous >= 0 && Character.isHighSurrogate((char) previous)) {
+            start++;
+            current = reader.read();
+            requireTextCharacter(current);
+        }
+        StringBuilder text = new StringBuilder();
+        while (current >= 0 && text.length() < maxChars) {
+            token.throwIfCancelled();
+            text.append((char) current);
+            current = reader.read();
+            requireTextCharacter(current);
+        }
+        boolean more = current >= 0;
+        if (more && text.length() > 0 && Character.isHighSurrogate(text.charAt(text.length() - 1))
+                && Character.isLowSurrogate((char) current)) {
+            text.setLength(text.length() - 1);
+            if (text.length() == 0) throw new IllegalArgumentException("max_chars must fit a complete Unicode character");
+        }
+        token.throwIfCancelled();
+        return new AttachmentTextPage(text.toString(), start, more);
+    }
+
+    private static void requireTextCharacter(int value) {
+        if (value >= 0 && ((value < 32 && value != '\n' && value != '\r' && value != '\t' && value != '\f') || value == 127)) {
+            throw unsupportedAttachmentText();
+        }
+    }
+
+    private static IllegalArgumentException unsupportedAttachmentText() {
+        return new IllegalArgumentException("This attachment is not supported UTF-8 text. PDF and binary extraction are unavailable; use the local Linux tools if installed.");
+    }
+
+    private void requireAttachmentAccess(File file) {
+        if (!canAccessAttachmentPath(file)) throw new IllegalArgumentException("Chat attachments are unavailable in this agent scope");
+    }
+
+    private boolean canAccessAttachmentPath(File file) {
+        try {
+            ensureDelegatedRoot();
+            if (attachmentsAllowed) return true;
+            String logical = file.getAbsoluteFile().toURI().normalize().getPath();
+            String logicalAttachments = new File(root, "attachments").getAbsoluteFile().toURI().normalize().getPath();
+            String canonical = file.getCanonicalPath();
+            String expectedAttachments = new File(canonicalRoot, "attachments").getPath();
+            String resolvedAttachments = new File(root, "attachments").getCanonicalPath();
+            return !isAtOrUnder(logical, logicalAttachments) && !isAtOrUnder(canonical, expectedAttachments)
+                    && !isAtOrUnder(canonical, resolvedAttachments);
+        } catch (Exception failure) { return false; }
+    }
+
+    private void ensureDelegatedRoot() {
+        if (!delegatedPrivateZonesDenied) return;
+        try {
+            if (!canonicalRoot.equals(expectedAttachmentWorkspaceRoot) || !root.getCanonicalPath().equals(expectedAttachmentWorkspaceRoot)) {
+                throw new IllegalArgumentException("Delegated workspace root is aliased or has changed");
+            }
+        } catch (IOException failure) {
+            throw new IllegalArgumentException("Could not verify delegated workspace root", failure);
+        }
+    }
+
+    private static boolean isAtOrUnder(String path, String directory) {
+        String boundary = directory.endsWith(File.separator) ? directory.substring(0, directory.length() - 1) : directory;
+        return path.equals(boundary) || path.startsWith(boundary + File.separator);
     }
 
     public String projectId() { return projectId; }
@@ -154,6 +443,7 @@ public final class WorkspaceStore {
     }
 
     private List<String> listLocked(String relativePath) {
+        ensureDelegatedRoot();
         boolean projectRoot = isProjectRoot(relativePath);
         String normalized = projectRoot ? "." : normalizePath(relativePath);
         String memoryRelative = memoryRelativePath(normalized);
@@ -247,6 +537,7 @@ public final class WorkspaceStore {
             Arrays.sort(children, (left, right) -> left.getName().compareTo(right.getName()));
             for (File child : children) {
                 if (skipHidden && child.getName().startsWith(".")) continue;
+                if (!canAccessAttachmentPath(child)) continue;
                 String canonical;
                 try { canonical = child.getCanonicalPath(); }
                 catch (Exception ignored) { continue; }
@@ -415,6 +706,7 @@ public final class WorkspaceStore {
     }
 
     private String normalizePath(String raw) {
+        ensureDelegatedRoot();
         if (raw != null) {
             String path = raw.trim();
             if (("/" + MEMORY_ZONE).equals(path) || ("/" + MEMORY_ZONE + "/").equals(path)) {
@@ -452,6 +744,8 @@ public final class WorkspaceStore {
     }
 
     public boolean memoryOnly() { return memoryOnly; }
+    public boolean skillsEnabled() { return skillsRoot != null; }
+    public boolean attachmentsEnabled() { return attachmentsAllowed; }
 
     private void requireAllowedWorkspacePath(String memoryRelative) {
         if (memoryOnly && memoryRelative == null) {
@@ -501,7 +795,7 @@ public final class WorkspaceStore {
         Arrays.sort(children, (left, right) -> left.getName().compareToIgnoreCase(right.getName()));
         List<String> entries = new ArrayList<>();
         for (File child : children) {
-            if (entries.size() >= MAX_LIST_ENTRIES || child.getName().startsWith(".")) continue;
+            if (entries.size() >= MAX_LIST_ENTRIES || child.getName().startsWith(".") || !canAccessAttachmentPath(child)) continue;
             if (relative.isEmpty()) {
                 if (!SKILL_ID_PATTERN.matcher(child.getName()).matches() || !child.isDirectory()) continue;
                 if (!isExpectedSkillDirectory(child.getName(), child)) continue;
@@ -592,6 +886,7 @@ public final class WorkspaceStore {
             }
             String suffix = relative.length() == skillId.length() ? "" : relative.substring(skillId.length() + 1);
             File target = new File(skillDirectory, suffix).getCanonicalFile();
+            requireAttachmentAccess(target);
             if (!isInsideDirectory(skillDirectory, target)) {
                 throw new IllegalArgumentException("Skill path escapes its skill directory");
             }
@@ -661,6 +956,7 @@ public final class WorkspaceStore {
 
     private File resolveExisting(String relativePath) {
         String normalized = normalizeRelativePath(relativePath);
+        requireAttachmentAccess(new File(root, normalized));
         File file;
         try {
             file = new File(root, normalized).getCanonicalFile();
@@ -674,6 +970,7 @@ public final class WorkspaceStore {
 
     private File resolveForWrite(String relativePath) {
         String normalized = normalizeRelativePath(relativePath);
+        requireAttachmentAccess(new File(root, normalized));
         if (!root.isDirectory() && !root.mkdirs()) throw new IllegalStateException("Could not create workspace directory");
         File file;
         try {
@@ -698,6 +995,7 @@ public final class WorkspaceStore {
     }
 
     private boolean isInsideRoot(File file) {
+        if (!canAccessAttachmentPath(file)) return false;
         try {
             String path = file.getCanonicalPath();
             return path.startsWith(canonicalRoot + File.separator);

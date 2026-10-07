@@ -42,6 +42,7 @@ data class OpenRouterModelInfo(
     val name: String,
     val contextLimit: Int,
     val outputLimit: Int,
+    val inputModalities: Set<String> = emptySet(),
 )
 
 /** OpenCode-compatible OpenAI OAuth model filter backed by the public models.dev catalog. */
@@ -74,6 +75,20 @@ object CodexModelCatalog {
 
     @JvmStatic
     fun currentModels(): List<ModelInfo> = _models.value
+
+    /** Unknown or empty metadata remains unknown; fallback UI rows never block attachment vision. */
+    @JvmStatic
+    fun visionSupport(provider: ProviderSettings.Provider, modelId: String): Boolean? {
+        val modalities = when (provider) {
+            ProviderSettings.Provider.OPENAI_CODEX -> if (authoritativeCatalogLoaded) find(modelId)?.inputModalities else null
+            ProviderSettings.Provider.OPENAI_API -> if (authoritativeOpenAiApiCatalogLoaded) {
+                _openAiApiModels.value.firstOrNull { it.id == modelId }?.inputModalities
+            } else null
+            ProviderSettings.Provider.OPENROUTER -> _openRouterModels.value.firstOrNull { it.id == modelId }?.inputModalities
+            ProviderSettings.Provider.CUSTOM -> null
+        }
+        return modalities?.takeIf { it.isNotEmpty() }?.contains("image")
+    }
 
     /** Loads a valid cache immediately, then refreshes stale/missing data away from the UI thread. */
     @JvmStatic
@@ -292,7 +307,8 @@ object CodexModelCatalog {
             if (id.isEmpty()) continue
             val limit = item.optJSONObject("limit") ?: JSONObject()
             result.add(OpenRouterModelInfo(id, item.optString("name", id),
-                limit.optInt("context", 0), limit.optInt("output", 0)))
+                limit.optInt("context", 0), limit.optInt("output", 0),
+                readStringSet(item.optJSONObject("modalities")?.optJSONArray("input"))))
         }
         return result.sortedBy { it.name.lowercase() }
     }
@@ -395,7 +411,8 @@ object CodexModelCatalog {
 
     private fun serializeOpenRouterCatalog(models: List<OpenRouterModelInfo>): JSONArray = JSONArray().apply {
         models.forEach { model -> put(JSONObject().put("id", model.id).put("name", model.name)
-            .put("context", model.contextLimit).put("output", model.outputLimit)) }
+            .put("context", model.contextLimit).put("output", model.outputLimit)
+            .put("input", JSONArray(model.inputModalities.toList()))) }
     }
 
     private fun parseStoredOpenRouterCatalog(json: String): List<OpenRouterModelInfo> = runCatching {
@@ -404,7 +421,7 @@ object CodexModelCatalog {
             for (index in 0 until array.length()) {
                 val item = array.getJSONObject(index)
                 add(OpenRouterModelInfo(item.getString("id"), item.optString("name", item.getString("id")),
-                    item.optInt("context"), item.optInt("output")))
+                    item.optInt("context"), item.optInt("output"), readStringSet(item.optJSONArray("input"))))
             }
         }
     }.getOrDefault(emptyList())
