@@ -23,7 +23,9 @@ No se incluyen APK, dependencias descompiladas, claves, tokens ni datos privados
 - Protegido `app/build_apk.sh`: si falta la clave original, se detiene en lugar de generar otra silenciosamente.
 - Restauradas 13 clases del módulo de proyectos de programación y cinco clases de pruebas. Compilan con destino Java 8 contra Android 36; 41 pruebas JVM enfocadas aprobadas. Ver `validation/coding-host.md` para límites.
 - Restauradas las rutas de adjuntos/imágenes, metadatos y almacenamiento de conversaciones, con transporte de imágenes y aislamiento. 27 aserciones host aprobadas; suite Android pendiente. Ver `validation/attachments-host.md`.
-- En curso: perfiles/checkpoints Crew; integración de runtime, UI y diagnóstico de autenticación.
+- Restaurados perfiles/checkpoints Crew y recuperación explícita; 39 pruebas agregadas, aún pendientes de ejecución completa.
+- Producción Full compila (Kotlin y Java) en la integración de trabajo; suite completa en curso.
+- En curso: publicación progresiva de runtime/Linux/UI y diagnóstico de autenticación.
 - Pendiente: compilación completa, pruebas y verificación funcional de la aplicación reconstruida.
 
 ## Desarrollo sin firma

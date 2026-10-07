@@ -2,12 +2,13 @@ package com.jarvys.agent.crew;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-/** Versioned, immutable projection used by the live UI and the per-chat append-only ledger. */
+/**
+ * Versioned, immutable projection used by the live UI and the per-chat append-only ledger.
+ */
 public final class CrewMissionSnapshot {
     public static final int SCHEMA_VERSION = 1;
     public final String missionId;
@@ -21,9 +22,7 @@ public final class CrewMissionSnapshot {
     public final List<CrewBotSnapshot> bots;
     public final List<CrewMessage> messages;
 
-    public CrewMissionSnapshot(String missionId, String conversationId, String processId, String title,
-                               String status, String synthesis, long startedAtMillis, long finishedAtMillis,
-                               List<CrewBotSnapshot> bots, List<CrewMessage> messages) {
+    public CrewMissionSnapshot(String missionId, String conversationId, String processId, String title, String status, String synthesis, long startedAtMillis, long finishedAtMillis, List<CrewBotSnapshot> bots, List<CrewMessage> messages) {
         this.missionId = missionId;
         this.conversationId = conversationId;
         this.processId = processId;
@@ -36,8 +35,13 @@ public final class CrewMissionSnapshot {
         this.messages = Collections.unmodifiableList(new ArrayList<>(messages));
     }
 
-    public int messageCount() { return messages.size(); }
-    public boolean active() { return "RUNNING".equals(status); }
+    public int messageCount() {
+        return messages.size();
+    }
+
+    public boolean active() {
+        return "RUNNING".equals(status);
+    }
 
     public CrewMissionSnapshot interrupted() {
         List<CrewBotSnapshot> recovered = new ArrayList<>();
@@ -49,8 +53,7 @@ public final class CrewMissionSnapshot {
         }
         String recoveredStatus = "RUNNING".equals(status) ? "INTERRUPTED" : status;
         changed |= !recoveredStatus.equals(status);
-        return changed ? new CrewMissionSnapshot(missionId, conversationId, CrewProcessIdentity.ID,
-                title, recoveredStatus, synthesis, startedAtMillis, System.currentTimeMillis(), recovered, messages) : this;
+        return changed ? new CrewMissionSnapshot(missionId, conversationId, CrewProcessIdentity.ID, title, recoveredStatus, synthesis, startedAtMillis, System.currentTimeMillis(), recovered, messages) : this;
     }
 
     public JSONObject toJson() {
@@ -69,25 +72,43 @@ public final class CrewMissionSnapshot {
             JSONArray botRows = new JSONArray();
             for (CrewBotSnapshot bot : bots) {
                 JSONObject value = new JSONObject();
-                value.put("id", bot.id); value.put("roleId", bot.roleId); value.put("roleName", bot.roleName);
-                value.put("name", bot.name); value.put("colorKey", bot.colorKey); value.put("mission", bot.mission);
-                value.put("status", bot.status); value.put("error", bot.error); value.put("result", bot.result);
-                value.put("waitingReason", bot.waitingReason); value.put("tools", new JSONArray(bot.tools));
-                value.put("startedAtMillis", bot.startedAtMillis); value.put("finishedAtMillis", bot.finishedAtMillis);
+                value.put("id", bot.id);
+                value.put("roleId", bot.roleId);
+                value.put("roleName", bot.roleName);
+                value.put("name", bot.name);
+                value.put("colorKey", bot.colorKey);
+                value.put("mission", bot.mission);
+                value.put("status", bot.status);
+                value.put("error", bot.error);
+                value.put("result", bot.result);
+                value.put("waitingReason", bot.waitingReason);
+                value.put("tools", new JSONArray(bot.tools));
+                value.put("resumeRequired", bot.resumeRequired);
+                value.put("canResume", bot.canResume);
+                value.put("recoveryNote", bot.recoveryNote);
+                value.put("startedAtMillis", bot.startedAtMillis);
+                value.put("finishedAtMillis", bot.finishedAtMillis);
                 botRows.put(value);
             }
             row.put("bots", botRows);
             JSONArray messageRows = new JSONArray();
             for (CrewMessage message : messages) {
                 JSONObject value = new JSONObject();
-                value.put("id", message.id); value.put("conversationId", message.conversationId);
-                value.put("from", message.from); value.put("to", message.to); value.put("type", message.type.name());
-                value.put("text", message.text); value.put("refs", new JSONArray(message.refs));
-                value.put("timestampMillis", message.timestampMillis); messageRows.put(value);
+                value.put("id", message.id);
+                value.put("conversationId", message.conversationId);
+                value.put("from", message.from);
+                value.put("to", message.to);
+                value.put("type", message.type.name());
+                value.put("text", message.text);
+                value.put("refs", new JSONArray(message.refs));
+                value.put("timestampMillis", message.timestampMillis);
+                messageRows.put(value);
             }
             row.put("messages", messageRows);
             return row;
-        } catch (Exception failure) { throw new IllegalStateException("Could not serialize Crew mission", failure); }
+        } catch (Exception failure) {
+            throw new IllegalStateException("Could not serialize Crew mission", failure);
+        }
     }
 
     public static CrewMissionSnapshot fromJson(JSONObject row) {
@@ -96,28 +117,26 @@ public final class CrewMissionSnapshot {
             List<CrewBotSnapshot> bots = new ArrayList<>();
             JSONArray botRows = row.optJSONArray("bots");
             if (botRows != null) for (int index = 0; index < botRows.length(); index++) {
-                JSONObject value = botRows.optJSONObject(index); if (value == null) continue;
-                JSONArray toolRows = value.optJSONArray("tools"); List<String> tools = new ArrayList<>();
+                JSONObject value = botRows.optJSONObject(index);
+                if (value == null) continue;
+                JSONArray toolRows = value.optJSONArray("tools");
+                List<String> tools = new ArrayList<>();
                 if (toolRows != null) for (int tool = 0; tool < toolRows.length(); tool++) tools.add(toolRows.optString(tool));
-                bots.add(new CrewBotSnapshot(value.optString("id"), value.optString("roleId"), value.optString("roleName"),
-                        value.optString("name"), value.optString("colorKey"), value.optString("mission"),
-                        value.optString("status"), value.optString("error"), value.optString("result"),
-                        value.optString("waitingReason"), tools, value.optLong("startedAtMillis"), value.optLong("finishedAtMillis")));
+                bots.add(new CrewBotSnapshot(value.optString("id"), value.optString("roleId"), value.optString("roleName"), value.optString("name"), value.optString("colorKey"), value.optString("mission"), value.optString("status"), value.optString("error"), value.optString("result"), value.optString("waitingReason"), tools, value.optLong("startedAtMillis"), value.optLong("finishedAtMillis"), value.optBoolean("canResume"), value.optString("recoveryNote"), value.optBoolean("resumeRequired")));
             }
             List<CrewMessage> messages = new ArrayList<>();
             JSONArray messageRows = row.optJSONArray("messages");
             if (messageRows != null) for (int index = 0; index < messageRows.length(); index++) {
-                JSONObject value = messageRows.optJSONObject(index); if (value == null) continue;
-                List<String> refs = new ArrayList<>(); JSONArray refRows = value.optJSONArray("refs");
+                JSONObject value = messageRows.optJSONObject(index);
+                if (value == null) continue;
+                List<String> refs = new ArrayList<>();
+                JSONArray refRows = value.optJSONArray("refs");
                 if (refRows != null) for (int ref = 0; ref < refRows.length(); ref++) refs.add(refRows.optString(ref));
-                messages.add(new CrewMessage(value.optString("id"), value.optString("conversationId"),
-                        value.optString("from"), value.optString("to"), CrewMessage.Type.valueOf(value.optString("type")),
-                        value.optString("text"), refs, value.optLong("timestampMillis")));
+                messages.add(new CrewMessage(value.optString("id"), value.optString("conversationId"), value.optString("from"), value.optString("to"), CrewMessage.Type.valueOf(value.optString("type")), value.optString("text"), refs, value.optLong("timestampMillis")));
             }
-            return new CrewMissionSnapshot(row.optString("missionId"), row.optString("conversationId"),
-                    row.optString("processId"), row.optString("title"), row.optString("status"),
-                    row.optString("synthesis"), row.optLong("startedAtMillis"), row.optLong("finishedAtMillis"),
-                    bots, messages);
-        } catch (Exception failure) { return null; }
+            return new CrewMissionSnapshot(row.optString("missionId"), row.optString("conversationId"), row.optString("processId"), row.optString("title"), row.optString("status"), row.optString("synthesis"), row.optLong("startedAtMillis"), row.optLong("finishedAtMillis"), bots, messages);
+        } catch (Exception failure) {
+            return null;
+        }
     }
 }

@@ -60,6 +60,12 @@ public final class CancellationToken {
         return isStoppedByUser() || timedOut.get();
     }
 
+    /** Cancellation state independent of the observing thread's interrupt flag. */
+    public boolean isCancellationRequested() {
+        return (controller != null && !controller.isActive(generation))
+                || (standaloneCancellable && standaloneCancelled.get()) || timedOut.get();
+    }
+
     public boolean isStoppedByUser() {
         return (controller != null && !controller.isActive(generation))
                 || (standaloneCancellable && standaloneCancelled.get())
