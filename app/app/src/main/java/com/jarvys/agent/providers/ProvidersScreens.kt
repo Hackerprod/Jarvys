@@ -1,5 +1,6 @@
 package com.jarvys.agent.providers
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -30,6 +31,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -37,7 +41,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import android.app.Activity
@@ -48,6 +51,9 @@ import android.content.ClipboardManager
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
+import com.jarvys.agent.CodexAuthDiagnostic
+import com.jarvys.agent.JarvysChoiceOption
+import com.jarvys.agent.JarvysChoiceSheet
 import com.jarvys.agent.CodexModelCatalog
 import com.jarvys.agent.JarvysGroup
 import com.jarvys.agent.JarvysListRow
@@ -236,31 +242,14 @@ internal fun ProvidersOpenAiDetailContent(
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         JarvysSectionLabel(stringResource(R.string.provider_openai_api_method))
-        JarvysGroup(contentPadding = androidx.compose.foundation.layout.PaddingValues(14.dp)) {
-            JarvysDropdownField(
-                label = stringResource(R.string.provider_openai_api_method),
-                value = state.openAiAuthMethod,
-                options = listOf(
-                    JarvysDropdownOption(ProviderSettings.OpenAiAuthMethod.BROWSER,
-                        stringResource(R.string.provider_openai_method_browser)),
-                    JarvysDropdownOption(ProviderSettings.OpenAiAuthMethod.DEVICE_CODE,
-                        stringResource(R.string.provider_openai_method_device)),
-                    JarvysDropdownOption(ProviderSettings.OpenAiAuthMethod.API_KEY,
-                        stringResource(R.string.provider_openai_method_api_key)),
-                ),
-                onSelect = onAuthMethodChange,
-                filterLabel = stringResource(R.string.provider_search_models),
-                noResultsLabel = stringResource(R.string.provider_no_models_found),
-                modifier = Modifier.testTag("provider-openai-auth-method"),
-            )
-        }
+        OpenAiAuthMethodControl(state.openAiAuthMethod, onAuthMethodChange)
 
         JarvysSectionLabel(stringResource(R.string.provider_connection_status))
         JarvysGroup {
             when (state.openAiAuthMethod) {
                 ProviderSettings.OpenAiAuthMethod.BROWSER -> {
                     ProviderConnectionRow(
-                        name = stringResource(R.string.provider_chatgpt_codex_name),
+                        name = stringResource(R.string.provider_chatgpt_browser_name),
                         connected = state.codexConnected,
                         detail = codexConnectionDetail(state, providerContext),
                     )
@@ -272,19 +261,24 @@ internal fun ProvidersOpenAiDetailContent(
                             Text(stringResource(R.string.provider_disconnect_chatgpt), color = MaterialTheme.colorScheme.error)
                         }
                     } else if (state.codexOAuthInProgress) {
-                        BrowserOAuthProgress(onCancelSignIn)
+                        BrowserOAuthProgress(state.codexOAuthExchanging, onCancelSignIn)
                     } else {
-                        Text(stringResource(R.string.provider_connect_chatgpt_summary),
+                        Text(stringResource(R.string.provider_connect_chatgpt_browser_summary),
                             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                             color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, lineHeight = 18.sp)
-                        Button(onClick = onSignIn, modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp)) {
+                        state.codexOAuthError?.let { failure ->
+                            Text(failure, Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp).testTag("provider-browser-signin-error"),
+                                color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+                            state.codexOAuthDiagnostic?.let { ProviderAuthDiagnostic(it, "browser") }
+                        }
+                        Button(onClick = onSignIn, modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp).testTag("provider-browser-signin")) {
                             Text(stringResource(R.string.provider_signin_chatgpt))
                         }
                     }
                 }
                 ProviderSettings.OpenAiAuthMethod.DEVICE_CODE -> {
                     ProviderConnectionRow(
-                        name = stringResource(R.string.provider_chatgpt_codex_name),
+                        name = stringResource(R.string.provider_chatgpt_device_name),
                         connected = state.codexConnected,
                         detail = codexConnectionDetail(state, providerContext),
                     )
@@ -295,12 +289,10 @@ internal fun ProvidersOpenAiDetailContent(
                         TextButton(onClick = { confirmDisconnect = true }, modifier = Modifier.align(Alignment.End)) {
                             Text(stringResource(R.string.provider_disconnect_chatgpt), color = MaterialTheme.colorScheme.error)
                         }
-                    } else if (state.codexOAuthInProgress) {
-                        BrowserOAuthProgress(onCancelSignIn)
                     } else if (state.codexDeviceCode.isRunning) {
                         DeviceCodeProgressCard(state.codexDeviceCode, onCopyDeviceCode, onOpenDevicePage, onCancelDeviceCode)
                     } else {
-                        Text(stringResource(R.string.provider_connect_chatgpt_summary),
+                        Text(stringResource(R.string.provider_connect_chatgpt_device_summary),
                             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                             color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, lineHeight = 18.sp)
                         when (val deviceState = state.codexDeviceCode) {
@@ -308,6 +300,7 @@ internal fun ProvidersOpenAiDetailContent(
                                 Text(stringResource(deviceState.messageResource),
                                     Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
                                     color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+                                deviceState.diagnostic?.let { ProviderAuthDiagnostic(it, "device_code") }
                                 Button(onClick = onBeginDeviceCode,
                                     modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp)
                                         .testTag("provider-device-code-retry")) {
@@ -428,6 +421,53 @@ internal fun ProvidersOpenAiDetailContent(
 }
 
 @Composable
+private fun OpenAiAuthMethodControl(method: ProviderSettings.OpenAiAuthMethod, onSelect: (ProviderSettings.OpenAiAuthMethod) -> Unit) {
+    var choosing by remember { mutableStateOf(false) }
+    val changeLabel = stringResource(R.string.provider_openai_change_method)
+    val selectedLabel = stringResource(when (method) {
+        ProviderSettings.OpenAiAuthMethod.BROWSER -> R.string.provider_openai_browser_short
+        ProviderSettings.OpenAiAuthMethod.DEVICE_CODE -> R.string.provider_openai_device_short
+        ProviderSettings.OpenAiAuthMethod.API_KEY -> R.string.provider_openai_api_short
+    })
+    JarvysGroup {
+        Row(Modifier.fillMaxWidth().clickable(role = Role.Button, onClickLabel = changeLabel) { choosing = true }
+            .testTag("provider-openai-auth-method").padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(selectedLabel, Modifier.weight(1f).testTag("provider-openai-auth-method-label"),
+                style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+            Icon(LucideIcons.ChevronDown, contentDescription = changeLabel, modifier = Modifier.size(18.dp))
+        }
+    }
+    if (choosing) JarvysChoiceSheet(stringResource(R.string.provider_openai_api_method),
+        listOf(JarvysChoiceOption(ProviderSettings.OpenAiAuthMethod.BROWSER, stringResource(R.string.provider_openai_method_browser)),
+            JarvysChoiceOption(ProviderSettings.OpenAiAuthMethod.DEVICE_CODE, stringResource(R.string.provider_openai_method_device)),
+            JarvysChoiceOption(ProviderSettings.OpenAiAuthMethod.API_KEY, stringResource(R.string.provider_openai_method_api_key))),
+        selected = method, onSelect = onSelect, onClose = { choosing = false })
+}
+
+@Composable
+private fun ProviderAuthDiagnostic(diagnostic: CodexAuthDiagnostic, method: String) {
+    val context = LocalContext.current
+    val title = stringResource(R.string.provider_auth_diagnostic_title)
+    val displayText = diagnostic.toDisplayText(method)
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(title, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        SelectionContainer {
+            Text(displayText, Modifier.fillMaxWidth().testTag("provider-auth-diagnostic"),
+                color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace)
+        }
+        OutlinedButton(onClick = {
+            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(ClipData.newPlainText(title, displayText))
+            Toast.makeText(context, R.string.provider_auth_diagnostic_copied, Toast.LENGTH_SHORT).show()
+        }, modifier = Modifier.fillMaxWidth().testTag("provider-auth-diagnostic-copy")) {
+            Text(stringResource(R.string.provider_auth_diagnostic_copy))
+        }
+    }
+}
+
+@Composable
 private fun codexConnectionDetail(state: ProvidersUiState, context: Context): String =
     if (state.codexConnected) state.codexAccountId?.takeIf(String::isNotBlank)
         ?.let { context.getString(R.string.provider_account_id, it) }
@@ -435,11 +475,11 @@ private fun codexConnectionDetail(state: ProvidersUiState, context: Context): St
     else context.getString(R.string.provider_signin_required)
 
 @Composable
-private fun BrowserOAuthProgress(onCancel: () -> Unit) {
+private fun BrowserOAuthProgress(exchanging: Boolean, onCancel: () -> Unit) {
     Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-        Text(stringResource(R.string.provider_waiting_chatgpt), color = MaterialTheme.colorScheme.onSurfaceVariant,
+        Text(stringResource(if (exchanging) R.string.provider_browser_exchanging else R.string.provider_waiting_chatgpt), color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f))
         TextButton(onClick = onCancel) { Text(stringResource(R.string.provider_cancel_signin)) }
     }

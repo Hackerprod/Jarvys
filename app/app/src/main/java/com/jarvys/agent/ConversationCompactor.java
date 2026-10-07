@@ -5,11 +5,18 @@ import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
 
-/** Coordinates one session's summary request and append-only compaction checkpoint. */
+/**
+ * Coordinates one session's summary request and append-only compaction checkpoint.
+ */
 public final class ConversationCompactor {
+
     public interface Listener {
-        default void onStarted(String trigger) { }
-        default void onCompleted(String summary, int summarizedMessages, String mode) { }
+
+        default void onStarted(String trigger) {
+        }
+
+        default void onCompleted(String summary, int summarizedMessages, String mode) {
+        }
     }
 
     public static final class Outcome {
@@ -18,48 +25,79 @@ public final class ConversationCompactor {
         public final int summarizedMessages;
         public final ConversationCompactionPolicy.Mode mode;
 
-        Outcome(List<ConversationTurn> context, String summary, int summarizedMessages,
-                ConversationCompactionPolicy.Mode mode) {
+        Outcome(List<ConversationTurn> context, String summary, int summarizedMessages, ConversationCompactionPolicy.Mode mode) {
             this.context = context;
             this.summary = summary;
             this.summarizedMessages = summarizedMessages;
             this.mode = mode;
         }
     }
-
     private static final ConcurrentHashMap<String, ReentrantLock> SESSION_LOCKS = new ConcurrentHashMap<>();
-    private static final int TOOL_RETURN_SUMMARY_LIMIT = 2_000;
+    private static final int TOOL_RETURN_SUMMARY_LIMIT = 2000;
     private final String sessionId;
     private final CoreAgentModel model;
     private final LocalRunStore store;
+    private final CrewConversationCompaction crew;
 
     public ConversationCompactor(String sessionId, CoreAgentModel model, LocalRunStore store) {
         this.sessionId = sessionId;
         this.model = model;
         this.store = store;
+        this.crew = null;
     }
 
-    public int currentUserMessageIndex() { return store.latestUserMessageIndex(sessionId); }
+    private ConversationCompactor(String sessionId, CrewConversationCompaction crew) {
+        this.sessionId = sessionId;
+        this.model = null;
+        this.store = null;
+        this.crew = crew;
+    }
 
-    public Outcome compact(List<ConversationTurn> transcript, int contextWindow,
-                          String trigger, ConversationCompactionPolicy.Mode requestedMode,
-                          CancellationToken token, Listener listener) {
+    public static ConversationCompactor forCrew(String scopeId, CoreAgentModel model, CrewContextArtifacts artifacts) {
+        java.util.Objects.requireNonNull(model);
+        return new ConversationCompactor(scopeId, new CrewConversationCompaction(model::completeSummary, artifacts));
+    }
+
+    static ConversationCompactor forCrew(String scopeId, CrewConversationCompaction.Summarizer model, CrewContextArtifacts artifacts) {
+        return new ConversationCompactor(scopeId, new CrewConversationCompaction(model, artifacts));
+    }
+
+    public boolean isCrew() {
+        return crew != null;
+    }
+
+    void protectGenuineUser(ConversationTurn turn) {
+        if (crew != null) crew.protectGenuineUser(turn);
+    }
+
+    void restoreSummaryCount(int count) {
+        if (crew != null) crew.restoreSummaryCount(count);
+    }
+
+    String retainToolOutput(String content, int contextWindow, CancellationToken token) {
+        return crew == null ? content : crew.retainToolOutput(content, contextWindow, token);
+    }
+
+    public int currentUserMessageIndex() {
+        return store == null ? -1 : store.latestUserMessageIndex(sessionId);
+    }
+
+    public Outcome compact(List<ConversationTurn> transcript, int contextWindow, String trigger, ConversationCompactionPolicy.Mode requestedMode, CancellationToken token, Listener listener) {
+        return compact(transcript, contextWindow, 0, trigger, requestedMode, token, listener);
+    }
+
+    public Outcome compact(List<ConversationTurn> transcript, int contextWindow, int inputOverheadTokens, String trigger, ConversationCompactionPolicy.Mode requestedMode, CancellationToken token, Listener listener) {
         token.throwIfCancelled();
-        ReentrantLock sessionLock = SESSION_LOCKS.computeIfAbsent(sessionId, ignored -> new ReentrantLock());
+        if (crew != null) return crew.compact(transcript, contextWindow, inputOverheadTokens, trigger, token, listener);
+        ReentrantLock sessionLock = SESSION_LOCKS.computeIfAbsent(sessionId, (ignored)->new ReentrantLock());
         if (!sessionLock.tryLock()) throw new IllegalStateException("Conversation compaction is already running");
         try {
             if (listener != null) listener.onStarted(trigger);
             token.throwIfCancelled();
-            ConversationCompactionPolicy.Plan plan = requestedMode == ConversationCompactionPolicy.Mode.ALL
-                    ? ConversationCompactionPolicy.planAll(transcript)
-                    : ConversationCompactionPolicy.planSliding(transcript, contextWindow,
-                    ConversationCompactionPolicy.DEFAULT_SLIDING_PERCENTAGE);
+            ConversationCompactionPolicy.Plan plan = requestedMode == ConversationCompactionPolicy.Mode.ALL ? ConversationCompactionPolicy.planAll(transcript) : ConversationCompactionPolicy.planSliding(transcript, contextWindow, ConversationCompactionPolicy.DEFAULT_SLIDING_PERCENTAGE);
             if (plan.summarize.isEmpty()) return null;
             String summary = summarize(plan.summarize, plan.mode, token);
-            // Local backend falls back from still-full sliding context to all-mode: local-backend.ts:746-787.
-            if (plan.mode == ConversationCompactionPolicy.Mode.SLIDING_WINDOW
-                    && ConversationCompactionPolicy.estimateTokens(summary)
-                    + ConversationCompactionPolicy.estimateTurnsTokens(plan.keep) >= contextWindow) {
+            if (plan.mode == ConversationCompactionPolicy.Mode.SLIDING_WINDOW && ConversationCompactionPolicy.estimateTokens(summary) + ConversationCompactionPolicy.estimateTurnsTokens(plan.keep) >= contextWindow) {
                 plan = ConversationCompactionPolicy.planAll(transcript);
                 if (plan.summarize.isEmpty()) return null;
                 summary = summarize(plan.summarize, ConversationCompactionPolicy.Mode.ALL, token);
@@ -77,13 +115,10 @@ public final class ConversationCompactor {
             for (ConversationTurn turn : plan.summarize) {
                 if (turn.originalMessageIndex == currentUserIndex) currentUserRepresented = true;
             }
-            // The active/reused user request must remain anchored to its raw ledger index.
             if (currentUserIndex >= 0 && !currentUserRepresented) firstKept = Math.min(firstKept, currentUserIndex);
             int summarizedCount = firstKept;
             token.throwIfCancelled();
-            // Summary + firstKept checkpoint mirrors local-store.ts:1157-1221,3006-3033; persist only after a complete summary.
-            store.appendCompaction(sessionId, summary, firstKept, trigger,
-                    plan.mode.name().toLowerCase(java.util.Locale.ROOT), summarizedCount);
+            store.appendCompaction(sessionId, summary, firstKept, trigger, plan.mode.name().toLowerCase(java.util.Locale.ROOT), summarizedCount);
             List<ConversationTurn> updated = new ArrayList<>();
             updated.add(ConversationTurn.compactionSummary(summary, summarizedCount));
             updated.addAll(plan.keep);
@@ -95,11 +130,9 @@ public final class ConversationCompactor {
         }
     }
 
-    private String summarize(List<ConversationTurn> messages, ConversationCompactionPolicy.Mode mode,
-                             CancellationToken token) {
+    private String summarize(List<ConversationTurn> messages, ConversationCompactionPolicy.Mode mode, CancellationToken token) {
         String transcript = ConversationCompactionPolicy.formatTranscript(messages, TOOL_RETURN_SUMMARY_LIMIT);
-        String prompt = mode == ConversationCompactionPolicy.Mode.SLIDING_WINDOW
-                ? ConversationCompactionPolicy.SLIDING_PROMPT : ConversationCompactionPolicy.ALL_PROMPT;
+        String prompt = mode == ConversationCompactionPolicy.Mode.SLIDING_WINDOW ? ConversationCompactionPolicy.SLIDING_PROMPT : ConversationCompactionPolicy.ALL_PROMPT;
         RuntimeException lastOverflow = null;
         List<String> attempts = new ArrayList<>();
         attempts.add(transcript);

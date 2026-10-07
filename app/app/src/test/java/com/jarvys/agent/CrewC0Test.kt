@@ -18,6 +18,11 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
 class CrewC0Test {
+    // v28 persists inbox delivery as paired tool observations rather than transient prompt text.
+    private fun inboxEvidence(transcript: List<ConversationTurn>) = transcript.filter {
+        it.kind == ConversationTurn.Kind.TOOL_RESULT && it.toolName == CoreAgentLoop.INBOX_TOOL
+    }.joinToString("\n") { it.content }
+
     private val emptyTools get() = CoreToolRegistry(emptyList())
 
     private fun loop(
@@ -257,7 +262,7 @@ class CrewC0Test {
         val calls = AtomicInteger()
         val loopCreations = AtomicInteger()
         val reanimatedTranscript = AtomicReference<List<ConversationTurn>>()
-        val reanimatedPrompt = AtomicReference<String>()
+        val reanimatedInbox = AtomicReference<String>()
         val reanimationEntered = CountDownLatch(1)
         val releaseReanimation = CountDownLatch(1)
         val lifecycleStarts = AtomicInteger()
@@ -269,7 +274,7 @@ class CrewC0Test {
                 if (calls.incrementAndGet() == 1) ModelReply("initial review", emptyList())
                 else {
                     reanimatedTranscript.set(transcript)
-                    reanimatedPrompt.set(prompt)
+                    reanimatedInbox.set(inboxEvidence(transcript))
                     ModelReply("revised review", emptyList())
                 }
             })
@@ -299,9 +304,9 @@ class CrewC0Test {
             assertEquals(2, bot.completedCycles())
             assertEquals(2, calls.get())
             assertEquals(1, loopCreations.get())
-            assertTrue(reanimatedPrompt.get().contains("UNTRUSTED CREW DATA"))
-            assertTrue(reanimatedPrompt.get().contains("Check the date"))
-            assertTrue(reanimatedPrompt.get().contains("Use the latest source"))
+            assertTrue(reanimatedInbox.get().contains("UNTRUSTED CREW DATA"))
+            assertTrue(reanimatedInbox.get().contains("Check the date"))
+            assertTrue(reanimatedInbox.get().contains("Use the latest source"))
             assertTrue(reanimatedTranscript.get().any { it.role == "assistant" && it.content == "initial review" })
             manager.sendUserMessage(bot.id, "Also verify the table")
             bot.awaitTermination()
@@ -316,16 +321,16 @@ class CrewC0Test {
         val senderEntered = CountDownLatch(1)
         val releaseSender = CountDownLatch(1)
         val calls = java.util.concurrent.ConcurrentHashMap<String, AtomicInteger>()
-        val updatedPrompt = AtomicReference<String>()
+        val updatedInbox = AtomicReference<String>()
         val manager = CrewManager("reanimate-from-bot", emptyTools, { _, _ -> emptyTools },
-            { bot, tools, incoming -> loop(tools, incoming, { _, prompt, _, token ->
+            { bot, tools, incoming -> loop(tools, incoming, { transcript, _, _, token ->
                 val attempt = calls.computeIfAbsent(bot.id) { AtomicInteger() }.incrementAndGet()
                 if (bot.name == "Sender") {
                     senderEntered.countDown()
                     try { releaseSender.await() } catch (_: InterruptedException) { token.throwIfCancelled() }
                     ModelReply("sender complete", emptyList())
                 } else {
-                    if (attempt > 1) updatedPrompt.set(prompt)
+                    if (attempt > 1) updatedInbox.set(inboxEvidence(transcript))
                     ModelReply("target complete", emptyList())
                 }
             }) }, null)
@@ -339,7 +344,7 @@ class CrewC0Test {
             sender.awaitTermination()
             target.awaitTermination()
             assertEquals(2, target.completedCycles())
-            assertTrue(updatedPrompt.get().contains("A newer source is available"))
+            assertTrue(updatedInbox.get().contains("A newer source is available"))
         } finally { releaseSender.countDown(); manager.close() }
     }
 
@@ -617,15 +622,16 @@ class CrewC0Test {
             { bot, tools, incoming ->
                 allLoopsReady.countDown()
                 try { openLoops.await() } catch (_: InterruptedException) { bot.token.throwIfCancelled() }
-                loop(tools, incoming, { _, prompt, _, _ ->
+                loop(tools, incoming, { transcript, _, _, _ ->
+                    val inbox = inboxEvidence(transcript)
                     when (bot.role.id) {
                         CrewRoleTemplates.EXPLORER -> ModelReply("Explorer found a primary source.", emptyList())
                         CrewRoleTemplates.CRITIC -> ModelReply("Critic: the date on that source is stale.", emptyList())
                         CrewRoleTemplates.ANALYST -> {
-                            assertTrue(prompt.contains("UNTRUSTED CREW DATA"))
-                            assertTrue(prompt.contains("FINDING"))
-                            assertTrue(prompt.contains("CRITIQUE"))
-                            assertTrue(prompt.contains("stale"))
+                            assertTrue(inbox.contains("UNTRUSTED CREW DATA"))
+                            assertTrue(inbox.contains("FINDING"))
+                            assertTrue(inbox.contains("CRITIQUE"))
+                            assertTrue(inbox.contains("stale"))
                             ModelReply("Analyst corrected the date and retained uncertainty.", emptyList())
                         }
                         else -> error("Unexpected template role ${bot.role.id}")

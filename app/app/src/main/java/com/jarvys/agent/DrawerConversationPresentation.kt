@@ -1,10 +1,11 @@
 package com.jarvys.agent
 
-internal fun drawerChatsForDisplay(items: List<RunHistoryItem>, query: String): List<RunHistoryItem> {
+internal fun drawerChatsForDisplay(items: List<RunHistoryItem>, query: String, archived: Boolean = false): List<RunHistoryItem> {
     val needle = query.trim()
     return items.asSequence()
-        .filter { drawerChatMatches(it.title, it.goal, needle) }
-        .sortedByDescending { it.timestampSeconds }
+        .filter { it.archived == archived && drawerChatMatches(it.title, it.goal, needle) }
+        .distinctBy { it.sessionId }
+        .sortedWith(compareByDescending<RunHistoryItem> { it.pinned }.thenByDescending { it.timestampSeconds })
         .toList()
 }
 

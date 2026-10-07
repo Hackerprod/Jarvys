@@ -18,6 +18,7 @@ public final class CrewRoleTemplates {
     public static final String CRITIC = "critico";
     public static final String WRITER = "redactor";
     public static final String OPERATOR = "operador";
+    public static final String CODING = "coding";
     private CrewRoleTemplates() { }
 
     public static List<CrewRole> all(Collection<String> captainTools) {

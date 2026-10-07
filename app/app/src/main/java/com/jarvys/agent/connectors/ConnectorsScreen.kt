@@ -100,6 +100,7 @@ fun ConnectorsScreen(
                     }
                 }
             }
+            FlavorAutonomyUi.ConnectorControls()
             ConnectorsRemoteServicesHost(override = remoteServicesOverride, selectedId = null, onSelect = onOpenRemote)
             ConnectorsGoogleServicesHost(override = googleServicesOverride, selectedId = null, onSelect = onOpenGoogle)
             if (deviceDefinitions.isEmpty() && definitions.isEmpty()) Text(stringResource(R.string.connector_empty),

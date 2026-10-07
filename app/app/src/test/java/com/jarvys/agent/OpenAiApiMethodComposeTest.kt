@@ -220,7 +220,7 @@ class OpenAiApiMethodComposeTest {
     }
 
     private fun selectMethod(optionRes: Int) {
-        compose.onAllNodesWithTag("jarvys-dropdown-field").get(0).performScrollTo().performClick()
+        compose.onNodeWithTag("provider-openai-auth-method").performScrollTo().performClick()
         compose.onNodeWithText(compose.activity.getString(optionRes)).performClick()
         compose.waitForIdle()
     }

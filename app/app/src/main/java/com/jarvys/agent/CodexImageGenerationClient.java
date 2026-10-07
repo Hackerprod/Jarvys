@@ -16,6 +16,8 @@ import java.util.Set;
 /** Dedicated image request path; image bytes never pass through the chat model context. */
 public final class CodexImageGenerationClient {
     public static final String DEFAULT_FORMAT = "png";
+    static final String EDIT_MODEL = "gpt-image-2";
+    public static final int MAX_EDIT_REFERENCES = 5;
     private static final List<String> SIZES = Collections.unmodifiableList(Arrays.asList(
             "1024x1024", "1536x1024", "1024x1536", "auto"));
     private static final int MAX_DIAGNOSTIC_CHARS = 600;
@@ -42,19 +44,196 @@ public final class CodexImageGenerationClient {
 
     private final ProviderSettings settings;
     private final RequestExecutor executor;
+    private final RequestExecutor editExecutor;
 
     public CodexImageGenerationClient(CodexOAuthManager oauth, ProviderSettings settings) {
         this(settings, (request, sessionId, token) -> CodexAuthenticatedRequestExecutor.execute(
                 request, sessionId, token, settings.getModel(),
                 (forceRefresh, currentToken) -> oauth.getValidCredentials(forceRefresh, currentToken),
                 (payload, credentials, currentSession, currentToken) -> OpenAICodexResponsesClient.sendImageRequest(
-                        payload, (SecretStore.CodexCredentials) credentials, currentSession, currentToken)));
+                        payload, (SecretStore.CodexCredentials) credentials, currentSession, currentToken)),
+                (request, sessionId, token) -> CodexAuthenticatedRequestExecutor.execute(
+                        request, sessionId, token, EDIT_MODEL,
+                        (forceRefresh, currentToken) -> oauth.getValidCredentials(forceRefresh, currentToken),
+                        (payload, credentials, currentSession, currentToken) -> OpenAICodexImagesClient.sendEditRequest(
+                                payload, (SecretStore.CodexCredentials) credentials, currentSession, currentToken)));
     }
 
     CodexImageGenerationClient(ProviderSettings settings, RequestExecutor executor) {
+        this(settings, executor, executor);
+    }
+
+    CodexImageGenerationClient(ProviderSettings settings, RequestExecutor executor, RequestExecutor editExecutor) {
         this.settings = settings;
         this.executor = executor;
+        this.editExecutor = editExecutor;
     }
+
+    public GeneratedImage edit(String sessionId, String prompt, String size,
+                               List<ImageEditInput> references, CancellationToken token) {
+        token.throwIfCancelled();
+        try {
+            JSONObject request = buildEditRequest(prompt, size, references);
+            ProviderHttp.Response response = editExecutor.execute(request, sessionId, token);
+            token.throwIfCancelled();
+            if (response == null) throw editFailure(CodexImageGenerationException.Kind.INCOMPLETE, null, "empty_response", 0, "images.edits");
+            if (response.status < 200 || response.status >= 300) throw editHttpFailure(response.status, response.rawBody, response.retryAfterMillis);
+            GeneratedImage image = parseEditResponse(response.body);
+            token.throwIfCancelled();
+            return image;
+        } catch (java.util.concurrent.CancellationException cancelled) {
+            throw cancelled;
+        } catch (CodexHttpException error) {
+            throw editHttpFailure(error.statusCode, error.responseBody, error.retryAfterMillis);
+        } catch (CodexImageGenerationException error) {
+            throw editFailure(error.kind, error.httpStatus, safeEditCode(error.errorCode), error.retryAfterMillis, "images.edits");
+        } catch (OutOfMemoryError lowMemory) {
+            throw editFailure(CodexImageGenerationException.Kind.INVALID_IMAGE, null, "image_memory_unavailable", 0, "images.edits");
+        } catch (RuntimeException error) {
+            token.throwIfCancelled();
+            String message = error.getMessage() == null ? "" : error.getMessage().toLowerCase(java.util.Locale.ROOT);
+            boolean session = message.contains("token refresh failed") || message.contains("sign in with chatgpt");
+            throw editFailure(session ? CodexImageGenerationException.Kind.SESSION : CodexImageGenerationException.Kind.NETWORK,
+                    null, session ? "session_expired" : "network_error", 0, "images.edits");
+        }
+    }
+
+    static JSONObject buildEditRequest(String prompt, String size, List<ImageEditInput> references) {
+        if (prompt == null || prompt.trim().isEmpty()) throw editFailure(CodexImageGenerationException.Kind.API, null, "empty_prompt", 0, "request.validation");
+        if (size != null && !size.trim().isEmpty() && !SIZES.contains(size.trim())) throw editFailure(CodexImageGenerationException.Kind.API, null, "unsupported_size", 0, "request.validation");
+        if (references == null || references.isEmpty() || references.size() > MAX_EDIT_REFERENCES) throw editFailure(CodexImageGenerationException.Kind.API, null, "invalid_references", 0, "request.validation");
+        try {
+            JSONArray images = new JSONArray();
+            for (ImageEditInput reference : references) {
+                if (reference == null) throw editFailure(CodexImageGenerationException.Kind.API, null, "invalid_references", 0, "request.validation");
+                images.put(new JSONObject().put("image_url", reference.dataUrl()));
+            }
+            return new JSONObject().put("images", images).put("prompt", prompt).put("model", EDIT_MODEL)
+                    .put("n", 1).put("quality", "auto").put("size", size == null || size.trim().isEmpty() ? "auto" : size.trim())
+                    .put("background", "auto");
+        } catch (CodexImageGenerationException error) {
+            throw error;
+        } catch (Exception error) {
+            throw editFailure(CodexImageGenerationException.Kind.API, null, "invalid_request", 0, "request.validation");
+        }
+    }
+
+    static GeneratedImage parseEditResponse(String body) {
+        if (body == null || body.trim().isEmpty()) throw editFailure(CodexImageGenerationException.Kind.INCOMPLETE, null, "empty_response", 0, "images.edits");
+        final JSONObject response;
+        try {
+            // Android's JSONObject parser is lenient. Check one strict JSON value before using it.
+            try (android.util.JsonReader reader = new android.util.JsonReader(new java.io.StringReader(body))) {
+                reader.setLenient(false);
+                reader.skipValue();
+                if (reader.peek() != android.util.JsonToken.END_DOCUMENT) throw new IllegalArgumentException();
+            }
+            org.json.JSONTokener parser = new org.json.JSONTokener(body);
+            Object value = parser.nextValue();
+            if (!(value instanceof JSONObject) || parser.nextClean() != 0) throw new IllegalArgumentException();
+            response = (JSONObject) value;
+        } catch (Exception malformed) {
+            throw editFailure(CodexImageGenerationException.Kind.INCOMPLETE, null, "malformed_response", 0, "images.edits");
+        }
+        if (response.has("error")) throw editHttpFailure(null, body, 0);
+        JSONArray data = response.optJSONArray("data");
+        if (data == null || data.length() == 0) throw editFailure(CodexImageGenerationException.Kind.INCOMPLETE, null, "missing_image", 0, "images.edits");
+        if (data.length() != 1 || data.optJSONObject(0) == null) throw editFailure(CodexImageGenerationException.Kind.INCOMPLETE, null, "malformed_response", 0, "images.edits");
+        Object encoded = data.optJSONObject(0).opt("b64_json");
+        if (!(encoded instanceof String) || ((String) encoded).isEmpty()) throw editFailure(CodexImageGenerationException.Kind.INVALID_IMAGE, null, "invalid_base64", 0, "images.edits");
+        final byte[] bytes;
+        try { bytes = strictBase64((String) encoded); }
+        catch (IllegalArgumentException invalid) {
+            throw editFailure(CodexImageGenerationException.Kind.INVALID_IMAGE, null, "invalid_base64", 0, "images.edits");
+        }
+        if (!isCompletePng(bytes)) throw editFailure(CodexImageGenerationException.Kind.INVALID_IMAGE, null, "invalid_png", 0, "images.edits");
+        String size = response.optString("size", "");
+        if (!size.matches("[1-9][0-9]*x[1-9][0-9]*") && !"auto".equals(size)) size = "";
+        return new GeneratedImage(bytes, "", size, DEFAULT_FORMAT);
+    }
+
+    static byte[] strictBase64(String encoded) {
+        if (!ImageEditInput.isCanonicalBase64(encoded)) throw new IllegalArgumentException("Invalid image encoding");
+        byte[] bytes = Base64.decode(encoded, Base64.NO_WRAP);
+        if (!Base64.encodeToString(bytes, Base64.NO_WRAP).equals(encoded)) throw new IllegalArgumentException("Invalid image encoding");
+        return bytes;
+    }
+
+    private static boolean isCompletePng(byte[] bytes) {
+        byte[] signature = {(byte) 0x89, 'P', 'N', 'G', 13, 10, 26, 10};
+        if (bytes == null || bytes.length < signature.length) return false;
+        for (int i = 0; i < signature.length; i++) if (bytes[i] != signature[i]) return false;
+        int offset = 8;
+        boolean header = false;
+        boolean pixels = false;
+        boolean ended = false;
+        while (offset <= bytes.length - 12) {
+            long length = uint32(bytes, offset);
+            if (length > bytes.length - offset - 12) return false;
+            int count = (int) length;
+            String type = new String(bytes, offset + 4, 4, StandardCharsets.US_ASCII);
+            java.util.zip.CRC32 crc = new java.util.zip.CRC32();
+            crc.update(bytes, offset + 4, count + 4);
+            if (crc.getValue() != uint32(bytes, offset + 8 + count)) return false;
+            if (!header) {
+                if (!"IHDR".equals(type) || count != 13) return false;
+                header = true;
+            } else if ("IHDR".equals(type)) return false;
+            if ("IDAT".equals(type)) pixels |= count > 0;
+            offset += count + 12;
+            if ("IEND".equals(type)) {
+                if (count != 0 || !pixels || offset != bytes.length) return false;
+                ended = true;
+                break;
+            }
+        }
+        if (!ended) return false;
+        try {
+            android.graphics.Bitmap decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+            if (decoded == null) return false;
+            decoded.recycle();
+            return true;
+        } catch (RuntimeException invalid) { return false; }
+    }
+
+    private static long uint32(byte[] bytes, int offset) {
+        return ((long) (bytes[offset] & 255) << 24) | ((long) (bytes[offset + 1] & 255) << 16)
+                | ((long) (bytes[offset + 2] & 255) << 8) | (bytes[offset + 3] & 255);
+    }
+
+    private static CodexImageGenerationException editHttpFailure(Integer status, String body, long retryAfter) {
+        ErrorDetail detail = parseError(body);
+        return editFailure(classify(status, detail.code, detail.type, detail.message), status, safeEditCode(detail.code), retryAfter, "images.edits");
+    }
+
+    private static String safeEditCode(String code) {
+        switch (code == null ? "" : code) {
+            case "empty_prompt": case "unsupported_size": case "invalid_references": case "invalid_request":
+            case "empty_response": case "malformed_response": case "missing_image": case "invalid_base64":
+            case "invalid_png": case "image_memory_unavailable": case "session_expired": case "network_error":
+            case "invalid_token": case "model_not_found": case "rate_limit_exceeded": case "insufficient_quota":
+            case "content_policy_violation": case "image_generation_user_error": case "image_generation_not_enabled":
+                return code;
+            default: return "image_edit_failed";
+        }
+    }
+
+    private static CodexImageGenerationException editFailure(CodexImageGenerationException.Kind kind,
+                                                              Integer status, String code, long retryAfter, String event) {
+        String message;
+        switch (kind) {
+            case SESSION: message = "Sign in with ChatGPT again to edit images."; break;
+            case ACCESS: message = "Image editing is not available for this account or model."; break;
+            case QUOTA: message = "The image editing quota or rate limit was reached. Try again later."; break;
+            case POLICY: message = "The provider declined this image edit under its safety policy."; break;
+            case NETWORK: message = "The image edit request could not be completed. Check the connection and try again."; break;
+            case INVALID_IMAGE: message = "The provider did not return a valid PNG image."; break;
+            case INCOMPLETE: message = "The image edit response was incomplete or unreadable."; break;
+            default: message = "The image edit request was rejected or invalid."; break;
+        }
+        return failure(kind, status, code, message, retryAfter, event, null);
+    }
+
 
     public GeneratedImage generate(String sessionId, String prompt, String size, CancellationToken token) {
         if (prompt == null || prompt.trim().isEmpty()) {
@@ -73,7 +252,9 @@ public final class CodexImageGenerationClient {
         } catch (java.util.concurrent.CancellationException cancelled) {
             throw cancelled;
         } catch (CodexImageGenerationException error) {
-            throw error;
+            throw failure(error.kind, error.httpStatus, scrub(error.errorCode, prompt, null),
+                    scrub(error.apiMessage, prompt, null), error.retryAfterMillis,
+                    scrub(error.lastEvent, prompt, null), null);
         } catch (CodexHttpException authenticationFailure) {
             if (authenticationFailure.statusCode == 401) {
                 ProviderHttp.Response unauthorized = new ProviderHttp.Response(401,
@@ -366,7 +547,7 @@ public final class CodexImageGenerationClient {
     private static CodexImageGenerationException failure(CodexImageGenerationException.Kind kind,
                                                           Integer status, String code, String message,
                                                           long retryAfter, String event, Throwable cause) {
-        return new CodexImageGenerationException(kind, status, code, message, retryAfter, event, cause);
+        return new CodexImageGenerationException(kind, status, code, message, retryAfter, event, null);
     }
 
     private static final class Candidate {

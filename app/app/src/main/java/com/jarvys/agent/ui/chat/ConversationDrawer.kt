@@ -2,6 +2,8 @@ package com.jarvys.agent.ui.chat
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,6 +24,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -48,6 +54,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.jarvys.agent.R
+import com.jarvys.agent.ConversationAction
+import com.jarvys.agent.isManagedSystemConversation
+import com.jarvys.agent.ScrollableDialogContent
+import com.jarvys.agent.JarvysTextField
 import com.jarvys.agent.RunHistoryItem
 import com.jarvys.agent.drawerChatsForDisplay
 import com.jarvys.agent.drawerConversationTitle
@@ -68,16 +78,32 @@ fun ConversationDrawer(
     onResumeActive: () -> Unit,
     onOpenHistory: (String) -> Unit,
     onOpenSettings: () -> Unit,
+    actionsEnabled: Boolean = true,
+    onConversationAction: (String, ConversationAction, String?) -> Unit = { _, _, _ -> },
 ) {
     val configuration = LocalConfiguration.current
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     var filter by rememberSaveable { mutableStateOf("") }
+    var archived by rememberSaveable { mutableStateOf(false) }
+    var renameTarget by remember { mutableStateOf<RunHistoryItem?>(null) }
+    var deleteTarget by remember { mutableStateOf<RunHistoryItem?>(null) }
+    var renameText by remember { mutableStateOf("") }
+    fun action(record: RunHistoryItem, action: ConversationAction) {
+        when (action) {
+            ConversationAction.RENAME -> { renameTarget = record; renameText = record.title ?: record.goal }
+            ConversationAction.DELETE -> { deleteTarget = record }
+            else -> onConversationAction(record.sessionId, action, null)
+        }
+    }
+    val activeRecord = history.firstOrNull { it.sessionId == activeSessionId }
+        ?: RunHistoryItem(activeSessionId, activeGoal, "", 0, 0, 0.0, activeSessionId, activeTitle)
+
     val searchableHistory = remember(history, activeSessionVisible, activeSessionId) {
         history.filterNot { activeSessionVisible && it.sessionId == activeSessionId }
     }
-    val visibleHistory = remember(searchableHistory, filter) { drawerChatsForDisplay(searchableHistory, filter) }
-    val activeVisible = activeSessionVisible &&
+    val visibleHistory = remember(searchableHistory, filter, archived) { drawerChatsForDisplay(searchableHistory, filter, archived) }
+    val activeVisible = activeSessionVisible && activeRecord.archived == archived &&
         (filter.isBlank() || activeTitle.orEmpty().contains(filter.trim(), true) || activeGoal.contains(filter.trim(), true))
     val clearDescription = stringResource(R.string.drawer_clear_search)
     val historyDescription = stringResource(R.string.drawer_history)
@@ -136,7 +162,13 @@ fun ConversationDrawer(
                         Icon(LucideIcons.History, contentDescription = null, modifier = Modifier.size(20.dp))
                     }
                 }
-                JarvysSectionLabel(stringResource(R.string.drawer_history_section))
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    JarvysSectionLabel(stringResource(if (archived) R.string.drawer_archived_chats else R.string.drawer_history_section))
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = { archived = !archived; filter = "" }) {
+                        Text(stringResource(if (archived) R.string.drawer_back_to_chats else R.string.drawer_archived_chats))
+                    }
+                }
             }
 
             LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -148,10 +180,12 @@ fun ConversationDrawer(
                         subtitle = stringResource(R.string.drawer_current_conversation),
                         selected = isChatRoute && selectedHistoryId == null,
                         active = true,
-                        onClick = onResumeActive)
+                        onClick = onResumeActive, pinned = activeRecord.pinned, archived = activeRecord.archived,
+                        actionsEnabled = actionsEnabled, managed = isManagedSystemConversation(activeSessionId),
+                        onAction = { action(activeRecord, it) })
                 }
                 if (visibleHistory.isEmpty() && !activeVisible) item(key = "history-empty") {
-                    Text(stringResource(if (filter.isBlank()) R.string.drawer_no_chats else R.string.drawer_search_no_results),
+                    Text(stringResource(if (filter.isNotBlank()) R.string.drawer_search_no_results else if (archived) R.string.drawer_no_archived_chats else R.string.drawer_no_chats),
                         Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 24.dp),
                         color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
                 }
@@ -161,7 +195,9 @@ fun ConversationDrawer(
                         subtitle = stringResource(R.string.drawer_history_summary, record.outcome, record.steps, record.turns),
                         selected = isChatRoute && selectedHistoryId == record.id,
                         active = false,
-                        onClick = { onOpenHistory(record.id) })
+                        onClick = { onOpenHistory(record.id) }, pinned = record.pinned, archived = record.archived,
+                        actionsEnabled = actionsEnabled, managed = isManagedSystemConversation(record.sessionId),
+                        onAction = { action(record, it) })
                 }
             }
 
@@ -186,11 +222,38 @@ fun ConversationDrawer(
             }
         }
     }
+    renameTarget?.let { record ->
+        AlertDialog(onDismissRequest = { renameTarget = null },
+            title = { Text(stringResource(R.string.drawer_rename_chat)) },
+            text = { ScrollableDialogContent {
+                JarvysTextField(value = renameText, onValueChange = { renameText = it }, singleLine = true,
+                    label = { Text(stringResource(R.string.drawer_chat_name)) })
+                if (renameText.isBlank()) Text(stringResource(R.string.drawer_name_required), color = MaterialTheme.colorScheme.error)
+            } },
+            confirmButton = { TextButton(enabled = actionsEnabled && renameText.isNotBlank(), onClick = {
+                renameTarget = null; onConversationAction(record.sessionId, ConversationAction.RENAME, renameText.trim())
+            }) { Text(stringResource(R.string.drawer_save_name)) } },
+            dismissButton = { TextButton(onClick = { renameTarget = null }) { Text(stringResource(R.string.drawer_cancel_action)) } })
+    }
+    deleteTarget?.let { record ->
+        AlertDialog(onDismissRequest = { deleteTarget = null },
+            title = { Text(stringResource(R.string.drawer_delete_chat)) },
+            text = { ScrollableDialogContent { Text(stringResource(R.string.drawer_delete_confirmation,
+                drawerConversationTitle(record.title, record.goal, stringResource(R.string.drawer_chat_fallback)))) } },
+            confirmButton = { TextButton(enabled = actionsEnabled, onClick = {
+                deleteTarget = null; onConversationAction(record.sessionId, ConversationAction.DELETE, null)
+            }) { Text(stringResource(R.string.drawer_delete_action), color = MaterialTheme.colorScheme.error) } },
+            dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text(stringResource(R.string.drawer_cancel_action)) } })
+    }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun SessionRow(title: String, subtitle: String, selected: Boolean, active: Boolean, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 62.dp).clickable(onClick = onClick)
+private fun SessionRow(title: String, subtitle: String, selected: Boolean, active: Boolean, onClick: () -> Unit,
+    pinned: Boolean, archived: Boolean, actionsEnabled: Boolean, managed: Boolean, onAction: (ConversationAction) -> Unit) {
+    var menuOpen by remember { mutableStateOf(false) }
+    Row(Modifier.fillMaxWidth().heightIn(min = 62.dp).combinedClickable(onClick = onClick,
+        onLongClick = { if (actionsEnabled) menuOpen = true })
         .background(if (selected) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f)
             else Color.Transparent, RoundedCornerShape(13.dp)).padding(horizontal = 12.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(11.dp)) {
@@ -205,7 +268,23 @@ private fun SessionRow(title: String, subtitle: String, selected: Boolean, activ
                 color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        if (active) Icon(LucideIcons.Circle, contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+        if (pinned) Text(stringResource(R.string.drawer_pinned), style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.primary)
+        Box {
+            IconButton(enabled = actionsEnabled, onClick = { menuOpen = true }, modifier = Modifier.size(40.dp)) {
+                Icon(LucideIcons.Ellipsis, contentDescription = stringResource(R.string.drawer_chat_actions, title), modifier = Modifier.size(18.dp))
+            }
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                listOf(
+                    (if (pinned) ConversationAction.UNPIN else ConversationAction.PIN) to (if (pinned) R.string.drawer_unpin else R.string.drawer_pin),
+                    ConversationAction.RENAME to R.string.drawer_rename_chat,
+                    (if (archived) ConversationAction.RESTORE else ConversationAction.ARCHIVE) to (if (archived) R.string.drawer_unarchive else R.string.drawer_archive),
+                ).forEach { (action, label) ->
+                    DropdownMenuItem(text = { Text(stringResource(label)) }, onClick = { menuOpen = false; onAction(action) }, enabled = actionsEnabled)
+                }
+                if (!managed) DropdownMenuItem(text = { Text(stringResource(R.string.drawer_delete_action), color = MaterialTheme.colorScheme.error) },
+                    onClick = { menuOpen = false; onAction(ConversationAction.DELETE) }, enabled = actionsEnabled)
+            }
+        }
     }
 }

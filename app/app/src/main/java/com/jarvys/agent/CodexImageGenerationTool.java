@@ -18,6 +18,7 @@ final class CodexImageGenerationTool implements CoreTool {
     private final String sessionId;
     private final ProviderSettings settings;
     private final CodexImageGenerationClient client;
+    private final SecretStore secrets;
     private final GeneratedImageStore images;
     private final LocalRunStore conversations;
     private final ToolSpec declaration;
@@ -27,10 +28,16 @@ final class CodexImageGenerationTool implements CoreTool {
     }
 
     CodexImageGenerationTool(Context context, String sessionId, ProviderSettings settings, SecretStore secrets) {
+        this(context, sessionId, settings, secrets, new CodexImageGenerationClient(new CodexOAuthManager(secrets), settings));
+    }
+
+    CodexImageGenerationTool(Context context, String sessionId, ProviderSettings settings,
+                              SecretStore secrets, CodexImageGenerationClient client) {
         this.context = context.getApplicationContext();
         this.sessionId = sessionId;
         this.settings = settings;
-        this.client = new CodexImageGenerationClient(new CodexOAuthManager(secrets), settings);
+        this.client = client;
+        this.secrets = secrets;
         this.images = new GeneratedImageStore(this.context);
         this.conversations = new LocalRunStore(this.context);
         Map<String, Object> properties = new LinkedHashMap<>();
@@ -39,10 +46,18 @@ final class CodexImageGenerationTool implements CoreTool {
         size.put("type", "string");
         size.put("enum", CodexImageGenerationClient.supportedSizes());
         properties.put("size", size);
+        Map<String, Object> references = new LinkedHashMap<>();
+        references.put("type", "array");
+        references.put("items", Collections.singletonMap("type", "string"));
+        references.put("maxItems", CodexImageGenerationClient.MAX_EDIT_REFERENCES);
+        references.put("uniqueItems", true);
+        references.put("description", "Exact image_ref values for only the images the user asks to use, from this conversation's attachment metadata or generated image results. Omit for text-only generation. Never use paths, URLs, indices or guessed references.");
+        properties.put("image_refs", references);
         Map<String, Object> schema = new LinkedHashMap<>();
         schema.put("type", "object");
         schema.put("properties", properties);
         schema.put("required", Collections.singletonList("prompt"));
+        schema.put("additionalProperties", false);
         declaration = new ToolSpec(NAME, "openai/codex-image",
                 this.context.getString(R.string.image_tool_description,
                         android.text.TextUtils.join(", ", CodexImageGenerationClient.supportedSizes())),
@@ -66,7 +81,14 @@ final class CodexImageGenerationTool implements CoreTool {
     @Override public ToolSpec declaration() { return declaration; }
 
     @Override public CoreToolResult execute(Map<String, Object> arguments, CancellationToken token) {
-        if (!isAvailable(context, settings, 0, sessionId)) {
+        try (AgentErrorReporter.AttachmentScope ignored = AgentErrorReporter.suppressForAttachments()) {
+            return executePrivate(arguments, token);
+        }
+    }
+
+    private CoreToolResult executePrivate(Map<String, Object> arguments, CancellationToken token) {
+        token.throwIfCancelled();
+        if (!isAvailable(context, settings, 0, sessionId, secrets)) {
             return CoreToolResult.failure(imageString(R.string.image_error_session, "SESSION_UNAVAILABLE",
                     "ChatGPT sign-in is no longer available for this run."));
         }
@@ -81,11 +103,24 @@ final class CodexImageGenerationTool implements CoreTool {
                     android.text.TextUtils.join(", ", CodexImageGenerationClient.supportedSizes())));
         }
         String size = rawSize == null ? null : (String) rawSize;
+        final List<ImageEditInput> inputs;
         try {
-            CodexImageGenerationClient.GeneratedImage generated = client.generate(sessionId, prompt, size, token);
+            List<String> selected = ImageReferenceResolver.parse(arguments.get("image_refs"));
+            inputs = selected.isEmpty() ? Collections.emptyList()
+                    : new ImageReferenceResolver(context, sessionId).resolve(selected, token);
+        } catch (IllegalArgumentException invalidReference) {
+            return CoreToolResult.failure(imageString(R.string.image_error_reference, invalidReference.getMessage()));
+        }
+        try {
+            token.throwIfCancelled();
+            CodexImageGenerationClient.GeneratedImage generated = inputs.isEmpty()
+                    ? client.generate(sessionId, prompt, size, token)
+                    : client.edit(sessionId, prompt, size, inputs, token);
+            token.throwIfCancelled();
             String imageId = UUID.randomUUID().toString();
             String relativePath = images.save(sessionId, imageId, generated.bytes);
             try {
+                token.throwIfCancelled();
                 conversations.appendGeneratedImageEvent(sessionId, relativePath, prompt,
                         generated.revisedPrompt, generated.size, generated.mimeType);
             } catch (RuntimeException persistFailure) {
@@ -96,8 +131,8 @@ final class CodexImageGenerationTool implements CoreTool {
                     generated.revisedPrompt, generated.mimeType, generated.size, "COMPLETED", null,
                     System.currentTimeMillis());
             AgentRunUiState.generatedImageAdded(sessionId, event);
-            return CoreToolResult.success("Image generated and added to this conversation. Image id: " + imageId
-                    + "; path: generated/" + sessionId + "/" + relativePath + "; format: PNG"
+            return CoreToolResult.success("Image " + (inputs.isEmpty() ? "generated" : "edited")
+                    + " and added to this conversation. image_ref: generated:" + imageId + "; format: PNG"
                     + (generated.size.isEmpty() ? "" : "; size: " + generated.size));
         } catch (java.util.concurrent.CancellationException cancelled) {
             throw cancelled;

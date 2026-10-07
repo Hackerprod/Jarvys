@@ -62,10 +62,17 @@ data class AgentRunUiEvent(
     val generatedImageSize: String? = null,
     val generatedImageStatus: String? = null,
     val generatedImageError: String? = null,
+    val attachments: List<ChatAttachment> = emptyList(),
+    val toolAuditDetail: String? = null,
+    val reactionEmoji: String = "",
  ) {
     fun copyMetadata(messageId: String, durationMs: Long): AgentRunUiEvent =
         copy(messageId = messageId, durationMs = durationMs)
+    fun copyReaction(emoji: String): AgentRunUiEvent =
+        copy(reactionEmoji = if (kind == "user" && proactiveThreadKey.isNullOrEmpty()) emoji else "")
     fun copyStage(stage: String?): AgentRunUiEvent = copy(stage = stage)
+    fun copyAttachments(attachments: List<ChatAttachment>): AgentRunUiEvent =
+        copy(attachments = if (kind == "user" && proactiveThreadKey.isNullOrEmpty()) attachments.toList() else emptyList())
 
     companion object {
         @JvmStatic
@@ -192,6 +199,8 @@ data class RunHistoryItem(
     val timestampSeconds: Double,
     val sessionId: String = id,
     val title: String? = null,
+    val pinned: Boolean = false,
+    val archived: Boolean = false,
 )
 
 /** Bridges the foreground service's existing AgentLoop progress callback into a Compose-observable StateFlow. */
@@ -204,13 +213,17 @@ object AgentRunUiState {
     val state: StateFlow<AgentRunUiSnapshot> = _state.asStateFlow()
 
     @JvmStatic
-    fun beginRun(sessionId: String, goal: String) = synchronized(lock) {
+    fun beginRun(sessionId: String, goal: String) = beginRun(sessionId, goal, emptyList())
+
+    @JvmStatic
+    fun beginRun(sessionId: String, goal: String, attachments: List<ChatAttachment>) = synchronized(lock) {
+        val visibleAttachments = if (isManagedSystemConversation(sessionId)) emptyList() else attachments
         val current = _state.value
         val sameTurnAlreadyStarted = current.sessionId == sessionId && current.running && current.goal == goal
         if (!sameTurnAlreadyStarted) pendingProgress.clear()
         val events = if (current.sessionId == sessionId) {
-            if (sameTurnAlreadyStarted) current.events else append(current.events, event("user", goal))
-        } else listOf(event("user", goal))
+            if (sameTurnAlreadyStarted) current.events else append(current.events, event("user", goal).copyAttachments(visibleAttachments))
+        } else listOf(event("user", goal).copyAttachments(visibleAttachments))
         _state.value = current.copy(
             sessionId = sessionId,
             goal = goal,
@@ -220,6 +233,27 @@ object AgentRunUiState {
             compacting = false,
             compactionStatus = null,
         )
+    }
+
+    /** Bind the optimistic row once persistence returns its identity; never match reactions by text. */
+    @JvmStatic
+    fun bindCurrentUserMessage(sessionId: String, messageId: String) = synchronized(lock) {
+        val current = _state.value
+        if (current.sessionId != sessionId || messageId.isBlank()) return@synchronized
+        val index = current.events.indexOfLast { it.kind == "user" }
+        if (index < 0 || current.events[index].messageId.isNotEmpty()) return@synchronized
+        _state.value = current.copy(events = current.events.mapIndexed { i, event ->
+            if (i == index) event.copy(messageId = messageId) else event
+        })
+    }
+
+    @JvmStatic
+    fun messageReactionChanged(sessionId: String, messageId: String, emoji: String) = synchronized(lock) {
+        val current = _state.value
+        if (current.sessionId != sessionId) return@synchronized
+        _state.value = current.copy(events = current.events.map { event ->
+            if (event.kind == "user" && event.messageId == messageId) event.copyReaction(emoji) else event
+        })
     }
 
     @JvmStatic
@@ -421,14 +455,19 @@ object AgentRunUiState {
 
     @JvmStatic
     fun onToolProgress(stage: String, callId: String, displayName: String,
-                       detail: String?, previewId: String?) = synchronized(lock) {
+                       detail: String?, previewId: String?) =
+        onToolProgress(stage, callId, displayName, detail, previewId, null)
+
+    @JvmStatic
+    fun onToolProgress(stage: String, callId: String, displayName: String,
+                       detail: String?, previewId: String?, auditDetail: String?) = synchronized(lock) {
         val current = _state.value
         if (!current.running) return@synchronized
         val events = pendingProgress.fold(current.events) { accumulated, buffered -> append(accumulated, buffered) }.toMutableList()
         pendingProgress.clear()
         val existingIndex = events.indexOfLast { it.kind == "tool" && it.toolCallId == callId }
         val updated = AgentRunUiEvent.toolEvent(nextEventId++, stage, displayName, detail, callId, previewId,
-            System.currentTimeMillis())
+            System.currentTimeMillis()).copy(toolAuditDetail = auditDetail ?: events.getOrNull(existingIndex)?.toolAuditDetail)
         if (stage != "tool_call" && existingIndex >= 0) {
             events[existingIndex] = updated.copy(id = events[existingIndex].id)
         } else {

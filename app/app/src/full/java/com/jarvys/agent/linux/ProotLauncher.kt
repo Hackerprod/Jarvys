@@ -24,13 +24,22 @@ data class ProotCommandPlan(val argv: List<String>, val environment: Map<String,
 /** Pure argument/environment construction: user command is always one guest argv element. */
 object ProotLauncher {
     fun buildArgv(proot: String, rootfs: String, cwd: String, workspace: String, command: String,
-                  shell: String = "/bin/bash"): List<String> {
+                  shell: String = "/bin/bash", projectProbe: Boolean = false,
+                  projectPrivateRoot: String? = null): List<String> {
         validateGuestCwd(cwd)
-        return listOf(proot, "--root-id", "--link2symlink", "--kill-on-exit", "-r", rootfs,
-            "-w", cwd, "-b", "/dev", "-b", "/proc", "-b", "/sys", "-b", "$workspace:/workspace",
-            "/usr/bin/env", "-i", "HOME=/root", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-            "LANG=C.UTF-8", shell, "-lc", "cd -- \"\$1\" && eval \"\$2\"", "jarvys", cwd, command)
+        require(!projectProbe || projectPrivateRoot != null) { "Project execution requires private home/temp overlays" }
+        val script = (if (projectProbe) PROJECT_PROBE else "") + "cd -- \"\$1\" && eval \"\$2\""
+        val argv = mutableListOf(proot, "--root-id", "--link2symlink", "--kill-on-exit", "-r", rootfs,
+            "-w", cwd, "-b", "/dev", "-b", "/proc", "-b", "/sys", "-b", "$workspace:/workspace")
+        if (projectProbe) argv += listOf("-b", "$projectPrivateRoot/root:/root", "-b", "$projectPrivateRoot/home:/home",
+            "-b", "$projectPrivateRoot/tmp:/tmp", "-b", "$projectPrivateRoot/tmp:/var/tmp")
+        argv += listOf("/usr/bin/env", "-i", "HOME=/root", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C.UTF-8")
+        if (projectProbe) argv += listOf("TMPDIR=/tmp", "XDG_CONFIG_HOME=/root/.config", "GIT_CONFIG_NOSYSTEM=1")
+        argv += listOf(shell, if (projectProbe) "-c" else "-lc", script, "jarvys", cwd, command)
+        return argv
     }
+
+    private const val PROJECT_PROBE = "if [ \"\$(uname -m)\" != aarch64 ] || [ \"\$(id -u)\" != 0 ] || [ ! -r /etc/os-release ]; then printf '%s\\n' 'Project environment probe failed; command not executed.' >&2; exit 125; fi; "
 
     fun validateGuestCwd(cwd: String) {
         require(cwd.startsWith('/') && '\u0000' !in cwd && cwd.split('/').none { it == ".." }) {
@@ -48,7 +57,8 @@ object ProotLauncher {
     fun plan(proot: File, loader: File, rootfs: File, cwd: String, workspace: File,
              tempDir: File, nativeLibraryDir: File, command: String,
              fileKindReader: LinuxFileKindReader = AndroidLinuxFileKindReader,
-             readGuestLink: (File) -> String = { Os.readlink(it.absolutePath) }): ProotCommandPlan {
+             readGuestLink: (File) -> String = { Os.readlink(it.absolutePath) },
+             projectProbe: Boolean = false): ProotCommandPlan {
         val talloc = File(nativeLibraryDir, "libtalloc.so")
         if (!tempDir.exists() && !tempDir.mkdirs()) throw IOException("Cannot create PRoot temporary directory")
         if (!talloc.isFile) throw IOException("libtalloc.so is missing from native libraries")
@@ -74,8 +84,13 @@ object ProotLauncher {
         val shell = resolveGuestExecutable(rootfs, "/bin/bash", fileKindReader, readGuestLink)
             ?: resolveGuestExecutable(rootfs, "/bin/sh", fileKindReader, readGuestLink)
             ?: throw IOException("Guest rootfs has neither executable /bin/bash nor /bin/sh")
+        val privateRoot = if (projectProbe) File(tempDir, "guest-private").also { private ->
+            for (name in listOf("root", "home", "tmp")) {
+                if (!File(private, name).mkdirs()) throw IOException("Cannot create isolated project home/temp directory")
+            }
+        } else null
         return ProotCommandPlan(
-            buildArgv(proot.absolutePath, rootfs.absolutePath, cwd, workspace.absolutePath, command, shell),
+            buildArgv(proot.absolutePath, rootfs.absolutePath, cwd, workspace.absolutePath, command, shell, projectProbe, privateRoot?.absolutePath),
             buildEnvironment(loader.absolutePath, uniqueLibraryDir.absolutePath, nativeLibraryDir.absolutePath),
             rootfs.absoluteFile.parentFile,
         )
@@ -173,10 +188,13 @@ interface ProcessTree {
     fun processIds(): List<Int>
     fun parentPid(pid: Int): Int?
     fun kill(pid: Int)
+    fun identity(pid: Int): String? = null
+    fun requiresIdentity(): Boolean = false
 }
 
 /** Cycle-safe parent/child traversal; children are signalled before their parent. */
 class ProcessTreeKiller(private val tree: ProcessTree) {
+    private val killedIdentities = ConcurrentHashMap<Int, String>()
     fun descendants(rootPid: Int): List<Int> {
         val all = tree.processIds().toSet()
         val children = all.associateWith { pid -> tree.parentPid(pid) }
@@ -190,24 +208,46 @@ class ProcessTreeKiller(private val tree: ProcessTree) {
         return found.toList()
     }
 
-    fun killTree(rootPid: Int): List<Int> {
+    fun identity(pid: Int): String? = tree.identity(pid)
+
+    fun killTree(rootPid: Int, expectedIdentity: String? = null): List<Int> {
+        val rootIdentity = tree.identity(rootPid)
+        if ((expectedIdentity != null && rootIdentity != expectedIdentity) || (tree.requiresIdentity() && rootIdentity == null)) return emptyList()
         val children = descendants(rootPid)
-        children.asReversed().forEach { runCatching { tree.kill(it) } }
-        runCatching { tree.kill(rootPid) }
-        return children + rootPid
+        val identities = children.associateWith(tree::identity).toMutableMap().apply { put(rootPid, rootIdentity) }
+        val killed = mutableListOf<Int>()
+        for (pid in children.asReversed() + rootPid) {
+            if (tree.identity(rootPid) != rootIdentity) break
+            val expected = identities[pid]
+            if (tree.requiresIdentity() && expected == null) continue
+            if (tree.identity(pid) != expected) continue
+            if (pid != rootPid) {
+                if (pid !in descendants(rootPid)) continue
+                if (tree.identity(rootPid) != rootIdentity) break
+                if (tree.identity(pid) != expected) continue
+            }
+            if (tree.identity(rootPid) != rootIdentity) break
+            if (expected != null) killedIdentities[pid] = expected
+            try { tree.kill(pid); killed += pid }
+            catch (_: RuntimeException) { if (expected != null) killedIdentities.remove(pid, expected) }
+        }
+        return killed
     }
 
     fun awaitGone(pids: List<Int>) {
         val targets = pids.toSet()
         var interrupted = false
         try {
-            while (tree.processIds().any(targets::contains)) {
+            while (tree.processIds().any { pid -> pid in targets &&
+                    (killedIdentities[pid]?.let { tree.identity(pid) == it } ?: !tree.requiresIdentity()) }) {
                 try { Thread.sleep(25) } catch (_: InterruptedException) { interrupted = true }
             }
         } finally {
+            targets.forEach(killedIdentities::remove)
             if (interrupted) Thread.currentThread().interrupt()
         }
     }
+
 }
 
 class AndroidProcessTree(private val procRoot: File = File("/proc")) : ProcessTree {
@@ -218,6 +258,11 @@ class AndroidProcessTree(private val procRoot: File = File("/proc")) : ProcessTr
         stat.substring(end + 1).trim().split(Regex("\\s+"))[1].toInt()
     }.getOrNull()
     override fun kill(pid: Int) { android.os.Process.killProcess(pid) }
+    override fun requiresIdentity() = true
+    override fun identity(pid: Int): String? = runCatching {
+        val stat = File(procRoot, "$pid/stat").readText()
+        "$pid:${stat.substring(stat.lastIndexOf(')') + 1).trim().split(Regex("\\s+"))[19]}"
+    }.getOrNull()
 }
 
 /** Executes PRoot without an intervening host shell and drains both pipes independently. */
@@ -225,6 +270,13 @@ class ProotProcessExecutor(private val killer: ProcessTreeKiller = ProcessTreeKi
     private data class ActiveExecution(val kill: () -> Unit, val finished: CountDownLatch = CountDownLatch(1))
     private val nextExecutionId = AtomicLong(1L)
     private val activeExecutions = ConcurrentHashMap<Long, ActiveExecution>()
+    private val launchLock = Any()
+    private var launchesSuspended = false
+
+    fun <T> withLaunchesSuspended(action: () -> T): T {
+        synchronized(launchLock) { check(!launchesSuspended) { "Runtime removal is already in progress" }; launchesSuspended = true }
+        try { return action() } finally { synchronized(launchLock) { launchesSuspended = false } }
+    }
 
     /** Used by uninstall: signal every live PRoot tree and wait until each runner has reaped it. */
     fun terminateAllAndWait() {
@@ -244,75 +296,93 @@ class ProotProcessExecutor(private val killer: ProcessTreeKiller = ProcessTreeKi
     }
 
     fun execute(plan: ProotCommandPlan, timeoutMillis: Long? = null, token: CancellationToken,
-                callback: LinuxOutputCallback): LinuxExecResult {
+                callback: LinuxOutputCallback, beforeLaunch: () -> Unit = { }): LinuxExecResult {
         token.throwIfCancelled()
+        require(timeoutMillis == null || timeoutMillis > 0) { "Timeout must be positive" }
         val builder = ProcessBuilder(plan.argv).apply {
-            environment().clear()
-            environment().putAll(plan.environment)
+            environment().clear(); environment().putAll(plan.environment)
             plan.workingDirectory?.let { directory(it) }
         }
-        val process = builder.start()
-        process.outputStream.close()
+        lateinit var process: Process
+        var ownedPid: Int? = null
+        var ownedIdentity: String? = null
+        val killed = java.util.concurrent.atomic.AtomicBoolean(false)
         val killedPids = java.util.concurrent.atomic.AtomicReference<List<Int>>(emptyList())
         val killAction = {
-            val pid = processPid(process)
-            killedPids.set(killer.killTree(pid))
-            process.destroyForcibly()
+            if (killed.compareAndSet(false, true)) {
+                try {
+                    if (isAlive(process)) ownedPid?.let { killedPids.set(killer.killTree(it, ownedIdentity)) }
+                } finally { process.destroyForcibly() }
+            }
             Unit
         }
         val executionId = nextExecutionId.getAndIncrement()
-        val activeExecution = ActiveExecution(killAction)
-        activeExecutions[executionId] = activeExecution
-        val unregister = token.registerCancelAction(killAction)
-        val stdout = drain("jarvys-linux-stdout", process.inputStream, LinuxOutputStream.STDOUT, callback)
-        val stderr = drain("jarvys-linux-stderr", process.errorStream, LinuxOutputStream.STDERR, callback)
+        lateinit var active: ActiveExecution
+        var unregister = Runnable { }
+        synchronized(launchLock) {
+            check(!launchesSuspended) { "Runtime removal is in progress; command not launched" }
+            token.throwIfCancelled(); beforeLaunch(); token.throwIfCancelled()
+            process = builder.start()
+            ownedPid = runCatching { processPid(process) }.getOrNull()
+            ownedIdentity = ownedPid?.let(killer::identity)
+            active = ActiveExecution(killAction)
+            activeExecutions[executionId] = active
+            unregister = token.registerCancelAction(killAction)
+        }
+        val outputFailure = java.util.concurrent.atomic.AtomicReference<Throwable?>(null)
+        val guardedOutput = LinuxOutputCallback { stream, text ->
+            try { callback.onChunk(stream, text) }
+            catch (failure: Throwable) { outputFailure.compareAndSet(null, failure); runCatching(killAction) }
+        }
+        val readFailure: (IOException) -> Unit = { failure ->
+            if (!killed.get()) { outputFailure.compareAndSet(null, failure); runCatching(killAction) }
+        }
+        var stdout: Thread? = null
+        var stderr: Thread? = null
         var timedOut = false
         try {
-            val exited = waitFor(process, timeoutMillis, token)
-            if (!exited) {
-                timedOut = !token.isCancelled
-                killAction()
-                waitFor(process, null, token)
-                killer.awaitGone(killedPids.get())
-            }
-            stdout.join()
-            stderr.join()
-            return LinuxExecResult(process.exitValue(), timedOut, token.isCancelled)
-        } catch (cancelled: CancellationException) {
-            killAction()
-            waitFor(process, null, CancellationToken.uncancellable())
+            process.outputStream.close()
+            stdout = drain("jarvys-linux-stdout", process.inputStream, LinuxOutputStream.STDOUT, guardedOutput, readFailure)
+            stderr = drain("jarvys-linux-stderr", process.errorStream, LinuxOutputStream.STDERR, guardedOutput, readFailure)
+            if (!waitFor(process, timeoutMillis, token)) { timedOut = !token.isCancellationRequested; killAction() }
+            reap(process)
             killer.awaitGone(killedPids.get())
-            stdout.join()
-            stderr.join()
-            return LinuxExecResult(process.exitValue(), cancelled = true)
+            joinUninterruptibly(stdout); joinUninterruptibly(stderr)
+            outputFailure.get()?.let { throw IOException("Command output could not be saved", it) }
+            return LinuxExecResult(process.exitValue(), timedOut, token.isCancellationRequested || (killed.get() && !timedOut))
+        } catch (_: CancellationException) {
+            killAction(); reap(process); killer.awaitGone(killedPids.get())
+            joinUninterruptibly(stdout); joinUninterruptibly(stderr)
+            return LinuxExecResult(process.exitValue(), timedOut, cancelled = true)
         } finally {
-            unregister.run()
-            activeExecutions.remove(executionId, activeExecution)
-            activeExecution.finished.countDown()
+            // No exceptional path may release ownership before reaping the child and drainers.
+            if (isAlive(process)) runCatching(killAction)
+            reap(process); killer.awaitGone(killedPids.get())
+            joinUninterruptibly(stdout); joinUninterruptibly(stderr)
+            unregister.run(); activeExecutions.remove(executionId, active); active.finished.countDown()
         }
     }
 
+    private fun isAlive(process: Process): Boolean = try { process.exitValue(); false } catch (_: IllegalThreadStateException) { true }
+    private fun reap(process: Process) {
+        var interrupted = false
+        try { while (true) { try { process.waitFor(); return } catch (_: InterruptedException) { interrupted = true } } }
+        finally { if (interrupted) Thread.currentThread().interrupt() }
+    }
+    private fun joinUninterruptibly(thread: Thread?) {
+        if (thread == null) return
+        var interrupted = false
+        try { while (true) { try { thread.join(); return } catch (_: InterruptedException) { interrupted = true } } }
+        finally { if (interrupted) Thread.currentThread().interrupt() }
+    }
     private fun waitFor(process: Process, timeoutMillis: Long?, token: CancellationToken): Boolean {
-        if (timeoutMillis == null) {
-            while (true) {
-                token.throwIfCancelled()
-                try { process.waitFor(); return true }
-                catch (_: InterruptedException) { token.throwIfCancelled() }
-            }
-        }
-        if (Build.VERSION.SDK_INT >= 26) {
-            while (true) {
-                token.throwIfCancelled()
-                try { return process.waitFor(timeoutMillis, TimeUnit.MILLISECONDS) }
-                catch (_: InterruptedException) { token.throwIfCancelled() }
-            }
-        }
-        val started = android.os.SystemClock.elapsedRealtime()
-        while (android.os.SystemClock.elapsedRealtime() - started < timeoutMillis) {
+        val started = System.nanoTime()
+        while (true) {
             token.throwIfCancelled()
-            try { return process.exitValue().let { true } } catch (_: IllegalThreadStateException) { Thread.sleep(25) }
+            if (!isAlive(process)) return true
+            if (timeoutMillis != null && TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) >= timeoutMillis) return false
+            try { Thread.sleep(25) } catch (_: InterruptedException) { Thread.currentThread().interrupt(); token.throwIfCancelled() }
         }
-        return try { process.exitValue(); true } catch (_: IllegalThreadStateException) { false }
     }
 
     private fun processPid(process: Process): Int {
@@ -332,7 +402,7 @@ class ProotProcessExecutor(private val killer: ProcessTreeKiller = ProcessTreeKi
     }
 
     private fun drain(name: String, stream: InputStream, kind: LinuxOutputStream,
-                      callback: LinuxOutputCallback) = Thread({
+                      callback: LinuxOutputCallback, readFailure: (IOException) -> Unit = { }) = Thread({
         try {
             InputStreamReader(stream, StandardCharsets.UTF_8).use { reader ->
                 val buffer = CharArray(8192)
@@ -342,6 +412,6 @@ class ProotProcessExecutor(private val killer: ProcessTreeKiller = ProcessTreeKi
                     if (count > 0) callback.onChunk(kind, String(buffer, 0, count))
                 }
             }
-        } catch (_: IOException) { }
+        } catch (failure: IOException) { readFailure(failure) }
     }, name).apply { isDaemon = true; start() }
 }

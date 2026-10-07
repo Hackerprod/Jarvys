@@ -11,6 +11,8 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
@@ -133,7 +135,7 @@ class ProviderModelFieldsTest {
         assertEquals("vendor/known", modelId.value)
     }
 
-    @Test fun quickChatSheetUsesProviderModelAndReasoningCombosWithImmediatePersistence() {
+    @Test fun quickChatSheetKeepsCurrentProviderAndPersistsModelAndEffortImmediately() {
         val context = RuntimeEnvironment.getApplication()
         context.getSharedPreferences("jarvys_provider_settings", 0).edit().clear().commit()
         SecretStore::class.java.getDeclaredField("singleton").apply { isAccessible = true }
@@ -159,12 +161,11 @@ class ProviderModelFieldsTest {
                 )
             }
         }
-        compose.onNodeWithTag("quick-provider-dropdown").assertIsDisplayed()
-        compose.onNodeWithTag("provider-openai-model-dropdown").assertIsDisplayed()
-        compose.onNodeWithTag("provider-openai-reasoning-dropdown").assertIsDisplayed()
-        compose.onAllNodesWithTag("jarvys-dropdown-field").get(1).performScrollTo().performClick()
-        compose.onNodeWithTag("jarvys-dropdown-filter").assertIsDisplayed()
-        compose.onNodeWithText("GPT-6 Astra").performClick()
+        compose.onNodeWithTag("quick-model-provider-label").assertIsDisplayed()
+        assertTrue(compose.onAllNodesWithTag("quick-provider-dropdown").fetchSemanticsNodes().isEmpty())
+        compose.onNodeWithTag("quick-model-combobox").performScrollTo().performClick()
+        compose.onNodeWithTag("quick-model-filter").assertIsDisplayed()
+        compose.onNodeWithTag("quick-model-row-gpt-6-astra").performScrollTo().performClick()
         compose.waitForIdle()
         assertTrue("model selection callback was not persisted: $selectedValues", selectedValues.any { it.second == "gpt-6-astra" })
         val settings = ProviderSettings(context)
@@ -172,28 +173,14 @@ class ProviderModelFieldsTest {
         assertEquals("gpt-6-astra", settings.model)
         assertEquals("medium", settings.reasoningVariant)
 
-        compose.onAllNodesWithTag("jarvys-dropdown-field").get(2).performClick()
-        compose.onNodeWithText("low").performClick()
+        compose.onNodeWithTag("quick-model-effort-slider").performScrollTo()
+            .performSemanticsAction(SemanticsActions.SetProgress) { it(0f) }
         compose.waitForIdle()
         assertEquals("low", settings.reasoningVariant)
-
-        compose.onAllNodesWithTag("jarvys-dropdown-field").get(0).performClick()
-        compose.onNodeWithText(RuntimeEnvironment.getApplication().getString(R.string.provider_openrouter_name)).performClick()
-        compose.waitForIdle()
-        assertEquals(ProviderSettings.Provider.OPENROUTER, settings.provider)
-        compose.onNodeWithTag("provider-openrouter-model-dropdown").assertIsDisplayed()
+        assertEquals(ProviderSettings.Provider.OPENAI_CODEX, settings.provider)
+        assertTrue(selectedValues.all { it.first == ProviderSettings.Provider.OPENAI_CODEX })
         assertTrue(compose.onAllNodesWithTag("provider-openai-reasoning-dropdown").fetchSemanticsNodes().isEmpty())
+        assertTrue(compose.onAllNodesWithTag("quick-model-other").fetchSemanticsNodes().isEmpty())
 
-        compose.onAllNodesWithTag("jarvys-dropdown-field").get(0).performClick()
-        compose.onNodeWithText(RuntimeEnvironment.getApplication().getString(R.string.provider_openai_chatgpt_account_option))
-            .assertIsDisplayed()
-        compose.onNodeWithText(RuntimeEnvironment.getApplication().getString(R.string.provider_openai_method_api_key))
-            .assertIsDisplayed().performClick()
-        compose.waitForIdle()
-        assertEquals(ProviderSettings.Provider.OPENAI_API, settings.provider)
-        assertEquals(ProviderSettings.OpenAiAuthMethod.API_KEY, settings.openAiAuthMethod)
-        assertEquals("gpt-4.1", settings.model)
-        compose.onNodeWithTag("provider-openai-api-model-dropdown").assertIsDisplayed()
-        assertTrue(compose.onAllNodesWithTag("provider-openai-reasoning-dropdown").fetchSemanticsNodes().isEmpty())
     }
 }

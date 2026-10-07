@@ -28,9 +28,12 @@ fun NavGraphBuilder.crewDestinations(
     initialBoardReference: String? = null,
     onBoardReferenceConsumed: () -> Unit = {},
     onBoardReference: (String, String) -> Unit,
+    onResumeBot: (String) -> Unit = {},
+    crewMode: () -> CrewMode = { CrewMode.AUTO },
+    onCrewModeChange: (CrewMode) -> Unit = {},
 ) {
     composable(CrewNavigationRoutes.EMPTY) {
-        CrewMissionScreen(null, board, readOnly(null), onOpenBot = {}, onAskBot = { _, _ -> }, onStopAll = onStopAll)
+        CrewMissionScreen(null, board, readOnly(null), onOpenBot = {}, onAskBot = { _, _ -> }, onStopAll = onStopAll, crewMode = crewMode(), onCrewModeChange = onCrewModeChange)
     }
     composable(route = CrewNavigationRoutes.MISSION,
         arguments = listOf(navArgument("missionId") { type = NavType.StringType })) { entry ->
@@ -46,7 +49,7 @@ fun NavGraphBuilder.crewDestinations(
                 }
                 else navController.navigate(CrewNavigationRoutes.bot(missionId, botId))
             }, onStopAll = onStopAll, initialBoardReference = initialBoardReference,
-            onBoardReferenceConsumed = onBoardReferenceConsumed)
+            onBoardReferenceConsumed = onBoardReferenceConsumed, crewMode = crewMode(), onCrewModeChange = onCrewModeChange)
     }
     composable(route = CrewNavigationRoutes.BOT,
         arguments = listOf(navArgument("missionId") { type = NavType.StringType },
@@ -59,6 +62,6 @@ fun NavGraphBuilder.crewDestinations(
             onSendMessage = { id, text -> AgentForegroundService.ensureCrewKeepalive(context); manager?.sendUserMessage(id, text) },
             onRedirect = { id, text -> AgentForegroundService.ensureCrewKeepalive(context); manager?.sendUserMessage(id, text) },
             onStopBot = { id -> manager?.stop(id) },
-            onBoardReference = { reference -> onBoardReference(missionId, reference) })
+            onBoardReference = { reference -> onBoardReference(missionId, reference) }, onResume = onResumeBot)
     }
 }

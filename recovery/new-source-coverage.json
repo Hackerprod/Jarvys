@@ -1,0 +1,292 @@
+[
+  {
+    "source": "com.jarvys.agent.AttachmentDraftViewModel.kt",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/AttachmentDraftViewModel.kt"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.AttachmentImagePreparer.java",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/AttachmentImagePreparer.java"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.AttachmentModelContext.java",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/AttachmentModelContext.java"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.AttachmentStore.java",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/AttachmentStore.java"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.ChatAttachment.java",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/ChatAttachment.java"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.CodexAuthConnectionRetry.java",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/CodexAuthConnectionRetry.java"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.CodexAuthDiagnostic.java",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/CodexAuthDiagnostic.java"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.CodingJobConversationGuard.java",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/CodingJobConversationGuard.java"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.CodingWorkspaceRouter.java",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/CodingWorkspaceRouter.java"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.ConversationActionPolicy.kt",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/ConversationActionPolicy.kt"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.ConversationImageReference.java",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/ConversationImageReference.java"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.ConversationMetadataStore.java",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/ConversationMetadataStore.java"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.CrewCheckpointCoordinator.java",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/CrewCheckpointCoordinator.java"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.CrewCheckpointStore.java",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/CrewCheckpointStore.java"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.CrewContextArtifacts.java",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/CrewContextArtifacts.java"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.CrewConversationCompaction.java",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/CrewConversationCompaction.java"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.ImageEditInput.java",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/ImageEditInput.java"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.ImageReferenceListingTool.java",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/ImageReferenceListingTool.java"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.ImageReferenceResolver.java",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/ImageReferenceResolver.java"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.OpenAICodexImagesClient.java",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/OpenAICodexImagesClient.java"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.coding.CodingProjectTools.java",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/coding/CodingProjectTools.java"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.coding.ProjectAdoptionService.java",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/coding/ProjectAdoptionService.java"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.coding.ProjectFileCleanup.java",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/coding/ProjectFileCleanup.java"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.coding.ProjectFileIO.java",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/coding/ProjectFileIO.java"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.coding.ProjectFileReader.java",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/coding/ProjectFileReader.java"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.coding.ProjectJournalIO.java",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/coding/ProjectJournalIO.java"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.coding.ProjectMutationJournal.java",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/coding/ProjectMutationJournal.java"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.coding.ProjectMutationService.java",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/coding/ProjectMutationService.java"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.coding.ProjectScope.java",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/coding/ProjectScope.java"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.coding.ProjectScopeIdentity.java",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/coding/ProjectScopeIdentity.java"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.coding.ProjectScopeStore.java",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/coding/ProjectScopeStore.java"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.coding.ProjectSearch.java",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/coding/ProjectSearch.java"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.coding.ProjectTextIO.java",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/coding/ProjectTextIO.java"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.connectors.FlavorAutonomyUi.kt",
+    "restored_paths": [
+      "play/java/com/jarvys/agent/connectors/FlavorAutonomyUi.kt",
+      "full/java/com/jarvys/agent/connectors/FlavorAutonomyUi.kt"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.crew.CrewCodingProfileUi.kt",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/crew/CrewCodingProfileUi.kt"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.crew.CrewProfile.java",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/crew/CrewProfile.java"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.crew.CrewProfileRepository.java",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/crew/CrewProfileRepository.java"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.flavor.CodingExecutionTools.kt",
+    "restored_paths": [
+      "play/java/com/jarvys/agent/flavor/CodingExecutionTools.kt",
+      "full/java/com/jarvys/agent/flavor/CodingExecutionTools.kt"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.linux.CodingJobManager.kt",
+    "restored_paths": [
+      "full/java/com/jarvys/agent/linux/CodingJobManager.kt"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.linux.LinuxExecAutonomy.kt",
+    "restored_paths": [
+      "full/java/com/jarvys/agent/linux/LinuxExecAutonomy.kt"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.linux.LinuxProjectRuntime.kt",
+    "restored_paths": [
+      "full/java/com/jarvys/agent/linux/LinuxProjectRuntime.kt"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.ui.JarvysNativeTheme.kt",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/ui/JarvysNativeTheme.kt"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.ui.ThemeContrast.kt",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/ui/ThemeContrast.kt"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.ui.chat.ChatAttachmentViews.kt",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/ui/chat/ChatAttachmentViews.kt"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.ui.chat.GeneratedImageGeometry.kt",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/ui/chat/GeneratedImageGeometry.kt"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.ui.shell.ModelEffortEffects.kt",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/ui/shell/ModelEffortEffects.kt"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.ui.shell.ModelEffortSlider.kt",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/ui/shell/ModelEffortSlider.kt"
+    ]
+  },
+  {
+    "source": "com.jarvys.agent.ui.shell.ModelSelectionPresentation.kt",
+    "restored_paths": [
+      "main/java/com/jarvys/agent/ui/shell/ModelSelectionPresentation.kt"
+    ]
+  }
+]

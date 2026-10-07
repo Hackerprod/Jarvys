@@ -2,6 +2,7 @@ package com.jarvys.agent.providers
 
 import android.app.Activity
 import android.content.Context
+import com.jarvys.agent.CodexAuthDiagnostic
 import com.jarvys.agent.CodexOAuthManager
 import com.jarvys.agent.CodexModelCatalog
 import com.jarvys.agent.ProviderSettings
@@ -27,6 +28,9 @@ data class ProvidersUiState(
     val codexConnected: Boolean,
     val codexAccountId: String?,
     val codexOAuthInProgress: Boolean,
+    val codexOAuthExchanging: Boolean = false,
+    val codexOAuthError: String? = null,
+    val codexOAuthDiagnostic: CodexAuthDiagnostic? = null,
     val codexDeviceCode: CodexDeviceCodeState = CodexDeviceCodeState.Idle,
     val openRouterConnected: Boolean,
     val exaConnected: Boolean,
@@ -64,7 +68,8 @@ class ProvidersRepository private constructor(context: Context) {
     private val app = context.applicationContext
     private val settings = ProviderSettings(app)
     private val secretStore = SecretStore.get(app)
-    private var codexOAuthManager: CodexOAuthManager? = null
+    @Volatile private var codexOAuthManager: CodexOAuthManager? = null
+    private val authAttemptPreferences = app.getSharedPreferences("jarvys_auth_attempt", Context.MODE_PRIVATE)
     private val deviceCodeLock = Any()
     private val deviceCodeExecutor = Executors.newSingleThreadExecutor { task ->
         Thread(task, "JarvysCodexDeviceCode").apply { isDaemon = true }
@@ -86,11 +91,38 @@ class ProvidersRepository private constructor(context: Context) {
     private val _feedback = MutableSharedFlow<ProvidersFeedback>(extraBufferCapacity = 8)
     val feedback = _feedback.asSharedFlow()
 
+    init {
+        val interrupted = authAttemptPreferences.getString("pending", null)
+        if (interrupted != null) {
+            authAttemptPreferences.edit().remove("pending").commit()
+            if (!_state.value.codexConnected) {
+                _state.update { it.copy(
+                    codexOAuthError = if (interrupted == "browser") app.getString(R.string.oauth_signin_interrupted) else null,
+                    codexDeviceCode = if (interrupted == "device") CodexDeviceCodeState.Failed(R.string.oauth_signin_interrupted,
+                        CodexAuthDiagnostic.validation(CodexAuthDiagnostic.Stage.UNKNOWN, "interrupted")) else it.codexDeviceCode,
+                ) }
+            }
+        }
+    }
+
+    private fun markAuthAttempt(method: String?) = synchronized(authAttemptPreferences) {
+        val editor = authAttemptPreferences.edit()
+        if (method == null) editor.remove("pending") else editor.putString("pending", method)
+        editor.commit()
+    }
+
+    private fun clearAuthAttempt(method: String) = synchronized(authAttemptPreferences) {
+        if (authAttemptPreferences.getString("pending", null) == method) authAttemptPreferences.edit().remove("pending").commit()
+    }
+
     fun refresh() {
         val previous = _state.value
         val persisted = readPersisted()
         _state.value = persisted.copy(
             codexOAuthInProgress = previous.codexOAuthInProgress,
+            codexOAuthExchanging = previous.codexOAuthExchanging,
+            codexOAuthError = previous.codexOAuthError,
+            codexOAuthDiagnostic = previous.codexOAuthDiagnostic,
             codexDeviceCode = previous.codexDeviceCode,
             openRouterKeyInput = previous.openRouterKeyInput,
             exaKeyInput = previous.exaKeyInput,
@@ -429,45 +461,72 @@ class ProvidersRepository private constructor(context: Context) {
         }
     }
 
-    fun beginCodexSignIn(activity: Activity) {
+    fun beginCodexSignIn(activity: Activity) = beginCodexSignIn(activity, CodexOAuthManager(secretStore))
+
+    internal fun beginCodexSignIn(activity: Activity, manager: CodexOAuthManager) {
         if (_state.value.codexOAuthInProgress || _state.value.codexDeviceCode.isRunning) return
-        _state.update { it.copy(codexOAuthInProgress = true, codexDeviceCode = CodexDeviceCodeState.Idle) }
+        markAuthAttempt("browser")
+        _state.update { it.copy(codexOAuthInProgress = true, codexOAuthExchanging = false,
+            codexOAuthError = null, codexOAuthDiagnostic = null, codexDeviceCode = CodexDeviceCodeState.Idle) }
         try {
             codexOAuthManager?.cancelAuthorization()
-            val manager = CodexOAuthManager(secretStore)
             codexOAuthManager = manager
             manager.authorize(activity, object : CodexOAuthManager.Listener {
+                override fun onDiagnostic(diagnostic: CodexAuthDiagnostic) {
+                    if (codexOAuthManager === manager) _state.update { it.copy(codexOAuthDiagnostic = diagnostic) }
+                }
+
+                override fun onExchanging() {
+                    if (codexOAuthManager === manager) _state.update { it.copy(codexOAuthExchanging = true) }
+                }
+
                 override fun onSuccess(accountId: String) {
-                    _state.update { it.copy(codexOAuthInProgress = false) }
+                    if (codexOAuthManager !== manager) return
+                    clearAuthAttempt("browser")
+                    _state.update { it.copy(codexOAuthInProgress = false, codexOAuthExchanging = false,
+                        codexOAuthError = null, codexOAuthDiagnostic = null) }
                     refresh()
                     feedback(R.string.chat_toast_chatgpt_connected)
                 }
 
                 override fun onFailure(message: String) {
-                    _state.update { it.copy(codexOAuthInProgress = false) }
+                    if (codexOAuthManager !== manager) return
+                    clearAuthAttempt("browser")
+                    _state.update { it.copy(codexOAuthInProgress = false, codexOAuthExchanging = false, codexOAuthError = message) }
                     refresh()
                     feedback(R.string.chat_toast_signin_failed, message)
                 }
             })
         } catch (error: RuntimeException) {
-            _state.update { it.copy(codexOAuthInProgress = false) }
-            feedback(R.string.chat_toast_oauth_start_failed, error.message.orEmpty())
+            manager.cancelAuthorization()
+            clearAuthAttempt("browser")
+            val message = app.getString(R.string.oauth_exchange_failed)
+            _state.update { it.copy(codexOAuthInProgress = false, codexOAuthExchanging = false,
+                codexOAuthError = message, codexOAuthDiagnostic = CodexAuthDiagnostic.failure(CodexAuthDiagnostic.Stage.BROWSER_LAUNCH, error)) }
+            feedback(R.string.chat_toast_oauth_start_failed, message)
         }
     }
 
     fun cancelCodexSignIn() {
         codexOAuthManager?.cancelAuthorization()
-        _state.update { it.copy(codexOAuthInProgress = false) }
-        feedback(R.string.chat_toast_oauth_cancelled)
+        codexOAuthManager = null
+        clearAuthAttempt("browser")
+        _state.update { it.copy(codexOAuthInProgress = false, codexOAuthExchanging = false,
+            codexOAuthError = null, codexOAuthDiagnostic = null) }
+        refresh()
+        feedback(if (_state.value.codexConnected) R.string.chat_toast_chatgpt_connected else R.string.chat_toast_oauth_cancelled)
     }
 
-    fun beginDeviceCodeSignIn() {
+    fun beginDeviceCodeSignIn() = beginDeviceCodeSignIn(null)
+
+    internal fun beginDeviceCodeSignIn(transport: CodexDeviceCodeTransport?) {
         synchronized(deviceCodeLock) {
             if (_state.value.codexOAuthInProgress || _state.value.codexDeviceCode.isRunning) return
             val cancellation = CancellationToken.cancellable()
             deviceCodeCancellation = cancellation
+            markAuthAttempt("device")
             _state.update { it.copy(codexDeviceCode = CodexDeviceCodeState.RequestingCode) }
-            deviceCodeFuture = deviceCodeExecutor.submit { runDeviceCodeSignIn(cancellation) }
+            deviceCodeFuture = deviceCodeExecutor.submit { runDeviceCodeSignIn(cancellation, transport) }
         }
     }
 
@@ -479,24 +538,36 @@ class ProvidersRepository private constructor(context: Context) {
             future = deviceCodeFuture
             deviceCodeCancellation = null
             deviceCodeFuture = null
+            clearAuthAttempt("device")
             _state.update { it.copy(codexDeviceCode = CodexDeviceCodeState.Idle) }
         }
         cancellation?.cancel()
         future?.cancel(true)
+        refresh()
     }
 
-    private fun runDeviceCodeSignIn(cancellation: CancellationToken) {
+    private fun runDeviceCodeSignIn(cancellation: CancellationToken, transport: CodexDeviceCodeTransport?) {
         try {
             val manager = CodexOAuthManager(secretStore)
-            val accountId = CodexDeviceCodeFlow(manager).authenticate(cancellation) { next ->
+            val gate = CodexOAuthManager.CredentialCommitGate { persist ->
                 synchronized(deviceCodeLock) {
-                    if (deviceCodeCancellation === cancellation && !cancellation.isCancelled) {
+                    if (deviceCodeCancellation !== cancellation || cancellation.isCancelled)
+                        throw CancellationException("Device-code sign-in cancelled")
+                    persist.run()
+                }
+            }
+            val flow = if (transport == null) CodexDeviceCodeFlow(manager, commitGate = gate)
+                else CodexDeviceCodeFlow(manager, transport = transport, commitGate = gate)
+            val accountId = flow.authenticate(cancellation) { next ->
+                synchronized(deviceCodeLock) {
+                    if (deviceCodeCancellation === cancellation && !cancellation.isCancelled && next !is CodexDeviceCodeState.Connected) {
                         _state.update { it.copy(codexDeviceCode = next) }
                     }
                 }
             }
             synchronized(deviceCodeLock) {
                 if (deviceCodeCancellation === cancellation && !cancellation.isCancelled) {
+                    clearAuthAttempt("device")
                     refresh()
                     _state.update { it.copy(codexDeviceCode = CodexDeviceCodeState.Connected(accountId)) }
                     feedback(R.string.chat_toast_chatgpt_connected)
@@ -505,35 +576,44 @@ class ProvidersRepository private constructor(context: Context) {
         } catch (_: CancellationException) {
             synchronized(deviceCodeLock) {
                 if (deviceCodeCancellation === cancellation) {
+                    clearAuthAttempt("device")
                     _state.update { it.copy(codexDeviceCode = CodexDeviceCodeState.Idle) }
                 }
             }
         } catch (failure: CodexDeviceCodeFailure) {
-            publishDeviceCodeFailure(cancellation, failure.messageResource)
-        } catch (_: Exception) {
-            publishDeviceCodeFailure(cancellation, R.string.provider_device_code_failed)
+            publishDeviceCodeFailure(cancellation, failure.messageResource, failure.diagnostic)
+        } catch (error: Exception) {
+            publishDeviceCodeFailure(cancellation, R.string.provider_device_code_failed,
+                CodexAuthDiagnostic.failure(CodexAuthDiagnostic.Stage.UNKNOWN, error))
         } finally {
             synchronized(deviceCodeLock) {
                 if (deviceCodeCancellation === cancellation) {
                     deviceCodeCancellation = null
                     deviceCodeFuture = null
+                    clearAuthAttempt("device")
                 }
             }
         }
     }
 
-    private fun publishDeviceCodeFailure(cancellation: CancellationToken, messageResource: Int) {
+    private fun publishDeviceCodeFailure(cancellation: CancellationToken, messageResource: Int, diagnostic: CodexAuthDiagnostic? = null) {
         synchronized(deviceCodeLock) {
             if (deviceCodeCancellation === cancellation && !cancellation.isCancelled) {
-                _state.update { it.copy(codexDeviceCode = CodexDeviceCodeState.Failed(messageResource)) }
+                clearAuthAttempt("device")
+                _state.update { it.copy(codexDeviceCode = CodexDeviceCodeState.Failed(messageResource, diagnostic)) }
             }
         }
     }
 
     fun disconnectCodex() {
+        codexOAuthManager?.cancelAuthorization()
+        codexOAuthManager = null
+        cancelDeviceCodeSignIn()
+        markAuthAttempt(null)
         secretStore.clearCodexTokens()
         refresh()
-        _state.update { it.copy(codexDeviceCode = CodexDeviceCodeState.Idle) }
+        _state.update { it.copy(codexOAuthInProgress = false, codexOAuthExchanging = false,
+            codexOAuthError = null, codexOAuthDiagnostic = null, codexDeviceCode = CodexDeviceCodeState.Idle) }
     }
 
     fun saveOpenRouterKey() {

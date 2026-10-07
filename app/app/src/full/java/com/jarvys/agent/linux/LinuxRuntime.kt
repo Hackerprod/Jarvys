@@ -17,4 +17,11 @@ interface LinuxRuntime {
     fun deleteWorkspace()
     fun exec(command: String, cwd: String, timeoutMillis: Long?, callback: LinuxOutputCallback,
              token: CancellationToken): LinuxExecResult
+    fun projectStatus(scope: com.jarvys.agent.coding.ProjectScope, cwd: String,
+                      requiredTools: List<String> = emptyList()): LinuxProjectStatus =
+        LinuxProjectStatus(false, "Project execution is unavailable in this runtime.")
+    fun execProject(scope: com.jarvys.agent.coding.ProjectScope, command: String, cwd: String,
+                    timeoutMillis: Long?, callback: LinuxOutputCallback, token: CancellationToken,
+                    beforeLaunch: () -> Unit): LinuxExecResult =
+        throw UnsupportedOperationException("Project execution is unavailable in this runtime.")
 }

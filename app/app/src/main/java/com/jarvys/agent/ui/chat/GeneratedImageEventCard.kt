@@ -2,6 +2,7 @@ package com.jarvys.agent.ui.chat
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import android.widget.ImageView
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
@@ -74,6 +75,7 @@ internal fun GeneratedImageEventCard(
     val file = remember(sessionId, event.generatedImagePath) {
         event.generatedImagePath?.let { path -> runCatching { store.resolve(sessionId, path) }.getOrNull() }
     }
+    val fileStamp = file?.let(::generatedImageFileStamp)
     var viewerOpen by remember(event.id) { mutableStateOf(false) }
     val failed = event.generatedImageStatus != "COMPLETED"
     val description = event.generatedImagePrompt ?: event.text
@@ -88,10 +90,10 @@ internal fun GeneratedImageEventCard(
                 Modifier.testTag("generated-image-missing-${event.id}"),
                 color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
         } else {
-            var imageAspect by remember(file, event.generatedImageSize) {
+            var imageAspect by remember(fileStamp, event.generatedImageSize) {
                 mutableFloatStateOf(imageAspectFromSize(event.generatedImageSize))
             }
-            LaunchedEffect(file) {
+            LaunchedEffect(fileStamp) {
                 readGeneratedImageBounds(file)?.let { bounds -> imageAspect = bounds.width.toFloat() / bounds.height }
             }
             BoxWithConstraints(
@@ -106,8 +108,8 @@ internal fun GeneratedImageEventCard(
                 val frameHeight = maxWidth / imageAspect.coerceAtLeast(0.01f)
                 val widthPx = with(density) { maxWidth.roundToPx() }.coerceAtLeast(1)
                 val heightPx = with(density) { frameHeight.roundToPx() }.coerceAtLeast(1)
-                var bitmap by remember(file, widthPx, heightPx) { mutableStateOf<Bitmap?>(null) }
-                LaunchedEffect(file, widthPx, heightPx) {
+                var bitmap by remember(fileStamp, widthPx, heightPx) { mutableStateOf<Bitmap?>(null) }
+                LaunchedEffect(fileStamp, widthPx, heightPx) {
                     bitmap = decodeGeneratedImage(file, widthPx, heightPx)
                 }
                 val image = bitmap
@@ -151,9 +153,7 @@ private fun GeneratedImageViewer(
     onShare: (AgentRunUiEvent) -> Unit,
 ) {
     val context = LocalContext.current
-    var scale by remember(event.id) { mutableFloatStateOf(1f) }
-    var panX by remember(event.id) { mutableFloatStateOf(0f) }
-    var panY by remember(event.id) { mutableFloatStateOf(0f) }
+    var transform by remember(event.id) { mutableStateOf(GeneratedImageTransform()) }
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.fillMaxWidth(0.96f).fillMaxHeight(0.92f).testTag("generated-image-viewer-${event.id}"),
@@ -173,29 +173,32 @@ private fun GeneratedImageViewer(
                     var bitmap by remember(file, widthPx, heightPx) { mutableStateOf<Bitmap?>(null) }
                     LaunchedEffect(file, widthPx, heightPx) { bitmap = decodeGeneratedImage(file, widthPx, heightPx) }
                     bitmap?.let { image ->
-                        AndroidView(
-                            factory = { imageContext -> ImageView(imageContext).apply {
-                                adjustViewBounds = true
-                                scaleType = ImageView.ScaleType.FIT_CENTER
-                                contentDescription = context.getString(R.string.image_open_accessibility, prompt)
-                                setImageBitmap(image)
-                            } },
-                            modifier = Modifier.fillMaxSize().semantics {
-                                contentDescription = context.getString(R.string.image_open_accessibility, prompt)
-                            }.graphicsLayer {
-                                scaleX = scale; scaleY = scale; translationX = panX; translationY = panY
-                            }.pointerInput(event.id) {
-                                detectTransformGestures { _, pan, zoom, _ ->
-                                    scale = (scale * zoom).coerceIn(1f, 5f)
-                                    panX += pan.x
-                                    panY += pan.y
+                        val geometry = remember(widthPx, heightPx, image) { GeneratedImageGeometry(
+                            widthPx.toFloat(), heightPx.toFloat(), image.width.toFloat(), image.height.toFloat()) }
+                        val displayed = geometry.clamp(transform)
+                        Box(Modifier.fillMaxSize().clip(RoundedCornerShape(0.dp))
+                            .pointerInput(event.id, geometry) {
+                                detectTransformGestures { centroid, pan, zoom, _ ->
+                                    transform = geometry.gesture(transform, zoom, pan.x, pan.y, centroid.x, centroid.y)
                                 }
-                            }.testTag("generated-image-viewer-image"),
-                            update = { view ->
-                                view.setImageBitmap(image)
-                                view.contentDescription = context.getString(R.string.image_open_accessibility, prompt)
-                            },
-                        )
+                            }) {
+                            AndroidView(
+                                factory = { imageContext -> ImageView(imageContext).apply { scaleType = ImageView.ScaleType.MATRIX } },
+                                modifier = Modifier.fillMaxSize().semantics {
+                                    contentDescription = context.getString(R.string.image_open_accessibility, prompt)
+                                }.testTag("generated-image-viewer-image"),
+                                update = { view ->
+                                    view.setImageBitmap(image)
+                                    view.contentDescription = context.getString(R.string.image_open_accessibility, prompt)
+                                    val scale = geometry.fittedWidth / image.width * displayed.scale
+                                    view.imageMatrix = Matrix().apply {
+                                        setScale(scale, scale)
+                                        postTranslate((widthPx - image.width * scale) / 2f + displayed.panX,
+                                            (heightPx - image.height * scale) / 2f + displayed.panY)
+                                    }
+                                },
+                            )
+                        }
                     }
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -224,6 +227,9 @@ private fun imageAspectFromSize(size: String?): Float {
     return if (width > 0 && height > 0) width.toFloat() / height else 1f
 }
 
+private data class GeneratedImageFileStamp(val path: String, val modified: Long, val length: Long)
+private fun generatedImageFileStamp(file: File) = GeneratedImageFileStamp(file.absolutePath, file.lastModified(), file.length())
+
 internal data class GeneratedImageBounds(val width: Int, val height: Int)
 
 /** Reads only PNG metadata before the view is sized; pixel decoding remains sampled and asynchronous. */
@@ -245,7 +251,7 @@ internal suspend fun decodeGeneratedImage(
 ): Bitmap? =
     withContext(Dispatchers.IO) {
         onDecodeThread(Thread.currentThread().name)
-        val key = "${file.absolutePath}:${targetWidth}x$targetHeight"
+        val key = "${generatedImageFileStamp(file)}:${targetWidth}x$targetHeight"
         GeneratedImageBitmapCache.get(key)?.let { return@withContext it }
         if (!file.isFile) return@withContext null
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }

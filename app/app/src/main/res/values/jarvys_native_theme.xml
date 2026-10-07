@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="JarvysNativeDialogDark" parent="@android:style/Theme.Material.Dialog.Alert">
+        <item name="android:colorControlActivated">#ff8db4ff</item>
+        <item name="android:colorAccent">#ff8db4ff</item>
+    </style>
+    <style name="JarvysNativeDialogLight" parent="@android:style/Theme.Material.Light.Dialog.Alert">
+        <item name="android:colorControlActivated">#ff2757c9</item>
+        <item name="android:colorAccent">#ff2757c9</item>
+    </style>
+</resources>

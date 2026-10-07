@@ -28,6 +28,8 @@ import com.jarvys.agent.linux.LinuxOutputSanitizer
 import com.jarvys.agent.linux.LinuxOutputStream
 import com.jarvys.agent.linux.LinuxProbeResult
 import com.jarvys.agent.linux.LinuxRuntime
+import com.jarvys.agent.linux.LinuxExecAutonomy
+import com.jarvys.agent.connectors.AutonomyPolicy
 import org.json.JSONObject
 import java.nio.charset.StandardCharsets
 import java.util.Locale
@@ -267,11 +269,12 @@ internal class LinuxExecTool(
     private val sanitizer: LinuxOutputSanitizer,
     budget: CorePromptBudget,
     surfaceAvailable: (Context?, String?, Int) -> Boolean,
+    private val autonomy: LinuxExecAutonomy = LinuxExecAutonomy.get(context),
 ) : LinuxToolBase(context, sessionId, surfaceAvailable) {
     private val perStreamChars = (budget.toolResultsPerTurnChars / 4).coerceAtLeast(1)
 
     override fun declaration(): ToolSpec = linuxSpec(LINUX_EXEC_NAME,
-        "Run one individually user-approved command inside the optional PRoot Ubuntu environment.", execSchema())
+        "Run a command inside optional PRoot Ubuntu according to the explicit Linux ASK/ALLOW/DENY policy.", execSchema())
 
     override fun execute(arguments: Map<String, Any>, token: CancellationToken): CoreToolResult =
         execute(arguments, token, CoreTool.ProgressListener { })
@@ -291,8 +294,20 @@ internal class LinuxExecTool(
             if (runtime.state().phase != LinuxInstallPhase.READY) {
                 return CoreToolResult.failure(linuxText(context, R.string.full_linux_exec_not_installed))
             }
-            val decision = approvalGate.request(commandApproval(command, cwd, timeoutMillis), token)
-            if (decision != ApprovalDecision.APPROVED) return CoreToolResult.failure(approvalResultMessage(decision))
+            val policy = autonomy.policy()
+            if (policy == AutonomyPolicy.DENY) return CoreToolResult.failure(linuxText(context, R.string.full_linux_autonomy_denied))
+            val automatic = policy == AutonomyPolicy.ALLOW
+            if (!automatic) {
+                val decision = approvalGate.request(commandApproval(command, cwd, timeoutMillis), token)
+                if (decision !in setOf(ApprovalDecision.APPROVED, ApprovalDecision.APPROVED_ALLOW_ALWAYS, ApprovalDecision.APPROVED_ALLOW_FAILED))
+                    return CoreToolResult.failure(approvalResultMessage(decision))
+            }
+            token.throwIfCancelled()
+            if (autonomy.policy() == AutonomyPolicy.DENY) return CoreToolResult.failure(linuxText(context, R.string.full_linux_autonomy_denied))
+            if (automatic && autonomy.policy() != AutonomyPolicy.ALLOW) return CoreToolResult.failure(linuxText(context, R.string.full_linux_autonomy_changed))
+            if (automatic) autonomy.recordAutomaticExecution(sanitizer.scrub(command), sanitizer.scrub(cwd))?.let {
+                return CoreToolResult.failure(it.resolve(context))
+            }
 
             progress.onProgress(linuxText(context, R.string.full_linux_exec_progress_running))
             val stdout = LinuxBoundedOutput(perStreamChars, sanitizer)
@@ -303,6 +318,9 @@ internal class LinuxExecTool(
                 progress.onProgress(linuxText(context, resource, line))
             })
             val started = android.os.SystemClock.elapsedRealtime()
+            token.throwIfCancelled()
+            if (autonomy.policy() == AutonomyPolicy.DENY) return CoreToolResult.failure(linuxText(context, R.string.full_linux_autonomy_denied))
+            if (automatic && autonomy.policy() != AutonomyPolicy.ALLOW) return CoreToolResult.failure(linuxText(context, R.string.full_linux_autonomy_changed))
             val execution = runtime.exec(command, cwd, timeoutMillis, LinuxOutputCallback { stream, text ->
                 val message = if (stream == LinuxOutputStream.STDOUT) {
                     stdout.append(text)
@@ -340,7 +358,8 @@ internal class LinuxExecTool(
         if (timeoutMillis != null) lines += ConnectorUiText(R.string.full_linux_exec_approval_timeout,
             listOf(timeoutMillis / 1000L), "Timeout: ${timeoutMillis / 1000L} seconds")
         return ApprovalSummary(
-            title = "Approve Linux command", lines = lines.map { it.fallback }, allowAlwaysAvailable = false,
+            title = "Approve Linux command", lines = lines.map { it.fallback }, allowAlwaysAvailable = true,
+            autonomyConnectorId = LinuxExecAutonomy.CONNECTOR_ID, autonomyOperationName = LinuxExecAutonomy.OPERATION_NAME,
             localizedTitle = ConnectorUiText(R.string.full_linux_exec_approval_title, fallback = "Approve Linux command"),
             localizedLines = lines,
             compactSummary = ConnectorUiText(R.string.full_linux_exec_approval_compact,
@@ -388,6 +407,7 @@ internal class LinuxUninstallTool(
     private val decisionAvailability: () -> Boolean,
     private val sanitizer: LinuxOutputSanitizer,
     surfaceAvailable: (Context?, String?, Int) -> Boolean,
+    private val autonomy: LinuxExecAutonomy = LinuxExecAutonomy.get(context),
 ) : LinuxToolBase(context, sessionId, surfaceAvailable) {
     override fun declaration() = linuxSpec(LINUX_UNINSTALL_NAME,
         "Remove the private Linux rootfs after the user chooses whether /workspace should be kept.", emptyObjectSchema())
@@ -400,12 +420,11 @@ internal class LinuxUninstallTool(
             when (val decision = requestDecision(uninstallDecisionSpec(), token)) {
                 is UserDecisionResult.Selected -> when (decision.option.id) {
                     OPTION_KEEP_WORKSPACE -> {
-                        runtime.uninstall()
+                        autonomy.withUninstallReset { runtime.uninstall() }
                         CoreToolResult.success(linuxText(context, R.string.full_linux_uninstall_done_keep))
                     }
                     OPTION_DELETE_WORKSPACE -> {
-                        runtime.uninstall()
-                        runtime.deleteWorkspace()
+                        autonomy.withUninstallReset { runtime.uninstall(); runtime.deleteWorkspace() }
                         CoreToolResult.success(linuxText(context, R.string.full_linux_uninstall_done_all))
                     }
                     else -> CoreToolResult.failure(linuxText(context, R.string.full_linux_uninstall_dismissed))

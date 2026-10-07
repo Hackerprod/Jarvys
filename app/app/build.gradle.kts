@@ -4,6 +4,8 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val unsignedBuild = providers.gradleProperty("unsignedBuild").map { it.toBoolean() }.getOrElse(false)
+
 android {
     namespace = "com.jarvys.agent"
     compileSdk = 36
@@ -22,8 +24,8 @@ android {
         applicationId = "com.jarvys.agent"
         minSdk = 24
         targetSdk = 35
-        versionCode = 6
-        versionName = "1.2.0"
+        versionCode = 29
+        versionName = "1.2.23-UX14"
     }
 
     signingConfigs {
@@ -36,7 +38,7 @@ android {
     }
     buildTypes {
         debug {
-            signingConfig = signingConfigs.getByName("jarvysDebug")
+            signingConfig = if (unsignedBuild) null else signingConfigs.getByName("jarvysDebug")
         }
         release {
             isMinifyEnabled = false

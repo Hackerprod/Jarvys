@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="full_project_exec_bot">Bot: %1$s</string>
+    <string name="full_project_exec_command">"Comando (literal):
+%1$s"</string>
+    <string name="full_project_exec_cwd">Directorio del proyecto: %1$s (en el entorno %2$s)</string>
+    <string name="full_project_exec_effects">Efectos: puede leer, escribir o borrar archivos del proyecto, ejecutar programas y usar el acceso de red de esta app. El proyecto permanece reservado para este trabajo hasta que termine la limpieza de sus procesos.</string>
+    <string name="full_project_exec_no_timeout">No se ha solicitado un tiempo máximo; DETENER/cancelar sigue disponible.</string>
+    <string name="full_project_exec_noninteractive">Sin interacción: la entrada estándar está cerrada. Se comprueba el entorno en modo de solo lectura antes del comando literal. Nunca se instalan automáticamente los paquetes que falten.</string>
+    <string name="full_project_exec_prior_outcomes">"Trabajos anteriores interrumpidos o con resultado incierto en este proyecto:
+%1$s
+Se desconoce cómo terminaron. No se repiten automáticamente. Revisa los cambios del proyecto antes de aprobar efectos que pudieran repetirse. Los registros anteriores siguen vinculados a su propietario original."</string>
+    <string name="full_project_exec_project">Proyecto: %1$s</string>
+    <string name="full_project_exec_timeout">Tiempo máximo solicitado (segundos): %1$d</string>
+    <string name="full_project_exec_title">Aprobar comando del proyecto</string>
+    <string name="full_project_exec_unreadable_journals">Registros de trabajos anteriores ilegibles: %1$d. Pueden ocultar un efecto anterior incierto. No repitas automáticamente comandos anteriores; revisa el proyecto antes de aprobar nuevos efectos. Se conservan los registros originales.</string>
+    <string name="full_project_exec_warning">PRoot no es un entorno aislado de seguridad; el sistema preparado se comparte y permite escritura. El directorio del proyecto y sus montajes limitados no contienen código malicioso ni lo aíslan de los privilegios de esta app.</string>
+</resources>

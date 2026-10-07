@@ -29,11 +29,38 @@ final class AgentErrorReporter {
     private static final Pattern BEARER = Pattern.compile("(?i)Bearer\\s+[A-Za-z0-9._~+/-]+=*");
     private static final Pattern OPENAI_KEY = Pattern.compile("sk-(?:or-v1-)?[A-Za-z0-9_-]{12,}");
 
+    private static final ThreadLocal<Integer> PRIVATE_ATTACHMENT_RUNS = new ThreadLocal<Integer>() {
+        @Override protected Integer initialValue() { return 0; }
+    };
+
     private AgentErrorReporter() { }
+
+    static AttachmentScope suppressForAttachments() {
+        PRIVATE_ATTACHMENT_RUNS.set(PRIVATE_ATTACHMENT_RUNS.get() + 1);
+        return new AttachmentScope();
+    }
+
+    static AttachmentScope suppressForPrivateContent() { return suppressForAttachments(); }
+
+    static boolean attachmentReportsSuppressed() { return PRIVATE_ATTACHMENT_RUNS.get() > 0; }
+
+    static final class AttachmentScope implements AutoCloseable {
+        private final Thread owner = Thread.currentThread();
+        private boolean closed;
+        @Override public void close() {
+            if (closed) return;
+            if (Thread.currentThread() != owner) throw new IllegalStateException("Attachment scope has a different owner");
+            closed = true;
+            int remaining = PRIVATE_ATTACHMENT_RUNS.get() - 1;
+            if (remaining <= 0) PRIVATE_ATTACHMENT_RUNS.remove();
+            else PRIVATE_ATTACHMENT_RUNS.set(remaining);
+        }
+    }
 
     static void report(Context context, String provider, String model, Integer httpStatus,
                        String responseBody, String exceptionMessage, String exceptionType,
                        String stackTrace) {
+        if (attachmentReportsSuppressed()) return;
         Context appContext = context.getApplicationContext();
         EXECUTOR.execute(() -> postOnce(appContext, provider, model, httpStatus, responseBody,
                 exceptionMessage, exceptionType, stackTrace));

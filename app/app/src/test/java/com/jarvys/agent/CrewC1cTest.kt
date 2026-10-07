@@ -12,6 +12,10 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
 class CrewC1cTest {
+    private fun inboxEvidence(transcript: List<ConversationTurn>) = transcript.filter {
+        it.kind == ConversationTurn.Kind.TOOL_RESULT && it.toolName == CoreAgentLoop.INBOX_TOOL
+    }.joinToString("\n") { it.content }
+
     private val emptyTools get() = CoreToolRegistry(emptyList())
 
     private fun botLoop(tools: CoreToolRegistry, incoming: CoreAgentLoop.TurnContextProvider,
@@ -33,7 +37,7 @@ class CrewC1cTest {
         val reviewerFirstStarted = CountDownLatch(1)
         val releaseReviewerFirst = CountDownLatch(1)
         val designerRevisionTranscript = AtomicReference<List<ConversationTurn>>()
-        val reviewerPrompts = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val reviewerInboxes = java.util.concurrent.CopyOnWriteArrayList<String>()
         val manager = CrewManager("c1c-debate", emptyTools,
             { _, _ -> throw AssertionError("Captain test tools should not create a worker registry") },
             { _, _, _ -> throw AssertionError("Configure worker factory before spawn") }, null)
@@ -48,12 +52,12 @@ class CrewC1cTest {
                             1 -> ModelReply("", listOf(call("draft", "report_done", "result" to "Borrador inicial: usar fuente A.")))
                             else -> {
                                 designerRevisionTranscript.set(transcript.toList())
-                                assertTrue(prompt.contains("La fecha de la fuente A está desactualizada"))
+                                assertTrue(inboxEvidence(transcript).contains("La fecha de la fuente A está desactualizada"))
                                 ModelReply("", listOf(call("revision", "report_done", "result" to "Borrador corregido: usar fuente B.")))
                             }
                         }
                     } else {
-                        reviewerPrompts.add(prompt)
+                        reviewerInboxes.add(inboxEvidence(transcript))
                         when (reviewerCycles.incrementAndGet()) {
                             1 -> {
                                 reviewerFirstStarted.countDown()
@@ -61,11 +65,11 @@ class CrewC1cTest {
                                 ModelReply("", listOf(call("ready", "report_done", "result" to "Listo para revisar el borrador.")))
                             }
                             2 -> {
-                                assertTrue(prompt.contains("Borrador inicial: usar fuente A."))
+                                assertTrue(inboxEvidence(transcript).contains("Borrador inicial: usar fuente A."))
                                 ModelReply("", listOf(call("critique", "report_done", "result" to "La fecha de la fuente A está desactualizada; usar B.")))
                             }
                             else -> {
-                                assertTrue(prompt.contains("Borrador corregido: usar fuente B."))
+                                assertTrue(inboxEvidence(transcript).contains("Borrador corregido: usar fuente B."))
                                 ModelReply("", listOf(call("approve", "report_done", "result" to "Aprobado: fuente B actual y pertinente.")))
                             }
                         }
@@ -125,8 +129,8 @@ class CrewC1cTest {
                     tool.name == "report_done" && tool.arguments["result"] == "Borrador inicial: usar fuente A."
                 }
             })
-            assertTrue(reviewerPrompts.any { it.contains("Borrador inicial: usar fuente A.") })
-            assertTrue(reviewerPrompts.any { it.contains("Borrador corregido: usar fuente B.") })
+            assertTrue(reviewerInboxes.any { it.contains("Borrador inicial: usar fuente A.") })
+            assertTrue(reviewerInboxes.any { it.contains("Borrador corregido: usar fuente B.") })
             val captainToolResults = captain.transcriptSnapshot().filter {
                 it.kind == ConversationTurn.Kind.TOOL_RESULT && it.toolName in setOf("crew_send", "crew_spawn", "crew_wait")
             }

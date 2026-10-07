@@ -1,0 +1,1847 @@
+{
+  "source_apk_sha256": "43d2cf85b4843a212aa129868d3111e46a71e21c0c61489dd7305a09e3b6964f",
+  "strings": [
+    {
+      "locale": "values",
+      "name": "full_linux_setup_consent_body",
+      "action": "restored",
+      "path": "app/app/src/full/res/values/linux_strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "full_linux_setup_failed_detail",
+      "action": "restored",
+      "path": "app/app/src/full/res/values/linux_strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "full_linux_exec_approval_command",
+      "action": "restored",
+      "path": "app/app/src/full/res/values/linux_strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "full_linux_exec_approval_warning",
+      "action": "restored",
+      "path": "app/app/src/full/res/values/linux_strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "full_linux_system_prompt",
+      "action": "restored",
+      "path": "app/app/src/full/res/values/linux_strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "full_linux_autonomy_allow",
+      "action": "added",
+      "path": "app/app/src/full/res/values/linux_strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "full_linux_autonomy_ask",
+      "action": "added",
+      "path": "app/app/src/full/res/values/linux_strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "full_linux_autonomy_audit_failed",
+      "action": "added",
+      "path": "app/app/src/full/res/values/linux_strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "full_linux_autonomy_changed",
+      "action": "added",
+      "path": "app/app/src/full/res/values/linux_strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "full_linux_autonomy_denied",
+      "action": "added",
+      "path": "app/app/src/full/res/values/linux_strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "full_linux_autonomy_deny",
+      "action": "added",
+      "path": "app/app/src/full/res/values/linux_strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "full_linux_autonomy_save_failed",
+      "action": "added",
+      "path": "app/app/src/full/res/values/linux_strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "full_linux_autonomy_switch",
+      "action": "added",
+      "path": "app/app/src/full/res/values/linux_strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "full_linux_autonomy_title",
+      "action": "added",
+      "path": "app/app/src/full/res/values/linux_strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "full_linux_autonomy_unavailable",
+      "action": "added",
+      "path": "app/app/src/full/res/values/linux_strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "full_linux_exec_allow_always",
+      "action": "added",
+      "path": "app/app/src/full/res/values/linux_strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "full_linux_exec_approval_allow_warning",
+      "action": "added",
+      "path": "app/app/src/full/res/values/linux_strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "remote_service_github_usage_note",
+      "action": "restored",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "remote_service_linear_usage_note",
+      "action": "restored",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "remote_service_atlassian_usage_note",
+      "action": "restored",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "connector_description_files",
+      "action": "restored",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "connector_operation_file_pick_description",
+      "action": "restored",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "file_create_approval_picker",
+      "action": "restored",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "memory_seed_root_index",
+      "action": "restored",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "memory_seed_human",
+      "action": "restored",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "memory_seed_persona",
+      "action": "restored",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "provider_signin_chatgpt",
+      "action": "restored",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "task_management_create_card",
+      "action": "restored",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "task_management_update_card",
+      "action": "restored",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "image_tool_description",
+      "action": "restored",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "attachment_model_decode",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "attachment_model_file_failed",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "attachment_model_memory",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "attachment_model_missing",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "attachment_model_nonvision",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "attachment_model_rejected",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "attachment_model_response_error",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "chat_attachment_close_preview",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "chat_attachment_copy_failed",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "chat_attachment_copying",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "chat_attachment_file",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "chat_attachment_image",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "chat_attachment_main_only",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "chat_attachment_open_image",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "chat_attachment_picker_failed",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "chat_attachment_preview_loading",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "chat_attachment_remove",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "chat_attachment_send_cancelled",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "chat_attachment_send_failed",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "chat_attachment_unavailable",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "chat_files_unavailable",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "chat_microphone_unavailable",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "chat_tray_files",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "crew_history_description",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "crew_mode_always_description",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "crew_mode_auto_description",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "crew_mode_off_description",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "crew_profile_adoption_help",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "crew_profile_capabilities",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "crew_profile_capabilities_help",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "crew_profile_close",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "crew_profile_configure",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "crew_profile_description",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "crew_profile_legacy_help",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "crew_profile_load_failed",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "crew_profile_name",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "crew_profile_no_skills",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "crew_profile_project_help",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "crew_profile_prompt",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "crew_profile_reload",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "crew_profile_safety",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "crew_profile_save",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "crew_profile_saved",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "crew_profile_saving",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "crew_profile_skills",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "crew_profile_skills_help",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "crew_profile_title",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "crew_profile_unavailable",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "crew_profile_version",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "crew_profile_workspace",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "crew_profile_workspace_legacy",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "crew_profile_workspace_project",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "crew_resume_action",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "crew_resume_description",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "crew_resume_failed",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "drawer_action_failed",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "drawer_archive",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "drawer_archive_help",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "drawer_archived_chats",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "drawer_archived_notice",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "drawer_back_to_chats",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "drawer_busy",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "drawer_cancel_action",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "drawer_chat_actions",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "drawer_chat_name",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "drawer_delete_action",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "drawer_delete_chat",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "drawer_delete_confirmation",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "drawer_deleted_notice",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "drawer_deleted_partial",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "drawer_name_required",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "drawer_no_archived_chats",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "drawer_pin",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "drawer_pinned",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "drawer_rename_chat",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "drawer_restored_notice",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "drawer_save_name",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "drawer_system_chat_delete",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "drawer_unarchive",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "drawer_unpin",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "full_project_exec_bot",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "full_project_exec_command",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "full_project_exec_cwd",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "full_project_exec_effects",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "full_project_exec_no_timeout",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "full_project_exec_noninteractive",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "full_project_exec_prior_outcomes",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "full_project_exec_project",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "full_project_exec_timeout",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "full_project_exec_title",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "full_project_exec_unreadable_journals",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "full_project_exec_warning",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "image_error_reference",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "oauth_callback_denied",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "oauth_callback_failed_body",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "oauth_callback_failed_title",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "oauth_callback_success_body",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "oauth_callback_success_title",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "oauth_callback_timeout",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "oauth_exchange_failed",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "oauth_exchange_invalid_response",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "oauth_signin_interrupted",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "oauth_storage_failed",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "provider_auth_diagnostic_copied",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "provider_auth_diagnostic_copy",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "provider_auth_diagnostic_title",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "provider_browser_exchanging",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "provider_chatgpt_browser_name",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "provider_chatgpt_device_name",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "provider_connect_chatgpt_browser_summary",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "provider_connect_chatgpt_device_summary",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "provider_openai_api_short",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "provider_openai_browser_short",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "provider_openai_change_method",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "provider_openai_device_short",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "quick_model_change_provider",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "quick_model_collapsed",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "quick_model_effort",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "quick_model_effort_high",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "quick_model_effort_low",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "quick_model_effort_max",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "quick_model_effort_medium",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "quick_model_effort_minimal",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "quick_model_effort_none",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "quick_model_effort_ultra",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "quick_model_effort_xhigh",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values",
+      "name": "quick_model_expanded",
+      "action": "added",
+      "path": "app/app/src/main/res/values/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "full_linux_setup_consent_body",
+      "action": "restored",
+      "path": "app/app/src/full/res/values-es/linux_strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "full_linux_setup_failed_detail",
+      "action": "restored",
+      "path": "app/app/src/full/res/values-es/linux_strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "full_linux_exec_approval_command",
+      "action": "restored",
+      "path": "app/app/src/full/res/values-es/linux_strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "full_linux_system_prompt",
+      "action": "restored",
+      "path": "app/app/src/full/res/values-es/linux_strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "full_linux_autonomy_allow",
+      "action": "added",
+      "path": "app/app/src/full/res/values-es/linux_strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "full_linux_autonomy_ask",
+      "action": "added",
+      "path": "app/app/src/full/res/values-es/linux_strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "full_linux_autonomy_audit_failed",
+      "action": "added",
+      "path": "app/app/src/full/res/values-es/linux_strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "full_linux_autonomy_changed",
+      "action": "added",
+      "path": "app/app/src/full/res/values-es/linux_strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "full_linux_autonomy_denied",
+      "action": "added",
+      "path": "app/app/src/full/res/values-es/linux_strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "full_linux_autonomy_deny",
+      "action": "added",
+      "path": "app/app/src/full/res/values-es/linux_strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "full_linux_autonomy_save_failed",
+      "action": "added",
+      "path": "app/app/src/full/res/values-es/linux_strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "full_linux_autonomy_switch",
+      "action": "added",
+      "path": "app/app/src/full/res/values-es/linux_strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "full_linux_autonomy_title",
+      "action": "added",
+      "path": "app/app/src/full/res/values-es/linux_strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "full_linux_autonomy_unavailable",
+      "action": "added",
+      "path": "app/app/src/full/res/values-es/linux_strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "full_linux_exec_allow_always",
+      "action": "added",
+      "path": "app/app/src/full/res/values-es/linux_strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "full_linux_exec_approval_allow_warning",
+      "action": "added",
+      "path": "app/app/src/full/res/values-es/linux_strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "memory_seed_root_index",
+      "action": "restored",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "memory_seed_human",
+      "action": "restored",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "memory_seed_persona",
+      "action": "restored",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "provider_signin_chatgpt",
+      "action": "restored",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "task_management_create_card",
+      "action": "restored",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "task_management_update_card",
+      "action": "restored",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "image_tool_description",
+      "action": "restored",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "attachment_model_decode",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "attachment_model_file_failed",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "attachment_model_memory",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "attachment_model_missing",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "attachment_model_nonvision",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "attachment_model_rejected",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "attachment_model_response_error",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "chat_attachment_close_preview",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "chat_attachment_copy_failed",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "chat_attachment_copying",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "chat_attachment_file",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "chat_attachment_image",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "chat_attachment_main_only",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "chat_attachment_open_image",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "chat_attachment_picker_failed",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "chat_attachment_preview_loading",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "chat_attachment_remove",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "chat_attachment_send_cancelled",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "chat_attachment_send_failed",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "chat_attachment_unavailable",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "chat_files_unavailable",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "chat_microphone_unavailable",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "chat_tray_files",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "crew_history_description",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "crew_mode_always_description",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "crew_mode_auto_description",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "crew_mode_off_description",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "crew_profile_adoption_help",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "crew_profile_capabilities",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "crew_profile_capabilities_help",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "crew_profile_close",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "crew_profile_configure",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "crew_profile_description",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "crew_profile_legacy_help",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "crew_profile_load_failed",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "crew_profile_name",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "crew_profile_no_skills",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "crew_profile_project_help",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "crew_profile_prompt",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "crew_profile_reload",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "crew_profile_safety",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "crew_profile_save",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "crew_profile_saved",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "crew_profile_saving",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "crew_profile_skills",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "crew_profile_skills_help",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "crew_profile_title",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "crew_profile_unavailable",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "crew_profile_version",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "crew_profile_workspace",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "crew_profile_workspace_legacy",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "crew_profile_workspace_project",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "crew_resume_action",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "crew_resume_description",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "crew_resume_failed",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "drawer_action_failed",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "drawer_archive",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "drawer_archive_help",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "drawer_archived_chats",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "drawer_archived_notice",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "drawer_back_to_chats",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "drawer_busy",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "drawer_cancel_action",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "drawer_chat_actions",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "drawer_chat_name",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "drawer_delete_action",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "drawer_delete_chat",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "drawer_delete_confirmation",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "drawer_deleted_notice",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "drawer_deleted_partial",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "drawer_name_required",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "drawer_no_archived_chats",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "drawer_pin",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "drawer_pinned",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "drawer_rename_chat",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "drawer_restored_notice",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "drawer_save_name",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "drawer_system_chat_delete",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "drawer_unarchive",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "drawer_unpin",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "full_project_exec_bot",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "full_project_exec_command",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "full_project_exec_cwd",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "full_project_exec_effects",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "full_project_exec_no_timeout",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "full_project_exec_noninteractive",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "full_project_exec_prior_outcomes",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "full_project_exec_project",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "full_project_exec_timeout",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "full_project_exec_title",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "full_project_exec_unreadable_journals",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "full_project_exec_warning",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "image_error_reference",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "oauth_callback_denied",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "oauth_callback_failed_body",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "oauth_callback_failed_title",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "oauth_callback_success_body",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "oauth_callback_success_title",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "oauth_callback_timeout",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "oauth_exchange_failed",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "oauth_exchange_invalid_response",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "oauth_signin_interrupted",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "oauth_storage_failed",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "provider_auth_diagnostic_copied",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "provider_auth_diagnostic_copy",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "provider_auth_diagnostic_title",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "provider_browser_exchanging",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "provider_chatgpt_browser_name",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "provider_chatgpt_device_name",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "provider_connect_chatgpt_browser_summary",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "provider_connect_chatgpt_device_summary",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "provider_openai_api_short",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "provider_openai_browser_short",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "provider_openai_change_method",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "provider_openai_device_short",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "quick_model_change_provider",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "quick_model_collapsed",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "quick_model_effort",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "quick_model_effort_high",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "quick_model_effort_low",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "quick_model_effort_max",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "quick_model_effort_medium",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "quick_model_effort_minimal",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "quick_model_effort_none",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "quick_model_effort_ultra",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "quick_model_effort_xhigh",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    },
+    {
+      "locale": "values-es",
+      "name": "quick_model_expanded",
+      "action": "added",
+      "path": "app/app/src/main/res/values-es/strings.xml"
+    }
+  ]
+}

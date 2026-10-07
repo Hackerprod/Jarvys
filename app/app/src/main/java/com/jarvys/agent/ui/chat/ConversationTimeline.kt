@@ -16,6 +16,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
@@ -24,6 +25,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.clickable
@@ -50,10 +52,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.role
@@ -78,6 +82,7 @@ import com.jarvys.agent.JarvysMotion
 import com.jarvys.agent.JarvysSectionLabel
 import com.jarvys.agent.JarvysTag
 import com.jarvys.agent.LucideIcons
+import com.jarvys.agent.MessageReactionEmoji
 import com.jarvys.agent.R
 import com.jarvys.agent.ScrollableDialogContent
 import com.jarvys.agent.skills.SkillFileLink
@@ -93,6 +98,7 @@ import com.jarvys.agent.connectors.ApprovalDecision
 import com.jarvys.agent.connectors.ApprovalGate
 import com.jarvys.agent.connectors.ApprovalOutcomeTone
 import com.jarvys.agent.connectors.ConnectorRegistry
+import com.jarvys.agent.connectors.FlavorAutonomyUi
 import com.jarvys.agent.connectors.approvalPrimaryActionResourceId
 import com.jarvys.agent.connectors.approvalStatusPresentation
 import com.jarvys.agent.connectors.approveAndAllowAlways
@@ -255,7 +261,7 @@ private fun JarvysConversationEvent(
     animateEntry: Boolean = false,
 ) {
     when (event.kind) {
-        "user" -> TimelineArrival(animateEntry) { IntentMessage(event) }
+        "user" -> TimelineArrival(animateEntry) { IntentMessage(event, generatedImageSessionId) }
         "assistant" -> TimelineArrival(animateEntry) {
             AssistantReplyView(event, onOpenSkillFile, event.stage == "FAILED",
                 onTranslateAssistant, onRegenerateAssistant, onSpeakAssistant, speakingMessageId, isLastAssistant,
@@ -293,15 +299,40 @@ private fun TimelineArrival(animateEntry: Boolean, content: @Composable () -> Un
 }
 
 @Composable
-private fun IntentMessage(event: AgentRunUiEvent) {
+internal fun IntentMessage(event: AgentRunUiEvent, sessionId: String = "") {
     val context = LocalContext.current
-    Row(Modifier.fillMaxWidth().semantics {
-        contentDescription = context.getString(R.string.chat_user_message_accessibility)
-    }, horizontalArrangement = Arrangement.End) {
-        Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(18.dp)) {
-            Text(event.text, Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                style = MaterialTheme.typography.bodyLarge)
+    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
+        Row(Modifier.fillMaxWidth().semantics {
+            contentDescription = context.getString(R.string.chat_user_message_accessibility)
+        }, horizontalArrangement = Arrangement.End) {
+            Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(18.dp),
+                modifier = Modifier.testTag("user-message-bubble-${event.id}")) {
+                Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (event.attachments.isNotEmpty()) UserChatAttachments(event.attachments, sessionId, Modifier.widthIn(max = 320.dp))
+                    if (event.text.isNotBlank()) SelectionContainer {
+                        Text(event.text, color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            style = MaterialTheme.typography.bodyLarge)
+                    }
+                }
+            }
+        }
+        if (event.kind == "user" && event.proactiveThreadKey.isNullOrEmpty() && !event.proactiveNotice &&
+            MessageReactionEmoji.isValid(event.reactionEmoji)) {
+            val description = stringResource(R.string.chat_message_reaction_accessibility, event.reactionEmoji)
+            // A read-only status outside selection and attachment hit targets. Empty reactions add no space.
+            Surface(
+                modifier = Modifier.padding(top = 4.dp)
+                    .testTag("user-message-reaction-${event.id}")
+                    .clearAndSetSemantics { contentDescription = description },
+                shape = RoundedCornerShape(50),
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                    .compositeOver(MaterialTheme.colorScheme.surface),
+                contentColor = MaterialTheme.colorScheme.onSurface,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.36f)),
+            ) {
+                Text(event.reactionEmoji, Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+                    fontSize = 16.sp, lineHeight = 20.sp)
+            }
         }
     }
 }
@@ -518,6 +549,13 @@ private fun ConnectorActivityLine(
                     Icon(if (expanded) LucideIcons.ChevronUp else LucideIcons.ChevronDown,
                         contentDescription = stringResource(if (expanded) R.string.tool_output_collapse else R.string.tool_output_expand),
                         modifier = Modifier.size(17.dp))
+                }
+            }
+            event.toolAuditDetail?.takeIf(String::isNotBlank)?.let { literalDetail ->
+                SelectionContainer {
+                    Text(literalDetail, Modifier.fillMaxWidth().padding(start = 26.dp, top = 6.dp).testTag("tool-audit-${event.id}"),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
                 }
             }
             inlineLinuxFailureDetail?.let { detail ->
@@ -838,7 +876,9 @@ private fun ApprovalDecisionCard(event: AgentRunUiEvent, connectorRegistry: Conn
                             Text(if (permission == null) context.getString(label) else context.getString(label,
                                 event.approvalPermissionLabel?.resolve(context) ?: permission), softWrap = true)
                         }
-                        if (event.approvalAllowAlwaysAvailable) OutlinedButton(onClick = {
+                        if (event.approvalAllowAlwaysAvailable && FlavorAutonomyUi.handlesApproval(event)) {
+                            FlavorAutonomyUi.ApprovalAction(event) { detail -> AgentRunUiState.updateApprovalDetail(event.approvalId.orEmpty(), detail) }
+                        } else if (event.approvalAllowAlwaysAvailable) OutlinedButton(onClick = {
                             approveAndAllowAlways(
                                 registry = connectorRegistry,
                                 connectorId = event.approvalAutonomyConnectorId,

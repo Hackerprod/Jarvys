@@ -1,6 +1,7 @@
 package com.jarvys.agent.ui
 
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
@@ -16,16 +17,21 @@ fun JarvysOwnTheme(mode: JarvysThemeMode, content: @Composable () -> Unit) {
         JarvysThemeMode.LIGHT -> false
         JarvysThemeMode.DARK -> true
     }
-    val colors = if (dark) darkColorScheme(
+    MaterialTheme(colorScheme = jarvysColorScheme(dark)) {
+        JarvysMotionProvider(content)
+    }
+}
+
+fun jarvysColorScheme(dark: Boolean): ColorScheme = if (dark) darkColorScheme(
         primary = JarvysPalette.GlassDark,
         onPrimary = JarvysPalette.CanvasDark,
         primaryContainer = JarvysPalette.RaisedDark,
         onPrimaryContainer = JarvysPalette.InkDark,
-        secondary = JarvysPalette.BrassDark,
+        secondary = JarvysPalette.WarningInkDark,
         onSecondary = JarvysPalette.CanvasDark,
         secondaryContainer = JarvysPalette.RaisedDark,
         onSecondaryContainer = JarvysPalette.InkDark,
-        tertiary = JarvysPalette.BrassDark,
+        tertiary = JarvysPalette.WarningInkDark,
         onTertiary = JarvysPalette.CanvasDark,
         tertiaryContainer = JarvysPalette.RaisedDark,
         onTertiaryContainer = JarvysPalette.InkDark,
@@ -36,6 +42,13 @@ fun JarvysOwnTheme(mode: JarvysThemeMode, content: @Composable () -> Unit) {
         background = JarvysPalette.CanvasDark,
         onBackground = JarvysPalette.InkDark,
         surface = JarvysPalette.SurfaceDark,
+        surfaceDim = JarvysPalette.SurfaceDimDark,
+        surfaceBright = JarvysPalette.SurfaceBrightDark,
+        surfaceContainerLowest = JarvysPalette.SurfaceContainerLowestDark,
+        surfaceContainerLow = JarvysPalette.SurfaceContainerLowDark,
+        surfaceContainer = JarvysPalette.SurfaceContainerDark,
+        surfaceContainerHigh = JarvysPalette.SurfaceContainerHighDark,
+        surfaceContainerHighest = JarvysPalette.SurfaceContainerHighestDark,
         onSurface = JarvysPalette.InkDark,
         surfaceVariant = JarvysPalette.RaisedDark,
         onSurfaceVariant = JarvysPalette.SecondaryInkDark,
@@ -50,11 +63,11 @@ fun JarvysOwnTheme(mode: JarvysThemeMode, content: @Composable () -> Unit) {
         onPrimary = JarvysPalette.SurfaceLight,
         primaryContainer = JarvysPalette.RaisedLight,
         onPrimaryContainer = JarvysPalette.InkLight,
-        secondary = JarvysPalette.BrassLight,
+        secondary = JarvysPalette.WarningInkLight,
         onSecondary = JarvysPalette.SurfaceLight,
         secondaryContainer = JarvysPalette.RaisedLight,
         onSecondaryContainer = JarvysPalette.InkLight,
-        tertiary = JarvysPalette.BrassLight,
+        tertiary = JarvysPalette.WarningInkLight,
         onTertiary = JarvysPalette.SurfaceLight,
         tertiaryContainer = JarvysPalette.RaisedLight,
         onTertiaryContainer = JarvysPalette.InkLight,
@@ -65,6 +78,13 @@ fun JarvysOwnTheme(mode: JarvysThemeMode, content: @Composable () -> Unit) {
         background = JarvysPalette.CanvasLight,
         onBackground = JarvysPalette.InkLight,
         surface = JarvysPalette.SurfaceLight,
+        surfaceDim = JarvysPalette.SurfaceDimLight,
+        surfaceBright = JarvysPalette.SurfaceBrightLight,
+        surfaceContainerLowest = JarvysPalette.SurfaceContainerLowestLight,
+        surfaceContainerLow = JarvysPalette.SurfaceContainerLowLight,
+        surfaceContainer = JarvysPalette.SurfaceContainerLight,
+        surfaceContainerHigh = JarvysPalette.SurfaceContainerHighLight,
+        surfaceContainerHighest = JarvysPalette.SurfaceContainerHighestLight,
         onSurface = JarvysPalette.InkLight,
         surfaceVariant = JarvysPalette.RaisedLight,
         onSurfaceVariant = JarvysPalette.SecondaryInkLight,
@@ -75,7 +95,3 @@ fun JarvysOwnTheme(mode: JarvysThemeMode, content: @Composable () -> Unit) {
         inversePrimary = JarvysPalette.GlassDark,
         surfaceTint = JarvysPalette.GlassLight,
     )
-    MaterialTheme(colorScheme = colors) {
-        JarvysMotionProvider(content)
-    }
-}
