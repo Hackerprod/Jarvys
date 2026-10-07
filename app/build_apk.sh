@@ -13,10 +13,9 @@ if [[ ! -d "$ANDROID_HOME/platforms" || ! -d "$ANDROID_HOME/build-tools" ]]; the
 fi
 
 if [[ ! -f debug.keystore ]]; then
-    keytool -genkeypair -v -keystore debug.keystore \
-        -storepass android -alias androiddebugkey -keypass android \
-        -keyalg RSA -keysize 2048 -validity 10000 \
-        -dname "CN=Jarvys Debug,O=Jarvys,C=US"
+    echo "Original debug.keystore is missing. Refusing to create a replacement signing key." >&2
+    echo "Compile/test sources with Gradle; restore the original signing key before building an update." >&2
+    exit 2
 fi
 
 ./gradlew --no-daemon -Dorg.gradle.jvmargs="-Xmx1280m -Dfile.encoding=UTF-8" \
