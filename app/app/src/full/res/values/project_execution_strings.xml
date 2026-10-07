@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="full_project_exec_bot">Bot: %1$s</string>
+    <string name="full_project_exec_command">"Command (literal):
+%1$s"</string>
+    <string name="full_project_exec_cwd">Project cwd: %1$s (guest %2$s)</string>
+    <string name="full_project_exec_effects">"Effects: may read, write or delete project files, execute programs and use this app's network access. A project writer lease is held until process cleanup."</string>
+    <string name="full_project_exec_no_timeout">No command timeout requested; STOP/cancel remains available.</string>
+    <string name="full_project_exec_noninteractive">Non-interactive: stdin is closed. A read-only environment probe runs before the literal command. Missing packages are never installed automatically.</string>
+    <string name="full_project_exec_prior_outcomes">"Prior interrupted or uncertain jobs in this project:
+%1$s
+Their exit results are unknown. Do not repeat them automatically. Review project changes before approving any potentially repeated effects. Prior logs remain bound to their original owner."</string>
+    <string name="full_project_exec_project">Project: %1$s</string>
+    <string name="full_project_exec_timeout">Requested timeout (seconds): %1$d</string>
+    <string name="full_project_exec_title">Approve project command</string>
+    <string name="full_project_exec_unreadable_journals">Unreadable prior job records: %1$d. They may conceal an uncertain previous effect. Do not automatically repeat earlier commands; inspect the project before approving new effects. The original records are preserved.</string>
+    <string name="full_project_exec_warning">"PRoot is not a security sandbox; the prepared system rootfs is shared and writable. Project cwd and a limited mount do not contain malicious code or isolate it from this app's privileges."</string>
+</resources>

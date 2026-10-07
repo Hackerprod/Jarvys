@@ -29,6 +29,8 @@ data class AutonomyAuditRecord(
 interface ConnectorAutonomyStore {
     fun policy(connectorId: String, operationName: String): AutonomyPolicy
     fun setPolicy(connectorId: String, operationName: String, policy: AutonomyPolicy)
+    fun setPolicyChecked(connectorId: String, operationName: String, policy: AutonomyPolicy) =
+        setPolicy(connectorId, operationName, policy)
     fun clearPolicies(connectorId: String) = Unit
     fun appendAudit(record: AutonomyAuditRecord)
     fun recentAudit(connectorId: String, limit: Int): List<AutonomyAuditRecord>
@@ -86,6 +88,18 @@ class SharedPreferencesConnectorAutonomyStore(context: Context) : ConnectorAuton
 
     override fun setPolicy(connectorId: String, operationName: String, policy: AutonomyPolicy) {
         preferences.edit().putString(policyKey(connectorId, operationName), policy.name).apply()
+    }
+
+    override fun setPolicyChecked(connectorId: String, operationName: String, policy: AutonomyPolicy) {
+        synchronized(lock) {
+            val key = policyKey(connectorId, operationName)
+            val previous = preferences.getString(key, null)
+            if (!preferences.edit().putString(key, policy.name).commit()) {
+                // A failed commit can still alter the in-memory preferences map.
+                preferences.edit().apply { if (previous == null) remove(key) else putString(key, previous) }.commit()
+                throw IllegalStateException("Could not persist connector action policy")
+            }
+        }
     }
 
     override fun clearPolicies(connectorId: String) {

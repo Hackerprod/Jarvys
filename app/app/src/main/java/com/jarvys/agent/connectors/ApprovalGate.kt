@@ -107,16 +107,17 @@ class ApprovalGate(
 
     fun isPending(id: String): Boolean = synchronized(lock) { pending[id]?.decision?.get() == null }
 
-    private fun complete(id: String, decision: ApprovalDecision): Boolean {
-        val request = synchronized(lock) { pending[id] } ?: return false
-        if (!request.decision.compareAndSet(null, decision)) return false
-        try {
-            presenter.update(id, decision)
-        } finally {
-            request.latch.countDown()
-        }
-        return true
+    /** Perform optional consent changes only while this exact approval is pending. */
+    fun resolveFromUi(id: String, decisionProvider: () -> ApprovalDecision): Boolean = synchronized(lock) {
+        val request = pending[id] ?: return@synchronized false
+        if (request.decision.get() != null) return@synchronized false
+        val decision = decisionProvider()
+        request.decision.set(decision)
+        try { presenter.update(id, decision) } finally { request.latch.countDown() }
+        true
     }
+
+    private fun complete(id: String, decision: ApprovalDecision): Boolean = resolveFromUi(id) { decision }
 
     companion object {
         const val DEFAULT_TIMEOUT_MILLIS = 120_000L
