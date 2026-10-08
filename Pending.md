@@ -319,6 +319,17 @@ Estado: pendiente; solicitud del 8 de octubre de 2026, añadida a la cola despu�
 - Ajustar composición, jerarquía y espaciado a las dos capturas de referencia aportadas, dentro del estilo azul de Jarvys.
 - Validar HTML ordinario y de proyecto, miniaturas en carga o fallidas, apertura al tocar, acciones, reapertura del chat, pantallas estrechas, texto grande, temas e idiomas. Una miniatura o prueba de host no certifica por sí sola interacción o rendimiento en dispositivo físico.
 
+### 13. UX29: indicador nativo de puntos iluminados
+
+Estado: pendiente; solicitud del 8 de octubre de 2026, añadida a la cola después de UX28.
+
+- Sustituir únicamente el glifo de AgentPresenceIndicator por una implementación original en Canvas de Compose inspirada en la referencia visual https://reactbits.dev/c/micro/lattice-loader.
+- Usar una cuadrícula fija de 3 × 3 puntos: ocho puntos exteriores se iluminan en secuencia y el punto central permanece tenue. Tomar como orientación visual puntos de unos 6 dp, separación de 2 dp, opacidad tenue cercana a 0,15 y ciclo de unos 864 ms, ajustándolo al componente nativo existente.
+- Conservar el texto actual de «Pensando», sus colores y estados. No incorporar React, WebView ni un cronómetro para esta tarea.
+- Respetar movimiento reducido con una representación estática y pausar la animación cuando no sea visible o su ciclo de vida no esté activo.
+- Crear el dibujo y la animación de forma independiente; no copiar código de la referencia sujeto a MIT más Commons Clause.
+- Validar integración, estados, temas, texto grande, contraste, movimiento reducido y visibilidad. Esta tarea se implementará por separado después de UX28, sin ampliar UX27.
+
 ## Validaciones que siguen abiertas
 
 - Preview web: endurecer y comprobar en Chromium real el posible egreso WebRTC heredado. Las restricciones de URL/CSP no equivalen a aislamiento absoluto de red; conservar el contrato HTML/CSS/JavaScript interactivo sin puentes privados ni permisos nuevos.
