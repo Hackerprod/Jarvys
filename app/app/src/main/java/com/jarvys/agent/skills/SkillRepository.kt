@@ -268,7 +268,7 @@ class SkillRepository private constructor(context: Context) : WorkspaceStore.Ski
         private const val SKILLS_DIRECTORY = "skills"
         private const val ASSET_ROOT = "skills"
         private const val SKILL_FILE = "SKILL.md"
-        private const val MAX_SKILLS_PER_RUN = 8
+        const val MAX_SKILLS_PER_RUN = 8
         private val SKILL_ID_PATTERN = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
         @Volatile private var instance: SkillRepository? = null

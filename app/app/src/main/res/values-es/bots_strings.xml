@@ -4,11 +4,9 @@
     <string name="drawer_pinned_section">Fijados</string>
     <string name="drawer_current_chats">Chats actuales</string>
     <string name="bots_title">Bots</string>
-    <string name="bots_subtitle">Tus asistentes reutilizables</string>
     <string name="bots_create">Crear bot</string>
     <string name="bots_back">Volver</string>
     <string name="bots_built_in">Integrado</string>
-    <string name="bots_custom">Personalizado</string>
     <string name="bots_enabled">Habilitado</string>
     <string name="bots_disabled">Deshabilitado</string>
     <string name="bots_toggle_accessibility">Habilitar %1$s</string>

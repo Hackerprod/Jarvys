@@ -4,11 +4,9 @@
     <string name="drawer_pinned_section">Pinned</string>
     <string name="drawer_current_chats">Current chats</string>
     <string name="bots_title">Bots</string>
-    <string name="bots_subtitle">Your reusable assistants</string>
     <string name="bots_create">Create bot</string>
     <string name="bots_back">Back</string>
     <string name="bots_built_in">Built-in</string>
-    <string name="bots_custom">Custom</string>
     <string name="bots_enabled">Enabled</string>
     <string name="bots_disabled">Disabled</string>
     <string name="bots_toggle_accessibility">Enable %1$s</string>

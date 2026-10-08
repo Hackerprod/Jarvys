@@ -2,7 +2,6 @@ package com.jarvys.agent.crew
 
 import android.graphics.BitmapFactory
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -27,6 +26,7 @@ import java.nio.charset.StandardCharsets
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -36,7 +36,6 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -47,10 +46,15 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.LineBreak
+import androidx.compose.ui.text.style.Hyphens
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.jarvys.agent.BotIconStore
 import com.jarvys.agent.BotIconService
 import com.jarvys.agent.JarvysTextField
+import com.jarvys.agent.JarvysTopAppBar
+import com.jarvys.agent.JarvysUiTokens
 import com.jarvys.agent.LucideIcons
 import com.jarvys.agent.R
 import com.jarvys.agent.ui.motion.rememberMotionEnabled
@@ -101,7 +105,6 @@ internal fun BotsCatalogGrid(
     working: Map<String, Int>,
     onOpen: (BotDefinition) -> Unit,
     onCreate: () -> Unit,
-    onEnabledChange: (BotDefinition, Boolean) -> Unit,
     onClose: () -> Unit,
     busy: Boolean = false,
     error: String? = null,
@@ -109,24 +112,15 @@ internal fun BotsCatalogGrid(
     CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onBackground) {
     BackHandler(onBack = onClose)
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).testTag("bots-catalog")) {
-        BotsHeader(stringResource(R.string.bots_title), onClose)
-        LazyVerticalGrid(columns = GridCells.Adaptive(144.dp * LocalDensity.current.fontScale.coerceIn(1f, 1.5f)), modifier = Modifier.weight(1f).testTag("bots-grid"),
-            contentPadding = PaddingValues(start = 18.dp, end = 18.dp, bottom = 24.dp),
+        BotsHeader(stringResource(R.string.bots_title), onClose, onCreate = onCreate, createEnabled = !busy)
+        LazyVerticalGrid(columns = GridCells.Fixed(2), modifier = Modifier.weight(1f).testTag("bots-grid"),
+            contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 8.dp, bottom = 24.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
-                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                    Text(stringResource(R.string.bots_subtitle), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Button(onClick = onCreate, enabled = !busy, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("bots-create")) {
-                        Icon(LucideIcons.Plus, null, Modifier.size(20.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text(stringResource(R.string.bots_create))
-                    }
-                    error?.let { BotsError(it) }
-                }
+            error?.let { message ->
+                item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) { BotsError(message) }
             }
             items(bots, key = { it.id }) { bot ->
-                BotCatalogTile(bot, working[bot.id]?.coerceAtLeast(0) ?: 0, busy, { onOpen(bot) },
-                    { onEnabledChange(bot, it) })
+                BotCatalogTile(bot, working[bot.id]?.coerceAtLeast(0) ?: 0) { onOpen(bot) }
             }
         }
     }
@@ -134,39 +128,21 @@ internal fun BotsCatalogGrid(
 }
 
 @Composable
-private fun BotCatalogTile(bot: BotDefinition, workingCount: Int, busy: Boolean,
-    onOpen: () -> Unit, onEnabledChange: (Boolean) -> Unit) {
-    val immutable = immutableCatalogBot(bot)
+private fun BotCatalogTile(bot: BotDefinition, workingCount: Int, onOpen: () -> Unit) {
     val state = stringResource(if (bot.enabled) R.string.bots_enabled else R.string.bots_disabled)
     val open = stringResource(R.string.bots_open, bot.profile.name)
     val workingText = if (workingCount > 1) stringResource(R.string.bots_working_count, workingCount)
         else stringResource(R.string.bots_working)
-    Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainerLow,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        modifier = Modifier.fillMaxWidth().testTag("bot-tile-${bot.id}")) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Column(Modifier.fillMaxWidth().clickable(onClick = onOpen).padding(horizontal = 12.dp, vertical = 18.dp)
-                .testTag("bot-open-${bot.id}").semantics { contentDescription = open },
-                horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                BotCatalogIcon(bot, Modifier.size(72.dp).testTag("bot-icon-${bot.id}"))
-                BotWorkingName(bot.profile.name, workingCount > 0, bot.id,
-                    Modifier.fillMaxWidth().testTag("bot-name-${bot.id}"))
-                Text(if (workingCount > 0) workingText else stringResource(if (immutable) R.string.bots_built_in else R.string.bots_custom),
-                    color = if (workingCount > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.labelMedium, textAlign = TextAlign.Center,
-                    modifier = Modifier.testTag("bot-state-${bot.id}").semantics { stateDescription = if (workingCount > 0) workingText else state })
-            }
-            if (!immutable) {
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(state, Modifier.weight(1f), style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    val toggleDescription = stringResource(R.string.bots_toggle_accessibility, bot.profile.name)
-                    Switch(checked = bot.enabled, onCheckedChange = onEnabledChange, enabled = !busy,
-                        modifier = Modifier.testTag("bot-enabled-${bot.id}").semantics { contentDescription = toggleDescription })
-                }
-            }
+    // The grid is intentionally just an icon and name. Management stays in the detail view.
+    Column(Modifier.fillMaxWidth().testTag("bot-tile-${bot.id}"), horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(Modifier.fillMaxWidth().clickable(onClick = onOpen).padding(horizontal = 8.dp, vertical = 16.dp)
+            .testTag("bot-open-${bot.id}").semantics {
+                contentDescription = open
+                stateDescription = if (workingCount > 0) workingText else state
+            }, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            BotCatalogIcon(bot, Modifier.size(72.dp).alpha(if (bot.enabled) 1f else 0.5f).testTag("bot-icon-${bot.id}"))
+            BotWorkingName(bot.profile.name, workingCount > 0, bot.id,
+                Modifier.fillMaxWidth().testTag("bot-name-${bot.id}"))
         }
     }
 }
@@ -178,10 +154,11 @@ internal fun BotWorkingName(name: String, working: Boolean, id: String, modifier
     val phase = rememberEffortSparklePhase(rememberMotionEnabled(working, viewport.visible))
     var width by remember { mutableFloatStateOf(1f) }
     val colors = MaterialTheme.colorScheme
-    val darkSurface = colors.surfaceContainerLow.luminance() < 0.5f
+    val darkSurface = colors.background.luminance() < 0.5f
     val textInk = if (working && darkSurface) colors.primary else colors.onSurface
     val illuminated = readableThemeInk(if (darkSurface) colors.onSurface else colors.primary,
-        colors.surfaceContainerLow, colors.onSurface, 4.5)
+        colors.background, colors.onSurface, 4.5)
+    val nameStyle = MaterialTheme.typography.titleMedium.copy(lineBreak = LineBreak.Heading, hyphens = Hyphens.Auto)
     val p = phase?.value
     val brush = p?.let {
         val center = width * (it * 1.8f - 0.4f)
@@ -192,7 +169,7 @@ internal fun BotWorkingName(name: String, working: Boolean, id: String, modifier
         .padding(vertical = 7.dp), contentAlignment = Alignment.Center) {
         Text(name, Modifier.fillMaxWidth(), textAlign = TextAlign.Center, fontWeight = FontWeight.SemiBold,
             color = if (brush == null) textInk else Color.Unspecified,
-            style = if (brush == null) MaterialTheme.typography.titleMedium else MaterialTheme.typography.titleMedium.copy(brush = brush))
+            style = if (brush == null) nameStyle else nameStyle.copy(brush = brush))
         if (p != null) Canvas(Modifier.matchParentSize().testTag("bot-working-motion-$id")) {
             repeat(4) { particle ->
                 val x = size.width * ((particle + 0.5f) / 4f)
@@ -447,14 +424,31 @@ internal fun BotIconPromptScreen(generating: Boolean, error: String?, onGenerate
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun BotsHeader(title: String, onClose: () -> Unit, enabled: Boolean = true) {
-    Row(Modifier.fillMaxWidth().padding(start = 6.dp, end = 18.dp, top = 8.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-        IconButton(onClick = onClose, enabled = enabled, modifier = Modifier.size(48.dp).testTag("bots-back")) {
-            Icon(LucideIcons.ArrowLeft, stringResource(R.string.bots_back))
-        }
-        Text(title, Modifier.weight(1f).padding(start = 6.dp).testTag("bots-header-title"), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
-    }
+internal fun BotsHeader(title: String, onClose: () -> Unit, enabled: Boolean = true,
+    onCreate: (() -> Unit)? = null, createEnabled: Boolean = true,
+    windowInsets: WindowInsets = TopAppBarDefaults.windowInsets,
+) {
+    // Same component, typography and system insets as Settings. This route owns its header.
+    JarvysTopAppBar(
+        title = { Text(title, Modifier.testTag("bots-header-title"), fontSize = JarvysUiTokens.ToolbarTitleSize,
+            fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        navigationIcon = {
+            IconButton(onClick = onClose, enabled = enabled, modifier = Modifier.size(48.dp).testTag("bots-back")) {
+                Icon(LucideIcons.ArrowLeft, stringResource(R.string.bots_back), Modifier.size(20.dp))
+            }
+        },
+        actions = {
+            onCreate?.let { create ->
+                IconButton(onClick = create, enabled = createEnabled, modifier = Modifier.size(48.dp).testTag("bots-create")) {
+                    Icon(LucideIcons.Plus, stringResource(R.string.bots_create), Modifier.size(22.dp))
+                }
+            }
+        },
+        transparent = true,
+        windowInsets = windowInsets,
+    )
 }
 
 @Composable

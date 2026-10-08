@@ -64,6 +64,11 @@ class BotProfileDraftServiceTest {
         assertEquals(listOf("skill.test"), decode(draft().put("capabilities", JSONArray(listOf("read_skill")))
             .put("skillIds", JSONArray(listOf("skill.test")))).skillIds)
     }
+    @Test fun generatedConfigurationCannotExceedRuntimeSkillLimit() {
+        val skills = (1..9).map { "skill.$it" }
+        invalid { BotProfileDraftService.decode(draft().put("capabilities", JSONArray(listOf("read_skill")))
+            .put("skillIds", JSONArray(skills)).toString(), options, skills) }
+    }
     @Test fun boundedTextAndSingleLineNamesAreEnforced() {
         invalid { decode(draft().put("name", "x".repeat(81))) }
         invalid { decode(draft().put("name", "First\nSecond")) }
@@ -77,6 +82,7 @@ class BotProfileDraftServiceTest {
             observed = true
             assertEquals(request, prompt); assertTrue(history.isEmpty()); assertTrue(images.isEmpty()); assertTrue(tools.isEmpty())
             assertTrue(instructions.contains("UNSAVED")); assertTrue(instructions.contains("user review"))
+            assertTrue(instructions.contains("written in English")); assertTrue(instructions.contains("1-3 words"))
             ModelReply(draft().toString(), emptyList())
         }
         assertEquals("Research partner", service.generate(request, options, emptyList(), CancellationToken.cancellable()).name)

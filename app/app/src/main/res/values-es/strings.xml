@@ -1318,4 +1318,7 @@ Se desconoce cómo terminaron. No se repiten automáticamente. Revisa los cambio
     <string name="quick_model_effort_ultra">Ultra</string>
     <string name="quick_model_effort_xhigh">Muy alto</string>
     <string name="quick_model_expanded">Desplegado</string>
+    <string name="chat_open_current_preview">Abrir vista previa actual</string>
+    <string name="connector_tool_unconfirmed">Sin confirmar: %1$s</string>
+    <string name="connector_tool_not_started">Sin ejecutar: %1$s</string>
 </resources>

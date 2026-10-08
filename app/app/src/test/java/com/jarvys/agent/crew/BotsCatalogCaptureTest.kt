@@ -60,7 +60,7 @@ class BotsCatalogCaptureTest {
         compose.mainClock.autoAdvance = false
         compose.setContent { CompositionLocalProvider(LocalReducedMotion provides reduced) {
             MaterialTheme(colorScheme = jarvysColorScheme(dark)) {
-                BotsCatalogGrid(listOf(coding), if (working) mapOf("coding" to 1) else emptyMap(), {}, {}, { _, _ -> }, {})
+                BotsCatalogGrid(listOf(coding), if (working) mapOf("coding" to 1) else emptyMap(), {}, {}, {})
             }
         } }
         val prefix = "${if (dark) "dark" else "light"}-motion"
@@ -94,7 +94,7 @@ class BotsCatalogCaptureTest {
             CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale), LocalReducedMotion provides true) {
                 MaterialTheme(colorScheme = jarvysColorScheme(dark)) {
                     if (route == "grid") BotsCatalogGrid(listOf(coding, android, research, paused), mapOf("coding" to 2),
-                        onOpen = { route = "editor" }, onCreate = { route = "prompt" }, onEnabledChange = { _, _ -> }, onClose = {})
+                        onOpen = { route = "editor" }, onCreate = { route = "prompt" }, onClose = {})
                     else if (route == "prompt") BotCreationPrompt(false, null, {}, { route = "grid" })
                     else BotDefinitionEditor(research, false, emptyList(), emptyList(), {}, { route = "grid" }, {}, {}, {}, iconAvailable = true)
                 }
@@ -105,13 +105,16 @@ class BotsCatalogCaptureTest {
         val first = compose.onNodeWithTag("bot-tile-coding").fetchSemanticsNode().boundsInRoot
         val second = compose.onNodeWithTag("bot-tile-android-use").fetchSemanticsNode().boundsInRoot
         assertTrue(compose.onNodeWithTag("bots-grid").fetchSemanticsNode().config.contains(SemanticsActions.ScrollToIndex))
-        if (fontScale < 1.5f) {
-            assertEquals(first.top, second.top, 0.1f)
-            assertTrue(first.right < second.left)
-        } else {
-            assertTrue("Large text keeps a readable adaptive grid cell", second.top > first.bottom)
-            assertEquals(first.left, second.left, 0.1f)
-        }
+        assertEquals("Two columns must remain at large font sizes", first.top, second.top, 0.1f)
+        assertTrue(first.right < second.left)
+        compose.onNodeWithText("Built-in").assertDoesNotExist()
+        compose.onNodeWithText("Integrado").assertDoesNotExist()
+        compose.onNodeWithText("Your reusable assistants").assertDoesNotExist()
+        compose.onNodeWithText("Tus asistentes reutilizables").assertDoesNotExist()
+        val add = compose.onNodeWithTag("bots-create").fetchSemanticsNode().boundsInRoot
+        val back = compose.onNodeWithTag("bots-back").fetchSemanticsNode().boundsInRoot
+        assertEquals(back.center.y, add.center.y, 0.1f)
+        assertTrue(add.bottom <= first.top)
         listOf("coding", "android-use").forEach { id ->
             val icon = compose.onNodeWithTag("bot-icon-$id", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
             val name = compose.onNodeWithTag("bot-name-$id", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
@@ -122,8 +125,9 @@ class BotsCatalogCaptureTest {
         compose.onNodeWithText("Android-use", useUnmergedTree = true).performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
         assertFalse("Bot name must wrap rather than clip", layouts.single().hasVisualOverflow)
         capture("$prefix-grid")
-        compose.onNodeWithTag("bots-grid").performScrollToNode(hasTestTag("bot-enabled-custom-writer"))
-        compose.onNodeWithTag("bot-enabled-custom-writer").assertIsDisplayed().assertIsOff()
+        compose.onNodeWithTag("bots-grid").performScrollToNode(hasTestTag("bot-open-custom-writer"))
+        compose.onNodeWithTag("bot-open-custom-writer").assertIsDisplayed()
+        compose.onNodeWithTag("bot-enabled-custom-writer").assertDoesNotExist()
         capture("$prefix-grid-custom")
         compose.runOnIdle { route = "editor" }
         compose.onNodeWithTag("bot-editor-name").assertExists()

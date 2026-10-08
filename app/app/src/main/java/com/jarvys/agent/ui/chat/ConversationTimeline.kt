@@ -534,6 +534,10 @@ private fun ConnectorActivityLine(
     }
     val localizedToolStatus = when {
         event.stage == "tool_progress" -> event.toolDisplayName ?: event.text
+        event.stage == "tool_interrupted" -> context.getString(R.string.connector_tool_unconfirmed,
+            localizedToolName ?: event.toolDisplayName ?: event.text)
+        event.stage == "tool_not_started" -> context.getString(R.string.connector_tool_not_started,
+            localizedToolName ?: event.toolDisplayName ?: event.text)
         WebSearchTools.isSearchLabel(event.toolDisplayName) && event.stage == "tool_error" ->
             context.getString(R.string.web_search_event_failed, searchQuery)
         WebSearchTools.isSearchLabel(event.toolDisplayName) -> context.getString(R.string.web_search_event, searchQuery)
@@ -562,7 +566,7 @@ private fun ConnectorActivityLine(
                 Text(localizedToolStatus, Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurface,
                     style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 if (inlineLinuxFailureDetail == null && !event.detail.isNullOrBlank()) IconButton(onClick = { expanded = !expanded },
-                    modifier = Modifier.size(44.dp)) {
+                    modifier = Modifier.size(44.dp).testTag("tool-output-toggle-${event.toolCallId ?: event.id}")) {
                     Icon(if (expanded) LucideIcons.ChevronUp else LucideIcons.ChevronDown,
                         contentDescription = stringResource(if (expanded) R.string.tool_output_collapse else R.string.tool_output_expand),
                         modifier = Modifier.size(17.dp))
@@ -592,8 +596,9 @@ private fun ConnectorActivityLine(
                     onOpenSkillFile)
             }
             event.previewId?.let { preview ->
-                TextButton(onClick = { onOpenPreview(preview) }, modifier = Modifier.align(Alignment.End)) {
-                    Text(stringResource(R.string.chat_open_preview))
+                TextButton(onClick = { onOpenPreview(preview) }, modifier = Modifier.align(Alignment.End)
+                    .testTag("tool-preview-${event.toolCallId ?: event.id}")) {
+                    Text(stringResource(if (event.previewIsCurrent) R.string.chat_open_current_preview else R.string.chat_open_preview))
                 }
             }
     }

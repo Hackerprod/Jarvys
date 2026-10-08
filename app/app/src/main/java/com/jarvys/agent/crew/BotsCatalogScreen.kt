@@ -193,7 +193,7 @@ fun BotsCatalogScreen(conversationId: String? = null, working: Map<String, Int> 
                 }
             })
         else -> BotsCatalogGrid(loaded.definitions, working, onOpen = { selectedId = it.id; error = null; iconError = null; iconCompletedRevision = null },
-            onCreate = { creating = true; error = null }, onEnabledChange = ::toggle, onClose = onClose,
+            onCreate = { creating = true; error = null }, onClose = onClose,
             busy = operation != null, error = error)
     }
     }

@@ -7,6 +7,14 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.platform.testTag
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Text
+import androidx.compose.ui.text.font.FontWeight
+import com.jarvys.agent.JarvysTopAppBar
+import com.jarvys.agent.JarvysUiTokens
 import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -48,14 +56,13 @@ class BotsCatalogComposeTest {
         } }
     }
 
-    @Test fun gridHasAdjacentColumnsWithIconsAboveNamesAndOnlyCustomSwitches() {
+    @Test fun gridHasTwoColumnsWithOnlyIconsNamesAndTopRightCreate() {
         val custom = custom()
         var opened = ""
-        var toggle: Pair<String, Boolean>? = null
+        var creates = 0
         val builtIn = BotDefinition(CrewProfile.codingDefault(), 1, true, true, "")
         compose.setContent { CompositionLocalProvider(LocalReducedMotion provides true) { MaterialTheme {
-            BotsCatalogGrid(listOf(builtIn, custom), emptyMap(), onOpen = { opened = it.id }, onCreate = {},
-                onEnabledChange = { bot, enabled -> toggle = bot.id to enabled }, onClose = {})
+            BotsCatalogGrid(listOf(builtIn, custom), emptyMap(), onOpen = { opened = it.id }, onCreate = { creates++ }, onClose = {})
         } } }
         val first = compose.onNodeWithTag("bot-tile-coding").fetchSemanticsNode().boundsInRoot
         val second = compose.onNodeWithTag("bot-tile-${custom.id}").fetchSemanticsNode().boundsInRoot
@@ -68,8 +75,49 @@ class BotsCatalogComposeTest {
         compose.onNodeWithTag("bot-open-${custom.id}").performClick()
         assertEquals(custom.id, opened)
         compose.onNodeWithTag("bot-enabled-coding").assertDoesNotExist()
-        compose.onNodeWithTag("bot-enabled-${custom.id}").performClick()
-        assertEquals(custom.id to false, toggle)
+        compose.onNodeWithTag("bot-enabled-${custom.id}").assertDoesNotExist()
+        compose.onNodeWithText("Built-in").assertDoesNotExist()
+        compose.onNodeWithText("Custom").assertDoesNotExist()
+        compose.onNodeWithText("Your reusable assistants").assertDoesNotExist()
+        val add = compose.onNodeWithTag("bots-create").fetchSemanticsNode().boundsInRoot
+        val back = compose.onNodeWithTag("bots-back").fetchSemanticsNode().boundsInRoot
+        val title = compose.onNodeWithTag("bots-header-title").fetchSemanticsNode().boundsInRoot
+        assertEquals(back.center.y, add.center.y, 0.1f)
+        assertTrue(add.left > title.right)
+        assertTrue(add.width >= 48f && add.height >= 48f)
+        assertTrue(add.bottom <= first.top)
+        compose.onNodeWithTag("bots-create").performClick()
+        assertEquals(1, creates)
+    }
+
+    @Test fun botsHeaderMatchesSettingsToolbarGeometryAndConsumesStatusInset() {
+        var bots by mutableStateOf(false)
+        compose.setContent { MaterialTheme {
+            if (bots) BotsHeader("Bots", {}, windowInsets = WindowInsets(0, 32, 0, 0))
+            else JarvysTopAppBar(
+                title = { Text("Bots", Modifier.testTag("settings-title"), fontSize = JarvysUiTokens.ToolbarTitleSize,
+                    fontWeight = FontWeight.SemiBold) },
+                navigationIcon = { IconButton({}, Modifier.size(48.dp).testTag("settings-back")) {} },
+                transparent = true, windowInsets = WindowInsets(0, 32, 0, 0),
+            )
+        } }
+        val settingsTitle = compose.onNodeWithTag("settings-title").fetchSemanticsNode().boundsInRoot
+        val settingsBack = compose.onNodeWithTag("settings-back").fetchSemanticsNode().boundsInRoot
+        compose.runOnIdle { bots = true }
+        val title = compose.onNodeWithTag("bots-header-title").fetchSemanticsNode().boundsInRoot
+        val back = compose.onNodeWithTag("bots-back").fetchSemanticsNode().boundsInRoot
+        assertEquals(settingsTitle, title)
+        assertEquals(settingsBack, back)
+        assertTrue("Status bar/cutout inset must precede the toolbar", back.top >= 32f)
+    }
+
+    @Test fun customDisableRemainsAvailableInsideDetail() {
+        var enabled: Boolean? = null
+        compose.setContent { MaterialTheme {
+            BotDefinitionEditor(custom(), false, options, emptyList(), {}, {}, { enabled = it }, {}, {})
+        } }
+        compose.onNodeWithTag("bot-editor-enabled").performScrollTo().performClick()
+        assertEquals(false, enabled)
     }
 
     @Test fun directBuiltinEditorCannotExposeAnyMutationEvenWithForgedMetadata() {
@@ -183,7 +231,7 @@ class BotsCatalogComposeTest {
         var draft: BotDefinition? by mutableStateOf(null)
         compose.setContent { MaterialTheme {
             when (route) {
-                "grid" -> BotsCatalogGrid(listOfNotNull(saved), emptyMap(), {}, { route = "prompt" }, { _, _ -> }, {})
+                "grid" -> BotsCatalogGrid(listOfNotNull(saved), emptyMap(), {}, { route = "prompt" }, {})
                 "prompt" -> BotCreationPrompt(false, null, onGenerate = { preparedPrompt = it; draft = custom(); route = "review" }, onCancel = { route = "grid" })
                 else -> BotDefinitionEditor(draft!!, true, options, emptyList(), { saved = it; route = "grid" }, { route = "grid" }, {}, {}, {})
             }
@@ -357,10 +405,10 @@ class BotsCatalogComposeTest {
         val disabled = BotDefinition(base.profile, 2, false, false, "")
         var working by mutableStateOf(mapOf(disabled.id to 1))
         compose.setContent { CompositionLocalProvider(LocalReducedMotion provides true) { MaterialTheme {
-            BotsCatalogGrid(listOf(disabled), working, {}, {}, { _, _ -> }, {})
+            BotsCatalogGrid(listOf(disabled), working, {}, {}, {})
         } } }
         compose.onNodeWithTag("bot-working-motion-${disabled.id}").assertDoesNotExist()
-        val node = compose.onNodeWithTag("bot-state-${disabled.id}", useUnmergedTree = true)
+        val node = compose.onNodeWithTag("bot-open-${disabled.id}", useUnmergedTree = true)
         assertEquals("Working", node.fetchSemanticsNode().config[SemanticsProperties.StateDescription])
         compose.runOnIdle { working = emptyMap() }
         assertEquals("Disabled", node.fetchSemanticsNode().config[SemanticsProperties.StateDescription])

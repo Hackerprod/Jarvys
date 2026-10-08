@@ -65,11 +65,14 @@ data class AgentRunUiEvent(
     val attachments: List<ChatAttachment> = emptyList(),
     val toolAuditDetail: String? = null,
     val reactionEmoji: String = "",
+    val previewIsCurrent: Boolean = false,
  ) {
     fun copyMetadata(messageId: String, durationMs: Long): AgentRunUiEvent =
         copy(messageId = messageId, durationMs = durationMs)
     fun copyReaction(emoji: String): AgentRunUiEvent =
         copy(reactionEmoji = if (kind == "user" && proactiveThreadKey.isNullOrEmpty()) emoji else "")
+    fun copyToolPresentation(auditDetail: String?, currentPreview: Boolean): AgentRunUiEvent =
+        copy(toolAuditDetail = auditDetail?.takeIf(String::isNotBlank), previewIsCurrent = currentPreview)
     fun copyStage(stage: String?): AgentRunUiEvent = copy(stage = stage)
     fun copyAttachments(attachments: List<ChatAttachment>): AgentRunUiEvent =
         copy(attachments = if (kind == "user" && proactiveThreadKey.isNullOrEmpty()) attachments.toList() else emptyList())
@@ -150,12 +153,16 @@ data class AgentRunUiEvent(
                 "tool_call" -> "tool_call"
                 "tool_error" -> "tool_error"
                 "tool_progress" -> "tool_progress"
+                "tool_interrupted" -> "tool_interrupted"
+                "tool_not_started" -> "tool_not_started"
                 else -> "tool_result"
             }
             val statusResource: Int? = when (normalizedStage) {
                 "tool_call" -> R.string.connector_tool_using
                 "tool_error" -> R.string.connector_tool_failed
                 "tool_progress" -> null
+                "tool_interrupted" -> R.string.connector_tool_unconfirmed
+                "tool_not_started" -> R.string.connector_tool_not_started
                 else -> R.string.connector_tool_used
             }
             return AgentRunUiEvent(
@@ -241,9 +248,14 @@ object AgentRunUiState {
         val current = _state.value
         if (current.sessionId != sessionId || messageId.isBlank()) return@synchronized
         val index = current.events.indexOfLast { it.kind == "user" }
-        if (index < 0 || current.events[index].messageId.isNotEmpty()) return@synchronized
-        _state.value = current.copy(events = current.events.mapIndexed { i, event ->
-            if (i == index) event.copy(messageId = messageId) else event
+        if (index < 0 || (current.events[index].messageId.isNotEmpty() && current.events[index].messageId != messageId)) return@synchronized
+        val bound = current.events.mapIndexed { i, event ->
+            if (i == index && event.messageId.isEmpty()) event.copy(messageId = messageId) else event
+        }
+        // Hydration can race the optimistic row. Deduplicate by durable identity, never by text.
+        val seenUserIds = mutableSetOf<String>()
+        _state.value = current.copy(events = bound.filter { event ->
+            event.kind != "user" || event.messageId.isBlank() || seenUserIds.add(event.messageId)
         })
     }
 
@@ -291,7 +303,16 @@ object AgentRunUiState {
         val current = _state.value
         if (current.sessionId != sessionId) return@synchronized
         val durableKinds = setOf("user", "assistant", "assistant_translation", "compaction", "compaction_error", "memory", "crew_mission", "tool", "user_decision", "generated_image")
-        val persistedToolCallIds = persistedEvents.asSequence().filter { it.kind == "tool" }
+        val liveInFlightToolIds = if (current.running) current.events.asSequence()
+            .filter { it.kind == "tool" && it.stage in setOf("tool_call", "tool_progress", "approval_waiting") }
+            .mapNotNull { it.toolCallId }.toSet() else emptySet()
+        // A durable missing-result observation is not a terminal outcome while this process still
+        // owns that same in-flight call. Actual persisted results always supersede the live row.
+        val authoritativePersisted = persistedEvents.filterNot { event ->
+            event.kind == "tool" && event.stage in setOf("tool_interrupted", "tool_not_started")
+                && event.toolCallId in liveInFlightToolIds
+        }
+        val persistedToolCallIds = authoritativePersisted.asSequence().filter { it.kind == "tool" }
             .mapNotNull { it.toolCallId }.toSet()
         val livePendingDecisionIds = if (current.running) current.events.asSequence()
             .filter { it.kind == "user_decision" && it.decisionStatus == "PENDING" }
@@ -304,7 +325,7 @@ object AgentRunUiState {
                         it.kind == "generated_image" && it.generatedImagePath == event.generatedImagePath
                     }
         } else emptyList()
-        val durableEvents = persistedEvents.filterNot { event ->
+        val durableEvents = authoritativePersisted.filterNot { event ->
             event.kind == "user_decision" && event.decisionId in livePendingDecisionIds
         }
         nextEventId = maxOf(nextEventId, (persistedEvents.maxOfOrNull { it.id } ?: 0L) + 1L)

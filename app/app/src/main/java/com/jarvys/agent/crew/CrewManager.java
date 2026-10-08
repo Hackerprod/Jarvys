@@ -630,7 +630,7 @@ public final class CrewManager implements AutoCloseable {
     }
 
     public static boolean isCaptainOnly(String name) {
-        return java.util.Arrays.asList("crew_spawn", "crew_stop", "crew_wait", "crew_list", "crew_send", "generate_bot_icon", "list_bots").contains(name);
+        return java.util.Arrays.asList("crew_spawn", "crew_stop", "crew_wait", "crew_list", "crew_send", "generate_bot_icon", "list_bots", "create_bot").contains(name);
     }
 
     private void runBot(Bot bot) {

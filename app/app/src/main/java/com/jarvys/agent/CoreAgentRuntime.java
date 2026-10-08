@@ -262,9 +262,13 @@ public final class CoreAgentRuntime {
       available.remove("generate_image");
       available.remove("generate_bot_icon");
       available.remove("list_bots");
+      available.remove("create_bot");
       available.remove("list_image_references");
       toolRegistry = toolRegistry.subset(available);
     }
+    final MainChatTranscriptStore transcriptStore = mainChat && context != null
+        ? new MainChatTranscriptStore(context.getFilesDir(), sessionId, new LocalRunStore(context)) : null;
+    if (transcriptStore != null) toolRegistry = toolRegistry.with(Collections.singletonList(transcriptStore.recoveryTool()));
     final MessageReactionTool reactionTool = reactionToolForRun(mainChat);
     if (reactionTool != null) toolRegistry = toolRegistry.with(Collections.singletonList(reactionTool));
     CrewMode mode = crewMode();
@@ -292,7 +296,7 @@ public final class CoreAgentRuntime {
     try {
       ConversationCompactor compactor =
           depth == 0 && context != null
-              ? new ConversationCompactor(sessionId, model, new LocalRunStore(context))
+              ? new ConversationCompactor(sessionId, model, new LocalRunStore(context), mainChat)
               : null;
       final String runInstructions = instructions() + (reactionTool == null ? "" : "\n\n" + MessageReactionTool.GUIDANCE);
       CoreAgentLoop.Model scopedModel =
@@ -327,6 +331,7 @@ public final class CoreAgentRuntime {
       CoreAgentLoop loop =
           new CoreAgentLoop(
               scopedModel, toolRegistry, runInstructions, sessionId, budget, compactor);
+      if (transcriptStore != null) transcriptStore.attach(loop, history);
       CoreAgentLoop.Result result = loop.run(request, history, attachments, token, listener);
       if (crewManager != null) {
         crewManager.finishMission(crewMissionId, result.text, result.outcome);
@@ -350,7 +355,7 @@ public final class CoreAgentRuntime {
   }
 
   static boolean lambda$runInternal$0(String name) {
-    return ("generate_image".equals(name) || "generate_bot_icon".equals(name) || "list_bots".equals(name) || "list_image_references".equals(name)) ? false : true;
+    return ("generate_image".equals(name) || "generate_bot_icon".equals(name) || "list_bots".equals(name) || "create_bot".equals(name) || "list_image_references".equals(name)) ? false : true;
   }
 
   /** Run-bound interactive capability, never part of inherited generic or Crew tool inventories. */
@@ -1098,6 +1103,7 @@ public final class CoreAgentRuntime {
             || "generate_image".equals(name)
             || "generate_bot_icon".equals(name)
             || "list_bots".equals(name)
+            || "create_bot".equals(name)
             || "list_image_references".equals(name)
             || name.startsWith("linux_")
             || TaskManagementTools.TOOL_NAMES.contains(name))
@@ -1158,6 +1164,8 @@ public final class CoreAgentRuntime {
     if (BotCatalogTool.isAvailable(this.context, this.depth, this.sessionId)) {
       CoreTool catalog = new BotCatalogTool(this.context, this.sessionId);
       if (allowed(catalog)) tools.add(catalog);
+      CoreTool creator = new BotCreationTool(this.context, this.sessionId);
+      if (allowed(creator)) tools.add(creator);
     }
     if (this.context != null
         && CodexImageGenerationTool.isAvailable(
@@ -1228,7 +1236,7 @@ public final class CoreAgentRuntime {
     List<String> names = new ArrayList<>();
     for (CoreTool tool : includedMcpTools) {
       String name = tool.declaration().name;
-      if (BotCatalogTool.NAME.equals(name) || BotIconGenerationTool.NAME.equals(name)) continue;
+      if (BotCatalogTool.NAME.equals(name) || BotIconGenerationTool.NAME.equals(name) || BotCreationTool.NAME.equals(name)) continue;
       if (!includeDelegate || !"search_files".equals(name)) {
         if (!includeDelegate
             || (!"generate_image".equals(name) && !"list_image_references".equals(name))) {
@@ -1462,7 +1470,7 @@ public final class CoreAgentRuntime {
     ConversationCompactor compactor =
         this.context == null
             ? null
-            : new ConversationCompactor(childId, sharedModel, new LocalRunStore(this.context));
+            : new ConversationCompactor(childId, sharedModel, new LocalRunStore(this.context), false);
     return new CoreAgentLoop(model, childTools3, childInstructions, childId, this.budget, compactor)
         .run(objective, Collections.emptyList(), token, null)
         .text;
@@ -1590,11 +1598,23 @@ public final class CoreAgentRuntime {
           + "First obtain the bot_id and expected_revision from list_bots; never guess them. "
           + "Use the user's freeform theme without attaching or reusing private images. Coding and Android-use templates are immutable.");
     }
+    if (BotCreationTool.isAvailable(this.context, this.depth, this.sessionId)
+        && CoreToolAccessPolicy.matches(BotCreationTool.NAME, null, this.allowedTools)) {
+      prompt.append("\n\nWhen the user asks for a reusable bot, use create_bot to save it completely: "
+          + "choose a simple name (ideally 1-3 words), write reusable instructions in English, select only the minimum "
+          + "declared tools/skills and invent an appropriate freeform icon prompt. The tool presents a one-time review "
+          + "of this exact definition and icon request before saving; this does not grant connector permissions or launch a task. "
+          + "Keep the same request_id on retries and check list_bots afterward. Never claim a generated icon unless icon_complete is true. "
+          + "If icon generation is unavailable or fails, explain that the definition is saved and the icon remains incomplete; "
+          + "use generate_bot_icon for that exact existing bot after resolving access, never recreate it. "
+          + "Catalog management is main-chat-only and must be performed directly even when Crew is enabled. "
+          + "Do not send the user to the UI or merely output a draft when the declared creation tool can complete the request.");
+    }
     CrewMode mode = crewMode();
     if (this.depth == 0 && mode.enabled()) {
       prompt.append("\n\nCrew guidance: You are the captain of an in-memory, role-scoped team. ");
       if (mode.mustDelegate()) {
-        prompt.append("Crew mode is always: delegate work to one or more bots before answering. ");
+        prompt.append("Crew mode is always: delegate work to one or more bots before answering, except main-chat-only catalog management. ");
       } else {
         prompt.append(
             "For complex multi-part tasks that benefit from parallel research or independent"

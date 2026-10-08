@@ -1,6 +1,7 @@
 package com.jarvys.agent
 
 import android.annotation.SuppressLint
+import android.content.Context
 import android.graphics.Color as AndroidColor
 import android.net.Uri
 import android.webkit.WebResourceRequest
@@ -20,12 +21,13 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.viewinterop.AndroidView
 import java.io.ByteArrayInputStream
 import java.io.FileInputStream
+import java.io.File
 
 /** In-app preview for local, static workspace files; no TCP listener or external browser process. */
 @Composable
 fun WorkspacePreviewScreen(projectId: String) {
     val context = LocalContext.current
-    val workspace = remember(projectId) { runCatching { WorkspaceStore(context, projectId) }.getOrNull() }
+    val workspace = remember(projectId) { runCatching { readOnlyPreviewWorkspace(context, projectId) }.getOrNull() }
     if (workspace == null || !workspace.hasIndexHtml()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text(stringResource(R.string.workspace_preview_missing), color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -46,6 +48,10 @@ fun WorkspacePreviewScreen(projectId: String) {
         },
     )
 }
+
+/** Static HTML preview needs only its local files, never skills, connectors, or a credential vault. */
+internal fun readOnlyPreviewWorkspace(context: Context, projectId: String): WorkspaceStore =
+    WorkspaceStore(File(context.applicationContext.filesDir, "jarvys/workspaces"), projectId)
 
 @SuppressLint("SetJavaScriptEnabled")
 private fun createPreviewWebView(context: android.content.Context, workspace: WorkspaceStore): WebView =

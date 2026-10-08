@@ -82,6 +82,9 @@ public final class CrewProfile {
     }
 
     public void validateAvailability(Collection<String> approvedCapabilities, Collection<String> availableSkillIds) {
+        if (this.skillIds.size() > com.jarvys.agent.skills.SkillRepository.MAX_SKILLS_PER_RUN) {
+            throw invalid("Select at most " + com.jarvys.agent.skills.SkillRepository.MAX_SKILLS_PER_RUN + " skills per bot");
+        }
         for (String capability : this.capabilities) {
             if ("delete".equals(capability) || CrewManager.isCaptainOnly(capability)) {
                 throw invalid("bots cannot receive memory deletion or captain-only capabilities");

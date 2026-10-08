@@ -4,6 +4,8 @@ Actualizado: 2026-10-08 (UTC).
 
 Este archivo mantiene la cola vigente y el estado de cada etapa. Debe actualizarse con cada avance y publicarse en GitHub junto con los cambios. No sustituye las comprobaciones de código, pruebas y APK.
 
+Modo de ejecución: continuar la cola completa. Al cerrar cada pendiente, verificar y publicar el código junto con este archivo y comenzar el siguiente. No esperar feedback ni prueba manual entre etapas; conservar las limitaciones de validación o configuración externa con su estado real. La entrega consolidada y el APK firmado corresponden al final de la cola, sin presentar entregas parciales como cierre total.
+
 ## Estado actual
 
 - **v31 completada:** reacciones locales del modelo, Markdown del usuario y lista de chats sin subtítulos restaurados. Pruebas: 994 Full y 910 Play. APK con identidad original entregado.
@@ -29,7 +31,7 @@ Este archivo mantiene la cola vigente y el estado de cada etapa. Debe actualizar
 
 ### P0. Herramientas y continuidad del agente
 
-Estado: causas confirmadas y corrección en curso, antes de APKFACTORY1.
+Estado: correcciones implementadas y revisión dirigida completada; validación agregada final de Full/Play en curso.
 
 - **Primer checkpoint:** eliminada la dependencia de hard links en identidad/journal y creación de archivos de Coding, operación prohibida por Android a las apps normales. Los registros privados se promocionan completos; los archivos nuevos se crean de forma exclusiva, sin sobrescribir rutas existentes, con comprobación de tamaño y SHA-256.
 - Si una creación queda interrumpida, se conservan el destino, el staging y la evidencia de recuperación; se informa un resultado parcial o incierto y no se reejecuta automáticamente. Las actualizaciones de archivos existentes conservan el reemplazo atómico.
@@ -37,7 +39,11 @@ Estado: causas confirmadas y corrección en curso, antes de APKFACTORY1.
 - **Segundo checkpoint:** detección de fallos repetidos por herramienta/argumentos, aunque el error incluya datos cambiantes; recuperación permitida cuando una acción correctiva aporta progreso real. No se añaden reintentos automáticos de escrituras.
 - Corregidos IDs de aprobación inexistentes, acciones desde notificaciones/tarjetas caducadas, carreras con STOP/timeout y registro de callbacks de cancelación. La aprobación se consume una sola vez y los lanzamientos de permisos asíncronos permanecen pendientes hasta su resultado.
 - Veintidós nuevas regresiones de bucles, aprobación y cancelación aprobadas, con revisión independiente. La segunda pasada dirigida completa fue de 164 pruebas Full sin fallos; continúan la restauración visual, creación de bots y validación final de ambos sabores.
-- Diagnóstico de continuidad confirmado: el historial de herramientas del agente principal no se restauraba entre turnos, aunque la interfaz conservaba sus tarjetas. La persistencia estructurada, la compactación, los reintentos sin progreso y las carreras de aprobación siguen en revisión y pruebas; no se declara una entrega lista.
+- **Tercer checkpoint:** historial estructurado del agente principal con IDs y resultados de herramientas persistidos antes de mostrar el resultado, restauración sin replay, evidencia acotada y acceso a artefactos únicamente dentro de la conversación. La compactación conserva resultados incluso si terminan después del resumen y las referencias creadas durante el mismo turno son recuperables.
+- Restaurados detalles expandibles, auditoría y vista previa tras recrear la Activity; las tarjetas de acciones interrumpidas distinguen resultado no confirmado y operación no iniciada. El estado en ejecución conserva prioridad frente a tarjetas sintéticas de recuperación. Duplicados de mensajes se eliminan por ID duradero, no por texto.
+- La vista previa local ya no inicializa skills, MCP ni su almacén de credenciales para leer HTML. Se conservan las restricciones de rutas, URL, WebView y CSP. La prueba navega por la vista real, lee el HTML existente y confirma que no vuelve a escribirlo.
+- Catorce regresiones de continuidad y siete de persistencia/reapertura cubren los casos anteriores; los fallos dirigidos encontrados durante revisión se corrigieron antes de la pasada agregada. Los detalles históricos que versiones antiguas nunca guardaron no se inventan; una vista previa antigua solo se reconecta al archivo actual verificado de ese chat.
+- Código de preparación actualizado a versión 33 / 1.2.26-P0, sin entrega parcial. Se realizará la entrega consolidada al terminar la cola.
 
 - Reproducir y diagnosticar los fallos repetidos de herramientas y la pérdida de continuidad observados en v32, contrastando la ejecución real con los contratos de las herramientas y el historial enviado al proveedor.
 - Conservar resultados de herramientas y estado relevante entre turnos y reinicios, con límites claros de contexto y sin reejecutar automáticamente acciones externas ambiguas.
@@ -48,23 +54,25 @@ Estado: causas confirmadas y corrección en curso, antes de APKFACTORY1.
 
 ### P0 UI. Corregir la presentación de Bots
 
-Estado: corrección prioritaria junto al incidente del agente.
+Estado: corrección implementada y revisión visual dirigida completada; incluida en la validación agregada.
 
 - Alinear cabecera, altura e insets con las vistas de Ajustes; evitar solapamiento con la barra de estado.
 - Colocar Añadir como botón en la esquina superior derecha.
 - Mostrar dos bots por fila, con icono arriba y nombre debajo, sin tarjetas/contenedores externos ni subtítulos de tipo “Built-in” o “Your reusable assistants”.
 - Conservar inmutabilidad de plantillas, edición y deshabilitado desde el detalle, animación de trabajo real y accesibilidad.
-- Revisar capturas y geometría con español/inglés, ambos temas y texto grande antes de entregar.
+- Diecinueve pruebas Compose y diez de capturas aprobadas; revisadas las dos columnas, cabecera, añadido y nombres en español/inglés, ambos temas y texto grande, incluida separación de palabras sin reducir la fuente.
 
 ### P0 Bots. Creación completa desde el chat
 
-Estado: capacidad ausente confirmada; implementación en curso.
+Estado: herramienta principal implementada y revisada; pruebas dirigidas aprobadas, validación agregada en curso.
 
 - Permitir al agente principal crear y guardar un bot a partir de una petición natural del usuario, con nombre simple, instrucciones en inglés e icono generable y configurable.
 - La versión anterior exponía consulta e iconos, pero la creación persistente estaba disponible únicamente desde la interfaz de Bots. Incorporar la herramienta y su registro real en el chat, sin fingir una creación completada.
 - Mantener las plantillas protegidas y los permisos por capacidad; crear un bot no concede automáticamente acceso a conectores ni operaciones sensibles.
 - Probar con un modelo simulado el recorrido de herramientas reales: creación de definición, generación/asignación de icono, persistencia y descubrimiento en el siguiente turno. Separar un icono fallido de una definición guardada y comunicar el resultado real.
-- Incluir en la próxima entrega solo después de revisión y validación completas, sin desplazar las correcciones de fiabilidad del agente.
+- Creación persistente revisada con una clave estable por petición; repetir la misma petición no duplica el bot ni la generación. Cambiar el contenido aprobado con la misma clave falla de forma segura, incluido el prompt del icono.
+- Herramienta excluida de todos los inventarios/ejecuciones de agentes hijos. Selección de skills alineada con el límite real existente de ocho por ejecución, evitando guardar configuraciones imposibles de lanzar.
+- Catorce pruebas de creación aprobadas con herramientas/registro/repositorio reales y transporte de imagen simulado; no se ha afirmado una prueba de proveedor real. La vista previa y los límites de ámbito se volvieron a probar tras corregir los fallos detectados.
 
 ### UX23. Restaurar selección de texto en respuestas
 
@@ -90,19 +98,19 @@ Estado: fallo confirmado en dispositivo; pendiente después del P0 y antes de nu
 - Validar ámbitos, rutas, MIME, nombres, colisiones y archivos parciales; mostrar éxito/error y la acción Abrir.
 - Mantener las autorizaciones existentes; no añadir instalación automática, subidas externas ni acceso amplio a archivos.
 
-### 3. UX17: chats archivados en Ajustes
+### 3. UX17/UX18: reorganizar el panel lateral y Ajustes
 
-- Mover **Chats archivados** a un menú de Ajustes.
-- Mostrar ese menú únicamente cuando exista al menos un chat archivado.
-- Conservar archivado, restauración y acciones sobre conversaciones.
+Estado: requisitos de diseño actualizados; pendiente después de las correcciones P0.
 
-### 4. UX18: acceso a Tareas programadas
+- Cabecera con el título **Jarvys** y la lupa de búsqueda en la esquina superior derecha, junto al título.
+- Orden de menús: **New chat**, después **Bots** y después **Tareas programadas**. Esta indicación sustituye la anterior que colocaba Bots primero.
+- Bots y Tareas programadas conservan sus iconos; la futura pantalla de tareas debe representar honestamente su disponibilidad, sin simular un planificador operativo.
+- Mostrar el encabezado **Pinned** únicamente cuando haya chats anclados. Encabezados de chats sin iconos.
+- Quitar **Archived** del panel y situar **Chats archivados** en Ajustes; mostrar ese menú solo si existen conversaciones archivadas. Conservar restauración y acciones sobre conversaciones.
+- Quitar el icono de recarga del panel lateral.
+- Antes de implementar, revisar la referencia visual proporcionada. Aceptación: orden y cabecera en español/inglés, ambos temas y texto grande; estados con/sin chats anclados y archivados, búsqueda funcional y navegación correcta.
 
-- Añadir **Tareas programadas con icono** inmediatamente debajo de Bots en el panel lateral.
-- Preparar el acceso para la implementación futura y representar su disponibilidad de forma honesta, sin simular un planificador operativo.
-- Mantener los encabezados de anclados y actuales/recientes sin iconos.
-
-### 5. UX19: conectores robustos de Gmail y Drive
+### 4. UX19: conectores robustos de Gmail y Drive
 
 Estado: pendiente de implementación; diagnóstico e investigación realizados.
 
@@ -118,20 +126,20 @@ Estado: pendiente de implementación; diagnóstico e investigación realizados.
 
 Referencias: [AuthorizationClient](https://developer.android.com/identity/authorization), [Gmail messages.send](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/send), [Drive files.create](https://developers.google.com/workspace/drive/api/reference/rest/v3/files/create), [cliente oficial Java](https://github.com/googleapis/google-api-java-client), [Google Workspace CLI](https://github.com/googleworkspace/cli), [Google Workspace MCP](https://github.com/taylorwilsdon/google_workspace_mcp).
 
-### 6. UX20: autenticación y capacidades de GitHub
+### 5. UX20: autenticación y capacidades de GitHub
 
 - Diagnosticar el inicio de sesión y contrastar el flujo con documentación oficial y los requisitos reales de configuración.
 - Preparar un conector robusto para trabajar con pull requests, commits, Discussions e issues, con herramientas y errores claros para el agente.
 - Respetar repositorio, cuenta y permisos mínimos; separar lectura y acciones de escritura.
 - Implementar estas capacidades no autoriza por sí mismo publicaciones, comentarios, commits, fusiones ni otros cambios externos: cada acción debe respetar la autorización correspondiente.
 
-### 7. UX21: alineación de permisos en conectores
+### 6. UX21: alineación de permisos en conectores
 
 - Inspeccionar todas las vistas de conectores.
 - Fijar los controles de permisos a la derecha, en una misma columna vertical y centrados respecto de su fila.
 - Validar etiquetas largas, pantallas estrechas, tamaños grandes de texto y español/inglés, conservando áreas táctiles accesibles.
 
-### 8. UX22: fluidez y gestos del preview web
+### 7. UX22: fluidez y gestos del preview web
 
 - Aislar la causa del desplazamiento por saltos antes de aplicar cambios.
 - Mejorar scroll, fling y coordinación de gestos anidados del WebView, respetando quién controla cada gesto.

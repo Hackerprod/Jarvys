@@ -1318,4 +1318,7 @@ Their exit results are unknown. Do not repeat them automatically. Review project
     <string name="quick_model_effort_ultra">Ultra</string>
     <string name="quick_model_effort_xhigh">Very high</string>
     <string name="quick_model_expanded">Expanded</string>
+    <string name="chat_open_current_preview">Open current preview</string>
+    <string name="connector_tool_unconfirmed">Unconfirmed %1$s</string>
+    <string name="connector_tool_not_started">Not run: %1$s</string>
 </resources>
