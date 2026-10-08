@@ -98,8 +98,12 @@ fun ConversationDrawer(
         focusManager.clearFocus()
         keyboard?.hide()
     }
-    BackHandler(enabled = isDrawerOpen) {
-        if (searchOpen) dismissSearch() else onCloseDrawer()
+    // Register while the modal is open, after the underlying NavHost's subcomposed callback.
+    // Enabling an always-registered callback can leave Back owned by the underlying route.
+    if (isDrawerOpen) {
+        BackHandler {
+            if (searchOpen) dismissSearch() else onCloseDrawer()
+        }
     }
     LaunchedEffect(isDrawerOpen, searchOpen) {
         if (isDrawerOpen && searchOpen) {

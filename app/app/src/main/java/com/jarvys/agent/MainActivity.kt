@@ -1561,6 +1561,21 @@ private fun JarvysApp(
     SideEffect { onNavControllerReady(navController) }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+    var drawerNavigationPending by remember { mutableStateOf(false) }
+    fun navigateFromDrawer(destination: () -> Unit) {
+        if (drawerNavigationPending) return
+        drawerNavigationPending = true
+        scope.launch {
+            try {
+                // Finish the modal transition before changing the underlying route. A rapid
+                // second pointer-down must not cancel closing and leave the new route covered.
+                drawerState.close()
+                destination()
+            } finally {
+                drawerNavigationPending = false
+            }
+        }
+    }
     val navEntry by navController.currentBackStackEntryAsState()
     val route = navEntry?.destination?.route ?: Routes.CHAT
     val routeTaskId = navEntry?.arguments?.getString("taskId")
@@ -1626,46 +1641,41 @@ private fun JarvysApp(
 
     JarvysShellFrame(
         drawerState = drawerState,
+        drawerGesturesEnabled = !drawerNavigationPending,
         drawerContent = {
             ConversationDrawer(
                 history = runHistory,
                 isDrawerOpen = drawerState.isOpen,
-                onCloseDrawer = { scope.launch { drawerState.close() } },
+                onCloseDrawer = { if (!drawerNavigationPending) scope.launch { drawerState.close() } },
                 activeSessionId = conversationSessionId,
                 activeTitle = conversationTitle,
                 activeGoal = agentState.goal,
                 activeSessionVisible = showActiveConversation,
                 selectedHistoryId = selectedHistoryRunId,
                 isChatRoute = route == Routes.CHAT,
-                actionsEnabled = !conversationActionPending,
+                actionsEnabled = !conversationActionPending && !drawerNavigationPending,
                 onConversationAction = onConversationAction,
-                onNewConversation = {
+                onNewConversation = { navigateFromDrawer {
                     onNewChat()
                     navController.navigate(Routes.CHAT) { launchSingleTop = true }
-                    scope.launch { drawerState.close() }
-                },
-                onResumeActive = {
+                } },
+                onResumeActive = { navigateFromDrawer {
                     onSelectHistory(null)
-                    scope.launch { drawerState.close() }
                     navController.navigate(Routes.CHAT) { launchSingleTop = true }
-                },
-                onOpenHistory = { runId ->
+                } },
+                onOpenHistory = { runId -> navigateFromDrawer {
                     onSelectHistory(runId)
-                    scope.launch { drawerState.close() }
                     navController.navigate(Routes.CHAT) { launchSingleTop = true }
-                },
-                onOpenScheduledTasks = {
-                    scope.launch { drawerState.close() }
+                } },
+                onOpenScheduledTasks = { navigateFromDrawer {
                     navController.navigate(Routes.SCHEDULED_TASKS) { launchSingleTop = true }
-                },
-                onOpenBots = {
-                    scope.launch { drawerState.close() }
+                } },
+                onOpenBots = { navigateFromDrawer {
                     navController.navigate(Routes.BOTS) { launchSingleTop = true }
-                },
-                onOpenSettings = {
-                    scope.launch { drawerState.close() }
+                } },
+                onOpenSettings = { navigateFromDrawer {
                     navController.navigate(Routes.SETTINGS) { launchSingleTop = true }
-                },
+                } },
             )
         },
         route = routeMeta,

@@ -118,18 +118,45 @@ class ArchivedChatsSettingsComposeTest {
         compose.waitForIdle()
         assertEquals("The rendered Android content uses 200% font scaling", 2f, fontScale, 0.001f)
         val row = compose.onNodeWithTag("settings-archived-chats-row").performScrollTo().assertIsDisplayed()
+        saveCapture(theme)
         val rowBounds = row.fetchSemanticsNode().boundsInRoot
         assertTrue("Settings archive row is at least 48dp", rowBounds.height >= 48f * density)
+        val title = context.getString(R.string.drawer_archived_chats)
+        val titleNode = compose.onNodeWithText(title, useUnmergedTree = true)
+        val titleBounds = titleNode.fetchSemanticsNode().boundsInRoot
         val layouts = mutableListOf<TextLayoutResult>()
-        compose.onNodeWithText(context.getString(R.string.drawer_archived_chats), useUnmergedTree = true)
-            .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
-        saveCapture(theme)
+        titleNode.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
         val layout = layouts.single()
+        val lineMetrics = (0 until layout.lineCount).joinToString { line ->
+            "$line:[${layout.getLineLeft(line)},${layout.getLineTop(line)}," +
+                "${layout.getLineRight(line)},${layout.getLineBottom(line)}]" +
+                " end=${layout.getLineEnd(line, visibleEnd = true)} ellipsized=${layout.isLineEllipsized(line)}"
+        }
         val metrics = "size=${layout.size}, lines=${layout.lineCount}, widthOverflow=${layout.didOverflowWidth}, " +
             "heightOverflow=${layout.didOverflowHeight}, paragraphWidth=${layout.multiParagraph.width}, " +
-            "row=$rowBounds, constraints=${layout.layoutInput.constraints}"
+            "title=$titleBounds, row=$rowBounds, constraints=${layout.layoutInput.constraints}, lineBounds=$lineMetrics"
         println("ARCHIVED_SETTINGS_TEXT_METRICS=$metrics")
-        assertFalse("Archive entry grows instead of clipping large text: $metrics", layout.hasVisualOverflow)
+        // The native paragraph may retain the available width while Text reports its smaller
+        // intrinsic width. Check the painted lines and full label rather than that aggregate flag.
+        assertFalse("Archive title cannot overflow vertically: $metrics", layout.didOverflowHeight)
+        assertEquals("The complete archive label is laid out", title, layout.layoutInput.text.text)
+        assertEquals("The title starts at its first character", 0, layout.getLineStart(0))
+        assertEquals("Every title character remains visible: $metrics", title.length,
+            layout.getLineEnd(layout.lineCount - 1, visibleEnd = true))
+        val rounding = 1f
+        assertTrue("Title stays inside its clickable row: $metrics",
+            titleBounds.left >= rowBounds.left - rounding && titleBounds.right <= rowBounds.right + rounding &&
+                titleBounds.top >= rowBounds.top - rounding && titleBounds.bottom <= rowBounds.bottom + rounding)
+        for (line in 0 until layout.lineCount) {
+            assertFalse("Archive title is never ellipsized: $metrics", layout.isLineEllipsized(line))
+            assertTrue("Each line fits the measured title width: $metrics",
+                layout.getLineLeft(line) >= -rounding && layout.getLineRight(line) <= layout.size.width + rounding)
+            assertTrue("Each line fits the measured title height: $metrics",
+                layout.getLineTop(line) >= -rounding && layout.getLineBottom(line) <= layout.size.height + rounding)
+            assertTrue("Each painted line stays inside the clickable row: $metrics",
+                titleBounds.left + layout.getLineLeft(line) >= rowBounds.left - rounding &&
+                    titleBounds.left + layout.getLineRight(line) <= rowBounds.right + rounding)
+        }
         row.performClick()
         assertEquals(1, opens)
     }

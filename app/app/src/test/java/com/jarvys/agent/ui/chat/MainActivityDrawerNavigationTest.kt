@@ -183,6 +183,7 @@ class MainActivityDrawerNavigationTest {
             click()
         }
         awaitTag("scheduled-tasks-placeholder")
+        awaitDrawerClosed()
         compose.onNodeWithText(context.getString(R.string.scheduled_tasks_placeholder_body)).assertIsDisplayed()
         compose.runOnIdle {
             assertEquals(AppNavigationBackPolicy.SCHEDULED_TASKS, navigation().currentDestination?.route)
@@ -372,10 +373,17 @@ class MainActivityDrawerNavigationTest {
         .apply { isAccessible = true }.get(activity) as NavHostController
 
     private fun awaitCurrentChat() {
-        compose.waitUntil(10_000) {
-            selectedSession() == currentSession && AgentRunUiState.state.value.sessionId == currentSession &&
-                AgentRunUiState.state.value.events.isNotEmpty() &&
-                compose.onAllNodesWithTag("chat-message-list").fetchSemanticsNodes().size == 1
+        try {
+            compose.waitUntil(10_000) {
+                // Fetch first to pump pending native UI callbacks even while async session reload is unfinished.
+                val lists = compose.onAllNodesWithTag("chat-message-list").fetchSemanticsNodes().size
+                selectedSession() == currentSession && AgentRunUiState.state.value.sessionId == currentSession &&
+                    AgentRunUiState.state.value.events.isNotEmpty() &&
+                    lists == 1
+            }
+        } catch (failure: Throwable) {
+            throw AssertionError("Chat did not return: ${navigationDiagnostic()}; expected=$currentSession; " +
+                "lists=${compose.onAllNodesWithTag("chat-message-list").fetchSemanticsNodes().size}", failure)
         }
         compose.waitForIdle()
     }
@@ -394,18 +402,90 @@ class MainActivityDrawerNavigationTest {
         settleNativeFrame()
         compose.onNodeWithTag(tag).assertIsDisplayed().performTouchInput { click() }
         compose.waitForIdle()
+        if (tag in setOf("drawer-open-settings", "drawer-open-scheduled-tasks", "drawer-new-chat", "drawer-open-bots")) {
+            awaitDrawerClosed()
+        }
+    }
+
+    private fun awaitDrawerClosed() {
+        try {
+            compose.waitUntil(10_000) {
+                compose.mainClock.advanceTimeByFrame()
+                runCatching { compose.onNodeWithTag("drawer-header").assertIsNotDisplayed() }.isSuccess
+            }
+        } catch (failure: Throwable) {
+            val bounds = compose.onAllNodesWithTag("drawer-header").fetchSemanticsNodes().map { it.boundsInRoot }
+            throw AssertionError("Drawer still covers destination: ${navigationDiagnostic()}; headerBounds=$bounds", failure)
+        }
+        settleNativeFrame()
     }
 
     private fun systemBack() {
-        compose.runOnIdle { activity.onBackPressedDispatcher.onBackPressed() }
+        compose.runOnIdle {
+            println("UX17_SYSTEM_BACK before: ${navigationDiagnostic()}")
+            activity.onBackPressedDispatcher.onBackPressed()
+        }
         compose.waitForIdle()
+        compose.runOnIdle { println("UX17_SYSTEM_BACK after: ${navigationDiagnostic()}") }
     }
+
+    private fun navigationDiagnostic(): String = "route=${navigation().currentDestination?.route}; " +
+        "stack=${navigation().currentBackStack.value.map { it.destination.route }}; selected=${selectedSession()}; " +
+        "projection=${AgentRunUiState.state.value.sessionId}; events=${AgentRunUiState.state.value.events.size}"
 
     private fun tapText(resource: Int) {
         settleNativeFrame()
         compose.onNodeWithText(context.getString(resource)).assertIsDisplayed().performTouchInput { click() }
-        compose.waitForIdle()
+        pumpPendingNativeRoots()
+        try { compose.waitForIdle() }
+        catch (failure: Throwable) {
+            throw AssertionError("Native text tap did not settle: ${context.resources.getResourceEntryName(resource)}; " +
+                "${navigationDiagnostic()}; ${composeIdleDiagnostic()}", failure)
+        }
     }
+
+    private fun testField(instance: Any, name: String): Any? {
+        var type: Class<*>? = instance.javaClass
+        while (type != null) {
+            val matching = type.declaredFields.firstOrNull { it.name == name }
+            if (matching != null) return matching.apply { isAccessible = true }.get(instance)
+            type = type.superclass
+        }
+        error("Missing diagnostic field $name")
+    }
+
+    private fun registeredNativeRoots(): Collection<*> {
+        val environment = requireNotNull(testField(compose, "environment"))
+        val registry = requireNotNull(testField(environment, "composeRootRegistry"))
+        return registry.javaClass.getMethod("getRegisteredComposeRoots").invoke(registry) as Collection<*>
+    }
+
+    /** A just-created dialog can have a native root still awaiting host measurement in Robolectric. */
+    private fun pumpPendingNativeRoots() {
+        repeat(2) {
+            compose.mainClock.advanceTimeByFrame()
+            compose.runOnUiThread {
+                val method = Class.forName("androidx.compose.ui.node.RootForTest").getMethod("measureAndLayoutForTest")
+                registeredNativeRoots().filterNotNull().forEach { method.invoke(it) }
+            }
+        }
+    }
+
+    private fun composeIdleDiagnostic(): String = runCatching {
+        val environment = requireNotNull(testField(compose, "environment"))
+        val idling = requireNotNull(testField(environment, "composeIdlingResource"))
+        val detail = idling.javaClass.getMethod("getDiagnosticMessageIfBusy").invoke(idling)
+        val flags = listOf("hadAwaitersOnMainClock", "hadSnapshotChanges", "hadRecomposerChanges",
+            "hadPendingSetContent", "hadPendingMeasureLayout").associateWith { testField(idling, it) }
+        val rootInterface = Class.forName("androidx.compose.ui.platform.ViewRootForTest")
+        val roots = registeredNativeRoots().filterNotNull().map { root ->
+            val view = rootInterface.getMethod("getView").invoke(root) as View
+            "${view.javaClass.simpleName} pending=${rootInterface.getMethod("getHasPendingMeasureOrLayout").invoke(root)} " +
+                "size=${view.width}x${view.height} attached=${view.isAttachedToWindow} " +
+                "parent=${view.parent?.javaClass?.simpleName} root=${view.rootView.javaClass.simpleName}"
+        }
+        "Compose idle diagnostic: $detail; $flags; roots=$roots"
+    }.getOrElse { "Compose idle diagnostic unavailable: ${it.message}" }
 
     private fun openDrawer() {
         settleNativeFrame()

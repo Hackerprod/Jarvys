@@ -53,12 +53,14 @@ fun JarvysShellFrame(
     onCompact: () -> Unit,
     onReflect: () -> Unit,
     bottomBar: @Composable () -> Unit,
+    drawerGesturesEnabled: Boolean = true,
     content: @Composable (PaddingValues) -> Unit,
 ) {
     val chatRoute = route.action == AppRouteAction.CHAT
     val background = MaterialTheme.colorScheme.background
     ModalNavigationDrawer(
         drawerState = drawerState,
+        gesturesEnabled = drawerGesturesEnabled,
         scrimColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f),
         drawerContent = drawerContent,
     ) {

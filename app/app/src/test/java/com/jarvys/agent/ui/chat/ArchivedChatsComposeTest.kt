@@ -101,7 +101,14 @@ class ArchivedChatsComposeTest {
                 }
             })
         } }
-        menuAction(R.string.drawer_rename_chat)
+        // Physical taps isolate the real popup/ripple path from MainActivity navigation.
+        showTitle("Archived chat")
+        awaitReactionDrawIdle(compose)
+        compose.onNodeWithContentDescription(context.getString(R.string.drawer_chat_actions, "Archived chat"))
+            .performTouchInput { click() }
+        awaitReactionDrawIdle(compose)
+        compose.onNodeWithText(context.getString(R.string.drawer_rename_chat)).performTouchInput { click() }
+        awaitReactionDrawIdle(compose)
         val input = compose.onNode(hasSetTextAction() and hasAnyAncestor(isDialog()))
         input.performTextReplacement("  ")
         compose.onNodeWithText(context.getString(R.string.drawer_name_required)).assertIsDisplayed()
