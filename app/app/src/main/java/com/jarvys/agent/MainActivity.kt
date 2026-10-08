@@ -211,6 +211,8 @@ import com.jarvys.agent.ui.JarvysOwnTheme
 import com.jarvys.agent.ui.chat.ConversationTimeline
 import com.jarvys.agent.ui.chat.ChatComposer
 import com.jarvys.agent.ui.chat.ConversationDrawer
+import com.jarvys.agent.ui.chat.ArchivedChatsScreen
+import com.jarvys.agent.ui.chat.ScheduledTasksPlaceholderScreen
 import com.jarvys.agent.ui.shell.JarvysRouteTopBar
 import com.jarvys.agent.ui.shell.JarvysShellFrame
 import com.jarvys.agent.ui.shell.ModelSelectorSheet
@@ -236,6 +238,8 @@ private object Routes {
     const val CHAT = AppNavigationBackPolicy.CHAT_ROOT
     const val SETTINGS = AppNavigationBackPolicy.SETTINGS
     const val SETTINGS_PREFERENCES = AppNavigationBackPolicy.SETTINGS_PREFERENCES
+    const val ARCHIVED_CHATS = AppNavigationBackPolicy.ARCHIVED_CHATS
+    const val SCHEDULED_TASKS = AppNavigationBackPolicy.SCHEDULED_TASKS
     const val PROVIDERS = AppNavigationBackPolicy.PROVIDERS
     const val PROVIDERS_OPENAI = AppNavigationBackPolicy.PROVIDERS_OPENAI
     const val PROVIDERS_OPENROUTER = AppNavigationBackPolicy.PROVIDERS_OPENROUTER
@@ -1625,6 +1629,8 @@ private fun JarvysApp(
         drawerContent = {
             ConversationDrawer(
                 history = runHistory,
+                isDrawerOpen = drawerState.isOpen,
+                onCloseDrawer = { scope.launch { drawerState.close() } },
                 activeSessionId = conversationSessionId,
                 activeTitle = conversationTitle,
                 activeGoal = agentState.goal,
@@ -1647,6 +1653,10 @@ private fun JarvysApp(
                     onSelectHistory(runId)
                     scope.launch { drawerState.close() }
                     navController.navigate(Routes.CHAT) { launchSingleTop = true }
+                },
+                onOpenScheduledTasks = {
+                    scope.launch { drawerState.close() }
+                    navController.navigate(Routes.SCHEDULED_TASKS) { launchSingleTop = true }
                 },
                 onOpenBots = {
                     scope.launch { drawerState.close() }
@@ -1741,6 +1751,8 @@ private fun JarvysApp(
                     onSkills = { navController.navigate(Routes.SKILLS) { launchSingleTop = true } },
                     onConnectors = { navController.navigate(Routes.CONNECTORS) { launchSingleTop = true } },
                     onMemory = { navController.navigate(Routes.MEMORY) { launchSingleTop = true } },
+                    archivedChatsAvailable = runHistory.any { it.archived },
+                    onArchivedChats = { navController.navigate(Routes.ARCHIVED_CHATS) { launchSingleTop = true } },
                     scheduledTasksAvailable = scheduledTasksAvailable,
                     onScheduledTasks = { navController.navigate(Routes.TASKS) { launchSingleTop = true } },
                     onAccessibilitySettings = onAccessibilitySettings,
@@ -1808,6 +1820,18 @@ private fun JarvysApp(
                         )
                     }
                 }
+                composable(Routes.ARCHIVED_CHATS) {
+                    ArchivedChatsScreen(
+                        history = runHistory,
+                        actionsEnabled = !conversationActionPending,
+                        onOpenHistory = { runId ->
+                            onSelectHistory(runId)
+                            navController.navigate(Routes.CHAT) { launchSingleTop = true }
+                        },
+                        onConversationAction = onConversationAction,
+                    )
+                }
+                composable(Routes.SCHEDULED_TASKS) { ScheduledTasksPlaceholderScreen() }
                 composable(Routes.SETTINGS) { settingsPageContent(JarvysSettingsPage.HOME) }
                 composable(Routes.SETTINGS_PREFERENCES) { settingsPageContent(JarvysSettingsPage.PREFERENCES) }
                 providersDestinations(navController, providersRepository)

@@ -16,7 +16,7 @@ import java.io.File
 class AppNavigationBackPolicyTest {
     @Test fun explicitNavigationGraphHasOnlyChatAsRootAndBackForEveryOtherRoute() {
         assertEquals(listOf(
-            "chat", "settings", "settings/preferences",
+            "chat", "settings", "settings/preferences", "settings/archived-chats", "scheduled-tasks",
             "providers", "providers/openai", "providers/openrouter", "providers/custom", "providers/service/{serviceId}",
             "mcp", "mcp/new", "mcp/server/{serverId}", "mcp/server/{serverId}/edit",
             "skills", "connectors", "connectors/device/{connectorId}",

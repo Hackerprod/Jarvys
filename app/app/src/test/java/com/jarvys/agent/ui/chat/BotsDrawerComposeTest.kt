@@ -33,14 +33,22 @@ class BotsDrawerComposeTest {
     private val current = RunHistoryItem("current", "hidden source request", "CHAT", 0, 0, 2.0, title = "Current project")
     private val archived = RunHistoryItem("archive", "archived source", "CHAT", 0, 0, 3.0, title = "Archived project", archived = true)
 
-    @Test fun botsIsFirstMenuThenPinnedAndCurrentSectionsWithoutOldHeadingOrSubtitles() {
+    @Test fun newChatThenBotsAndScheduledTasksBeforeIconlessChatSections() {
         var opened = 0
         content(onBots = { opened++ })
         compose.onNodeWithTag("drawer-open-bots").assertIsDisplayed().performClick()
         assertEquals(1, opened)
         val botBounds = compose.onNodeWithTag("drawer-open-bots").fetchSemanticsNode().boundsInRoot
         val newBounds = compose.onNodeWithTag("drawer-new-chat").fetchSemanticsNode().boundsInRoot
-        assertTrue(botBounds.bottom <= newBounds.top)
+        assertTrue(newBounds.bottom <= botBounds.top)
+        val scheduledBounds = compose.onNodeWithTag("drawer-open-scheduled-tasks").fetchSemanticsNode().boundsInRoot
+        assertTrue(botBounds.bottom <= scheduledBounds.top)
+        val titleBounds = compose.onNodeWithTag("drawer-header-title").fetchSemanticsNode().boundsInRoot
+        val searchBounds = compose.onNodeWithTag("drawer-search-toggle").fetchSemanticsNode().boundsInRoot
+        assertTrue(titleBounds.right <= searchBounds.left)
+        assertTrue(searchBounds.height >= 48f)
+        compose.onNodeWithTag("drawer-archive-toggle").assertDoesNotExist()
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.drawer_history)).assertDoesNotExist()
         compose.onNodeWithText(compose.activity.getString(R.string.drawer_chats_heading)).assertDoesNotExist()
         compose.onNodeWithText("old source request").assertDoesNotExist()
         val pinnedHeading = compose.onNodeWithTag("drawer-pinned-heading").fetchSemanticsNode().boundsInRoot
@@ -58,20 +66,23 @@ class BotsDrawerComposeTest {
         assertEquals(1, resumed)
     }
 
-    @Test fun searchAndArchiveActionsKeepTheirTargets() {
+    @Test fun searchAndChatActionsKeepTheirTargetsWithoutExposingArchives() {
         var action: Pair<String, ConversationAction>? = null
         content(onAction = { id, kind, _ -> action = id to kind })
+        compose.onNodeWithTag("drawer-search").assertDoesNotExist()
+        compose.onNodeWithTag("drawer-search-toggle").performClick()
         compose.onNodeWithTag("drawer-search").performTextInput("Pinned")
         compose.onNodeWithText("Pinned project").assertIsDisplayed()
         compose.onNodeWithText("Current project").assertDoesNotExist()
         compose.onNodeWithContentDescription(compose.activity.getString(R.string.drawer_chat_actions, "Pinned project")).performClick()
         compose.onNodeWithText(compose.activity.getString(R.string.drawer_unpin)).performClick()
         assertEquals("pinned" to ConversationAction.UNPIN, action)
-        compose.onNodeWithTag("drawer-archive-toggle").performClick()
-        compose.onNodeWithText("Archived project").assertIsDisplayed()
-        compose.onNodeWithText("Pinned project").assertDoesNotExist()
-        compose.onNodeWithTag("drawer-archive-toggle").performClick()
+        compose.onNodeWithText("Archived project").assertDoesNotExist()
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.drawer_clear_search)).performClick()
         compose.onNodeWithText("Current project").assertIsDisplayed()
+        compose.onNodeWithTag("drawer-search-toggle").performClick()
+        compose.onNodeWithTag("drawer-search").assertDoesNotExist()
+
     }
 
     @Test fun lightEnglishDrawerCapture() = capture(false, 1f)
@@ -89,7 +100,7 @@ class BotsDrawerComposeTest {
         }
         content(dark = dark)
         compose.onNodeWithTag("drawer-open-bots").assertIsDisplayed()
-        val output = TestCaptureDirectories.named("ux15-drawer-${BuildConfig.FLAVOR}")
+        val output = TestCaptureDirectories.named("ux17-drawer-${BuildConfig.FLAVOR}")
         saveCapture(output, "${if (dark) "dark" else "light"}_${compose.activity.resources.configuration.locales[0].language}_font${scale.toInt()}_menus.png")
         compose.onNodeWithTag("conversation-drawer-scroll").performScrollToNode(hasText("Current project"))
         compose.onNodeWithText("Current project").assertIsDisplayed()

@@ -53,7 +53,7 @@ class DrawerTitleOnlyRecoveryComposeTest {
         assertEquals(FontWeight.SemiBold, titleWeight("Saved chat"))
     }
 
-    @Test fun pinUnpinArchiveAndRestoreStillDispatchForTheCorrectSession() {
+    @Test fun pinUnpinAndArchiveStillDispatchForTheCorrectSession() {
         val record = mutableStateOf(saved)
         val actions = mutableListOf<Pair<String, ConversationAction>>()
         compose.setContent { MaterialTheme {
@@ -76,15 +76,9 @@ class DrawerTitleOnlyRecoveryComposeTest {
         compose.onNodeWithTag("drawer-pinned-marker", useUnmergedTree = true).assertDoesNotExist()
         menuAction(R.string.drawer_archive)
         compose.onNodeWithText("Saved chat").assertDoesNotExist()
-        archiveToggle()
-        showText("Saved chat").assertIsDisplayed()
-        compose.onAllNodesWithText(saved.outcome, substring = true).assertCountEquals(0)
-        menuAction(R.string.drawer_unarchive)
-        compose.onNodeWithText("Saved chat").assertDoesNotExist()
-        archiveToggle()
-        showText("Saved chat").assertIsDisplayed()
-        assertEquals(listOf(ConversationAction.PIN, ConversationAction.UNPIN, ConversationAction.ARCHIVE,
-            ConversationAction.RESTORE).map { saved.sessionId to it }, actions)
+        compose.onNodeWithTag("drawer-archive-toggle").assertDoesNotExist()
+        assertEquals(listOf(ConversationAction.PIN, ConversationAction.UNPIN, ConversationAction.ARCHIVE)
+            .map { saved.sessionId to it }, actions)
     }
 
     @Test fun renameStillValidatesAndDeleteStillRequiresConfirmation() {
@@ -131,11 +125,6 @@ class DrawerTitleOnlyRecoveryComposeTest {
     private fun showText(text: String): SemanticsNodeInteraction {
         compose.onNodeWithTag("conversation-drawer-scroll").performScrollToNode(hasText(text))
         return compose.onNodeWithText(text)
-    }
-
-    private fun archiveToggle() {
-        compose.onNodeWithTag("conversation-drawer-scroll").performScrollToNode(hasTestTag("drawer-archive-toggle"))
-        compose.onNodeWithTag("drawer-archive-toggle").performClick()
     }
 
     private fun openMenu() {

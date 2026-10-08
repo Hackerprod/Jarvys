@@ -33,6 +33,8 @@ fun JarvysSettingsScreen(
     onScheduledTasks: () -> Unit = {},
     onAccessibilitySettings: () -> Unit,
     onNavigate: (JarvysSettingsPage) -> Unit,
+    archivedChatsAvailable: Boolean = false,
+    onArchivedChats: () -> Unit = {},
 ) = SettingsWorkspace(
     page = page,
     themeMode = themeMode,
@@ -58,4 +60,6 @@ fun JarvysSettingsScreen(
     onScheduledTasks = onScheduledTasks,
     onAccessibilitySettings = onAccessibilitySettings,
     onNavigate = onNavigate,
+    archivedChatsAvailable = archivedChatsAvailable,
+    onArchivedChats = onArchivedChats,
 )

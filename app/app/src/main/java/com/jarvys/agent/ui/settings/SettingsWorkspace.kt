@@ -79,6 +79,8 @@ fun SettingsWorkspace(
     onScheduledTasks: () -> Unit,
     onAccessibilitySettings: () -> Unit,
     onNavigate: (SettingsWorkspacePage) -> Unit,
+    archivedChatsAvailable: Boolean = false,
+    onArchivedChats: () -> Unit = {},
 ) {
     var languageChoiceOpen by remember { mutableStateOf(false) }
     var appearanceChoiceOpen by remember { mutableStateOf(false) }
@@ -95,6 +97,8 @@ fun SettingsWorkspace(
                 memoryUsedCharacters = memoryUsedCharacters,
                 scheduledTasksAvailable = scheduledTasksAvailable,
                 onScheduledTasks = onScheduledTasks,
+                archivedChatsAvailable = archivedChatsAvailable,
+                onArchivedChats = onArchivedChats,
                 onMemory = onMemory,
                 onAppearance = { appearanceChoiceOpen = true },
                 onLanguage = { languageChoiceOpen = true },
@@ -148,6 +152,8 @@ private fun SettingsIndex(
     memoryUsedCharacters: Int,
     scheduledTasksAvailable: Boolean,
     onScheduledTasks: () -> Unit,
+    archivedChatsAvailable: Boolean,
+    onArchivedChats: () -> Unit,
     onMemory: () -> Unit,
     onAppearance: () -> Unit,
     onLanguage: () -> Unit,
@@ -166,6 +172,11 @@ private fun SettingsIndex(
         if (scheduledTasksAvailable) {
             SettingsRule()
             TaskSettingsEntry(onScheduledTasks)
+        }
+        if (archivedChatsAvailable) {
+            SettingsRule()
+            SettingsIndexRow(LucideIcons.History, stringResource(R.string.drawer_archived_chats),
+                null, onArchivedChats, testTag = "settings-archived-chats-row")
         }
         SettingsRule()
         SettingsIndexRow(LucideIcons.SunMoon, stringResource(R.string.settings_color_mode),
@@ -207,7 +218,8 @@ private fun SettingsIndexRow(icon: androidx.compose.ui.graphics.vector.ImageVect
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
         Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(21.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+            Text(title, modifier = Modifier.fillMaxWidth(), style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium)
             detail?.let { Text(it, style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2) }
         }

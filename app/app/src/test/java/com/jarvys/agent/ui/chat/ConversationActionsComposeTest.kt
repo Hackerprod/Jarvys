@@ -45,21 +45,23 @@ class ConversationActionsComposeTest {
         showText("Saved chat").assertIsDisplayed()
     }
 
-    @Test fun switchingArchiveViewsDoesNotOpenOrMutateChats() {
+    @Test fun showingArchivesInTheirOwnDestinationDoesNotOpenOrMutateChats() {
         var opens = 0
         var mutations = 0
         val normal = RunHistoryItem("r", "goal", "CHAT", 0, 1, 1.0, "s", "Normal")
         val archived = normal.copy(id = "a", sessionId = "a", title = "Archived", archived = true)
+        val archiveView = mutableStateOf(false)
         compose.setContent { MaterialTheme {
-            ConversationDrawer(listOf(normal, archived), "other", null, "", false, null, true, {}, {}, { opens++ }, {},
+            if (archiveView.value) ArchivedChatsScreen(listOf(normal, archived), true, { opens++ }, { _, _, _ -> mutations++ })
+            else ConversationDrawer(listOf(normal, archived), "other", null, "", false, null, true, {}, {}, { opens++ }, {},
                 onConversationAction = { _, _, _ -> mutations++ })
         } }
         showText("Normal").assertIsDisplayed()
         compose.onNodeWithText("Archived").assertDoesNotExist()
-        toggleArchive()
-        showText("Archived").assertIsDisplayed()
+        compose.runOnIdle { archiveView.value = true }
+        compose.onNodeWithText("Archived").assertIsDisplayed()
         compose.onNodeWithText("Normal").assertDoesNotExist()
-        toggleArchive()
+        compose.runOnIdle { archiveView.value = false }
         showText("Normal").assertIsDisplayed()
         assertEquals(0, opens)
         assertEquals(0, mutations)
@@ -68,11 +70,6 @@ class ConversationActionsComposeTest {
     private fun showText(text: String): SemanticsNodeInteraction {
         compose.onNodeWithTag("conversation-drawer-scroll").performScrollToNode(hasText(text))
         return compose.onNodeWithText(text)
-    }
-
-    private fun toggleArchive() {
-        compose.onNodeWithTag("conversation-drawer-scroll").performScrollToNode(hasTestTag("drawer-archive-toggle"))
-        compose.onNodeWithTag("drawer-archive-toggle").performClick()
     }
 
 }

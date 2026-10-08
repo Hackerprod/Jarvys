@@ -13,7 +13,8 @@ Modo de ejecución: continuar la cola completa. Al cerrar cada pendiente, verifi
 - **P0 / preparación v33 cerrada en código y host:** correcciones de herramientas, continuidad, restauración visual y Bots completadas. Suites finales: 1159 Full y 1075 Play, cero fallos/errores/omitidas. Lint sin errores nuevos; deuda restante: 46 Full y 37 Play. Ambos APK sin firma compilados y verificados con paquete original, permisos sin cambios, CRC y alineación correctos.
 - **UX23 / preparación v34 cerrada en código y host:** selección por mensaje restaurada para respuestas y traducciones. Suites finales: 1173 Full y 1089 Play, cero fallos/errores/omitidas. Lint sin cambios respecto al P0 (46 Full / 37 Play); ambos APK unsigned verificados. Se conserva el límite de validación física y el comportamiento heredado del enlace descritos abajo.
 - **APKFACTORY1 / preparación v35 implementada y validada en host:** fábrica offline nativa, empaquetado sin Gradle por aplicación, firma con identidad por app y skill exclusivo de Coding. Suites: 1238 Full, 1154 Play y 17 runtime, sin fallos; nueve pruebas de SDK JavaScript. La aceptación física Android/ARM64 e instalación/actualización con datos conservados sigue pendiente.
-- **Siguiente etapa:** UX16 y la cola restante. No se entrega un APK parcial ni se espera feedback entre etapas.
+- **UX16 / preparación v36 completada en host:** archivos nativos y descargas directas con 1289 pruebas Full, 1205 Play, 17 runtime y nueve JavaScript aprobadas. Aceptación física pendiente.
+- **Etapa activa:** UX17/UX18 consolidada para v37; después UX19 y la cola restante. No se entrega un APK parcial ni se espera feedback entre etapas.
 - La paridad completa con el comportamiento de v28 en un teléfono sigue pendiente de validación; la fiabilidad del agente es prioritaria antes de añadir funciones.
 
 ## Entregas previas
@@ -127,7 +128,14 @@ Diseño y límites: `app/FILE_DELIVERY.md`. Evidencia reproducible: `recovery/va
 
 ### 3. UX17/UX18: reorganizar el panel lateral y Ajustes
 
-Estado: requisitos de diseño actualizados; pendiente después de las correcciones P0.
+Estado: implementación v37 / 1.2.30-UX17-UX18 en curso. Referencia visual inspeccionada; se valida la reorganización y la navegación antes de cerrar la etapa.
+
+- Cabecera y búsqueda desplegable implementadas, con estado conservado al cerrar el panel, limpiar/cancelar y botón Atrás.
+- Archivados pasan a una pantalla de Ajustes con visibilidad condicional; filas y confirmaciones de acciones compartidas con el panel.
+- La nueva entrada de Tareas programadas abre una vista informativa pendiente de implementación. El gestor de tareas ya existente en Ajustes y su runtime se conservan sin cambios.
+- Revisión independiente detectó y se corrigió el cierre con Atrás: primero cancela la búsqueda, después cierra el panel y solo después vuelve de la pantalla anidada.
+- Capturas nativas inspeccionadas en ambos temas, español/inglés y texto al 200%; los primeros recorridos de archivo, filtros y acciones aprueban. Validación de Activity en curso: se están corrigiendo fixtures de avisos iniciales y comprobando diálogos y posición de scroll. Este respaldo es WIP; no afirma suites completas aprobadas, aceptación física ni APK listo.
+- Nueve pruebas del SDK JavaScript aprobadas; fábrica, permisos y clave original se conservan. No se ha firmado ni entregado un APK.
 
 - Cabecera con el título **Jarvys** y la lupa de búsqueda en la esquina superior derecha, junto al título.
 - Orden de menús: **New chat**, después **Bots** y después **Tareas programadas**. Esta indicación sustituye la anterior que colocaba Bots primero.
