@@ -612,7 +612,12 @@ class CrewTaskPresentationTest {
         assertEquals(original, text("crew-full-instructions"))
         assertEquals("Dialog text must really use the requested font scale", expectedFontScale,
             layout(instructions).layoutInput.density.fontScale, 0.01f)
-        val scroll = instructions.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange]
+        val scrollingAncestor = SemanticsMatcher.keyIsDefined(SemanticsProperties.VerticalScrollAxisRange) and
+            hasAnyDescendant(hasTestTag("crew-full-instructions"))
+        compose.onAllNodes(scrollingAncestor, useUnmergedTree = true).assertCountEquals(1)
+        instructions.assert(hasAnyAncestor(scrollingAncestor))
+        val scroll = compose.onNode(scrollingAncestor, useUnmergedTree = true).fetchSemanticsNode()
+            .config[SemanticsProperties.VerticalScrollAxisRange]
         assertTrue("Long original instructions must be independently scrollable", scroll.maxValue() > 0f)
         val glyph = layout(instructions).getBoundingBox(2).center
         instructions.performTouchInput { longClick(glyph) }

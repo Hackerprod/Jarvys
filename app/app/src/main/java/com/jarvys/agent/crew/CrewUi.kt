@@ -97,6 +97,7 @@ import com.jarvys.agent.JarvysTopAppBar
 import com.jarvys.agent.JarvysUiTokens
 import com.jarvys.agent.LucideIcons
 import com.jarvys.agent.R
+import com.jarvys.agent.ScrollableDialogContent
 import com.jarvys.agent.ui.readableThemeInk
 import com.jarvys.agent.ui.motion.LocalReducedMotion
 import com.jarvys.agent.ui.motion.rememberLifecycleVisible
@@ -486,8 +487,9 @@ fun CrewMissionScreen(
         onDismissRequest = { showSettings = false },
         title = { Text(stringResource(R.string.crew_settings_title)) },
         text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            ScrollableDialogContent {
                 CrewModePicker(crewMode, onCrewModeChange, stacked = true)
+                Spacer(Modifier.height(8.dp))
                 if (snapshot != null && snapshot.originalInstructions.isNotBlank()) TextButton(
                     onClick = { showSettings = false; showInstructions = true },
                     modifier = Modifier.fillMaxWidth().testTag("crew-view-instructions"),
@@ -505,7 +507,7 @@ fun CrewMissionScreen(
         onDismissRequest = { showAskPicker = false },
         title = { Text(stringResource(R.string.crew_ask_bot)) },
         text = {
-            Column(Modifier.verticalScroll(rememberScrollState())) {
+            ScrollableDialogContent {
                 snapshot.bots.filter { it.status != "INTERRUPTED" && !it.resumeRequired }.forEach { bot ->
                     TextButton(onClick = { showAskPicker = false; onAskBot(bot.id, "") },
                         modifier = Modifier.fillMaxWidth().testTag("crew-pick-bot-${bot.id}")) {
@@ -889,9 +891,11 @@ private fun CrewInstructionsDialog(instructions: String, onClose: () -> Unit) {
     AlertDialog(onDismissRequest = onClose,
         modifier = Modifier.testTag("crew-instructions-dialog"),
         title = { Text(stringResource(R.string.crew_instructions_title)) },
-        text = { SelectionContainer {
-            Text(instructions, modifier = Modifier.verticalScroll(rememberScrollState()).testTag("crew-full-instructions"),
-                color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyMedium)
+        text = { ScrollableDialogContent {
+            SelectionContainer {
+                Text(instructions, modifier = Modifier.testTag("crew-full-instructions"),
+                    color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyMedium)
+            }
         } },
         confirmButton = { TextButton(onClick = onClose) { Text(stringResource(R.string.crew_close_panel)) } },
     )
