@@ -10,9 +10,10 @@ object BackgroundRunController {
     private val lock = Any()
     private var active: Active? = null
     private var interactiveActive = false
+    private val interactiveGenerations = mutableSetOf<Long>()
 
     fun tryStart(kind: BackgroundRunKind): CancellationToken? = synchronized(lock) {
-        if (interactiveActive) return@synchronized null
+        if (interactiveActive || interactiveGenerations.isNotEmpty()) return@synchronized null
         val current = active
         if (current != null) {
             // Explicit tasks outrank passive Proactive review, but wait for its worker to unwind.
@@ -43,5 +44,17 @@ object BackgroundRunController {
 
     fun interactiveFinished() = synchronized(lock) { interactiveActive = false }
 
-    fun isInteractiveActive(): Boolean = synchronized(lock) { interactiveActive }
+    /** Scoped reservations overlap safely while a cancelled worker unwinds. */
+    fun interactiveStarted(generation: Long) = synchronized(lock) {
+        interactiveGenerations.add(generation)
+        active?.token?.cancel()
+        Unit
+    }
+
+    fun interactiveFinished(generation: Long) = synchronized(lock) {
+        interactiveGenerations.remove(generation)
+        Unit
+    }
+
+    fun isInteractiveActive(): Boolean = synchronized(lock) { interactiveActive || interactiveGenerations.isNotEmpty() }
 }

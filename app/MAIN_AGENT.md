@@ -14,7 +14,7 @@ Generic scoped delegation returns a JSON receipt with `run_outcome`, `run_id`, `
 
 Normal assistant text accompanying tool calls is an interim message. The loop checkpoints first, then notifies the ordinary chat listener before tool effects. The UI derives a PROGRESS assistant row from the same marked `model_tool_calls` journal entry, keyed by its first call ID. No second ordinary assistant message is added to model history, reflection indices or the final-answer lifecycle. Blank text, private provider reasoning, generic worker and Crew commentary are not presented through this route. Persisted text uses the existing bounded/redacted journal and may be incomplete when retention limits apply.
 
-Live progress and terminal presentation are scoped to the originating chat and run generation. Navigation cannot redirect an old callback into another conversation. Hydration preserves a live generation when returning to its conversation. Prior tool results and uncertain effects remain durable even when their live UI callback is cancelled.
+Live progress and terminal presentation are scoped to the originating chat and run generation. Navigation cannot redirect an old callback into another conversation. Hydration preserves a live generation and its pending approval cards when returning to its conversation; transient list IDs are reconciled with durable rows to avoid key collisions. Background scheduling stays blocked by a set of active/reserved interactive generations, so old teardown cannot release a newer run. Prior tool results and uncertain effects remain durable even when their live UI callback is cancelled.
 
 ## Explicit interruption and replacement
 

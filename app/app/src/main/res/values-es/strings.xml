@@ -1351,4 +1351,5 @@ Se desconoce cómo terminaron. No se repiten automáticamente. Revisa los cambio
     <string name="chat_interrupt_pending">Sin iniciar. Copia este mensaje para reenviarlo si lo necesitas.</string>
     <string name="chat_interrupt_failed">No se pudo guardar el mensaje pendiente. Tu borrador sigue aquí.</string>
     <string name="chat_other_run_active">Ya hay una tarea en ejecución. Puedes detenerla en su chat o esperar para enviar.</string>
+    <string name="chat_interrupt_start_failed">No se pudo completar este turno. Revisa el chat antes de intentarlo de nuevo.</string>
 </resources>

@@ -360,10 +360,14 @@ object AgentRunUiState {
         val durableEvents = authoritativePersisted.filterNot { event ->
             event.kind == "user_decision" && event.decisionId in livePendingDecisionIds
         }
-        nextEventId = maxOf(nextEventId, (persistedEvents.maxOfOrNull { it.id } ?: 0L) + 1L)
+        nextEventId = maxOf(nextEventId, ((durableEvents + transientEvents).maxOfOrNull { it.id } ?: 0L) + 1L)
+        val usedIds = durableEvents.mapTo(mutableSetOf()) { it.id }
+        val uniqueTransient = transientEvents.map { live ->
+            if (usedIds.add(live.id)) live else live.copy(id = nextEventId++).also { usedIds.add(it.id) }
+        }
         _state.value = current.copy(
             goal = persistedEvents.lastOrNull { it.kind == "user" }?.text ?: current.goal,
-            events = durableEvents + transientEvents,
+            events = durableEvents + uniqueTransient,
         )
     }
 
@@ -523,7 +527,9 @@ object AgentRunUiState {
     @JvmStatic
     fun rejectUnstarted(sessionId: String, events: List<AgentRunUiEvent>) = synchronized(lock) {
         if (_state.value.sessionId != sessionId) return@synchronized
-        _state.value = _state.value.copy(running = ownedRunActive && ownedSessionId == sessionId)
+        val stillOwnsRun = ownedRunActive && ownedSessionId == sessionId
+        _state.value = _state.value.copy(running = stillOwnsRun,
+            outcome = if (stillOwnsRun) _state.value.outcome else "FAILED")
         refreshPersistedSession(sessionId, events)
     }
 

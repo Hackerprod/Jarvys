@@ -77,8 +77,8 @@ class GeneratedImageComposeTest {
                 }
             }
         }
-        compose.onNodeWithTag("generated-image-${event.id}").assertIsDisplayed()
         compose.waitUntil(5_000) { compose.onAllNodesWithTag("generated-image-open-${event.id}").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("generated-image-${event.id}").assertIsDisplayed()
         compose.onNodeWithTag("generated-image-open-${event.id}").assertIsDisplayed()
         compose.waitUntil(5_000) {
             compose.onAllNodesWithTag("generated-image-thumbnail-${event.id}", useUnmergedTree = true)

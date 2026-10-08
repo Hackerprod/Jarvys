@@ -314,35 +314,42 @@ public final class AgentForegroundService extends Service {
       controller.stopRun(); // Its cancellation callbacks stop only this captain's Crew and approvals.
       CancellationToken replacement = controller.beginRun();
       if (replacement != null) {
+        com.jarvys.agent.proactive.BackgroundRunController.INSTANCE.interactiveStarted(replacement.generation());
         AgentRunUiState.bindGeneration(sessionId, replacement.generation());
-        java.util.concurrent.atomic.AtomicBoolean dispatched = new java.util.concurrent.atomic.AtomicBoolean(false);
+        java.util.concurrent.atomic.AtomicBoolean workerStarted = new java.util.concurrent.atomic.AtomicBoolean(false);
         Runnable unregister = replacement.registerCancelAction(() -> {
-          if (!dispatched.get()) AgentRunUiState.stopPendingGeneration(sessionId, replacement.generation());
+          if (!workerStarted.get()) {
+            com.jarvys.agent.proactive.BackgroundRunController.INSTANCE.interactiveFinished(replacement.generation());
+            AgentRunUiState.stopPendingGeneration(sessionId, replacement.generation());
+          }
         });
         try {
           Future<?> future = service.worker.submit(() -> {
+            workerStarted.set(true);
+            unregister.run();
             try {
               replacement.throwIfCancelled();
               org.json.JSONObject pending = replacement.callIfActive(
                   () -> store.dispatchInterruptRequest(sessionId, requestId), null);
               if (pending == null) return;
-              dispatched.set(true);
-              unregister.run();
               AgentRunUiState.refreshPersistedSession(sessionId, store.readConversationTimeline(sessionId));
-              com.jarvys.agent.proactive.BackgroundRunController.INSTANCE.interactiveStarted();
               service.replacementRunner.run(replacement, sessionId, requestId, pending.optString("content"),
                   skills, memoryDisabled);
             } catch (RuntimeException unavailable) {
               // The inert input remains visible and selectable; never silently replay it.
+              boolean stopped = replacement.isStoppedByUser();
+              String outcome = stopped ? "STOPPED" : "FAILED";
+              String message = service.getString(stopped ? R.string.agent_run_stopped : R.string.chat_interrupt_start_failed);
               try {
                 if (store.readConversationMessage(sessionId, requestId) != null)
-                  store.appendConversationMessage(sessionId, "assistant", service.getString(R.string.chat_interrupt_failed),
-                      null, "", requestId, "FAILED");
+                  store.appendConversationMessage(sessionId, "assistant", message, null, "", requestId, outcome);
               } catch (RuntimeException ignored) { }
-              AgentRunUiState.stopPendingGeneration(sessionId, replacement.generation());
+              AgentRunUiState.completeGeneration(sessionId, replacement.generation(), "replacement-end",
+                  outcome, message, "", 0L);
             } finally {
               unregister.run();
               AgentRunUiState.stopPendingGeneration(sessionId, replacement.generation());
+              com.jarvys.agent.proactive.BackgroundRunController.INSTANCE.interactiveFinished(replacement.generation());
               controller.completeRun(replacement);
               service.stopServiceIfIdle();
             }
@@ -351,6 +358,7 @@ public final class AgentForegroundService extends Service {
         } catch (RuntimeException rejected) {
           unregister.run();
           AgentRunUiState.stopPendingGeneration(sessionId, replacement.generation());
+          com.jarvys.agent.proactive.BackgroundRunController.INSTANCE.interactiveFinished(replacement.generation());
           controller.completeRun(replacement);
         }
       }
@@ -467,12 +475,24 @@ public final class AgentForegroundService extends Service {
         stopSelf(startId);
         return START_NOT_STICKY;
       }
-      if (realAgent)
-        com.jarvys.agent.proactive.BackgroundRunController.INSTANCE.interactiveStarted();
+      java.util.concurrent.atomic.AtomicBoolean workerStarted = new java.util.concurrent.atomic.AtomicBoolean(false);
+      if (realAgent) {
+        com.jarvys.agent.proactive.BackgroundRunController.INSTANCE.interactiveStarted(token.generation());
+        AgentRunUiState.bindGeneration(chatSessionId, token.generation());
+      }
+      Runnable unregisterQueued = realAgent ? token.registerCancelAction(() -> {
+        if (!workerStarted.get()) {
+          com.jarvys.agent.proactive.BackgroundRunController.INSTANCE.interactiveFinished(token.generation());
+          AgentRunUiState.stopPendingGeneration(chatSessionId, token.generation());
+        }
+      }) : () -> { };
       try {
         Future<?> future =
             worker.submit(
                 () -> {
+                  workerStarted.set(true);
+                  unregisterQueued.run();
+                  try {
                   if (compactConversation) runManualConversationCompaction(token, chatSessionId);
                   else if (manualDeviceTest) runManualDeviceTest(token);
                   else if (realAgent)
@@ -487,12 +507,45 @@ public final class AgentForegroundService extends Service {
                         regeneration,
                         existingUserMessageId);
                   else runStopTest(token);
+                  } catch (RuntimeException earlyFailure) {
+                    if (!realAgent) throw earlyFailure;
+                    String message = getString(R.string.chat_interrupt_start_failed);
+                    try {
+                      LocalRunStore store = new LocalRunStore(this);
+                      String id = userMessageAlreadyRecorded ? existingUserMessageId
+                          : store.appendConversationMessage(chatSessionId, "user", chatDisplayGoal);
+                      store.appendConversationMessage(chatSessionId, "assistant", message, null, "", id, "FAILED");
+                    } catch (RuntimeException ignored) { }
+                    AgentRunUiState.completeGeneration(chatSessionId, token.generation(), "failed-start", "FAILED", message, "", 0L);
+                  } finally {
+                    if (realAgent) {
+                      com.jarvys.agent.proactive.BackgroundRunController.INSTANCE.interactiveFinished(token.generation());
+                      AgentRunUiState.stopPendingGeneration(chatSessionId, token.generation());
+                    }
+                    StopController.getInstance().completeRun(token);
+                    stopServiceIfIdle();
+                  }
                 });
         StopController.getInstance().attachFuture(token, future);
       } catch (RuntimeException failure) {
-        if (realAgent)
-          com.jarvys.agent.proactive.BackgroundRunController.INSTANCE.interactiveFinished();
-        throw failure;
+        unregisterQueued.run();
+        try {
+        if (realAgent) {
+          com.jarvys.agent.proactive.BackgroundRunController.INSTANCE.interactiveFinished(token.generation());
+          AgentRunUiState.stopPendingGeneration(chatSessionId, token.generation());
+          LocalRunStore store = new LocalRunStore(this);
+          String id = userMessageAlreadyRecorded ? existingUserMessageId
+              : store.appendConversationMessage(chatSessionId, "user", chatDisplayGoal);
+          store.appendConversationMessage(chatSessionId, "assistant", getString(R.string.chat_interrupt_start_failed),
+              null, "", id, "FAILED");
+          AgentRunUiState.rejectUnstarted(chatSessionId, store.readConversationTimeline(chatSessionId));
+        }
+        } catch (RuntimeException persistenceFailure) {
+          // The already-saved user input remains the retry source when storage is readable again.
+        } finally {
+          StopController.getInstance().completeRun(token);
+          stopServiceIfIdle();
+        }
       }
     } else if (realAgent) {
       LocalRunStore store = new LocalRunStore(this);
@@ -839,7 +892,7 @@ public final class AgentForegroundService extends Service {
       if (privateContentScope != null) privateContentScope.close();
       if (timeoutTask != null) timeoutTask.cancel(false);
       if (token.isTimedOut()) Thread.interrupted();
-      com.jarvys.agent.proactive.BackgroundRunController.INSTANCE.interactiveFinished();
+      com.jarvys.agent.proactive.BackgroundRunController.INSTANCE.interactiveFinished(token.generation());
       try {
         com.jarvys.agent.tasks.TaskScheduler.INSTANCE.rearm(this);
       } catch (RuntimeException ignored) {

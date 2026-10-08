@@ -46,6 +46,37 @@ class MainAgentComposerTest {
     @Test fun noReplacementForManagedOrBlockedScope() = scene("en", false, 1f, allowed = false)
     @Test fun emptyDraftOnlyOffersStop() = scene("en", false, 1f, draft = "")
 
+    @Test fun restoredApprovalWithCollidingNumericIdRendersAlongsideDurableProgress() {
+        AgentRunUiState.beginRun("collision-owner", "Inspect")
+        AgentRunUiState.bindGeneration("collision-owner", 99)
+        AgentRunUiState.showApproval("approval-collision", "Approve hydration", listOf("A reviewed action"), null)
+        val approvalId = AgentRunUiState.state.value.events.single { it.approvalId == "approval-collision" }.id
+        AgentRunUiState.resetSession("other")
+        val durable = listOf(
+            AgentRunUiEvent.messageEvent(approvalId + 1, "user", "Inspect", 1).copyMetadata("user-proof", 0),
+            AgentRunUiEvent.messageEvent(approvalId, "assistant", "Durable progress", 2).copyMetadata("progress-proof", 0).copyStage("PROGRESS"))
+        AgentRunUiState.restoreSession("collision-owner", durable)
+        val events = AgentRunUiState.state.value.events
+        assertEquals(events.size, events.map { it.id }.toSet().size)
+        assertEquals(1, events.count { it.approvalId == "approval-collision" })
+        val connectors = com.jarvys.agent.connectors.ConnectorRegistry.createForTests(
+            object : com.jarvys.agent.connectors.ConnectorConnectionPreferences {
+                override fun isConnected(id: String) = false
+                override fun setConnected(id: String, connected: Boolean) = Unit
+            }, { true })
+        compose.setContent {
+            JarvysOwnTheme(JarvysThemeMode.LIGHT) {
+                CompositionLocalProvider(LocalReducedMotion provides true) {
+                    ConversationTimeline(conversationKey = "collision-owner", events = events, isRunning = true,
+                        connectorRegistry = connectors, onOpenPreview = {}, onOpenSkillFile = {}, chatWithoutMemory = true)
+                }
+            }
+        }
+        compose.waitForIdle()
+        compose.onNodeWithText("Approve hydration").assertIsDisplayed()
+        AgentRunUiState.completeGeneration("collision-owner", 99, "done", "STOPPED", "stopped", "m", 0)
+    }
+
     private fun scene(language: String, dark: Boolean, scale: Float, allowed: Boolean = true,
         draft: String = if (language == "es") "Mejor revisa el archivo primero." else "Please inspect the file first.") {
         val config = Configuration(compose.activity.resources.configuration).apply { setLocales(LocaleList(Locale(language))) }
@@ -59,6 +90,10 @@ class MainAgentComposerTest {
                 CompositionLocalProvider(LocalContext provides context, LocalDensity provides Density(1f, scale), LocalReducedMotion provides true) {
                     Column(Modifier.width(320.dp).fillMaxHeight().background(MaterialTheme.colorScheme.background)) {
                         Box(Modifier.padding(12.dp)) { AssistantReplyView(progress, {}, false, streamActive = true) }
+                        Box(Modifier.padding(horizontal = 12.dp)) {
+                            IntentMessage(AgentRunUiEvent.messageEvent(2, "user", draft.ifBlank { "Next request" }, 2)
+                                .copyMetadata("pending-fixture", 0).copyStage("QUEUED"))
+                        }
                         Spacer(Modifier.weight(1f))
                         ChatComposer(goal = draft, onGoalChange = {}, onSend = { sends++ }, onStop = { stops++ },
                             onSelectModel = {}, modelLabel = "GPT-5", running = true,
@@ -73,6 +108,7 @@ class MainAgentComposerTest {
         }
         compose.waitForIdle()
         compose.onNodeWithText(progress.text).assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.chat_interrupt_pending)).assertIsDisplayed()
         val stop = compose.onNodeWithTag("chat-send-stop-button")
         stop.assertIsDisplayed()
         assertTrue(stop.fetchSemanticsNode().boundsInRoot.height >= 48f)
@@ -88,7 +124,7 @@ class MainAgentComposerTest {
         } else compose.onNodeWithTag("chat-interrupt-send").assertDoesNotExist()
         stop.performClick()
         assertEquals(1, stops); assertEquals(0, sends)
-        val directory = System.getenv("JARVYS_UX26_CAPTURE_DIR")?.let(::File)
+        val directory = System.getenv("JARVYS_UX26_CAPTURE_DIR")?.let { File(it, BuildConfig.FLAVOR) }
         if (directory != null) {
             directory.mkdirs()
             compose.runOnIdle {

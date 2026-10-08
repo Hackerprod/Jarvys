@@ -308,6 +308,114 @@ class MainAgentInteractionTest {
         AgentRunUiState.completeGeneration("hidden-start-owner", 82, "r", "STOPPED", "stopped", "m", 0)
     }
 
+    @Test fun olderInteractiveCompletionCannotReleaseNewGenerationOrLegacyScope() {
+        val background = com.jarvys.agent.proactive.BackgroundRunController
+        background.interactiveStarted(9001); background.interactiveStarted(9002)
+        try {
+            background.interactiveFinished(9001)
+            assertTrue(background.isInteractiveActive())
+            background.interactiveFinished()
+            assertTrue(background.isInteractiveActive())
+            assertNull(background.tryStart(com.jarvys.agent.proactive.BackgroundRunKind.PROACTIVE))
+        } finally { background.interactiveFinished(9001); background.interactiveFinished(9002) }
+        assertFalse(background.isInteractiveActive())
+    }
+
+    @Test fun cancellingQueuedReplacementDoesNotReleaseUnwindingOlderWorker() {
+        val background = com.jarvys.agent.proactive.BackgroundRunController
+        background.interactiveStarted(9011); background.interactiveStarted(9012)
+        try {
+            background.interactiveFinished(9012)
+            assertTrue(background.isInteractiveActive())
+            assertNull(background.tryStart(com.jarvys.agent.proactive.BackgroundRunKind.TASK))
+        } finally { background.interactiveFinished(9011); background.interactiveFinished(9012) }
+        assertFalse(background.isInteractiveActive())
+    }
+
+    @Test fun ordinarySubmissionCancelledBeforeStartReleasesItsReservation() = ordinaryQueuedExit(false)
+    @Test fun ordinaryRejectedSubmissionReleasesItsReservationAndRecordsFailure() = ordinaryQueuedExit(true)
+
+    private fun ordinaryQueuedExit(reject: Boolean) {
+        StopController.getInstance().stopRun()
+        val serviceController = Robolectric.buildService(AgentForegroundService::class.java).create()
+        val service = serviceController.get()
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val session = "ordinary-queue-${System.nanoTime()}"
+        val store = LocalRunStore(context)
+        val id = store.appendConversationMessage(session, "user", "must remain recoverable")
+        AgentRunUiState.beginRun(session, "must remain recoverable")
+        val started = CountDownLatch(1); val release = CountDownLatch(1)
+        if (reject) worker(service).shutdown() else {
+            worker(service).submit { started.countDown(); release.await(5, TimeUnit.SECONDS) }
+            assertTrue(started.await(5, TimeUnit.SECONDS))
+        }
+        try {
+            service.onStartCommand(AgentForegroundService.storedChatMessageIntent(context, session, id), 0, 1)
+            if (!reject) {
+                assertTrue(com.jarvys.agent.proactive.BackgroundRunController.isInteractiveActive())
+                StopController.getInstance().stopRun()
+            }
+            assertFalse(com.jarvys.agent.proactive.BackgroundRunController.isInteractiveActive())
+            assertFalse(AgentRunUiState.state.value.running)
+            assertTrue(StopController.getInstance().isStopped)
+            assertEquals("must remain recoverable", store.readConversationMessage(session, id))
+            if (reject) assertTrue(store.readConversationMessages(session).any { it.optString("status") == "FAILED" })
+        } finally {
+            StopController.getInstance().stopRun(); release.countDown()
+            if (!worker(service).isShutdown) worker(service).submit {}.get(5, TimeUnit.SECONDS)
+            serviceController.destroy()
+        }
+    }
+
+    @Test fun earlyRuntimeSetupFailureCannotLeakInteractiveOwnership() {
+        StopController.getInstance().stopRun()
+        val serviceController = Robolectric.buildService(AgentForegroundService::class.java).create()
+        val service = serviceController.get()
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val session = "early-setup-${System.nanoTime()}"
+        val store = LocalRunStore(context)
+        val id = store.appendConversationMessage(session, "user", "read only")
+        val prefs = context.getSharedPreferences("jarvys_ui_preferences", Context.MODE_PRIVATE)
+        prefs.edit().putString("agent_timeout_seconds", "invalid fixture type").commit()
+        AgentRunUiState.beginRun(session, "read only")
+        try {
+            service.onStartCommand(AgentForegroundService.storedChatMessageIntent(context, session, id), 0, 1)
+            worker(service).submit {}.get(5, TimeUnit.SECONDS)
+            assertFalse(com.jarvys.agent.proactive.BackgroundRunController.isInteractiveActive())
+            assertTrue(StopController.getInstance().isStopped)
+            assertFalse(AgentRunUiState.state.value.running)
+            assertEquals("FAILED", AgentRunUiState.state.value.outcome)
+            assertTrue(store.readConversationMessages(session).any { it.optString("status") == "FAILED" })
+            assertTrue(store.readModelTranscriptRows(session).isEmpty())
+        } finally {
+            prefs.edit().remove("agent_timeout_seconds").commit()
+            StopController.getInstance().stopRun(); serviceController.destroy()
+        }
+    }
+
+    @Test fun stoppedReplacementBoundaryRemainsStoppedRatherThanFailed() = replacementBoundaryOutcome(true)
+    @Test fun failedReplacementBoundaryIsRecordedAsFailed() = replacementBoundaryOutcome(false)
+
+    private fun replacementBoundaryOutcome(stopped: Boolean) {
+        withHeldWorker { service, context, session, release ->
+            service.replacementRunner = AgentForegroundService.ReplacementRunner { _,_,_,_,_,_ ->
+                if (stopped) {
+                    StopController.getInstance().stopRun()
+                    throw java.util.concurrent.CancellationException("fixture stop before model")
+                }
+                throw IllegalStateException("fixture setup failure")
+            }
+            assertTrue(AgentForegroundService.interruptAndSend(context, session, "new instruction", arrayListOf(), false))
+            release.countDown()
+            worker(service).submit {}.get(5, TimeUnit.SECONDS)
+            val expected = if (stopped) "STOPPED" else "FAILED"
+            assertEquals(expected, AgentRunUiState.state.value.outcome)
+            assertFalse(AgentRunUiState.state.value.running)
+            assertFalse(com.jarvys.agent.proactive.BackgroundRunController.isInteractiveActive())
+            assertEquals(expected, LocalRunStore(context).readConversationMessages(session).last().optString("status"))
+        }
+    }
+
     private fun worker(service: AgentForegroundService) = AgentForegroundService::class.java.getDeclaredField("worker")
         .apply { isAccessible = true }.get(service) as ExecutorService
 
@@ -321,11 +429,13 @@ class MainAgentInteractionTest {
         AgentRunUiState.beginRun(session, "original")
         val old = StopController.getInstance().beginRun()!!
         AgentRunUiState.bindGeneration(session, old.generation())
+        com.jarvys.agent.proactive.BackgroundRunController.interactiveStarted(old.generation())
         val started = CountDownLatch(1)
         val release = CountDownLatch(1)
         val future = worker(service).submit {
             started.countDown()
-            while (release.count > 0) try { release.await() } catch (_: InterruptedException) { }
+            try { while (release.count > 0) try { release.await() } catch (_: InterruptedException) { } }
+            finally { com.jarvys.agent.proactive.BackgroundRunController.interactiveFinished(old.generation()) }
         }
         StopController.getInstance().attachFuture(old, future)
         assertTrue(started.await(5, TimeUnit.SECONDS))

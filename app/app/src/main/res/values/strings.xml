@@ -1351,4 +1351,5 @@ Their exit results are unknown. Do not repeat them automatically. Review project
     <string name="chat_interrupt_pending">Not started. Copy this message to send it again if needed.</string>
     <string name="chat_interrupt_failed">The message could not be queued. Your draft is still here.</string>
     <string name="chat_other_run_active">A task is already running. Open its chat to stop it, or wait before sending.</string>
+    <string name="chat_interrupt_start_failed">This turn could not finish. Check the chat before trying again.</string>
 </resources>
