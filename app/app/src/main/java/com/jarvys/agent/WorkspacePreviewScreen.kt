@@ -161,11 +161,12 @@ internal class WorkspacePreviewWebView(context: Context) : WebView(context) {
     }
 }
 
-private class WorkspacePreviewContent(context: Context, private val workspace: WorkspaceStore?,
-    private val session: String? = null, private val descriptor: HtmlPreviewDescriptor? = null) {
+internal class WorkspacePreviewContent(context: Context, private val workspace: WorkspaceStore?,
+    private val session: String? = null, private val descriptor: HtmlPreviewDescriptor? = null,
+    thumbnail: Boolean = false) {
     val key = if (descriptor != null) "$session/${descriptor.token}" else requireNotNull(workspace).projectId()
     // Independent registrable hosts also prevent parent-domain cookies crossing previews.
-    val host = "jarvys-preview-${previewOriginKey(key)}.invalid"
+    val host = "jarvys-${if (thumbnail) "thumbnail" else "preview"}-${previewOriginKey(key)}.invalid"
     private val prefix = if (descriptor == null) "/workspaces/${workspace!!.projectId()}/" else "/"
     private val root = workspace?.let { File(context.filesDir.canonicalFile, "jarvys/workspaces/${it.projectId()}") }
     private val artifacts = if (descriptor != null) DeliveredArtifactStore(context) else null

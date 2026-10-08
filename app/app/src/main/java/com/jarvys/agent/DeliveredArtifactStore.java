@@ -222,7 +222,7 @@ public final class DeliveredArtifactStore {
         JSONArray array = preview.getJSONArray("warnings");
         for (int i = 0; i < array.length(); i++) warnings.add(array.getString(i));
         return new HtmlPreviewDescriptor(id, preview.getString("entryPath"), preview.getJSONArray("files").length(),
-                preview.getLong("totalBytes"), warnings);
+                preview.getLong("totalBytes"), warnings, preview.getString("fingerprint"));
     }
 
     public HtmlPreviewDescriptor resolvePreview(String session, String token) {
@@ -289,7 +289,7 @@ public final class DeliveredArtifactStore {
         File saved = resolve(session, attachment);
         if (!HtmlPreviewCapture.isHtmlFile(saved)) return null;
         return new HtmlPreviewDescriptor(attachment.id, attachment.name, 1, attachment.sizeBytes,
-                java.util.Collections.singletonList("Only the saved HTML file is available; linked assets were not captured."));
+                java.util.Collections.singletonList("Only the saved HTML file is available; linked assets were not captured."), record.optString("sha256"));
     }
 
     private JSONObject previewRecord(String session, String token) throws Exception {
@@ -362,6 +362,45 @@ public final class DeliveredArtifactStore {
 
     public InputStream open(String session, ChatAttachment attachment) throws IOException {
         synchronized (lock) { return new FileInputStream(resolve(session, attachment)); }
+    }
+
+    /**
+     * Derived thumbnails share the delivered-store commit/delete lock, but never modify a bundle.
+     * Callers MUST resolve transcript ownership before entering: LocalRunStore takes its transcript
+     * lock before this lock, so calling it from the callback would invert deletion's lock order.
+     */
+    interface ThumbnailOperation<T> { T run(ThumbnailStorage storage) throws IOException; }
+
+    final class ThumbnailStorage {
+        final File deliveredRoot, sessionDirectory;
+        private final String session;
+        private ThumbnailStorage(String session, File directory) {
+            this.session = session; deliveredRoot = root; sessionDirectory = directory;
+        }
+        void verifyPath(File file) throws IOException { verify(file); }
+        void requireLiveSession() throws IOException {
+            verify(sessionDirectory);
+            // Do not recreate a session directory removed by deleteSession, even without a ledger.
+            if (!sessionDirectory.isDirectory()) throw new IOException("The delivered conversation is unavailable");
+            try {
+                if (new ConversationMetadataStore(root.getParentFile().getParentFile()).read(session).deleted)
+                    throw new IOException("The conversation has been deleted");
+            } catch (IllegalStateException invalid) { throw new IOException("Conversation ownership is unavailable", invalid); }
+        }
+    }
+
+    <T> T withThumbnailStorage(String session, ChatAttachment owner, String fingerprint,
+            ThumbnailOperation<T> operation) throws IOException {
+        synchronized (lock) {
+            ThumbnailStorage storage = new ThumbnailStorage(session, directory(session, false));
+            storage.requireLiveSession();
+            try {
+                HtmlPreviewDescriptor preview = previewForAttachment(session, owner);
+                if (preview == null || !preview.contentFingerprint.equals(fingerprint))
+                    throw new IOException("The immutable preview content changed");
+                return operation.run(storage);
+            } catch (IllegalArgumentException invalid) { throw new IOException("Preview is unavailable", invalid); }
+        }
     }
 
     public boolean deleteSession(String session) {

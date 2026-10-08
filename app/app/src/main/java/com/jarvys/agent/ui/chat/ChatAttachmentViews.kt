@@ -135,18 +135,26 @@ private fun AttachmentFileCard(attachment: ChatAttachment, sessionId: String, de
             }.getOrNull()
         }
     }
-    Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceVariant,
+    Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceVariant,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         modifier = Modifier.fillMaxWidth().testTag("chat-attachment-file-${attachment.id}")) {
-        Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Icon(LucideIcons.FileText, null, Modifier.size(24.dp), tint = MaterialTheme.colorScheme.primary)
-            Column(Modifier.weight(1f)) {
-                Text(attachment.name, maxLines = 3, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelLarge)
-                Text(Formatter.formatShortFileSize(context, attachment.sizeBytes), style = MaterialTheme.typography.labelSmall)
-                Text(attachment.mimeType, maxLines = 2, style = MaterialTheme.typography.labelSmall)
-                if (available == false) UnavailableAttachment(attachment.id)
-                if (available == true) ChatFileButtons(request, Modifier.padding(top = 8.dp),
-                    tagPrefix = if (delivered) "delivered-file" else "chat-file",
-                    onPreview = preview?.let { descriptor -> { onOpenPreview(descriptor.token) } })
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(LucideIcons.FileText, null, Modifier.size(26.dp), tint = MaterialTheme.colorScheme.primary)
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text(attachment.name, maxLines = 3, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleSmall)
+                    Text(Formatter.formatShortFileSize(context, attachment.sizeBytes) + " • " + attachment.mimeType,
+                        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            if (available == false) UnavailableAttachment(attachment.id)
+            if (available == true) {
+                preview?.let { descriptor ->
+                    HtmlArtifactThumbnail(request, descriptor) { onOpenPreview(descriptor.token) }
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                ChatFileIconButtons(request, Modifier.align(Alignment.CenterHorizontally),
+                    tagPrefix = if (delivered) "delivered-file" else "chat-file")
             }
         }
     }

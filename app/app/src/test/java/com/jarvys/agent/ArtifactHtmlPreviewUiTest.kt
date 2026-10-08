@@ -18,10 +18,8 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
-import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import com.jarvys.agent.ui.JarvysOwnTheme
@@ -41,8 +39,9 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * Persisted delivered-file cards and their actual AndroidView request boundary. The PNG captures
- * contain native Compose UI; Robolectric cannot render or validate the preview's Chromium DOM.
+ * UX28: persisted HTML thumbnails, icon-only actions and their actual AndroidView request boundary.
+ * PNG captures contain native Compose UI, including honest thumbnail fallback states. Robolectric
+ * does not render or validate Chromium DOM content; these are not browser-rendering screenshots.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -62,20 +61,20 @@ class ArtifactHtmlPreviewUiTest {
         val png: ByteArray,
     )
 
-    @Test fun restoredHtmlCardEnglishLightAt320dpAnd200PercentKeepsAllThreeActions() =
+    @Test fun restoredHtmlCardEnglishLightAt320dpAnd200PercentKeepsThumbnailAndIconActions() =
         restoredCard(false, "en-light-320dp-font200")
 
-    @Test fun restoredHtmlCardEnglishDarkAt320dpAnd200PercentKeepsAllThreeActions() =
+    @Test fun restoredHtmlCardEnglishDarkAt320dpAnd200PercentKeepsThumbnailAndIconActions() =
         restoredCard(true, "en-dark-320dp-font200")
 
     @Test
     @Config(qualifiers = "es-rES-w320dp-h900dp-port-mdpi")
-    fun restoredHtmlCardSpanishLightAt320dpAnd200PercentKeepsAllThreeActions() =
+    fun restoredHtmlCardSpanishLightAt320dpAnd200PercentKeepsThumbnailAndIconActions() =
         restoredCard(false, "es-light-320dp-font200")
 
     @Test
     @Config(qualifiers = "es-rES-w320dp-h900dp-port-mdpi")
-    fun restoredHtmlCardSpanishDarkAt320dpAnd200PercentKeepsAllThreeActions() =
+    fun restoredHtmlCardSpanishDarkAt320dpAnd200PercentKeepsThumbnailAndIconActions() =
         restoredCard(true, "es-dark-320dp-font200")
 
     private fun restoredCard(dark: Boolean, captureName: String) {
@@ -109,53 +108,35 @@ class ArtifactHtmlPreviewUiTest {
         awaitTag("delivered-file-preview-${fixture.attachment.id}")
         settleNativeFrame()
         compose.onNodeWithText(fixture.attachment.name).assertIsDisplayed()
-        compose.onNodeWithText("text/html").assertIsDisplayed()
+        compose.onNodeWithText("text/html", substring = true).assertIsDisplayed()
         val card = compose.onNodeWithTag("chat-attachment-file-${fixture.attachment.id}").fetchSemanticsNode().boundsInRoot
+        // Capture native UI even if a subsequent accessibility or geometry assertion fails.
+        capture(captureName)
+        val minimumTarget = 48f * compose.activity.resources.displayMetrics.density
         for (action in listOf("preview", "download", "share")) {
             val button = compose.onNodeWithTag("delivered-file-$action-${fixture.attachment.id}")
-                .assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+                .assertIsDisplayed().assertHasClickAction().fetchSemanticsNode().boundsInRoot
             assertTrue("$action must fit the narrow card without horizontal clipping: $button / $card",
                 button.left >= card.left && button.right <= card.right)
             assertTrue("$action must stay inside the card", button.top >= card.top && button.bottom <= card.bottom)
+            assertTrue("$action needs at least a 48dp-wide touch target", button.width >= minimumTarget - 1f)
+            assertTrue("$action needs at least a 48dp-high touch target", button.height >= minimumTarget - 1f)
         }
-        // Preserve native visual evidence even when the text-overflow assertion below fails.
-        capture(captureName)
-        for ((action, label) in listOf("preview" to R.string.chat_view_in_jarvys,
-            "download" to R.string.chat_download_action, "share" to R.string.image_action_share)) {
+        compose.onNodeWithTag("html-thumbnail-static-${fixture.attachment.id}")
+            .assertIsDisplayed().assertTextEquals(compose.activity.getString(R.string.chat_html_thumbnail_static))
+        val thumbnail = compose.onNodeWithTag("delivered-file-preview-${fixture.attachment.id}")
+            .assertContentDescriptionEquals(compose.activity.getString(R.string.chat_html_thumbnail_open, fixture.attachment.name))
+            .fetchSemanticsNode().boundsInRoot
+        assertEquals("The preview region is fixed at 3:2, independent of font size", thumbnail.width / 1.5f,
+            thumbnail.height, 1f)
+        for ((action, label) in listOf("download" to R.string.chat_download_action, "share" to R.string.image_action_share)) {
             val text = compose.activity.getString(label)
-            val layouts = mutableListOf<TextLayoutResult>()
-            val textNode = compose.onNodeWithText(text, useUnmergedTree = true).assertIsDisplayed()
-            textNode
-                .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
-            val layout = layouts.single()
-            val textBounds = textNode.fetchSemanticsNode().boundsInRoot
-            val buttonBounds = compose.onNodeWithTag("delivered-file-$action-${fixture.attachment.id}")
-                .fetchSemanticsNode().boundsInRoot
-            assertEquals("Validate the entire localized label", text, layout.layoutInput.text.text)
-            assertEquals("No omitted suffix at the final line", text.length,
-                layout.getLineEnd(layout.lineCount - 1, visibleEnd = true))
-            assertFalse("No vertical clipping at 200%: $text", layout.didOverflowHeight)
-            assertTrue("No ellipsis at 200%: $text", (0 until layout.lineCount).none(layout::isLineEllipsized))
-            // Compose may retain a wider cached paragraph constraint while shrink-wrapping the
-            // Text node to its real glyph width; didOverflowWidth compares those different widths.
-            // Check every character's actual box instead, in local and absolute native bounds.
-            val tolerance = 1f // One physical pixel allows integer raster/semantics rounding.
-            assertEquals("The full text node remains visible", layout.size.width.toFloat(), textBounds.width, tolerance)
-            assertEquals("The full text height remains visible", layout.size.height.toFloat(), textBounds.height, tolerance)
-            for (offset in text.indices) {
-                val glyph = layout.getBoundingBox(offset)
-                assertTrue("$text character $offset must fit its text width: $glyph / ${layout.size}",
-                    glyph.left >= -tolerance && glyph.right <= layout.size.width + tolerance)
-                assertTrue("$text character $offset must fit its text height: $glyph / ${layout.size}",
-                    glyph.top >= -tolerance && glyph.bottom <= layout.size.height + tolerance)
-                val nativeGlyph = glyph.translate(textBounds.topLeft)
-                for ((scope, bounds) in listOf("button" to buttonBounds, "card" to card)) {
-                    assertTrue("$text character $offset must be visible inside its $scope: $nativeGlyph / $bounds",
-                        nativeGlyph.left >= bounds.left - tolerance && nativeGlyph.right <= bounds.right + tolerance &&
-                            nativeGlyph.top >= bounds.top - tolerance && nativeGlyph.bottom <= bounds.bottom + tolerance)
-                }
-            }
+            val description = compose.activity.getString(R.string.chat_file_action_named, text, fixture.attachment.name)
+            compose.onNodeWithTag("delivered-file-$action-${fixture.attachment.id}").assertContentDescriptionEquals(description)
+            compose.onAllNodesWithText(text, useUnmergedTree = true).assertCountEquals(0)
         }
+        compose.onAllNodesWithText(compose.activity.getString(R.string.chat_view_in_jarvys), useUnmergedTree = true)
+            .assertCountEquals(0)
         compose.onNodeWithTag("delivered-file-download-${fixture.attachment.id}").performTouchInput { click() }
         compose.onNodeWithTag("delivered-file-share-${fixture.attachment.id}").performTouchInput { click() }
         assertEquals(1, downloads.size)
@@ -248,9 +229,16 @@ class ArtifactHtmlPreviewUiTest {
         }
         for (attachment in attachments) {
             awaitTag("delivered-file-download-${attachment.id}")
-            compose.onNodeWithTag("delivered-file-download-${attachment.id}").assertIsDisplayed()
-            compose.onNodeWithTag("delivered-file-share-${attachment.id}").assertIsDisplayed()
+            for ((action, label) in listOf("download" to R.string.chat_download_action,
+                "share" to R.string.image_action_share)) {
+                compose.onNodeWithTag("delivered-file-$action-${attachment.id}").assertIsDisplayed()
+                    .assertHasClickAction().assertContentDescriptionEquals(compose.activity.getString(
+                        R.string.chat_file_action_named, compose.activity.getString(label), attachment.name))
+            }
             compose.onNodeWithTag("delivered-file-preview-${attachment.id}").assertDoesNotExist()
+        }
+        for (label in listOf(R.string.chat_download_action, R.string.image_action_share, R.string.chat_view_in_jarvys)) {
+            compose.onAllNodesWithText(compose.activity.getString(label), useUnmergedTree = true).assertCountEquals(0)
         }
         assertNull(findWebView(compose.activity.window.decorView))
     }
@@ -372,11 +360,11 @@ class ArtifactHtmlPreviewUiTest {
             val bitmap = Bitmap.createBitmap(root.width, root.height, Bitmap.Config.ARGB_8888)
             try {
                 root.draw(Canvas(bitmap))
-                val directory = TestCaptureDirectories.named("ux22-html-preview-${BuildConfig.FLAVOR}")
+                val directory = TestCaptureDirectories.named("ux28-html-thumbnail-${BuildConfig.FLAVOR}")
                 val file = File(directory, "$name.png")
                 TestCaptureDirectories.assertOwned(directory, file)
                 file.outputStream().use { check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) }
-                println("UX22_CAPTURE=${file.absolutePath}")
+                println("UX28_CAPTURE=${file.absolutePath}")
             } finally { bitmap.recycle() }
         }
     }

@@ -21,7 +21,7 @@ Modo de ejecución: continuar la cola completa. Al cerrar cada pendiente o corre
 - **UX22 / preparación v41 completada en código y host:** gestos nativos del preview y apertura interna de HTML entregado. Suites finales: 1686 Full, 1459 Play, 17 runtime y nueve JavaScript aprobadas; lint sin incidencias nuevas. Ambos APK originales sin firma verificados para firma y entrega. La fluidez real de Chromium en teléfono sigue pendiente de aceptación.
 - **UX24 / preparación v42 completada en código y host:** efecto de trabajo sobre icono y nombre e identidad visual compartida entre cuadrícula y misiones. Suites finales: 1701 Full, 1474 Play, 17 runtime y nueve JavaScript aprobadas; sin incidencias nuevas de lint. Ambos APK originales sin firma verificados para firma y entrega.
 - **UX25 / preparación v43 completada en código y host:** contrato original de ingeniería, ejecución Full con aprobación por comando, modo de solo lectura y límites de jobs. Suites finales: 1725 Full, 1492 Play, 17 runtime y nueve JavaScript aprobadas; sin incidencias nuevas de lint. Ambos APK originales sin firma verificados para firma externa y entrega. Evaluación conductual con modelo real y aceptación física siguen pendientes.
-- **Siguiente etapa:** UX26, contrato del agente principal, salvo nueva priorización explícita.
+- **Siguiente etapa:** UX28, miniaturas HTML y acciones de archivos, en implementación después de UX27; UX29 y UX30 permanecen en cola.
 - La paridad completa con el comportamiento de v28 en un teléfono sigue pendiente de validación; la fiabilidad del agente es prioritaria antes de añadir funciones.
 
 ## Entregas previas
@@ -318,7 +318,7 @@ Contrato y límites: app/CREW_TASKS.md. Código y Pending.md respaldados directa
 
 ### 12. UX28: miniaturas HTML y acciones de archivos
 
-Estado: pendiente; solicitud del 8 de octubre de 2026, añadida a la cola después de UX27.
+Estado: en implementación para preparación v46 / 1.2.39-UX28. Primer checkpoint: tarjeta compacta con miniatura local y acciones por iconos; renderizado automático sin JavaScript ni almacenamiento DOM, recursos limitados al HTML inmutable. Las pruebas, revisión y compilación final siguen pendientes. No se afirma validación visual de Chromium en el host.
 
 - Mostrar una miniatura real del contenido HTML entregado y abrir el preview al tocarla; no sustituirla por una imagen genérica o un diseño inventado.
 - Eliminar el botón textual «View in Jarvys» de esa tarjeta y reorganizar sus acciones inferiores como iconos claros, con etiquetas de accesibilidad y objetivos táctiles adecuados.

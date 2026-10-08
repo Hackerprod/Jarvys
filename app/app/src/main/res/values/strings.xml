@@ -1357,4 +1357,9 @@ Their exit results are unknown. Do not repeat them automatically. Review project
     <string name="crew_message_action">Message a bot</string>
     <string name="crew_message_recipient">To %1$s</string>
     <string name="crew_message_short">Message</string>
+    <string name="chat_html_thumbnail_open">Open preview of %1$s</string>
+    <string name="chat_file_action_named">%1$s: %2$s</string>
+    <string name="chat_html_thumbnail_static">Static preview · scripts disabled</string>
+    <string name="chat_html_thumbnail_unavailable">Thumbnail unavailable. Tap to open the page.</string>
+    <string name="chat_html_thumbnail_loading">Preparing page thumbnail…</string>
 </resources>

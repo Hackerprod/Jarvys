@@ -66,7 +66,7 @@ class DeliveredFileUiTest {
         }
         compose.waitUntil(5_000) { compose.onAllNodesWithTag("delivered-file-download-${attachment.id}").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText(attachment.name).assertIsDisplayed()
-        compose.onNodeWithText(attachment.mimeType).assertIsDisplayed()
+        compose.onNodeWithText(attachment.mimeType, substring = true).assertIsDisplayed()
         compose.onNodeWithTag("delivered-file-download-${attachment.id}").performClick()
         compose.onNodeWithTag("delivered-file-share-${attachment.id}").performClick()
         assertEquals(session, downloads.single().sessionId)

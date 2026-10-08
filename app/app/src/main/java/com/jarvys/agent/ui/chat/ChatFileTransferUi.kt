@@ -10,6 +10,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -116,5 +122,45 @@ internal fun ChatFileButtons(request: ChatFileRequest, modifier: Modifier = Modi
         }
         if (transfer?.saved == true) TextButton(onClick = { actions.open(request) },
             modifier = Modifier.testTag("$tagPrefix-open-${request.artifactId}")) { Text(stringResource(R.string.chat_download_open)) }
+    }
+}
+
+
+/** Compact file-card actions retain the existing transfer state machine and native destinations. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun ChatFileIconButtons(request: ChatFileRequest, modifier: Modifier = Modifier,
+    tagPrefix: String = "chat-file") {
+    val actions = LocalChatFileActions.current
+    val transfer = actions.transfers[request.key]
+    val busy = transfer?.busy == true || transfer?.waitingForPermission == true
+    val saving = stringResource(R.string.chat_download_saving)
+    val download = stringResource(R.string.chat_file_action_named,
+        stringResource(R.string.chat_download_action), request.displayName)
+    val share = stringResource(R.string.chat_file_action_named,
+        stringResource(R.string.image_action_share), request.displayName)
+    val cancel = stringResource(R.string.chat_file_action_named,
+        stringResource(R.string.settings_cancel), request.displayName)
+    val open = stringResource(R.string.chat_file_action_named,
+        stringResource(R.string.chat_download_open), request.displayName)
+    FlowRow(modifier, horizontalArrangement = Arrangement.spacedBy(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilledTonalIconButton(onClick = { actions.download(request) }, enabled = !busy,
+            modifier = Modifier.size(48.dp).testTag("$tagPrefix-download-${request.artifactId}")
+                .semantics { contentDescription = download; if (busy) stateDescription = saving }) {
+            if (busy) CircularProgressIndicator(Modifier.size(20.dp).clearAndSetSemantics {}, strokeWidth = 2.dp)
+            else Icon(LucideIcons.Download, null, Modifier.size(22.dp))
+        }
+        if (busy) FilledTonalIconButton(onClick = { actions.cancel(request) },
+            modifier = Modifier.size(48.dp).testTag("$tagPrefix-cancel-${request.artifactId}")) {
+            Icon(LucideIcons.X, cancel, Modifier.size(22.dp))
+        } else FilledTonalIconButton(onClick = { actions.share(request) },
+            modifier = Modifier.size(48.dp).testTag("$tagPrefix-share-${request.artifactId}")) {
+            Icon(LucideIcons.Share, share, Modifier.size(22.dp))
+        }
+        if (transfer?.saved == true) FilledTonalIconButton(onClick = { actions.open(request) },
+            modifier = Modifier.size(48.dp).testTag("$tagPrefix-open-${request.artifactId}")) {
+            Icon(LucideIcons.Eye, open, Modifier.size(22.dp))
+        }
     }
 }

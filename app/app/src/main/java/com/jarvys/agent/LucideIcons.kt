@@ -75,6 +75,7 @@ internal object LucideIcons {
     val X: ImageVector by lazy(LazyThreadSafetyMode.PUBLICATION) { vector("X", "M18 6 6 18 M 0 0 m6 6 12 12") }
     val ClipboardPaste: ImageVector by lazy(LazyThreadSafetyMode.PUBLICATION) { vector("ClipboardPaste", "M11 14h10 M 0 0 M16 4h2a2 2 0 0 1 2 2v1.344 M 0 0 m17 18 4-4-4-4 M 0 0 M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 1.793-1.113 M 0 0 M 9 2 H 15 A 1 1 0 0 1 16 3 V 5 A 1 1 0 0 1 15 6 H 9 A 1 1 0 0 1 8 5 V 3 A 1 1 0 0 1 9 2 Z") }
     val FileUp: ImageVector by lazy(LazyThreadSafetyMode.PUBLICATION) { vector("FileUp", "M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z M 0 0 M14 2v5a1 1 0 0 0 1 1h5 M 0 0 M12 12v6 M 0 0 m15 15-3-3-3 3") }
+    val Share: ImageVector by lazy(LazyThreadSafetyMode.PUBLICATION) { vector("Share", "M12 16V3 M 0 0 m8 7 4-4 4 4 M 0 0 M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6") }
     val GitFork: ImageVector by lazy(LazyThreadSafetyMode.PUBLICATION) { vector("GitFork", "M 15 18 A 3 3 0 1 0 9 18 A 3 3 0 1 0 15 18 M 0 0 M 9 6 A 3 3 0 1 0 3 6 A 3 3 0 1 0 9 6 M 0 0 M 21 6 A 3 3 0 1 0 15 6 A 3 3 0 1 0 21 6 M 0 0 M18 9v2c0 .6-.4 1-1 1H7c-.6 0-1-.4-1-1V9 M 0 0 M12 12v3") }
 
     fun all(): List<ImageVector> = listOf(
@@ -133,6 +134,7 @@ internal object LucideIcons {
         X,
         ClipboardPaste,
         FileUp,
+        Share,
         GitFork,
     )
 }
