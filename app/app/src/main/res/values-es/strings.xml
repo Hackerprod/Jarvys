@@ -1245,7 +1245,6 @@ Después:
     <string name="drawer_archive_help">Abre un chat o restáuralo desde su menú</string>
     <string name="drawer_archived_chats">Chats archivados</string>
     <string name="drawer_archived_notice">Chat archivado. Lo encontrarás en Chats archivados.</string>
-    <string name="drawer_back_to_chats">Volver a chats</string>
     <string name="drawer_busy">Espera a que termine el trabajo activo antes de archivar o eliminar chats.</string>
     <string name="drawer_cancel_action">Cancelar</string>
     <string name="drawer_chat_actions">Opciones de %1$s</string>

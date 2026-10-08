@@ -25,7 +25,7 @@ class DrawerNavigationComposeTest {
 
     @Test fun pinnedSectionAppearsOnlyForVisiblePinnedRowsWithoutDuplicatingRecentRows() {
         val history = mutableStateOf(listOf(first, second))
-        compose.setContent { MaterialTheme { drawer(history.value) } }
+        compose.setContent { MaterialTheme { DrawerContent(history.value) } }
         compose.onNodeWithTag("drawer-pinned-heading").assertDoesNotExist()
         compose.onNodeWithText(compose.activity.getString(R.string.drawer_no_pinned_chats)).assertDoesNotExist()
         compose.runOnIdle { history.value = listOf(first.copy(pinned = true), second) }
@@ -38,7 +38,7 @@ class DrawerNavigationComposeTest {
     }
 
     @Test fun searchFiltersTitleAndOriginalGoalButNeverIncludesArchivedChats() {
-        compose.setContent { MaterialTheme { drawer(listOf(first, second.copy(archived = true))) } }
+        compose.setContent { MaterialTheme { DrawerContent(listOf(first, second.copy(archived = true))) } }
         compose.onNodeWithTag("drawer-search-toggle").performTouchInput { click() }
         compose.onNodeWithTag("drawer-search").assertIsFocused().performTextInput("oRiGiNaL")
         compose.onNodeWithText("First title").assertIsDisplayed()
@@ -48,7 +48,7 @@ class DrawerNavigationComposeTest {
     }
 
     @Test fun clearAndCancelHaveDifferentEffectsAndBothRestoreChats() {
-        compose.setContent { MaterialTheme { drawer(listOf(first)) } }
+        compose.setContent { MaterialTheme { DrawerContent(listOf(first)) } }
         compose.onNodeWithTag("drawer-search-toggle").performClick()
         compose.onNodeWithTag("drawer-search").performTextInput("missing")
         compose.onNodeWithContentDescription(compose.activity.getString(R.string.drawer_clear_search)).performTouchInput { click() }
@@ -67,7 +67,7 @@ class DrawerNavigationComposeTest {
             object : androidx.activity.OnBackPressedCallback(true) {
                 override fun handleOnBackPressed() { backCalls++ }
             })
-        compose.setContent { MaterialTheme { drawer(listOf(first), open.value) } }
+        compose.setContent { MaterialTheme { DrawerContent(listOf(first), open.value) } }
         compose.onNodeWithTag("drawer-search-toggle").performClick()
         compose.onNodeWithTag("drawer-search").performTextInput("missing")
         compose.runOnIdle { compose.activity.onBackPressedDispatcher.onBackPressed() }
@@ -83,7 +83,7 @@ class DrawerNavigationComposeTest {
     @Test fun searchSurvivesDrawerCloseReopenAndSavedStateRestoration() {
         val open = mutableStateOf(true)
         val restoration = StateRestorationTester(compose)
-        restoration.setContent { MaterialTheme { drawer(listOf(first, second), open.value) } }
+        restoration.setContent { MaterialTheme { DrawerContent(listOf(first, second), open.value) } }
         compose.onNodeWithTag("drawer-search-toggle").performClick()
         compose.onNodeWithTag("drawer-search").performTextInput("Second")
         compose.runOnIdle { open.value = false }
@@ -132,7 +132,7 @@ class DrawerNavigationComposeTest {
     }
 
     @androidx.compose.runtime.Composable
-    private fun drawer(history: List<RunHistoryItem>, open: Boolean = true) {
+    private fun DrawerContent(history: List<RunHistoryItem>, open: Boolean = true) {
         ConversationDrawer(history, "new", null, "", false, null, true, {}, {}, {}, {}, isDrawerOpen = open)
     }
 }
