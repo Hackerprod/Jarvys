@@ -328,7 +328,7 @@ class BotsCatalogComposeTest {
         var outside by mutableStateOf(false)
         compose.mainClock.autoAdvance = false
         compose.setContent { CompositionLocalProvider(LocalReducedMotion provides reduced, LocalLifecycleOwner provides owner) {
-            MaterialTheme { Box { BotWorkingName("Research", active, "research", Modifier.offset(y = if (outside) 2000.dp else 0.dp)) } }
+            MaterialTheme { Box { BotWorkingName("Research", active, "research", Modifier.offset { androidx.compose.ui.unit.IntOffset(0, if (outside) 2000.dp.roundToPx() else 0) }) } }
         } }
         compose.onNodeWithTag("bot-working-motion-research", useUnmergedTree = true).assertDoesNotExist()
         compose.runOnIdle { active = true }

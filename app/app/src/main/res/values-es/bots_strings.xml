@@ -14,7 +14,6 @@
     <string name="bots_toggle_accessibility">Habilitar %1$s</string>
     <string name="bots_working">Trabajando</string>
     <string name="bots_working_count">Trabajando · %1$d</string>
-    <string name="bots_not_running">Sin ejecutar</string>
     <string name="bots_open">Abrir %1$s</string>
     <string name="bots_read_only">Bot integrado. Sus instrucciones, herramientas e icono son fijos.</string>
     <string name="bots_runtime_details">Detalles de Coding</string>
@@ -50,7 +49,6 @@
     <string name="bots_operation_failed">No se pudo completar este cambio.</string>
     <string name="bots_retry">Reintentar</string>
     <string name="bots_loading">Cargando bots…</string>
-    <string name="bots_empty">Crea tu primer bot personalizado.</string>
     <string name="bots_enabled_help">Deshabilitar detiene las tareas actuales de este bot e impide nuevas tareas. Algunas acciones externas pueden haberse realizado ya.</string>
     <string name="bots_workspace">Espacio de trabajo</string>
     <string name="bots_capabilities">Herramientas</string>
@@ -63,5 +61,5 @@
     <string name="drawer_no_pinned_chats">No hay chats fijados</string>
     <string name="bots_changed_elsewhere">Este bot cambió en otro lugar. Tus cambios siguen aquí. Cópialos si los necesitas y vuelve a abrir el bot antes de guardar.</string>
     <string name="bots_draft_failed">No se pudo preparar la configuración. Comprueba el modelo y proveedor seleccionados e inténtalo de nuevo. No se guardó ningún bot.</string>
-    <string name="bots_icon_prompt_limit">Usa como máximo %1$d caracteres para describir el icono.</string>
+    <string name="bots_icon_prompt_limit">Límite de caracteres para el icono: %1$d.</string>
 </resources>

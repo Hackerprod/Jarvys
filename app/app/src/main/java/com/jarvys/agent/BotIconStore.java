@@ -187,7 +187,7 @@ public final class BotIconStore {
         }
     }
 
-    @android.annotation.TargetApi(26)
+    @androidx.annotation.RequiresApi(26)
     private static final class Api26 {
         static boolean isSymbolicLink(File file) throws IOException {
             try {

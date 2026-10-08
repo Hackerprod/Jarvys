@@ -138,6 +138,25 @@ public class BotCatalogCoreRuntimeTest {
         } finally { release.countDown(); crews.remove(session, manager); manager.close(); }
     }
 
+    @Test public void transientLegacyRoleCannotImpersonateAVersionedCatalogIdInWorkingCounts() throws Exception {
+        Field field = CoreAgentRuntime.class.getDeclaredField("CREWS");
+        field.setAccessible(true);
+        @SuppressWarnings("unchecked") Map<String, CrewManager> crews = (Map<String, CrewManager>) field.get(null);
+        String session = "catalog-transient-" + System.nanoTime();
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CrewManager manager = manager(session, started, release);
+        crews.put(session, manager);
+        try {
+            CrewManager.Bot bot = manager.spawn("custom", "A separate one-off mission", Collections.emptyList(), "catalog-collision");
+            assertTrue(started.await(5, TimeUnit.SECONDS));
+            assertEquals("custom-catalog-collision", bot.role.id);
+            assertEquals(0, bot.role.profileVersion);
+            assertFalse("Only versioned catalog profiles can light up a catalog tile",
+                    CoreAgentRuntime.workingBotCounts().containsKey(bot.role.id));
+        } finally { release.countDown(); crews.remove(session, manager); manager.close(); }
+    }
+
     private static CrewManager manager(String session, CountDownLatch started, CountDownLatch release) {
         CoreToolRegistry empty = new CoreToolRegistry(Collections.emptyList());
         return new CrewManager(session, empty, (bot, crew) -> empty,

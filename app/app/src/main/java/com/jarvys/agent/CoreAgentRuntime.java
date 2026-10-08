@@ -1110,7 +1110,8 @@ public final class CoreAgentRuntime {
     Map<String, Integer> counts = new java.util.LinkedHashMap<>();
     java.util.Set<String> seen = new java.util.HashSet<>();
     for (CrewManager manager : CREWS.values()) for (CrewManager.Bot bot : manager.bots()) {
-      if (bot.status() != CrewManager.Status.RUNNING || bot.token.isCancellationRequested()
+      if (bot.role.profileVersion <= 0 || bot.status() != CrewManager.Status.RUNNING
+          || bot.token.isCancellationRequested()
           || !seen.add(manager.conversationId() + "/" + bot.id)) continue;
       int previous = counts.containsKey(bot.role.id) ? counts.get(bot.role.id) : 0;
       counts.put(bot.role.id, previous == Integer.MAX_VALUE ? previous : previous + 1);

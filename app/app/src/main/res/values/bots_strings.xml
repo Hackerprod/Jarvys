@@ -14,7 +14,6 @@
     <string name="bots_toggle_accessibility">Enable %1$s</string>
     <string name="bots_working">Working</string>
     <string name="bots_working_count">Working · %1$d</string>
-    <string name="bots_not_running">Not running</string>
     <string name="bots_open">Open %1$s</string>
     <string name="bots_read_only">Built-in bot. Its instructions, tools and icon are fixed.</string>
     <string name="bots_runtime_details">Coding details</string>
@@ -50,7 +49,6 @@
     <string name="bots_operation_failed">Could not complete this change.</string>
     <string name="bots_retry">Retry</string>
     <string name="bots_loading">Loading bots…</string>
-    <string name="bots_empty">Create your first custom bot.</string>
     <string name="bots_enabled_help">Disabling stops this bot’s current tasks and prevents new ones. External actions may already have happened.</string>
     <string name="bots_workspace">Workspace</string>
     <string name="bots_capabilities">Tools</string>
@@ -63,5 +61,5 @@
     <string name="drawer_no_pinned_chats">No pinned chats</string>
     <string name="bots_changed_elsewhere">This bot changed elsewhere. Your edits are still here. Copy them if needed, then reopen the bot before saving.</string>
     <string name="bots_draft_failed">Could not prepare the configuration. Check the selected model and provider, then try again. No bot was saved.</string>
-    <string name="bots_icon_prompt_limit">Use no more than %1$d characters for the icon prompt.</string>
+    <string name="bots_icon_prompt_limit">Icon prompt character limit: %1$d.</string>
 </resources>
