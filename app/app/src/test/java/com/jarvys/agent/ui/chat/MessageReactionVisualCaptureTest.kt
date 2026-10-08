@@ -147,6 +147,7 @@ class MessageReactionVisualCaptureTest {
         capture("image-only")
 
         compose.runOnIdle { event = event.copy(attachments = listOf(document)) }
+        awaitReactionFileReady(compose, document.id)
         assertBadge("👍")
         assertAttachmentClearance("chat-attachment-file-${document.id}")
         capture("file-only")
@@ -156,6 +157,7 @@ class MessageReactionVisualCaptureTest {
             compose.onAllNodesWithTag("chat-attachment-image-${image.id}").fetchSemanticsNodes()
                 .singleOrNull()?.config?.contains(SemanticsActions.OnClick) == true
         }
+        awaitReactionFileReady(compose, document.id)
         assertBadge("👍")
         val badge = compose.onNodeWithTag("user-message-reaction-14").fetchSemanticsNode().boundsInRoot
         for (tag in listOf("chat-attachment-image-${image.id}", "chat-attachment-file-${document.id}")) {

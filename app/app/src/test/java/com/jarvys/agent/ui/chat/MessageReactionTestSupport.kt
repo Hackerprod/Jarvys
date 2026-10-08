@@ -11,6 +11,7 @@ import androidx.activity.ComponentActivity
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.junit4.AndroidComposeTestRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performSemanticsAction
@@ -18,6 +19,7 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.test.ext.junit.rules.ActivityScenarioRule
 import com.jarvys.agent.AttachmentStore
 import com.jarvys.agent.ChatAttachment
+import com.jarvys.agent.LocalRunStore
 import com.jarvys.agent.TestCaptureDirectories
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -48,7 +50,12 @@ internal class ReactionAttachmentFixtures(base: Context) {
     }
 
     fun document(name: String): ChatAttachment = store.copyFromStream(session, name, "text/plain",
-        ChatAttachment.Kind.FILE, ByteArrayInputStream("Local review notes".toByteArray()))
+        ChatAttachment.Kind.FILE, ByteArrayInputStream("Local review notes".toByteArray())).also { attachment ->
+        // File controls require persisted conversation ownership, not just copied bytes.
+        val history = LocalRunStore(context)
+        history.appendConversationMessage(session, "user", "Attached review notes", listOf(attachment))
+        check(history.findChatFile(session, "attachment", attachment.id) == attachment)
+    }
 }
 
 /** Plain paragraphs also appear in the async parser's 16 sp fallback. Wait for the real 14 sp body. */
@@ -67,6 +74,21 @@ internal fun awaitReactionMarkdownText(
     }
     compose.waitForIdle()
     return compose.onNodeWithText(text, useUnmergedTree = true)
+}
+
+/** Ownership resolves on IO before file action buttons change the card's geometry.
+ * Wait for that real readiness signal before comparing a badge snapshot with its parent row.
+ * The geometry assertions remain unchanged and still fail on overlap or extra padding.
+ */
+internal fun awaitReactionFileReady(
+    compose: AndroidComposeTestRule<ActivityScenarioRule<ComponentActivity>, ComponentActivity>,
+    attachmentId: String,
+) {
+    compose.waitUntil(5_000) {
+        compose.onAllNodesWithTag("chat-file-download-$attachmentId").fetchSemanticsNodes()
+            .singleOrNull()?.config?.contains(SemanticsActions.OnClick) == true
+    }
+    awaitReactionDrawIdle(compose)
 }
 
 /** Flushes actual View layout/draw after Compose settles; captures remain host-rendered native pixels. */

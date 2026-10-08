@@ -237,6 +237,7 @@ class MessageReactionUiTest {
             compose.onAllNodesWithTag(thumbnail).fetchSemanticsNodes().singleOrNull()
                 ?.config?.contains(SemanticsActions.OnClick) == true
         }
+        awaitReactionFileReady(compose, document.id)
         assertBadge(1L, "Jarvys reacted 👍")
         val badge = compose.onNodeWithTag("user-message-reaction-1").fetchSemanticsNode().boundsInRoot
         for (tag in listOf(thumbnail, "chat-attachment-file-${document.id}")) {
