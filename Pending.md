@@ -79,7 +79,11 @@ Estado: completado en código; revisión y pruebas agregadas aprobadas. El prove
 
 ### UX23. Restaurar selección de texto en respuestas
 
-Estado: fallo confirmado en dispositivo; pendiente después del P0 y antes de nuevas funciones.
+Estado: corrección mínima implementada para preparación v34 / 1.2.27-UX23; pruebas dirigidas en curso.
+
+- Confirmada la omisión durante la recuperación de los dos contenedores de selección presentes en v28: cuerpo de respuesta y cuerpo de traducción. Restaurados por mensaje, sin envolver encabezados, sugerencias, acciones de pie, adjuntos ni vecinos; no se modifica la frontera táctil pasiva del compositor.
+- Una regresión de pulsación larga reproduce el fallo en la fuente P0 antes de aplicar el cambio: no se abre la selección. Se añaden pruebas de gestos, selectores, arrastre, copia, Markdown/código, enlaces, traducciones, reacciones, temas y texto grande, scroll y foco/IME.
+- La validación del host sustituye únicamente la presentación del menú y la lupa; no certifica el teléfono, el menú nativo ni un teclado físico. La compilación seguirá sin firma, sin entrega parcial ni clave nueva.
 
 - Restaurar selección mediante pulsación larga en los mensajes del agente; la selección actual de los mensajes del usuario debe conservarse.
 - Contrastar con UX7/v28: selección por mensaje para respuestas, traducciones, Markdown y código; excluir adjuntos, acciones de pie y mensajes vecinos.

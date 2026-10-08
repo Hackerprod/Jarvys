@@ -387,8 +387,11 @@ internal fun AssistantReplyView(
                 if (isError) R.string.chat_assistant_error_accessibility else R.string.chat_assistant_message_accessibility,
             )
         }) {
-            AssistantMarkdown(event.text, onOpenSkillFile = onOpenSkillFile,
-                textColor = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onBackground)
+            // One selection scope per body; actions and neighboring messages stay outside it.
+            SelectionContainer {
+                AssistantMarkdown(event.text, onOpenSkillFile = onOpenSkillFile,
+                    textColor = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onBackground)
+            }
         }
         if (event.proactiveReplies.isNotEmpty()) SuggestedReplyActions(event, onProactiveSuggestedReply, !streamActive)
         AnimatedVisibility(
@@ -660,7 +663,9 @@ private fun TranslationNote(event: AgentRunUiEvent, onOpenSkillFile: (SkillFileL
                 onHide(event.detail.orEmpty())
             }
         }
-        AssistantMarkdown(event.text, Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp), onOpenSkillFile)
+        SelectionContainer {
+            AssistantMarkdown(event.text, Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp), onOpenSkillFile)
+        }
     }
 }
 
