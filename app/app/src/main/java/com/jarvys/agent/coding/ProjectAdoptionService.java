@@ -313,8 +313,17 @@ public final class ProjectAdoptionService {
       ProjectFileIO.preservePermissions(source.resolve(entry.path), staged);
       token.throwIfCancelled();
       scope.resolve(entry.path);
-      ProjectFileIO.linkNoReplace(staged, target);
-      promoted = true;
+      try {
+        ProjectFileIO.copyNew(staged, target, entry.sha, entry.size, copiedBytes -> token.throwIfCancelled());
+        promoted = true;
+      } catch (ProjectFileIO.IncompleteCreationException interruptedCreation) {
+        promoted = true;
+        temporary = null;
+        cleanupWarnings.add("Adoption destination is incomplete or unverified: " + entry.path
+            + "; source and staging evidence retained. Inspect before retrying.");
+        lease.markChanged();
+        throw interruptedCreation;
+      }
       copied.add(entry.path);
       lease.markChanged();
       if (observer != null) observer.afterPromotion(entry.path);

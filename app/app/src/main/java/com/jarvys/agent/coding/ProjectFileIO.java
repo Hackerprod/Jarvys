@@ -8,14 +8,23 @@ import android.system.StructStat;
 import java.io.File;
 import java.io.FileDescriptor;
 import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.channels.Channels;
+import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.OpenOption;
+import java.nio.file.attribute.PosixFilePermissions;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.Arrays;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 
 final class ProjectFileIO {
   private ProjectFileIO() {}
@@ -146,15 +155,138 @@ final class ProjectFileIO {
     }
   }
 
-  static void linkNoReplace(File source, File destination) throws IOException {
-    if (Build.VERSION.SDK_INT >= 26) {
-      Nio.link(source, destination);
-      return;
+  /** A failed exclusive creation may have left bytes; callers must retain its recovery evidence. */
+  static final class IncompleteCreationException extends IOException {
+    IncompleteCreationException(Throwable cause) {
+      super("New project file creation was interrupted; inspect the destination and recovery record before retrying", cause);
     }
+  }
+
+  interface CopyObserver {
+    void afterChunk(long copied) throws IOException;
+  }
+
+  /**
+   * Android forbids hard links in untrusted apps. Create a new inode exclusively instead.
+   * Existing paths (including dangling symlinks) are never opened or overwritten. Unlike an
+   * atomic rename, readers may observe a partial new file; the mutation journal records this
+   * intent before entry and recovery never replays it.
+   */
+  static void copyNew(File source, File destination) throws IOException {
+    copyNew(source, destination, null);
+  }
+
+  static void copyNew(File source, File destination, CopyObserver observer) throws IOException {
+    Attributes original = attributes(source);
+    String expectedSha;
+    try (InputStream input = openNoFollow(source)) { expectedSha = ProjectScope.sha256(input); }
+    copyNew(source, destination, expectedSha, original.size(), observer);
+  }
+
+  static void copyNew(File source, File destination, String expectedSha, long expectedSize,
+      CopyObserver observer) throws IOException {
+    Attributes original = attributes(source);
+    if (original.size() != expectedSize) throw new IOException("Creation source length changed");
+    if (!original.isRegularFile() || original.isSymbolicLink()) {
+      throw new IOException("Creation source is not an ordinary file");
+    }
+    ProjectScope.Anchor parent = new ProjectScope.Anchor(destination.getParentFile());
+    boolean created = false;
+    try (InputStream input = openNoFollow(source)) {
+      parent.validate();
+      if (Build.VERSION.SDK_INT >= 26) {
+        Nio.copyNew(input, source, destination, original, parent, expectedSha, expectedSize, observer);
+      } else {
+        copyNewAndroid(input, source, destination, original, parent, expectedSha, expectedSize, observer);
+      }
+      created = true;
+    } catch (IOException error) {
+      if (created && !(error instanceof IncompleteCreationException)) {
+        throw new IncompleteCreationException(error);
+      }
+      throw error;
+    }
+  }
+
+  private static void copyNewAndroid(InputStream input, File source, File destination,
+      Attributes original, ProjectScope.Anchor parent, String expectedSha, long expectedSize, CopyObserver observer) throws IOException {
+    FileDescriptor descriptor;
     try {
-      Os.link(source.getPath(), destination.getPath());
+      int mode = Os.lstat(source.getPath()).st_mode & 0777;
+      descriptor = Os.open(destination.getPath(),
+          OsConstants.O_WRONLY | OsConstants.O_CREAT | OsConstants.O_EXCL | OsConstants.O_NOFOLLOW, mode);
     } catch (ErrnoException error) {
       throw new IOException(error.getMessage(), error);
+    }
+    try (FileOutputStream output = new FileOutputStream(descriptor)) {
+      Attributes created;
+      try { created = fromStat(Os.fstat(descriptor)); }
+      catch (ErrnoException error) { throw new IOException("Could not verify new project descriptor", error); }
+      copy(input, output, expectedSha, expectedSize, observer);
+      output.getFD().sync();
+      validateCreated(source, destination, original, created, parent, expectedSha);
+    } catch (IOException | RuntimeException error) {
+      throw new IncompleteCreationException(error);
+    }
+  }
+
+  private static void copy(InputStream input, java.io.OutputStream output, String expectedSha,
+      long expectedSize, CopyObserver observer) throws IOException {
+    MessageDigest digest;
+    try { digest = MessageDigest.getInstance("SHA-256"); }
+    catch (NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
+    byte[] buffer = new byte[8192];
+    long copied = 0;
+    int count;
+    while ((count = input.read(buffer)) != -1) {
+      if (count > expectedSize - copied) throw new IOException("Creation source grew during copy");
+      output.write(buffer, 0, count);
+      digest.update(buffer, 0, count);
+      copied += count;
+      if (observer != null) observer.afterChunk(copied);
+    }
+    StringBuilder sha = new StringBuilder();
+    for (byte value : digest.digest()) sha.append(String.format(java.util.Locale.ROOT, "%02x", value & 255));
+    if (copied != expectedSize || !expectedSha.equals(sha.toString())) {
+      throw new IOException("Creation source content changed");
+    }
+  }
+
+  private static void validateCreated(File source, File destination, Attributes original,
+      Attributes created, ProjectScope.Anchor parent, String expectedSha) throws IOException {
+    parent.validate();
+    Attributes after = attributes(destination);
+    Attributes sourceAfter = attributes(source);
+    if (!ProjectScope.sameIdentity(original, sourceAfter) || original.size() != sourceAfter.size()
+        || !ProjectScope.sameIdentity(created, after) || after.isSymbolicLink()
+        || after.size() != original.size()) {
+      throw new IOException("Project file changed during exclusive creation");
+    }
+    try (InputStream installed = openNoFollow(destination)) {
+      if (!expectedSha.equals(ProjectScope.sha256(installed))) {
+        throw new IOException("New project content changed before verification");
+      }
+    }
+    if (!ProjectScope.sameIdentity(created, attributes(destination))) {
+      throw new IOException("New project file was replaced before verification");
+    }
+    parent.validate();
+  }
+
+  /**
+   * Only for app-private recovery metadata, never project/code paths. These callers serialize
+   * creation in this process; project tools and the code mount cannot access this directory.
+   * Rename preserves a fully written/checksummed record across process death without hard links.
+   */
+  static synchronized void moveNewPrivateRecord(File source, File destination) throws IOException {
+    if (!source.getParentFile().getCanonicalFile().equals(destination.getParentFile().getCanonicalFile())) {
+      throw new IOException("Recovery record promotion must stay in its private directory");
+    }
+    if (exists(destination)) throw new IOException("Private project recovery record already exists");
+    if (Build.VERSION.SDK_INT >= 26) {
+      Nio.moveNew(source, destination);
+    } else if (!source.renameTo(destination)) {
+      throw new IOException("Could not promote private project recovery record");
     }
   }
 
@@ -215,8 +347,25 @@ final class ProjectFileIO {
           StandardCopyOption.REPLACE_EXISTING);
     }
 
-    static void link(File source, File destination) throws IOException {
-      Files.createLink(destination.toPath(), source.toPath());
+    static void copyNew(InputStream input, File source, File destination, Attributes original,
+        ProjectScope.Anchor parent, String expectedSha, long expectedSize, CopyObserver observer) throws IOException {
+      // CREATE_NEW is atomic with respect to other creators and refuses existing symlinks.
+      Set<OpenOption> options = new HashSet<>(Arrays.asList(StandardOpenOption.WRITE,
+          StandardOpenOption.CREATE_NEW, LinkOption.NOFOLLOW_LINKS));
+      FileChannel channel = FileChannel.open(destination.toPath(), options,
+          PosixFilePermissions.asFileAttribute(Files.getPosixFilePermissions(source.toPath(), LinkOption.NOFOLLOW_LINKS)));
+      try (FileChannel output = channel) {
+        Attributes created = attributes(destination);
+        copy(input, Channels.newOutputStream(output), expectedSha, expectedSize, observer);
+        output.force(true);
+        validateCreated(source, destination, original, created, parent, expectedSha);
+      } catch (IOException | RuntimeException error) {
+        throw new IncompleteCreationException(error);
+      }
+    }
+
+    static void moveNew(File source, File destination) throws IOException {
+      Files.move(source.toPath(), destination.toPath());
     }
   }
 }

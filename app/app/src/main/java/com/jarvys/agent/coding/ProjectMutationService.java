@@ -170,6 +170,8 @@ public final class ProjectMutationService {
 
     default void afterPromotion(String path) throws IOException {}
 
+    default void afterCreationChunk(String path, long copied) throws IOException {}
+
     default void afterEffectBeforeJournal(String path) throws IOException {}
 
     default void beforeCleanup(String path, boolean directory) throws IOException {}
@@ -267,7 +269,7 @@ public final class ProjectMutationService {
           journal,
           cleanupWarnings.isEmpty() ? Status.APPLIED : Status.PARTIAL,
           applied,
-          "Applied atomically per file; no multi-file transaction is claimed",
+          "Applied with durable receipts; replacements are atomic, new files are exclusively created; no multi-file transaction is claimed",
           scope.version(),
           cleanupWarnings);
     } catch (CancellationException stopped) {
@@ -593,8 +595,22 @@ public final class ProjectMutationService {
         ProjectFileIO.preservePermissions(scope.resolve(permissionsFrom), staged);
       scope.resolve(relative);
       if (ProjectScope.MISSING.equals(expected)) {
-        ProjectFileIO.linkNoReplace(staged, target);
-        promoted = true;
+        try {
+          ProjectFileIO.copyNew(staged, target, hash(bytes), bytes.length, copied -> {
+            token.throwIfCancelled();
+            if (observer != null) observer.afterCreationChunk(relative, copied);
+          });
+          promoted = true;
+        } catch (ProjectFileIO.IncompleteCreationException interruptedCreation) {
+          // The destination was exclusively created but completion was not verified. Keep both
+          // paths and the durable intent, invalidate stale scope versions, and never replay.
+          promoted = true;
+          temporary = null;
+          cleanupWarnings.add("New file creation is incomplete or unverified: " + relative
+              + "; staging and recovery evidence retained. Inspect before retrying.");
+          lease.markChanged();
+          throw interruptedCreation;
+        }
       } else {
         ProjectFileIO.atomicReplace(staged, target);
         promoted = true;

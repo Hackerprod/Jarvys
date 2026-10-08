@@ -29,12 +29,27 @@ Este archivo mantiene la cola vigente y el estado de cada etapa. Debe actualizar
 
 ### P0. Herramientas y continuidad del agente
 
-Estado: investigación y corrección prioritarias antes de APKFACTORY1.
+Estado: causas confirmadas y corrección en curso, antes de APKFACTORY1.
+
+- **Primer checkpoint:** eliminada la dependencia de hard links en identidad/journal y creación de archivos de Coding, operación prohibida por Android a las apps normales. Los registros privados se promocionan completos; los archivos nuevos se crean de forma exclusiva, sin sobrescribir rutas existentes, con comprobación de tamaño y SHA-256.
+- Si una creación queda interrumpida, se conservan el destino, el staging y la evidencia de recuperación; se informa un resultado parcial o incierto y no se reejecuta automáticamente. Las actualizaciones de archivos existentes conservan el reemplazo atómico.
+- Diez regresiones dirigidas de almacenamiento aprobadas en el host (SDK 34/Robolectric), incluidas colisiones, symlinks, competencia entre creadores, copia parcial, recuperación sin replay y contenido modificado. Revisión independiente completada. Esto no sustituye la validación real en teléfono ni confirma el fallback de API 24.
+- Diagnóstico de continuidad confirmado: el historial de herramientas del agente principal no se restauraba entre turnos, aunque la interfaz conservaba sus tarjetas. La persistencia estructurada, la compactación, los reintentos sin progreso y las carreras de aprobación siguen en revisión y pruebas; no se declara una entrega lista.
 
 - Reproducir y diagnosticar los fallos repetidos de herramientas y la pérdida de continuidad observados en v32, contrastando la ejecución real con los contratos de las herramientas y el historial enviado al proveedor.
 - Conservar resultados de herramientas y estado relevante entre turnos y reinicios, con límites claros de contexto y sin reejecutar automáticamente acciones externas ambiguas.
 - Revisar operaciones de archivos compatibles con las restricciones reales de Android, errores, cancelación, reintentos y controles de aprobación.
 - Añadir pruebas de regresión dirigidas y validar en el dispositivo antes de afirmar que se ha corregido el comportamiento real.
+
+### P0 UI. Corregir la presentación de Bots
+
+Estado: corrección prioritaria junto al incidente del agente.
+
+- Alinear cabecera, altura e insets con las vistas de Ajustes; evitar solapamiento con la barra de estado.
+- Colocar Añadir como botón en la esquina superior derecha.
+- Mostrar dos bots por fila, con icono arriba y nombre debajo, sin tarjetas/contenedores externos ni subtítulos de tipo “Built-in” o “Your reusable assistants”.
+- Conservar inmutabilidad de plantillas, edición y deshabilitado desde el detalle, animación de trabajo real y accesibilidad.
+- Revisar capturas y geometría con español/inglés, ambos temas y texto grande antes de entregar.
 
 ### 1. APKFACTORY1: fábrica local de APK y skill de Coding
 
