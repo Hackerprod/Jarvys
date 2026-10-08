@@ -1,0 +1,36 @@
+{
+  "stage": "UX23",
+  "version_code": 34,
+  "version_name": "1.2.27-UX23",
+  "baseline": "P0 v33",
+  "baseline_regression": "Real long-press on formatted assistant text did not open selection before restoration.",
+  "restoration": "Two per-message body-only SelectionContainer scopes, matching v28 assistant response and translation structure.",
+  "focused_full": {
+    "tests": 39,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "new_pointer_tests": 14,
+  "covered": [
+    "Light/dark at font scales 1.0 and 1.5",
+    "Formatted assistant text, range handles, handle dragging, copy and select-all",
+    "Markdown blocks and fenced code within one message",
+    "Horizontal code scrolling and vertical long-answer scrolling",
+    "Translation text excludes its header, hide action and original message",
+    "User reaction, attachments, neighboring messages and proactive suggestions excluded",
+    "Ordinary link taps preserved; rendered link text included in select-all",
+    "Error and streaming response selection",
+    "Active message selection yields to composer focus; draft retained; 1px-drift send remains reachable",
+    "Injected IME insets lift composer without claiming physical keyboard validation"
+  ],
+  "known_existing_behavior": [
+    "Compose 1.9 long-press directly on a link label may both select it and trigger its link callback. Identical fresh-state behavior confirmed on the unchanged user-message wrapper. No gesture/library rewrite included."
+  ],
+  "host_limits": [
+    "Robolectric SDK 34 native rendering; not a physical Android phone",
+    "Toolbar presentation and magnifier replaced in tests; Foundation gesture recognition, range handles and clipboard callbacks are real",
+    "Activity-root captures exclude separate popup handles and toolbar",
+    "Full/Play aggregate, lint and unsigned artifacts pending"
+  ]
+}
