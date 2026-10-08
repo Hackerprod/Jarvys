@@ -75,6 +75,16 @@ public final class AgentForegroundService extends Service {
 
   private final AtomicInteger activeReflectionTasks = new AtomicInteger();
   private final AtomicInteger replacementTransitions = new AtomicInteger();
+  private final Object lifecycleLock = new Object();
+  private boolean stopping;
+
+  private boolean reserveReplacement() {
+    synchronized (lifecycleLock) {
+      if (stopping || currentInstance != this) return false;
+      replacementTransitions.incrementAndGet();
+      return true;
+    }
+  }
 
   @Override
   protected void attachBaseContext(Context base) {
@@ -289,14 +299,18 @@ public final class AgentForegroundService extends Service {
     AgentForegroundService service = currentInstance;
     if (service == null || !MessageReactionTool.isOrdinaryChat(sessionId)
         || !sessionId.equals(AgentRunUiState.INSTANCE.getState().getValue().getSessionId())
-        || !AgentRunUiState.INSTANCE.getState().getValue().getRunning()) return false;
-    LocalRunStore store = new LocalRunStore(context);
-    String requestId = store.appendInterruptRequest(sessionId, text, skills, memoryDisabled);
+        || !sessionId.equals(AgentRunUiState.INSTANCE.getState().getValue().getInteractiveOwnerSessionId())
+        || !AgentRunUiState.INSTANCE.getState().getValue().getRunning()
+        || AgentRunUiState.INSTANCE.getState().getValue().getCompacting()
+        || AgentRunUiState.INSTANCE.getState().getValue().getReflecting()
+        || StopController.getInstance().isStopped() || !service.reserveReplacement()) return false;
+    LocalRunStore store;
     // Persistence precedes cancellation and clearing the composer. The input is recoverable even
     // if the service is destroyed or STOP cancels the queued replacement before it starts.
     StopController controller = StopController.getInstance();
-    service.replacementTransitions.incrementAndGet();
     try {
+      store = new LocalRunStore(context);
+      String requestId = store.appendInterruptRequest(sessionId, text, skills, memoryDisabled);
       controller.stopRun(); // Its cancellation callbacks stop only this captain's Crew and approvals.
       CancellationToken replacement = controller.beginRun();
       if (replacement != null) {
@@ -342,6 +356,7 @@ public final class AgentForegroundService extends Service {
       }
     } finally {
       service.replacementTransitions.decrementAndGet();
+      service.stopServiceIfIdle();
     }
     AgentRunUiState.refreshPersistedSession(sessionId, store.readConversationTimeline(sessionId));
     return true;
@@ -479,6 +494,13 @@ public final class AgentForegroundService extends Service {
           com.jarvys.agent.proactive.BackgroundRunController.INSTANCE.interactiveFinished();
         throw failure;
       }
+    } else if (realAgent) {
+      LocalRunStore store = new LocalRunStore(this);
+      String id = existingUserMessageId;
+      if (!userMessageAlreadyRecorded) id = store.appendConversationMessage(chatSessionId, "user", chatDisplayGoal);
+      store.appendConversationMessage(chatSessionId, "assistant", getString(R.string.chat_other_run_active),
+          null, "", id, "FAILED");
+      AgentRunUiState.rejectUnstarted(chatSessionId, store.readConversationTimeline(chatSessionId));
     }
     return START_NOT_STICKY;
   }
@@ -933,10 +955,14 @@ public final class AgentForegroundService extends Service {
   }
 
   private void stopServiceIfIdle() {
-    if (StopController.getInstance().isStopped()
-        && activeReflectionTasks.get() == 0
-        && replacementTransitions.get() == 0
-        && !CoreAgentRuntime.hasActiveCrewBots()) stopSelf();
+    boolean noCrew = !CoreAgentRuntime.hasActiveCrewBots();
+    synchronized (lifecycleLock) {
+      if (StopController.getInstance().isStopped() && activeReflectionTasks.get() == 0
+          && replacementTransitions.get() == 0 && noCrew) {
+        stopping = true;
+        stopSelf();
+      }
+    }
   }
 
   private boolean enqueueMemoryReflection(

@@ -192,6 +192,7 @@ data class AgentRunUiSnapshot(
     val sessionId: String? = null,
     val goal: String = "",
     val running: Boolean = false,
+    val interactiveOwnerSessionId: String? = null,
     val outcome: String? = null,
     val events: List<AgentRunUiEvent> = emptyList(),
     val compacting: Boolean = false,
@@ -221,6 +222,16 @@ object AgentRunUiState {
     private var activeGeneration: Long = Long.MIN_VALUE
     private var ownedSessionId: String? = null
     private var ownedRunActive = false
+    private var ownedLiveSnapshot: AgentRunUiSnapshot? = null
+
+    private fun preserveOwnedSnapshot() {
+        if (ownedRunActive && _state.value.sessionId == ownedSessionId) ownedLiveSnapshot = _state.value
+    }
+
+    private fun publishOwnedSnapshot(snapshot: AgentRunUiSnapshot) {
+        if (_state.value.sessionId == snapshot.sessionId) _state.value = snapshot
+        else ownedLiveSnapshot = snapshot
+    }
 
     private const val MAX_EVENTS = 300
     private var nextEventId = 1L
@@ -294,12 +305,19 @@ object AgentRunUiState {
 
     @JvmStatic
     fun restoreSession(sessionId: String, events: List<AgentRunUiEvent>) = synchronized(lock) {
+        preserveOwnedSnapshot()
+        if (ownedRunActive && ownedSessionId == sessionId && ownedLiveSnapshot != null) {
+            _state.value = ownedLiveSnapshot!!.copy(running = true, interactiveOwnerSessionId = ownedSessionId)
+            refreshPersistedSession(sessionId, events)
+            return@synchronized
+        }
         pendingProgress.clear()
         val current = _state.value
         nextEventId = maxOf(nextEventId, (events.maxOfOrNull { it.id } ?: 0L) + 1L)
         _state.value = AgentRunUiSnapshot(
             sessionId = sessionId,
             running = ownedRunActive && ownedSessionId == sessionId,
+            interactiveOwnerSessionId = if (ownedRunActive) ownedSessionId else null,
             goal = events.lastOrNull { it.kind == "user" }?.text.orEmpty(),
             events = events,
             reflecting = current.reflecting,
@@ -388,9 +406,11 @@ object AgentRunUiState {
 
     @JvmStatic
     fun resetSession(sessionId: String) = synchronized(lock) {
+        preserveOwnedSnapshot()
         pendingProgress.clear()
         val current = _state.value
-        _state.value = AgentRunUiSnapshot(sessionId = sessionId, reflecting = current.reflecting,
+        _state.value = AgentRunUiSnapshot(sessionId = sessionId,
+            interactiveOwnerSessionId = if (ownedRunActive) ownedSessionId else null, reflecting = current.reflecting,
             reflectionSessionId = current.reflectionSessionId, reflectionStatus = current.reflectionStatus,
             reflectionLastSuccessMillis = current.reflectionLastSuccessMillis)
     }
@@ -468,9 +488,11 @@ object AgentRunUiState {
 
     @JvmStatic
     fun bindGeneration(sessionId: String, generation: Long) = synchronized(lock) {
+        if (ownedSessionId != sessionId || activeGeneration != generation) ownedLiveSnapshot = null
         ownedSessionId = sessionId
         activeGeneration = generation
         ownedRunActive = true
+        _state.value = _state.value.copy(interactiveOwnerSessionId = sessionId)
         if (_state.value.sessionId == sessionId) _state.value = _state.value.copy(running = true, outcome = null)
     }
 
@@ -481,6 +503,11 @@ object AgentRunUiState {
             if (regeneration) beginRegenerationRun(sessionId, goal) else beginRun(sessionId, goal, attachments)
         }
         bindGeneration(sessionId, generation)
+        if (_state.value.sessionId != sessionId) {
+            ownedLiveSnapshot = AgentRunUiSnapshot(sessionId = sessionId, goal = goal, running = true,
+                interactiveOwnerSessionId = sessionId,
+                events = listOf(event("user", goal).copyAttachments(attachments)))
+        }
     }
 
     @JvmStatic
@@ -494,6 +521,13 @@ object AgentRunUiState {
     }
 
     @JvmStatic
+    fun rejectUnstarted(sessionId: String, events: List<AgentRunUiEvent>) = synchronized(lock) {
+        if (_state.value.sessionId != sessionId) return@synchronized
+        _state.value = _state.value.copy(running = ownedRunActive && ownedSessionId == sessionId)
+        refreshPersistedSession(sessionId, events)
+    }
+
+    @JvmStatic
     fun withSession(sessionId: String, update: Runnable) = synchronized(lock) {
         if (_state.value.sessionId == sessionId) update.run()
     }
@@ -502,6 +536,8 @@ object AgentRunUiState {
     fun stopPendingGeneration(sessionId: String, generation: Long) = synchronized(lock) {
         if (ownedRunActive && ownedSessionId == sessionId && activeGeneration == generation) {
             ownedRunActive = false
+            ownedLiveSnapshot = null
+            _state.value = _state.value.copy(interactiveOwnerSessionId = null)
             if (_state.value.sessionId == sessionId) _state.value = _state.value.copy(running = false, outcome = "STOPPED")
         }
     }
@@ -509,8 +545,10 @@ object AgentRunUiState {
     @JvmStatic
     fun completeGeneration(sessionId: String, generation: Long, runId: String, outcome: String,
         text: String, messageId: String, durationMs: Long) = synchronized(lock) {
-        if (ownedSessionId == sessionId && activeGeneration == generation) {
+        if (ownedRunActive && ownedSessionId == sessionId && activeGeneration == generation) {
             ownedRunActive = false
+            ownedLiveSnapshot = null
+            _state.value = _state.value.copy(interactiveOwnerSessionId = null)
             if (_state.value.sessionId == sessionId) complete(runId, outcome, text, messageId, durationMs)
         }
     }
@@ -613,7 +651,8 @@ object AgentRunUiState {
         requester: String? = null,
         requesterColorKey: String? = null,
     ) = synchronized(lock) {
-        val current = _state.value
+        val current = if (ownedRunActive && _state.value.sessionId != ownedSessionId)
+            ownedLiveSnapshot ?: return@synchronized else _state.value
         if (!current.running || current.events.any { it.approvalId == id }) return@synchronized
         val events = current.events.toMutableList()
         val pendingToolIndex = events.indexOfLast { it.kind == "tool" && it.stage == "tool_call" }
@@ -639,17 +678,18 @@ object AgentRunUiState {
             approvalRequester = requester,
             approvalRequesterColorKey = requesterColorKey,
         )
-        _state.value = current.copy(events = append(events, card))
+        publishOwnedSnapshot(current.copy(events = append(events, card)))
     }
 
     @JvmStatic
     fun updateApproval(id: String, status: String) = synchronized(lock) {
-        val current = _state.value
+        val current = if (_state.value.events.any { it.approvalId == id }) _state.value
+            else ownedLiveSnapshot ?: return@synchronized
         val index = current.events.indexOfLast { it.kind == "approval" && it.approvalId == id }
         if (index < 0) return@synchronized
         val events = current.events.toMutableList()
         events[index] = events[index].copy(stage = status, approvalStatus = status)
-        _state.value = current.copy(events = events)
+        publishOwnedSnapshot(current.copy(events = events))
     }
 
     @JvmStatic

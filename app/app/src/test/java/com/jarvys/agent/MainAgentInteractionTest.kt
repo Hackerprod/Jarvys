@@ -171,6 +171,143 @@ class MainAgentInteractionTest {
         }
     }
 
+    @Test fun rejectedExecutorKeepsInputAndUnlocksComposer() {
+        withHeldWorker { service, context, session, release ->
+            worker(service).shutdown()
+            assertTrue(AgentForegroundService.interruptAndSend(context, session, "preserved", arrayListOf(), false))
+            assertFalse(AgentRunUiState.state.value.running)
+            assertTrue(LocalRunStore(context).readConversationTimeline(session).any { it.stage == "QUEUED" && it.text == "preserved" })
+            release.countDown()
+        }
+    }
+
+    @Test fun deletedConversationCannotDispatchOrLeaveRunStuck() {
+        withHeldWorker { service, context, session, release ->
+            val invoked = AtomicInteger()
+            service.replacementRunner = AgentForegroundService.ReplacementRunner { _,_,_,_,_,_ -> invoked.incrementAndGet() }
+            assertTrue(AgentForegroundService.interruptAndSend(context, session, "never run", arrayListOf(), false))
+            LocalRunStore(context).deleteConversation(session)
+            release.countDown()
+            worker(service).submit {}.get(5, TimeUnit.SECONDS)
+            assertEquals(0, invoked.get())
+            assertFalse(AgentRunUiState.state.value.running)
+        }
+    }
+
+    @Test fun synchronousCancellationIdleCheckCannotDestroyReplacementService() {
+        withHeldWorker { service, context, session, release ->
+            val controller = StopController.getInstance()
+            val field = controller.javaClass.getDeclaredField("generation").apply { isAccessible = true }
+            val old = CancellationToken(controller, (field.get(controller) as java.util.concurrent.atomic.AtomicLong).get())
+            val idle = AgentForegroundService::class.java.getDeclaredMethod("stopServiceIfIdle").apply { isAccessible = true }
+            old.registerCancelAction { idle.invoke(service) }
+            service.replacementRunner = AgentForegroundService.ReplacementRunner { _,_,_,_,_,_ -> }
+            assertTrue(AgentForegroundService.interruptAndSend(context, session, "reserved", arrayListOf(), false))
+            assertFalse(org.robolectric.Shadows.shadowOf(service).isStoppedBySelf)
+            StopController.getInstance().stopRun()
+            release.countDown()
+        }
+    }
+
+    @Test fun startingHiddenReplacementDoesNotSwitchVisibleConversation() {
+        AgentRunUiState.resetSession("selected-chat")
+        AgentRunUiState.beginServiceRun("background-chat", "new goal", emptyList(), false, 50)
+        assertEquals("selected-chat", AgentRunUiState.state.value.sessionId)
+        assertFalse(AgentRunUiState.state.value.running)
+        AgentRunUiState.completeGeneration("background-chat", 50, "r", "COMPLETED", "hidden result", "m", 0)
+        assertTrue(AgentRunUiState.state.value.events.isEmpty())
+    }
+
+    @Test fun activeOtherChatRejectsOrdinarySendAndCannotBeInterruptedFromOptimisticUi() {
+        withHeldWorker { service, context, session, release ->
+            val other = "$session-other"
+            AgentRunUiState.resetSession(other)
+            val store = LocalRunStore(context)
+            val messageId = store.appendConversationMessage(other, "user", "different chat")
+            AgentRunUiState.beginRun(other, "different chat")
+            service.onStartCommand(AgentForegroundService.storedChatMessageIntent(context, other, messageId), 0, 2)
+            assertFalse(AgentRunUiState.state.value.running)
+            assertEquals(session, AgentRunUiState.state.value.interactiveOwnerSessionId)
+            assertFalse(AgentForegroundService.interruptAndSend(context, other, "must not cancel A", arrayListOf(), false))
+            assertFalse(StopController.getInstance().isStopped)
+            assertTrue(store.readConversationMessages(other).any { it.optString("status") == "FAILED" })
+            release.countDown()
+        }
+    }
+
+    @Test fun approvalCardAndWaitSurviveSameChatHydration() {
+        AgentRunUiState.beginRun("approval-restore", "request")
+        AgentRunUiState.bindGeneration("approval-restore", 80)
+        val durable = AgentRunUiState.state.value.events
+        AgentRunUiState.showApproval("pending-80", "Approve action", listOf("read first"), null)
+        AgentRunUiState.restoreSession("approval-restore", durable)
+        assertEquals(1, AgentRunUiState.state.value.events.count { it.approvalId == "pending-80" })
+        assertTrue(AgentRunUiState.state.value.running)
+        AgentRunUiState.completeGeneration("approval-restore", 80, "r", "STOPPED", "stopped", "m", 0)
+    }
+
+    @Test fun approvalArrivingWhileOtherChatVisibleReturnsToItsOwner() {
+        AgentRunUiState.beginRun("approval-owner", "request")
+        AgentRunUiState.bindGeneration("approval-owner", 81)
+        val durable = AgentRunUiState.state.value.events
+        AgentRunUiState.resetSession("unrelated")
+        AgentRunUiState.showApproval("pending-81", "Private action", listOf("details"), null)
+        assertFalse(AgentRunUiState.state.value.events.any { it.approvalId == "pending-81" })
+        AgentRunUiState.restoreSession("approval-owner", durable)
+        assertEquals(1, AgentRunUiState.state.value.events.count { it.approvalId == "pending-81" })
+        AgentRunUiState.resetSession("unrelated")
+        AgentRunUiState.updateApproval("pending-81", "CANCELLED")
+        AgentRunUiState.restoreSession("approval-owner", durable)
+        assertEquals("CANCELLED", AgentRunUiState.state.value.events.single { it.approvalId == "pending-81" }.approvalStatus)
+        AgentRunUiState.completeGeneration("approval-owner", 81, "r", "STOPPED", "stopped", "m", 0)
+    }
+
+    @Test fun actualApprovalGateIsCancelledByReplacement() = approvalReplacement(false)
+    @Test fun approvalCannotApproveInPresenterRegistrationCancellationGap() = approvalReplacement(true)
+
+    private fun approvalReplacement(gap: Boolean) {
+        withHeldWorker { service, context, session, release ->
+            val controller = StopController.getInstance()
+            val field = controller.javaClass.getDeclaredField("generation").apply { isAccessible = true }
+            val old = CancellationToken(controller, (field.get(controller) as java.util.concurrent.atomic.AtomicLong).get())
+            val shown = CountDownLatch(1); val finishShow = CountDownLatch(if (gap) 1 else 0)
+            val id = java.util.concurrent.atomic.AtomicReference<String>()
+            val gate = com.jarvys.agent.connectors.ApprovalGate(5000, object : com.jarvys.agent.connectors.ApprovalPresenter {
+                override fun show(value: String, summary: com.jarvys.agent.connectors.ApprovalSummary) {
+                    id.set(value); AgentRunUiState.showApproval(value, summary.title, summary.lines, null)
+                    shown.countDown(); finishShow.await(5, TimeUnit.SECONDS)
+                }
+                override fun update(value: String, decision: com.jarvys.agent.connectors.ApprovalDecision) { AgentRunUiState.updateApproval(value, decision.name) }
+            })
+            val pool = java.util.concurrent.Executors.newSingleThreadExecutor()
+            val request = pool.submit { runCatching { gate.request(com.jarvys.agent.connectors.ApprovalSummary("write", listOf("target")), old) } }
+            try {
+                assertTrue(shown.await(5, TimeUnit.SECONDS))
+                assertTrue(AgentForegroundService.interruptAndSend(context, session, "inspect instead", arrayListOf(), false))
+                var effects = 0
+                assertFalse(gate.resolveFromUi(id.get()) { effects++; com.jarvys.agent.connectors.ApprovalDecision.APPROVED })
+                assertEquals(0, effects)
+                finishShow.countDown(); request.get(5, TimeUnit.SECONDS)
+                assertFalse(gate.isPending(id.get()))
+                StopController.getInstance().stopRun(); release.countDown()
+            } finally { finishShow.countDown(); pool.shutdownNow() }
+        }
+    }
+
+    @Test fun hiddenStartRetainsApprovalUntilOwnerChatIsOpened() {
+        AgentRunUiState.resetSession("visible-before-start")
+        AgentRunUiState.beginServiceRun("hidden-start-owner", "inspect then write", emptyList(), false, 82)
+        AgentRunUiState.showApproval("hidden-start-approval", "Write file", listOf("target"), null)
+        assertEquals("visible-before-start", AgentRunUiState.state.value.sessionId)
+        assertTrue(AgentRunUiState.state.value.events.isEmpty())
+        val user = AgentRunUiEvent.messageEvent(1, "user", "inspect then write", 1).copyMetadata("actual-user-id", 0)
+        AgentRunUiState.restoreSession("hidden-start-owner", listOf(user))
+        assertEquals(1, AgentRunUiState.state.value.events.count { it.approvalId == "hidden-start-approval" })
+        assertEquals(1, AgentRunUiState.state.value.events.count { it.messageId == "actual-user-id" })
+        assertTrue(AgentRunUiState.state.value.running)
+        AgentRunUiState.completeGeneration("hidden-start-owner", 82, "r", "STOPPED", "stopped", "m", 0)
+    }
+
     private fun worker(service: AgentForegroundService) = AgentForegroundService::class.java.getDeclaredField("worker")
         .apply { isAccessible = true }.get(service) as ExecutorService
 
@@ -193,6 +330,11 @@ class MainAgentInteractionTest {
         StopController.getInstance().attachFuture(old, future)
         assertTrue(started.await(5, TimeUnit.SECONDS))
         try { block(service, context, session, release) }
-        finally { StopController.getInstance().stopRun(); release.countDown(); worker(service).submit {}.get(5, TimeUnit.SECONDS); controller.destroy() }
+        finally {
+            StopController.getInstance().stopRun(); release.countDown()
+            if (!worker(service).isShutdown) worker(service).submit {}.get(5, TimeUnit.SECONDS)
+            else worker(service).awaitTermination(5, TimeUnit.SECONDS)
+            controller.destroy()
+        }
     }
 }

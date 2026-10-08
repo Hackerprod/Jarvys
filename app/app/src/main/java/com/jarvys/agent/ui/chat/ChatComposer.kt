@@ -124,6 +124,7 @@ fun ChatComposer(
     effortLabel: String = "",
     effortAppearance: ModelEffortAppearance? = null,
     effortMotionActive: Boolean = true,
+    sendAllowed: Boolean = true,
     canInterrupt: Boolean = false,
     onInterruptAndSend: () -> Unit = {},
 ) {
@@ -188,6 +189,8 @@ fun ChatComposer(
                         modifier = Modifier.size(18.dp))
                 }
             }
+            if (!running && !sendAllowed) Text(stringResource(R.string.chat_other_run_active),
+                style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(vertical = 4.dp))
             if (running && canInterrupt && goal.isNotBlank() && pendingAttachments.isEmpty() && !attachmentSending) {
                 TextButton(onClick = onInterruptAndSend,
                     modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("chat-interrupt-send")) {
@@ -227,7 +230,7 @@ fun ChatComposer(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
                 }
                 Button(onClick = { if (running || attachmentSending) onStop() else onSend() },
-                    enabled = running || attachmentSending || canSendWithAttachments(goal, pendingAttachments), shape = CircleShape,
+                    enabled = running || attachmentSending || sendAllowed && canSendWithAttachments(goal, pendingAttachments), shape = CircleShape,
                     modifier = Modifier.size(48.dp).testTag("chat-send-stop-button"),
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) {
                     AnimatedContent(targetState = running || attachmentSending, transitionSpec = {

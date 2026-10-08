@@ -744,6 +744,10 @@ class MainActivity : ComponentActivity() {
         if (message.isBlank() && attachmentDrafts.drafts.value.isEmpty()) return
         val state = AgentRunUiState.state.value
         if (state.running || state.compacting || state.reflecting) return
+        if (!StopController.getInstance().isStopped) {
+            toast(getString(R.string.chat_other_run_active), Toast.LENGTH_LONG)
+            return
+        }
         val sessionId = conversationSessionId
         val enabledSkillIds = skillRepository.enabledForRun().filter { it.metadata.id in selectedSkillIds }.map { it.metadata.id }
         if (conversationTitle == null) conversationTitle = ConversationTitle.fromFirstMessage(message)
@@ -1715,7 +1719,9 @@ private fun JarvysApp(
                     onGoalChange = onGoalChange,
                     onSend = onSubmitMessage,
                     onInterruptAndSend = onInterruptAndSend,
+                    sendAllowed = agentState.interactiveOwnerSessionId == null,
                     canInterrupt = agentState.running && agentState.sessionId == conversationSessionId
+                        && agentState.interactiveOwnerSessionId == conversationSessionId
                         && MessageReactionTool.isOrdinaryChat(conversationSessionId)
                         && !agentState.compacting && !agentState.reflecting,
                     pendingAttachments = pendingAttachments,

@@ -1348,6 +1348,7 @@ Se desconoce cómo terminaron. No se repiten automáticamente. Revisa los cambio
     <string name="chat_view_in_jarvys">Ver en Jarvys</string>
     <string name="workspace_preview_partial">No se pudieron guardar algunos recursos. Esta vista local puede estar incompleta.</string>
     <string name="chat_interrupt_send">Detener y enviar este mensaje</string>
-    <string name="chat_interrupt_pending">Pendiente de iniciar. Si se interrumpe, copia este mensaje para reenviarlo.</string>
+    <string name="chat_interrupt_pending">Sin iniciar. Copia este mensaje para reenviarlo si lo necesitas.</string>
     <string name="chat_interrupt_failed">No se pudo guardar el mensaje pendiente. Tu borrador sigue aquí.</string>
+    <string name="chat_other_run_active">Ya hay una tarea en ejecución. Puedes detenerla en su chat o esperar para enviar.</string>
 </resources>
