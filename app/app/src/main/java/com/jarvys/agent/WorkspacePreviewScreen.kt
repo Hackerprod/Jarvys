@@ -11,6 +11,7 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
+import androidx.core.net.toUri
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.Column
@@ -135,6 +136,9 @@ private fun Context.previewActivity(): ComponentActivity = when (this) {
 /** Protect one native touch stream without consuming Compose pointers or synthesizing scrolling. */
 internal class WorkspacePreviewWebView(context: Context) : WebView(context) {
     var onUserInteraction: () -> Unit = {}
+    // Keep the inherited native accessibility/click path. Touch handling never fabricates a click.
+    override fun performClick(): Boolean = super.performClick()
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (event.actionMasked == MotionEvent.ACTION_DOWN) onUserInteraction()
         if (event.actionMasked == MotionEvent.ACTION_DOWN || event.actionMasked == MotionEvent.ACTION_POINTER_DOWN) {
@@ -208,7 +212,7 @@ private fun createPreviewWebView(context: Context, content: WorkspacePreviewCont
         android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this, false)
         onUserInteraction = state::userInteracted
         webViewClient = WorkspacePreviewClient(content, state)
-        state.attach(this, content.entryUrl) { content.localPath(Uri.parse(it)) != null }
+        state.attach(this, content.entryUrl) { content.localPath(it.toUri()) != null }
     }
 
 private class WorkspacePreviewClient(private val content: WorkspacePreviewContent,
@@ -240,7 +244,7 @@ private class WorkspacePreviewClient(private val content: WorkspacePreviewConten
         request.method != "GET" || content.localPath(request.url) == null
 
     @Deprecated("Required for older WebView callbacks")
-    override fun shouldOverrideUrlLoading(view: WebView?, url: String): Boolean = content.localPath(Uri.parse(url)) == null
+    override fun shouldOverrideUrlLoading(view: WebView?, url: String): Boolean = content.localPath(url.toUri()) == null
 
     override fun onPageFinished(view: WebView, url: String) { state.pageFinished(view) }
 
