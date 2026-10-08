@@ -7,7 +7,7 @@ import java.security.MessageDigest
 internal const val BUNDLED_SKILL_CREATOR_ID = "com.jarvys.skill-creator"
 
 internal fun skillEnabledByDefault(source: SkillSource, id: String): Boolean = when (source) {
-    SkillSource.BUNDLED -> id == BUNDLED_SKILL_CREATOR_ID
+    SkillSource.BUNDLED -> id == BUNDLED_SKILL_CREATOR_ID || id == SkillScopePolicy.APK_FACTORY_ID
     SkillSource.IMPORTED -> true
 }
 

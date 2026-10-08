@@ -45,3 +45,9 @@ Only the Full flavor uses `com.google.android.gms:play-services-auth:22.0.0` for
 ## Unicode emoji data
 
 The message reaction validator derives its Unicode 16.0 emoji forms from https://unicode.org/Public/emoji/16.0/emoji-test.txt. Copyright © 2024 Unicode, Inc. Distributed under Unicode License v3; see UNICODE-LICENSE.txt. No Unicode fonts are bundled.
+
+## APK factory runtime and signing
+
+The factory runtime uses `androidx.webkit:webkit:1.14.0` and its AndroidX dependencies, licensed under Apache-2.0. The runtime carries the Apache license and attribution in `apk-runtime/src/main/assets/factory-licenses.txt`; generated APKs preserve that asset. The local signer uses Google's AOSP `com.android.tools.build:apksig:8.13.2`, licensed under Apache-2.0; its distributed LICENSE is retained as `app/src/main/assets/apk_factory/apksig-LICENSE.txt`.
+
+The original `TemplateApk.java` implementation reads the binary structures documented in AOSP `libs/androidfw/include/androidfw/ResourceTypes.h` (Apache-2.0). It does not copy a third-party APK editing implementation. Android platform SDK tools are build-time only and are not shipped in generated applications. No signing keys are bundled.

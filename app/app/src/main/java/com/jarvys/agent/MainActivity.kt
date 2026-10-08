@@ -549,7 +549,8 @@ class MainActivity : ComponentActivity() {
                     captureContextRequested = captureContextRequested,
                     skillEnabledCount = skillEntries.count { it.enabled && it.validationError == null },
                     skillTotalCount = skillEntries.size,
-                    availableSkills = skillEntries.filter { it.enabled && it.validationError == null },
+                    availableSkills = skillEntries.filter { it.enabled && it.validationError == null &&
+                        com.jarvys.agent.skills.SkillScopePolicy.availableTo(it.metadata.id, null) },
                     selectedSkillIds = selectedSkillIds,
                     onSubmitMessage = ::submitMessage,
                     pendingAttachments = pendingAttachments,

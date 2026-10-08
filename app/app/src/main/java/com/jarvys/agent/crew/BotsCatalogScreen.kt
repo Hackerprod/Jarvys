@@ -95,11 +95,13 @@ fun BotsCatalogScreen(conversationId: String? = null, working: Map<String, Int> 
         try {
             val fresh = withContext(Dispatchers.IO) {
                 val definitions = repository.getOrThrow().definitions()
-                val capabilities = CoreAgentRuntime.profileCapabilities(context, conversationId).distinct()
+                val capabilities = CoreAgentRuntime.profileCapabilities(context, conversationId)
+                    .filterNot { it == com.jarvys.agent.skills.SkillScopePolicy.APK_FACTORY_TOOL }.distinct()
                 val skills = SkillRepository.get(context).also { it.refresh() }
                 val available = skills.enabledForRun().map { it.metadata.id }.toSet()
                 BotCatalogConfiguration(definitions, capabilities.map { CrewProfileOption(it, CoreToolRegistry.humanizeToolName(it)) },
-                    skills.skills.value.map { CrewProfileOption(it.metadata.id, it.metadata.name, it.metadata.id in available) }, icons.getOrNull()?.let { runCatching { it.isAvailable }.getOrDefault(false) } ?: false)
+                    skills.skills.value.filterNot { com.jarvys.agent.skills.SkillScopePolicy.isReserved(it.metadata.id) }
+                        .map { CrewProfileOption(it.metadata.id, it.metadata.name, it.metadata.id in available) }, icons.getOrNull()?.let { runCatching { it.isAvailable }.getOrDefault(false) } ?: false)
             }
             // Listener deliveries that arrived during the load must win over an older disk snapshot.
             val merged = fresh.definitions.associateBy { it.id }.toMutableMap()

@@ -17,6 +17,13 @@ import java.nio.charset.StandardCharsets
 
 enum class SkillSource { BUNDLED, IMPORTED }
 
+/** Android lists child directories; archive-backed asset providers may list entrypoint paths. */
+internal fun bundledSkillDirectoryNames(listing: Collection<String>): List<String> = listing
+    .map { it.removeSuffix("/SKILL.md") }
+    .filter { it.matches(Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,127}")) }
+    .distinct()
+    .sorted()
+
 data class SkillEntry(
     val metadata: SkillMetadata,
     val body: String,
@@ -52,12 +59,19 @@ class SkillRepository private constructor(context: Context) : WorkspaceStore.Ski
 
     fun totalCount(): Int = skills.value.size
 
-    fun enabledForRun(): List<SkillEntry> = skills.value.filter { it.enabled && it.validationError == null }
+    /** Main chat and custom-profile discovery never include runtime-owned Coding instructions. */
+    fun enabledForRun(): List<SkillEntry> = enabledForProfile(null)
 
-    fun selectedForRun(ids: Collection<String>): List<SkillEntry> {
+    fun enabledForProfile(profileId: String?): List<SkillEntry> = skills.value.filter {
+        it.enabled && it.validationError == null && SkillScopePolicy.availableTo(it.metadata.id, profileId)
+    }
+
+    fun selectedForRun(ids: Collection<String>): List<SkillEntry> = selectedForProfile(ids, null)
+
+    fun selectedForProfile(ids: Collection<String>, profileId: String?): List<SkillEntry> {
         if (ids.isEmpty()) return emptyList()
         require(ids.distinct().size <= MAX_SKILLS_PER_RUN) { "Select at most $MAX_SKILLS_PER_RUN skills per run" }
-        val available = enabledForRun().associateBy { it.metadata.id }
+        val available = enabledForProfile(profileId).associateBy { it.metadata.id }
         val missing = ids.distinct().filterNot { it in available }
         require(missing.isEmpty()) { "Selected skills are disabled or invalid: ${missing.joinToString(", ")}" }
         return ids.distinct().map { available.getValue(it) }
@@ -84,6 +98,7 @@ class SkillRepository private constructor(context: Context) : WorkspaceStore.Ski
 
     fun importMarkdown(markdown: String): SkillEntry = synchronized(lock) {
         val parsed = SkillMarkdownParser.parse(markdown)
+        require(!SkillScopePolicy.isReserved(parsed.metadata.id)) { "This skill ID is reserved for the built-in Coding runtime" }
         require(_skills.value.none { it.metadata.id == parsed.metadata.id }) {
             "A skill with id '${parsed.metadata.id}' already exists"
         }
@@ -111,6 +126,7 @@ class SkillRepository private constructor(context: Context) : WorkspaceStore.Ski
 
     override fun commitSkillWorkspaceWrite(skillId: String, skillMarkdown: String?, writeFile: Runnable) = synchronized(lock) {
         require(SKILL_ID_PATTERN.matches(skillId)) { "Skill directory must use a valid skill id" }
+        require(!SkillScopePolicy.isReserved(skillId)) { "Coding runtime skills cannot be overridden in the skill workspace" }
         SkillWorkspaceMutation.commit(
             skillMarkdown = skillMarkdown,
             validateMarkdown = {
@@ -137,6 +153,7 @@ class SkillRepository private constructor(context: Context) : WorkspaceStore.Ski
 
     fun readWorkspaceSkillFile(skillId: String, relativePath: String): String = synchronized(lock) {
         require(SKILL_ID_PATTERN.matches(skillId)) { "Skill id is invalid" }
+        require(!SkillScopePolicy.isReserved(skillId)) { "This skill is available only through Coding's read_skill tool" }
         require(relativePath.isNotBlank() && !relativePath.startsWith('/') && '\\' !in relativePath
                 && '\u0000' !in relativePath && relativePath.split('/').none { it.isBlank() || it == "." || it == ".." }) {
             "Skill file path is invalid"
@@ -166,12 +183,13 @@ class SkillRepository private constructor(context: Context) : WorkspaceStore.Ski
     }
 
     private fun loadBundled(): List<SkillEntry> {
-        val directories = runCatching { appContext.assets.list(ASSET_ROOT).orEmpty() }.getOrDefault(emptyArray())
-        val fromAssets = directories.sorted().filterNot { it == BUNDLED_SKILL_CREATOR_ID }.mapNotNull { directory ->
+        val directories = bundledSkillDirectoryNames(
+            runCatching { appContext.assets.list(ASSET_ROOT).orEmpty().toList() }.getOrDefault(emptyList()))
+        val fromAssets = directories.filterNot { it == BUNDLED_SKILL_CREATOR_ID }.mapNotNull { directory ->
             val assetPath = "$ASSET_ROOT/$directory/$SKILL_FILE"
             runCatching {
                 val override = File(skillRoot, "$directory/$SKILL_FILE")
-                val markdown = if (override.isFile) readBoundedUtf8(override.inputStream())
+                val markdown = if (!SkillScopePolicy.isReserved(directory) && override.isFile) readBoundedUtf8(override.inputStream())
                     else appContext.assets.open(assetPath).use(::readBoundedUtf8)
                 val parsed = SkillMarkdownParser.parse(markdown)
                 require(directory == parsed.metadata.id) { "Bundled skill directory must match its frontmatter id" }
@@ -189,7 +207,7 @@ class SkillRepository private constructor(context: Context) : WorkspaceStore.Ski
 
     private fun loadImported(): List<SkillEntry> {
         val directories = skillRoot.listFiles { file -> file.isDirectory } ?: return emptyList()
-        return directories.sortedBy { it.name }.mapNotNull { directory ->
+        return directories.filterNot { SkillScopePolicy.isReserved(it.name) }.sortedBy { it.name }.mapNotNull { directory ->
             runCatching {
                 val safeDirectory = safeSkillDirectory(directory.name)
                 val file = File(safeDirectory, SKILL_FILE)
@@ -218,7 +236,10 @@ class SkillRepository private constructor(context: Context) : WorkspaceStore.Ski
         val available = buildSet {
             addAll(ToolRegistry().names())
             addAll(WorkspaceTools.acceptedNames())
+            addAll(com.jarvys.agent.coding.CodingProjectTools.names())
+            addAll(listOf("board_read", "board_post", "msg_send", "ask_chief", "report_done"))
             add("read_skill")
+            add(SkillScopePolicy.APK_FACTORY_TOOL)
             addAll(McpServerToolRegistry(mcpServers).all().map { it.modelName })
             connectors.definitions.value.forEach { definition ->
                 definition.operations.forEach { operation ->
@@ -244,7 +265,7 @@ class SkillRepository private constructor(context: Context) : WorkspaceStore.Ski
     }
 
     private fun isBundledId(id: String): Boolean = id == BUNDLED_SKILL_CREATOR_ID
-            || appContext.assets.list(ASSET_ROOT)?.contains(id) == true
+            || id in bundledSkillDirectoryNames(appContext.assets.list(ASSET_ROOT).orEmpty().toList())
 
     private fun readBoundedUtf8(input: InputStream): String {
         input.use { stream ->

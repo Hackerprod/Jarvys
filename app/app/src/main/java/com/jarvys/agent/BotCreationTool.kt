@@ -70,8 +70,8 @@ internal class BotCreationService(
         { id, revision, prompt, token -> BotIconService(context, sessionId, ProviderSettings(context)).generateAndAssign(id, revision, prompt, token) },
     )
 
-    fun capabilities() = currentCapabilities().distinct()
-    fun skills() = currentSkills().distinct()
+    fun capabilities() = currentCapabilities().filterNot { it == com.jarvys.agent.skills.SkillScopePolicy.APK_FACTORY_TOOL }.distinct()
+    fun skills() = currentSkills().filterNot { com.jarvys.agent.skills.SkillScopePolicy.isReserved(it) }.distinct()
 
     fun create(arguments: Map<String, Any>?, token: CancellationToken): CoreToolResult {
         token.throwIfCancelled()

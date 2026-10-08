@@ -14,4 +14,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "jarvys-agent"
-include(":app")
+include(":app", ":apk-runtime")

@@ -1,6 +1,7 @@
 package com.jarvys.agent;
 
 import com.jarvys.agent.skills.SkillEntry;
+import com.jarvys.agent.skills.SkillScopePolicy;
 
 import java.util.Collection;
 import java.util.Collections;
@@ -20,8 +21,15 @@ public final class LoadSkillTool implements CoreTool {
 
     public LoadSkillTool(Collection<SkillEntry> availableSkills, int maxBodyChars,
                          java.util.function.Predicate<String> currentlyAvailable) {
+        this(availableSkills, maxBodyChars, currentlyAvailable, null);
+    }
+
+    public LoadSkillTool(Collection<SkillEntry> availableSkills, int maxBodyChars,
+                         java.util.function.Predicate<String> currentlyAvailable, String profileId) {
         this.currentlyAvailable = currentlyAvailable;
-        for (SkillEntry skill : availableSkills) skills.put(skill.getMetadata().getId(), skill);
+        for (SkillEntry skill : SkillScopePolicy.forProfile(availableSkills, profileId)) {
+            skills.put(skill.getMetadata().getId(), skill);
+        }
         this.maxBodyChars = maxBodyChars;
         Map<String, String> properties = new LinkedHashMap<>();
         properties.put("skill_id", "string");
@@ -33,6 +41,11 @@ public final class LoadSkillTool implements CoreTool {
     Collection<SkillEntry> availableSkills() { return Collections.unmodifiableCollection(skills.values()); }
 
     LoadSkillTool narrow(Collection<String> selectedIds) {
+        for (String id : selectedIds) {
+            if (SkillScopePolicy.isReserved(id)) {
+                throw new IllegalArgumentException("Coding runtime skills cannot be passed to delegated workers");
+            }
+        }
         java.util.List<SkillEntry> selected = new java.util.ArrayList<>();
         for (SkillEntry skill : skills.values()) {
             if (selectedIds.contains(skill.getMetadata().getId())) selected.add(skill);

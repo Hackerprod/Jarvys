@@ -2,6 +2,7 @@ package com.jarvys.agent;
 
 import android.content.Context;
 import com.jarvys.agent.coding.CodingProjectTools;
+import com.jarvys.agent.coding.ApkFactoryTools;
 import com.jarvys.agent.coding.ProjectMutationService;
 import com.jarvys.agent.coding.ProjectScope;
 import com.jarvys.agent.coding.ProjectScopeStore;
@@ -36,6 +37,7 @@ import com.jarvys.agent.proactive.ProactiveConversation;
 import com.jarvys.agent.proactive.ProactiveStatusCoreTool;
 import com.jarvys.agent.skills.SkillEntry;
 import com.jarvys.agent.skills.SkillRepository;
+import com.jarvys.agent.skills.SkillScopePolicy;
 import com.jarvys.agent.tasks.ScheduledTaskConversation;
 import com.jarvys.agent.tasks.TaskManagementTools;
 import java.io.IOException;
@@ -193,7 +195,7 @@ public final class CoreAgentRuntime {
     List<String> listUnmodifiableList;
     this.context = context == null ? null : context.getApplicationContext();
     this.sessionId = sessionId;
-    this.skills = Collections.unmodifiableList(new ArrayList(skills));
+    this.skills = SkillScopePolicy.forProfile(skills, null);
     if (allowedTools == null) {
       listUnmodifiableList = null;
     } else {
@@ -438,6 +440,8 @@ public final class CoreAgentRuntime {
         });
     final List<String> profileCeiling = new ArrayList<>(crewCapabilities.names());
     profileCeiling.addAll(CodingProjectTools.names());
+    profileCeiling.add(ApkFactoryTools.NAME);
+    profileCeiling.add("read_skill");
     profileCeiling.addAll(FlavorLinuxTools.profileCapabilityNames(this.context, this.sessionId));
     manager.configureProfiles(
         new Function() {
@@ -534,7 +538,7 @@ public final class CoreAgentRuntime {
       if (definition.id.equals(roleId)) {
         if (!definition.enabled) throw new IllegalStateException("Bot definition is disabled: " + roleId);
         List<String> availableSkills = new ArrayList<>();
-        for (SkillEntry skill : SkillRepository.Companion.get(this.context).enabledForRun()) {
+        for (SkillEntry skill : SkillRepository.Companion.get(this.context).enabledForProfile(roleId)) {
           availableSkills.add(skill.getMetadata().getId());
         }
         CrewRole role = profiles.resolveRole(definition.id, withCrewProtocol(profileCeiling), availableSkills);
@@ -585,7 +589,7 @@ public final class CoreAgentRuntime {
   public CrewRole currentResumeRole(CrewManager.Bot bot) {
     CrewProfileRepository profiles = new CrewProfileRepository(this.context);
     List<String> availableSkills = new ArrayList<>();
-    for (SkillEntry skill : SkillRepository.Companion.get(this.context).enabledForRun()) {
+    for (SkillEntry skill : SkillRepository.Companion.get(this.context).enabledForProfile(bot.role.id)) {
       availableSkills.add(skill.getMetadata().getId());
     }
     CrewRole current = nativeAndroidRole(
@@ -736,7 +740,8 @@ public final class CoreAgentRuntime {
                     })
                 .collect(Collectors.toList());
     selected.removeAll(workspaceSelected);
-    List<SkillEntry> profileSkills = selectedSkills(bot.role.skillIds);
+    String skillProfileId = bot.role.profileVersion > 0 ? bot.role.id : null;
+    List<SkillEntry> profileSkills = selectedSkills(bot.role.skillIds, skillProfileId);
     selected.remove("read_skill");
     selected.remove("delegate_subtask");
     final List<String> executionNames = FlavorLinuxTools.profileCapabilityNames(context, sessionId);
@@ -755,6 +760,10 @@ public final class CoreAgentRuntime {
                     })
                 .collect(Collectors.toList());
     selected.removeAll(executionSelected);
+    final boolean factorySelected = selected.remove(ApkFactoryTools.NAME);
+    if (factorySelected && (!projectScope || bot.role.profileVersion <= 0 || !CrewRoleTemplates.CODING.equals(bot.role.id))) {
+      throw new IllegalArgumentException("APK factory is reserved for the built-in Coding project");
+    }
     List<CoreTool> workspace2 = workspace;
     CoreToolRegistry scoped =
         captainTools.forRequester(bot.name, bot.role.colorKey).subset(selected).forDelegatedAgent();
@@ -774,6 +783,22 @@ public final class CoreAgentRuntime {
                           })
                       .collect(Collectors.toList()));
     }
+    if (factorySelected) {
+      try {
+        ProjectScope factoryScope = new ProjectScopeStore(context.getFilesDir()).open(sessionId);
+        scoped = scoped.with(Collections.singletonList(ApkFactoryTools.create(context, factoryScope, bot.id,
+            () -> {
+              try {
+                checkCrewToolPolicies(bot);
+                return !bot.token.isCancellationRequested() && bot.role.profileVersion > 0
+                    && CrewRoleTemplates.CODING.equals(bot.role.id) && bot.role.tools.contains(ApkFactoryTools.NAME);
+              } catch (RuntimeException revoked) { return false; }
+            })));
+
+      } catch (IOException unavailable) {
+        throw new IllegalStateException("Factory project scope is unavailable", unavailable);
+      }
+    }
     if (!executionSelected.isEmpty()) {
       scoped =
           scoped.with(
@@ -784,7 +809,8 @@ public final class CoreAgentRuntime {
           scoped.with(
               Collections.singletonList(
                   new LoadSkillTool(
-                      profileSkills, this.budget.loadedSkillChars, this::skillCurrentlyAvailable)));
+                      profileSkills, this.budget.loadedSkillChars,
+                      id -> skillCurrentlyAvailable(id, skillProfileId), skillProfileId)));
     }
     if (bot.role.tools.contains("delegate_subtask")) {
       scoped =
@@ -1076,6 +1102,8 @@ public final class CoreAgentRuntime {
             true);
     List<String> ceiling = new ArrayList<>(crewBotCapabilityScope(runtime.createTools()).names());
     ceiling.addAll(CodingProjectTools.names());
+    ceiling.add(ApkFactoryTools.NAME);
+    ceiling.add("read_skill");
     ceiling.addAll(FlavorLinuxTools.profileCapabilityNames(context, catalogSession));
     return withCrewProtocol(new LinkedHashSet(ceiling));
   }
@@ -1276,10 +1304,15 @@ public final class CoreAgentRuntime {
   }
 
   public boolean skillCurrentlyAvailable(String id) {
+    return skillCurrentlyAvailable(id, null);
+  }
+
+  private boolean skillCurrentlyAvailable(String id, String profileId) {
+    if (!SkillScopePolicy.availableTo(id, profileId)) return false;
     if (this.context == null) {
       return true;
     }
-    for (SkillEntry skill : SkillRepository.Companion.get(this.context).enabledForRun()) {
+    for (SkillEntry skill : SkillRepository.Companion.get(this.context).enabledForProfile(profileId)) {
       if (id.equals(skill.getMetadata().getId())) {
         return true;
       }
@@ -1322,12 +1355,17 @@ public final class CoreAgentRuntime {
     return catalog.toString();
   }
 
-  private List<SkillEntry> selectedSkills(Collection<String> selectedIds) {
+  private List<SkillEntry> selectedSkills(Collection<String> selectedIds, String profileId) {
+    for (String id : selectedIds) {
+      if (!SkillScopePolicy.availableTo(id, profileId)) {
+        throw new IllegalArgumentException("Selected skill is reserved for the built-in Coding profile");
+      }
+    }
     if (selectedIds.isEmpty()) {
       return Collections.emptyList();
     }
     if (this.context != null) {
-      return SkillRepository.Companion.get(this.context).selectedForRun(selectedIds);
+      return SkillRepository.Companion.get(this.context).selectedForProfile(selectedIds, profileId);
     }
     List<SkillEntry> result = new ArrayList<>();
     for (SkillEntry skill : this.skills) {
@@ -1370,6 +1408,14 @@ public final class CoreAgentRuntime {
       List<String> requestedTools,
       List<String> requestedSkillIds,
       CorePromptBudget budget) {
+    for (String id : requestedSkillIds) {
+      if (SkillScopePolicy.isReserved(id)) {
+        throw new IllegalArgumentException("APK factory instructions are available only in the built-in Coding profile");
+      }
+    }
+    if (requestedTools.contains(SkillScopePolicy.APK_FACTORY_TOOL)) {
+      throw new IllegalArgumentException("apk_factory cannot be passed to delegated workers");
+    }
     List<String> actual = new ArrayList<>(requestedTools);
     actual.remove("delegate_subtask");
     if (!parent.names().containsAll(actual)) {
@@ -1539,6 +1585,11 @@ public final class CoreAgentRuntime {
               + " write/edit there. Relative file paths still address the existing workspace;"
               + " adopting legacy files requires an explicit reviewed copy through a project-scoped"
               + " Crew profile.");
+      prompt.append("\nAPK factory discovery: delegate Android APK requests to the built-in Coding bot "
+          + "with crew_spawn role=coding when Crew is available. Coding loads the factory skill and "
+          + "checks its local offline runtime capabilities. Full factory instructions and apk_factory "
+          + "are Coding-only; signing needs its own approval and installation is not automatic. "
+          + "If crew_spawn is unavailable, explain that Coding/Crew must be enabled before building.");
     }
     if (skillWorkspaceAvailable()) {
       prompt.append(
