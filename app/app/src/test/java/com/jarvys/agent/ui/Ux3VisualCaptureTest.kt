@@ -2,7 +2,6 @@ package com.jarvys.agent.ui
 
 import android.graphics.Bitmap
 import android.graphics.Canvas
-import android.view.View
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
@@ -20,6 +19,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
@@ -60,7 +60,7 @@ import org.robolectric.annotation.GraphicsMode
 
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
-@Config(sdk = [34])
+@Config(sdk = [34], qualifiers = "en-rUS-w360dp-h800dp-port-mdpi")
 class Ux3VisualCaptureTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
     private val output = TestCaptureDirectories.named("ux3-shots")
@@ -191,7 +191,7 @@ class Ux3VisualCaptureTest {
                         Column(Modifier.fillMaxSize().padding(padding)) {
                             Box(Modifier.fillMaxWidth().weight(1f)) {
                                 ConversationTimeline(
-                                    conversationKey = "ux3-floating-chat", events = events, isRunning = false,
+                                    conversationKey = "ux3-floating-chat-$dark-$scrollHistory-$composerText", events = events, isRunning = false,
                                     connectorRegistry = connectors, onOpenPreview = {}, onOpenSkillFile = {},
                                     chatWithoutMemory = false, runSnapshot = AgentRunUiSnapshot(events = events),
                                     allowMessageEntrance = false,
@@ -203,9 +203,15 @@ class Ux3VisualCaptureTest {
             }
         }
         compose.waitForIdle()
+        // Every capture scene represents a newly opened conversation, not state retained
+        // from the preceding scene by ComponentActivity.setContent's reused composition.
+        compose.onNodeWithTag("chat-jump-to-end").assertDoesNotExist()
         if (scrollHistory) {
-            compose.onNodeWithTag("chat-message-list").performTouchInput { swipeDown() }
+            compose.onNodeWithTag("chat-message-list").performTouchInput {
+                swipeDown(startY = height * 0.3f, endY = height * 0.65f)
+            }
             compose.waitForIdle()
+            compose.onNodeWithTag("chat-jump-to-end").assertIsDisplayed()
         }
     }
 
@@ -231,9 +237,13 @@ class Ux3VisualCaptureTest {
             val density = root.resources.displayMetrics.density
             val width = (360f * density).toInt()
             val height = (800f * density).toInt()
-            root.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
-                View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY))
-            root.layout(0, 0, width, height)
+            // Configure the real Robolectric window above; resizing only this View for a
+            // screenshot leaves the window clip at 320x470 and later controls off-screen.
+            val visible = android.graphics.Rect()
+            root.getWindowVisibleDisplayFrame(visible)
+            assertEquals("capture width matches real window", width, root.width)
+            assertEquals("capture height matches real window", height, root.height)
+            assertTrue("capture fits the real visible window", visible.width() >= width && visible.height() >= height)
             captured = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also { root.draw(Canvas(it)) }
         }
         return requireNotNull(captured)

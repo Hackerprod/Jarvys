@@ -76,6 +76,8 @@ public final class CrewManager implements AutoCloseable {
 
     public interface CheckpointSupport {
 
+        default boolean canPersist(Bot bot) { return true; }
+
         void persist(Bot bot, List<CrewMessage> messages, List<CrewMessage> pending);
 
         ResumePlan reconcile(Bot bot);
@@ -137,6 +139,7 @@ public final class CrewManager implements AutoCloseable {
         private volatile boolean checkpointAvailable;
         private volatile boolean requiresExplicitResume;
         private volatile boolean stopping;
+        private volatile boolean definitionDisabled;
         private volatile Runnable checkpointChanged = ()->{
         };
         private final Set<String> jobOwners = ConcurrentHashMap.newKeySet();
@@ -244,7 +247,7 @@ public final class CrewManager implements AutoCloseable {
         }
 
         public boolean canResume() {
-            return checkpointAvailable && requiresExplicitResume && !cycleScheduled && (status == Status.INTERRUPTED || status == Status.STOPPED || status == Status.FAILED);
+            return checkpointAvailable && !definitionDisabled && requiresExplicitResume && !cycleScheduled && (status == Status.INTERRUPTED || status == Status.STOPPED || status == Status.FAILED);
         }
 
         public String recoveryNote() {
@@ -288,8 +291,11 @@ public final class CrewManager implements AutoCloseable {
     private volatile CheckpointSupport checkpointSupport;
     private volatile Function<String, CrewRole> profileResolver = (id)->null;
     private volatile List<String> profileCapabilityCeiling = Collections.emptyList();
+    private volatile boolean profilesConfigured;
+    private final AtomicReference<Runnable> unregisterProfiles = new AtomicReference<>(() -> { });
     private final CrewMessageBus bus;
     private final Map<String, Bot> bots = new ConcurrentHashMap<>();
+    private final Map<String, Integer> observedDefinitionRevisions = new ConcurrentHashMap<>();
     private final Map<String, MissionState> missions = new ConcurrentHashMap<>();
     private volatile String currentMissionId;
     private final ExecutorService executor;
@@ -400,7 +406,7 @@ public final class CrewManager implements AutoCloseable {
     private void persistCheckpoint(Bot bot) {
         synchronized (bot) {
             CheckpointSupport support = checkpointSupport;
-            if (support != null && (!bot.requiresExplicitResume || bot.checkpointAvailable)) {
+            if (support != null && support.canPersist(bot) && (!bot.requiresExplicitResume || bot.checkpointAvailable)) {
                 support.persist(bot, bus.snapshot(), bus.pending(bot.id));
                 bot.checkpointAvailable = true;
             }
@@ -416,6 +422,7 @@ public final class CrewManager implements AutoCloseable {
             if (support == null) throw new IllegalStateException("Resume is unavailable in this runtime");
             try {
                 ResumePlan plan = support.reconcile(bot);
+                validateCurrentProfile(plan.role);
                 bot.role = plan.role;
                 bot.token = bot.freshToken();
                 bot.loop = null;
@@ -492,8 +499,48 @@ public final class CrewManager implements AutoCloseable {
     }
 
     public void configureProfiles(Function<String, CrewRole> resolver, Collection<String> capabilityNames) {
+        profilesConfigured = resolver != null;
         profileResolver = resolver == null ? (id)->null : resolver;
         profileCapabilityCeiling = Collections.unmodifiableList(new ArrayList<>(capabilityNames));
+    }
+
+    public void configureProfileSubscription(Runnable unregister) {
+        unregisterProfiles.getAndSet(unregister == null ? () -> { } : unregister).run();
+    }
+
+    /** Cancel every live cycle for an edited/disabled definition, across all its missions. */
+    public synchronized void definitionChanged(BotDefinition definition) {
+        Integer observed = observedDefinitionRevisions.get(definition.id);
+        if (observed != null && observed > definition.revision) return;
+        observedDefinitionRevisions.put(definition.id, definition.revision);
+        for (Bot bot : bots.values()) {
+            if (bot.role.profileVersion <= 0 || !definition.id.equals(bot.role.id)) continue;
+            synchronized (bot.cycleLock) {
+                bot.definitionDisabled = !definition.enabled;
+                if (!definition.enabled || definition.profile.version != bot.role.profileVersion) {
+                    bot.requiresExplicitResume = true;
+                    bot.reanimationRequested = false;
+                    bot.recoveryNote = definition.enabled
+                            ? "Bot configuration changed. Review and resume explicitly, or start a new mission."
+                            : "This bot definition is disabled. Enable it before starting or resuming work.";
+                    // Cancel even a terminal bot's old token so no late owned operation can survive.
+                    bot.token.cancel();
+                    try { stop(bot.id); } catch (RuntimeException ignored) { }
+                }
+            }
+            try { publishPresentation(bot.missionId); } catch (RuntimeException ignored) { }
+        }
+    }
+
+    private void validateCurrentProfile(CrewRole role) {
+        if (role.profileVersion <= 0 || !profilesConfigured) return;
+        CrewRole current = profileResolver.apply(role.id);
+        if (current == null) throw new IllegalStateException("Bot definition is missing or disabled");
+        if (!current.id.equals(role.id) || current.profileVersion != role.profileVersion
+                || current.workspaceMode != role.workspaceMode || !current.tools.containsAll(role.tools)
+                || !current.skillIds.containsAll(role.skillIds)) {
+            throw new IllegalStateException("Bot configuration changed; review it before continuing");
+        }
     }
 
     private List<String> capabilityNames(CrewRole role) {
@@ -524,6 +571,7 @@ public final class CrewManager implements AutoCloseable {
             }
         }
         validateRole(role);
+        validateCurrentProfile(role);
         String id = "bot-" + UUID.randomUUID();
         String name = requestedName == null || requestedName.trim().isEmpty() ? role.name : requestedName.trim();
         String missionId = currentMissionId;
@@ -582,7 +630,7 @@ public final class CrewManager implements AutoCloseable {
     }
 
     public static boolean isCaptainOnly(String name) {
-        return java.util.Arrays.asList("crew_spawn", "crew_stop", "crew_wait", "crew_list", "crew_send").contains(name);
+        return java.util.Arrays.asList("crew_spawn", "crew_stop", "crew_wait", "crew_list", "crew_send", "generate_bot_icon", "list_bots").contains(name);
     }
 
     private void runBot(Bot bot) {
@@ -594,6 +642,7 @@ public final class CrewManager implements AutoCloseable {
         boolean lifecycleStarted = false;
         try {
             token.throwIfCancelled();
+            validateCurrentProfile(bot.role);
             synchronized (bot.cycleLock) {
                 bot.status = Status.RUNNING;
                 bot.waitingReason = "";
@@ -646,6 +695,7 @@ public final class CrewManager implements AutoCloseable {
             while (true) {
                 awaitIncomingDispatches(bot, token);
                 token.throwIfCancelled();
+                validateCurrentProfile(bot.role);
                 synchronized (bot.cycleLock) {
                     bot.status = Status.RUNNING;
                     bot.waitingReason = "";
@@ -679,7 +729,7 @@ public final class CrewManager implements AutoCloseable {
             if (loop != null) bot.transcript = loop.transcriptSnapshot();
             synchronized (bot.cycleLock) {
                 bot.status = Status.STOPPED;
-                if (checkpointSupport != null && bot.role.profileVersion > 0 && bot.role.workspaceMode == CrewProfile.WorkspaceMode.CONVERSATION_PROJECT) bot.requiresExplicitResume = true;
+                if (checkpointSupport != null && bot.role.profileVersion > 0) bot.requiresExplicitResume = true;
                 bot.waitingReason = "";
                 bot.finishedAtMillis = System.currentTimeMillis();
                 if (bot.error.isEmpty()) bot.error = "Stopped";
@@ -692,7 +742,7 @@ public final class CrewManager implements AutoCloseable {
             bot.result = "Bot " + bot.name + " failed: " + bot.error;
             synchronized (bot.cycleLock) {
                 bot.status = Status.FAILED;
-                if (checkpointSupport != null && bot.role.profileVersion > 0 && bot.role.workspaceMode == CrewProfile.WorkspaceMode.CONVERSATION_PROJECT) bot.requiresExplicitResume = true;
+                if (checkpointSupport != null && bot.role.profileVersion > 0) bot.requiresExplicitResume = true;
                 bot.waitingReason = "";
                 bot.finishedAtMillis = System.currentTimeMillis();
                 if (bus.hasMatching(bot.id, (message)->"user".equals(message.from) && message.type == CrewMessage.Type.USER)) bot.reanimationRequested = true;
@@ -833,6 +883,7 @@ public final class CrewManager implements AutoCloseable {
 
     private CrewMessage dispatch(Bot recipient, String from, String to, CrewMessage.Type type, String text, List<String> refs, boolean explicitUser) {
         if (recipient == null) return bus.send(from, to, type, text, refs);
+        validateCurrentProfile(recipient.role);
         boolean launchWorker = false;
         boolean dispatchPersisted = false;
         recipient.incomingDispatches.incrementAndGet();
@@ -962,7 +1013,7 @@ public final class CrewManager implements AutoCloseable {
             if (terminal(bot.status)) return false;
             boolean pending = hasPendingOwnedWork(bot);
             bot.stopping = true;
-            if (checkpointSupport != null && bot.role.profileVersion > 0 && bot.role.workspaceMode == CrewProfile.WorkspaceMode.CONVERSATION_PROJECT) bot.requiresExplicitResume = true;
+            if (checkpointSupport != null && bot.role.profileVersion > 0) bot.requiresExplicitResume = true;
             bot.reanimationRequested = false;
             bot.status = pending ? Status.WAITING : Status.STOPPED;
             bot.waitingReason = pending ? "deteniendo trabajo del proyecto" : "";
@@ -1067,6 +1118,7 @@ public final class CrewManager implements AutoCloseable {
     @Override
     public void close() {
         stopAll();
+        unregisterProfiles.getAndSet(() -> { }).run();
         unregisterCaptain.getAndSet(()->{
         }).run();
         executor.shutdownNow();

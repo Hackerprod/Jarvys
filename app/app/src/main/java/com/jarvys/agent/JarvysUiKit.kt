@@ -84,6 +84,7 @@ object JarvysUiTokens {
     val ListRowMinHeight = 72.dp
     val IconTileSize = 42.dp
     val ToolbarTitleSize = 21.sp
+    val ChatToolbarTitleSize = 20.sp
     val PrimaryButtonHeight = 54.dp
     val Space1 = 6.dp
     val Space2 = 12.dp

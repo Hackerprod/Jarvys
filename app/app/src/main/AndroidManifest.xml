@@ -32,7 +32,7 @@
     <application
         android:allowBackup="false"
         android:usesCleartextTraffic="true"
-        android:label="@string/app_name"
+        android:label="${jarvysApplicationLabel}"
         android:icon="@drawable/ic_jarvys"
         android:roundIcon="@drawable/ic_jarvys"
         android:theme="@android:style/Theme.Material.Light.NoActionBar"
@@ -75,7 +75,7 @@
 
         <service
             android:name="com.jarvys.agent.connectors.JarvysNotificationListenerService"
-            android:label="@string/notification_listener_label"
+            android:label="${jarvysNotificationListenerLabel}"
             android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
             android:exported="false">
             <intent-filter>

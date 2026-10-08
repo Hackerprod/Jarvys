@@ -104,6 +104,7 @@ class AttachmentDraftViewModel(application: Application) : AndroidViewModel(appl
                 val messageId = LocalRunStore(app).appendConversationMessage(session, "user", text, attachments)
                 persisted = true
                 AgentRunUiState.beginRun(session, text, attachments)
+                AgentRunUiState.bindCurrentUserMessage(session, messageId)
                 if (cancelSend.get()) throw InterruptedException()
                 AgentForegroundService.startRealAgentFromStoredChatMessage(app, session, messageId, skills, memoryDisabled)
             } catch (failure: Exception) {

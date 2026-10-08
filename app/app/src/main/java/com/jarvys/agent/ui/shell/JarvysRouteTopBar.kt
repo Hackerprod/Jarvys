@@ -68,7 +68,7 @@ fun JarvysRouteTopBar(
                 if (reducedMotion) EnterTransition.None togetherWith ExitTransition.None
                 else fadeIn(JarvysMotion.placeChange()) togetherWith fadeOut(JarvysMotion.placeChange())
             }, label = "place-title") { title ->
-                Text(title, maxLines = 1, softWrap = false, fontSize = JarvysUiTokens.ToolbarTitleSize,
+                Text(title, maxLines = 1, softWrap = false, fontSize = if (route.action == AppRouteAction.CHAT) JarvysUiTokens.ChatToolbarTitleSize else JarvysUiTokens.ToolbarTitleSize,
                     fontWeight = FontWeight.SemiBold, overflow = TextOverflow.Ellipsis)
             }
         },

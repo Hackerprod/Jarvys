@@ -266,7 +266,7 @@ fun ChatComposer(
     }
 }
 
-private const val FLOATING_COMPOSER_SURFACE_ALPHA = 0.94f
+private const val FLOATING_COMPOSER_SURFACE_ALPHA = 0.97f
 
 @Composable
 private fun ComposerModelPill(

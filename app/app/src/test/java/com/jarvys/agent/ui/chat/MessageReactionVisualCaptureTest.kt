@@ -90,6 +90,8 @@ class MessageReactionVisualCaptureTest {
         val image = fixtures.image("reaction-photo.png")
         val document = fixtures.document("notes.txt")
         val plainText = if (spanish) "Revisa este plan, por favor." else "Please review this plan."
+        val multilineText = if (spanish) "Revisa este plan.\nComprueba la última línea." else "Review this plan.\nCheck the final line."
+        var repeatedRows by mutableStateOf(false)
         var event by mutableStateOf(AgentRunUiEvent.messageEvent(14L, "user", plainText, 14L).copyReaction("👀"))
         compose.setContent {
             CompositionLocalProvider(LocalContext provides fixtures.context, LocalReducedMotion provides false) {
@@ -100,6 +102,12 @@ class MessageReactionVisualCaptureTest {
                             verticalArrangement = Arrangement.spacedBy(18.dp)) {
                             Text("Jarvys", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onBackground)
                             Column(Modifier.testTag("reaction-message-layout")) { IntentMessage(event, fixtures.session) }
+                            if (repeatedRows) {
+                                IntentMessage(AgentRunUiEvent.messageEvent(15L, "user", if (spanish) "Dos" else "Two", 15L).copyReaction("🎉"))
+                                IntentMessage(AgentRunUiEvent.messageEvent(16L, "user", if (spanish) "Tres" else "Three", 16L).copyReaction("👍"))
+                                Text(if (spanish) "Siguiente mensaje" else "Next message", Modifier.testTag("following-message"),
+                                    color = MaterialTheme.colorScheme.onBackground)
+                            }
                         }
                     }
                 }
@@ -107,6 +115,7 @@ class MessageReactionVisualCaptureTest {
         }
         awaitText(plainText)
         assertBadge("👀")
+        assertTextClearance(plainText)
         val originalBubble = compose.onNodeWithTag("user-message-bubble-14").fetchSemanticsNode().boundsInRoot
         val initial = capture("acknowledged")
         compose.mainClock.advanceTimeBy(1_000)
@@ -122,11 +131,27 @@ class MessageReactionVisualCaptureTest {
         compose.runOnIdle { event = event.copyReaction("") }
         compose.onNodeWithTag("user-message-reaction-14").assertDoesNotExist()
         val noReaction = compose.onNodeWithTag("reaction-message-layout").fetchSemanticsNode().boundsInRoot
-        assertEquals("Removal reserves no row or padding", originalBubble.height, noReaction.height, 0.01f)
+        val unreactedBubble = compose.onNodeWithTag("user-message-bubble-14").fetchSemanticsNode().boundsInRoot
+        assertEquals("Removal reserves no row or padding", unreactedBubble.height, noReaction.height, 0.01f)
+        assertTrue("Removal also restores the original bubble content padding", unreactedBubble.height < originalBubble.height)
         val removed = capture("removed")
         assertTrue("Removing the reaction must alter native pixels", removed != updated)
 
-        compose.runOnIdle { event = event.copy(text = "", attachments = listOf(image, document), reactionEmoji = "👍") }
+        compose.runOnIdle { event = event.copy(text = "", attachments = listOf(image), reactionEmoji = "👍") }
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithTag("chat-attachment-image-${image.id}").fetchSemanticsNodes()
+                .singleOrNull()?.config?.contains(SemanticsActions.OnClick) == true
+        }
+        assertBadge("👍")
+        assertAttachmentClearance("chat-attachment-image-${image.id}")
+        capture("image-only")
+
+        compose.runOnIdle { event = event.copy(attachments = listOf(document)) }
+        assertBadge("👍")
+        assertAttachmentClearance("chat-attachment-file-${document.id}")
+        capture("file-only")
+
+        compose.runOnIdle { event = event.copy(attachments = listOf(image, document)) }
         compose.waitUntil(5_000) {
             compose.onAllNodesWithTag("chat-attachment-image-${image.id}").fetchSemanticsNodes()
                 .singleOrNull()?.config?.contains(SemanticsActions.OnClick) == true
@@ -138,12 +163,32 @@ class MessageReactionVisualCaptureTest {
             assertTrue("Reaction stays outside both image and document bounds", badge.top > attachment.bottom)
         }
         capture("attachments")
+
+        compose.runOnIdle { event = event.copy(text = multilineText, attachments = emptyList()) }
+        awaitText(multilineText)
+        assertBadge("👍")
+        assertTextClearance(multilineText)
+        capture("multiline")
+        compose.runOnIdle { repeatedRows = true }
+        awaitText(if (spanish) "Dos" else "Two")
+        awaitText(if (spanish) "Tres" else "Three")
+        assertBadge("👍")
+        assertRepeatedRowClearance()
+        capture("repeated-rows")
+        compose.runOnIdle { event = event.copyReaction("") }
+        compose.onNodeWithTag("user-message-reaction-14").assertDoesNotExist()
+        assertRepeatedRowClearance()
+        capture("repeated-removed")
+        compose.runOnIdle { event = event.copyReaction("👀") }
+        assertBadge("👀")
+        assertRepeatedRowClearance()
+        capture("repeated-added")
         println("UX14_REACTION_CAPTURE_DIR=${output.absolutePath}")
         println("UX14_REACTION_CAPTURE_LIMIT=Native Robolectric pixels and semantics; actual device TalkBack and OEM emoji require mobile verification.")
     }
 
     private fun awaitText(text: String) {
-        compose.waitUntil(5_000) { compose.onAllNodesWithText(text, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+        awaitReactionMarkdownText(compose, text)
         awaitReactionDrawIdle(compose)
     }
 
@@ -156,14 +201,49 @@ class MessageReactionVisualCaptureTest {
             badge.config[SemanticsProperties.ContentDescription])
         assertFalse(badge.config.contains(SemanticsActions.OnClick))
         assertFalse(badge.config.contains(SemanticsProperties.Role))
-        assertTrue("Badge cannot overlay the bubble at either text scale", badge.boundsInRoot.top > bubble.boundsInRoot.bottom)
+        assertEquals("Badge center stays on the bottom edge at either text scale", bubble.boundsInRoot.bottom,
+            badge.boundsInRoot.center.y, 0.5f)
+        assertTrue("Half of the badge is inside the bubble", badge.boundsInRoot.top < bubble.boundsInRoot.bottom)
+        assertTrue("Half of the badge is outside the bubble", badge.boundsInRoot.bottom > bubble.boundsInRoot.bottom)
         assertEquals(bubble.boundsInRoot.right, badge.boundsInRoot.right, 0.01f)
+        assertEquals("Only the outside half is reserved in the row", badge.boundsInRoot.bottom,
+            compose.onNodeWithTag("reaction-message-layout").fetchSemanticsNode().boundsInRoot.bottom, 0.01f)
         assertTrue("Badge stays entirely inside the real viewport", badge.boundsInWindow.bottom < compose.activity.window.decorView.height)
         assertTrue("Badge grows to fit text without clipping", badge.boundsInRoot.height >= 20f * expectedScale)
     }
 
+    private fun assertTextClearance(text: String) {
+        val textBounds = compose.onAllNodesWithText(text, useUnmergedTree = true).fetchSemanticsNodes().single().boundsInRoot
+        val badge = compose.onNodeWithTag("user-message-reaction-14").fetchSemanticsNode().boundsInRoot
+        assertTrue("The final text line and its selection area clear the inside half", badge.top >= textBounds.bottom + 3.5f)
+    }
+
+    private fun assertAttachmentClearance(tag: String) {
+        val attachment = compose.onNodeWithTag(tag).assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        val badge = compose.onNodeWithTag("user-message-reaction-14").fetchSemanticsNode().boundsInRoot
+        assertTrue("The inside half clears the whole attachment", badge.top >= attachment.bottom + 3.5f)
+    }
+
+    private fun assertRepeatedRowClearance() {
+        awaitReactionDrawIdle(compose)
+        for (id in 14L..16L) {
+            val badge = compose.onAllNodesWithTag("user-message-reaction-$id").fetchSemanticsNodes().singleOrNull()?.boundsInRoot
+            val bubble = compose.onNodeWithTag("user-message-bubble-$id").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+            if (badge != null) {
+                assertEquals(bubble.bottom, badge.center.y, 0.5f)
+                assertEquals(bubble.right, badge.right, 0.01f)
+            }
+            val nextTag = if (id < 16L) "user-message-bubble-${id + 1}" else "following-message"
+            val next = compose.onNodeWithTag(nextTag).assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+            assertTrue("Each complete badge clears the following row", (badge?.bottom ?: bubble.bottom) < next.top)
+        }
+    }
+
     private fun capture(state: String): String {
         awaitReactionDrawIdle(compose)
+        val bubble = compose.onNodeWithTag("user-message-bubble-14").fetchSemanticsNode().boundsInRoot
+        val badge = compose.onAllNodesWithTag("user-message-reaction-14").fetchSemanticsNodes().singleOrNull()?.boundsInRoot
+        val row = compose.onNodeWithTag("reaction-message-layout").fetchSemanticsNode().boundsInRoot
         var hash = ""
         compose.runOnIdle {
             val root = compose.activity.window.decorView
@@ -184,6 +264,9 @@ class MessageReactionVisualCaptureTest {
                 manifest.appendText(JSONObject().put("file", file.name).put("sha256", hash).put("state", state)
                     .put("widthPixels", root.width).put("heightPixels", root.height)
                     .put("density", root.resources.displayMetrics.density).put("fontScale", expectedScale)
+                    .put("bubbleBottom", bubble.bottom).put("rowBottom", row.bottom)
+                    .put("badgeTop", badge?.top ?: JSONObject.NULL).put("badgeBottom", badge?.bottom ?: JSONObject.NULL)
+                    .put("badgeCenterY", badge?.center?.y ?: JSONObject.NULL)
                     .put("locale", root.resources.configuration.locales[0].toLanguageTag()).toString() + "\n")
                 println("UX14_REACTION_CAPTURE ${file.absolutePath} sha256=$hash")
             } finally { bitmap.recycle() }

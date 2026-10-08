@@ -4,13 +4,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.background
-import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.material3.DrawerState
 import androidx.compose.material3.MaterialTheme
@@ -23,8 +17,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
@@ -36,6 +31,7 @@ import com.jarvys.agent.AppRouteMeta
 import com.jarvys.agent.AppRouteAction
 import com.jarvys.agent.AgentRunUiSnapshot
 import com.jarvys.agent.LocalChatComposerInset
+import com.jarvys.agent.LocalChatHeaderInset
 
 @Composable
 fun JarvysShellFrame(
@@ -60,6 +56,7 @@ fun JarvysShellFrame(
     content: @Composable (PaddingValues) -> Unit,
 ) {
     val chatRoute = route.action == AppRouteAction.CHAT
+    val background = MaterialTheme.colorScheme.background
     ModalNavigationDrawer(
         drawerState = drawerState,
         scrimColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f),
@@ -69,6 +66,20 @@ fun JarvysShellFrame(
             modifier = Modifier.imePadding(),
             containerColor = MaterialTheme.colorScheme.background,
             topBar = {
+                // Recovered v28: draw past the toolbar without reserving extra layout height.
+                Box(if (chatRoute && route.showTopBar) Modifier.testTag(CHAT_HEADER_FADE_TAG)
+                    .drawWithCache {
+                        val fadeHeight = size.height + CHAT_HEADER_FADE_EXTENSION.toPx()
+                        val toolbarEnd = size.height / fadeHeight
+                        val brush = Brush.verticalGradient(
+                            0f to background.copy(alpha = 0.99f),
+                            toolbarEnd * 0.65f to background.copy(alpha = 0.96f),
+                            toolbarEnd to background.copy(alpha = 0.74f),
+                            1f to background.copy(alpha = 0f),
+                            endY = fadeHeight,
+                        )
+                        onDrawBehind { drawRect(brush, size = Size(size.width, fadeHeight)) }
+                    } else Modifier) {
                 JarvysRouteTopBar(
                     route = route,
                     agentSnapshot = agentSnapshot,
@@ -86,6 +97,7 @@ fun JarvysShellFrame(
                     onCompact = onCompact,
                     onReflect = onReflect,
                 )
+                }
             },
             bottomBar = { if (!chatRoute) bottomBar() },
             content = { padding ->
@@ -97,11 +109,14 @@ fun JarvysShellFrame(
                     val layoutDirection = LocalLayoutDirection.current
                     val bodyPadding = PaddingValues(
                         start = padding.calculateStartPadding(layoutDirection),
-                        top = padding.calculateTopPadding(),
+                        top = 0.dp,
                         end = padding.calculateEndPadding(layoutDirection),
                         bottom = 0.dp,
                     )
-                    CompositionLocalProvider(LocalChatComposerInset provides composerInset) {
+                    CompositionLocalProvider(
+                        LocalChatComposerInset provides composerInset,
+                        LocalChatHeaderInset provides padding.calculateTopPadding(),
+                    ) {
                     Box(Modifier.fillMaxSize()) {
                         content(bodyPadding)
                         Box(Modifier.align(androidx.compose.ui.Alignment.BottomCenter)
@@ -111,20 +126,12 @@ fun JarvysShellFrame(
                                     if (composerInset != measuredDp) composerInset = measuredDp
                                 }
                                 .testTag(CHAT_COMPOSER_OVERLAY_TAG)) {
-                                Box(Modifier.align(androidx.compose.ui.Alignment.TopCenter).fillMaxWidth()
-                                    .height(COMPOSER_FADE_HEIGHT).offset(y = -COMPOSER_FADE_HEIGHT)
-                                    .background(Brush.verticalGradient(listOf(
-                                        Color.Transparent,
-                                        MaterialTheme.colorScheme.background.copy(alpha = COMPOSER_FADE_OPACITY),
-                                    ))))
                                 Box(Modifier.align(androidx.compose.ui.Alignment.BottomCenter).fillMaxWidth()
                                     .pointerInput(Unit) {
-                                        awaitEachGesture {
-                                            awaitFirstDown(requireUnconsumed = false)
-                                            do {
-                                                val event = awaitPointerEvent(PointerEventPass.Final)
-                                                event.changes.forEach { if (it.pressed) it.consume() }
-                                            } while (event.changes.any { it.pressed })
+                                        // A hit-test boundary protects messages underneath. Do not consume:
+                                        // even a 1px move consumed at Final cancels child buttons and text focus.
+                                        awaitPointerEventScope {
+                                            while (true) awaitPointerEvent()
                                         }
                                     }) {
                                     bottomBar()
@@ -139,5 +146,5 @@ fun JarvysShellFrame(
 }
 
 internal const val CHAT_COMPOSER_OVERLAY_TAG = "chat-composer-overlay"
-private val COMPOSER_FADE_HEIGHT = 24.dp
-private const val COMPOSER_FADE_OPACITY = 0.96f
+internal const val CHAT_HEADER_FADE_TAG = "chat-header-fade"
+internal val CHAT_HEADER_FADE_EXTENSION = 28.dp

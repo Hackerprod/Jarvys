@@ -23,7 +23,6 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
-import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.unit.dp
 import com.jarvys.agent.AgentRunUiSnapshot
@@ -84,11 +83,12 @@ class JarvysShellFrameUx3Test {
         assertContentAndComposerOverlap()
         assertTailAndJumpAboveComposer()
 
-        compose.onNodeWithTag("chat-message-list").performTouchInput { swipeDown() }
+        compose.onNodeWithTag("chat-message-list").performTouchInput { swipeDown(startY = height * 0.3f, endY = height * 0.65f) }
         compose.waitForIdle()
         val jump = compose.onNodeWithTag("chat-jump-to-end").fetchSemanticsNode().boundsInRoot
         val composer = compose.onNodeWithTag("ux3-composer-surface").fetchSemanticsNode().boundsInRoot
         assertTrue("jump button remains above floating composer: jump=$jump composer=$composer", jump.bottom <= composer.top)
+        assertEquals("jump is centered over composer", composer.center.x, jump.center.x, 1f)
         compose.onNodeWithTag("ux3-composer-surface").performTouchInput { click() }
         assertEquals(0, underComposerTaps)
         compose.onNodeWithTag("chat-jump-to-end").performClick()
@@ -101,7 +101,7 @@ class JarvysShellFrameUx3Test {
         val insetAfterGrowth = compose.onNodeWithTag("ux3-composer-surface").fetchSemanticsNode().boundsInRoot.height
         assertTrue("measured composer inset grows with composer content", insetAfterGrowth > insetBeforeGrowth)
         assertTailAndJumpAboveComposer()
-        compose.onNodeWithTag("chat-message-list").performTouchInput { swipeDown() }
+        compose.onNodeWithTag("chat-message-list").performTouchInput { swipeDown(startY = height * 0.3f, endY = height * 0.65f) }
         compose.waitForIdle()
         val jumpAfterGrowth = compose.onNodeWithTag("chat-jump-to-end").fetchSemanticsNode().boundsInRoot
         val composerAfterGrowth = compose.onNodeWithTag("ux3-composer-surface").fetchSemanticsNode().boundsInRoot

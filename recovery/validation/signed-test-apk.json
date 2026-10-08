@@ -1,0 +1,51 @@
+{
+  "baseline_commit": "a0473d9925fe6ddd61d977982a44c8831cfce7c8",
+  "package": "com.jarvys.agent.recoverytest",
+  "label": "Jarvys Prueba",
+  "flavor": "full",
+  "version_code": 28,
+  "version_name": "1.2.22-UX13-recovery-test",
+  "file_name": "Jarvys-Prueba-UX13-v28-signed.apk",
+  "size_bytes": 18797052,
+  "sha256": "f90fe1f01a414d7e09462ae2a2482bf2f42a7ec9c93bb73a414e91eb6406fa47",
+  "signature_schemes_verified": [
+    "v2",
+    "v3"
+  ],
+  "signing_certificate_sha256": "e0369d56d8a729a62163af1f209ee18e4561d7e3209f38dfb2e930f3ea42a56e",
+  "signing_certificate_sha1": "a6edc60e3a0b5e31b2b82cc3ffb1bebfe2a8cf37",
+  "zip_integrity": true,
+  "zipalign_16kb": true,
+  "focused_full_tests": {
+    "tests": 13,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "full_baseline_tests_previously_passed": 923,
+  "play_baseline_tests_previously_passed": 839,
+  "device_installation_tested": false,
+  "real_login_tested": false,
+  "private_key_backed_up_under_user_control": false,
+  "private_key_uploaded": false,
+  "private_key_in_repository": false,
+  "normal_unsigned_regression_suites": {
+    "Full": {
+      "classes": 199,
+      "tests": 927,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "Play": {
+      "classes": 179,
+      "tests": 843,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "normal_full_manifest_exactly_matches_baseline": true,
+  "normal_full_unsigned_verified": true,
+  "test_identity_rejects_original_signing_path": true
+}

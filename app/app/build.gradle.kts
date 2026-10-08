@@ -5,6 +5,11 @@ plugins {
 }
 
 val unsignedBuild = providers.gradleProperty("unsignedBuild").map { it.toBoolean() }.getOrElse(false)
+// Opt-in identity for a side-by-side recovery test. Never reuse the original signing config.
+val recoveryTestBuild = providers.gradleProperty("recoveryTestBuild").map { it.toBoolean() }.getOrElse(false)
+require(!recoveryTestBuild || unsignedBuild) {
+    "Recovery test builds require -PunsignedBuild=true; sign the separate APK outside Gradle."
+}
 
 android {
     namespace = "com.jarvys.agent"
@@ -21,11 +26,14 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.jarvys.agent"
+        applicationId = if (recoveryTestBuild) "com.jarvys.agent.recoverytest" else "com.jarvys.agent"
         minSdk = 24
         targetSdk = 35
-        versionCode = 29
-        versionName = "1.2.23-UX14"
+        versionCode = 31
+        versionName = "1.2.25-UX14.2" + if (recoveryTestBuild) "-test" else ""
+        manifestPlaceholders["jarvysApplicationLabel"] = if (recoveryTestBuild) "Jarvys Prueba" else "@string/app_name"
+        manifestPlaceholders["jarvysNotificationListenerLabel"] =
+            if (recoveryTestBuild) "Jarvys Prueba: notificaciones" else "@string/notification_listener_label"
     }
 
     signingConfigs {

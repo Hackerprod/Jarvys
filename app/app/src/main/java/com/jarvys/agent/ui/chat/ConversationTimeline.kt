@@ -53,6 +53,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -67,6 +68,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.offset
 import androidx.compose.ui.unit.sp
 import org.json.JSONObject
 import com.jarvys.agent.AgentRunUiEvent
@@ -301,38 +303,53 @@ private fun TimelineArrival(animateEntry: Boolean, content: @Composable () -> Un
 @Composable
 internal fun IntentMessage(event: AgentRunUiEvent, sessionId: String = "") {
     val context = LocalContext.current
-    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
-        Row(Modifier.fillMaxWidth().semantics {
-            contentDescription = context.getString(R.string.chat_user_message_accessibility)
-        }, horizontalArrangement = Arrangement.End) {
-            Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(18.dp),
-                modifier = Modifier.testTag("user-message-bubble-${event.id}")) {
-                Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (event.attachments.isNotEmpty()) UserChatAttachments(event.attachments, sessionId, Modifier.widthIn(max = 320.dp))
-                    if (event.text.isNotBlank()) SelectionContainer {
-                        Text(event.text, color = MaterialTheme.colorScheme.onPrimaryContainer,
-                            style = MaterialTheme.typography.bodyLarge)
+    val hasReaction = event.kind == "user" && event.proactiveThreadKey.isNullOrEmpty() && !event.proactiveNotice &&
+        MessageReactionEmoji.isValid(event.reactionEmoji)
+    // Measure the actual badge, including accessibility font scaling, before reserving its two halves.
+    // Stable slots keep selection and attachment state intact when the reaction changes or disappears.
+    SubcomposeLayout(Modifier.fillMaxWidth()) { constraints ->
+        val badge = subcompose("reaction") {
+            if (hasReaction) {
+                val description = stringResource(R.string.chat_message_reaction_accessibility, event.reactionEmoji)
+                Surface(
+                    modifier = Modifier.testTag("user-message-reaction-${event.id}")
+                        .clearAndSetSemantics { contentDescription = description },
+                    shape = RoundedCornerShape(50),
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                        .compositeOver(MaterialTheme.colorScheme.surface),
+                    contentColor = MaterialTheme.colorScheme.onSurface,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.36f)),
+                ) {
+                    Text(event.reactionEmoji, Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+                        fontSize = 16.sp, lineHeight = 20.sp)
+                }
+            }
+        }.singleOrNull()?.measure(constraints.copy(minWidth = 0, minHeight = 0))
+        val insideHalf = (badge?.height ?: 0) / 2
+        val outsideHalf = (badge?.height ?: 0) - insideHalf
+        val contentBottom = if (badge == null) 12.dp else maxOf(12.dp, insideHalf.toDp() + 4.dp)
+        val bubble = subcompose("bubble") {
+            Row(Modifier.fillMaxWidth().semantics {
+                contentDescription = context.getString(R.string.chat_user_message_accessibility)
+            }, horizontalArrangement = Arrangement.End) {
+                Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(18.dp),
+                    modifier = Modifier.widthIn(min = (badge?.width ?: 0).toDp())
+                        .testTag("user-message-bubble-${event.id}")) {
+                    Column(Modifier.padding(start = 16.dp, top = 12.dp, end = 16.dp, bottom = contentBottom),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (event.attachments.isNotEmpty()) UserChatAttachments(event.attachments, sessionId, Modifier.widthIn(max = 320.dp))
+                        if (event.text.isNotBlank()) SelectionContainer {
+                            AssistantMarkdown(markdown = event.text, onOpenSkillFile = {},
+                                textColor = MaterialTheme.colorScheme.onPrimaryContainer, userMessage = true)
+                        }
                     }
                 }
             }
-        }
-        if (event.kind == "user" && event.proactiveThreadKey.isNullOrEmpty() && !event.proactiveNotice &&
-            MessageReactionEmoji.isValid(event.reactionEmoji)) {
-            val description = stringResource(R.string.chat_message_reaction_accessibility, event.reactionEmoji)
-            // A read-only status outside selection and attachment hit targets. Empty reactions add no space.
-            Surface(
-                modifier = Modifier.padding(top = 4.dp)
-                    .testTag("user-message-reaction-${event.id}")
-                    .clearAndSetSemantics { contentDescription = description },
-                shape = RoundedCornerShape(50),
-                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
-                    .compositeOver(MaterialTheme.colorScheme.surface),
-                contentColor = MaterialTheme.colorScheme.onSurface,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.36f)),
-            ) {
-                Text(event.reactionEmoji, Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
-                    fontSize = 16.sp, lineHeight = 20.sp)
-            }
+        }.single().measure(constraints.offset(vertical = -outsideHalf).copy(minHeight = 0))
+        layout(bubble.width, bubble.height + outsideHalf) {
+            bubble.placeRelative(0, 0)
+            // The badge stays inside this layout's bounds, so the outside half cannot clip into the next row.
+            badge?.placeRelative(bubble.width - badge.width, bubble.height - insideHalf)
         }
     }
 }

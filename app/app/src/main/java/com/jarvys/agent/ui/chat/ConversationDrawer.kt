@@ -177,7 +177,6 @@ fun ConversationDrawer(
                 if (activeVisible) item(key = "active-session") {
                     SessionRow(drawerConversationTitle(activeTitle, activeGoal,
                         stringResource(R.string.drawer_chat_fallback)),
-                        subtitle = stringResource(R.string.drawer_current_conversation),
                         selected = isChatRoute && selectedHistoryId == null,
                         active = true,
                         onClick = onResumeActive, pinned = activeRecord.pinned, archived = activeRecord.archived,
@@ -192,7 +191,6 @@ fun ConversationDrawer(
                 items(visibleHistory, key = { it.id }) { record ->
                     SessionRow(drawerConversationTitle(record.title, record.goal,
                         stringResource(R.string.drawer_chat_fallback)),
-                        subtitle = stringResource(R.string.drawer_history_summary, record.outcome, record.steps, record.turns),
                         selected = isChatRoute && selectedHistoryId == record.id,
                         active = false,
                         onClick = { onOpenHistory(record.id) }, pinned = record.pinned, archived = record.archived,
@@ -249,7 +247,7 @@ fun ConversationDrawer(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun SessionRow(title: String, subtitle: String, selected: Boolean, active: Boolean, onClick: () -> Unit,
+private fun SessionRow(title: String, selected: Boolean, active: Boolean, onClick: () -> Unit,
     pinned: Boolean, archived: Boolean, actionsEnabled: Boolean, managed: Boolean, onAction: (ConversationAction) -> Unit) {
     var menuOpen by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().heightIn(min = 62.dp).combinedClickable(onClick = onClick,
@@ -260,14 +258,9 @@ private fun SessionRow(title: String, subtitle: String, selected: Boolean, activ
         Box(Modifier.width(3.dp).height(36.dp).background(
             if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
             RoundedCornerShape(2.dp)))
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(title, style = MaterialTheme.typography.bodyMedium,
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-                maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Text(subtitle, style = MaterialTheme.typography.labelSmall,
-                color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
+        Text(title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+            maxLines = 2, overflow = TextOverflow.Ellipsis)
         if (pinned) Text(stringResource(R.string.drawer_pinned), style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.primary)
         Box {
