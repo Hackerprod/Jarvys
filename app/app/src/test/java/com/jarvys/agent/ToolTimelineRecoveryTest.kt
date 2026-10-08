@@ -13,6 +13,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -113,6 +114,13 @@ class ToolTimelineRecoveryTest {
         compose.onNodeWithTag("tool-output-toggle-reopen-write").performScrollTo().performClick()
         compose.onNodeWithText("Wrote index.html").performScrollTo().assertIsDisplayed()
         compose.onNodeWithTag("tool-preview-reopen-preview").performScrollTo().performClick()
+        // Preview file verification runs on IO. Compose idleness alone does not await that work.
+        compose.waitUntil(10_000) {
+            compose.onAllNodes(isRoot()).fetchSemanticsNodes()
+            var ready = false
+            compose.runOnUiThread { ready = findWebView(compose.activity.window.decorView) != null }
+            ready
+        }
         compose.waitForIdle()
         compose.runOnIdle {
             assertEquals(projectId, selectedPreview.value)
