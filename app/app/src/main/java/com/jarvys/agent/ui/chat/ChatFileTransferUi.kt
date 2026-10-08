@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import com.jarvys.agent.DownloadIntents
 import com.jarvys.agent.LucideIcons
 import com.jarvys.agent.R
+import com.jarvys.agent.ScrollableDialogContent
 
 @Composable
 internal fun ChatFileTransferHost(transfers: ChatFileTransfers, startIntent: (Intent) -> Unit) {
@@ -60,13 +61,15 @@ internal fun ChatFileTransferHost(transfers: ChatFileTransfers, startIntent: (In
                 current.failure == ChatFileTransfer.Failure.OPEN -> R.string.chat_download_open_failed_title
                 else -> R.string.chat_download_failed
             })) },
-            text = { Text(if (success) context.getString(R.string.chat_download_location, current.result!!.displayName) else
-                context.getString(when (current.failure) {
-                    ChatFileTransfer.Failure.PERMISSION -> R.string.chat_download_permission_denied
-                    ChatFileTransfer.Failure.UNAVAILABLE -> R.string.chat_attachment_unavailable
-                    ChatFileTransfer.Failure.OPEN -> R.string.chat_download_open_failed
-                    else -> R.string.chat_download_retry
-                })) },
+            text = { ScrollableDialogContent {
+                Text(if (success) context.getString(R.string.chat_download_location, current.result!!.displayName) else
+                    context.getString(when (current.failure) {
+                        ChatFileTransfer.Failure.PERMISSION -> R.string.chat_download_permission_denied
+                        ChatFileTransfer.Failure.UNAVAILABLE -> R.string.chat_attachment_unavailable
+                        ChatFileTransfer.Failure.OPEN -> R.string.chat_download_open_failed
+                        else -> R.string.chat_download_retry
+                    }))
+            } },
             confirmButton = {
                 if (success) TextButton(onClick = {
                     transfers.dismissNotice()
