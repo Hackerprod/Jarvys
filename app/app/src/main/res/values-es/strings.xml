@@ -1343,4 +1343,7 @@ Se desconoce cómo terminaron. No se repiten automáticamente. Revisa los cambio
     <string name="github_write_review_note">Cada escritura de GitHub se revisa con su repositorio, método y cambios concretos. Elegir capacidades no concede permisos a la cuenta.</string>
     <string name="github_granted_scopes">Permisos OAuth concedidos: %1$s</string>
     <string name="github_manage_grants">Revisar autorizaciones en GitHub</string>
+    <string name="github_workflow_scope">Solicitar acceso a archivos de workflows (requiere repositorios)</string>
+    <string name="github_scope_review_note">Los permisos adicionales requieren tu aprobación en GitHub. Volver a conectar nunca repite automáticamente la acción pendiente.</string>
+    <string name="github_required_scopes">GitHub solicitó estos permisos: %1$s. Revisa el acceso en Ajustes avanzados y vuelve a conectar, o actualiza el token en GitHub.</string>
 </resources>

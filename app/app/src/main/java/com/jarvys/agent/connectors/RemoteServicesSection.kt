@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
 import android.net.Uri
+import androidx.core.net.toUri
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.app.Activity
@@ -88,8 +89,8 @@ internal fun RemoteServicesSection(
     selectedId: String? = null,
     onSelect: (String, String) -> Unit = { _, _ -> },
     onDetailExit: () -> Unit = {},
-    githubFlowStarter: GitHubDeviceFlowStarter = GitHubDeviceFlowStarter { repositories, code, complete ->
-        GitHubDeviceFlowAttempt.start(repositories, code, complete)
+    githubFlowStarter: GitHubDeviceFlowStarter = GitHubDeviceFlowStarter { request, code, complete ->
+        GitHubDeviceFlowAttempt.start(request.privateRepositories, code, complete, request.additionalScopes)
     },
     onGitHubConnected: (String) -> Unit = connections::connect,
 ) {
@@ -143,6 +144,7 @@ private fun RemoteServiceCard(
     var oauthInProgress by remember(service.id) { mutableStateOf(false) }
     var advancedExpanded by remember(service.id) { mutableStateOf(false) }
     var githubRepoScope by remember(service.id) { mutableStateOf(false) }
+    var githubWorkflowScope by remember(service.id) { mutableStateOf(false) }
     var githubToolsets by remember(service.id) { mutableStateOf(server?.githubToolsets ?: GitHubOperationPolicy.defaultToolsets) }
     val githubFlow = remember(service.id) { GitHubDeviceFlowController(githubFlowStarter) }
     val githubState by githubFlow.state.collectAsState()
@@ -170,7 +172,7 @@ private fun RemoteServiceCard(
             if (server == null || server.authMode != McpAuthMode.OAUTH) connections.disconnect(config.id)
             repository.upsert(config)
             githubErrorResource = null
-            githubFlow.begin(githubRepoScope) { tokens ->
+            githubFlow.begin(GitHubAuthorizationRequest(githubRepoScope, if (githubWorkflowScope) setOf("workflow") else emptySet())) { tokens ->
                 oauthManager.saveGitHubDeviceGrant(config, tokens)
                 repository.clearBearerToken(config.id)
                 onGitHubConnected(config.id)
@@ -221,7 +223,9 @@ private fun RemoteServiceCard(
         }
     }
     val detailError = listOfNotNull(state?.message?.takeIf { it.isNotBlank() && status in setOf(McpConnectionStatus.ERROR, McpConnectionStatus.AUTH_REQUIRED, McpConnectionStatus.REAUTH_REQUIRED, McpConnectionStatus.PERMISSION_REQUIRED) },
-        patError, githubErrorResource?.let(context::getString), githubState.error?.let { error -> context.getString(when (error) {
+        patError, githubErrorResource?.let(context::getString), state?.requiredScopes?.takeIf { isGitHub && it.isNotEmpty() }?.let {
+            context.getString(R.string.github_required_scopes, it.sorted().joinToString(", "))
+        }, githubState.error?.let { error -> context.getString(when (error) {
             GitHubDeviceFlowError.EXPIRED -> R.string.github_device_error_expired
             GitHubDeviceFlowError.DENIED -> R.string.github_device_error_denied
             GitHubDeviceFlowError.DISABLED -> R.string.github_device_error_disabled
@@ -295,9 +299,14 @@ private fun RemoteServiceCard(
         advanced = {
             if (isGitHub) Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(stringResource(R.string.github_device_private_repos), modifier = Modifier.weight(1f), fontSize = 13.sp)
-                Switch(checked = githubRepoScope, onCheckedChange = { githubRepoScope = it }, enabled = !authorizationBusy)
+                Switch(checked = githubRepoScope, onCheckedChange = { githubRepoScope = it; if (!it) githubWorkflowScope = false }, enabled = !authorizationBusy)
             }
             if (isGitHub) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(stringResource(R.string.github_workflow_scope), Modifier.weight(1f))
+                    Switch(checked = githubWorkflowScope, enabled = githubRepoScope && !authorizationBusy, onCheckedChange = { githubWorkflowScope = it })
+                }
+                Text(stringResource(R.string.github_scope_review_note))
                 Text(stringResource(R.string.github_capability_groups))
                 GitHubOperationPolicy.supportedToolsets.forEach { group ->
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -325,7 +334,7 @@ private fun RemoteServiceCard(
                     if (scopes.isNotBlank()) Text(stringResource(R.string.github_granted_scopes, scopes))
                 }
                 TextButton(onClick = { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW,
-                    Uri.parse("https://github.com/settings/applications"))) } }) { Text(stringResource(R.string.github_manage_grants)) }
+                    "https://github.com/settings/applications".toUri())) } }) { Text(stringResource(R.string.github_manage_grants)) }
             }
             if (service.authMode == RemoteServiceAuthMode.PAT) {
                 Text(stringResource(service.patInstructionsResourceId), fontSize = 13.sp, lineHeight = 19.sp,

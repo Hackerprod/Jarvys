@@ -10,7 +10,7 @@ class GitHubDeviceFlowControllerTest {
     }
     private class Starter : GitHubDeviceFlowStarter {
         val attempts = mutableListOf<Attempt>()
-        override fun start(privateRepositories: Boolean, onCode: (GitHubDeviceCode) -> Unit,
+        override fun start(request: GitHubAuthorizationRequest, onCode: (GitHubDeviceCode) -> Unit,
                            onComplete: (Result<GitHubOAuthTokens>) -> Unit) = Attempt(onCode, onComplete).also(attempts::add)
     }
     private val code = GitHubDeviceCode("private", "ABCD-1234", GitHubDeviceFlowProtocol.VERIFICATION_URI, 900, 5)

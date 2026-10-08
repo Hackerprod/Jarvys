@@ -1343,4 +1343,7 @@ Their exit results are unknown. Do not repeat them automatically. Review project
     <string name="github_write_review_note">Each GitHub write is reviewed with its exact repository, method and changes. Capability selection does not grant account permissions.</string>
     <string name="github_granted_scopes">Granted OAuth scopes: %1$s</string>
     <string name="github_manage_grants">Review GitHub account grants</string>
+    <string name="github_workflow_scope">Request workflow-file access (requires repository access)</string>
+    <string name="github_scope_review_note">Additional permissions require your approval on GitHub. Reconnecting never repeats the pending action automatically.</string>
+    <string name="github_required_scopes">GitHub requested these scopes: %1$s. Review access in Advanced settings and reconnect, or update the token in GitHub.</string>
 </resources>

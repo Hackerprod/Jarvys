@@ -92,6 +92,22 @@ class GitHubLoginComposeTest {
         compose.runOnIdle{attempts.single().complete(Result.success(tokens))}
         assertEquals(0,connects);assertTrue(vault.values.values.none{it==tokens.accessToken})
     }
+    @Test fun activityRecreationClosesOldAttemptAndRejectsLateCredentials(){
+        start();showCode()
+        compose.activityRule.scenario.recreate()
+        assertEquals(1,attempts.single().closes)
+        attempts.single().complete(Result.success(tokens))
+        assertEquals(0,connects);assertTrue(vault.values.values.none{it==tokens.accessToken})
+    }
+    @Test fun browserIntentUsesOnlyVerifiedDeviceUrlAndDoesNotCancelPolling(){
+        start();showCode()
+        compose.onNodeWithText(compose.activity.getString(R.string.github_device_open_browser)).performClick()
+        val intent=org.robolectric.Shadows.shadowOf(compose.activity).nextStartedActivity
+        assertEquals("https://github.com/login/device",intent.dataString)
+        assertEquals(0,attempts.single().closes)
+        compose.runOnIdle{attempts.single().complete(Result.success(tokens))}
+        assertEquals(1,connects)
+    }
     @Test fun deniedAuthorizationShowsSpecificErrorAndAllowsRetry(){
         start();compose.runOnIdle{attempts.single().complete(Result.failure(GitHubDeviceFlowException("access_denied")))}
         compose.onNodeWithText(compose.activity.getString(R.string.github_device_error_denied)).performScrollTo().assertIsDisplayed()

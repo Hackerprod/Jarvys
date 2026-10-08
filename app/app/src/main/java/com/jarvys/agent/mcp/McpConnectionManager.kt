@@ -68,13 +68,21 @@ class McpConnectionManager internal constructor(
             if (owner.get() != expectedGeneration) return@execute
             try {
                 val epoch = githubEpoch(config)
-                val session = connectWithSingleRefresh(config) { owner.get() == expectedGeneration }
+                val discoveryOwner = java.util.concurrent.atomic.AtomicReference<McpProtocolSession?>()
+                val session = connectWithSingleRefresh(config) {
+                    owner.get() == expectedGeneration &&
+                        (discoveryOwner.get() == null && sessions[serverId] == null || sessions[serverId] === discoveryOwner.get()) &&
+                        repository.get(serverId)?.let { sameConnection(config, it) } == true &&
+                        runCatching { githubEpoch(config) }.getOrNull() == epoch
+                }
+                discoveryOwner.set(session)
                 val admitted = synchronized(owner) {
                     val latest = repository.get(serverId)
                     if (owner.get() != expectedGeneration || latest == null || !sameConnection(config, latest) || epoch != runCatching { githubEpoch(config) }.getOrNull()) false
                     else {
                         sessions[serverId] = session
                         if (epoch != null) sessionEpochs[serverId] = epoch
+                        persistDiscoveredTools(serverId, session.tools, config)
                         publish(serverId, McpConnectionSnapshot(McpConnectionStatus.READY,
                             "Connected · ${repository.get(serverId)?.tools?.size ?: session.tools.size} tools discovered", session.serverInfo))
                         true
@@ -92,7 +100,7 @@ class McpConnectionManager internal constructor(
                             else -> if (latestConfigIsOAuth(serverId) && listOf("authoriz", "expired", "refresh", "oauth token")
                                 .any { errorText.contains(it, true) }) McpConnectionStatus.AUTH_REQUIRED else McpConnectionStatus.ERROR
                         }
-                        publish(serverId, McpConnectionSnapshot(status, safeMessage(error)))
+                        publish(serverId, McpConnectionSnapshot(status, safeMessage(error), requiredScopes = (error as? McpPermissionRequiredException)?.requiredScopes.orEmpty()))
                     }
                 }
             }
@@ -112,7 +120,8 @@ class McpConnectionManager internal constructor(
 
     private fun sameConnection(a: McpServerConfig, b: McpServerConfig): Boolean = b.enabled &&
         a.endpoint == b.endpoint && a.authMode == b.authMode && a.oauthClientId == b.oauthClientId &&
-        a.catalogServiceId == b.catalogServiceId && a.githubToolsets == b.githubToolsets
+        a.catalogServiceId == b.catalogServiceId && a.githubToolsets == b.githubToolsets &&
+        a.transport == b.transport && a.trustInsecureServer == b.trustInsecureServer
 
     fun callTool(serverId: String, wireName: String, arguments: JSONObject, token: CancellationToken): JSONObject =
         callTool(serverId, wireName, arguments, token, null)
@@ -155,7 +164,7 @@ class McpConnectionManager internal constructor(
             executor.execute { runCatching { session.close() } }
             throw unauthorized
         } catch (permission: McpPermissionRequiredException) {
-            publishIfCurrent(serverId, expectedGeneration, McpConnectionSnapshot(McpConnectionStatus.PERMISSION_REQUIRED, safeMessage(permission)))
+            publishIfCurrent(serverId, expectedGeneration, McpConnectionSnapshot(McpConnectionStatus.PERMISSION_REQUIRED, safeMessage(permission), requiredScopes = permission.requiredScopes))
             throw permission
         } catch (reauth: McpReauthRequiredException) {
             publishIfCurrent(serverId, expectedGeneration, McpConnectionSnapshot(McpConnectionStatus.REAUTH_REQUIRED, safeMessage(reauth)))
@@ -172,7 +181,9 @@ class McpConnectionManager internal constructor(
             },
             request = {
                 sessionFactory(config, authorizationHeader(config)) {
-                    discovered -> if (canPublish()) persistDiscoveredTools(config.id, discovered, config)
+                    discovered -> synchronized(generation(config.id)) {
+                        if (canPublish()) persistDiscoveredTools(config.id, discovered, config)
+                    }
                 }
             },
         )
@@ -185,18 +196,20 @@ class McpConnectionManager internal constructor(
         arguments: JSONObject,
         token: CancellationToken,
         onDefinitiveRejection: () -> Unit = {},
+        beforeDispatch: () -> Unit = {},
         beforeRequest: () -> Unit = {},
     ): JSONObject {
         val requestGeneration = generation(config.id).get()
         var ownedSession = originalSession
         try {
             beforeRequest()
+            beforeDispatch()
             return originalSession.callTool(wireName, arguments, token)
         } catch (unauthorized: McpTransportClient.McpAuthorizationException) {
             if (config.authMode != McpAuthMode.OAUTH) throw unauthorized
             onDefinitiveRejection()
         } catch (forbidden: McpPermissionRequiredException) {
-            publishIfCurrent(config.id, requestGeneration, McpConnectionSnapshot(McpConnectionStatus.PERMISSION_REQUIRED, safeMessage(forbidden)))
+            publishIfCurrent(config.id, requestGeneration, McpConnectionSnapshot(McpConnectionStatus.PERMISSION_REQUIRED, safeMessage(forbidden), requiredScopes = forbidden.requiredScopes))
             throw forbidden
         }
         return synchronized(refreshLocks.computeIfAbsent(config.id) { Any() }) {
@@ -212,9 +225,18 @@ class McpConnectionManager internal constructor(
                     oauthManager.invalidateAccessToken(config)
                     oauthManager.refreshAccessToken(config)
                     beforeRequest()
+                    val discoveryOwner = java.util.concurrent.atomic.AtomicReference<McpProtocolSession?>(originalSession)
+                    val discoveryEpoch = githubEpoch(config)
                     val replacement = sessionFactory(config, authorizationHeader(config)) {
-                        discovered -> persistDiscoveredTools(config.id, discovered, config)
+                        discovered -> synchronized(generation(config.id)) {
+                            if (generation(config.id).get() == requestGeneration && sessions[config.id] === discoveryOwner.get() &&
+                                repository.get(config.id)?.let { sameConnection(config, it) } == true &&
+                                runCatching { githubEpoch(config) }.getOrNull() == discoveryEpoch) {
+                                persistDiscoveredTools(config.id, discovered, config)
+                            }
+                        }
                     }
+                    discoveryOwner.set(replacement)
                     try {
                         synchronized(generation(config.id)) {
                             require(generation(config.id).get() == requestGeneration && sessions[config.id] === originalSession) { "MCP connection changed during refresh" }
@@ -222,6 +244,7 @@ class McpConnectionManager internal constructor(
                             sessions[config.id] = replacement
                             ownedSession = replacement
                             githubEpoch(config)?.let { sessionEpochs[config.id] = it }
+                            persistDiscoveredTools(config.id, replacement.tools, config)
                         }
                     } catch (failure: Exception) { replacement.close(); throw failure }
                     runCatching { originalSession.close() }
@@ -232,6 +255,7 @@ class McpConnectionManager internal constructor(
                 token.throwIfCancelled()
                 try {
                     beforeRequest()
+                    beforeDispatch()
                     retrySession.callTool(wireName, arguments, token)
                 } catch (unauthorized: McpTransportClient.McpAuthorizationException) {
                     onDefinitiveRejection()
@@ -240,7 +264,7 @@ class McpConnectionManager internal constructor(
                     throw McpReauthRequiredException("MCP authorization failed after one refresh; reauthorize this service")
                 }
             } catch (permission: McpPermissionRequiredException) {
-                publishIfCurrent(config.id, requestGeneration, McpConnectionSnapshot(McpConnectionStatus.PERMISSION_REQUIRED, safeMessage(permission)))
+                publishIfCurrent(config.id, requestGeneration, McpConnectionSnapshot(McpConnectionStatus.PERMISSION_REQUIRED, safeMessage(permission), requiredScopes = permission.requiredScopes))
                 throw permission
             } catch (unauthorized: McpTransportClient.McpAuthorizationException) {
                 sessions.remove(config.id, ownedSession)
@@ -322,10 +346,10 @@ class McpConnectionManager internal constructor(
                 }
                 val result = callToolWithSingleRefresh(config, session, tool.wireName, args, token, onDefinitiveRejection = {
                     if (reserved) { check(githubJournal.resolve(intent)) { "GitHub rejected the write, but local safety state could not be released" }; reserved = false }
-                }) {
+                }, beforeDispatch = {
                     requireGitHubLease(config, tool, epoch, expectedGeneration, token)
                     if (write && !reserved) beforeMutation()
-                }
+                }) { requireGitHubLease(config, tool, epoch, expectedGeneration, token) }
                 val callResult = result.optJSONObject("result")
                 if (write && (callResult == null || callResult.optJSONArray("content") == null ||
                     callResult.has("isError") && callResult.opt("isError") !is Boolean)) {

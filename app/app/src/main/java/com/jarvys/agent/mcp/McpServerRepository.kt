@@ -106,7 +106,7 @@ class McpServerRepository internal constructor(context: Context, private val sec
 
     fun updateToolEnabled(serverId: String, wireName: String, enabled: Boolean) = synchronized(lock) {
         val current = get(serverId) ?: return@synchronized
-        if (enabled && current.tools.count { it.enabled } >= McpToolSecurity.MAX_EXPOSED_TOOLS_PER_SERVER) {
+        if (enabled && current.tools.firstOrNull { it.wireName == wireName }?.enabled != true && current.tools.count { it.enabled } >= McpToolSecurity.MAX_EXPOSED_TOOLS_PER_SERVER) {
             throw IllegalStateException("Only ${McpToolSecurity.MAX_EXPOSED_TOOLS_PER_SERVER} tools per server can be enabled for model context")
         }
         upsert(current.copy(
@@ -120,16 +120,14 @@ class McpServerRepository internal constructor(context: Context, private val sec
 
     fun setAllToolsEnabled(serverId: String, enabled: Boolean) = synchronized(lock) {
         val current = get(serverId) ?: return@synchronized
-        var readCount = 0
-        upsert(current.copy(
-            tools = current.tools.map { tool ->
-                val access = McpToolSecurity.classify(current.catalogServiceId, tool.wireName, tool.annotations)
-                val selected = enabled && access == McpToolAccess.READ
-                    && readCount++ < McpToolSecurity.MAX_DEFAULT_READ_TOOLS_PER_SERVER
-                tool.copy(enabled = selected)
-            },
-            toolSelectionMode = if (enabled) McpToolSelectionMode.CUSTOM else McpToolSelectionMode.NONE,
-        ))
+        val selectedWrites = current.tools.count { it.enabled && McpToolSecurity.classify(current.catalogServiceId, it.wireName, it.annotations) == McpToolAccess.WRITE }
+        var available = (McpToolSecurity.MAX_EXPOSED_TOOLS_PER_SERVER - selectedWrites).coerceAtLeast(0)
+        val updated = current.tools.map { tool ->
+            val access = McpToolSecurity.classify(current.catalogServiceId, tool.wireName, tool.annotations)
+            if (access == McpToolAccess.WRITE) tool else tool.copy(enabled = enabled && available-- > 0)
+        }
+        upsert(current.copy(tools = updated, toolSelectionMode = McpToolSelectionMode.CUSTOM,
+            githubToolPreferences = rememberGitHubChoices(current.copy(tools = updated))))
     }
 
     private fun rememberGitHubChoices(config: McpServerConfig): Map<String, String> =

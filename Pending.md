@@ -167,7 +167,14 @@ Referencias: [AuthorizationClient](https://developer.android.com/identity/author
 
 ### 5. UX20: autenticación y capacidades de GitHub
 
-Estado: implementación activa para preparación v39. Identificada una carrera de propiedad del intento de inicio de sesión: una recomposición podía cancelar el intento nuevo y ocultar el resultado. Implementados controles de ciclo de vida y regresiones, metadatos de autorización completos, grupos de herramientas y operaciones nativas acotadas para Discussions y commits con SHA esperado. Primer checkpoint: 68 pruebas dirigidas aprobadas, incluida la pantalla Compose real con cancelación y callbacks tardíos. La revisión independiente ha corregido reintentos ambiguos y cambios de cuenta/conexión. Se amplían ahora las regresiones de integración y transporte y todavía falta la validación agregada; no se ha validado una cuenta real ni concedido nuevos permisos.
+Estado: implementación y revisión independiente completadas; fuente congelada para validación agregada para preparación v39 / 1.2.32-UX20. Las 188 pruebas dirigidas de GitHub y MCP aprueban, incluidas 124 regresiones nuevas respecto de UX19. Todavía faltan las suites agregadas, lint y la verificación de ambos APK sin firma.
+
+- Corregida la carrera del intento de inicio de sesión: recomponer, cancelar, volver del navegador o recrear la Activity no permite que un callback antiguo guarde credenciales ni cancele un intento nuevo.
+- Metadatos OAuth completos y cifrados, caducidad de refresh, identidad de autorización y scopes requeridos visibles. Repo y workflow se solicitan solo mediante selección explícita; reconectar no repite acciones pendientes.
+- Herramientas agrupadas y opt-in, con límite de contexto y permisos conservados. Escrituras revisadas por repositorio y método, con argumentos congelados y nueva comprobación de cuenta, permiso y generación al despachar o renovar.
+- Puente nativo acotado para crear/actualizar Discussions, commits multifichero con SHA de base atómico y checks de un SHA exacto. El resto usa el MCP oficial; los comentarios/hilos identificados por nodo se vinculan previamente a su repositorio.
+- Reintentos solo para lecturas seguras o un rechazo 401 definitivo. Una respuesta perdida, reanudación SSE fallida o ejecución GraphQL incierta conserva un marcador privado persistente y bloquea la repetición automática.
+- Las pruebas incluyen flujo simulado issue → archivo → rama → commit → PR borrador → checks, cambios de cuenta/permisos, carreras de reconexión, paginación, cancelación, almacenamiento fallido y ausencia de replay. No se usaron cuentas reales ni se concedieron nuevos permisos. La configuración externa del OAuth App y el teléfono siguen sin verificarse.
 
 - Diagnosticar el inicio de sesión y contrastar el flujo con documentación oficial y los requisitos reales de configuración.
 - Preparar un conector robusto para trabajar con pull requests, commits, Discussions e issues, con herramientas y errores claros para el agente.

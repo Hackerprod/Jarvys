@@ -92,6 +92,15 @@ class GitHubDeviceFlowTest {
         assertEquals(1, expiring.urls.size)
     }
 
+    @Test fun incrementalWorkflowScopeRequiresExplicitRepositorySelectionAndRejectsUnreviewedScopes() {
+        assertEquals("read:user repo workflow offline_access", GitHubDeviceFlowProtocol.requestForm(
+            GitHubDeviceFlowProtocol.CLIENT_ID, true, setOf("workflow"))["scope"])
+        assertTrue(runCatching { GitHubDeviceFlowProtocol.requestForm(GitHubDeviceFlowProtocol.CLIENT_ID, false, setOf("workflow")) }.isFailure)
+        assertTrue(runCatching { GitHubDeviceFlowProtocol.requestForm(GitHubDeviceFlowProtocol.CLIENT_ID, true, setOf("admin:org")) }.isFailure)
+        assertFalse(GitHubOAuthTokens("private-access", "private-refresh", 0, 0, emptySet()).toString().contains("private"))
+        assertFalse(GitHubDeviceCode("private-device", "ABCD", "https://github.com/login/device", 900, 5).toString().contains("private-device"))
+    }
+
     @Test fun refreshUsesPublicClientAndKeepsCredentialOutOfTheRequestUrl() {
         val form = GitHubDeviceFlowProtocol.refreshForm(GitHubDeviceFlowProtocol.CLIENT_ID, "refresh-secret")
         assertEquals(GitHubDeviceFlowProtocol.CLIENT_ID, form["client_id"])

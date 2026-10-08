@@ -1,8 +1,11 @@
 package com.jarvys.agent.mcp
 
+import com.jarvys.agent.CancellationToken
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayOutputStream
@@ -25,6 +28,8 @@ private data class McpTestSeenRequest(
     val request: JSONObject,
     val sessionId: String?,
     val lastEventId: String?,
+    val headers: Map<String, String>,
+    val bodySizeBytes: Int,
 )
 
 private data class McpTestParsedRequest(
@@ -69,6 +74,8 @@ private class McpTestLocalResponse(private val socket: Socket) {
         }
         runCatching { socket.close() }
     }
+
+    @Synchronized fun closeWithoutResponse() = socket.close()
 
     private fun writeHeaders(
         status: Int,
@@ -246,8 +253,174 @@ class McpTransportClientStreamingTest {
             val session = McpTransportClient.connect(server.config(McpTransport.STREAMABLE_HTTP), null, {})
             try {
                 assertEquals(listOf("page_one", "page_two"), session.tools.map { it.wireName })
-                assertEquals("cursor-two", server.requests.last { it.method == "POST" && it.request.optString("method") == "tools/list" }
-                    .request.getJSONObject("params").optString("cursor"))
+                val requests = server.rpcPosts("tools/list")
+                assertEquals(2, requests.size)
+                assertFalse(requests.first().request.getJSONObject("params").has("cursor"))
+                assertEquals("cursor-two", requests.last().request.getJSONObject("params").optString("cursor"))
+            } finally { session.close() }
+        }
+    }
+
+    @Test fun toolsListRepeatedCursorFailsWithoutRequestingAThirdPage() {
+        assertToolsListCursorCycleIsRejected(listOf("cursor-a", "cursor-a"))
+    }
+
+    @Test fun toolsListCursorCycleFailsBeforeReturningToAVisitedCursor() {
+        assertToolsListCursorCycleIsRejected(listOf("cursor-a", "cursor-b", "cursor-a"))
+    }
+
+    @Test fun toolsListRetries429WithRetryAfterZeroThenSucceeds() {
+        assertMetadataRetrySucceeds(429)
+    }
+
+    @Test fun toolsListRetriesOnlySelectedServerFailuresThenSucceeds() {
+        listOf(500, 502, 503, 504).forEach(::assertMetadataRetrySucceeds)
+    }
+
+    @Test fun toolsListRetryableFailuresStopAfterThreeAttempts() {
+        listOf(429, 500, 502, 503, 504).forEach { status ->
+            LocalMcpHttpServer().use { server ->
+                server.toolsList = { _, response ->
+                    server.sendEmpty(response, status, mapOf("Retry-After" to "0"))
+                }
+                val error = runCatching {
+                    McpTransportClient.connect(server.config(McpTransport.STREAMABLE_HTTP), null, {})
+                }.exceptionOrNull()
+                assertHttpStatus(status, error)
+                val attempts = server.rpcPosts("tools/list")
+                assertEquals("HTTP $status must stop after the original request and two retries", 3, attempts.size)
+                assertEquals(1, attempts.map { it.request.optString("id") }.distinct().size)
+                assertEquals(1, server.rpcPosts("initialize").size)
+                assertTrue(server.requests.none { it.method == "GET" })
+            }
+        }
+    }
+
+    @Test fun toolsListDoesNotRetryUnselectedServerFailures() {
+        listOf(501, 505).forEach { status ->
+            LocalMcpHttpServer().use { server ->
+                server.toolsList = { _, response ->
+                    server.sendEmpty(response, status, mapOf("Retry-After" to "0"))
+                }
+                val error = runCatching {
+                    McpTransportClient.connect(server.config(McpTransport.STREAMABLE_HTTP), null, {})
+                }.exceptionOrNull()
+                assertHttpStatus(status, error)
+                assertEquals("HTTP $status is not retryable", 1, server.rpcPosts("tools/list").size)
+                assertEquals(1, server.rpcPosts("initialize").size)
+            }
+        }
+    }
+
+    @Test fun toolsListDoesNotRetryWhenRetryAfterExceedsTheBound() {
+        listOf(429, 503).forEach { status ->
+            LocalMcpHttpServer().use { server ->
+                server.toolsList = { _, response ->
+                    server.sendEmpty(response, status, mapOf("Retry-After" to "6"))
+                }
+                val error = runCatching {
+                    McpTransportClient.connect(server.config(McpTransport.STREAMABLE_HTTP), null, {})
+                }.exceptionOrNull()
+                assertHttpStatus(status, error)
+                assertEquals(6L, (error as McpTransportClient.McpHttpStatusException).retryAfterSeconds)
+                assertEquals(1, server.rpcPosts("tools/list").size)
+                assertEquals(1, server.rpcPosts("initialize").size)
+            }
+        }
+    }
+
+    @Test fun mutationSseResume401IsAmbiguousAndDoesNotReplayTheAcceptedPost() {
+        assertMutationResumeFailureIsAmbiguous(401)
+    }
+
+    @Test fun mutationSseResume403IsAmbiguousAndDoesNotReplayTheAcceptedPost() {
+        assertMutationResumeFailureIsAmbiguous(403)
+    }
+
+    @Test fun mutationSseResume404IsAmbiguousAndDoesNotReplayTheAcceptedPost() {
+        assertMutationResumeFailureIsAmbiguous(404)
+    }
+
+    @Test fun mutationSseResume429IsAmbiguousAndDoesNotReplayTheAcceptedPost() {
+        assertMutationResumeFailureIsAmbiguous(429)
+    }
+
+    @Test fun mutationInitial404DoesNotReinitializeOrReplay() {
+        assertMutationInitialStatusIsNotRetried(404)
+    }
+
+    @Test fun mutationInitial429DoesNotRetryEvenWithRetryAfterZero() {
+        assertMutationInitialStatusIsNotRetried(429)
+    }
+
+    @Test fun mutationInitial503DoesNotRetryEvenWithRetryAfterZero() {
+        assertMutationInitialStatusIsNotRetried(503)
+    }
+
+    @Test fun mutationInitialInsufficientScope401PreservesScopesWithoutOAuthRecovery() {
+        LocalMcpHttpServer().use { server ->
+            server.toolsCall = { _, response ->
+                server.sendEmpty(response, 401, mapOf("WWW-Authenticate" to
+                    "Bearer error=\"insufficient_scope\", scope=\"repo read:org\""))
+            }
+            val session = connectMutationSession(server)
+            try {
+                val error = callMutationError(session)
+                assertTrue("Expected a permission request but got $error", error is McpPermissionRequiredException)
+                assertFalse(error is McpTransportClient.McpAuthorizationException)
+                assertEquals(setOf("repo", "read:org"), (error as McpPermissionRequiredException).requiredScopes)
+                assertMutationWasPostedOnce(server)
+                assertTrue(server.requests.none { it.method == "GET" })
+            } finally { session.close() }
+        }
+    }
+
+    @Test fun initializationInsufficientScope401PreservesScopesWithoutOAuthRecovery() {
+        LocalMcpHttpServer().use { server ->
+            server.initialize = { _, response ->
+                server.sendEmpty(response, 401, mapOf("WWW-Authenticate" to
+                    "Bearer error=\"insufficient_scope\", scope=\"repo read:org\""))
+            }
+            val error = runCatching {
+                McpTransportClient.connect(server.config(McpTransport.STREAMABLE_HTTP), null, {})
+            }.exceptionOrNull()
+            assertTrue("Expected a permission request but got $error", error is McpPermissionRequiredException)
+            assertFalse(error is McpTransportClient.McpAuthorizationException)
+            assertEquals(setOf("repo", "read:org"), (error as McpPermissionRequiredException).requiredScopes)
+            assertEquals(1, server.rpcPosts("initialize").size)
+            assertTrue(server.rpcPosts("tools/list").isEmpty())
+        }
+    }
+
+    @Test fun everyPostUsesExplicitUtf8ContentLengthWithoutChunkedEncoding() {
+        LocalMcpHttpServer().use { server ->
+            val session = connectMutationSession(server)
+            try {
+                session.callTool("create_issue", JSONObject().put("title", "Café ☕"), CancellationToken.uncancellable())
+                assertMutationWasPostedOnce(server)
+                val posts = server.requests.filter { it.method == "POST" }
+                assertEquals(listOf("initialize", "notifications/initialized", "tools/list", "tools/call"),
+                    posts.map { it.request.optString("method") })
+                posts.forEach { request ->
+                    assertEquals("Content-Length must count UTF-8 bytes for ${request.request.optString("method")}",
+                        request.bodySizeBytes.toString(), request.headers["content-length"])
+                    assertTrue(request.bodySizeBytes > 0)
+                    assertFalse("POST bodies must not use chunked transfer", request.headers.containsKey("transfer-encoding"))
+                }
+                assertEquals("Café ☕", posts.last().request.getJSONObject("params").getJSONObject("arguments").getString("title"))
+            } finally { session.close() }
+        }
+    }
+
+    @Test fun mutationConnectionClosedAfterReadingBodyDoesNotTransparentlyReplayPost() {
+        LocalMcpHttpServer().use { server ->
+            server.toolsCall = { _, response -> response.closeWithoutResponse() }
+            val session = connectMutationSession(server)
+            try {
+                val error = callMutationError(session)
+                assertNotNull("Dropping the response must fail the mutation", error)
+                assertMutationWasPostedOnce(server)
+                assertTrue(server.requests.none { it.method == "GET" })
             } finally { session.close() }
         }
     }
@@ -289,6 +462,116 @@ class McpTransportClientStreamingTest {
             } finally { session.close() }
         }
     }
+
+    private fun assertToolsListCursorCycleIsRejected(cursors: List<String>) {
+        val pages = AtomicInteger()
+        LocalMcpHttpServer().use { server ->
+            server.toolsList = { request, response ->
+                val page = pages.getAndIncrement()
+                val result = toolsResult(request.optString("id"), listOf(smallTool("page_$page")))
+                // A broken client still receives a finite repeated cursor rather than a fixture exception.
+                result.getJSONObject("result").put("nextCursor", cursors.getOrElse(page) { cursors.last() })
+                server.sendJson(response, result)
+            }
+            val error = runCatching {
+                McpTransportClient.connect(server.config(McpTransport.STREAMABLE_HTTP), null, {})
+            }.exceptionOrNull()
+            assertTrue("Expected cursor-cycle rejection but got $error", error is IllegalStateException)
+            assertEquals("MCP server repeated a tools/list cursor", error?.message)
+            val requests = server.rpcPosts("tools/list")
+            assertEquals(cursors.size, requests.size)
+            assertEquals(listOf("") + cursors.dropLast(1),
+                requests.map { it.request.getJSONObject("params").optString("cursor") })
+            assertEquals(1, server.rpcPosts("initialize").size)
+        }
+    }
+
+    private fun assertMetadataRetrySucceeds(status: Int) {
+        val attempts = AtomicInteger()
+        LocalMcpHttpServer().use { server ->
+            server.toolsList = { request, response ->
+                if (attempts.incrementAndGet() <= 2) {
+                    server.sendEmpty(response, status, mapOf("Retry-After" to "0"))
+                } else {
+                    server.sendJson(response, toolsResult(request.optString("id"), listOf(smallTool("after_retry"))))
+                }
+            }
+            val session = McpTransportClient.connect(server.config(McpTransport.STREAMABLE_HTTP), null, {})
+            try {
+                assertEquals("after_retry", session.tools.single().wireName)
+                val requests = server.rpcPosts("tools/list")
+                assertEquals("HTTP $status should allow exactly two metadata retries", 3, requests.size)
+                assertEquals(1, requests.map { it.request.optString("id") }.distinct().size)
+                assertTrue(requests.all { it.sessionId == "session-1" })
+                assertEquals(1, server.rpcPosts("initialize").size)
+            } finally { session.close() }
+        }
+    }
+
+    private fun assertMutationResumeFailureIsAmbiguous(status: Int) {
+        LocalMcpHttpServer().use { server ->
+            server.toolsCall = { _, response ->
+                val event = "id: accepted-mutation\r\nretry: 0\r\n" +
+                    sseData(JSONObject().put("jsonrpc", "2.0").put("method", "notifications/ping").toString())
+                server.sendSse(response, listOf(event.toByteArray(StandardCharsets.UTF_8)))
+            }
+            server.streamableGet = { _, response ->
+                server.sendEmpty(response, status, mapOf("Retry-After" to "0",
+                    "WWW-Authenticate" to "Bearer realm=\"local-mcp\""))
+            }
+            val session = connectMutationSession(server)
+            try {
+                val error = callMutationError(session)
+                assertTrue("Accepted mutation followed by resume HTTP $status must be ambiguous, got $error",
+                    error is McpTransportClient.McpAmbiguousWriteException)
+                assertMutationWasPostedOnce(server)
+                val resumes = server.requests.filter { it.method == "GET" }
+                assertEquals("A failed resume must not trigger another resume or POST", 1, resumes.size)
+                assertEquals("accepted-mutation", resumes.single().lastEventId)
+                assertEquals("session-1", resumes.single().sessionId)
+                assertEquals("2025-11-25", resumes.single().headers["mcp-protocol-version"])
+            } finally { session.close() }
+        }
+    }
+
+    private fun assertMutationInitialStatusIsNotRetried(status: Int) {
+        LocalMcpHttpServer().use { server ->
+            server.toolsCall = { _, response -> server.sendEmpty(response, status, mapOf("Retry-After" to "0")) }
+            val session = connectMutationSession(server)
+            try {
+                assertHttpStatus(status, callMutationError(session))
+                assertMutationWasPostedOnce(server)
+                assertTrue(server.requests.none { it.method == "GET" })
+            } finally { session.close() }
+        }
+    }
+
+    private fun assertHttpStatus(status: Int, error: Throwable?) {
+        assertTrue("Expected HTTP $status but got $error", error is McpTransportClient.McpHttpStatusException)
+        assertEquals(status, (error as McpTransportClient.McpHttpStatusException).statusCode)
+    }
+
+    private fun connectMutationSession(server: LocalMcpHttpServer): McpProtocolSession {
+        server.toolsList = { request, response ->
+            server.sendJson(response, toolsResult(request.optString("id"), listOf(smallTool("create_issue"))))
+        }
+        return McpTransportClient.connect(server.config(McpTransport.STREAMABLE_HTTP), null, {})
+    }
+
+    private fun callMutationError(session: McpProtocolSession): Throwable? = runCatching {
+        session.callTool("create_issue", JSONObject().put("title", "Test issue"), CancellationToken.uncancellable())
+    }.exceptionOrNull()
+
+    private fun assertMutationWasPostedOnce(server: LocalMcpHttpServer) {
+        val posts = server.rpcPosts("tools/call")
+        assertEquals("Mutations must never be posted twice", 1, posts.size)
+        assertEquals("create_issue", posts.single().request.getJSONObject("params").getString("name"))
+        assertEquals("Mutation recovery must not reinitialize the session", 1, server.rpcPosts("initialize").size)
+        assertEquals(1, server.rpcPosts("tools/list").size)
+    }
+
+    private fun LocalMcpHttpServer.rpcPosts(method: String): List<McpTestSeenRequest> =
+        requests.filter { it.method == "POST" && it.request.optString("method") == method }
 
     private fun smallTool(name: String, description: String = "test tool") = McpToolConfig(
         wireName = name,
@@ -345,6 +628,9 @@ class McpTransportClientStreamingTest {
         }
         @Volatile var toolsList: (JSONObject, McpTestLocalResponse) -> Unit = { request, response ->
             sendJson(response, toolsResult(request.optString("id"), emptyList()))
+        }
+        @Volatile var toolsCall: (JSONObject, McpTestLocalResponse) -> Unit = { request, response ->
+            sendJson(response, rpcResult(request.optString("id"), JSONObject().put("content", JSONArray())))
         }
         @Volatile var streamableGet: (McpTestSeenRequest, McpTestLocalResponse) -> Unit = { _, response -> sendEmpty(response, 405) }
         @Volatile var legacyMessage: (JSONObject) -> JSONObject? = { request -> when (request.optString("method")) {
@@ -437,6 +723,7 @@ class McpTransportClientStreamingTest {
                 request.optString("method") == "initialize" -> initialize(request, response)
                 request.optString("method") == "notifications/initialized" -> sendEmpty(response, 202)
                 request.optString("method") == "tools/list" -> toolsList(request, response)
+                request.optString("method") == "tools/call" -> toolsCall(request, response)
                 parsed.method == "DELETE" -> sendEmpty(response, 200)
                 else -> sendJson(response, rpcResult(request.optString("id"), JSONObject()))
             }
@@ -467,6 +754,8 @@ class McpTransportClientStreamingTest {
             request = request,
             sessionId = parsed.headers["mcp-session-id"],
             lastEventId = parsed.headers["last-event-id"],
+            headers = parsed.headers.toMap(),
+            bodySizeBytes = parsed.body.size,
         ).also(requests::add)
 
         private fun writeLegacyEvent(event: String) {

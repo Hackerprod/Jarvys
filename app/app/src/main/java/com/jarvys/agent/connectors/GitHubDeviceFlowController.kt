@@ -4,8 +4,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
+internal data class GitHubAuthorizationRequest(val privateRepositories: Boolean, val additionalScopes: Set<String> = emptySet())
+
 internal fun interface GitHubDeviceFlowStarter {
-    fun start(privateRepositories: Boolean, onCode: (GitHubDeviceCode) -> Unit,
+    fun start(request: GitHubAuthorizationRequest, onCode: (GitHubDeviceCode) -> Unit,
               onComplete: (Result<GitHubOAuthTokens>) -> Unit): AutoCloseable
 }
 
@@ -17,8 +19,8 @@ internal data class GitHubDeviceFlowState(
 
 /** One UI owner, one attempt. Late callbacks can never adopt a replacement owner's credentials. */
 internal class GitHubDeviceFlowController(
-    private val starter: GitHubDeviceFlowStarter = GitHubDeviceFlowStarter { repositories, code, complete ->
-        GitHubDeviceFlowAttempt.start(repositories, code, complete)
+    private val starter: GitHubDeviceFlowStarter = GitHubDeviceFlowStarter { request, code, complete ->
+        GitHubDeviceFlowAttempt.start(request.privateRepositories, code, complete, request.additionalScopes)
     },
 ) : AutoCloseable {
     private val mutableState = MutableStateFlow(GitHubDeviceFlowState())
@@ -27,12 +29,15 @@ internal class GitHubDeviceFlowController(
     private var attempt: AutoCloseable? = null
     private var closed = false
 
-    @Synchronized fun begin(privateRepositories: Boolean, saveGrant: (GitHubOAuthTokens) -> Unit): Boolean {
+    fun begin(privateRepositories: Boolean, saveGrant: (GitHubOAuthTokens) -> Unit): Boolean =
+        begin(GitHubAuthorizationRequest(privateRepositories), saveGrant)
+
+    @Synchronized fun begin(request: GitHubAuthorizationRequest, saveGrant: (GitHubOAuthTokens) -> Unit): Boolean {
         if (closed || mutableState.value.inProgress) return false
         val owner = ++generation
         mutableState.value = GitHubDeviceFlowState(inProgress = true)
         try {
-            val started = starter.start(privateRepositories, { code -> synchronized(this) {
+            val started = starter.start(request.copy(additionalScopes = request.additionalScopes.toSet()), { code -> synchronized(this) {
                 if (owns(owner)) mutableState.value = GitHubDeviceFlowState(true, code)
             } }, { result -> synchronized(this) {
                 if (owns(owner)) {

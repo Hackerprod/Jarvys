@@ -18,7 +18,7 @@ data class GitHubDeviceCode(
     val verificationUri: String,
     val expiresInSeconds: Long,
     val intervalSeconds: Long,
-)
+) { override fun toString() = "GitHubDeviceCode(redacted)" }
 
 data class GitHubOAuthTokens(
     val accessToken: String,
@@ -26,7 +26,7 @@ data class GitHubOAuthTokens(
     val expiresAtMillis: Long,
     val refreshTokenExpiresAtMillis: Long,
     val scopes: Set<String>,
-)
+) { override fun toString() = "GitHubOAuthTokens(redacted)" }
 
 data class GitHubOAuthResponse(val status: Int, val body: String, val retryAfterSeconds: Long? = null)
 
@@ -46,12 +46,14 @@ object GitHubDeviceFlowProtocol {
     const val OFFLINE_SCOPE = "offline_access"
     const val MAX_RESPONSE_CHARS = 64 * 1024
 
-    fun requestForm(clientId: String, includePrivateRepositories: Boolean): Map<String, String> {
+    fun requestForm(clientId: String, includePrivateRepositories: Boolean, additionalScopes: Set<String> = emptySet()): Map<String, String> {
+        require(additionalScopes.all { it == "workflow" } && (additionalScopes.isEmpty() || includePrivateRepositories)) { "Review repository and workflow access before requesting it" }
         require(validClientId(clientId))
         return mapOf("client_id" to clientId,
             "scope" to buildList {
                 add(USER_SCOPE)
                 if (includePrivateRepositories) add(REPOSITORY_SCOPE)
+                addAll(additionalScopes.sorted())
                 add(OFFLINE_SCOPE)
             }.joinToString(" "))
     }
@@ -76,8 +78,8 @@ object GitHubDeviceFlowProtocol {
     }
 
     fun deviceCode(transport: GitHubOAuthTransport, clientId: String = CLIENT_ID,
-                   includePrivateRepositories: Boolean = false): GitHubDeviceCode {
-        val response = transport.post(DEVICE_CODE_ENDPOINT, requestForm(clientId, includePrivateRepositories))
+                   includePrivateRepositories: Boolean = false, additionalScopes: Set<String> = emptySet()): GitHubDeviceCode {
+        val response = transport.post(DEVICE_CODE_ENDPOINT, requestForm(clientId, includePrivateRepositories, additionalScopes))
         return parseDeviceCode(response.status, response.body)
     }
 
@@ -182,6 +184,7 @@ class GitHubDeviceFlowAttempt private constructor(
             includePrivateRepositories: Boolean,
             onDeviceCode: (GitHubDeviceCode) -> Unit,
             onComplete: (Result<GitHubOAuthTokens>) -> Unit,
+            additionalScopes: Set<String> = emptySet(),
         ): GitHubDeviceFlowAttempt {
             val cancelled = AtomicBoolean(false)
             val worker = AtomicReference<Thread?>()
@@ -190,7 +193,7 @@ class GitHubDeviceFlowAttempt private constructor(
                 worker.set(Thread.currentThread())
                 val result = runCatching {
                     val code = GitHubDeviceFlowProtocol.deviceCode(transport,
-                        includePrivateRepositories = includePrivateRepositories)
+                        includePrivateRepositories = includePrivateRepositories, additionalScopes = additionalScopes)
                     if (cancelled.get()) throw GitHubDeviceFlowException("cancelled")
                     main.post { if (!cancelled.get()) onDeviceCode(code) }
                     GitHubDeviceFlowProtocol.pollForToken(transport, code,

@@ -66,6 +66,7 @@ data class McpConnectionSnapshot(
     val status: McpConnectionStatus = McpConnectionStatus.DISCONNECTED,
     val message: String = "",
     val serverInfo: McpServerInfo? = null,
+    val requiredScopes: Set<String> = emptySet(),
 )
 
 enum class McpConnectionStatus { DISCONNECTED, CONNECTING, READY, ERROR, AUTH_REQUIRED, REAUTH_REQUIRED, PERMISSION_REQUIRED }
