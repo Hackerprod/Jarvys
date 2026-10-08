@@ -200,7 +200,7 @@ Diseño y límites de la implementación: `app/GITHUB_CONNECTOR.md`.
 
 ### 6. UX21: alineación de permisos en conectores
 
-Estado: implementación y pruebas dirigidas en curso para preparación v40 / 1.2.33-UX21; todavía no constituye una entrega validada.
+Estado: implementación y revisión independiente completadas; 81 ejecuciones dirigidas y suites de 1643 Full / 1416 Play / 17 runtime / nueve JavaScript aprobadas. Lint no añadió errores, pero detectó una advertencia nueva de orden de parámetros de Compose. Se corrige y se repiten las comprobaciones sobre la fuente final antes de entregar v40 / 1.2.33-UX21.
 
 - Inspeccionada la captura real de Calendar: el valor de lectura y el selector editable usaban tipografía, anchura y rellenos diferentes. Se unifican en una fila de presentación con columna derecha estable y espacio de flecha reservado también para valores informativos.
 - Aplicado a permisos nativos, scopes y operaciones de Gmail/Drive, herramientas del catálogo incluido GitHub, herramientas MCP personalizadas y la política inicial del editor MCP. Los interruptores de Ajustes y permisos avanzados ya conservaban su columna derecha centrada y no se rediseñan.

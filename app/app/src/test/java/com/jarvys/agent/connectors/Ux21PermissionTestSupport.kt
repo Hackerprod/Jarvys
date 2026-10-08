@@ -114,7 +114,7 @@ internal fun Ux21FixtureRow(
         }
     }, permission = {
         if (readOnly) ConnectorPolicyValue(selected, Modifier.testTag("policy-$id"))
-        else ConnectorPolicySelector(selected, choices, enabled, Modifier.testTag("policy-$id"))
+        else ConnectorPolicySelector(selected, choices, modifier = Modifier.testTag("policy-$id"), enabled = enabled)
     })
 }
 

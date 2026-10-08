@@ -229,8 +229,8 @@ private fun ConnectorPolicyContent(selectedLabelResource: Int, showChevron: Bool
 internal fun ConnectorPolicySelector(
     selectedLabelResource: Int,
     choices: List<ConnectorPolicyChoice>,
-    enabled: Boolean = true,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
 ) {
     var expanded by remember(selectedLabelResource, choices.size, enabled) { mutableStateOf(false) }
     Box(Modifier.fillMaxWidth()) {
