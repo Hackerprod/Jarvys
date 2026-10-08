@@ -34,10 +34,15 @@ Estado: causas confirmadas y corrección en curso, antes de APKFACTORY1.
 - **Primer checkpoint:** eliminada la dependencia de hard links en identidad/journal y creación de archivos de Coding, operación prohibida por Android a las apps normales. Los registros privados se promocionan completos; los archivos nuevos se crean de forma exclusiva, sin sobrescribir rutas existentes, con comprobación de tamaño y SHA-256.
 - Si una creación queda interrumpida, se conservan el destino, el staging y la evidencia de recuperación; se informa un resultado parcial o incierto y no se reejecuta automáticamente. Las actualizaciones de archivos existentes conservan el reemplazo atómico.
 - Diez regresiones dirigidas de almacenamiento aprobadas en el host (SDK 34/Robolectric), incluidas colisiones, symlinks, competencia entre creadores, copia parcial, recuperación sin replay y contenido modificado. Revisión independiente completada. Esto no sustituye la validación real en teléfono ni confirma el fallback de API 24.
+- **Segundo checkpoint:** detección de fallos repetidos por herramienta/argumentos, aunque el error incluya datos cambiantes; recuperación permitida cuando una acción correctiva aporta progreso real. No se añaden reintentos automáticos de escrituras.
+- Corregidos IDs de aprobación inexistentes, acciones desde notificaciones/tarjetas caducadas, carreras con STOP/timeout y registro de callbacks de cancelación. La aprobación se consume una sola vez y los lanzamientos de permisos asíncronos permanecen pendientes hasta su resultado.
+- Veintidós nuevas regresiones de bucles, aprobación y cancelación aprobadas, con revisión independiente. La segunda pasada dirigida completa fue de 164 pruebas Full sin fallos; continúan la restauración visual, creación de bots y validación final de ambos sabores.
 - Diagnóstico de continuidad confirmado: el historial de herramientas del agente principal no se restauraba entre turnos, aunque la interfaz conservaba sus tarjetas. La persistencia estructurada, la compactación, los reintentos sin progreso y las carreras de aprobación siguen en revisión y pruebas; no se declara una entrega lista.
 
 - Reproducir y diagnosticar los fallos repetidos de herramientas y la pérdida de continuidad observados en v32, contrastando la ejecución real con los contratos de las herramientas y el historial enviado al proveedor.
 - Conservar resultados de herramientas y estado relevante entre turnos y reinicios, con límites claros de contexto y sin reejecutar automáticamente acciones externas ambiguas.
+- **Reapertura de interfaz:** conservar también el detalle expandible de cada herramienta y la acción de vista previa web. Se ha confirmado que la versión anterior reconstruía solo las etiquetas al reabrir. Restaurar referencias verificadas del workspace, mostrar honestamente los datos que una versión antigua no guardó y no volver a ejecutar herramientas durante la recuperación.
+- La aceptación requiere crear archivos/vista previa, reconstruir Activity y almacenamiento, abrir detalles y vista previa desde la conversación restaurada y comprobar que el siguiente turno del modelo recibe la misma evidencia.
 - Revisar operaciones de archivos compatibles con las restricciones reales de Android, errores, cancelación, reintentos y controles de aprobación.
 - Añadir pruebas de regresión dirigidas y validar en el dispositivo antes de afirmar que se ha corregido el comportamiento real.
 
@@ -50,6 +55,25 @@ Estado: corrección prioritaria junto al incidente del agente.
 - Mostrar dos bots por fila, con icono arriba y nombre debajo, sin tarjetas/contenedores externos ni subtítulos de tipo “Built-in” o “Your reusable assistants”.
 - Conservar inmutabilidad de plantillas, edición y deshabilitado desde el detalle, animación de trabajo real y accesibilidad.
 - Revisar capturas y geometría con español/inglés, ambos temas y texto grande antes de entregar.
+
+### P0 Bots. Creación completa desde el chat
+
+Estado: capacidad ausente confirmada; implementación en curso.
+
+- Permitir al agente principal crear y guardar un bot a partir de una petición natural del usuario, con nombre simple, instrucciones en inglés e icono generable y configurable.
+- La versión anterior exponía consulta e iconos, pero la creación persistente estaba disponible únicamente desde la interfaz de Bots. Incorporar la herramienta y su registro real en el chat, sin fingir una creación completada.
+- Mantener las plantillas protegidas y los permisos por capacidad; crear un bot no concede automáticamente acceso a conectores ni operaciones sensibles.
+- Probar con un modelo simulado el recorrido de herramientas reales: creación de definición, generación/asignación de icono, persistencia y descubrimiento en el siguiente turno. Separar un icono fallido de una definición guardada y comunicar el resultado real.
+- Incluir en la próxima entrega solo después de revisión y validación completas, sin desplazar las correcciones de fiabilidad del agente.
+
+### UX23. Restaurar selección de texto en respuestas
+
+Estado: fallo confirmado en dispositivo; pendiente después del P0 y antes de nuevas funciones.
+
+- Restaurar selección mediante pulsación larga en los mensajes del agente; la selección actual de los mensajes del usuario debe conservarse.
+- Contrastar con UX7/v28: selección por mensaje para respuestas, traducciones, Markdown y código; excluir adjuntos, acciones de pie y mensajes vecinos.
+- Validar gestos reales de pulsación larga, selectores y copia a través de Markdown/código y desplazamiento, sin interceptar enlaces ni romper la selección del usuario.
+- No incluir esta corrección en la entrega P0 sin revisión y comprobación completas.
 
 ### 1. APKFACTORY1: fábrica local de APK y skill de Coding
 

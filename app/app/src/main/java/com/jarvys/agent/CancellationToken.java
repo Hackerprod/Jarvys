@@ -10,6 +10,7 @@ public final class CancellationToken {
     private final long generation;
     private final boolean standaloneCancellable;
     private final boolean crewRun;
+    private final Object standaloneActionLock = new Object();
     private final java.util.concurrent.atomic.AtomicBoolean standaloneCancelled = new java.util.concurrent.atomic.AtomicBoolean(false);
     private final java.util.concurrent.CopyOnWriteArrayList<Runnable> standaloneCancelActions = new java.util.concurrent.CopyOnWriteArrayList<>();
     private final java.util.concurrent.atomic.AtomicBoolean timedOut = new java.util.concurrent.atomic.AtomicBoolean(false);
@@ -44,12 +45,18 @@ public final class CancellationToken {
     public boolean isCrewRun() { return crewRun; }
 
     public boolean cancel() {
-        if (!standaloneCancellable || !standaloneCancelled.compareAndSet(false, true)) return false;
+        synchronized (standaloneActionLock) {
+            if (!standaloneCancellable || !standaloneCancelled.compareAndSet(false, true)) return false;
+        }
+        cancelStandaloneActions();
+        return true;
+    }
+
+    private void cancelStandaloneActions() {
         for (Runnable action : standaloneCancelActions) {
             try { action.run(); } catch (RuntimeException ignored) { }
         }
         standaloneCancelActions.clear();
-        return true;
     }
 
     public long generation() {
@@ -77,11 +84,14 @@ public final class CancellationToken {
     }
 
     boolean cancelForTimeout() {
-        boolean latched = controller == null
-                ? timedOut.compareAndSet(false, true)
-                : controller.latchTimeout(generation, () -> timedOut.compareAndSet(false, true));
+        boolean latched;
+        if (controller == null) {
+            synchronized (standaloneActionLock) { latched = timedOut.compareAndSet(false, true); }
+        } else latched = controller.latchTimeout(generation, () -> timedOut.compareAndSet(false, true));
         if (latched && timedOut.get() && controller != null) {
             controller.cancelActionsForTimeout(generation);
+        } else if (latched && controller == null) {
+            cancelStandaloneActions();
         }
         return latched && timedOut.get();
     }
@@ -100,39 +110,57 @@ public final class CancellationToken {
         if (Thread.currentThread().isInterrupted()) {
             return false;
         }
-        if (standaloneCancellable && standaloneCancelled.get()) return false;
         if (controller == null) {
-            action.run();
-            return true;
+            synchronized (standaloneActionLock) {
+                if (standaloneCancelled.get() || timedOut.get()) return false;
+                action.run();
+                return true;
+            }
         }
-        return controller.runIfActive(generation, action);
+        final boolean[] invoked = { false };
+        controller.runIfActive(generation, () -> {
+            if (!timedOut.get()) {
+                invoked[0] = true;
+                action.run();
+            }
+        });
+        return invoked[0];
     }
 
     public <T> T callIfActive(Callable<T> action, T cancelledValue) {
         if (Thread.currentThread().isInterrupted()) {
             return cancelledValue;
         }
-        if (standaloneCancellable && standaloneCancelled.get()) return cancelledValue;
         if (controller == null) {
-            try {
-                return action.call();
-            } catch (Exception error) {
-                throw new IllegalStateException("Uncancellable action failed", error);
+            synchronized (standaloneActionLock) {
+                if (standaloneCancelled.get() || timedOut.get()) return cancelledValue;
+                try {
+                    return action.call();
+                } catch (RuntimeException error) {
+                    throw error;
+                } catch (Exception error) {
+                    throw new IllegalStateException("Action failed", error);
+                }
             }
         }
-        return controller.callIfActive(generation, action, cancelledValue);
+        return controller.callIfActive(generation, () -> timedOut.get() ? cancelledValue : action.call(), cancelledValue);
     }
 
     /** Register an active blocking I/O handle so STOP can close it synchronously. */
     public Runnable registerCancelAction(Runnable action) {
         if (controller == null) {
-            if (!standaloneCancellable || action == null) return () -> { };
+            if (action == null) return () -> { };
             java.util.concurrent.atomic.AtomicBoolean invoked = new java.util.concurrent.atomic.AtomicBoolean(false);
             Runnable once = () -> { if (invoked.compareAndSet(false, true)) action.run(); };
-            if (standaloneCancelled.get()) once.run();
+            if (standaloneCancelled.get() || timedOut.get()) once.run();
             else {
                 standaloneCancelActions.add(once);
-                if (standaloneCancelled.get() && standaloneCancelActions.remove(once)) once.run();
+                if (standaloneCancelled.get() || timedOut.get()) {
+                    standaloneCancelActions.remove(once);
+                    // Cancellation may already have cleared the list after taking its snapshot.
+                    // The once wrapper, not membership in that list, owns exactly-once delivery.
+                    once.run();
+                }
             }
             return () -> standaloneCancelActions.remove(once);
         }
