@@ -11,7 +11,8 @@ Modo de ejecución: continuar la cola completa. Al cerrar cada pendiente, verifi
 - **v31 completada:** reacciones locales del modelo, Markdown del usuario y lista de chats sin subtítulos restaurados. Pruebas: 994 Full y 910 Play. APK con identidad original entregado.
 - **UX15 / v32 implementada y entregada:** APK original firmado de Jarvys, versión 32 / 1.2.26-UX15. Pruebas completas aprobadas: 1089 Full y 1005 Play, sin fallos, errores ni omitidas. Revisión visual y de seguridad completada. Lint sin errores nuevos; permanecen 75 errores heredados en Full y 66 en Play. La prueba real en teléfono ha detectado un incidente prioritario de fallos repetidos de herramientas y pérdida de continuidad. Las pruebas del host no demuestran que ese comportamiento esté resuelto.
 - **P0 / preparación v33 cerrada en código y host:** correcciones de herramientas, continuidad, restauración visual y Bots completadas. Suites finales: 1159 Full y 1075 Play, cero fallos/errores/omitidas. Lint sin errores nuevos; deuda restante: 46 Full y 37 Play. Ambos APK sin firma compilados y verificados con paquete original, permisos sin cambios, CRC y alineación correctos.
-- **Siguiente etapa:** UX23, restaurar selección de texto de respuestas; después, APKFACTORY1 y la cola restante. No se entrega un APK parcial ni se espera feedback entre etapas.
+- **UX23 / preparación v34 cerrada en código y host:** selección por mensaje restaurada para respuestas y traducciones. Suites finales: 1173 Full y 1089 Play, cero fallos/errores/omitidas. Lint sin cambios respecto al P0 (46 Full / 37 Play); ambos APK unsigned verificados. Se conserva el límite de validación física y el comportamiento heredado del enlace descritos abajo.
+- **Siguiente etapa:** APKFACTORY1 y la cola restante. No se entrega un APK parcial ni se espera feedback entre etapas.
 - La paridad completa con el comportamiento de v28 en un teléfono sigue pendiente de validación; la fiabilidad del agente es prioritaria antes de añadir funciones.
 
 ## Entregas previas
@@ -79,19 +80,18 @@ Estado: completado en código; revisión y pruebas agregadas aprobadas. El prove
 
 ### UX23. Restaurar selección de texto en respuestas
 
-Estado: corrección mínima revisada para preparación v34 / 1.2.27-UX23; 39 pruebas dirigidas Full aprobadas. La primera pasada agregada aprobó 1089 Play; Full tuvo una carrera de sincronización en una prueba existente de Tareas, ajena a la selección. Se corrige únicamente la espera del fixture y se repite la validación congelada de ambos sabores, lint y APK unsigned.
+Estado: completado en código, revisión y validación de host para preparación v34 / 1.2.27-UX23. Las 39 pruebas dirigidas y la repetición final de 1173 Full / 1089 Play aprueban sin fallos, errores ni omitidas. XML frescos y fuente idéntica durante pruebas, lint y compilación. El informe de lint regenerado confirma cero errores/avisos nuevos y la deuda heredada de 46 Full / 37 Play.
 
 - Confirmada la omisión durante la recuperación de los dos contenedores de selección presentes en v28: cuerpo de respuesta y cuerpo de traducción. Restaurados por mensaje, sin envolver encabezados, sugerencias, acciones de pie, adjuntos ni vecinos; no se modifica la frontera táctil pasiva del compositor.
 - Una regresión de pulsación larga reproduce el fallo en la fuente P0 antes de aplicar el cambio: no se abre la selección. Se añaden pruebas de gestos, selectores, arrastre, copia, Markdown/código, enlaces, traducciones, reacciones, temas y texto grande, scroll y foco/IME.
 - La prueba existente de Tareas esperaba inmediatamente un menú recién insertado mientras la pantalla recargaba su snapshot en IO. Se añade una espera acotada a la fila y su posición, conservando clics y todas las aserciones; no cambia el producto. Sus cinco pruebas vuelven a pasar en Full y Play. El primer lint conserva exactamente la deuda P0 (46 Full / 37 Play), sin nuevos errores ni avisos.
 - Catorce nuevas regresiones verifican selección y copia reales por puntero, arrastre de selectores, aislamiento, sugerencias, código, traducción, scroll, temas/fuentes y transición de selección activa a foco del compositor. Las pruebas distinguen el cursor del campo de los selectores de rango.
 - Los toques ordinarios sobre enlaces siguen funcionando. Se aisló un comportamiento heredado de Compose 1.9: una pulsación larga directamente sobre la etiqueta de un enlace puede seleccionar y activar el enlace; se reproduce igual en el contenedor del usuario sin cambios. Esta restauración no reescribe los gestos de la dependencia.
-- La validación del host sustituye únicamente la presentación del menú y la lupa; no certifica el teléfono, el menú nativo ni un teclado físico. La compilación seguirá sin firma, sin entrega parcial ni clave nueva.
+- La validación del host sustituye únicamente la presentación del menú y la lupa; no certifica el teléfono, el menú nativo ni un teclado físico. Los dos APK se compilaron sin firma, sin entrega parcial ni clave nueva; paquete com.jarvys.agent, nombre Jarvys, versión 34 / 1.2.27-UX23, permisos sin cambios, CRC y alineación válidos.
 
-- Restaurar selección mediante pulsación larga en los mensajes del agente; la selección actual de los mensajes del usuario debe conservarse.
-- Contrastar con UX7/v28: selección por mensaje para respuestas, traducciones, Markdown y código; excluir adjuntos, acciones de pie y mensajes vecinos.
-- Validar gestos reales de pulsación larga, selectores y copia a través de Markdown/código y desplazamiento, sin interceptar enlaces ni romper la selección del usuario.
-- No incluir esta corrección en la entrega P0 sin revisión y comprobación completas.
+- Paridad de los contenedores contrastada con el Java decompilado y smali de v28. Se mantiene la selección del usuario, los controles de copia y traducción y el ámbito por mensaje.
+- Seis capturas nativas de host revisadas en ambos temas y tamaños de texto, incluida la transición al compositor con inset IME simulado. No muestran la lupa, barra flotante ni ventanas separadas de selectores; estos últimos se verifican mediante pruebas.
+- Evidencia reproducible y límites de alcance: `recovery/validation/ux23-text-selection.json`. Se continúa con APKFACTORY1 sin esperar validación manual ni entregar v34 por separado.
 
 ### 1. APKFACTORY1: fábrica local de APK y skill de Coding
 

@@ -31,7 +31,7 @@
     "Robolectric SDK 34 native rendering; not a physical Android phone",
     "Toolbar presentation and magnifier replaced in tests; Foundation gesture recognition, range handles and clipboard callbacks are real",
     "Activity-root captures exclude separate popup handles and toolbar",
-    "Full/Play aggregate, lint and unsigned artifacts pending"
+    "Development APKs are unsigned/debuggable and do not establish original-signature update compatibility."
   ],
   "aggregate_attempt_1": {
     "Full": {
@@ -59,5 +59,84 @@
     "Play_errors": 37,
     "new_errors": 0,
     "new_warnings": 0
-  }
+  },
+  "status": "Validated in host; no partial APK delivery",
+  "final_tests": {
+    "source_changed": [],
+    "flavors": {
+      "Full": {
+        "counts": {
+          "tests": 1173,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "stale_results": [],
+        "failures": []
+      },
+      "Play": {
+        "counts": {
+          "tests": 1089,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "stale_results": [],
+        "failures": []
+      }
+    }
+  },
+  "final_lint": {
+    "full": {
+      "counts": {
+        "Error": 46,
+        "Warning": 282,
+        "Hint": 4
+      },
+      "new_errors": 0,
+      "new_warnings": 0,
+      "fresh_report": true
+    },
+    "play": {
+      "counts": {
+        "Error": 37,
+        "Warning": 274,
+        "Hint": 4
+      },
+      "new_errors": 0,
+      "new_warnings": 0,
+      "fresh_report": true
+    }
+  },
+  "artifacts": {
+    "full": {
+      "path": "Jarvys-UX23-full-v34-unsigned.apk",
+      "sha256": "86e50fdb2c85e7ef696f7ab09dcde1282233ed9d82580ff1e746e02ad79b0031",
+      "bytes": 18970354,
+      "package": "com.jarvys.agent",
+      "version_code": 34,
+      "version_name": "1.2.27-UX23",
+      "label": "Jarvys",
+      "unsigned_verified": true,
+      "zip_crc_verified": true,
+      "alignment_verified": true,
+      "permissions_unchanged": true,
+      "debuggable": true
+    },
+    "play": {
+      "path": "Jarvys-UX23-play-v34-unsigned.apk",
+      "sha256": "3b4f56f039f498105fc6f27b538e726daf3787e691634ed16d9b1f3b6eec0a8e",
+      "bytes": 17624307,
+      "package": "com.jarvys.agent",
+      "version_code": 34,
+      "version_name": "1.2.27-UX23",
+      "label": "Jarvys",
+      "unsigned_verified": true,
+      "zip_crc_verified": true,
+      "alignment_verified": true,
+      "permissions_unchanged": true,
+      "debuggable": true
+    }
+  },
+  "visual_review": "Six native host captures independently reviewed: light/dark, normal/large type, selected text, focused composer and simulated IME insets. No visual blocker."
 }
