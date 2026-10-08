@@ -153,6 +153,7 @@ fun CrewBotAvatar(
     background: Color = MaterialTheme.colorScheme.background,
 ) {
     val visual = remember(status, waitingReason) { BotVisualState.from(status, waitingReason) }
+    val catalogIdentity = rememberCatalogBotIcon(roleId)
     val design = remember(roleId) { BotAvatarDesign.forRole(roleId) }
     val viewport = rememberMotionViewport()
     val motion = rememberMotionEnabled(active = visual.active && reducedMotionOverride != true,
@@ -169,7 +170,13 @@ fun CrewBotAvatar(
             }
     val surface = MaterialTheme.colorScheme.surface
     val onSurface = MaterialTheme.colorScheme.onSurface
-    if (motion) AnimatedCrewBotGlyph(avatarModifier, design, visual, baseColor, surface, background, onSurface)
+    if (catalogIdentity != null) {
+        // Mission roleId is the stable catalog ID; instance IDs, names and status never select an icon.
+        BotWorkingVisual(visual.mode == BotVisualState.Mode.RUNNING && reducedMotionOverride != true,
+            roleId.orEmpty(), avatarModifier) {
+            BotIdentityIcon(catalogIdentity, Modifier.fillMaxSize())
+        }
+    } else if (motion) AnimatedCrewBotGlyph(avatarModifier, design, visual, baseColor, surface, background, onSurface)
     else Canvas(avatarModifier) {
         drawBotFace(design, visual, baseColor, surface, background, onSurface, phase = 0f, animated = false)
     }

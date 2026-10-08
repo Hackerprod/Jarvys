@@ -376,7 +376,7 @@ class BotsCatalogComposeTest {
         var outside by mutableStateOf(false)
         compose.mainClock.autoAdvance = false
         compose.setContent { CompositionLocalProvider(LocalReducedMotion provides reduced, LocalLifecycleOwner provides owner) {
-            MaterialTheme { Box { BotWorkingName("Research", active, "research", Modifier.offset { androidx.compose.ui.unit.IntOffset(0, if (outside) 2000.dp.roundToPx() else 0) }) } }
+            MaterialTheme { Box { BotWorkingVisual(active, "research", Modifier.offset { androidx.compose.ui.unit.IntOffset(0, if (outside) 2000.dp.roundToPx() else 0) }) { Text("Research") } } }
         } }
         compose.onNodeWithTag("bot-working-motion-research", useUnmergedTree = true).assertDoesNotExist()
         compose.runOnIdle { active = true }
@@ -398,6 +398,19 @@ class BotsCatalogComposeTest {
         compose.runOnIdle { active = false }
         compose.mainClock.advanceTimeBy(32)
         compose.onNodeWithTag("bot-working-motion-research", useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test fun workingEffectBoundsEncloseTheIconAndCompleteMultilineName() {
+        val bot = custom(name = "A long reusable research assistant")
+        compose.mainClock.autoAdvance = false
+        compose.setContent { MaterialTheme { BotsCatalogGrid(listOf(bot), mapOf(bot.id to 1), {}, {}, {}) } }
+        compose.mainClock.advanceTimeBy(100)
+        val effect = compose.onNodeWithTag("bot-working-motion-${bot.id}", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        listOf("bot-icon-${bot.id}", "bot-name-${bot.id}").forEach { tag ->
+            val content = compose.onNodeWithTag(tag, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+            assertTrue(effect.top <= content.top && effect.bottom >= content.bottom)
+            assertTrue(effect.left <= content.left && effect.right >= content.right)
+        }
     }
 
     @Test fun reducedMotionWorkingStatusDoesNotDependOnEnabledFlag() {

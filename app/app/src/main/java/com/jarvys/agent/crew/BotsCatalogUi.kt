@@ -1,9 +1,6 @@
 package com.jarvys.agent.crew
 
-import android.graphics.BitmapFactory
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -25,16 +22,9 @@ import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.luminance
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
@@ -50,21 +40,12 @@ import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.text.style.Hyphens
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.jarvys.agent.BotIconStore
 import com.jarvys.agent.BotIconService
 import com.jarvys.agent.JarvysTextField
 import com.jarvys.agent.JarvysTopAppBar
 import com.jarvys.agent.JarvysUiTokens
 import com.jarvys.agent.LucideIcons
 import com.jarvys.agent.R
-import com.jarvys.agent.ui.motion.rememberMotionEnabled
-import com.jarvys.agent.ui.motion.rememberMotionViewport
-import com.jarvys.agent.ui.readableThemeInk
-import com.jarvys.agent.ui.shell.drawEffortLightRay
-import com.jarvys.agent.ui.shell.effortSparkleAlpha
-import com.jarvys.agent.ui.shell.rememberEffortSparklePhase
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 private const val MAX_SAVED_BOT_CONFIGURATION = 65_536
 
@@ -140,41 +121,16 @@ private fun BotCatalogTile(bot: BotDefinition, workingCount: Int, onOpen: () -> 
                 contentDescription = open
                 stateDescription = if (workingCount > 0) workingText else state
             }, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            BotCatalogIcon(bot, Modifier.size(72.dp).alpha(if (bot.enabled) 1f else 0.5f).testTag("bot-icon-${bot.id}"))
-            BotWorkingName(bot.profile.name, workingCount > 0, bot.id,
-                Modifier.fillMaxWidth().testTag("bot-name-${bot.id}"))
-        }
-    }
-}
-
-/** One gated phase drives both the existing light-ray primitive and a sweep across the actual name. */
-@Composable
-internal fun BotWorkingName(name: String, working: Boolean, id: String, modifier: Modifier = Modifier) {
-    val viewport = rememberMotionViewport()
-    val phase = rememberEffortSparklePhase(rememberMotionEnabled(working, viewport.visible))
-    var width by remember { mutableFloatStateOf(1f) }
-    val colors = MaterialTheme.colorScheme
-    val darkSurface = colors.background.luminance() < 0.5f
-    val textInk = if (working && darkSurface) colors.primary else colors.onSurface
-    val illuminated = readableThemeInk(if (darkSurface) colors.onSurface else colors.primary,
-        colors.background, colors.onSurface, 4.5)
-    val nameStyle = MaterialTheme.typography.titleMedium.copy(lineBreak = LineBreak.Heading, hyphens = Hyphens.Auto)
-    val p = phase?.value
-    val brush = p?.let {
-        val center = width * (it * 1.8f - 0.4f)
-        Brush.linearGradient(listOf(textInk, illuminated, textInk),
-            start = Offset(center - width * 0.30f, 0f), end = Offset(center + width * 0.30f, 0f))
-    }
-    Box(modifier.then(viewport.modifier).onSizeChanged { width = it.width.toFloat().coerceAtLeast(1f) }
-        .padding(vertical = 7.dp), contentAlignment = Alignment.Center) {
-        Text(name, Modifier.fillMaxWidth(), textAlign = TextAlign.Center, fontWeight = FontWeight.SemiBold,
-            color = if (brush == null) textInk else Color.Unspecified,
-            style = if (brush == null) nameStyle else nameStyle.copy(brush = brush))
-        if (p != null) Canvas(Modifier.matchParentSize().testTag("bot-working-motion-$id")) {
-            repeat(4) { particle ->
-                val x = size.width * ((particle + 0.5f) / 4f)
-                val y = if (particle % 2 == 0) 1.dp.toPx() else size.height - 1.dp.toPx()
-                drawEffortLightRay(Offset(x, y), effortSparkleAlpha(p, particle), particle)
+            BotWorkingVisual(workingCount > 0, bot.id, Modifier.fillMaxWidth()) {
+                Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    BotCatalogIcon(bot, Modifier.size(72.dp).alpha(if (bot.enabled) 1f else 0.5f).testTag("bot-icon-${bot.id}"))
+                    val colors = MaterialTheme.colorScheme
+                    Text(bot.profile.name, Modifier.fillMaxWidth().padding(vertical = 7.dp).testTag("bot-name-${bot.id}"),
+                        textAlign = TextAlign.Center, fontWeight = FontWeight.SemiBold,
+                        color = if (workingCount > 0 && colors.background.luminance() < 0.5f) colors.primary else colors.onSurface,
+                        style = MaterialTheme.typography.titleMedium.copy(lineBreak = LineBreak.Heading, hyphens = Hyphens.Auto))
+                }
             }
         }
     }
@@ -182,27 +138,7 @@ internal fun BotWorkingName(name: String, working: Boolean, id: String, modifier
 
 @Composable
 internal fun BotCatalogIcon(bot: BotDefinition, modifier: Modifier = Modifier) {
-    val context = LocalContext.current.applicationContext
-    val bitmap by produceState<ImageBitmap?>(null, context, bot.id, bot.iconRef) {
-        value = if (bot.iconRef.isBlank()) null else withContext(Dispatchers.IO) {
-            runCatching {
-                val file = BotIconStore(context).resolve(bot.id, bot.iconRef)
-                val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                BitmapFactory.decodeFile(file.absolutePath, options)
-                if (options.outWidth !in 1..4096 || options.outHeight !in 1..4096) return@runCatching null
-                options.inJustDecodeBounds = false
-                options.inSampleSize = (maxOf(options.outWidth, options.outHeight) / 256).coerceAtLeast(1)
-                BitmapFactory.decodeFile(file.absolutePath, options)?.asImageBitmap()
-            }.getOrNull()
-        }
-    }
-    Box(modifier.clip(RoundedCornerShape(22.dp)).background(MaterialTheme.colorScheme.primaryContainer),
-        contentAlignment = Alignment.Center) {
-        val image = bitmap
-        if (image != null) Image(image, contentDescription = null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-        else Icon(when (bot.id) { "coding" -> LucideIcons.Terminal; "android-use" -> LucideIcons.Smartphone; else -> LucideIcons.Bot },
-            contentDescription = null, Modifier.fillMaxSize().padding(17.dp), tint = MaterialTheme.colorScheme.primary)
-    }
+    BotIdentityIcon(BotIconIdentity(bot.id, bot.iconRef), modifier)
 }
 
 @Composable

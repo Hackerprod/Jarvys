@@ -71,7 +71,17 @@ class BotsCatalogCaptureTest {
             capture("$prefix-$mode-b")
             val equal = File(output, "$prefix-$mode-a.png").readBytes()
                 .contentEquals(File(output, "$prefix-$mode-b.png").readBytes())
-            assertEquals("Only working, visible, non-reduced names may animate ($mode)", !expectMotion, equal)
+            assertEquals("Only working, visible, non-reduced tiles may animate ($mode)", !expectMotion, equal)
+            val first = android.graphics.BitmapFactory.decodeFile(File(output, "$prefix-$mode-a.png").absolutePath)
+            val second = android.graphics.BitmapFactory.decodeFile(File(output, "$prefix-$mode-b.png").absolutePath)
+            listOf("bot-icon-coding", "bot-name-coding").forEach { tag ->
+                val bounds = compose.onNodeWithTag(tag, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+                val a = Bitmap.createBitmap(first, bounds.left.toInt(), bounds.top.toInt(), bounds.width.toInt(), bounds.height.toInt())
+                val b = Bitmap.createBitmap(second, bounds.left.toInt(), bounds.top.toInt(), bounds.width.toInt(), bounds.height.toInt())
+                assertEquals("The sweep must independently cover $tag ($mode)", !expectMotion, a.sameAs(b))
+                a.recycle(); b.recycle()
+            }
+            first.recycle(); second.recycle()
         }
         pair("working", true)
         compose.runOnIdle { working = false }
