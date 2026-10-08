@@ -1269,7 +1269,6 @@ Después:
 %1$s"</string>
     <string name="full_project_exec_cwd">Directorio del proyecto: %1$s (en el entorno %2$s)</string>
     <string name="full_project_exec_effects">Efectos: puede leer, escribir o borrar archivos del proyecto, ejecutar programas y usar el acceso de red de esta app. El proyecto permanece reservado para este trabajo hasta que termine la limpieza de sus procesos.</string>
-    <string name="full_project_exec_no_timeout">No se ha solicitado un tiempo máximo; DETENER/cancelar sigue disponible.</string>
     <string name="full_project_exec_noninteractive">Sin interacción: la entrada estándar está cerrada. Se comprueba el entorno en modo de solo lectura antes del comando literal. Nunca se instalan automáticamente los paquetes que falten.</string>
     <string name="full_project_exec_prior_outcomes">"Trabajos anteriores interrumpidos o con resultado incierto en este proyecto:
 %1$s

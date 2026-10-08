@@ -1269,7 +1269,6 @@ After:
 %1$s"</string>
     <string name="full_project_exec_cwd">Project cwd: %1$s (guest %2$s)</string>
     <string name="full_project_exec_effects">"Effects: may read, write or delete project files, execute programs and use this app's network access. A project writer lease is held until process cleanup."</string>
-    <string name="full_project_exec_no_timeout">No command timeout requested; STOP/cancel remains available.</string>
     <string name="full_project_exec_noninteractive">Non-interactive: stdin is closed. A read-only environment probe runs before the literal command. Missing packages are never installed automatically.</string>
     <string name="full_project_exec_prior_outcomes">"Prior interrupted or uncertain jobs in this project:
 %1$s
