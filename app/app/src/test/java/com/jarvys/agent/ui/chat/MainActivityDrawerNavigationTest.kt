@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.os.Looper
 import android.view.View
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -26,6 +27,7 @@ import org.junit.rules.ExternalResource
 import org.junit.rules.RuleChain
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
@@ -224,8 +226,15 @@ class MainActivityDrawerNavigationTest {
         chooseConversationAction(titleA, R.string.drawer_rename_chat)
         val renameInput = compose.onNode(hasSetTextAction() and hasAnyAncestor(isDialog()))
         renameInput.performTextReplacement(" ")
-        compose.onNodeWithText(context.getString(R.string.drawer_save_name)).assertIsNotEnabled()
+        pumpPendingNativeRoots()
+        compose.waitForIdle()
+        renameInput.assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.drawer_name_required)).assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.drawer_save_name)).assertIsDisplayed().assertIsNotEnabled()
+        compose.onNodeWithText(context.getString(R.string.drawer_cancel_action)).assertIsDisplayed()
+        captureDialog("archived-rename-empty-validation")
         renameInput.performTextReplacement("  Renamed garden notes  ")
+        pumpPendingNativeRoots()
         tapText(R.string.drawer_save_name)
         awaitText("Renamed garden notes")
         assertEquals("Renamed garden notes", store.readConversationTitle(archivedA))
@@ -464,9 +473,31 @@ class MainActivityDrawerNavigationTest {
     private fun pumpPendingNativeRoots() {
         repeat(2) {
             compose.mainClock.advanceTimeByFrame()
+            Shadows.shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(32))
             compose.runOnUiThread {
                 val method = Class.forName("androidx.compose.ui.node.RootForTest").getMethod("measureAndLayoutForTest")
-                registeredNativeRoots().filterNotNull().forEach { method.invoke(it) }
+                val rootInterface = Class.forName("androidx.compose.ui.platform.ViewRootForTest")
+                registeredNativeRoots().filterNotNull().forEach { root ->
+                    method.invoke(root)
+                    val view = rootInterface.getMethod("getView").invoke(root) as View
+                    println("UX17_NATIVE_ROOT before parent=${view.parent?.javaClass?.simpleName}; " +
+                        "size=${view.width}x${view.height}; pending=${rootInterface.getMethod("getHasPendingMeasureOrLayout").invoke(root)}")
+                    if (view.parent?.javaClass?.simpleName == "DialogLayout") {
+                        val decor = view.rootView
+                        val width = decor.width.takeIf { it > 0 } ?: decor.measuredWidth
+                        val availableHeight = (decor.resources.configuration.screenHeightDp * decor.resources.displayMetrics.density).toInt()
+                        if (width > 0 && availableHeight > 0) {
+                            decor.forceLayout()
+                            decor.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+                                View.MeasureSpec.makeMeasureSpec(availableHeight, View.MeasureSpec.AT_MOST))
+                            decor.layout(decor.left, decor.top, decor.left + decor.measuredWidth, decor.top + decor.measuredHeight)
+                            val bitmap = Bitmap.createBitmap(decor.measuredWidth, decor.measuredHeight, Bitmap.Config.ARGB_8888)
+                            try { decor.draw(Canvas(bitmap)) } finally { bitmap.recycle() }
+                        }
+                    }
+                    println("UX17_NATIVE_ROOT after parent=${view.parent?.javaClass?.simpleName}; " +
+                        "size=${view.width}x${view.height}; pending=${rootInterface.getMethod("getHasPendingMeasureOrLayout").invoke(root)}")
+                }
             }
         }
     }
@@ -513,6 +544,22 @@ class MainActivityDrawerNavigationTest {
 
     private fun chatScrollPosition(): Float = compose.onNodeWithTag("chat-message-list")
         .fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()
+
+    private fun captureDialog(name: String) {
+        compose.runOnIdle {
+            val rootInterface = Class.forName("androidx.compose.ui.platform.ViewRootForTest")
+            val view = registeredNativeRoots().filterNotNull().map { rootInterface.getMethod("getView").invoke(it) as View }
+                .single { it.parent?.javaClass?.simpleName == "DialogLayout" }.rootView
+            val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+            try {
+                view.draw(Canvas(bitmap))
+                val output = TestCaptureDirectories.named("ux17-navigation-${BuildConfig.FLAVOR}")
+                val file = File(output, "$name.png")
+                TestCaptureDirectories.assertOwned(output, file)
+                file.outputStream().use { check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) }
+            } finally { bitmap.recycle() }
+        }
+    }
 
     /** Compose idleness alone can precede the Android window's layout/draw and pointer hit targets. */
     private fun settleNativeFrame() {

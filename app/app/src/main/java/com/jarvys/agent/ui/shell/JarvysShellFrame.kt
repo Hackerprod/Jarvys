@@ -103,25 +103,25 @@ fun JarvysShellFrame(
             },
             bottomBar = { if (!chatRoute) bottomBar() },
             content = { padding ->
-                if (!chatRoute) {
-                    content(padding)
-                } else {
-                    var composerInset by remember { mutableStateOf(0.dp) }
-                    val density = LocalDensity.current
-                    val layoutDirection = LocalLayoutDirection.current
-                    val bodyPadding = PaddingValues(
-                        start = padding.calculateStartPadding(layoutDirection),
-                        top = 0.dp,
-                        end = padding.calculateEndPadding(layoutDirection),
-                        bottom = 0.dp,
-                    )
-                    CompositionLocalProvider(
-                        LocalChatComposerInset provides composerInset,
-                        LocalChatHeaderInset provides padding.calculateTopPadding(),
-                    ) {
+                var composerInset by remember { mutableStateOf(0.dp) }
+                val density = LocalDensity.current
+                val layoutDirection = LocalLayoutDirection.current
+                val bodyPadding = PaddingValues(
+                    start = padding.calculateStartPadding(layoutDirection),
+                    top = 0.dp,
+                    end = padding.calculateEndPadding(layoutDirection),
+                    bottom = 0.dp,
+                )
+                // Keep the NavHost at one stable composition position across chat/settings routes.
+                // Moving it between branches discarded its saveable state holder and chat scroll.
+                CompositionLocalProvider(
+                    LocalChatComposerInset provides if (chatRoute) composerInset else 0.dp,
+                    LocalChatHeaderInset provides if (chatRoute) padding.calculateTopPadding() else 0.dp,
+                ) {
                     Box(Modifier.fillMaxSize()) {
-                        content(bodyPadding)
-                        Box(Modifier.align(androidx.compose.ui.Alignment.BottomCenter)
+                        content(if (chatRoute) bodyPadding else padding)
+                        if (chatRoute) {
+                            Box(Modifier.align(androidx.compose.ui.Alignment.BottomCenter)
                                 .fillMaxWidth()
                                 .onSizeChanged { measured ->
                                     val measuredDp = with(density) { measured.height.toDp() }
