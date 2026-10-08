@@ -10,10 +10,11 @@ Modo de ejecución: continuar la cola completa. Al cerrar cada pendiente, verifi
 
 - **v31 completada:** reacciones locales del modelo, Markdown del usuario y lista de chats sin subtítulos restaurados. Pruebas: 994 Full y 910 Play. APK con identidad original entregado.
 - **UX15 / v32 implementada y entregada:** APK original firmado de Jarvys, versión 32 / 1.2.26-UX15. Pruebas completas aprobadas: 1089 Full y 1005 Play, sin fallos, errores ni omitidas. Revisión visual y de seguridad completada. Lint sin errores nuevos; permanecen 75 errores heredados en Full y 66 en Play. La prueba real en teléfono ha detectado un incidente prioritario de fallos repetidos de herramientas y pérdida de continuidad. Las pruebas del host no demuestran que ese comportamiento esté resuelto.
-- **Siguiente etapa:** P0 de herramientas y continuidad del agente; después, APKFACTORY1 y la cola restante.
+- **P0 / preparación v33 cerrada en código y host:** correcciones de herramientas, continuidad, restauración visual y Bots completadas. Suites finales: 1159 Full y 1075 Play, cero fallos/errores/omitidas. Lint sin errores nuevos; deuda restante: 46 Full y 37 Play. Ambos APK sin firma compilados y verificados con paquete original, permisos sin cambios, CRC y alineación correctos.
+- **Siguiente etapa:** UX23, restaurar selección de texto de respuestas; después, APKFACTORY1 y la cola restante. No se entrega un APK parcial ni se espera feedback entre etapas.
 - La paridad completa con el comportamiento de v28 en un teléfono sigue pendiente de validación; la fiabilidad del agente es prioritaria antes de añadir funciones.
 
-## Última etapa completada
+## Entregas previas
 
 ### UX15: Bots y v32
 
@@ -31,32 +32,32 @@ Modo de ejecución: continuar la cola completa. Al cerrar cada pendiente, verifi
 
 ### P0. Herramientas y continuidad del agente
 
-Estado: correcciones implementadas y revisión dirigida completada; validación agregada final de Full/Play en curso.
+Estado: completado en código, revisión y validación de host; pendiente la comprobación final en el dispositivo al terminar la cola.
 
-La repetición agregada aprobó 1159 pruebas Full y 1075 Play, sin fallos, errores ni omitidas y con todos los XML frescos. La corrección de cancelación conserva la verificación del icono, la revisión y la prohibición de commits posteriores a STOP. Lint detectó que faltaba declarar API 26 en la clase auxiliar NIO, cuyos accesos ya estaban protegidos por comprobaciones de SDK; se añadió esa anotación y se repiten las verificaciones finales antes de cerrar la etapa.
+Validación final del código congelado: 1159 pruebas Full y 1075 Play aprobadas, sin fallos, errores ni omitidas; XML frescos y fuentes idénticas durante pruebas, lint y compilación. La anotación API 26 documenta el backend NIO ya protegido por comprobaciones de SDK. Lint no añade errores y resuelve 29 heredados por sabor: quedan 46 Full y 37 Play. Los dos APK de preparación son unsigned y debuggable; no constituyen una entrega firmada.
 
 - **Primer checkpoint:** eliminada la dependencia de hard links en identidad/journal y creación de archivos de Coding, operación prohibida por Android a las apps normales. Los registros privados se promocionan completos; los archivos nuevos se crean de forma exclusiva, sin sobrescribir rutas existentes, con comprobación de tamaño y SHA-256.
 - Si una creación queda interrumpida, se conservan el destino, el staging y la evidencia de recuperación; se informa un resultado parcial o incierto y no se reejecuta automáticamente. Las actualizaciones de archivos existentes conservan el reemplazo atómico.
 - Diez regresiones dirigidas de almacenamiento aprobadas en el host (SDK 34/Robolectric), incluidas colisiones, symlinks, competencia entre creadores, copia parcial, recuperación sin replay y contenido modificado. Revisión independiente completada. Esto no sustituye la validación real en teléfono ni confirma el fallback de API 24.
 - **Segundo checkpoint:** detección de fallos repetidos por herramienta/argumentos, aunque el error incluya datos cambiantes; recuperación permitida cuando una acción correctiva aporta progreso real. No se añaden reintentos automáticos de escrituras.
 - Corregidos IDs de aprobación inexistentes, acciones desde notificaciones/tarjetas caducadas, carreras con STOP/timeout y registro de callbacks de cancelación. La aprobación se consume una sola vez y los lanzamientos de permisos asíncronos permanecen pendientes hasta su resultado.
-- Veintidós nuevas regresiones de bucles, aprobación y cancelación aprobadas, con revisión independiente. La segunda pasada dirigida completa fue de 164 pruebas Full sin fallos; continúan la restauración visual, creación de bots y validación final de ambos sabores.
+- Veintidós nuevas regresiones de bucles, aprobación y cancelación aprobadas, con revisión independiente e incluidas en las suites finales de ambos sabores.
 - **Tercer checkpoint:** historial estructurado del agente principal con IDs y resultados de herramientas persistidos antes de mostrar el resultado, restauración sin replay, evidencia acotada y acceso a artefactos únicamente dentro de la conversación. La compactación conserva resultados incluso si terminan después del resumen y las referencias creadas durante el mismo turno son recuperables.
 - Restaurados detalles expandibles, auditoría y vista previa tras recrear la Activity; las tarjetas de acciones interrumpidas distinguen resultado no confirmado y operación no iniciada. El estado en ejecución conserva prioridad frente a tarjetas sintéticas de recuperación. Duplicados de mensajes se eliminan por ID duradero, no por texto.
 - La vista previa local ya no inicializa skills, MCP ni su almacén de credenciales para leer HTML. Se conservan las restricciones de rutas, URL, WebView y CSP. La prueba navega por la vista real, lee el HTML existente y confirma que no vuelve a escribirlo.
 - Catorce regresiones de continuidad y siete de persistencia/reapertura cubren los casos anteriores; los fallos dirigidos encontrados durante revisión se corrigieron antes de la pasada agregada. Los detalles históricos que versiones antiguas nunca guardaron no se inventan; una vista previa antigua solo se reconecta al archivo actual verificado de ese chat.
 - Código de preparación actualizado a versión 33 / 1.2.26-P0, sin entrega parcial. Se realizará la entrega consolidada al terminar la cola.
 
-- Reproducir y diagnosticar los fallos repetidos de herramientas y la pérdida de continuidad observados en v32, contrastando la ejecución real con los contratos de las herramientas y el historial enviado al proveedor.
-- Conservar resultados de herramientas y estado relevante entre turnos y reinicios, con límites claros de contexto y sin reejecutar automáticamente acciones externas ambiguas.
+- Causas de los fallos repetidos y la pérdida de continuidad identificadas mediante la evidencia del dispositivo, código y contratos de herramientas/proveedor; corregidas y cubiertas por regresiones.
+- Resultados y estado relevante conservados entre turnos y reinicios, con límites de contexto y sin reejecución automática de acciones ambiguas.
 - **Reapertura de interfaz:** conservar también el detalle expandible de cada herramienta y la acción de vista previa web. Se ha confirmado que la versión anterior reconstruía solo las etiquetas al reabrir. Restaurar referencias verificadas del workspace, mostrar honestamente los datos que una versión antigua no guardó y no volver a ejecutar herramientas durante la recuperación.
-- La aceptación requiere crear archivos/vista previa, reconstruir Activity y almacenamiento, abrir detalles y vista previa desde la conversación restaurada y comprobar que el siguiente turno del modelo recibe la misma evidencia.
-- Revisar operaciones de archivos compatibles con las restricciones reales de Android, errores, cancelación, reintentos y controles de aprobación.
+- Recorrido de aceptación aprobado en host: herramientas reales crean archivo/vista previa, se recrean Activity y almacenamiento, se abren detalles y WebView lee el HTML guardado, sin repetir la escritura; el siguiente turno del proveedor conserva la evidencia.
+- Revisadas las restricciones Android de archivos, errores, cancelación, reintentos y aprobación. Las pruebas de host no se presentan como comprobación física del teléfono.
 - Añadir pruebas de regresión dirigidas y validar en el dispositivo antes de afirmar que se ha corregido el comportamiento real.
 
 ### P0 UI. Corregir la presentación de Bots
 
-Estado: corrección implementada y revisión visual dirigida completada; incluida en la validación agregada.
+Estado: completado; pruebas agregadas y revisión visual aprobadas en ambos sabores.
 
 - Alinear cabecera, altura e insets con las vistas de Ajustes; evitar solapamiento con la barra de estado.
 - Colocar Añadir como botón en la esquina superior derecha.
@@ -66,7 +67,7 @@ Estado: corrección implementada y revisión visual dirigida completada; incluid
 
 ### P0 Bots. Creación completa desde el chat
 
-Estado: herramienta principal implementada y revisada; pruebas dirigidas aprobadas, validación agregada en curso.
+Estado: completado en código; revisión y pruebas agregadas aprobadas. El proveedor real de imágenes se verificará en el dispositivo al finalizar la cola.
 
 - Permitir al agente principal crear y guardar un bot a partir de una petición natural del usuario, con nombre simple, instrucciones en inglés e icono generable y configurable.
 - La versión anterior exponía consulta e iconos, pero la creación persistente estaba disponible únicamente desde la interfaz de Bots. Incorporar la herramienta y su registro real en el chat, sin fingir una creación completada.
