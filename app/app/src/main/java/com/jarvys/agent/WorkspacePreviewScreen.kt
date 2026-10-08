@@ -139,6 +139,9 @@ internal class WorkspacePreviewWebView(context: Context) : WebView(context) {
     // Keep the inherited native accessibility/click path. Touch handling never fabricates a click.
     override fun performClick(): Boolean = super.performClick()
 
+    // WebView detects native/DOM clicks in super. This interception wrapper detects no click
+    // itself, and calling performClick here would fabricate activations after drags/selection.
+    @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (event.actionMasked == MotionEvent.ACTION_DOWN) onUserInteraction()
         if (event.actionMasked == MotionEvent.ACTION_DOWN || event.actionMasked == MotionEvent.ACTION_POINTER_DOWN) {
