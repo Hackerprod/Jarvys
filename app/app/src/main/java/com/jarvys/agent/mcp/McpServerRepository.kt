@@ -32,31 +32,58 @@ class McpServerRepository internal constructor(context: Context, private val sec
         _servers.value.firstOrNull { it.id == serverId }
     }
 
+    /** Serializes explicit grant adoption with edits/removal of the configuration it belongs to. */
+    internal fun <T> withCurrentOAuthConfig(expected: McpServerConfig, block: () -> T): T = synchronized(lock) {
+        val current = get(expected.id) ?: error("MCP server was removed during authorization")
+        require(current.endpoint == expected.endpoint && current.authMode == McpAuthMode.OAUTH && current.enabled &&
+            current.oauthClientId == expected.oauthClientId && current.catalogServiceId == expected.catalogServiceId) {
+            "MCP authorization configuration changed; start a new authorization"
+        }
+        block()
+    }
+
     fun hasBearerToken(serverId: String): Boolean = !secrets.get(serverId, SECRET_BEARER).isNullOrBlank()
 
-    fun bearerToken(config: McpServerConfig): String? {
-        val token = secrets.get(config.id, SECRET_BEARER) ?: return null
+    fun bearerToken(config: McpServerConfig): String? = synchronized(lock) {
+        val token = secrets.get(config.id, SECRET_BEARER) ?: return@synchronized null
         val boundEndpoint = secrets.get(config.id, SECRET_BEARER_ENDPOINT)
         require(boundEndpoint == config.endpoint) {
             "MCP endpoint changed; re-enter its bearer token before connecting"
         }
-        return token
+        token
+    }
+
+    internal fun bearerAuthorizationEpoch(config: McpServerConfig): String = synchronized(lock) {
+        val token = bearerToken(config)?.takeIf(String::isNotBlank) ?: error("GitHub bearer grant is unavailable")
+        secrets.get(config.id, "github_bearer_epoch").takeUnless { it.isNullOrBlank() }
+            ?: com.jarvys.agent.connectors.GitHubOperationPolicy.digest("legacy-bearer:" + token)
+    }
+
+    internal fun bearerAuthorizationHeader(config: McpServerConfig, expectedEpoch: String): String = synchronized(lock) {
+        val current = get(config.id) ?: error("GitHub was disconnected")
+        require(current.enabled && current.authMode == McpAuthMode.BEARER && current.endpoint == config.endpoint && current.catalogServiceId == config.catalogServiceId) { "GitHub configuration changed" }
+        require(bearerAuthorizationEpoch(config) == expectedEpoch) { "GitHub account changed during review" }
+        "Bearer ${bearerToken(config)}"
     }
 
     fun oauthValue(serverId: String, key: String): String? = secrets.get(serverId, key)
 
-    fun saveBearerToken(serverId: String, endpoint: String, value: String) {
+    fun saveBearerToken(serverId: String, endpoint: String, value: String) = synchronized(lock) {
         val token = value.trim()
         require(token.length <= MAX_TOKEN_CHARS && token.none { it == '\r' || it == '\n' }) {
             "Bearer token is invalid or too long"
         }
+        secrets.save(serverId, SECRET_BEARER_ENDPOINT, "")
+        secrets.save(serverId, "github_bearer_epoch", "")
         secrets.save(serverId, SECRET_BEARER, token)
         secrets.save(serverId, SECRET_BEARER_ENDPOINT, endpoint)
+        secrets.save(serverId, "github_bearer_epoch", UUID.randomUUID().toString())
     }
 
-    fun clearBearerToken(serverId: String) {
-        secrets.save(serverId, SECRET_BEARER, "")
+    fun clearBearerToken(serverId: String) = synchronized(lock) {
         secrets.save(serverId, SECRET_BEARER_ENDPOINT, "")
+        secrets.save(serverId, SECRET_BEARER, "")
+        secrets.save(serverId, "github_bearer_epoch", "")
     }
 
     fun saveOAuthValue(serverId: String, key: String, value: String?) {
@@ -74,7 +101,7 @@ class McpServerRepository internal constructor(context: Context, private val sec
 
     fun updateTools(serverId: String, tools: List<McpToolConfig>) = synchronized(lock) {
         val current = get(serverId) ?: return@synchronized
-        upsert(current.copy(tools = tools))
+        upsert(current.copy(tools = tools, githubToolPreferences = rememberGitHubChoices(current)))
     }
 
     fun updateToolEnabled(serverId: String, wireName: String, enabled: Boolean) = synchronized(lock) {
@@ -85,6 +112,9 @@ class McpServerRepository internal constructor(context: Context, private val sec
         upsert(current.copy(
             tools = current.tools.map { if (it.wireName == wireName) it.copy(enabled = enabled) else it },
             toolSelectionMode = McpToolSelectionMode.CUSTOM,
+            githubToolPreferences = rememberGitHubChoices(current) + current.tools.filter { it.wireName == wireName }.associate {
+                it.wireName to "${McpToolSecurity.classify(current.catalogServiceId, it.wireName, it.annotations).name}:$enabled"
+            },
         ))
     }
 
@@ -101,6 +131,11 @@ class McpServerRepository internal constructor(context: Context, private val sec
             toolSelectionMode = if (enabled) McpToolSelectionMode.CUSTOM else McpToolSelectionMode.NONE,
         ))
     }
+
+    private fun rememberGitHubChoices(config: McpServerConfig): Map<String, String> =
+        if (config.catalogServiceId != "github") emptyMap() else (config.githubToolPreferences + config.tools.associate {
+            it.wireName to "${McpToolSecurity.classify(config.catalogServiceId, it.wireName, it.annotations).name}:${it.enabled}"
+        }).entries.toList().takeLast(512).associate { it.toPair() }
 
     fun delete(serverId: String) = synchronized(lock) {
         val next = _servers.value.filterNot { it.id == serverId }
@@ -179,6 +214,13 @@ class McpServerRepository internal constructor(context: Context, private val sec
             tools = decodedTools,
             toolSelectionMode = selectionMode,
             catalogServiceId = item.optString("catalogServiceId", "").takeIf(String::isNotBlank),
+            githubToolPreferences = item.optJSONObject("githubToolPreferences")?.let { choices ->
+                choices.keys().asSequence().take(512).filter { it.length <= 512 && it.none(Char::isISOControl) }
+                    .associateWith { choices.optString(it) }.filterValues { it in setOf("READ:true", "READ:false", "WRITE:true", "WRITE:false") }
+            }.orEmpty(),
+            githubToolsets = item.optJSONArray("githubToolsets")?.let { groups ->
+                (0 until groups.length()).map { groups.getString(it) }.toSet().also(com.jarvys.agent.connectors.GitHubOperationPolicy::validateToolsets)
+            } ?: com.jarvys.agent.connectors.GitHubOperationPolicy.defaultToolsets,
             initialToolPolicy = runCatching { McpInitialToolPolicy.valueOf(item.optString("initialToolPolicy", "ASK")) }
                 .getOrDefault(McpInitialToolPolicy.ASK),
         )
@@ -213,6 +255,8 @@ class McpServerRepository internal constructor(context: Context, private val sec
                     .put("catalogServiceId", config.catalogServiceId ?: "")
                     .put("toolSelectionMode", config.toolSelectionMode.name)
                     .put("initialToolPolicy", config.initialToolPolicy.name)
+                    .put("githubToolsets", JSONArray(config.githubToolsets.sorted()))
+                    .put("githubToolPreferences", JSONObject(config.githubToolPreferences))
                     .put("tools", tools),
             )
         }
@@ -228,6 +272,7 @@ class McpServerRepository internal constructor(context: Context, private val sec
         require(config.oauthClientId.length <= 1024 && config.oauthClientId.none(Char::isISOControl)) {
             "OAuth client ID is invalid"
         }
+        if (config.catalogServiceId == "github") com.jarvys.agent.connectors.GitHubOperationPolicy.validateToolsets(config.githubToolsets)
         require(config.tools.size <= MAX_TOOLS) { "MCP server returned too many tools" }
     }
 

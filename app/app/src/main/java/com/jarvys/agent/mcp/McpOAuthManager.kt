@@ -7,6 +7,7 @@ import android.util.Base64
 import androidx.browser.customtabs.CustomTabsIntent
 import com.jarvys.agent.connectors.LoopbackOAuthCallbackServer
 import com.jarvys.agent.connectors.GitHubDeviceFlowProtocol
+import com.jarvys.agent.connectors.GitHubOAuthTokens
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -16,12 +17,19 @@ import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.security.SecureRandom
+import java.util.UUID
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /** OAuth 2.1 public-client PKCE coordinator for a single explicitly configured MCP server. */
-class McpOAuthManager(private val repository: McpServerRepository) {
+class McpOAuthManager internal constructor(
+    private val repository: McpServerRepository,
+    private val nowMillis: () -> Long,
+    private val tokenRequester: ((String, Map<String, String>) -> JSONObject)?,
+) {
+    constructor(repository: McpServerRepository) : this(repository, System::currentTimeMillis, null)
+
     fun authorize(activity: Activity, serverId: String, onComplete: (Result<Unit>) -> Unit) {
         AUTH_EXECUTOR.execute {
             val result = runCatching {
@@ -35,16 +43,16 @@ class McpOAuthManager(private val repository: McpServerRepository) {
 
     @Synchronized
     fun authorizationHeader(config: McpServerConfig): String {
-        val boundEndpoint = repository.oauthValue(config.id, ENDPOINT_BINDING)
-        require(boundEndpoint == config.endpoint) {
-            "MCP endpoint changed; complete OAuth authorization again for this server URL"
-        }
+        requireEndpointBinding(config)
         val access = repository.oauthValue(config.id, ACCESS_TOKEN)
-        val expiresAt = repository.oauthValue(config.id, EXPIRES_AT)?.toLongOrNull() ?: 0L
+        val expiresAt = if (isGitHubGrant(config)) {
+            access?.takeIf(String::isNotEmpty)?.let(::validateGitHubToken)
+            storedGitHubExpiry(config.id, EXPIRES_AT)
+        } else repository.oauthValue(config.id, EXPIRES_AT)?.toLongOrNull() ?: 0L
         if (access.isNullOrBlank() && repository.oauthValue(config.id, REFRESH_TOKEN).isNullOrBlank()) {
             throw IllegalStateException("Authorize this MCP server with OAuth first")
         }
-        return if (access.isNullOrBlank() || expiresAt > 0 && expiresAt <= System.currentTimeMillis() + TOKEN_REFRESH_LEEWAY_MS) {
+        return if (access.isNullOrBlank() || expiresAt > 0 && expiresAt - nowMillis() <= TOKEN_REFRESH_LEEWAY_MS) {
             refreshAccessToken(config)
         } else "Bearer $access"
     }
@@ -52,9 +60,8 @@ class McpOAuthManager(private val repository: McpServerRepository) {
     /** Forces exactly one refresh attempt after an authenticated MCP request receives HTTP 401. */
     @Synchronized
     fun refreshAccessToken(config: McpServerConfig): String {
-        require(repository.oauthValue(config.id, ENDPOINT_BINDING) == config.endpoint) {
-            "MCP endpoint changed; complete OAuth authorization again for this server URL"
-        }
+        requireEndpointBinding(config)
+        if (isGitHubGrant(config)) return refreshGitHubAccessToken(config)
         val refresh = repository.oauthValue(config.id, REFRESH_TOKEN)
             ?: throw McpReauthRequiredException("MCP OAuth refresh token is unavailable; authorize this server again")
         val tokenEndpoint = repository.oauthValue(config.id, TOKEN_ENDPOINT)
@@ -84,15 +91,18 @@ class McpOAuthManager(private val repository: McpServerRepository) {
 
     @Synchronized
     fun invalidateAccessToken(config: McpServerConfig) {
-        require(repository.oauthValue(config.id, ENDPOINT_BINDING) == config.endpoint) {
-            "MCP endpoint changed; complete OAuth authorization again for this server URL"
-        }
+        requireEndpointBinding(config)
         repository.saveOAuthValue(config.id, ACCESS_TOKEN, null)
     }
 
     /** Best-effort RFC 7009 cleanup before the local MCP configuration and SecretStore entries are deleted. */
     @Synchronized
     fun revokeAndClear(config: McpServerConfig) {
+        // GitHub Device Flow does not advertise an RFC 7009 endpoint for a public client.
+        if (isGitHubGrant(config)) {
+            clear(config.id)
+            return
+        }
         val revokeEndpoint = repository.oauthValue(config.id, REVOCATION_ENDPOINT)
         val access = repository.oauthValue(config.id, ACCESS_TOKEN)
         val refresh = repository.oauthValue(config.id, REFRESH_TOKEN)
@@ -119,29 +129,229 @@ class McpOAuthManager(private val repository: McpServerRepository) {
         } finally { connection.disconnect() }
     }
 
+    @Synchronized
     fun clear(serverId: String) {
-        listOf(ACCESS_TOKEN, REFRESH_TOKEN, EXPIRES_AT, TOKEN_ENDPOINT, RESOURCE, ENDPOINT_BINDING,
-            REVOCATION_ENDPOINT).forEach {
+        listOf(GITHUB_AUTHORIZATION_EPOCH, ACCESS_TOKEN, REFRESH_TOKEN, EXPIRES_AT, TOKEN_ENDPOINT,
+            RESOURCE, ENDPOINT_BINDING, REVOCATION_ENDPOINT, GITHUB_CLIENT_BINDING,
+            GITHUB_REFRESH_EXPIRES_AT, GITHUB_GRANTED_SCOPES).forEach {
             repository.saveOAuthValue(serverId, it, null)
         }
     }
 
-    /** Adopts a GitHub OAuth App Device Flow token into the same encrypted MCP session store. */
-    fun saveGitHubDeviceGrant(config: McpServerConfig, accessToken: String, refreshToken: String?, expiresAt: Long) {
-        require(config.catalogServiceId == "github" && config.endpoint == GITHUB_MCP_ENDPOINT
-            && config.authMode == McpAuthMode.OAUTH
-            && config.oauthClientId == GitHubDeviceFlowProtocol.CLIENT_ID) {
-            "GitHub device grant did not match the verified remote service configuration"
+    /** Compatibility overload for callers that have no refresh-expiry or scope metadata. */
+    fun saveGitHubDeviceGrant(config: McpServerConfig, accessToken: String, refreshToken: String?, expiresAt: Long) =
+        saveGitHubDeviceGrant(config, GitHubOAuthTokens(accessToken, refreshToken, expiresAt, 0L, emptySet()))
+
+    /** Adopts a complete GitHub Device Flow grant into the encrypted MCP credential vault. */
+    @Synchronized
+    fun saveGitHubDeviceGrant(config: McpServerConfig, tokens: GitHubOAuthTokens) {
+        requireGitHubConfiguration(config)
+        validateGitHubToken(tokens.accessToken)
+        tokens.refreshToken?.let(::validateGitHubToken)
+        validateGitHubExpiry(tokens.expiresAtMillis)
+        validateGitHubExpiry(tokens.refreshTokenExpiresAtMillis)
+        require(tokens.refreshToken != null || tokens.refreshTokenExpiresAtMillis == 0L) {
+            "GitHub refresh expiry requires a refresh token"
         }
-        requireCurrentServer(config)
-        require(accessToken.isNotBlank() && accessToken.length <= 4096)
-        repository.saveOAuthValue(config.id, ACCESS_TOKEN, accessToken)
-        repository.saveOAuthValue(config.id, REFRESH_TOKEN, refreshToken)
-        repository.saveOAuthValue(config.id, EXPIRES_AT, expiresAt.takeIf { it > 0 }?.toString())
-        repository.saveOAuthValue(config.id, TOKEN_ENDPOINT, GitHubDeviceFlowProtocol.TOKEN_ENDPOINT)
-        repository.saveOAuthValue(config.id, RESOURCE, config.endpoint)
-        repository.saveOAuthValue(config.id, ENDPOINT_BINDING, config.endpoint)
-        repository.saveOAuthValue(config.id, REVOCATION_ENDPOINT, null)
+        validateGitHubScopes(tokens.scopes)
+        repository.withCurrentOAuthConfig(config) {
+            // A replacement account must never inherit the old grant's scopes, deadlines or epoch.
+            clear(config.id)
+            repository.saveOAuthValue(config.id, ACCESS_TOKEN, tokens.accessToken)
+            repository.saveOAuthValue(config.id, REFRESH_TOKEN, tokens.refreshToken)
+            saveGitHubExpiry(config.id, EXPIRES_AT, tokens.expiresAtMillis)
+            saveGitHubExpiry(config.id, GITHUB_REFRESH_EXPIRES_AT, tokens.refreshTokenExpiresAtMillis)
+            repository.saveOAuthValue(config.id, GITHUB_GRANTED_SCOPES, encodeGitHubScopes(tokens.scopes))
+            repository.saveOAuthValue(config.id, TOKEN_ENDPOINT, GitHubDeviceFlowProtocol.TOKEN_ENDPOINT)
+            repository.saveOAuthValue(config.id, RESOURCE, config.endpoint)
+            repository.saveOAuthValue(config.id, ENDPOINT_BINDING, config.endpoint)
+            repository.saveOAuthValue(config.id, GITHUB_CLIENT_BINDING, config.oauthClientId)
+            repository.saveOAuthValue(config.id, GITHUB_AUTHORIZATION_EPOCH, UUID.randomUUID().toString())
+        }
+    }
+
+    /** Opaque grant identity for connection leases; never derived from an access/refresh token. */
+    @Synchronized
+    fun githubAuthorizationEpoch(config: McpServerConfig): String {
+        return repository.withCurrentOAuthConfig(config) {
+            requireGitHubBinding(config)
+            val access = repository.oauthValue(config.id, ACCESS_TOKEN)?.takeIf(String::isNotEmpty)
+            val refresh = repository.oauthValue(config.id, REFRESH_TOKEN)?.takeIf(String::isNotEmpty)
+            access?.let(::validateGitHubToken)
+            refresh?.let(::validateGitHubToken)
+            require(access != null || refresh != null) { "Authorize GitHub again before connecting" }
+            val epoch = repository.oauthValue(config.id, GITHUB_AUTHORIZATION_EPOCH)?.takeIf(String::isNotEmpty)
+            if (epoch != null) {
+                require(epoch.matches(GITHUB_EPOCH_PATTERN)) { "GitHub authorization identity is invalid; authorize again" }
+                return@withCurrentOAuthConfig epoch
+            }
+            // Older builds stored only the fixed GitHub endpoint. Bind their existing grant before leasing it.
+            UUID.randomUUID().toString().also {
+                repository.saveOAuthValue(config.id, GITHUB_CLIENT_BINDING, config.oauthClientId)
+                repository.saveOAuthValue(config.id, GITHUB_AUTHORIZATION_EPOCH, it)
+            }
+        }
+    }
+
+    /** Safe diagnostic metadata only. Tokens and provider response bodies are never returned. */
+    @Synchronized
+    fun githubGrantedScopes(config: McpServerConfig): Set<String> {
+        requireGitHubBinding(config)
+        return storedGitHubScopes(config.id)
+    }
+
+    /** Zero means that GitHub supplied no refresh deadline (including non-expiring grants). */
+    @Synchronized
+    fun githubRefreshTokenExpiresAtMillis(config: McpServerConfig): Long {
+        requireGitHubBinding(config)
+        return storedGitHubExpiry(config.id, GITHUB_REFRESH_EXPIRES_AT)
+    }
+
+    private fun refreshGitHubAccessToken(config: McpServerConfig): String {
+        val epoch = githubAuthorizationEpoch(config)
+        val refresh = repository.oauthValue(config.id, REFRESH_TOKEN)?.takeIf(String::isNotEmpty)
+            ?: throw McpReauthRequiredException("GitHub refresh token is unavailable; authorize GitHub again")
+        validateGitHubToken(refresh)
+        val refreshExpiresAt = storedGitHubExpiry(config.id, GITHUB_REFRESH_EXPIRES_AT)
+        if (refreshExpiresAt > 0L && refreshExpiresAt <= nowMillis()) {
+            throw McpReauthRequiredException("GitHub refresh token expired; authorize GitHub again")
+        }
+        val previousScopes = storedGitHubScopes(config.id)
+        val response = try {
+            // GitHub supports public-client refresh without a client secret or RFC 8707 resource.
+            tokenRequest(GitHubDeviceFlowProtocol.TOKEN_ENDPOINT,
+                GitHubDeviceFlowProtocol.refreshForm(config.oauthClientId, refresh))
+        } catch (_: Exception) {
+            // Provider/network exceptions can include response bodies and credentials: never chain them.
+            throw McpReauthRequiredException("GitHub OAuth refresh failed; authorize GitHub again")
+        }
+        val tokens = try {
+            require(response.toString().length <= GitHubDeviceFlowProtocol.MAX_RESPONSE_CHARS)
+            require(!response.has("error"))
+            val access = response.opt("access_token") as? String ?: error("Invalid GitHub access token")
+            validateGitHubToken(access)
+            if (response.has("token_type")) {
+                require((response.opt("token_type") as? String)?.equals("bearer", true) == true)
+            }
+            val rotatedRefresh = if (response.has("refresh_token")) {
+                (response.opt("refresh_token") as? String ?: error("Invalid GitHub refresh token"))
+                    .also(::validateGitHubToken)
+            } else refresh
+            val scopes = if (response.has("scope")) {
+                val scope = response.opt("scope") as? String ?: error("Invalid GitHub scopes")
+                require(scope.length <= MAX_GITHUB_SCOPE_CHARS && scope.none(Char::isISOControl))
+                scope.split(',', ' ').filter(String::isNotEmpty).toSet().also(::validateGitHubScopes)
+            } else previousScopes
+            GitHubOAuthTokens(access, rotatedRefresh,
+                githubResponseExpiry(response, "expires_in", 0L),
+                githubResponseExpiry(response, "refresh_token_expires_in", refreshExpiresAt), scopes)
+        } catch (_: Exception) {
+            throw McpReauthRequiredException("GitHub OAuth refresh returned invalid token metadata; authorize again")
+        }
+        return repository.withCurrentOAuthConfig(config) {
+            // A config edit, disconnect or replacement grant while HTTP was in flight must win.
+            requireGitHubBinding(config)
+            require(repository.oauthValue(config.id, GITHUB_AUTHORIZATION_EPOCH) == epoch) {
+                "GitHub authorization changed during refresh; connect again"
+            }
+            repository.saveOAuthValue(config.id, ACCESS_TOKEN, tokens.accessToken)
+            repository.saveOAuthValue(config.id, REFRESH_TOKEN, tokens.refreshToken)
+            saveGitHubExpiry(config.id, EXPIRES_AT, tokens.expiresAtMillis)
+            saveGitHubExpiry(config.id, GITHUB_REFRESH_EXPIRES_AT, tokens.refreshTokenExpiresAtMillis)
+            repository.saveOAuthValue(config.id, GITHUB_GRANTED_SCOPES, encodeGitHubScopes(tokens.scopes))
+            "Bearer ${tokens.accessToken}"
+        }
+    }
+
+    private fun isGitHubGrant(config: McpServerConfig): Boolean = config.catalogServiceId == "github"
+        || repository.oauthValue(config.id, ENDPOINT_BINDING) == GITHUB_MCP_ENDPOINT
+        || repository.oauthValue(config.id, TOKEN_ENDPOINT) == GitHubDeviceFlowProtocol.TOKEN_ENDPOINT
+
+    private fun requireEndpointBinding(config: McpServerConfig) {
+        if (isGitHubGrant(config)) requireGitHubBinding(config)
+        else require(repository.oauthValue(config.id, ENDPOINT_BINDING) == config.endpoint) {
+            "MCP endpoint changed; complete OAuth authorization again for this server URL"
+        }
+    }
+
+    private fun requireGitHubConfiguration(expected: McpServerConfig) {
+        require(expected.catalogServiceId == "github" && expected.endpoint == GITHUB_MCP_ENDPOINT
+            && expected.authMode == McpAuthMode.OAUTH
+            && expected.oauthClientId == GitHubDeviceFlowProtocol.CLIENT_ID) {
+            "GitHub grant does not match the catalog service configuration"
+        }
+        val current = repository.get(expected.id) ?: error("GitHub configuration was removed; connect again")
+        require(current.enabled && current.endpoint == expected.endpoint && current.authMode == expected.authMode
+            && current.oauthClientId == expected.oauthClientId && current.catalogServiceId == expected.catalogServiceId) {
+            "GitHub configuration changed; authorize GitHub again"
+        }
+    }
+
+    private fun requireGitHubBinding(config: McpServerConfig) {
+        requireGitHubConfiguration(config)
+        val client = repository.oauthValue(config.id, GITHUB_CLIENT_BINDING)
+        val epoch = repository.oauthValue(config.id, GITHUB_AUTHORIZATION_EPOCH)
+        require(repository.oauthValue(config.id, ENDPOINT_BINDING) == GITHUB_MCP_ENDPOINT
+            && repository.oauthValue(config.id, TOKEN_ENDPOINT) == GitHubDeviceFlowProtocol.TOKEN_ENDPOINT
+            && (client == config.oauthClientId || client.isNullOrEmpty() && epoch.isNullOrEmpty())) {
+            "GitHub grant binding changed; authorize GitHub again"
+        }
+    }
+
+    private fun validateGitHubToken(value: String) {
+        require(value.length in 1..MAX_GITHUB_TOKEN_CHARS && value.all { it.code in 0x21..0x7e }) {
+            "GitHub returned invalid token metadata"
+        }
+    }
+
+    private fun validateGitHubExpiry(value: Long) {
+        require(value >= 0L) { "GitHub returned invalid token expiry" }
+    }
+
+    private fun validateGitHubScopes(scopes: Set<String>) {
+        require(scopes.size <= MAX_GITHUB_SCOPE_COUNT
+            && scopes.sumOf { it.length + 1 } <= MAX_GITHUB_SCOPE_CHARS
+            && scopes.all { it.matches(GITHUB_SCOPE_PATTERN) }) { "GitHub returned invalid granted scopes" }
+    }
+
+    private fun storedGitHubScopes(serverId: String): Set<String> {
+        val value = repository.oauthValue(serverId, GITHUB_GRANTED_SCOPES)?.takeIf(String::isNotEmpty)
+            ?: return emptySet()
+        return try {
+            require(value.length <= MAX_GITHUB_SCOPE_CHARS + MAX_GITHUB_SCOPE_COUNT * 3 + 2)
+            val scopes = JSONArray(value)
+            require(scopes.length() <= MAX_GITHUB_SCOPE_COUNT)
+            (0 until scopes.length()).map { scopes.get(it) as? String ?: error("Invalid scope") }
+                .toSet().also(::validateGitHubScopes)
+        } catch (_: Exception) {
+            throw IllegalStateException("Stored GitHub scope metadata is invalid; authorize again")
+        }
+    }
+
+    private fun encodeGitHubScopes(scopes: Set<String>): String = JSONArray(scopes.sorted()).toString()
+
+    private fun storedGitHubExpiry(serverId: String, key: String): Long {
+        val value = repository.oauthValue(serverId, key)?.takeIf(String::isNotEmpty) ?: return 0L
+        require(value.matches(Regex("[0-9]{1,19}"))) { "Stored GitHub token expiry is invalid; authorize again" }
+        return value.toLongOrNull()?.takeIf { it >= 0L }
+            ?: error("Stored GitHub token expiry is invalid; authorize again")
+    }
+
+    private fun saveGitHubExpiry(serverId: String, key: String, value: Long) =
+        repository.saveOAuthValue(serverId, key, value.takeIf { it > 0L }?.toString())
+
+    private fun githubResponseExpiry(response: JSONObject, key: String, absent: Long): Long {
+        if (!response.has(key)) return absent
+        val raw = response.opt(key)
+        require(raw is Number || raw is String)
+        val value = raw.toString()
+        require(value.matches(Regex("[0-9]{1,10}")))
+        val seconds = value.toLong()
+        require(seconds in 0..MAX_GITHUB_TOKEN_LIFETIME_SECONDS)
+        if (seconds == 0L) return 0L
+        val now = nowMillis()
+        require(now >= 0L && now <= Long.MAX_VALUE - seconds * 1_000L)
+        return now + seconds * 1_000L
     }
 
     private fun authorizeBlocking(activity: Activity, config: McpServerConfig) {
@@ -268,6 +478,7 @@ class McpOAuthManager(private val repository: McpServerRepository) {
     }
 
     private fun tokenRequest(endpoint: String, fields: Map<String, String>): JSONObject {
+        tokenRequester?.let { return it(endpoint, fields) }
         val connection = open(endpoint, "POST", "application/json")
         try {
             connection.doOutput = true
@@ -386,7 +597,7 @@ class McpOAuthManager(private val repository: McpServerRepository) {
 
     private fun expiry(token: JSONObject): Long {
         val seconds = token.optLong("expires_in", 0L).coerceIn(0, MAX_TOKEN_LIFETIME_SECONDS)
-        return if (seconds == 0L) 0L else System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(seconds)
+        return if (seconds == 0L) 0L else nowMillis() + TimeUnit.SECONDS.toMillis(seconds)
     }
 
     private fun requireCurrentServer(expected: McpServerConfig): McpServerConfig {
@@ -406,6 +617,16 @@ class McpOAuthManager(private val repository: McpServerRepository) {
         private const val MAX_OAUTH_RESPONSE_BYTES = 128 * 1024
         private const val MAX_AUTH_CODE_CHARS = 8 * 1024
         private const val MAX_TOKEN_LIFETIME_SECONDS = 315_360_000L
+        private const val MAX_GITHUB_TOKEN_CHARS = 4096
+        private const val MAX_GITHUB_SCOPE_CHARS = 4096
+        private const val MAX_GITHUB_SCOPE_COUNT = 128
+        private const val MAX_GITHUB_TOKEN_LIFETIME_SECONDS = 31_536_000L
+        private val GITHUB_SCOPE_PATTERN = Regex("[A-Za-z0-9:_./-]{1,256}")
+        private val GITHUB_EPOCH_PATTERN = Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+        private const val GITHUB_CLIENT_BINDING = "oauth_github_client_binding"
+        private const val GITHUB_AUTHORIZATION_EPOCH = "oauth_github_authorization_epoch"
+        private const val GITHUB_REFRESH_EXPIRES_AT = "oauth_github_refresh_expires_at"
+        private const val GITHUB_GRANTED_SCOPES = "oauth_github_granted_scopes"
         private const val GITHUB_MCP_ENDPOINT = "https://api.githubcopilot.com/mcp/"
         private const val ACCESS_TOKEN = "oauth_access_token"
         private const val REFRESH_TOKEN = "oauth_refresh_token"

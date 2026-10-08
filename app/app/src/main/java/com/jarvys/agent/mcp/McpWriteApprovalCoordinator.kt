@@ -21,9 +21,12 @@ class McpWriteApprovalCoordinator(
     private val notifier: com.jarvys.agent.connectors.AutonomyActionNotifier,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
-    fun policy(tool: McpToolDefinition): AutonomyPolicy = autonomyStore.policy(connectorId(tool), tool.wireName)
+    fun policy(tool: McpToolDefinition): AutonomyPolicy = autonomyStore.policy(connectorId(tool), tool.wireName).let {
+        if (tool.catalogServiceId == "github" && it == AutonomyPolicy.ALLOW) AutonomyPolicy.ASK else it
+    }
 
     fun setPolicy(tool: McpToolDefinition, policy: AutonomyPolicy) {
+        require(tool.catalogServiceId != "github" || policy != AutonomyPolicy.ALLOW) { "GitHub writes require review of their exact repository and method" }
         require(tool.access == McpToolAccess.WRITE) { "Autonomy policy only applies to MCP write tools" }
         require(policy != AutonomyPolicy.ALLOW || !McpToolSecurity.isDestructive(tool.wireName, tool.annotations)) {
             "Destructive MCP tools cannot use Allow"
@@ -66,7 +69,7 @@ class McpWriteApprovalCoordinator(
         if (configured == AutonomyPolicy.DENY) throw McpWriteDeniedException("Remote write is denied by the saved per-tool policy")
 
         val destructive = McpToolSecurity.isDestructive(tool.wireName, tool.annotations)
-        val automatic = configured == AutonomyPolicy.ALLOW && !destructive && notifier.canPost()
+        val automatic = tool.catalogServiceId != "github" && configured == AutonomyPolicy.ALLOW && !destructive && notifier.canPost()
         if (automatic) {
             token.throwIfCancelled()
             val result = action()
@@ -75,10 +78,13 @@ class McpWriteApprovalCoordinator(
         }
 
         val title = tool.annotations?.title?.takeIf(String::isNotBlank) ?: tool.wireName
-        val args = McpToolSecurity.approvalArgumentSummary(arguments)
+        val args = if (tool.catalogServiceId == "github") emptyList() else McpToolSecurity.approvalArgumentSummary(arguments)
         val localizedLines = buildList {
             add(ConnectorUiText(R.string.remote_write_approval_warning,
                 fallback = "The remote service controls this tool and its descriptions. Review the target and arguments before approving."))
+            if (tool.catalogServiceId == "github") com.jarvys.agent.connectors.GitHubOperationPolicy.approvalLines(tool.wireName, arguments).forEach {
+                add(ConnectorUiText(fallback = it))
+            }
             args.forEach { (name, value) ->
                 add(ConnectorUiText(R.string.remote_write_approval_argument, listOf(name, value), "$name: $value"))
             }

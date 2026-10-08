@@ -1330,4 +1330,17 @@ Their exit results are unknown. Do not repeat them automatically. Review project
     <string name="chat_download_open">Open</string>
     <string name="chat_file_preview_unavailable">Preview unavailable. Download or share the original file.</string>
     <string name="chat_download_open_failed_title">Could not open the file</string>
+    <string name="github_device_error_client">GitHub rejected this app client ID. The app owner must verify the OAuth App configuration.</string>
+    <string name="github_device_error_cancelled">GitHub authorization was cancelled. You can start again.</string>
+    <string name="github_disconnect_local_body">Disconnect and remove the GitHub credentials from this device? This does not revoke the grant on GitHub. Review Authorized OAuth Apps or personal access tokens in your GitHub settings to revoke it.</string>
+    <string name="github_capability_groups">Capability groups (new tools stay disabled)</string>
+    <string name="github_group_context">Account context</string>
+    <string name="github_group_repos">Repositories and commits</string>
+    <string name="github_group_issues">Issues</string>
+    <string name="github_group_pulls">Pull requests and reviews</string>
+    <string name="github_group_discussions">Discussions</string>
+    <string name="github_group_actions">Actions and checks</string>
+    <string name="github_write_review_note">Each GitHub write is reviewed with its exact repository, method and changes. Capability selection does not grant account permissions.</string>
+    <string name="github_granted_scopes">Granted OAuth scopes: %1$s</string>
+    <string name="github_manage_grants">Review GitHub account grants</string>
 </resources>

@@ -136,7 +136,7 @@ internal object McpTransportClient {
         val code = responseCode(connection)
         if (code != 200) {
             connection.disconnect()
-            throw httpError(code, connection.getHeaderField("WWW-Authenticate"))
+            throw httpError(code, connection.getHeaderField("WWW-Authenticate"), connection.getHeaderField("Retry-After"))
         }
         val contentType = connection.contentType.orEmpty()
         require(contentType.startsWith("text/event-stream", true)) { "Legacy MCP SSE endpoint did not return text/event-stream" }
@@ -184,7 +184,9 @@ internal object McpTransportClient {
         body: JSONObject,
         onMessage: (JSONObject) -> Unit = {},
         token: CancellationToken? = null,
+        safeToReplay: Boolean = body.optString("method") != "tools/call",
     ): JSONObject {
+        var accepted = false
         val id = body.optString("id").takeIf(String::isNotBlank)
         val connection = open(endpoint.toURL(), config, authorization, "POST", sessionId, requestAccept())
         var unregisterCancellation: Runnable = Runnable { }
@@ -195,7 +197,8 @@ internal object McpTransportClient {
             writeJson(connection, body)
             val code = responseCode(connection)
             if (code == 404 && sessionId != null) throw SessionExpiredException()
-            if (code !in 200..299) throw httpError(code, connection.getHeaderField("WWW-Authenticate"))
+            if (code !in 200..299) throw httpError(code, connection.getHeaderField("WWW-Authenticate"), connection.getHeaderField("Retry-After"))
+            accepted = true
             val type = connection.contentType.orEmpty()
             if (code == 202 || code == 204) {
                 if (id != null) throw IllegalStateException("MCP server accepted a request without returning its response")
@@ -221,6 +224,7 @@ internal object McpTransportClient {
                 requireNoRpcError(response)
             }
         } catch (error: Exception) {
+            if (accepted && !safeToReplay) throw McpAmbiguousWriteException()
             if (token?.isCancelled == true) throw CancellationException("MCP request stopped")
             throw error
         } finally {
@@ -235,7 +239,7 @@ internal object McpTransportClient {
             if (version != null && version != "2024-11-05") connection.setRequestProperty("MCP-Protocol-Version", version)
             writeJson(connection, body)
             val code = responseCode(connection)
-            if (code !in 200..299) throw httpError(code, connection.getHeaderField("WWW-Authenticate"))
+            if (code !in 200..299) throw httpError(code, connection.getHeaderField("WWW-Authenticate"), connection.getHeaderField("Retry-After"))
         } finally {
             connection.disconnect()
         }
@@ -258,6 +262,7 @@ internal object McpTransportClient {
             setRequestProperty("Accept", accept)
             setRequestProperty("MCP-Client-Name", "Jarvys")
             authorization?.let { setRequestProperty("Authorization", it) }
+            com.jarvys.agent.connectors.GitHubOperationPolicy.headers(config).forEach { (name, value) -> setRequestProperty(name, value) }
             sessionId?.let { setRequestProperty("MCP-Session-Id", it) }
             lastEventId?.let { setRequestProperty("Last-Event-ID", it) }
             if (method == "POST") {
@@ -270,7 +275,9 @@ internal object McpTransportClient {
     }
 
     private fun writeJson(connection: HttpURLConnection, json: JSONObject) {
-        connection.outputStream.use { output -> output.write(json.toString().toByteArray(StandardCharsets.UTF_8)) }
+        val bytes = json.toString().toByteArray(StandardCharsets.UTF_8)
+        connection.setFixedLengthStreamingMode(bytes.size)
+        connection.outputStream.use { output -> output.write(bytes) }
     }
 
     private fun responseCode(connection: HttpURLConnection): Int = try {
@@ -279,12 +286,14 @@ internal object McpTransportClient {
         throw IllegalStateException("Could not reach MCP server", error)
     }
 
-    private fun httpError(code: Int, challenge: String?): RuntimeException = when (code) {
-        401 -> McpAuthorizationException("MCP server requires valid authorization", challenge)
-        403 -> McpPermissionRequiredException("MCP server denied access: the configured account or token lacks required permissions")
-        301, 302, 303, 307, 308 -> IllegalStateException("MCP redirects are not followed; update the configured endpoint URL")
-        400, 404, 405 -> McpHttpStatusException(code)
-        else -> IllegalStateException("MCP server returned HTTP $code")
+    private fun httpError(code: Int, challenge: String?, retryAfter: String? = null): RuntimeException = when {
+        code == 401 && challenge?.contains("insufficient_scope", true) == true -> McpPermissionRequiredException(
+            "The service requires additional account permissions. Review the requested scopes and reconnect; the pending action was not replayed.",
+            Regex("scope=\"([^\"]{1,512})\"").find(challenge)?.groupValues?.get(1)?.split(' ')?.filter { it.matches(Regex("[A-Za-z0-9:_-]{1,64}")) }?.toSet().orEmpty())
+        code == 401 -> McpAuthorizationException("MCP server requires valid authorization", challenge)
+        code == 403 -> McpPermissionRequiredException("MCP server denied access: the configured account or token lacks required permissions")
+        code in setOf(301, 302, 303, 307, 308) -> IllegalStateException("MCP redirects are not followed; update the configured endpoint URL")
+        else -> McpHttpStatusException(code, retryAfter?.toLongOrNull()?.coerceIn(0, 60))
     }
 
     private fun readBounded(input: InputStream): String {
@@ -354,7 +363,7 @@ internal object McpTransportClient {
                 if (token != null) unregisterCancellation = token.registerCancelAction { connection.disconnect() }
                 if (version != null && version != "2024-11-05") connection.setRequestProperty("MCP-Protocol-Version", version)
                 val code = responseCode(connection)
-                if (code != 200) throw httpError(code, connection.getHeaderField("WWW-Authenticate"))
+                if (code != 200) throw httpError(code, connection.getHeaderField("WWW-Authenticate"), connection.getHeaderField("Retry-After"))
                 try {
                     return readSseResponse(connection.inputStream, requestId, onMessage, closed.lastEventId, closed.retryMillis)
                 } catch (nextClose: IncompleteSseResponse) {
@@ -469,13 +478,27 @@ internal object McpTransportClient {
 
         private fun callWithRecovery(method: String, params: JSONObject, token: CancellationToken? = null): JSONObject {
             val id = nextId.getAndIncrement().toString()
-            try {
-                return request(endpoint, config, authorization, sessionId, version, rpcRequest(method, id, params), ::handleServerMessage, token)
-            } catch (expired: SessionExpiredException) {
-                sessionId = initializeAgain()
+            val safeRead = method == "tools/list" || method == "tools/call" && tools.firstOrNull {
+                it.wireName == params.optString("name")
+            }?.let { McpToolSecurity.classify(config.catalogServiceId, it.wireName, it.annotations) == McpToolAccess.READ } == true
+            var recovered = false
+            var retries = 0
+            while (true) {
                 token?.throwIfCancelled()
-                val retried = request(endpoint, config, authorization, sessionId, version, rpcRequest(method, id, params), ::handleServerMessage, token)
-                return retried
+                try {
+                    return request(endpoint, config, authorization, sessionId, version, rpcRequest(method, id, params), ::handleServerMessage, token, safeRead)
+                } catch (expired: SessionExpiredException) {
+                    if (!safeRead || recovered) throw McpHttpStatusException(404)
+                    sessionId = initializeAgain(); recovered = true
+                } catch (status: McpHttpStatusException) {
+                    if (!safeRead || status.statusCode !in setOf(429, 500, 502, 503, 504) || retries++ >= 2 || (status.retryAfterSeconds ?: 0) > 5) throw status
+                    var remaining = status.retryAfterSeconds?.times(1000) ?: (250L * retries + (0..100).random())
+                    while (remaining > 0) {
+                        token?.throwIfCancelled()
+                        val wait = minOf(remaining, 100L)
+                        Thread.sleep(wait); remaining -= wait
+                    }
+                }
             }
         }
 
@@ -643,7 +666,7 @@ internal object McpTransportClient {
                 if (version.isNotBlank() && version != "2024-11-05") connection.setRequestProperty("MCP-Protocol-Version", version)
                 writeJson(connection, body)
                 val code = responseCode(connection)
-                if (code !in 200..299) throw httpError(code, connection.getHeaderField("WWW-Authenticate"))
+                if (code !in 200..299) throw httpError(code, connection.getHeaderField("WWW-Authenticate"), connection.getHeaderField("Retry-After"))
                 val responseBody = runCatching { readBounded(connection.inputStream) }.getOrDefault("")
                 if (expectingResponse && responseBody.isNotBlank()) {
                     val json = JSONObject(responseBody)
@@ -715,7 +738,14 @@ internal object McpTransportClient {
 
     private class SessionExpiredException : RuntimeException("MCP session expired")
     private class IncompleteSseResponse(val lastEventId: String?, val retryMillis: Long) : RuntimeException()
-    private class McpHttpStatusException(val statusCode: Int) : RuntimeException("MCP server returned HTTP $statusCode")
+    internal class McpAmbiguousWriteException : IllegalStateException("MCP write may have completed; response recovery failed, so automatic replay is blocked")
+    internal class McpHttpStatusException(val statusCode: Int, val retryAfterSeconds: Long? = null) : RuntimeException(when(statusCode) {
+        404 -> "GitHub target or MCP session was not found; verify the repository/account and reconnect before retrying"
+        409 -> "GitHub target changed; read the latest branch or content before preparing a new operation"
+        422 -> "GitHub rejected the arguments or repository rules; check branch protection and required fields"
+        429 -> "GitHub rate limit reached; wait before retrying"
+        else -> "MCP server returned HTTP $statusCode"
+    })
     private class McpProtocolException(code: Int, message: String) : RuntimeException("MCP JSON-RPC error $code: $message")
     internal class McpAuthorizationException(message: String, val challenge: String?) : RuntimeException(message)
 

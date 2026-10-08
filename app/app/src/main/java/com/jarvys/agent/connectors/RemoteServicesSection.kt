@@ -88,6 +88,10 @@ internal fun RemoteServicesSection(
     selectedId: String? = null,
     onSelect: (String, String) -> Unit = { _, _ -> },
     onDetailExit: () -> Unit = {},
+    githubFlowStarter: GitHubDeviceFlowStarter = GitHubDeviceFlowStarter { repositories, code, complete ->
+        GitHubDeviceFlowAttempt.start(repositories, code, complete)
+    },
+    onGitHubConnected: (String) -> Unit = connections::connect,
 ) {
     val servers by repository.servers.collectAsState()
     val states by connections.states.collectAsState()
@@ -101,7 +105,8 @@ internal fun RemoteServicesSection(
                 RemoteServiceCatalog.services.forEachIndexed { index, service ->
                     val server = servers.firstOrNull { it.catalogServiceId == service.id }
                     RemoteServiceCard(service, server, states[server?.id], repository, connections, oauthManager,
-                        selected = false, onSelect = { onSelect(service.id, context.getString(service.nameResourceId)) })
+                        selected = false, onSelect = { onSelect(service.id, context.getString(service.nameResourceId)) },
+                        githubFlowStarter = githubFlowStarter, onGitHubConnected = onGitHubConnected)
                     if (index != RemoteServiceCatalog.services.lastIndex) ConnectorRowsDivider()
                 }
             }
@@ -109,7 +114,8 @@ internal fun RemoteServicesSection(
             val service = RemoteServiceCatalog.find(selectedId) ?: return@Column
             val server = servers.firstOrNull { it.catalogServiceId == service.id }
             RemoteServiceCard(service, server, states[server?.id], repository, connections, oauthManager,
-                selected = true, onSelect = {}, onDetailExit = onDetailExit)
+                selected = true, onSelect = {}, onDetailExit = onDetailExit,
+                githubFlowStarter = githubFlowStarter, onGitHubConnected = onGitHubConnected)
         }
     }
 }
@@ -125,6 +131,8 @@ private fun RemoteServiceCard(
     selected: Boolean,
     onSelect: () -> Unit,
     onDetailExit: () -> Unit = {},
+    githubFlowStarter: GitHubDeviceFlowStarter,
+    onGitHubConnected: (String) -> Unit,
 ) {
     val context = LocalContext.current
     val status = state?.status ?: McpConnectionStatus.DISCONNECTED
@@ -135,16 +143,18 @@ private fun RemoteServiceCard(
     var oauthInProgress by remember(service.id) { mutableStateOf(false) }
     var advancedExpanded by remember(service.id) { mutableStateOf(false) }
     var githubRepoScope by remember(service.id) { mutableStateOf(false) }
-    var githubDeviceCode by remember(service.id) { mutableStateOf<GitHubDeviceCode?>(null) }
-    var githubDeviceDialog by remember(service.id) { mutableStateOf(false) }
-    var githubDeviceAttempt by remember(service.id) { mutableStateOf<GitHubDeviceFlowAttempt?>(null) }
+    var githubToolsets by remember(service.id) { mutableStateOf(server?.githubToolsets ?: GitHubOperationPolicy.defaultToolsets) }
+    val githubFlow = remember(service.id) { GitHubDeviceFlowController(githubFlowStarter) }
+    val githubState by githubFlow.state.collectAsState()
     var githubErrorResource by remember(service.id) { mutableStateOf<Int?>(null) }
     val isGitHub = service.id == "github"
-    DisposableEffect(githubDeviceAttempt) {
-        onDispose { githubDeviceAttempt?.close() }
+    DisposableEffect(githubFlow) {
+        onDispose { githubFlow.close() }
     }
+    val authorizationBusy = oauthInProgress || githubState.inProgress
 
     fun beginGitHubDeviceFlow() {
+        if (githubState.inProgress) return
         val config = (server ?: McpServerConfig(
             id = service.mcpServerId,
             alias = context.getString(service.nameResourceId),
@@ -155,42 +165,16 @@ private fun RemoteServiceCard(
             oauthClientId = GitHubDeviceFlowProtocol.CLIENT_ID,
             catalogServiceId = service.id,
         )).copy(authMode = McpAuthMode.OAUTH, enabled = true,
-            oauthClientId = GitHubDeviceFlowProtocol.CLIENT_ID, catalogServiceId = service.id)
+            oauthClientId = GitHubDeviceFlowProtocol.CLIENT_ID, catalogServiceId = service.id, githubToolsets = githubToolsets)
         runCatching {
             if (server == null || server.authMode != McpAuthMode.OAUTH) connections.disconnect(config.id)
             repository.upsert(config)
-            oauthInProgress = true
             githubErrorResource = null
-            githubDeviceAttempt?.close()
-            githubDeviceAttempt = GitHubDeviceFlowAttempt.start(
-                includePrivateRepositories = githubRepoScope,
-                onDeviceCode = { code -> githubDeviceCode = code; githubDeviceDialog = true },
-                onComplete = { result ->
-                    oauthInProgress = false
-                    githubDeviceAttempt = null
-                    result.fold(onSuccess = { tokens ->
-                        runCatching {
-                            oauthManager.saveGitHubDeviceGrant(config, tokens.accessToken, tokens.refreshToken,
-                                tokens.expiresAtMillis)
-                            repository.clearBearerToken(config.id)
-                            connections.connect(config.id)
-                            githubDeviceDialog = false
-                            githubDeviceCode = null
-                        }.onFailure { githubErrorResource = R.string.github_device_error_generic }
-                    }, onFailure = { error ->
-                        if (GitHubDeviceFlowProtocol.mapError(error) != GitHubDeviceFlowError.CANCELLED) {
-                            githubErrorResource = when (GitHubDeviceFlowProtocol.mapError(error)) {
-                                GitHubDeviceFlowError.EXPIRED -> R.string.github_device_error_expired
-                                GitHubDeviceFlowError.DENIED -> R.string.github_device_error_denied
-                                GitHubDeviceFlowError.DISABLED -> R.string.github_device_error_disabled
-                                else -> R.string.github_device_error_generic
-                            }
-                        }
-                        githubDeviceDialog = false
-                        githubDeviceCode = null
-                    })
-                },
-            )
+            githubFlow.begin(githubRepoScope) { tokens ->
+                oauthManager.saveGitHubDeviceGrant(config, tokens)
+                repository.clearBearerToken(config.id)
+                onGitHubConnected(config.id)
+            }
         }.onFailure {
             oauthInProgress = false
             githubErrorResource = R.string.github_device_error_generic
@@ -204,7 +188,7 @@ private fun RemoteServiceCard(
 
     val reauthStatus = status in setOf(McpConnectionStatus.AUTH_REQUIRED, McpConnectionStatus.REAUTH_REQUIRED, McpConnectionStatus.PERMISSION_REQUIRED)
     val primaryLabel = when {
-        status == McpConnectionStatus.CONNECTING || oauthInProgress -> R.string.remote_service_connecting
+        status == McpConnectionStatus.CONNECTING || authorizationBusy -> R.string.remote_service_connecting
         isGitHub -> R.string.github_device_connect
         service.authMode == RemoteServiceAuthMode.PAT && !isGitHub && (server == null || !repository.hasBearerToken(server.id) || reauthStatus) ->
             if (server == null) R.string.remote_service_connect else R.string.remote_service_update_token
@@ -236,8 +220,15 @@ private fun RemoteServiceCard(
             else -> server?.let { connections.connect(it.id) }
         }
     }
-    val detailError = listOfNotNull(state?.message?.takeIf { it.isNotBlank() && status != McpConnectionStatus.READY },
-        patError, githubErrorResource?.let(context::getString)).joinToString(" · ").ifBlank { null }
+    val detailError = listOfNotNull(state?.message?.takeIf { it.isNotBlank() && status in setOf(McpConnectionStatus.ERROR, McpConnectionStatus.AUTH_REQUIRED, McpConnectionStatus.REAUTH_REQUIRED, McpConnectionStatus.PERMISSION_REQUIRED) },
+        patError, githubErrorResource?.let(context::getString), githubState.error?.let { error -> context.getString(when (error) {
+            GitHubDeviceFlowError.EXPIRED -> R.string.github_device_error_expired
+            GitHubDeviceFlowError.DENIED -> R.string.github_device_error_denied
+            GitHubDeviceFlowError.DISABLED -> R.string.github_device_error_disabled
+            GitHubDeviceFlowError.INVALID_CLIENT -> R.string.github_device_error_client
+            GitHubDeviceFlowError.CANCELLED -> R.string.github_device_error_cancelled
+            else -> R.string.github_device_error_generic
+        }) }).joinToString(" · ").ifBlank { null }
     ConnectorDetailScaffold(
         title = stringResource(service.nameResourceId),
         subtitle = stringResource(statusLabel(status)),
@@ -246,10 +237,10 @@ private fun RemoteServiceCard(
         account = server?.alias?.takeIf { status == McpConnectionStatus.READY },
         summary = stringResource(R.string.connector_detail_connect_summary),
         primaryActionLabel = stringResource(primaryLabel),
-        primaryActionEnabled = !oauthInProgress && status != McpConnectionStatus.CONNECTING,
+        primaryActionEnabled = !authorizationBusy && status != McpConnectionStatus.CONNECTING,
         onPrimaryAction = ::connectPrimary,
         disconnectLabel = stringResource(R.string.remote_service_disconnect),
-        disconnectExplanation = stringResource(R.string.remote_service_disconnect_body),
+        disconnectExplanation = stringResource(if (isGitHub) R.string.github_disconnect_local_body else R.string.remote_service_disconnect_body),
         error = detailError,
         onDisconnect = {
             server?.let { config -> RemoteServiceDisconnectExecutor.execute {
@@ -304,7 +295,37 @@ private fun RemoteServiceCard(
         advanced = {
             if (isGitHub) Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(stringResource(R.string.github_device_private_repos), modifier = Modifier.weight(1f), fontSize = 13.sp)
-                Switch(checked = githubRepoScope, onCheckedChange = { githubRepoScope = it }, enabled = !oauthInProgress)
+                Switch(checked = githubRepoScope, onCheckedChange = { githubRepoScope = it }, enabled = !authorizationBusy)
+            }
+            if (isGitHub) {
+                Text(stringResource(R.string.github_capability_groups))
+                GitHubOperationPolicy.supportedToolsets.forEach { group ->
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(stringResource(when(group) {
+                            "context" -> R.string.github_group_context
+                            "repos" -> R.string.github_group_repos
+                            "issues" -> R.string.github_group_issues
+                            "pull_requests" -> R.string.github_group_pulls
+                            "discussions" -> R.string.github_group_discussions
+                            else -> R.string.github_group_actions
+                        }), Modifier.weight(1f))
+                        Switch(checked = group in githubToolsets, enabled = group != "context" && !authorizationBusy,
+                            onCheckedChange = { enabled ->
+                                githubToolsets = if(enabled) githubToolsets + group else githubToolsets - group
+                                server?.let { current ->
+                                    repository.upsert(current.copy(githubToolsets = githubToolsets))
+                                    if (status == McpConnectionStatus.READY) connections.connect(current.id)
+                                }
+                            })
+                    }
+                }
+                Text(stringResource(R.string.github_write_review_note))
+                if (server?.authMode == McpAuthMode.OAUTH) {
+                    val scopes = runCatching { oauthManager.githubGrantedScopes(server).sorted().joinToString(", ") }.getOrDefault("")
+                    if (scopes.isNotBlank()) Text(stringResource(R.string.github_granted_scopes, scopes))
+                }
+                TextButton(onClick = { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW,
+                    Uri.parse("https://github.com/settings/applications"))) } }) { Text(stringResource(R.string.github_manage_grants)) }
             }
             if (service.authMode == RemoteServiceAuthMode.PAT) {
                 Text(stringResource(service.patInstructionsResourceId), fontSize = 13.sp, lineHeight = 19.sp,
@@ -349,7 +370,7 @@ private fun RemoteServiceCard(
                     transport = service.transport,
                     authMode = McpAuthMode.BEARER,
                     enabled = true,
-                    catalogServiceId = service.id,
+                    catalogServiceId = service.id, githubToolsets = githubToolsets,
                 )
                 runCatching {
                     if (config.authMode == McpAuthMode.OAUTH) oauthManager.clear(config.id)
@@ -366,13 +387,10 @@ private fun RemoteServiceCard(
         dismissButton = { TextButton(onClick = { patDialog = false; pat = "" }) { Text(stringResource(R.string.connector_cancel)) } },
     )
 
-    val deviceCode = githubDeviceCode
-    if (githubDeviceDialog && deviceCode != null) AlertDialog(
+    val deviceCode = githubState.code
+    if (deviceCode != null) AlertDialog(
         onDismissRequest = {
-            githubDeviceAttempt?.close()
-            githubDeviceAttempt = null
-            githubDeviceDialog = false
-            githubDeviceCode = null
+            githubFlow.cancel()
         },
         title = { Text(stringResource(R.string.github_device_dialog_title)) },
         text = { ScrollableDialogContent {
@@ -396,10 +414,7 @@ private fun RemoteServiceCard(
                 .onFailure { githubErrorResource = R.string.github_device_error_generic }
         }) { Text(stringResource(R.string.github_device_open_browser)) } },
         dismissButton = { TextButton(onClick = {
-            githubDeviceAttempt?.close()
-            githubDeviceAttempt = null
-            githubDeviceDialog = false
-            githubDeviceCode = null
+            githubFlow.cancel()
         }) { Text(stringResource(R.string.connector_cancel)) } },
     )
 }
@@ -512,7 +527,7 @@ private fun RemoteMcpToolRow(
                 if (!tool.enabled) repository.updateToolEnabled(server.id, tool.wireName, true)
             }
         })
-        if (!McpToolSecurity.isDestructive(tool.wireName, tool.annotations)) add(ConnectorPolicyChoice(R.string.remote_service_policy_allow) {
+        if (service.id != "github" && !McpToolSecurity.isDestructive(tool.wireName, tool.annotations)) add(ConnectorPolicyChoice(R.string.remote_service_policy_allow) {
             runCatching {
                 connections.writeApproval.setPolicy(definition, AutonomyPolicy.ALLOW); policy = AutonomyPolicy.ALLOW
                 if (!tool.enabled) repository.updateToolEnabled(server.id, tool.wireName, true)

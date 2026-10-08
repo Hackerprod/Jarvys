@@ -43,6 +43,8 @@ data class McpServerConfig(
     val toolSelectionMode: McpToolSelectionMode = McpToolSelectionMode.DEFAULT_ALL,
     val catalogServiceId: String? = null,
     val initialToolPolicy: McpInitialToolPolicy = McpInitialToolPolicy.ASK,
+    val githubToolsets: Set<String> = com.jarvys.agent.connectors.GitHubOperationPolicy.defaultToolsets,
+    val githubToolPreferences: Map<String, String> = emptyMap(),
 )
 
 data class McpToolConfig(
@@ -69,7 +71,7 @@ data class McpConnectionSnapshot(
 enum class McpConnectionStatus { DISCONNECTED, CONNECTING, READY, ERROR, AUTH_REQUIRED, REAUTH_REQUIRED, PERMISSION_REQUIRED }
 
 class McpReauthRequiredException(message: String) : IllegalStateException(message)
-class McpPermissionRequiredException(message: String) : IllegalStateException(message)
+class McpPermissionRequiredException(message: String, val requiredScopes: Set<String> = emptySet()) : IllegalStateException(message)
 
 data class McpToolDefinition(
     val serverId: String,

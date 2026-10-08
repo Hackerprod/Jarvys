@@ -44,10 +44,7 @@ object RemoteServiceCatalog {
             patInstructionsResourceId = R.string.remote_service_pat_instructions,
             patCreationUrl = "https://github.com/settings/personal-access-tokens/new",
             scopesNoteResourceId = R.string.remote_service_pat_scopes,
-            verifiedReadToolNames = setOf(
-                "search_repositories", "search_code", "get_file_contents", "get_commit", "list_commits",
-                "issue_read", "search_issues", "list_issues", "pull_request_read", "list_pull_requests",
-            ),
+            verifiedReadToolNames = GitHubOperationPolicy.readNames,
             risk = RemoteServiceRisk.HIGH,
             usageNoteResourceId = R.string.remote_service_github_usage_note,
             notConnectedNoteResourceId = R.string.remote_service_not_connected_note,

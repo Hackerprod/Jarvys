@@ -167,10 +167,14 @@ Referencias: [AuthorizationClient](https://developer.android.com/identity/author
 
 ### 5. UX20: autenticación y capacidades de GitHub
 
+Estado: implementación activa para preparación v39. Identificada una carrera de propiedad del intento de inicio de sesión: una recomposición podía cancelar el intento nuevo y ocultar el resultado. Implementados controles de ciclo de vida y regresiones, metadatos de autorización completos, grupos de herramientas y operaciones nativas acotadas para Discussions y commits con SHA esperado. Primer checkpoint: 68 pruebas dirigidas aprobadas, incluida la pantalla Compose real con cancelación y callbacks tardíos. La revisión independiente ha corregido reintentos ambiguos y cambios de cuenta/conexión. Se amplían ahora las regresiones de integración y transporte y todavía falta la validación agregada; no se ha validado una cuenta real ni concedido nuevos permisos.
+
 - Diagnosticar el inicio de sesión y contrastar el flujo con documentación oficial y los requisitos reales de configuración.
 - Preparar un conector robusto para trabajar con pull requests, commits, Discussions e issues, con herramientas y errores claros para el agente.
 - Respetar repositorio, cuenta y permisos mínimos; separar lectura y acciones de escritura.
 - Implementar estas capacidades no autoriza por sí mismo publicaciones, comentarios, commits, fusiones ni otros cambios externos: cada acción debe respetar la autorización correspondiente.
+
+Diseño y límites de la implementación: `app/GITHUB_CONNECTOR.md`.
 
 ### 6. UX21: alineación de permisos en conectores
 
@@ -199,8 +203,10 @@ Estado: pendiente; se abordará después de UX22 sin alterar la validación de l
 
 ### 9. UX25: prompt de producción y harness de Coding
 
-Estado: investigación prioritaria en curso; implementación después de UX24, salvo repriorización explícita.
+Estado: investigación y propuesta original preparadas; implementación después de UX24, salvo repriorización explícita.
 
+- La auditoría detectó que Coding integrado no declara ejecución aunque el backend Full existe para perfiles personalizados. Alinear declaración y runtime bajo aprobación, sin activar permisos automáticamente.
+- Preparadas 18 pruebas de aceptación para integrar el prompt, ejecución y recuperación.
 - Redactar un prompt original y completo para Coding, contrastando referencias públicas con el comportamiento real del harness de Jarvys.
 - Auditar herramientas disponibles, lectura/escritura, ejecución, planificación, verificación, recuperación, contexto y entrega. No prometer capacidades que el runtime no expone.
 - Convertir el contrato en pruebas de comportamiento del agente y del harness, incluidas interrupciones, fallos, límites y continuidad; no limitar la tarea a cambiar un texto.
@@ -208,8 +214,9 @@ Estado: investigación prioritaria en curso; implementación después de UX24, s
 
 ### 10. UX26: contrato del agente principal
 
-Estado: investigación prioritaria en curso; implementación después de UX25, salvo repriorización explícita.
+Estado: investigación y contrato original preparados; implementación después de UX25, salvo repriorización explícita.
 
+- Preparadas 24 pruebas de aceptación; corregir la entrega de resultados de delegación, el canal de progreso natural y la incorporación de indicaciones durante una ejecución activa.
 - Contrastar referencias oficiales de OpenClaw y el runtime actual para definir un contrato original de comunicación, uso de herramientas, delegación y gestión de contexto.
 - Alinear prompt y capacidades reales: decisiones, seguimiento, límites de autorización, resultados verificables y continuidad entre turnos.
 - Probar el comportamiento real en conversaciones y herramientas, incluidos fallos y recuperación; conservar privacidad y separación de datos no confiables.

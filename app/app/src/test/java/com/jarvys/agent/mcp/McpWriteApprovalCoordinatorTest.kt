@@ -40,7 +40,7 @@ class McpWriteApprovalCoordinatorTest {
         modelName = "mcp_github_$name",
         description = "remote description",
         inputSchema = JSONObject(),
-        catalogServiceId = "github",
+        catalogServiceId = null, // These cases exercise generic MCP policy; GitHub has repository-bound tests.
         annotations = McpToolAnnotations(readOnlyHint = false, destructiveHint = destructive, title = "Create item"),
         access = McpToolAccess.WRITE,
     )

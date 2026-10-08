@@ -27,14 +27,16 @@ object McpToolSecurity {
                 McpToolAccess.READ -> {
                     // Newly discovered tools remain opt-in, including safe reads. Reconnects preserve
                     // only the user's prior selection; newly added upstream capabilities stay off.
-                    val wanted = old?.enabled == true
+                    val wanted = old?.enabled ?: (config.catalogServiceId == "github" && config.githubToolPreferences[remote.wireName] == "READ:true")
                     val selected = wanted && selectedReadTools < MAX_DEFAULT_READ_TOOLS_PER_SERVER
                     if (selected) selectedReadTools++
                     selected
                 }
                 // Old configs had no trusted annotation record. Their previously default-enabled writes
                 // are disabled once on upgrade; a later explicit per-tool opt-in is persisted.
-                McpToolAccess.WRITE -> old?.annotations != null && oldAccess == McpToolAccess.WRITE && old.enabled
+                McpToolAccess.WRITE -> if (old == null && config.catalogServiceId == "github") {
+                    remote.annotations != null && config.githubToolPreferences[remote.wireName] == "WRITE:true"
+                } else old?.annotations != null && oldAccess == McpToolAccess.WRITE && old.enabled
             }
             remote.copy(modelName = McpServerToolRegistry.namespace(config, remote.wireName), enabled = enabled)
         }

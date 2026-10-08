@@ -1330,4 +1330,17 @@ Se desconoce cómo terminaron. No se repiten automáticamente. Revisa los cambio
     <string name="chat_download_open">Abrir</string>
     <string name="chat_file_preview_unavailable">Vista previa no disponible. Descarga o comparte el archivo original.</string>
     <string name="chat_download_open_failed_title">No se pudo abrir el archivo</string>
+    <string name="github_device_error_client">GitHub rechazó el ID de cliente de esta app. El propietario debe revisar la configuración de la OAuth App.</string>
+    <string name="github_device_error_cancelled">Se canceló la autorización de GitHub. Puedes iniciarla de nuevo.</string>
+    <string name="github_disconnect_local_body">¿Desconectar y eliminar las credenciales de GitHub de este dispositivo? Esto no revoca la autorización en GitHub. Revisa las OAuth Apps autorizadas o los tokens personales en los ajustes de GitHub para revocarla.</string>
+    <string name="github_capability_groups">Grupos de capacidades (las herramientas nuevas quedan desactivadas)</string>
+    <string name="github_group_context">Contexto de la cuenta</string>
+    <string name="github_group_repos">Repositorios y commits</string>
+    <string name="github_group_issues">Issues</string>
+    <string name="github_group_pulls">Pull requests y revisiones</string>
+    <string name="github_group_discussions">Discussions</string>
+    <string name="github_group_actions">Actions y comprobaciones</string>
+    <string name="github_write_review_note">Cada escritura de GitHub se revisa con su repositorio, método y cambios concretos. Elegir capacidades no concede permisos a la cuenta.</string>
+    <string name="github_granted_scopes">Permisos OAuth concedidos: %1$s</string>
+    <string name="github_manage_grants">Revisar autorizaciones en GitHub</string>
 </resources>

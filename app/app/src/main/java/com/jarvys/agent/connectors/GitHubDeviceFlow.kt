@@ -28,7 +28,7 @@ data class GitHubOAuthTokens(
     val scopes: Set<String>,
 )
 
-data class GitHubOAuthResponse(val status: Int, val body: String)
+data class GitHubOAuthResponse(val status: Int, val body: String, val retryAfterSeconds: Long? = null)
 
 fun interface GitHubOAuthTransport {
     fun post(url: String, form: Map<String, String>): GitHubOAuthResponse
@@ -57,10 +57,10 @@ object GitHubDeviceFlowProtocol {
     }
 
     fun parseDeviceCode(status: Int, body: String): GitHubDeviceCode {
-        require(status in 200..299) { "GitHub device authorization request failed (HTTP $status)" }
         require(body.length <= MAX_RESPONSE_CHARS) { "GitHub device authorization response was too large" }
-        val json = JSONObject(body)
+        val json = runCatching { JSONObject(body) }.getOrElse { throw GitHubDeviceFlowException("http_$status") }
         json.optString("error").takeIf(String::isNotBlank)?.let { throw GitHubDeviceFlowException(it) }
+        if (status !in 200..299) throw GitHubDeviceFlowException("http_$status")
         val deviceCode = json.optString("device_code")
         val userCode = json.optString("user_code")
         val verification = json.optString("verification_uri").ifBlank { json.optString("verification_url") }
@@ -71,7 +71,8 @@ object GitHubDeviceFlowProtocol {
             "GitHub returned an unexpected device verification URL"
         }
         return GitHubDeviceCode(deviceCode, userCode, VERIFICATION_URI,
-            json.optLong("expires_in", 0).coerceIn(1, 3600), json.optLong("interval", 5).coerceIn(1, 120))
+            json.optLong("expires_in", 0).also { require(it in 1..3600) { "Invalid GitHub code expiry" } },
+            json.optLong("interval", 5).also { require(it in 1..120) { "Invalid GitHub polling interval" } })
     }
 
     fun deviceCode(transport: GitHubOAuthTransport, clientId: String = CLIENT_ID,
@@ -117,7 +118,7 @@ object GitHubDeviceFlowProtocol {
                 when (error) {
                     "authorization_pending" -> Unit
                     "slow_down" -> interval = max(interval + SLOW_DOWN_INCREMENT_SECONDS,
-                        json.optLong("interval", interval + SLOW_DOWN_INCREMENT_SECONDS).coerceAtMost(MAX_INTERVAL_SECONDS))
+                        json.optLong("interval", interval + SLOW_DOWN_INCREMENT_SECONDS)).coerceAtMost(MAX_INTERVAL_SECONDS)
                     "expired_token", "token_expired" -> throw GitHubDeviceFlowException("expired_token")
                     "access_denied" -> throw GitHubDeviceFlowException("access_denied")
                     "device_flow_disabled" -> throw GitHubDeviceFlowException("device_flow_disabled")
@@ -133,11 +134,14 @@ object GitHubDeviceFlowProtocol {
 
     fun parseTokens(json: JSONObject, nowMillis: Long): GitHubOAuthTokens {
         val access = json.optString("access_token")
-        require(access.length in 1..4096) { "GitHub did not return a usable access token" }
+        require(access.length in 1..4096 && access.none(Char::isISOControl)) { "GitHub did not return a usable access token" }
         val expires = json.optLong("expires_in", 0).coerceIn(0, 31_536_000)
         val refreshExpiry = json.optLong("refresh_token_expires_in", 0).coerceIn(0, 31_536_000)
         val scopes = json.optString("scope").split(',', ' ').filter(String::isNotBlank).toSet()
-        return GitHubOAuthTokens(access, json.optString("refresh_token").takeIf(String::isNotBlank),
+        val refresh = json.optString("refresh_token").takeIf(String::isNotBlank)
+        require(refresh == null || refresh.length <= 4096 && refresh.none(Char::isISOControl)) { "Invalid GitHub refresh token" }
+        require(!json.has("token_type") || json.optString("token_type").equals("bearer", true)) { "Unsupported GitHub token type" }
+        return GitHubOAuthTokens(access, refresh,
             if (expires == 0L) 0L else nowMillis + expires * 1_000,
             if (refreshExpiry == 0L) 0L else nowMillis + refreshExpiry * 1_000, scopes)
     }
@@ -148,6 +152,7 @@ object GitHubDeviceFlowProtocol {
         "expired_token", "token_expired" -> GitHubDeviceFlowError.EXPIRED
         "access_denied" -> GitHubDeviceFlowError.DENIED
         "device_flow_disabled" -> GitHubDeviceFlowError.DISABLED
+        "incorrect_client_credentials", "invalid_client" -> GitHubDeviceFlowError.INVALID_CLIENT
         "cancelled" -> GitHubDeviceFlowError.CANCELLED
         else -> GitHubDeviceFlowError.NETWORK
     }
@@ -157,7 +162,7 @@ object GitHubDeviceFlowProtocol {
     private const val MAX_INTERVAL_SECONDS = 600L
 }
 
-enum class GitHubDeviceFlowError { PENDING, SLOW_DOWN, EXPIRED, DENIED, DISABLED, CANCELLED, NETWORK }
+enum class GitHubDeviceFlowError { PENDING, SLOW_DOWN, EXPIRED, DENIED, DISABLED, CANCELLED, INVALID_CLIENT, NETWORK }
 
 class GitHubDeviceFlowException(val code: String) : IllegalStateException("GitHub Device Flow failed: ${code.take(80)}")
 
@@ -165,8 +170,9 @@ class GitHubDeviceFlowException(val code: String) : IllegalStateException("GitHu
 class GitHubDeviceFlowAttempt private constructor(
     private val cancelled: AtomicBoolean,
     private val worker: AtomicReference<Thread?>,
+    private val transport: GitHubUrlConnectionTransport,
 ) : AutoCloseable {
-    override fun close() { cancelled.set(true); worker.get()?.interrupt() }
+    override fun close() { cancelled.set(true); transport.close(); worker.get()?.interrupt() }
 
     companion object {
         private val executor = Executors.newCachedThreadPool { Thread(it, "JarvysGitHubDeviceOAuth").apply { isDaemon = true } }
@@ -179,29 +185,37 @@ class GitHubDeviceFlowAttempt private constructor(
         ): GitHubDeviceFlowAttempt {
             val cancelled = AtomicBoolean(false)
             val worker = AtomicReference<Thread?>()
+            val transport = GitHubUrlConnectionTransport()
             executor.execute {
                 worker.set(Thread.currentThread())
                 val result = runCatching {
-                    val code = GitHubDeviceFlowProtocol.deviceCode(GitHubUrlConnectionTransport,
+                    val code = GitHubDeviceFlowProtocol.deviceCode(transport,
                         includePrivateRepositories = includePrivateRepositories)
                     if (cancelled.get()) throw GitHubDeviceFlowException("cancelled")
                     main.post { if (!cancelled.get()) onDeviceCode(code) }
-                    GitHubDeviceFlowProtocol.pollForToken(GitHubUrlConnectionTransport, code,
+                    GitHubDeviceFlowProtocol.pollForToken(transport, code,
                         waitMillis = { Thread.sleep(it) }, isCancelled = cancelled::get)
                 }
                 val finalResult = if (cancelled.get()) Result.failure(GitHubDeviceFlowException("cancelled")) else result
-                main.post { onComplete(finalResult) }
+                worker.set(null)
+                main.post { onComplete(if (cancelled.get()) Result.failure(GitHubDeviceFlowException("cancelled")) else finalResult) }
             }
-            return GitHubDeviceFlowAttempt(cancelled, worker)
+            return GitHubDeviceFlowAttempt(cancelled, worker, transport)
         }
     }
 }
 
-private object GitHubUrlConnectionTransport : GitHubOAuthTransport {
+private class GitHubUrlConnectionTransport : GitHubOAuthTransport, AutoCloseable {
+    private val active = AtomicReference<HttpURLConnection?>()
+    private val cancelled = AtomicBoolean(false)
+    override fun close() { cancelled.set(true); active.getAndSet(null)?.disconnect() }
     override fun post(url: String, form: Map<String, String>): GitHubOAuthResponse {
         require(url == GitHubDeviceFlowProtocol.DEVICE_CODE_ENDPOINT || url == GitHubDeviceFlowProtocol.TOKEN_ENDPOINT)
+        if (cancelled.get()) throw GitHubDeviceFlowException("cancelled")
         val connection = URL(url).openConnection() as HttpURLConnection
+        active.set(connection)
         try {
+            if (cancelled.get()) throw GitHubDeviceFlowException("cancelled")
             connection.requestMethod = "POST"
             connection.connectTimeout = 10_000
             connection.readTimeout = 15_000
@@ -215,9 +229,19 @@ private object GitHubUrlConnectionTransport : GitHubOAuthTransport {
             connection.outputStream.use { it.write(body.toByteArray(StandardCharsets.UTF_8)) }
             val status = connection.responseCode
             val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-            val response = stream?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() }.orEmpty()
-            require(response.length <= GitHubDeviceFlowProtocol.MAX_RESPONSE_CHARS)
-            return GitHubOAuthResponse(status, response)
-        } finally { connection.disconnect() }
+            val response = stream?.use { input ->
+                val output = java.io.ByteArrayOutputStream()
+                val buffer = ByteArray(4096)
+                while (true) {
+                    if (cancelled.get()) throw GitHubDeviceFlowException("cancelled")
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    require(output.size() + count <= GitHubDeviceFlowProtocol.MAX_RESPONSE_CHARS) { "GitHub OAuth response exceeded its byte limit" }
+                    output.write(buffer, 0, count)
+                }
+                output.toString("UTF-8")
+            }.orEmpty()
+            return GitHubOAuthResponse(status, response, connection.getHeaderField("Retry-After")?.toLongOrNull())
+        } finally { active.compareAndSet(connection, null); connection.disconnect() }
     }
 }
