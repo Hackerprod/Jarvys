@@ -424,6 +424,48 @@ public final class LocalRunStore {
         appendMessageMarker(sessionId, "assistant_translation_hidden", messageId);
     }
 
+    /** Commits ownership before the runtime reports a successful native attachment. Repeats are idempotent. */
+    public synchronized void appendDeliveredFile(String sessionId, ChatAttachment artifact) {
+        new DeliveredArtifactStore(root.getParentFile()).resolve(sessionId, artifact);
+        synchronized (SESSION_TITLE_LOCK) {
+            for (JSONObject row : readConversationRows(sessionId)) {
+                if ("delivered_file".equals(row.optString("type"))) {
+                    ChatAttachment existing = ChatAttachment.fromJson(row.optJSONObject("artifact"));
+                    if (existing != null && existing.id.equals(artifact.id)) {
+                        if (!existing.equals(artifact)) throw new IllegalStateException("Delivered artifact metadata differs");
+                        return;
+                    }
+                }
+            }
+            try {
+                JSONObject row = new JSONObject().put("type", "delivered_file").put("artifact", artifact.toJson())
+                        .put("timestamp", System.currentTimeMillis() / 1000.0);
+                appendSessionRowLocked(conversationFile(sessionId), row);
+            } catch (Exception failure) { throw new IllegalStateException("Could not persist delivered file", failure); }
+        }
+    }
+
+    public synchronized ChatAttachment findChatFile(String sessionId, String kind, String id) {
+        if (conversationMetadata.read(sessionId).deleted) return null;
+        for (JSONObject row : readConversationRows(sessionId)) {
+            if ("delivered".equals(kind) && "delivered_file".equals(row.optString("type"))) {
+                ChatAttachment attachment = ChatAttachment.fromJson(row.optJSONObject("artifact"));
+                if (attachment != null && attachment.id.equals(id)) return attachment;
+            } else if ("attachment".equals(kind)) {
+                for (ChatAttachment attachment : attachmentsForRow(sessionId, row)) if (attachment.id.equals(id)) return attachment;
+            }
+        }
+        return null;
+    }
+
+    public synchronized boolean ownsGeneratedFile(String sessionId, String path) {
+        if (conversationMetadata.read(sessionId).deleted) return false;
+        for (JSONObject row : readConversationRows(sessionId))
+            if ("generated_image".equals(row.optString("type")) && "COMPLETED".equals(row.optString("status"))
+                    && path.equals(row.optString("imagePath"))) return true;
+        return false;
+    }
+
     /** Persists an image reference and prompt only; raw image bytes stay in GeneratedImageStore. */
     public synchronized void appendGeneratedImageEvent(String sessionId, String relativePath,
                                                         String prompt, String revisedPrompt,
@@ -482,6 +524,8 @@ public final class LocalRunStore {
             } catch (IOException | RuntimeException failure) { complete = false; }
             try { complete &= new GeneratedImageStore(root.getParentFile()).deleteSession(sessionId); }
             catch (RuntimeException failure) { complete = false; }
+            try { complete &= new DeliveredArtifactStore(root.getParentFile()).deleteSession(sessionId); }
+            catch (RuntimeException failure) { complete = false; }
             try { complete &= new AttachmentStore(root.getParentFile()).deleteSession(sessionId); }
             catch (RuntimeException failure) { complete = false; }
             try {
@@ -524,7 +568,7 @@ public final class LocalRunStore {
 
     public synchronized boolean conversationHasPrivateImagesOrAttachments(String sessionId) {
         for (JSONObject row : readConversationRows(sessionId)) {
-            if (!attachmentsForRow(sessionId, row).isEmpty() || "generated_image".equals(row.optString("type"))) return true;
+            if (!attachmentsForRow(sessionId, row).isEmpty() || "generated_image".equals(row.optString("type")) || "delivered_file".equals(row.optString("type"))) return true;
         }
         return false;
     }
@@ -660,6 +704,43 @@ public final class LocalRunStore {
             row.put("timestamp", System.currentTimeMillis() / 1000.0);
         } catch (Exception error) { throw new IllegalStateException(error); }
         synchronized (SESSION_TITLE_LOCK) { appendSessionRowLocked(conversationFile(sessionId), row); }
+    }
+
+    /** Persist terminal presentation before publishing it to the live timeline; never used as reflection input. */
+    public synchronized void appendConversationToolPresentation(String sessionId, String userMessageId,
+            String displayName, String stage, String callId, String detail, String previewId, String auditDetail) {
+        if (!("tool_result".equals(stage) || "tool_error".equals(stage)))
+            throw new IllegalArgumentException("A terminal tool presentation is required");
+        if (callId == null || callId.isEmpty()) throw new IllegalArgumentException("Tool presentation needs its call ID");
+        try {
+            MainChatTranscriptStore retained = new MainChatTranscriptStore(filesDirectory(), sessionId, this);
+            JSONObject row = new JSONObject().put("type", "tool_presentation").put("schemaVersion", 1)
+                    .put("userMessageId", userMessageId == null ? "" : userMessageId)
+                    .put("toolName", displayName == null ? "tool" : displayName).put("stage", stage)
+                    .put("callId", callId).put("detail", retained.retain(detail == null ? "" : detail))
+                    .put("auditDetail", MainChatTranscriptStore.shortText(
+                            CrewCheckpointStore.sanitizeText(auditDetail == null ? "" : auditDetail), 4_000))
+                    .put("timestamp", System.currentTimeMillis() / 1000.0);
+            if (previewId != null && previewId.equals(WorkspaceStore.projectIdForSession(sessionId))) row.put("previewId", previewId);
+            synchronized (SESSION_TITLE_LOCK) { appendSessionRowLocked(conversationFile(sessionId), row); }
+        } catch (Exception failure) { throw new IllegalStateException("Could not persist tool details and preview", failure); }
+    }
+
+    /** Only reconnect a preview to this chat's canonical existing workspace. Never create a file. */
+    private String verifiedPreview(String sessionId, String recordedId) {
+        String expected = WorkspaceStore.projectIdForSession(sessionId);
+        if (recordedId == null || !expected.equals(recordedId)) return null;
+        try {
+            File workspaces = new File(filesDirectory().getCanonicalFile(), "jarvys/workspaces");
+            File project = new File(workspaces, expected);
+            if (!project.isDirectory() || !project.getCanonicalFile().equals(project.getAbsoluteFile())) return null;
+            File index = new WorkspaceStore(workspaces, expected).resolvePreviewPath("index.html");
+            return index.isFile() && index.canRead() ? expected : null;
+        } catch (Exception unsafeOrMissing) { return null; }
+    }
+
+    private static boolean isPreviewTool(String name) {
+        return "preview_workspace".equals(name) || "Preview Workspace".equalsIgnoreCase(name);
     }
 
     /** Persists only a trust marker; connector/MCP/workspace result bodies never enter reflection storage. */
@@ -820,11 +901,19 @@ public final class LocalRunStore {
             if (!summary.isEmpty()) context.add(ConversationTurn.compactionSummary(summary,
                     latestCompaction.optInt("summarizedMessages", firstKept)));
         }
-        for (int index = firstKept; index < messages.size(); index++) {
-            JSONObject row = messages.get(index);
-            if ("assistant".equals(row.optString("role"))
-                    && hidden.contains(row.optString("messageId", ""))) continue;
-            context.add(ConversationTurn.messageWithAttachments(row.optString("role"), row.optString("content", ""), index, attachmentsForRow(sessionId, row)));
+        Map<Integer, List<ConversationTurn>> toolGroups = MainChatTranscriptStore.restore(
+                rows, firstKept, latestCompaction == null ? -1 : latestCompactionRow);
+        int messageIndex = 0;
+        for (int rowIndex = 0; rowIndex < rows.size(); rowIndex++) {
+            JSONObject row = rows.get(rowIndex);
+            String role = row.optString("role");
+            if (("user".equals(role) || "assistant".equals(role)) && row.has("content")) {
+                int index = messageIndex++;
+                if (index < firstKept || ("assistant".equals(role) && hidden.contains(row.optString("messageId", "")))) continue;
+                context.add(ConversationTurn.messageWithAttachments(role, row.optString("content", ""), index, attachmentsForRow(sessionId, row)));
+            } else if (toolGroups.containsKey(rowIndex)) {
+                context.addAll(toolGroups.get(rowIndex));
+            }
         }
         return context;
     }
@@ -844,6 +933,23 @@ public final class LocalRunStore {
             if ("user".equals(row.optString("role"))) return row.optString("messageId", "");
         }
         return "";
+    }
+
+    File filesDirectory() { return root.getParentFile().getParentFile(); }
+
+    synchronized List<JSONObject> readModelTranscriptRows(String sessionId) {
+        List<JSONObject> modelRows = new ArrayList<>();
+        for (JSONObject row : readConversationRows(sessionId))
+            if (row.optString("type").startsWith("model_")) modelRows.add(row);
+        return modelRows;
+    }
+
+    synchronized void appendModelTranscriptRow(String sessionId, JSONObject row) {
+        String type = row.optString("type");
+        if (!("model_tool_calls".equals(type) || "model_tool_started".equals(type)
+                || "model_tool_result".equals(type) || "model_artifact".equals(type)) || row.has("role"))
+            throw new IllegalArgumentException("Invalid model transcript record");
+        synchronized (SESSION_TITLE_LOCK) { appendSessionRowLocked(conversationFile(sessionId), row); }
     }
 
     private List<JSONObject> readConversationRows(String sessionId) {
@@ -1203,6 +1309,24 @@ public final class LocalRunStore {
                 latestTranslation.put(row.optString("messageId", ""), rowIndex);
             }
         }
+        Map<String, JSONObject> presentations = new LinkedHashMap<>();
+        Map<String, JSONObject> reflectionTools = new LinkedHashMap<>();
+        Map<String, JSONObject> modelCalls = new LinkedHashMap<>();
+        Set<String> modelResults = new HashSet<>();
+        Set<String> startedModelCalls = new HashSet<>();
+        for (JSONObject row : rows) {
+            String type = row.optString("type");
+            if ("tool_presentation".equals(type)) presentations.put(row.optString("callId"), row);
+            else if ("reflection_tool".equals(type)) reflectionTools.put(row.optString("callId"), row);
+            else if ("model_tool_calls".equals(type)) {
+                JSONArray calls = row.optJSONArray("calls");
+                if (calls != null) for (int i = 0; i < calls.length(); i++) {
+                    JSONObject call = calls.optJSONObject(i);
+                    if (call != null) modelCalls.put(call.optString("id"), row);
+                }
+            } else if ("model_tool_result".equals(type)) modelResults.add(row.optString("callId"));
+            else if ("model_tool_started".equals(type)) startedModelCalls.add(row.optString("callId"));
+        }
         Map<String, String> reactions = MessageReactionTool.isOrdinaryChat(sessionId)
                 ? readMessageReactions(rows) : java.util.Collections.emptyMap();
         int messageIndex = 0;
@@ -1245,6 +1369,10 @@ public final class LocalRunStore {
                         .copyMetadata(messageId, row.optLong("durationMs", 0)).copyStage(
                             AgentRunUiEvent.assistantStageForOutcome(row.optString("status", ""))));
                 }
+            } else if ("delivered_file".equals(type)) {
+                ChatAttachment artifact = ChatAttachment.fromJson(row.optJSONObject("artifact"));
+                if (artifact != null) events.add(AgentRunUiEvent.deliveredFileEvent(id++, artifact,
+                        (long) (row.optDouble("timestamp", 0) * 1000)));
             } else if ("generated_image".equals(type)) {
                 events.add(AgentRunUiEvent.generatedImageEvent(id++,
                         row.has("imagePath") ? row.optString("imagePath", null) : null,
@@ -1252,17 +1380,48 @@ public final class LocalRunStore {
                         row.optString("mimeType", "image/png"), row.optString("size", ""),
                         row.optString("status", "FAILED"), row.optString("error", ""),
                         (long) (row.optDouble("timestamp", 0) * 1000)));
-            } else if ("reflection_tool".equals(type)) {
+            } else if ("model_tool_calls".equals(type)) {
                 String userMessageId = row.optString("userMessageId", "");
-                if (userMessageId.isEmpty()
-                        || rowIndex < latestInvalidatedToolTurnRow.getOrDefault(userMessageId, -1)) continue;
-                String stage = row.optString("stage", "tool_result");
+                if (userMessageId.isEmpty() || rowIndex < latestInvalidatedToolTurnRow.getOrDefault(userMessageId, -1)) continue;
+                JSONArray calls = row.optJSONArray("calls");
+                if (calls != null) for (int callIndex = 0; callIndex < calls.length(); callIndex++) {
+                    JSONObject call = calls.optJSONObject(callIndex);
+                    if (call == null) continue;
+                    String callId = call.optString("id");
+                    if (modelResults.contains(callId) || presentations.containsKey(callId) || reflectionTools.containsKey(callId)) continue;
+                    boolean started = startedModelCalls.contains(callId);
+                    String detail = started
+                            ? "Execution started, but no final result was durably recorded. The run may have been interrupted; effects may have occurred. Inspect current evidence before retrying."
+                            : "This tool intent was recorded but was never launched. It was not automatically replayed.";
+                    events.add(AgentRunUiEvent.toolEvent(id++, started ? "tool_interrupted" : "tool_not_started",
+                            CoreToolRegistry.humanizeToolName(call.optString("name", "tool")), detail, callId, null,
+                            (long) (row.optDouble("timestamp", 0) * 1000)));
+                }
+            } else if ("tool_presentation".equals(type) || "model_tool_result".equals(type) || "reflection_tool".equals(type)) {
+                String callId = row.optString("callId", "");
+                boolean presentation = "tool_presentation".equals(type);
+                boolean modelResult = "model_tool_result".equals(type);
+                if (presentation ? presentations.get(callId) != row
+                        : presentations.containsKey(callId) || (!modelResult && modelResults.contains(callId))) continue;
+                JSONObject sourceCall = modelCalls.get(callId);
+                String userMessageId = modelResult && sourceCall != null ? sourceCall.optString("userMessageId") : row.optString("userMessageId", "");
+                if (userMessageId.isEmpty() || rowIndex < latestInvalidatedToolTurnRow.getOrDefault(userMessageId, -1)) continue;
+                String detail = presentation ? row.optString("detail", "") : modelResult ? row.optString("output", "") : "";
+                String stage = modelResult ? (detail.startsWith("Tool error:") ? "tool_error" : "tool_result") : row.optString("stage", "tool_result");
                 if (!"tool_result".equals(stage) && !"tool_error".equals(stage)) continue;
                 String toolName = row.optString("toolName", "tool");
-                String callId = row.optString("callId", "");
-                events.add(AgentRunUiEvent.toolEvent(id++, stage, toolName, null,
-                        callId.isEmpty() ? null : callId, null,
-                        (long) (row.optDouble("timestamp", 0) * 1000)));
+                if (modelResult) toolName = reflectionTools.containsKey(callId)
+                        ? reflectionTools.get(callId).optString("toolName", toolName) : CoreToolRegistry.humanizeToolName(toolName);
+                String recordedPreview = presentation ? row.optString("previewId", "") : "";
+                boolean legacyPreview = recordedPreview.isEmpty() && "tool_result".equals(stage) && isPreviewTool(toolName);
+                String preview = verifiedPreview(sessionId, legacyPreview ? WorkspaceStore.projectIdForSession(sessionId) : recordedPreview);
+                if (legacyPreview && preview != null) detail += (detail.isEmpty() ? "" : "\n\n")
+                        + "Original preview details are unavailable. This opens the current verified index.html in this conversation's workspace.";
+                else if (!recordedPreview.isEmpty() && preview == null) detail += "\n\nThe recorded preview file is no longer available in this conversation's workspace.";
+                events.add(AgentRunUiEvent.toolEvent(id++, stage, toolName, detail.isEmpty() ? null : detail,
+                        callId.isEmpty() ? null : callId, preview,
+                        (long) (row.optDouble("timestamp", 0) * 1000))
+                        .copyToolPresentation(presentation ? row.optString("auditDetail", "") : null, legacyPreview && preview != null));
             } else if ("compaction".equals(type)) {
                 if (rowIndex < latestInvalidationRow) continue;
                 int count = row.optInt("summarizedMessages", 0);

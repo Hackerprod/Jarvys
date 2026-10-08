@@ -466,7 +466,7 @@ fun CrewMissionScreen(
             .verticalScroll(rememberScrollState()).testTag("crew-mission-header")) {
         CrewModePicker(crewMode, onCrewModeChange, modifier = Modifier.padding(horizontal = JarvysUiTokens.ScreenPadding))
         TextButton(onClick = { configuringCoding = true }, modifier = Modifier.fillMaxWidth().testTag("crew-configure-coding")) {
-            Text(stringResource(R.string.crew_profile_configure))
+            Text(stringResource(R.string.bots_runtime_details))
         }
         if (snapshot != null) Row(Modifier.fillMaxWidth().padding(horizontal = JarvysUiTokens.ScreenPadding, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {

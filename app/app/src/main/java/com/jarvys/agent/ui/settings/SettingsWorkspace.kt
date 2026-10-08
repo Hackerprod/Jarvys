@@ -79,6 +79,8 @@ fun SettingsWorkspace(
     onScheduledTasks: () -> Unit,
     onAccessibilitySettings: () -> Unit,
     onNavigate: (SettingsWorkspacePage) -> Unit,
+    archivedChatsAvailable: Boolean = false,
+    onArchivedChats: () -> Unit = {},
 ) {
     var languageChoiceOpen by remember { mutableStateOf(false) }
     var appearanceChoiceOpen by remember { mutableStateOf(false) }
@@ -95,6 +97,8 @@ fun SettingsWorkspace(
                 memoryUsedCharacters = memoryUsedCharacters,
                 scheduledTasksAvailable = scheduledTasksAvailable,
                 onScheduledTasks = onScheduledTasks,
+                archivedChatsAvailable = archivedChatsAvailable,
+                onArchivedChats = onArchivedChats,
                 onMemory = onMemory,
                 onAppearance = { appearanceChoiceOpen = true },
                 onLanguage = { languageChoiceOpen = true },
@@ -148,6 +152,8 @@ private fun SettingsIndex(
     memoryUsedCharacters: Int,
     scheduledTasksAvailable: Boolean,
     onScheduledTasks: () -> Unit,
+    archivedChatsAvailable: Boolean,
+    onArchivedChats: () -> Unit,
     onMemory: () -> Unit,
     onAppearance: () -> Unit,
     onLanguage: () -> Unit,
@@ -166,6 +172,11 @@ private fun SettingsIndex(
         if (scheduledTasksAvailable) {
             SettingsRule()
             TaskSettingsEntry(onScheduledTasks)
+        }
+        if (archivedChatsAvailable) {
+            SettingsRule()
+            SettingsIndexRow(LucideIcons.History, stringResource(R.string.drawer_archived_chats),
+                null, onArchivedChats, testTag = "settings-archived-chats-row")
         }
         SettingsRule()
         SettingsIndexRow(LucideIcons.SunMoon, stringResource(R.string.settings_color_mode),

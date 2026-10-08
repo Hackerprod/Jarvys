@@ -1,0 +1,142 @@
+{
+  "stage": "UX23",
+  "version_code": 34,
+  "version_name": "1.2.27-UX23",
+  "baseline": "P0 v33",
+  "baseline_regression": "Real long-press on formatted assistant text did not open selection before restoration.",
+  "restoration": "Two per-message body-only SelectionContainer scopes, matching v28 assistant response and translation structure.",
+  "focused_full": {
+    "tests": 39,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "new_pointer_tests": 14,
+  "covered": [
+    "Light/dark at font scales 1.0 and 1.5",
+    "Formatted assistant text, range handles, handle dragging, copy and select-all",
+    "Markdown blocks and fenced code within one message",
+    "Horizontal code scrolling and vertical long-answer scrolling",
+    "Translation text excludes its header, hide action and original message",
+    "User reaction, attachments, neighboring messages and proactive suggestions excluded",
+    "Ordinary link taps preserved; rendered link text included in select-all",
+    "Error and streaming response selection",
+    "Active message selection yields to composer focus; draft retained; 1px-drift send remains reachable",
+    "Injected IME insets lift composer without claiming physical keyboard validation"
+  ],
+  "known_existing_behavior": [
+    "Compose 1.9 long-press directly on a link label may both select it and trigger its link callback. Identical fresh-state behavior confirmed on the unchanged user-message wrapper. No gesture/library rewrite included."
+  ],
+  "host_limits": [
+    "Robolectric SDK 34 native rendering; not a physical Android phone",
+    "Toolbar presentation and magnifier replaced in tests; Foundation gesture recognition, range handles and clipboard callbacks are real",
+    "Activity-root captures exclude separate popup handles and toolbar",
+    "Development APKs are unsigned/debuggable and do not establish original-signature update compatibility."
+  ],
+  "aggregate_attempt_1": {
+    "Full": {
+      "tests": 1173,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 0
+    },
+    "Play": {
+      "tests": 1089,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "failure": "Existing task-list fixture clicked a newly inserted menu before the asynchronous IO-backed snapshot and lazy-list position were ready."
+  },
+  "test_fixture_stabilization": "Bounded synchronization with the new task menu and its first-row position; no task product changes or assertions removed.",
+  "task_fixture_focused": {
+    "Full": 5,
+    "Play": 5,
+    "failures": 0
+  },
+  "lint_attempt_1": {
+    "Full_errors": 46,
+    "Play_errors": 37,
+    "new_errors": 0,
+    "new_warnings": 0
+  },
+  "status": "Validated in host; no partial APK delivery",
+  "final_tests": {
+    "source_changed": [],
+    "flavors": {
+      "Full": {
+        "counts": {
+          "tests": 1173,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "stale_results": [],
+        "failures": []
+      },
+      "Play": {
+        "counts": {
+          "tests": 1089,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "stale_results": [],
+        "failures": []
+      }
+    }
+  },
+  "final_lint": {
+    "full": {
+      "counts": {
+        "Error": 46,
+        "Warning": 282,
+        "Hint": 4
+      },
+      "new_errors": 0,
+      "new_warnings": 0,
+      "fresh_report": true
+    },
+    "play": {
+      "counts": {
+        "Error": 37,
+        "Warning": 274,
+        "Hint": 4
+      },
+      "new_errors": 0,
+      "new_warnings": 0,
+      "fresh_report": true
+    }
+  },
+  "artifacts": {
+    "full": {
+      "path": "Jarvys-UX23-full-v34-unsigned.apk",
+      "sha256": "86e50fdb2c85e7ef696f7ab09dcde1282233ed9d82580ff1e746e02ad79b0031",
+      "bytes": 18970354,
+      "package": "com.jarvys.agent",
+      "version_code": 34,
+      "version_name": "1.2.27-UX23",
+      "label": "Jarvys",
+      "unsigned_verified": true,
+      "zip_crc_verified": true,
+      "alignment_verified": true,
+      "permissions_unchanged": true,
+      "debuggable": true
+    },
+    "play": {
+      "path": "Jarvys-UX23-play-v34-unsigned.apk",
+      "sha256": "3b4f56f039f498105fc6f27b538e726daf3787e691634ed16d9b1f3b6eec0a8e",
+      "bytes": 17624307,
+      "package": "com.jarvys.agent",
+      "version_code": 34,
+      "version_name": "1.2.27-UX23",
+      "label": "Jarvys",
+      "unsigned_verified": true,
+      "zip_crc_verified": true,
+      "alignment_verified": true,
+      "permissions_unchanged": true,
+      "debuggable": true
+    }
+  },
+  "visual_review": "Six native host captures independently reviewed: light/dark, normal/large type, selected text, focused composer and simulated IME insets. No visual blocker."
+}

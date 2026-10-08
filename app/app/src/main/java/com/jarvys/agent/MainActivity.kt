@@ -20,6 +20,12 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.core.content.FileProvider
 import com.jarvys.agent.ui.chat.PendingChatAttachment
+import com.jarvys.agent.ui.chat.ChatFileActions
+import com.jarvys.agent.ui.chat.ChatFileRequest
+import com.jarvys.agent.ui.chat.ChatFileTransfers
+import com.jarvys.agent.ui.chat.ChatFileTransferHost
+import com.jarvys.agent.ui.chat.LocalChatFileActions
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.AnimatedVisibility
@@ -205,6 +211,8 @@ import com.jarvys.agent.ui.JarvysOwnTheme
 import com.jarvys.agent.ui.chat.ConversationTimeline
 import com.jarvys.agent.ui.chat.ChatComposer
 import com.jarvys.agent.ui.chat.ConversationDrawer
+import com.jarvys.agent.ui.chat.ArchivedChatsScreen
+import com.jarvys.agent.ui.chat.ScheduledTasksPlaceholderScreen
 import com.jarvys.agent.ui.shell.JarvysRouteTopBar
 import com.jarvys.agent.ui.shell.JarvysShellFrame
 import com.jarvys.agent.ui.shell.ModelSelectorSheet
@@ -230,6 +238,8 @@ private object Routes {
     const val CHAT = AppNavigationBackPolicy.CHAT_ROOT
     const val SETTINGS = AppNavigationBackPolicy.SETTINGS
     const val SETTINGS_PREFERENCES = AppNavigationBackPolicy.SETTINGS_PREFERENCES
+    const val ARCHIVED_CHATS = AppNavigationBackPolicy.ARCHIVED_CHATS
+    const val SCHEDULED_TASKS = AppNavigationBackPolicy.SCHEDULED_TASKS
     const val PROVIDERS = AppNavigationBackPolicy.PROVIDERS
     const val PROVIDERS_OPENAI = AppNavigationBackPolicy.PROVIDERS_OPENAI
     const val PROVIDERS_OPENROUTER = AppNavigationBackPolicy.PROVIDERS_OPENROUTER
@@ -245,6 +255,7 @@ private object Routes {
     const val MEMORY = AppNavigationBackPolicy.MEMORY
     const val TASKS = AppNavigationBackPolicy.TASKS
     const val TASK_DETAIL = AppNavigationBackPolicy.TASK_DETAIL
+    const val BOTS = AppNavigationBackPolicy.BOTS
     const val CREW_EMPTY = AppNavigationBackPolicy.CREW_EMPTY
     const val CREW = AppNavigationBackPolicy.CREW
     const val CREW_BOT = AppNavigationBackPolicy.CREW_BOT
@@ -331,26 +342,7 @@ class MainActivity : ComponentActivity() {
     private val skillImportExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "JarvysSkillImport").apply { isDaemon = true }
     }
-    private val imageSaveExecutor = Executors.newSingleThreadExecutor { runnable ->
-        Thread(runnable, "JarvysImageSave").apply { isDaemon = true }
-    }
-    private var pendingGeneratedImageSource: File? = null
-    private val generatedImageSaveLauncher = registerForActivityResult(ActivityResultContracts.CreateDocument("image/png")) { uri ->
-        val source = pendingGeneratedImageSource
-        pendingGeneratedImageSource = null
-        if (uri == null || source == null) return@registerForActivityResult
-        imageSaveExecutor.execute {
-            val result = runCatching {
-                val output = contentResolver.openOutputStream(uri)
-                    ?: throw IllegalStateException("Could not open the selected image destination")
-                output.use { target -> FileInputStream(source).use { input -> input.copyTo(target) } }
-            }
-            runOnUiThread {
-                if (result.isSuccess) toast(getString(R.string.image_save_succeeded))
-                else toast(getString(R.string.image_save_failed), Toast.LENGTH_LONG)
-            }
-        }
-    }
+    private lateinit var fileTransfers: ChatFileTransfers
     private val skillImportLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let(::importSkillMarkdown)
     }
@@ -389,6 +381,7 @@ class MainActivity : ComponentActivity() {
         mcpConnectionManager.connectEnabledServers()
         localRunStore = LocalRunStore(this)
         attachmentDrafts = ViewModelProvider(this)[AttachmentDraftViewModel::class.java]
+        fileTransfers = ViewModelProvider(this)[ChatFileTransfers::class.java]
         attachmentPickerSession = savedInstanceState?.getString("attachment_picker_session")
         assistantSpeechController = AssistantSpeechController(
             this,
@@ -434,8 +427,8 @@ class MainActivity : ComponentActivity() {
             ?: savedInstanceState?.getString(STATE_PROACTIVE_TARGET_MESSAGE)
         pendingTaskId = TaskDeepLink.existingTaskId(this,
             intent?.getStringExtra(EXTRA_OPEN_TASK) ?: savedInstanceState?.getString(STATE_OPEN_TASK))
-        conversationSessionId = intent?.getStringExtra(EXTRA_OPEN_CHAT_SESSION)
-            ?: savedInstanceState?.getString(STATE_SESSION_ID)
+        conversationSessionId = savedInstanceState?.getString(STATE_SESSION_ID)
+            ?: intent?.getStringExtra(EXTRA_OPEN_CHAT_SESSION)
             ?: getSharedPreferences("jarvys_chat", MODE_PRIVATE).getString("active_session_id", null)
             ?: java.util.UUID.randomUUID().toString()
         val openingProactiveThread = conversationSessionId == ProactiveConversation.SESSION_ID
@@ -471,6 +464,9 @@ class MainActivity : ComponentActivity() {
         }
         setContent {
             val pendingAttachments by attachmentDrafts.drafts.collectAsState()
+            val transfers by fileTransfers.transfers.collectAsState()
+            // Capture the rendered conversation, never the mutable selection after an asynchronous action.
+            val fileActionSession = conversationSessionId
             val attachmentSending by attachmentDrafts.sending.collectAsState()
             val agentState by AgentRunUiState.state.collectAsState()
             val taskDataRevision by TaskDataChanges.revision.collectAsState()
@@ -496,6 +492,9 @@ class MainActivity : ComponentActivity() {
                 if (Build.VERSION.SDK_INT >= 29) window.isNavigationBarContrastEnforced = false
             }
             JarvysOwnTheme(themeMode) {
+                CompositionLocalProvider(LocalChatFileActions provides ChatFileActions(
+                    transfers, fileTransfers::download, fileTransfers::share, fileTransfers::open, fileTransfers::cancel,
+                )) {
                 SafDocumentPickerHost(this@MainActivity)
                 JarvysApp(
                     providersRepository = providersRepository,
@@ -548,7 +547,8 @@ class MainActivity : ComponentActivity() {
                     captureContextRequested = captureContextRequested,
                     skillEnabledCount = skillEntries.count { it.enabled && it.validationError == null },
                     skillTotalCount = skillEntries.size,
-                    availableSkills = skillEntries.filter { it.enabled && it.validationError == null },
+                    availableSkills = skillEntries.filter { it.enabled && it.validationError == null &&
+                        com.jarvys.agent.skills.SkillScopePolicy.availableTo(it.metadata.id, null) },
                     selectedSkillIds = selectedSkillIds,
                     onSubmitMessage = ::submitMessage,
                     pendingAttachments = pendingAttachments,
@@ -600,14 +600,16 @@ class MainActivity : ComponentActivity() {
                     onImportSkillMarkdown = ::importSkillText,
                     onImportSkillGitHub = ::importSkillFromGitHub,
                     onHistoryUpdated = ::refreshRunHistory,
-                    onSaveGeneratedImage = ::saveGeneratedImage,
-                    onShareGeneratedImage = ::shareGeneratedImage,
+                    onSaveGeneratedImage = { event -> saveGeneratedImage(fileActionSession, event) },
+                    onShareGeneratedImage = { event -> shareGeneratedImage(fileActionSession, event) },
                     mcpServerRepository = mcpServerRepository,
                     mcpConnectionManager = mcpConnectionManager,
                     mcpOAuthManager = mcpOAuthManager,
                     skillRepository = skillRepository,
                     connectorRegistry = connectorRegistry,
                 )
+                ChatFileTransferHost(fileTransfers) { intent -> startActivity(intent) }
+                }
             }
         }
     }
@@ -1019,25 +1021,12 @@ ${event.text}
         else historyEvents = events
     }
 
-    private fun shareGeneratedImage(event: AgentRunUiEvent) {
-        val path = event.generatedImagePath ?: return
-        runCatching {
-            val file = GeneratedImageStore(this).resolve(conversationSessionId, path)
-            val send = GeneratedImageIntents.shareIntent(this, file)
-            startActivity(Intent.createChooser(send, getString(R.string.image_share_chooser)))
-        }.onFailure {
-            toast(getString(R.string.image_missing_file), Toast.LENGTH_LONG)
-        }
+    private fun shareGeneratedImage(sessionId: String, event: AgentRunUiEvent) {
+        ChatFileRequest.generated(sessionId, event)?.let(fileTransfers::share)
     }
 
-    private fun saveGeneratedImage(event: AgentRunUiEvent) {
-        val path = event.generatedImagePath ?: return
-        runCatching { GeneratedImageStore(this).resolve(conversationSessionId, path) }
-            .onSuccess { file ->
-                pendingGeneratedImageSource = file
-                generatedImageSaveLauncher.launch(file.name)
-            }
-            .onFailure { toast(getString(R.string.image_missing_file), Toast.LENGTH_LONG) }
+    private fun saveGeneratedImage(sessionId: String, event: AgentRunUiEvent) {
+        ChatFileRequest.generated(sessionId, event)?.let(fileTransfers::download)
     }
 
     private fun undoMemoryRevisionFromChat(revisionId: Long) {
@@ -1572,6 +1561,21 @@ private fun JarvysApp(
     SideEffect { onNavControllerReady(navController) }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+    var drawerNavigationPending by remember { mutableStateOf(false) }
+    fun navigateFromDrawer(destination: () -> Unit) {
+        if (drawerNavigationPending) return
+        drawerNavigationPending = true
+        scope.launch {
+            try {
+                // Finish the modal transition before changing the underlying route. A rapid
+                // second pointer-down must not cancel closing and leave the new route covered.
+                drawerState.close()
+                destination()
+            } finally {
+                drawerNavigationPending = false
+            }
+        }
+    }
     val navEntry by navController.currentBackStackEntryAsState()
     val route = navEntry?.destination?.route ?: Routes.CHAT
     val routeTaskId = navEntry?.arguments?.getString("taskId")
@@ -1637,36 +1641,41 @@ private fun JarvysApp(
 
     JarvysShellFrame(
         drawerState = drawerState,
+        drawerGesturesEnabled = !drawerNavigationPending,
         drawerContent = {
             ConversationDrawer(
                 history = runHistory,
+                isDrawerOpen = drawerState.isOpen,
+                onCloseDrawer = { if (!drawerNavigationPending) scope.launch { drawerState.close() } },
                 activeSessionId = conversationSessionId,
                 activeTitle = conversationTitle,
                 activeGoal = agentState.goal,
                 activeSessionVisible = showActiveConversation,
                 selectedHistoryId = selectedHistoryRunId,
                 isChatRoute = route == Routes.CHAT,
-                actionsEnabled = !conversationActionPending,
+                actionsEnabled = !conversationActionPending && !drawerNavigationPending,
                 onConversationAction = onConversationAction,
-                onNewConversation = {
+                onNewConversation = { navigateFromDrawer {
                     onNewChat()
                     navController.navigate(Routes.CHAT) { launchSingleTop = true }
-                    scope.launch { drawerState.close() }
-                },
-                onResumeActive = {
+                } },
+                onResumeActive = { navigateFromDrawer {
                     onSelectHistory(null)
-                    scope.launch { drawerState.close() }
                     navController.navigate(Routes.CHAT) { launchSingleTop = true }
-                },
-                onOpenHistory = { runId ->
+                } },
+                onOpenHistory = { runId -> navigateFromDrawer {
                     onSelectHistory(runId)
-                    scope.launch { drawerState.close() }
                     navController.navigate(Routes.CHAT) { launchSingleTop = true }
-                },
-                onOpenSettings = {
-                    scope.launch { drawerState.close() }
+                } },
+                onOpenScheduledTasks = { navigateFromDrawer {
+                    navController.navigate(Routes.SCHEDULED_TASKS) { launchSingleTop = true }
+                } },
+                onOpenBots = { navigateFromDrawer {
+                    navController.navigate(Routes.BOTS) { launchSingleTop = true }
+                } },
+                onOpenSettings = { navigateFromDrawer {
                     navController.navigate(Routes.SETTINGS) { launchSingleTop = true }
-                },
+                } },
             )
         },
         route = routeMeta,
@@ -1752,6 +1761,8 @@ private fun JarvysApp(
                     onSkills = { navController.navigate(Routes.SKILLS) { launchSingleTop = true } },
                     onConnectors = { navController.navigate(Routes.CONNECTORS) { launchSingleTop = true } },
                     onMemory = { navController.navigate(Routes.MEMORY) { launchSingleTop = true } },
+                    archivedChatsAvailable = runHistory.any { it.archived },
+                    onArchivedChats = { navController.navigate(Routes.ARCHIVED_CHATS) { launchSingleTop = true } },
                     scheduledTasksAvailable = scheduledTasksAvailable,
                     onScheduledTasks = { navController.navigate(Routes.TASKS) { launchSingleTop = true } },
                     onAccessibilitySettings = onAccessibilitySettings,
@@ -1819,6 +1830,18 @@ private fun JarvysApp(
                         )
                     }
                 }
+                composable(Routes.ARCHIVED_CHATS) {
+                    ArchivedChatsScreen(
+                        history = runHistory,
+                        actionsEnabled = !conversationActionPending,
+                        onOpenHistory = { runId ->
+                            onSelectHistory(runId)
+                            navController.navigate(Routes.CHAT) { launchSingleTop = true }
+                        },
+                        onConversationAction = onConversationAction,
+                    )
+                }
+                composable(Routes.SCHEDULED_TASKS) { ScheduledTasksPlaceholderScreen() }
                 composable(Routes.SETTINGS) { settingsPageContent(JarvysSettingsPage.HOME) }
                 composable(Routes.SETTINGS_PREFERENCES) { settingsPageContent(JarvysSettingsPage.PREFERENCES) }
                 providersDestinations(navController, providersRepository)
@@ -1857,6 +1880,25 @@ private fun JarvysApp(
                         }
                     },
                 )
+                composable(Routes.BOTS) {
+                    val owner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+                    var working by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
+                    LaunchedEffect(owner) {
+                        owner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                            try {
+                                while (true) {
+                                    working = CoreAgentRuntime.workingBotCounts()
+                                    kotlinx.coroutines.delay(500)
+                                }
+                            } finally { working = emptyMap() }
+                        }
+                    }
+                    com.jarvys.agent.crew.BotsCatalogScreen(
+                        conversationId = conversationSessionId,
+                        working = working,
+                        onClose = { if (!navController.popBackStack()) navController.navigate(Routes.CHAT) { launchSingleTop = true } },
+                    )
+                }
                 crewDestinations(
                     navController = navController,
                     board = crewBoard,

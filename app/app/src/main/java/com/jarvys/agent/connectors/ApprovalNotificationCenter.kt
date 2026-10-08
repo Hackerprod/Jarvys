@@ -93,12 +93,10 @@ object ApprovalNotificationActionResolver {
         id: String,
         decision: ApprovalDecision,
         performApprovedAction: () -> Boolean = { true },
-    ): Boolean {
-        if (!gate.isPending(id)) return false
-        val result = if (decision == ApprovalDecision.APPROVED && !performApprovedAction()) {
+    ): Boolean = gate.resolveFromUi(id) {
+        if (decision == ApprovalDecision.APPROVED && !performApprovedAction()) {
             ApprovalDecision.ACTION_FAILED
         } else decision
-        return gate.resolve(id, result)
     }
 }
 

@@ -34,6 +34,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -72,9 +73,14 @@ internal fun GeneratedImageEventCard(
     val context = LocalContext.current
     val reducedMotion = LocalReducedMotion.current
     val store = remember(context) { GeneratedImageStore(context) }
-    val file = remember(sessionId, event.generatedImagePath) {
-        event.generatedImagePath?.let { path -> runCatching { store.resolve(sessionId, path) }.getOrNull() }
+    var resolved by remember(sessionId, event.generatedImagePath) { mutableStateOf(false) }
+    val file by produceState<File?>(null, sessionId, event.generatedImagePath) {
+        value = withContext(Dispatchers.IO) {
+            event.generatedImagePath?.let { path -> runCatching { store.resolve(sessionId, path) }.getOrNull() }
+        }
+        resolved = true
     }
+    val sourceFile = file
     val fileStamp = file?.let(::generatedImageFileStamp)
     var viewerOpen by remember(event.id) { mutableStateOf(false) }
     val failed = event.generatedImageStatus != "COMPLETED"
@@ -85,8 +91,8 @@ internal fun GeneratedImageEventCard(
             Text(event.generatedImageError.orEmpty().ifBlank { stringResource(R.string.image_error_incomplete, "FAILED", "Image generation failed", "unknown") },
                 Modifier.testTag("generated-image-error-${event.id}"),
                 color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
-        } else if (file == null) {
-            Text(stringResource(R.string.image_missing_file),
+        } else if (sourceFile == null) {
+            if (resolved) Text(stringResource(R.string.image_missing_file),
                 Modifier.testTag("generated-image-missing-${event.id}"),
                 color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
         } else {
@@ -94,7 +100,7 @@ internal fun GeneratedImageEventCard(
                 mutableFloatStateOf(imageAspectFromSize(event.generatedImageSize))
             }
             LaunchedEffect(fileStamp) {
-                readGeneratedImageBounds(file)?.let { bounds -> imageAspect = bounds.width.toFloat() / bounds.height }
+                readGeneratedImageBounds(sourceFile)?.let { bounds -> imageAspect = bounds.width.toFloat() / bounds.height }
             }
             BoxWithConstraints(
                 Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { viewerOpen = true }
@@ -109,14 +115,17 @@ internal fun GeneratedImageEventCard(
                 val widthPx = with(density) { maxWidth.roundToPx() }.coerceAtLeast(1)
                 val heightPx = with(density) { frameHeight.roundToPx() }.coerceAtLeast(1)
                 var bitmap by remember(fileStamp, widthPx, heightPx) { mutableStateOf<Bitmap?>(null) }
+                var decoded by remember(fileStamp, widthPx, heightPx) { mutableStateOf(false) }
                 LaunchedEffect(fileStamp, widthPx, heightPx) {
-                    bitmap = decodeGeneratedImage(file, widthPx, heightPx)
+                    bitmap = decodeGeneratedImage(sourceFile, widthPx, heightPx)
+                    decoded = true
                 }
                 val image = bitmap
                 Box(Modifier.fillMaxWidth().height(frameHeight)
                     .background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) {
                     if (image == null) {
-                        Box(Modifier.fillMaxSize().testTag("generated-image-loading-${event.id}"))
+                        if (decoded) Text(stringResource(R.string.chat_file_preview_unavailable), Modifier.padding(12.dp))
+                        else Box(Modifier.fillMaxSize().testTag("generated-image-loading-${event.id}"))
                     } else {
                         AndroidView(
                             factory = { imageContext -> ImageView(imageContext).apply {
@@ -136,8 +145,8 @@ internal fun GeneratedImageEventCard(
             }
         }
     }
-    if (viewerOpen && file != null) {
-        GeneratedImageViewer(event, file, description, reducedMotion, onDismiss = { viewerOpen = false },
+    if (viewerOpen && sourceFile != null) {
+        GeneratedImageViewer(event, sessionId, sourceFile, description, reducedMotion, onDismiss = { viewerOpen = false },
             onSave = onSave, onShare = onShare)
     }
 }
@@ -145,6 +154,7 @@ internal fun GeneratedImageEventCard(
 @Composable
 private fun GeneratedImageViewer(
     event: AgentRunUiEvent,
+    sessionId: String,
     file: File,
     prompt: String,
     reducedMotion: Boolean,
@@ -154,6 +164,10 @@ private fun GeneratedImageViewer(
 ) {
     val context = LocalContext.current
     var transform by remember(event.id) { mutableStateOf(GeneratedImageTransform()) }
+    val actions = LocalChatFileActions.current
+    val request = remember(sessionId, event) { ChatFileRequest.generated(sessionId, event) }
+    val transfer = request?.let { actions.transfers[it.key] }
+    val saving = transfer?.busy == true || transfer?.waitingForPermission == true
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.fillMaxWidth(0.96f).fillMaxHeight(0.92f).testTag("generated-image-viewer-${event.id}"),
@@ -202,17 +216,22 @@ private fun GeneratedImageViewer(
                     }
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { onSave(event) }, modifier = Modifier.weight(1f).testTag("generated-image-save")) {
+                    OutlinedButton(onClick = { onSave(event) }, enabled = !saving,
+                        modifier = Modifier.weight(1f).testTag("generated-image-save")) {
                         Icon(LucideIcons.Download, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text(stringResource(R.string.image_action_save))
+                        Text(stringResource(if (saving) R.string.chat_download_saving else R.string.image_action_save))
                     }
-                    OutlinedButton(onClick = { onShare(event) },
-                        modifier = Modifier.weight(1f).testTag("generated-image-share")) {
-                        Icon(LucideIcons.FileUp, contentDescription = null, modifier = Modifier.size(18.dp))
+                    OutlinedButton(onClick = { if (saving) actions.cancel(requireNotNull(request)) else onShare(event) },
+                        modifier = Modifier.weight(1f).testTag(if (saving) "generated-image-cancel" else "generated-image-share")) {
+                        Icon(if (saving) LucideIcons.X else LucideIcons.FileUp, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text(stringResource(R.string.image_action_share))
+                        Text(stringResource(if (saving) R.string.settings_cancel else R.string.image_action_share))
                     }
+                }
+                if (transfer?.saved == true) TextButton(onClick = { actions.open(requireNotNull(request)) },
+                    modifier = Modifier.testTag("generated-image-open-download")) {
+                    Text(stringResource(R.string.chat_download_open))
                 }
             }
         }
@@ -235,11 +254,13 @@ internal data class GeneratedImageBounds(val width: Int, val height: Int)
 /** Reads only PNG metadata before the view is sized; pixel decoding remains sampled and asynchronous. */
 internal suspend fun readGeneratedImageBounds(file: File): GeneratedImageBounds? =
     withContext(Dispatchers.IO) {
-        if (!file.isFile) return@withContext null
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeFile(file.absolutePath, bounds)
-        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) null
-        else GeneratedImageBounds(bounds.outWidth, bounds.outHeight)
+        try {
+            if (!file.isFile) return@withContext null
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(file.absolutePath, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) null
+            else GeneratedImageBounds(bounds.outWidth, bounds.outHeight)
+        } catch (_: Exception) { null } catch (_: OutOfMemoryError) { null }
     }
 
 /** Every decode, including bounds inspection and sampling, happens on Dispatchers.IO. */
@@ -250,26 +271,28 @@ internal suspend fun decodeGeneratedImage(
     onDecodeThread: (String) -> Unit = {},
 ): Bitmap? =
     withContext(Dispatchers.IO) {
-        onDecodeThread(Thread.currentThread().name)
-        val key = "${generatedImageFileStamp(file)}:${targetWidth}x$targetHeight"
-        GeneratedImageBitmapCache.get(key)?.let { return@withContext it }
-        if (!file.isFile) return@withContext null
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeFile(file.absolutePath, bounds)
-        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@withContext null
-        val width = targetWidth.coerceAtLeast(1)
-        val height = targetHeight.coerceAtLeast(1)
-        var sample = 1
-        while (bounds.outWidth / sample > width || bounds.outHeight / sample > height) {
-            if (sample > Int.MAX_VALUE / 2) break
-            sample *= 2
-        }
-        val bitmap = BitmapFactory.decodeFile(file.absolutePath, BitmapFactory.Options().apply {
-            inSampleSize = sample
-            inPreferredConfig = Bitmap.Config.ARGB_8888
-        }) ?: return@withContext null
-        GeneratedImageBitmapCache.put(key, bitmap)
-        bitmap
+        try {
+            onDecodeThread(Thread.currentThread().name)
+            val key = "${generatedImageFileStamp(file)}:${targetWidth}x$targetHeight"
+            GeneratedImageBitmapCache.get(key)?.let { return@withContext it }
+            if (!file.isFile) return@withContext null
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(file.absolutePath, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@withContext null
+            val width = targetWidth.coerceAtLeast(1)
+            val height = targetHeight.coerceAtLeast(1)
+            var sample = 1
+            while (bounds.outWidth / sample > width || bounds.outHeight / sample > height) {
+                if (sample > Int.MAX_VALUE / 2) break
+                sample *= 2
+            }
+            val bitmap = BitmapFactory.decodeFile(file.absolutePath, BitmapFactory.Options().apply {
+                inSampleSize = sample
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+            }) ?: return@withContext null
+            GeneratedImageBitmapCache.put(key, bitmap)
+            bitmap
+        } catch (_: Exception) { null } catch (_: OutOfMemoryError) { null }
     }
 
 /** Cache ceiling is one eighth of the process's currently advertised maximum heap. */

@@ -1,6 +1,7 @@
 package com.jarvys.agent;
 
 import com.jarvys.agent.skills.SkillEntry;
+import com.jarvys.agent.skills.SkillScopePolicy;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -53,10 +54,12 @@ public final class DelegateSubtaskTool implements CoreTool {
     this.runner = runner;
     this.scopedRunner = scopedRunner;
     this.capabilityScope = scope;
-    this.skillEntries = Collections.unmodifiableList(new ArrayList(availableSkills));
-    this.availableTools = Collections.unmodifiableList(new ArrayList(availableTools));
+    this.skillEntries = SkillScopePolicy.forProfile(availableSkills, null);
+    List<String> transferableTools = new ArrayList<>(availableTools);
+    transferableTools.remove(SkillScopePolicy.APK_FACTORY_TOOL);
+    this.availableTools = Collections.unmodifiableList(transferableTools);
     List<String> ids = new ArrayList<>();
-    for (SkillEntry skill : availableSkills) {
+    for (SkillEntry skill : this.skillEntries) {
       ids.add(skill.getMetadata().getId());
     }
     this.availableSkills = Collections.unmodifiableList(ids);

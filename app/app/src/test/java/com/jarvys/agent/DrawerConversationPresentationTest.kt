@@ -26,8 +26,8 @@ class DrawerConversationPresentationTest {
 
     @Test fun conversationRowsShowSelectionAndActiveSessionState() {
         val module = File(requireNotNull(System.getProperty("user.dir")))
-        val source = File(module, "src/main/java/com/jarvys/agent/ui/chat/ConversationDrawer.kt").readText()
-        val start = source.indexOf("private fun SessionRow")
+        val source = File(module, "src/main/java/com/jarvys/agent/ui/chat/ChatConversationActions.kt").readText()
+        val start = source.indexOf("internal fun ConversationSessionRow")
         assertTrue(start >= 0)
         val row = source.substring(start)
         assertTrue(row.contains("Text(title"))

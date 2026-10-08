@@ -75,7 +75,7 @@ public final class ProviderAgentModel implements AgentModel {
         dynamicMcpTools = Collections.unmodifiableMap(dynamicTools);
         Set<String> allowedIntersection = null;
         StringBuilder skillContext = new StringBuilder();
-        for (SkillEntry skill : selectedSkills) {
+        for (SkillEntry skill : com.jarvys.agent.skills.SkillScopePolicy.forProfile(selectedSkills, null)) {
             if (skill.getValidationError() != null) {
                 throw new IllegalArgumentException("Skill '" + skill.getMetadata().getId() + "' is invalid: " + skill.getValidationError());
             }

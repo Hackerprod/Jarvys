@@ -27,6 +27,8 @@ object AppNavigationBackPolicy {
     const val CHAT_ROOT = "chat"
     const val SETTINGS = "settings"
     const val SETTINGS_PREFERENCES = "settings/preferences"
+    const val ARCHIVED_CHATS = "settings/archived-chats"
+    const val SCHEDULED_TASKS = "scheduled-tasks"
     const val PROVIDERS = "providers"
     const val PROVIDERS_OPENAI = "providers/openai"
     const val PROVIDERS_OPENROUTER = "providers/openrouter"
@@ -46,6 +48,7 @@ object AppNavigationBackPolicy {
     const val TASK_DETAIL = "tasks/detail/{taskId}"
     const val MEMORY_HISTORY = "memory/history"
     const val MEMORY_FILE = "memory/file?path={path}&new={new}"
+    const val BOTS = "bots"
     const val CREW_EMPTY = "crew"
     const val CREW = "crew/{missionId}"
     const val CREW_BOT = "crew/{missionId}/bot/{botId}"
@@ -62,12 +65,12 @@ object AppNavigationBackPolicy {
     fun providerService(serviceId: String) = "providers/service/${android.net.Uri.encode(serviceId)}"
 
     val registeredRoutePatterns = listOf(
-        CHAT_ROOT, SETTINGS, SETTINGS_PREFERENCES,
+        CHAT_ROOT, SETTINGS, SETTINGS_PREFERENCES, ARCHIVED_CHATS, SCHEDULED_TASKS,
         PROVIDERS, PROVIDERS_OPENAI, PROVIDERS_OPENROUTER, PROVIDERS_CUSTOM, PROVIDERS_SERVICE,
         MCP_LIST, MCP_NEW, MCP_SERVER, MCP_SERVER_EDIT, SKILLS, CONNECTORS,
         CONNECTOR_DEVICE, CONNECTOR_REMOTE, CONNECTOR_GOOGLE, MEMORY, MEMORY_HISTORY, MEMORY_FILE,
         TASKS, TASK_DETAIL,
-        CREW_EMPTY, CREW, CREW_BOT, WORKSPACE_PREVIEW,
+        BOTS, CREW_EMPTY, CREW, CREW_BOT, WORKSPACE_PREVIEW,
     )
     val rootRoutes = setOf(CHAT_ROOT)
 
@@ -76,6 +79,8 @@ object AppNavigationBackPolicy {
     fun metadata(context: Context, route: String, chatTitle: String, crewBotTitle: String?,
                  detailTitle: String?): AppRouteMeta = when (route) {
         CHAT_ROOT -> AppRouteMeta(chatTitle, isRoot = true, action = AppRouteAction.CHAT)
+        ARCHIVED_CHATS -> AppRouteMeta(context.getString(R.string.drawer_archived_chats), false)
+        SCHEDULED_TASKS -> AppRouteMeta(context.getString(R.string.drawer_scheduled_tasks), false)
         SETTINGS -> AppRouteMeta(context.getString(R.string.drawer_settings), false)
         SETTINGS_PREFERENCES -> AppRouteMeta(context.getString(R.string.settings_preferences), false)
         PROVIDERS -> AppRouteMeta(context.getString(R.string.settings_providers), false)
@@ -97,6 +102,7 @@ object AppNavigationBackPolicy {
         MEMORY_FILE -> AppRouteMeta(context.getString(R.string.memory_title), false)
         TASKS -> AppRouteMeta(context.getString(R.string.tasks_title), false)
         TASK_DETAIL -> AppRouteMeta(detailTitle ?: context.getString(R.string.task_detail_title), false)
+        BOTS -> AppRouteMeta(context.getString(R.string.drawer_bots), false, showTopBar = false)
         CREW_EMPTY, CREW -> AppRouteMeta(context.getString(R.string.crew_title), false)
         CREW_BOT -> AppRouteMeta(crewBotTitle ?: context.getString(R.string.crew_bot_title), false)
         WORKSPACE_PREVIEW -> AppRouteMeta(context.getString(R.string.chat_open_preview), false)

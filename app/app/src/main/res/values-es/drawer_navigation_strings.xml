@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="drawer_cancel_search">Cancelar búsqueda</string>
+    <string name="drawer_scheduled_tasks">Tareas programadas</string>
+    <string name="scheduled_tasks_placeholder_title">Próximamente</string>
+    <string name="scheduled_tasks_placeholder_body">Esta nueva vista de tareas programadas todavía no está disponible. Puedes seguir gestionando las tareas existentes desde Ajustes.</string>
+</resources>

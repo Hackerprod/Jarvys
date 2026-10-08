@@ -35,8 +35,8 @@ public final class BotProfileDraftService {
         List<String> skills = safeOptions(availableSkillIds);
         String instructions = "Create an UNSAVED specialist bot configuration for the user's review. "
                 + "Return only one JSON object with exactly name, description, prompt, capabilities, skillIds, workspaceMode. "
-                + "name is a concise single-line name in the user's language, description a short single-line purpose, "
-                + "prompt the complete reusable instructions reflecting only the user's request. "
+                + "name is a simple single-line name of 1-3 words (at most 4 words and 40 characters), description a short single-line purpose, "
+                + "prompt the complete reusable instructions written in English, reflecting only the user's request. "
                 + "capabilities and skillIds are arrays of exact IDs from the available options below. "
                 + "Select the minimum needed, or empty arrays; never invent tools, grant permissions, execute a mission, "
                 + "or imply unavailable integrations. Every selection remains subject to user review and existing approvals. "
@@ -73,8 +73,10 @@ public final class BotProfileDraftService {
                     ? CrewProfile.WorkspaceMode.CONVERSATION_PROJECT
                     : "legacy_chat".equals(workspace) ? CrewProfile.WorkspaceMode.LEGACY_CHAT : null;
             if (mode == null) throw new IllegalArgumentException("The draft contains an unsupported workspace.");
+            String name = value(object, "name", 40);
+            if (name.split("\\s+").length > 4) throw new IllegalArgumentException("Use a simple bot name of at most four words.");
             CrewProfile profile = new CrewProfile("custom-" + UUID.randomUUID(), 1,
-                    value(object, "name", 80), value(object, "description", 240), value(object, "prompt", 16000),
+                    name, value(object, "description", 240), value(object, "prompt", 16000),
                     identifiers(object, "skillIds"), identifiers(object, "capabilities"), mode);
             profile.validateAvailability(capabilities, skills);
             return profile;

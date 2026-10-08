@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "appId": "com.jarvys.factory.template",
+  "name": "Offline Notes",
+  "entryPoint": "www/index.html",
+  "capabilities": ["storage", "export"]
+}

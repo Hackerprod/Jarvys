@@ -12,17 +12,22 @@ import java.util.Map;
 final class ToolLoopDetector {
     static final int WARNING_THRESHOLD = 10;
     static final int CRITICAL_THRESHOLD = 20;
+    static final int FAILURE_THRESHOLD = 3;
     private static final int HISTORY_SIZE = 30;
 
     private static final class Outcome {
         final String toolName;
         final String arguments;
         final String result;
+        final boolean success;
+        final boolean progress;
 
-        Outcome(String toolName, String arguments, String result) {
+        Outcome(String toolName, String arguments, boolean success, boolean progress, String result) {
             this.toolName = toolName;
             this.arguments = arguments;
             this.result = result;
+            this.success = success;
+            this.progress = progress;
         }
     }
 
@@ -54,9 +59,33 @@ final class ToolLoopDetector {
         return count;
     }
 
-    void record(String toolName, String arguments, boolean success, String result) {
-        history.add(new Outcome(toolName, arguments, (success ? "success\n" : "failure\n") + result));
+    /** Error messages can contain changing temporary paths, request IDs, or timestamps. */
+    int consecutiveFailureCount(String toolName, String arguments) {
+        int count = 0;
+        for (int index = history.size() - 1; index >= 0; index--) {
+            Outcome outcome = history.get(index);
+            // A changed successful observation may have repaired a failing precondition.
+            // Repeating an unrelated unchanged success must not keep a failure loop alive.
+            if (outcome.progress) break;
+            if (!outcome.toolName.equals(toolName) || !outcome.arguments.equals(arguments)) continue;
+            if (outcome.success) break;
+            count++;
+        }
+        return count;
+    }
+
+    boolean record(String toolName, String arguments, boolean success, String result) {
+        String outcomeKey = (success ? "success\n" : "failure\n") + result;
+        boolean progress = success;
+        if (success) for (int index = history.size() - 1; index >= 0; index--) {
+            Outcome previous = history.get(index);
+            if (!previous.toolName.equals(toolName) || !previous.arguments.equals(arguments)) continue;
+            progress = !outcomeKey.equals(previous.result);
+            break;
+        }
+        history.add(new Outcome(toolName, arguments, success, progress, outcomeKey));
         if (history.size() > HISTORY_SIZE) history.remove(0);
+        return progress;
     }
 
     private static String canonical(Object value) {

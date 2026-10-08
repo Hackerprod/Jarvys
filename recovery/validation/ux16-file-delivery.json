@@ -1,0 +1,194 @@
+{
+  "schema_version": 1,
+  "stage": "UX16",
+  "version_code": 36,
+  "version_name": "1.2.29-UX16",
+  "status": "Completed in code and host validation; physical Android acceptance remains pending",
+  "source_app_tree": "00fe5e1e6685508552bd22e3ae57f3d74affaa85",
+  "source_manifest_sha256": "3cce67e7f7979c29febf68a994184190a01198c46fea88440ba5e3aa15bb7d5f",
+  "frozen_files": 711,
+  "source_unchanged_during_final_tests": true,
+  "tests": {
+    "Full": {
+      "tests": 1289,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "Play": {
+      "tests": 1205,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "Runtime": {
+      "tests": 17,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "fresh_test_xml": true,
+  "new_ux16_tests": 51,
+  "targeted_ux16_and_existing_image_cases": 56,
+  "sdk_javascript_tests": 9,
+  "lint": {
+    "full": {
+      "counts": {
+        "Error": 46,
+        "Warning": 282,
+        "Hint": 4
+      },
+      "baseline_counts": {
+        "Error": 46,
+        "Warning": 282,
+        "Hint": 4
+      },
+      "fresh": true,
+      "new_errors": [],
+      "resolved_errors": [],
+      "new_warnings": []
+    },
+    "play": {
+      "counts": {
+        "Error": 37,
+        "Warning": 274,
+        "Hint": 4
+      },
+      "baseline_counts": {
+        "Error": 37,
+        "Warning": 274,
+        "Hint": 4
+      },
+      "fresh": true,
+      "new_errors": [],
+      "resolved_errors": [],
+      "new_warnings": []
+    }
+  },
+  "runtime_lint": {
+    "errors": 0,
+    "warnings": [
+      "OldTargetApi",
+      "RequiresFeature",
+      "DataExtractionRules",
+      "IconLauncherShape"
+    ]
+  },
+  "artifacts": {
+    "full": {
+      "sha256": "f9432a80355f41982244b3c0025cace65d443eaf52243288b6945cd2cb61505f",
+      "bytes": 20244280,
+      "package": "com.jarvys.agent",
+      "version_code": 36,
+      "version_name": "1.2.29-UX16",
+      "label": "Jarvys",
+      "unsigned_verified": true,
+      "zip_crc_verified": true,
+      "alignment_verified": true,
+      "permission_delta": {
+        "added": [
+          "uses-permission: name='android.permission.WRITE_EXTERNAL_STORAGE' maxSdkVersion='28'"
+        ],
+        "removed": [],
+        "max_sdk_28_only": true
+      },
+      "debuggable": true,
+      "filename": "Jarvys-UX16-full-v36-unsigned.apk"
+    },
+    "play": {
+      "sha256": "9323d660902267d03d489d7a39b3a0b21a8b0fb184517d641cba173056c36a92",
+      "bytes": 18886321,
+      "package": "com.jarvys.agent",
+      "version_code": 36,
+      "version_name": "1.2.29-UX16",
+      "label": "Jarvys",
+      "unsigned_verified": true,
+      "zip_crc_verified": true,
+      "alignment_verified": true,
+      "permission_delta": {
+        "added": [
+          "uses-permission: name='android.permission.WRITE_EXTERNAL_STORAGE' maxSdkVersion='28'"
+        ],
+        "removed": [],
+        "max_sdk_28_only": true
+      },
+      "debuggable": true,
+      "filename": "Jarvys-UX16-play-v36-unsigned.apk"
+    }
+  },
+  "factory_template": {
+    "full": {
+      "assets/apk_factory/template.apk": {
+        "sha256": "2be7120507818dede560c2063bf2fd67e811e8381c849b0a60d3d86eb254f0fc",
+        "unchanged": true
+      },
+      "assets/skills/com.jarvys.apk-factory/SKILL.md": {
+        "sha256": "c02f323184b7ab3bc53f9012dc266898ef5280c79676f30678f9373cd2bd6da7",
+        "unchanged": true
+      }
+    },
+    "play": {
+      "assets/apk_factory/template.apk": {
+        "sha256": "2be7120507818dede560c2063bf2fd67e811e8381c849b0a60d3d86eb254f0fc",
+        "unchanged": true
+      },
+      "assets/skills/com.jarvys.apk-factory/SKILL.md": {
+        "sha256": "c02f323184b7ab3bc53f9012dc266898ef5280c79676f30678f9373cd2bd6da7",
+        "unchanged": true
+      }
+    }
+  },
+  "factory_fixture_verification": {
+    "apks": 6,
+    "aapt2_metadata": true,
+    "zipalign": true,
+    "apksigner_v2_v3": true,
+    "certificate_continuity_per_app": true,
+    "dex_unchanged": true,
+    "permissions": 0,
+    "installed": false
+  },
+  "native_host_captures": [
+    {
+      "filename": "delivered-file-dark.png",
+      "sha256": "9e77e5a86e76c346d7a79eba7cbc1b5325df2633ea5e7f02fadcb78ea048a7cc",
+      "reviewed": true
+    },
+    {
+      "filename": "delivered-file-light.png",
+      "sha256": "0483a88b17924e716ef191f278c5f210c7db3b7ad6e9c26eb01a75ab282040bc",
+      "reviewed": true
+    },
+    {
+      "filename": "generated-image-viewer-save-share.png",
+      "sha256": "c671d09466e8e3410829071f067c9da1416c75bbec3f8d6230d527153980fde0",
+      "reviewed": true
+    },
+    {
+      "filename": "unsupported-image-actions.png",
+      "sha256": "e76d19f1a9047392fab551d7688faeda2188f678f5e1e30012d02fb5f1c2e42e",
+      "reviewed": true
+    }
+  ],
+  "safety_boundaries": [
+    "Main-chat-only deliver_file, no delegated capability expansion",
+    "Current conversation workspace/project files only; immutable copy and transcript-owned read-only URI",
+    "MediaStore Downloads on API 29+; root system Downloads; explicit storage permission only through API 28",
+    "Bounded streaming maximum 256 MiB, exact size/checksum and descriptor identity/path checks",
+    "No automatic external upload, viewer/installer launch, or installation",
+    "Incomplete pending cleanup and durable duplicate/restart reconciliation; preserve published owner files"
+  ],
+  "physical_acceptance_pending": [
+    "Android 24 and 29+ file descriptor path aliases and /proc availability",
+    "Real MediaStore Downloads visibility and external viewers",
+    "Actual permission dialogs, device rotation/process death, filesystem low-space behavior"
+  ],
+  "delivery": "No Jarvys APK signed or delivered; final signing remains with the existing approved key after all queue items.",
+  "references": [
+    "https://developer.android.com/training/data-storage/shared/media",
+    "https://developer.android.com/reference/android/system/Os"
+  ],
+  "validated_at": "2026-10-08T08:11:25.208753+00:00",
+  "independent_review": "Approved after security, UI, source-freeze and final-evidence review; no unresolved blocker in reviewed scope."
+}

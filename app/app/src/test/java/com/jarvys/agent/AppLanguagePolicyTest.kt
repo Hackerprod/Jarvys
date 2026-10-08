@@ -87,7 +87,7 @@ class AppLanguagePolicyTest {
         assertTrue(source.contains("outState.putString(STATE_GOAL, goalInput)"))
     }
 
-    @Test fun baseManifestPermissionSetIsUnchangedByLocaleConfiguration() {
+    @Test fun baseManifestPermissionSetIncludesOnlyScopedLegacyDownloadStorage() {
         val manifest = File(projectRoot(), "src/main/AndroidManifest.xml")
         val factory = DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
         val document = factory.newDocumentBuilder().parse(manifest)
@@ -102,6 +102,7 @@ class AppLanguagePolicyTest {
         }
         assertEquals(setOf(
             "android.permission.INTERNET",
+            "android.permission.WRITE_EXTERNAL_STORAGE",
             "android.permission.FOREGROUND_SERVICE",
             "android.permission.FOREGROUND_SERVICE_SPECIAL_USE",
             "android.permission.POST_NOTIFICATIONS",
@@ -113,6 +114,14 @@ class AppLanguagePolicyTest {
             "android.permission.ACCESS_COARSE_LOCATION",
             "android.permission.ACCESS_FINE_LOCATION",
         ), actual)
+        // UX16 adds only the platform permission needed by explicit Downloads taps on Android 7–9.
+        // Modern Android must never request a broad-storage grant for this flow.
+        val legacyStorage = (0 until nodes.length).map { nodes.item(it) as Element }.filter {
+            it.getAttributeNS("http://schemas.android.com/apk/res/android", "name") == "android.permission.WRITE_EXTERNAL_STORAGE"
+        }
+        assertEquals(1, legacyStorage.size)
+        assertEquals("28", legacyStorage.single().getAttributeNS("http://schemas.android.com/apk/res/android", "maxSdkVersion"))
+        assertFalse(actual.contains("android.permission.MANAGE_EXTERNAL_STORAGE"))
     }
 
     @Test fun languageUiHasNoInlineCopyAndKeepsGoogleRestOutOfPlaySources() {

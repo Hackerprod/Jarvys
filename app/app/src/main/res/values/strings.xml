@@ -957,7 +957,6 @@ description: Explicit preferences about language, tone, style, and how to help t
     <string name="chat_camera_unavailable">Camera attachments are not available in this run. You can capture the active screen from Context instead.</string>
     <string name="chat_photos_unavailable">Photo attachments are not available in this run. You can capture the active screen from Context instead.</string>
     <string name="chat_instructions_unavailable">Standalone instruction injection is not configured. Choose a skill to provide bounded guidance.</string>
-    <string name="drawer_history_section">Recent conversations</string>
     <string name="drawer_current_conversation">Current conversation</string>
     <string name="drawer_history_summary">%1$s · %2$d steps · %3$d turns</string>
     <string name="workspace_preview_missing">No index.html was found in this workspace.</string>
@@ -973,7 +972,6 @@ description: Explicit preferences about language, tone, style, and how to help t
     <string name="provider_save_replacement_key">Save replacement key</string>
     <string name="provider_save_api_key">Save API key</string>
     <string name="provider_save_key">Save key</string>
-    <string name="chat_drawer_local_profile">Local profile</string>
     <string name="chat_message_start_failed">Could not start your message. Please try again.</string>
     <string name="markdown_close">Close</string>
     <string name="oauth_callback_input_hint">Paste the complete redirect URL here</string>
@@ -1209,9 +1207,6 @@ After:
     <string name="image_action_share">Share</string>
     <string name="image_open_accessibility">Open generated image: %1$s</string>
     <string name="image_viewer_close">Close image viewer</string>
-    <string name="image_share_chooser">Share generated image</string>
-    <string name="image_save_succeeded">Image saved.</string>
-    <string name="image_save_failed">Could not save this image to the selected location.</string>
     <string name="attachment_model_decode">Cannot read image %1$s on this Android device. It may be damaged or use an unsupported format. Try JPEG or PNG. The message is saved.</string>
     <string name="attachment_model_file_failed">Cannot prepare attached file %1$s for the workspace. The message and attachment are saved.</string>
     <string name="attachment_model_memory">There is not enough available memory to prepare %1$s. The message is saved; try again after closing other apps.</string>
@@ -1239,31 +1234,9 @@ After:
     <string name="crew_mode_always_description">The agent always delegates to Crew.</string>
     <string name="crew_mode_auto_description">The agent decides when to use Crew.</string>
     <string name="crew_mode_off_description">The agent does not use Crew.</string>
-    <string name="crew_profile_adoption_help">Changing this option does not move or copy files. To bring existing text files into the project, explicitly request coding_adopt with selected paths and review its plan before copying. Originals are preserved; collisions stop the copy. Attachments are never copied automatically.</string>
-    <string name="crew_profile_capabilities">Selected capabilities</string>
-    <string name="crew_profile_capabilities_help">Select exact tools from the available catalog. Normal approvals still apply. Availability is checked again when starting and running the bot.</string>
     <string name="crew_profile_close">Close</string>
-    <string name="crew_profile_configure">Configure Coding</string>
-    <string name="crew_profile_description">Short description</string>
-    <string name="crew_profile_legacy_help">Keeps the existing chat files and tools. Profiles saved before project workspaces keep this option until you change it explicitly. Project-only tools must be deselected here.</string>
     <string name="crew_profile_load_failed">The Coding profile could not be loaded. Its stored configuration has not been replaced.</string>
-    <string name="crew_profile_name">Name</string>
-    <string name="crew_profile_no_skills">No enabled skills are available. You can save without skills.</string>
-    <string name="crew_profile_project_help">The main chat and this bot share the same project root in this conversation. Other conversations, attachments, memory and app-wide skills stay outside that root. Existing project files are kept.</string>
-    <string name="crew_profile_prompt">Instructions for the bot</string>
-    <string name="crew_profile_reload">Reload profile</string>
-    <string name="crew_profile_safety">Applies to new Coding bots. Saving does not start a bot, change Crew mode or grant execution permissions. This version has no command execution.</string>
-    <string name="crew_profile_save">Save profile</string>
-    <string name="crew_profile_saved">Profile saved. Existing bots keep their current instructions.</string>
-    <string name="crew_profile_saving">Saving…</string>
-    <string name="crew_profile_skills">Selected skills</string>
-    <string name="crew_profile_skills_help">Only these enabled skills are available to this bot. Also select the read_skill capability to load them. Their instructions cannot add tools or permissions.</string>
-    <string name="crew_profile_title">Coding profile</string>
     <string name="crew_profile_unavailable">%1$s · Unavailable. Remove this selection or restore its availability.</string>
-    <string name="crew_profile_version">ID: %1$s · Version %2$d</string>
-    <string name="crew_profile_workspace">File workspace</string>
-    <string name="crew_profile_workspace_legacy">Existing chat workspace (legacy)</string>
-    <string name="crew_profile_workspace_project">Separate project for each conversation</string>
     <string name="crew_resume_action">Resume and review</string>
     <string name="crew_resume_description">Review saved work and current permissions before continuing. Uncertain commands and edits will not be replayed.</string>
     <string name="crew_resume_failed">The saved work could not be resumed.</string>
@@ -1272,7 +1245,6 @@ After:
     <string name="drawer_archive_help">Open a chat or restore it from its menu</string>
     <string name="drawer_archived_chats">Archived chats</string>
     <string name="drawer_archived_notice">Chat archived. Find it in Archived chats.</string>
-    <string name="drawer_back_to_chats">Back to chats</string>
     <string name="drawer_busy">Wait for active work to finish before archiving or deleting chats.</string>
     <string name="drawer_cancel_action">Cancel</string>
     <string name="drawer_chat_actions">Actions for %1$s</string>
@@ -1342,4 +1314,20 @@ Their exit results are unknown. Do not repeat them automatically. Review project
     <string name="quick_model_effort_ultra">Ultra</string>
     <string name="quick_model_effort_xhigh">Very high</string>
     <string name="quick_model_expanded">Expanded</string>
+    <string name="chat_open_current_preview">Open current preview</string>
+    <string name="connector_tool_unconfirmed">Unconfirmed %1$s</string>
+    <string name="connector_tool_not_started">Not run: %1$s</string>
+
+    <!-- Chat delivery and direct Downloads export. -->
+    <string name="chat_download_action">Download</string>
+    <string name="chat_download_saving">Saving…</string>
+    <string name="chat_download_complete">Saved to Downloads</string>
+    <string name="chat_download_location">%1$s is ready in Downloads.</string>
+    <string name="chat_download_failed">Could not confirm the download</string>
+    <string name="chat_download_permission_denied">This Android version needs storage permission to save in Downloads. No new file was saved. You can share the file instead, or grant storage permission in Android settings and try again.</string>
+    <string name="chat_download_open_failed">The file could not be opened. If it was saved, you can find it in Downloads.</string>
+    <string name="chat_download_retry">The download could not be confirmed. Check Downloads before trying again.</string>
+    <string name="chat_download_open">Open</string>
+    <string name="chat_file_preview_unavailable">Preview unavailable. Download or share the original file.</string>
+    <string name="chat_download_open_failed_title">Could not open the file</string>
 </resources>

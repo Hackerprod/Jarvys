@@ -178,7 +178,7 @@ public final class CoreAgentLoop {
     public static final class CheckpointFailure extends IllegalStateException {
 
         CheckpointFailure(RuntimeException cause) {
-            super("Crew checkpoint could not be saved; execution stopped before further effects", cause);
+            super("Tool transcript checkpoint could not be saved; execution stopped before further effects", cause);
         }
     }
 
@@ -526,27 +526,11 @@ public final class CoreAgentLoop {
                 }
                 if (!replyToolCallAlreadyRecorded) transcript.add(ConversationTurn.toolCalls(reply.text, reply.calls));
                 updateTranscriptSnapshot(transcript);
-                ModelReply.Call repeatedCall = null;
-                for (ModelReply.Call call : reply.calls) {
-                    if (loopDetector.noProgressStreak(call.name, loopDetector.argumentsKey(call)) >= ToolLoopDetector.CRITICAL_THRESHOLD) {
-                        repeatedCall = call;
-                        break;
-                    }
-                }
-                if (repeatedCall != null) {
-                    String blockMessage = "Repeated " + repeatedCall.name + " calls with identical arguments and unchanged results were blocked to prevent a no-progress loop.";
-                    for (ModelReply.Call call : reply.calls) {
-                        transcript.add(ConversationTurn.toolResult(call.id, call.name, "Tool error: " + blockMessage));
-                    }
-                    updateTranscriptSnapshot(transcript);
-                    if (loopRecoveryUsed) return new Result(runId, LOOP_MESSAGE, modelTurns, "PARTIAL");
-                    loopRecoveryUsed = true;
-                    prompt = "Continue.";
-                    continue;
-                }
                 int remainingResultChars = limits.isUnbounded() ? Integer.MAX_VALUE : budget.toolResultsPerTurnChars;
                 int callCount = limits.maxToolCallsPerTurn == 0 ? reply.calls.size() : Math.min(reply.calls.size(), limits.maxToolCallsPerTurn);
                 String terminalText = null;
+                boolean blockedRepeatedCall = false;
+                boolean madeProgress = false;
                 for (int index = 0; index < callCount; index++) {
                     token.throwIfCancelled();
                     ModelReply.Call call = reply.calls.get(index);
@@ -559,6 +543,23 @@ public final class CoreAgentLoop {
                     int recentCalls = loopDetector.recentCallCount(call.name, argumentsKey);
                     String reflectionSource = tools.reflectionSource(call.name);
                     String auditDetail = tools.auditDetail(call.name, call.arguments);
+                    int failedCalls = loopDetector.consecutiveFailureCount(call.name, argumentsKey);
+                    String blockMessage = null;
+                    if (failedCalls >= ToolLoopDetector.FAILURE_THRESHOLD) {
+                        blockMessage = "Repeated " + call.name + " calls failed " + failedCalls
+                                + " times with identical arguments. This attempt was not executed. Inspect the failure and change the approach or report the blocker; do not repeat the same failing call.";
+                    } else if (loopDetector.noProgressStreak(call.name, argumentsKey) >= ToolLoopDetector.CRITICAL_THRESHOLD) {
+                        blockMessage = "Repeated " + call.name + " calls with identical arguments and unchanged results were blocked to prevent a no-progress loop. This attempt was not executed.";
+                    }
+                    if (blockMessage != null) {
+                        blockedRepeatedCall = true;
+                        toolLifecycle.put(call.id, "NEVER_LAUNCHED");
+                        String content = "Tool error: " + blockMessage;
+                        transcript.add(ConversationTurn.toolResult(call.id, call.name, content));
+                        updateTranscriptSnapshot(transcript);
+                        if (listener != null) listener.onToolProgress("tool_error", call.id, displayName, content, null, reflectionSource, auditDetail);
+                        continue;
+                    }
                     if (listener != null && !quietReaction) listener.onToolProgress("tool_call", call.id, displayName, null, null, reflectionSource, auditDetail);
                     toolLifecycle.put(call.id, "STARTED");
                     updateTranscriptSnapshot(transcript);
@@ -568,7 +569,7 @@ public final class CoreAgentLoop {
                         }
                     });
                     String rawContent = result.content;
-                    loopDetector.record(call.name, argumentsKey, result.success, rawContent);
+                    madeProgress |= loopDetector.record(call.name, argumentsKey, result.success, rawContent);
                     transcript.add(ConversationTurn.toolResult(call.id, call.name, result.success ? rawContent : "Tool error: " + rawContent));
                     if (turnContextProvider != null && result.success) {
                         try {
@@ -612,6 +613,12 @@ public final class CoreAgentLoop {
                 if (terminalText != null) {
                     emit(listener, "answer", terminalText);
                     return new Result(runId, terminalText, modelTurns, "COMPLETED", Math.max(0L, System.currentTimeMillis() - startedAtMs));
+                }
+                if (blockedRepeatedCall && !madeProgress) {
+                    if (loopRecoveryUsed) return new Result(runId, LOOP_MESSAGE, modelTurns, "PARTIAL", Math.max(0L, System.currentTimeMillis() - startedAtMs));
+                    loopRecoveryUsed = true;
+                } else if (madeProgress) {
+                    loopRecoveryUsed = false;
                 }
                 prompt = "Continue.";
             }

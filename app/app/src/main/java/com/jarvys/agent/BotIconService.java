@@ -143,10 +143,10 @@ public final class BotIconService {
     }
 
     /**
-     * Standalone UI tokens do not themselves serialize cancel() with runIfActive(). This operation's
-     * cancellation callback and metadata commit share a lock: cancellation before this gate wins;
-     * cancellation after the commit gate wins is a late cancellation of an already committed action.
-     * The controller-backed runIfActive gate is retained for the main-chat STOP latch as well.
+     * Cancellation callbacks and metadata commits share this operation's lock. The token's final
+     * action gate serializes dispatch with cancellation for standalone and controller-backed runs:
+     * cancellation before dispatch wins; cancellation after dispatch waits for the committed action
+     * and prevents subsequent effects.
      */
     static final class CommitGate implements AutoCloseable {
         private final CancellationToken token;

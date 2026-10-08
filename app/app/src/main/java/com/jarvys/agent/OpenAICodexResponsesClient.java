@@ -461,13 +461,14 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
     if (body == null || body.trim().isEmpty())
       throw new IllegalStateException("OpenAI Codex returned an empty response");
     LinkedHashMap<String, ModelReply.Call> calls = new LinkedHashMap<>();
+    Map<String, String> fallbackIds = new LinkedHashMap<>();
     StringBuilder text = new StringBuilder();
     try {
       String[] events = body.split("\\n");
       for (String event : events) {
         String payload = event.trim();
         if (payload.isEmpty() || !payload.startsWith("{")) continue;
-        consumeResponse(new JSONObject(payload), calls, text);
+        consumeResponse(new JSONObject(payload), calls, text, fallbackIds);
       }
     } catch (Exception e) {
       if (e instanceof IllegalStateException) throw (IllegalStateException) e;
@@ -505,11 +506,11 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
   }
 
   private static void consumeResponse(
-      JSONObject event, Map<String, ModelReply.Call> calls, StringBuilder text) throws Exception {
+      JSONObject event, Map<String, ModelReply.Call> calls, StringBuilder text, Map<String, String> fallbackIds) throws Exception {
     JSONObject response = event.optJSONObject("response");
     JSONObject item = event.optJSONObject("item");
-    if (response != null) consumeOutput(response.optJSONArray("output"), calls, text);
-    consumeItem(item, calls, text);
+    if (response != null) consumeOutput(response.optJSONArray("output"), calls, text, fallbackIds);
+    consumeItem(item, calls, text, fallbackIds, "output:" + event.optInt("output_index", 0));
     String eventType = event.optString("type", "");
     if ("response.output_text.delta".equals(eventType)) text.append(event.optString("delta", ""));
     if ("response.output_text.done".equals(eventType) && text.length() == 0) {
@@ -518,24 +519,31 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
   }
 
   private static void consumeOutput(
-      JSONArray output, Map<String, ModelReply.Call> calls, StringBuilder text) throws Exception {
+      JSONArray output, Map<String, ModelReply.Call> calls, StringBuilder text, Map<String, String> fallbackIds) throws Exception {
     if (output == null) return;
-    for (int i = 0; i < output.length(); i++) consumeItem(output.optJSONObject(i), calls, text);
+    for (int i = 0; i < output.length(); i++) consumeItem(output.optJSONObject(i), calls, text, fallbackIds, "output:" + i);
   }
 
   private static void consumeItem(
-      JSONObject item, Map<String, ModelReply.Call> calls, StringBuilder text) throws Exception {
+      JSONObject item, Map<String, ModelReply.Call> calls, StringBuilder text,
+      Map<String, String> fallbackIds, String fallbackKey) throws Exception {
     if (item == null) return;
     String type = item.optString("type", "");
     if ("function_call".equals(type)) {
-      String id = item.optString("call_id", item.optString("id", ""));
+      String id = item.optString("call_id", "");
+      if (id.isEmpty()) id = item.optString("id", "");
+      if (id.isEmpty()) id = fallbackIds.computeIfAbsent(fallbackKey,
+          ignored -> "jarvys-call-" + java.util.UUID.randomUUID());
+      else {
+        String previousId = fallbackIds.put(fallbackKey, id);
+        if (previousId != null && !previousId.equals(id)) calls.remove(previousId);
+      }
       String name = item.optString("name", "");
       String argsRaw = item.optString("arguments", "{}");
       JSONObject args = new JSONObject(argsRaw.trim().isEmpty() ? "{}" : argsRaw);
       if (!name.isEmpty())
         calls.put(
-            id.isEmpty() ? name + calls.size() : id,
-            new ModelReply.Call(id.isEmpty() ? name + calls.size() : id, name, toMap(args)));
+            id, new ModelReply.Call(id, name, toMap(args)));
     } else if ("message".equals(type)) {
       JSONArray content = item.optJSONArray("content");
       if (content != null) {

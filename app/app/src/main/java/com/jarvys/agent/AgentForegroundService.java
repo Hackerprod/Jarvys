@@ -629,22 +629,8 @@ public final class AgentForegroundService extends Service {
                 String previewId,
                 String reflectionSource,
                 String auditDetail) {
-              AgentRunUiState.onToolProgress(
-                  stage, callId, displayName, detail, previewId, auditDetail);
-              if ("tool_result".equals(stage) || "tool_error".equals(stage)) {
-                try {
-                  String storedToolName =
-                      "web".equals(reflectionSource) ? "web_search" : displayName;
-                  conversationStore.appendReflectionToolEvent(
-                      sessionId,
-                      reflectionUserMessageId,
-                      storedToolName,
-                      reflectionSource,
-                      stage,
-                      callId);
-                } catch (RuntimeException ignored) {
-                }
-              }
+              persistAndShowToolProgress(conversationStore, sessionId, reflectionUserMessageId,
+                  stage, callId, displayName, detail, previewId, reflectionSource, auditDetail);
             }
 
             @Override
@@ -746,6 +732,21 @@ public final class AgentForegroundService extends Service {
       }
       stopServiceIfIdle();
     }
+  }
+
+  /** Shared service projection: durably save terminal UI data before announcing completion. */
+  static void persistAndShowToolProgress(LocalRunStore store, String sessionId, String userMessageId,
+      String stage, String callId, String displayName, String detail, String previewId,
+      String reflectionSource, String auditDetail) {
+    if ("tool_result".equals(stage) || "tool_error".equals(stage)) {
+      store.appendConversationToolPresentation(sessionId, userMessageId, displayName, stage, callId,
+          detail, previewId, auditDetail);
+      try {
+        store.appendReflectionToolEvent(sessionId, userMessageId,
+            "web".equals(reflectionSource) ? "web_search" : displayName, reflectionSource, stage, callId);
+      } catch (RuntimeException ignored) { }
+    }
+    AgentRunUiState.onToolProgress(stage, callId, displayName, detail, previewId, auditDetail);
   }
 
   private void finishCoreRun(CancellationToken token, String report) {

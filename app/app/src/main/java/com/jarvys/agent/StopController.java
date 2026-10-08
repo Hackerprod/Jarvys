@@ -114,19 +114,23 @@ public final class StopController {
         }
     }
 
-    synchronized Runnable registerCancelAction(long tokenGeneration, Runnable action) {
-        if (!isActive(tokenGeneration)) {
-            action.run();
-            return () -> { };
+    Runnable registerCancelAction(long tokenGeneration, Runnable action) {
+        synchronized (this) {
+            if (isActive(tokenGeneration)) {
+                List<Runnable> actions = cancelActions.get(tokenGeneration);
+                if (actions == null) {
+                    actions = new ArrayList<>();
+                    cancelActions.put(tokenGeneration, actions);
+                }
+                actions.add(action);
+                List<Runnable> registered = actions;
+                return () -> unregisterCancelAction(tokenGeneration, registered, action);
+            }
         }
-        List<Runnable> actions = cancelActions.get(tokenGeneration);
-        if (actions == null) {
-            actions = new ArrayList<>();
-            cancelActions.put(tokenGeneration, actions);
-        }
-        actions.add(action);
-        List<Runnable> registered = actions;
-        return () -> unregisterCancelAction(tokenGeneration, registered, action);
+        // A callback may acquire an approval/UI lock whose owner checks this controller.
+        // Keep immediate cancellation synchronous, but never invoke foreign code under our monitor.
+        action.run();
+        return () -> { };
     }
 
     void cancelActionsForTimeout(long tokenGeneration) {

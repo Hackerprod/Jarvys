@@ -23,6 +23,8 @@ import java.util.concurrent.TimeUnit;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.Test;
+import org.junit.Before;
+import org.junit.After;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
@@ -30,6 +32,25 @@ import org.robolectric.annotation.Config;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 34)
 public class BotCatalogCoreRuntimeTest {
+    private Object previousSecrets;
+
+    @Before public void installTestSecretStorage() throws Exception {
+        Context context = ApplicationProvider.getApplicationContext();
+        android.content.SharedPreferences preferences = context.getSharedPreferences("bot-catalog-runtime-secrets", Context.MODE_PRIVATE);
+        assertTrue(preferences.edit().clear().commit());
+        Field singleton = SecretStore.class.getDeclaredField("singleton");
+        singleton.setAccessible(true);
+        previousSecrets = singleton.get(null);
+        // Existing package-local test seam; production encryption and policy paths are unchanged.
+        singleton.set(null, new SecretStore(preferences));
+    }
+
+    @After public void restoreSecretStorage() throws Exception {
+        Field singleton = SecretStore.class.getDeclaredField("singleton");
+        singleton.setAccessible(true);
+        singleton.set(null, previousSecrets);
+    }
+
     @Test public void captainCatalogOnlyContainsEnabledShortMetadataNeverChildInstructions() {
         Context context = ApplicationProvider.getApplicationContext();
         CrewProfileRepository repository = new CrewProfileRepository(context);
@@ -57,6 +78,7 @@ public class BotCatalogCoreRuntimeTest {
             repository.setEnabled(definition.id, definition.revision, false);
             CoreToolResult result = tools.invoke("board_read", Collections.emptyMap(), bot.token);
             assertFalse(result.success);
+            assertTrue(result.content, result.content.contains("disabled"));
             assertTrue(bot.token.isCancellationRequested());
         }
     }
@@ -113,6 +135,25 @@ public class BotCatalogCoreRuntimeTest {
             release.countDown();
             bot.awaitTermination();
             assertFalse(CoreAgentRuntime.workingBotCounts().containsKey(profile.id));
+        } finally { release.countDown(); crews.remove(session, manager); manager.close(); }
+    }
+
+    @Test public void transientLegacyRoleCannotImpersonateAVersionedCatalogIdInWorkingCounts() throws Exception {
+        Field field = CoreAgentRuntime.class.getDeclaredField("CREWS");
+        field.setAccessible(true);
+        @SuppressWarnings("unchecked") Map<String, CrewManager> crews = (Map<String, CrewManager>) field.get(null);
+        String session = "catalog-transient-" + System.nanoTime();
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CrewManager manager = manager(session, started, release);
+        crews.put(session, manager);
+        try {
+            CrewManager.Bot bot = manager.spawn("custom", "A separate one-off mission", Collections.emptyList(), "catalog-collision");
+            assertTrue(started.await(5, TimeUnit.SECONDS));
+            assertEquals("custom-catalog-collision", bot.role.id);
+            assertEquals(0, bot.role.profileVersion);
+            assertFalse("Only versioned catalog profiles can light up a catalog tile",
+                    CoreAgentRuntime.workingBotCounts().containsKey(bot.role.id));
         } finally { release.countDown(); crews.remove(session, manager); manager.close(); }
     }
 

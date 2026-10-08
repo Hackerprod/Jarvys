@@ -79,13 +79,29 @@ public final class CrewProfileRepository {
     public CrewRole resolveRole(String id, Collection<String> approvedCapabilities, Collection<String> availableSkillIds) {
         BotDefinition definition = definition(id);
         if (!definition.enabled) throw CrewProfile.invalid("bot is disabled: " + id);
-        return definition.profile.resolveRole(approvedCapabilities, availableSkillIds);
+        return runtimeProfile(definition, availableSkillIds).resolveRole(approvedCapabilities, availableSkillIds);
     }
 
     public List<CrewRole> resolveRoles(Collection<String> approvedCapabilities, Collection<String> availableSkillIds) {
         List<CrewRole> result = new ArrayList<>();
-        for (BotDefinition definition : definitions()) if (definition.enabled) result.add(definition.profile.resolveRole(approvedCapabilities, availableSkillIds));
+        for (BotDefinition definition : definitions()) if (definition.enabled) {
+            result.add(runtimeProfile(definition, availableSkillIds).resolveRole(approvedCapabilities, availableSkillIds));
+        }
         return Collections.unmodifiableList(result);
+    }
+
+    /** Optional factory availability narrows the immutable template only for this run. */
+    private static CrewProfile runtimeProfile(BotDefinition definition, Collection<String> availableSkillIds) {
+        CrewProfile profile = definition.profile;
+        if (!definition.builtIn || !CrewRoleTemplates.CODING.equals(profile.id)
+                || availableSkillIds.contains(com.jarvys.agent.skills.SkillScopePolicy.APK_FACTORY_ID)) return profile;
+        List<String> skills = new ArrayList<>(profile.skillIds);
+        skills.remove(com.jarvys.agent.skills.SkillScopePolicy.APK_FACTORY_ID);
+        List<String> capabilities = new ArrayList<>(profile.capabilities);
+        capabilities.remove(com.jarvys.agent.skills.SkillScopePolicy.APK_FACTORY_TOOL);
+        if (skills.isEmpty()) capabilities.remove("read_skill");
+        return new CrewProfile(profile.id, profile.version, profile.name, profile.description, profile.prompt,
+                skills, capabilities, profile.workspaceMode);
     }
 
     public BotDefinition create(CrewProfile draft, Collection<String> approvedCapabilities, Collection<String> availableSkillIds) {

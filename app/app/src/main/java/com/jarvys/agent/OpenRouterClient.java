@@ -308,9 +308,9 @@ public final class OpenRouterClient implements ModelProviderClient {
           if (function == null) continue;
           String name = function.optString("name", "");
           JSONObject arguments = new JSONObject(function.optString("arguments", "{}"));
-          calls.add(
-              new ModelReply.Call(
-                  tool.optString("id", "openrouter-call-" + i), name, toMap(arguments)));
+          String callId = tool.optString("id", "");
+          if (callId.isEmpty()) callId = "jarvys-call-" + java.util.UUID.randomUUID();
+          calls.add(new ModelReply.Call(callId, name, toMap(arguments)));
         }
       }
       JSONObject usage = root.optJSONObject("usage");

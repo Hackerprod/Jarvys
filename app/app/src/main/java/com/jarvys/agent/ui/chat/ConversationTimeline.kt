@@ -280,6 +280,9 @@ private fun JarvysConversationEvent(
         "crew_mission" -> event.crewMissionSnapshot?.let { mission ->
             CrewMissionCard(mission, onOpen = { onOpenCrewMission(mission.missionId) })
         }
+        "delivered_file" -> TimelineArrival(animateEntry) {
+            DeliveredArtifactEventCard(event, generatedImageSessionId)
+        }
         "generated_image" -> TimelineArrival(animateEntry) {
             GeneratedImageEventCard(event, generatedImageSessionId, onSaveGeneratedImage, onShareGeneratedImage)
         }
@@ -387,8 +390,11 @@ internal fun AssistantReplyView(
                 if (isError) R.string.chat_assistant_error_accessibility else R.string.chat_assistant_message_accessibility,
             )
         }) {
-            AssistantMarkdown(event.text, onOpenSkillFile = onOpenSkillFile,
-                textColor = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onBackground)
+            // One selection scope per body; actions and neighboring messages stay outside it.
+            SelectionContainer {
+                AssistantMarkdown(event.text, onOpenSkillFile = onOpenSkillFile,
+                    textColor = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onBackground)
+            }
         }
         if (event.proactiveReplies.isNotEmpty()) SuggestedReplyActions(event, onProactiveSuggestedReply, !streamActive)
         AnimatedVisibility(
@@ -534,6 +540,10 @@ private fun ConnectorActivityLine(
     }
     val localizedToolStatus = when {
         event.stage == "tool_progress" -> event.toolDisplayName ?: event.text
+        event.stage == "tool_interrupted" -> context.getString(R.string.connector_tool_unconfirmed,
+            localizedToolName ?: event.toolDisplayName ?: event.text)
+        event.stage == "tool_not_started" -> context.getString(R.string.connector_tool_not_started,
+            localizedToolName ?: event.toolDisplayName ?: event.text)
         WebSearchTools.isSearchLabel(event.toolDisplayName) && event.stage == "tool_error" ->
             context.getString(R.string.web_search_event_failed, searchQuery)
         WebSearchTools.isSearchLabel(event.toolDisplayName) -> context.getString(R.string.web_search_event, searchQuery)
@@ -562,7 +572,7 @@ private fun ConnectorActivityLine(
                 Text(localizedToolStatus, Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurface,
                     style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 if (inlineLinuxFailureDetail == null && !event.detail.isNullOrBlank()) IconButton(onClick = { expanded = !expanded },
-                    modifier = Modifier.size(44.dp)) {
+                    modifier = Modifier.size(44.dp).testTag("tool-output-toggle-${event.toolCallId ?: event.id}")) {
                     Icon(if (expanded) LucideIcons.ChevronUp else LucideIcons.ChevronDown,
                         contentDescription = stringResource(if (expanded) R.string.tool_output_collapse else R.string.tool_output_expand),
                         modifier = Modifier.size(17.dp))
@@ -592,8 +602,9 @@ private fun ConnectorActivityLine(
                     onOpenSkillFile)
             }
             event.previewId?.let { preview ->
-                TextButton(onClick = { onOpenPreview(preview) }, modifier = Modifier.align(Alignment.End)) {
-                    Text(stringResource(R.string.chat_open_preview))
+                TextButton(onClick = { onOpenPreview(preview) }, modifier = Modifier.align(Alignment.End)
+                    .testTag("tool-preview-${event.toolCallId ?: event.id}")) {
+                    Text(stringResource(if (event.previewIsCurrent) R.string.chat_open_current_preview else R.string.chat_open_preview))
                 }
             }
     }
@@ -655,7 +666,9 @@ private fun TranslationNote(event: AgentRunUiEvent, onOpenSkillFile: (SkillFileL
                 onHide(event.detail.orEmpty())
             }
         }
-        AssistantMarkdown(event.text, Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp), onOpenSkillFile)
+        SelectionContainer {
+            AssistantMarkdown(event.text, Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp), onOpenSkillFile)
+        }
     }
 }
 
@@ -840,22 +853,32 @@ private fun ApprovalDecisionCard(event: AgentRunUiEvent, connectorRegistry: Conn
     val title = event.approvalLocalizedTitle?.resolve(context) ?: event.text
     val lines = event.approvalLocalizedLines?.map { it.resolve(context) } ?: event.approvalLines
     val decisionStatus = approvalStatusPresentation(event.approvalStatus.orEmpty())
+    var permissionDecision by remember(event.approvalId) { mutableStateOf(ApprovalDecision.APPROVED) }
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) ApprovalGate.INSTANCE.resolve(event.approvalId.orEmpty(), ApprovalDecision.APPROVED)
-        else if (event.approvalPermissionDeniedIntent != null) {
-            runCatching { context.startActivity(buildApprovalIntent(event.approvalPermissionDeniedIntent)) }
-                .onSuccess { ApprovalGate.INSTANCE.resolve(event.approvalId.orEmpty(), ApprovalDecision.PERMISSION_FALLBACK_LAUNCHED) }
-                .onFailure { ApprovalGate.INSTANCE.resolve(event.approvalId.orEmpty(), ApprovalDecision.ACTION_FAILED) }
-        } else ApprovalGate.INSTANCE.resolve(event.approvalId.orEmpty(), ApprovalDecision.PERMISSION_DENIED)
+        ApprovalGate.INSTANCE.resolveFromUi(event.approvalId.orEmpty()) {
+            if (granted) permissionDecision
+            else if (event.approvalPermissionDeniedIntent != null) {
+                if (runCatching { context.startActivity(buildApprovalIntent(event.approvalPermissionDeniedIntent)) }.isSuccess)
+                    ApprovalDecision.PERMISSION_FALLBACK_LAUNCHED else ApprovalDecision.ACTION_FAILED
+            } else ApprovalDecision.PERMISSION_DENIED
+        }
     }
-    fun approve(decision: ApprovalDecision = ApprovalDecision.APPROVED) {
+    fun approve(decisionProvider: () -> ApprovalDecision = { ApprovalDecision.APPROVED }) {
         if (permission != null && androidx.core.content.ContextCompat.checkSelfPermission(context, permission)
-            != android.content.pm.PackageManager.PERMISSION_GRANTED) permissionLauncher.launch(permission)
-        else event.approvalIntent?.let { spec ->
-            runCatching { context.startActivity(buildApprovalIntent(spec)) }
-                .onSuccess { ApprovalGate.INSTANCE.resolve(event.approvalId.orEmpty(), decision) }
-                .onFailure { ApprovalGate.INSTANCE.resolve(event.approvalId.orEmpty(), ApprovalDecision.ACTION_FAILED) }
-        } ?: ApprovalGate.INSTANCE.resolve(event.approvalId.orEmpty(), decision)
+            != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            runCatching {
+                ApprovalGate.INSTANCE.beginUiAction(event.approvalId.orEmpty()) {
+                    permissionDecision = decisionProvider()
+                    permissionLauncher.launch(permission)
+                }
+            }.onFailure { ApprovalGate.INSTANCE.resolve(event.approvalId.orEmpty(), ApprovalDecision.ACTION_FAILED) }
+        } else ApprovalGate.INSTANCE.resolveFromUi(event.approvalId.orEmpty()) {
+            val decision = decisionProvider()
+            event.approvalIntent?.let { spec ->
+                if (runCatching { context.startActivity(buildApprovalIntent(spec)) }.isSuccess) decision
+                else ApprovalDecision.ACTION_FAILED
+            } ?: decision
+        }
     }
     JarvysGroup(
         Modifier.fillMaxWidth().then(if (pending) Modifier else Modifier.clickable { expanded = !expanded })
@@ -896,13 +919,17 @@ private fun ApprovalDecisionCard(event: AgentRunUiEvent, connectorRegistry: Conn
                         if (event.approvalAllowAlwaysAvailable && FlavorAutonomyUi.handlesApproval(event)) {
                             FlavorAutonomyUi.ApprovalAction(event) { detail -> AgentRunUiState.updateApprovalDetail(event.approvalId.orEmpty(), detail) }
                         } else if (event.approvalAllowAlwaysAvailable) OutlinedButton(onClick = {
-                            approveAndAllowAlways(
-                                registry = connectorRegistry,
-                                connectorId = event.approvalAutonomyConnectorId,
-                                operationName = event.approvalAutonomyOperationName,
-                                onStatusDetail = { detail -> AgentRunUiState.updateApprovalDetail(event.approvalId.orEmpty(), detail) },
-                                onResolve = ::approve,
-                            )
+                            approve {
+                                var decision = ApprovalDecision.APPROVED
+                                approveAndAllowAlways(
+                                    registry = connectorRegistry,
+                                    connectorId = event.approvalAutonomyConnectorId,
+                                    operationName = event.approvalAutonomyOperationName,
+                                    onStatusDetail = { detail -> AgentRunUiState.updateApprovalDetail(event.approvalId.orEmpty(), detail) },
+                                    onResolve = { decision = it },
+                                )
+                                decision
+                            }
                         }, modifier = Modifier.fillMaxWidth()) { Text(context.getString(R.string.approval_approve_allow_always), softWrap = true) }
                         TextButton(onClick = { ApprovalGate.INSTANCE.resolve(event.approvalId.orEmpty(), ApprovalDecision.DENIED) },
                             modifier = Modifier.fillMaxWidth()) { Text(context.getString(R.string.approval_reject)) }

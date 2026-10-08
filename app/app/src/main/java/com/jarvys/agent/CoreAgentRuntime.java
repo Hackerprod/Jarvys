@@ -2,6 +2,7 @@ package com.jarvys.agent;
 
 import android.content.Context;
 import com.jarvys.agent.coding.CodingProjectTools;
+import com.jarvys.agent.coding.ApkFactoryTools;
 import com.jarvys.agent.coding.ProjectMutationService;
 import com.jarvys.agent.coding.ProjectScope;
 import com.jarvys.agent.coding.ProjectScopeStore;
@@ -36,6 +37,7 @@ import com.jarvys.agent.proactive.ProactiveConversation;
 import com.jarvys.agent.proactive.ProactiveStatusCoreTool;
 import com.jarvys.agent.skills.SkillEntry;
 import com.jarvys.agent.skills.SkillRepository;
+import com.jarvys.agent.skills.SkillScopePolicy;
 import com.jarvys.agent.tasks.ScheduledTaskConversation;
 import com.jarvys.agent.tasks.TaskManagementTools;
 import java.io.IOException;
@@ -193,7 +195,7 @@ public final class CoreAgentRuntime {
     List<String> listUnmodifiableList;
     this.context = context == null ? null : context.getApplicationContext();
     this.sessionId = sessionId;
-    this.skills = Collections.unmodifiableList(new ArrayList(skills));
+    this.skills = SkillScopePolicy.forProfile(skills, null);
     if (allowedTools == null) {
       listUnmodifiableList = null;
     } else {
@@ -259,12 +261,17 @@ public final class CoreAgentRuntime {
     CoreToolRegistry toolRegistry = createTools();
     if (!mainChat) {
       List<String> available = new ArrayList<>(toolRegistry.names());
+      available.remove("deliver_file");
       available.remove("generate_image");
       available.remove("generate_bot_icon");
       available.remove("list_bots");
+      available.remove("create_bot");
       available.remove("list_image_references");
       toolRegistry = toolRegistry.subset(available);
     }
+    final MainChatTranscriptStore transcriptStore = mainChat && context != null
+        ? new MainChatTranscriptStore(context.getFilesDir(), sessionId, new LocalRunStore(context)) : null;
+    if (transcriptStore != null) toolRegistry = toolRegistry.with(Collections.singletonList(transcriptStore.recoveryTool()));
     final MessageReactionTool reactionTool = reactionToolForRun(mainChat);
     if (reactionTool != null) toolRegistry = toolRegistry.with(Collections.singletonList(reactionTool));
     CrewMode mode = crewMode();
@@ -292,7 +299,7 @@ public final class CoreAgentRuntime {
     try {
       ConversationCompactor compactor =
           depth == 0 && context != null
-              ? new ConversationCompactor(sessionId, model, new LocalRunStore(context))
+              ? new ConversationCompactor(sessionId, model, new LocalRunStore(context), mainChat)
               : null;
       final String runInstructions = instructions() + (reactionTool == null ? "" : "\n\n" + MessageReactionTool.GUIDANCE);
       CoreAgentLoop.Model scopedModel =
@@ -327,6 +334,7 @@ public final class CoreAgentRuntime {
       CoreAgentLoop loop =
           new CoreAgentLoop(
               scopedModel, toolRegistry, runInstructions, sessionId, budget, compactor);
+      if (transcriptStore != null) transcriptStore.attach(loop, history);
       CoreAgentLoop.Result result = loop.run(request, history, attachments, token, listener);
       if (crewManager != null) {
         crewManager.finishMission(crewMissionId, result.text, result.outcome);
@@ -350,7 +358,7 @@ public final class CoreAgentRuntime {
   }
 
   static boolean lambda$runInternal$0(String name) {
-    return ("generate_image".equals(name) || "generate_bot_icon".equals(name) || "list_bots".equals(name) || "list_image_references".equals(name)) ? false : true;
+    return ("deliver_file".equals(name) || "generate_image".equals(name) || "generate_bot_icon".equals(name) || "list_bots".equals(name) || "create_bot".equals(name) || "list_image_references".equals(name)) ? false : true;
   }
 
   /** Run-bound interactive capability, never part of inherited generic or Crew tool inventories. */
@@ -433,6 +441,8 @@ public final class CoreAgentRuntime {
         });
     final List<String> profileCeiling = new ArrayList<>(crewCapabilities.names());
     profileCeiling.addAll(CodingProjectTools.names());
+    profileCeiling.add(ApkFactoryTools.NAME);
+    profileCeiling.add("read_skill");
     profileCeiling.addAll(FlavorLinuxTools.profileCapabilityNames(this.context, this.sessionId));
     manager.configureProfiles(
         new Function() {
@@ -529,7 +539,7 @@ public final class CoreAgentRuntime {
       if (definition.id.equals(roleId)) {
         if (!definition.enabled) throw new IllegalStateException("Bot definition is disabled: " + roleId);
         List<String> availableSkills = new ArrayList<>();
-        for (SkillEntry skill : SkillRepository.Companion.get(this.context).enabledForRun()) {
+        for (SkillEntry skill : SkillRepository.Companion.get(this.context).enabledForProfile(roleId)) {
           availableSkills.add(skill.getMetadata().getId());
         }
         CrewRole role = profiles.resolveRole(definition.id, withCrewProtocol(profileCeiling), availableSkills);
@@ -580,7 +590,7 @@ public final class CoreAgentRuntime {
   public CrewRole currentResumeRole(CrewManager.Bot bot) {
     CrewProfileRepository profiles = new CrewProfileRepository(this.context);
     List<String> availableSkills = new ArrayList<>();
-    for (SkillEntry skill : SkillRepository.Companion.get(this.context).enabledForRun()) {
+    for (SkillEntry skill : SkillRepository.Companion.get(this.context).enabledForProfile(bot.role.id)) {
       availableSkills.add(skill.getMetadata().getId());
     }
     CrewRole current = nativeAndroidRole(
@@ -731,7 +741,8 @@ public final class CoreAgentRuntime {
                     })
                 .collect(Collectors.toList());
     selected.removeAll(workspaceSelected);
-    List<SkillEntry> profileSkills = selectedSkills(bot.role.skillIds);
+    String skillProfileId = bot.role.profileVersion > 0 ? bot.role.id : null;
+    List<SkillEntry> profileSkills = selectedSkills(bot.role.skillIds, skillProfileId);
     selected.remove("read_skill");
     selected.remove("delegate_subtask");
     final List<String> executionNames = FlavorLinuxTools.profileCapabilityNames(context, sessionId);
@@ -750,6 +761,10 @@ public final class CoreAgentRuntime {
                     })
                 .collect(Collectors.toList());
     selected.removeAll(executionSelected);
+    final boolean factorySelected = selected.remove(ApkFactoryTools.NAME);
+    if (factorySelected && (!projectScope || bot.role.profileVersion <= 0 || !CrewRoleTemplates.CODING.equals(bot.role.id))) {
+      throw new IllegalArgumentException("APK factory is reserved for the built-in Coding project");
+    }
     List<CoreTool> workspace2 = workspace;
     CoreToolRegistry scoped =
         captainTools.forRequester(bot.name, bot.role.colorKey).subset(selected).forDelegatedAgent();
@@ -769,6 +784,26 @@ public final class CoreAgentRuntime {
                           })
                       .collect(Collectors.toList()));
     }
+    if (factorySelected) {
+      try {
+        ProjectScope factoryScope = new ProjectScopeStore(context.getFilesDir()).open(sessionId);
+        scoped = scoped.with(Collections.singletonList(ApkFactoryTools.create(context, factoryScope, bot.id,
+            () -> {
+              try {
+                BotDefinition current = new CrewProfileRepository(context).definition(CrewRoleTemplates.CODING);
+                return !bot.token.isCancellationRequested() && bot.role.profileVersion > 0
+                    && current.enabled && current.builtIn && current.profile.version == bot.role.profileVersion
+                    && CrewRoleTemplates.CODING.equals(bot.role.id) && bot.role.tools.contains(ApkFactoryTools.NAME)
+                    && SkillRepository.Companion.get(context).enabledForProfile(CrewRoleTemplates.CODING).stream()
+                        .anyMatch(skill -> SkillScopePolicy.APK_FACTORY_ID.equals(skill.getMetadata().getId()))
+                    && factoryScope.durableIdentity().equals(bot.scopeIdentity());
+              } catch (RuntimeException | IOException revoked) { return false; }
+            })));
+
+      } catch (IOException unavailable) {
+        throw new IllegalStateException("Factory project scope is unavailable", unavailable);
+      }
+    }
     if (!executionSelected.isEmpty()) {
       scoped =
           scoped.with(
@@ -779,7 +814,8 @@ public final class CoreAgentRuntime {
           scoped.with(
               Collections.singletonList(
                   new LoadSkillTool(
-                      profileSkills, this.budget.loadedSkillChars, this::skillCurrentlyAvailable)));
+                      profileSkills, this.budget.loadedSkillChars,
+                      id -> skillCurrentlyAvailable(id, skillProfileId), skillProfileId)));
     }
     if (bot.role.tools.contains("delegate_subtask")) {
       scoped =
@@ -1071,6 +1107,8 @@ public final class CoreAgentRuntime {
             true);
     List<String> ceiling = new ArrayList<>(crewBotCapabilityScope(runtime.createTools()).names());
     ceiling.addAll(CodingProjectTools.names());
+    ceiling.add(ApkFactoryTools.NAME);
+    ceiling.add("read_skill");
     ceiling.addAll(FlavorLinuxTools.profileCapabilityNames(context, catalogSession));
     return withCrewProtocol(new LinkedHashSet(ceiling));
   }
@@ -1095,9 +1133,11 @@ public final class CoreAgentRuntime {
   static boolean lambda$crewBotCapabilityScope$15(String name) {
     return (UserDecisionTool.NAME.equals(name)
             || "search_files".equals(name)
+            || "deliver_file".equals(name)
             || "generate_image".equals(name)
             || "generate_bot_icon".equals(name)
             || "list_bots".equals(name)
+            || "create_bot".equals(name)
             || "list_image_references".equals(name)
             || name.startsWith("linux_")
             || TaskManagementTools.TOOL_NAMES.contains(name))
@@ -1110,7 +1150,8 @@ public final class CoreAgentRuntime {
     Map<String, Integer> counts = new java.util.LinkedHashMap<>();
     java.util.Set<String> seen = new java.util.HashSet<>();
     for (CrewManager manager : CREWS.values()) for (CrewManager.Bot bot : manager.bots()) {
-      if (bot.status() != CrewManager.Status.RUNNING || bot.token.isCancellationRequested()
+      if (bot.role.profileVersion <= 0 || bot.status() != CrewManager.Status.RUNNING
+          || bot.token.isCancellationRequested()
           || !seen.add(manager.conversationId() + "/" + bot.id)) continue;
       int previous = counts.containsKey(bot.role.id) ? counts.get(bot.role.id) : 0;
       counts.put(bot.role.id, previous == Integer.MAX_VALUE ? previous : previous + 1);
@@ -1148,7 +1189,7 @@ public final class CoreAgentRuntime {
       }
     }
     for (CoreTool tool3 : this.workspaceTools) {
-      if (this.depth <= 0 || !"search_files".equals(tool3.declaration().name)) {
+      if (this.depth <= 0 || (!"search_files".equals(tool3.declaration().name) && !"deliver_file".equals(tool3.declaration().name))) {
         if (allowed(tool3)) {
           tools.add(tool3);
         }
@@ -1157,6 +1198,8 @@ public final class CoreAgentRuntime {
     if (BotCatalogTool.isAvailable(this.context, this.depth, this.sessionId)) {
       CoreTool catalog = new BotCatalogTool(this.context, this.sessionId);
       if (allowed(catalog)) tools.add(catalog);
+      CoreTool creator = new BotCreationTool(this.context, this.sessionId);
+      if (allowed(creator)) tools.add(creator);
     }
     if (this.context != null
         && CodexImageGenerationTool.isAvailable(
@@ -1227,7 +1270,7 @@ public final class CoreAgentRuntime {
     List<String> names = new ArrayList<>();
     for (CoreTool tool : includedMcpTools) {
       String name = tool.declaration().name;
-      if (BotCatalogTool.NAME.equals(name) || BotIconGenerationTool.NAME.equals(name)) continue;
+      if (DeliverFileTool.NAME.equals(name) || BotCatalogTool.NAME.equals(name) || BotIconGenerationTool.NAME.equals(name) || BotCreationTool.NAME.equals(name)) continue;
       if (!includeDelegate || !"search_files".equals(name)) {
         if (!includeDelegate
             || (!"generate_image".equals(name) && !"list_image_references".equals(name))) {
@@ -1267,10 +1310,15 @@ public final class CoreAgentRuntime {
   }
 
   public boolean skillCurrentlyAvailable(String id) {
+    return skillCurrentlyAvailable(id, null);
+  }
+
+  private boolean skillCurrentlyAvailable(String id, String profileId) {
+    if (!SkillScopePolicy.availableTo(id, profileId)) return false;
     if (this.context == null) {
       return true;
     }
-    for (SkillEntry skill : SkillRepository.Companion.get(this.context).enabledForRun()) {
+    for (SkillEntry skill : SkillRepository.Companion.get(this.context).enabledForProfile(profileId)) {
       if (id.equals(skill.getMetadata().getId())) {
         return true;
       }
@@ -1313,12 +1361,17 @@ public final class CoreAgentRuntime {
     return catalog.toString();
   }
 
-  private List<SkillEntry> selectedSkills(Collection<String> selectedIds) {
+  private List<SkillEntry> selectedSkills(Collection<String> selectedIds, String profileId) {
+    for (String id : selectedIds) {
+      if (!SkillScopePolicy.availableTo(id, profileId)) {
+        throw new IllegalArgumentException("Selected skill is reserved for the built-in Coding profile");
+      }
+    }
     if (selectedIds.isEmpty()) {
       return Collections.emptyList();
     }
     if (this.context != null) {
-      return SkillRepository.Companion.get(this.context).selectedForRun(selectedIds);
+      return SkillRepository.Companion.get(this.context).selectedForProfile(selectedIds, profileId);
     }
     List<SkillEntry> result = new ArrayList<>();
     for (SkillEntry skill : this.skills) {
@@ -1361,6 +1414,14 @@ public final class CoreAgentRuntime {
       List<String> requestedTools,
       List<String> requestedSkillIds,
       CorePromptBudget budget) {
+    for (String id : requestedSkillIds) {
+      if (SkillScopePolicy.isReserved(id)) {
+        throw new IllegalArgumentException("APK factory instructions are available only in the built-in Coding profile");
+      }
+    }
+    if (requestedTools.contains(SkillScopePolicy.APK_FACTORY_TOOL)) {
+      throw new IllegalArgumentException("apk_factory cannot be passed to delegated workers");
+    }
     List<String> actual = new ArrayList<>(requestedTools);
     actual.remove("delegate_subtask");
     if (!parent.names().containsAll(actual)) {
@@ -1461,7 +1522,7 @@ public final class CoreAgentRuntime {
     ConversationCompactor compactor =
         this.context == null
             ? null
-            : new ConversationCompactor(childId, sharedModel, new LocalRunStore(this.context));
+            : new ConversationCompactor(childId, sharedModel, new LocalRunStore(this.context), false);
     return new CoreAgentLoop(model, childTools3, childInstructions, childId, this.budget, compactor)
         .run(objective, Collections.emptyList(), token, null)
         .text;
@@ -1530,6 +1591,15 @@ public final class CoreAgentRuntime {
               + " write/edit there. Relative file paths still address the existing workspace;"
               + " adopting legacy files requires an explicit reviewed copy through a project-scoped"
               + " Crew profile.");
+      prompt.append("\nFile delivery: when the user requests an actual file, use deliver_file with its existing "
+          + "workspace path (or /project/path for Coding/backend output). It creates a native, immutable attachment. "
+          + "A path or Markdown link alone is not delivery. The user taps Download to save to OS Downloads; "
+          + "delivery never installs or executes a file. Check the tool result before saying it is attached.");
+      prompt.append("\nAPK factory discovery: delegate Android APK requests to the built-in Coding bot "
+          + "with crew_spawn role=coding when Crew is available. Coding loads the factory skill and "
+          + "checks its local offline runtime capabilities. Full factory instructions and apk_factory "
+          + "are Coding-only; signing needs its own approval and installation is not automatic. "
+          + "If crew_spawn is unavailable, explain that Coding/Crew must be enabled before building.");
     }
     if (skillWorkspaceAvailable()) {
       prompt.append(
@@ -1589,11 +1659,23 @@ public final class CoreAgentRuntime {
           + "First obtain the bot_id and expected_revision from list_bots; never guess them. "
           + "Use the user's freeform theme without attaching or reusing private images. Coding and Android-use templates are immutable.");
     }
+    if (BotCreationTool.isAvailable(this.context, this.depth, this.sessionId)
+        && CoreToolAccessPolicy.matches(BotCreationTool.NAME, null, this.allowedTools)) {
+      prompt.append("\n\nWhen the user asks for a reusable bot, use create_bot to save it completely: "
+          + "choose a simple name (ideally 1-3 words), write reusable instructions in English, select only the minimum "
+          + "declared tools/skills and invent an appropriate freeform icon prompt. The tool presents a one-time review "
+          + "of this exact definition and icon request before saving; this does not grant connector permissions or launch a task. "
+          + "Keep the same request_id on retries and check list_bots afterward. Never claim a generated icon unless icon_complete is true. "
+          + "If icon generation is unavailable or fails, explain that the definition is saved and the icon remains incomplete; "
+          + "use generate_bot_icon for that exact existing bot after resolving access, never recreate it. "
+          + "Catalog management is main-chat-only and must be performed directly even when Crew is enabled. "
+          + "Do not send the user to the UI or merely output a draft when the declared creation tool can complete the request.");
+    }
     CrewMode mode = crewMode();
     if (this.depth == 0 && mode.enabled()) {
       prompt.append("\n\nCrew guidance: You are the captain of an in-memory, role-scoped team. ");
       if (mode.mustDelegate()) {
-        prompt.append("Crew mode is always: delegate work to one or more bots before answering. ");
+        prompt.append("Crew mode is always: delegate work to one or more bots before answering, except main-chat-only catalog management. ");
       } else {
         prompt.append(
             "For complex multi-part tasks that benefit from parallel research or independent"

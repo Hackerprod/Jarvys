@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="drawer_cancel_search">Cancel search</string>
+    <string name="drawer_scheduled_tasks">Scheduled tasks</string>
+    <string name="scheduled_tasks_placeholder_title">Coming later</string>
+    <string name="scheduled_tasks_placeholder_body">This new scheduled tasks view is not available yet. You can still manage existing tasks from Settings.</string>
+</resources>

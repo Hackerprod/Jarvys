@@ -50,11 +50,18 @@ class TaskPlatformContractTest {
             if (permission.attributes.getNamedItem("tools:node")?.nodeValue == "remove") null
             else permission.attributes.getNamedItem("android:name")?.nodeValue
         }.toSet()
-        assertEquals(setOf("android.permission.INTERNET", "android.permission.FOREGROUND_SERVICE",
+        assertEquals(setOf("android.permission.INTERNET", "android.permission.WRITE_EXTERNAL_STORAGE", "android.permission.FOREGROUND_SERVICE",
             "android.permission.FOREGROUND_SERVICE_SPECIAL_USE", "android.permission.POST_NOTIFICATIONS",
             "android.permission.SYSTEM_ALERT_WINDOW", "android.permission.READ_CALENDAR",
             "android.permission.WRITE_CALENDAR", "android.permission.READ_CONTACTS", "android.permission.CALL_PHONE",
             "android.permission.ACCESS_COARSE_LOCATION", "android.permission.ACCESS_FINE_LOCATION"), names)
+        // Downloads alone needs this legacy permission; scheduled tasks gain no storage capability.
+        val legacyStorage = (0 until permissions.length).map { permissions.item(it) }.filter {
+            it.attributes.getNamedItem("android:name")?.nodeValue == "android.permission.WRITE_EXTERNAL_STORAGE"
+        }
+        assertEquals(1, legacyStorage.size)
+        assertEquals("28", legacyStorage.single().attributes.getNamedItem("android:maxSdkVersion")?.nodeValue)
+        assertFalse(names.contains("android.permission.MANAGE_EXTERNAL_STORAGE"))
         assertFalse(names.any { it.contains("SCHEDULE_EXACT_ALARM") || it.contains("RECEIVE_BOOT_COMPLETED") })
         assertTrue(manifest.readText().contains("android:allowBackup=\"false\""))
 

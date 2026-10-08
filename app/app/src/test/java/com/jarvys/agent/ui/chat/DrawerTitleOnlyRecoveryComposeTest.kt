@@ -36,16 +36,16 @@ class DrawerTitleOnlyRecoveryComposeTest {
             ConversationDrawer(listOf(saved), "current-session", "Current chat", "Current goal", true,
                 selected.value, true, {}, { resumed++ }, { opened += it }, {})
         } }
-        compose.onNodeWithText("Current chat").assertIsDisplayed()
-        compose.onNodeWithText("Saved chat").assertIsDisplayed()
+        showText("Current chat").assertIsDisplayed()
+        showText("Saved chat").assertIsDisplayed()
         compose.onAllNodesWithText(context.getString(R.string.drawer_current_conversation)).assertCountEquals(0)
         compose.onAllNodesWithText(context.getString(R.string.drawer_history_summary, saved.outcome, saved.steps, saved.turns))
             .assertCountEquals(0)
         compose.onAllNodesWithText(saved.outcome, substring = true).assertCountEquals(0)
         assertEquals(FontWeight.SemiBold, titleWeight("Current chat"))
         assertEquals(FontWeight.Medium, titleWeight("Saved chat"))
-        compose.onNodeWithText("Current chat").performClick()
-        compose.onNodeWithText("Saved chat").performClick()
+        showText("Current chat").performClick()
+        showText("Saved chat").performClick()
         assertEquals(1, resumed)
         assertEquals(listOf(saved.id), opened)
         compose.runOnIdle { selected.value = saved.id }
@@ -53,7 +53,7 @@ class DrawerTitleOnlyRecoveryComposeTest {
         assertEquals(FontWeight.SemiBold, titleWeight("Saved chat"))
     }
 
-    @Test fun pinUnpinArchiveAndRestoreStillDispatchForTheCorrectSession() {
+    @Test fun pinUnpinAndArchiveStillDispatchForTheCorrectSession() {
         val record = mutableStateOf(saved)
         val actions = mutableListOf<Pair<String, ConversationAction>>()
         compose.setContent { MaterialTheme {
@@ -70,20 +70,15 @@ class DrawerTitleOnlyRecoveryComposeTest {
                 })
         } }
         menuAction(R.string.drawer_pin)
-        compose.onNodeWithText(context.getString(R.string.drawer_pinned)).assertIsDisplayed()
+        showText("Saved chat")
+        compose.onNodeWithTag("drawer-pinned-marker", useUnmergedTree = true).assertIsDisplayed()
         menuAction(R.string.drawer_unpin)
-        compose.onNodeWithText(context.getString(R.string.drawer_pinned)).assertDoesNotExist()
+        compose.onNodeWithTag("drawer-pinned-marker", useUnmergedTree = true).assertDoesNotExist()
         menuAction(R.string.drawer_archive)
         compose.onNodeWithText("Saved chat").assertDoesNotExist()
-        compose.onNodeWithText(context.getString(R.string.drawer_archived_chats)).performClick()
-        compose.onNodeWithText("Saved chat").assertIsDisplayed()
-        compose.onAllNodesWithText(saved.outcome, substring = true).assertCountEquals(0)
-        menuAction(R.string.drawer_unarchive)
-        compose.onNodeWithText("Saved chat").assertDoesNotExist()
-        compose.onNodeWithText(context.getString(R.string.drawer_back_to_chats)).performClick()
-        compose.onNodeWithText("Saved chat").assertIsDisplayed()
-        assertEquals(listOf(ConversationAction.PIN, ConversationAction.UNPIN, ConversationAction.ARCHIVE,
-            ConversationAction.RESTORE).map { saved.sessionId to it }, actions)
+        compose.onNodeWithTag("drawer-archive-toggle").assertDoesNotExist()
+        assertEquals(listOf(ConversationAction.PIN, ConversationAction.UNPIN, ConversationAction.ARCHIVE)
+            .map { saved.sessionId to it }, actions)
     }
 
     @Test fun renameStillValidatesAndDeleteStillRequiresConfirmation() {
@@ -127,8 +122,15 @@ class DrawerTitleOnlyRecoveryComposeTest {
         assertEquals(0, mutations)
     }
 
-    private fun openMenu() = compose.onNodeWithContentDescription(context.getString(R.string.drawer_chat_actions, "Saved chat"))
-        .performClick()
+    private fun showText(text: String): SemanticsNodeInteraction {
+        compose.onNodeWithTag("conversation-drawer-scroll").performScrollToNode(hasText(text))
+        return compose.onNodeWithText(text)
+    }
+
+    private fun openMenu() {
+        showText("Saved chat")
+        compose.onNodeWithContentDescription(context.getString(R.string.drawer_chat_actions, "Saved chat")).performClick()
+    }
 
     private fun menuAction(resource: Int) {
         openMenu()
@@ -136,6 +138,7 @@ class DrawerTitleOnlyRecoveryComposeTest {
     }
 
     private fun titleWeight(title: String): FontWeight? {
+        showText(title)
         val results = mutableListOf<TextLayoutResult>()
         compose.onNodeWithText(title, useUnmergedTree = true)
             .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(results) }

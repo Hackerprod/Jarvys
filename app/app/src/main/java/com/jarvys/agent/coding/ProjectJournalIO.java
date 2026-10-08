@@ -80,7 +80,7 @@ final class ProjectJournalIO {
       }
       parent.validate();
       if (createOnly) {
-        ProjectFileIO.linkNoReplace(staged, file);
+        ProjectFileIO.moveNewPrivateRecord(staged, file);
       } else {
         if (!ProjectFileIO.attributes(file).isRegularFile()) {
           throw new IOException("Project recovery record was replaced");

@@ -51,35 +51,39 @@ public class BotCatalogToolScopeTest {
         assertTrue(BotIconGenerationTool.isAvailable(context, settings, 0, "scope-main"));
         CoreAgentRuntime narrowed = runtime("scope-main", 0, Collections.emptyList());
         assertFalse(narrowed.createTools().names().contains(BotCatalogTool.NAME));
+        assertFalse(narrowed.createTools().names().contains(BotCreationTool.NAME));
+        assertFalse(narrowed.instructions().contains("use create_bot"));
         assertFalse(narrowed.createTools().names().contains(BotIconGenerationTool.NAME));
         assertFalse(narrowed.instructions().contains("Bots catalog: use list_bots"));
 
         CoreAgentRuntime catalogOnly = runtime("scope-catalog", 0, Collections.singletonList(BotCatalogTool.NAME));
         assertTrue(catalogOnly.createTools().names().contains(BotCatalogTool.NAME));
         assertFalse(catalogOnly.createTools().names().contains(BotIconGenerationTool.NAME));
-        CoreAgentRuntime both = runtime("scope-both", 0, Arrays.asList(BotCatalogTool.NAME, BotIconGenerationTool.NAME));
-        assertTrue(both.createTools().names().containsAll(Arrays.asList(BotCatalogTool.NAME, BotIconGenerationTool.NAME)));
+        CoreAgentRuntime both = runtime("scope-both", 0, Arrays.asList(BotCatalogTool.NAME, BotIconGenerationTool.NAME, BotCreationTool.NAME));
+        assertTrue(both.createTools().names().containsAll(Arrays.asList(BotCatalogTool.NAME, BotIconGenerationTool.NAME, BotCreationTool.NAME)));
     }
 
     @Test public void mainOnlyBotToolsStayOutOfEveryChildInventoryEvenExplicitSelections() throws Exception {
         CoreAgentRuntime main = runtime("scope-main", 0, null);
         List<CoreTool> bots = Arrays.asList(new BotCatalogTool(context, "scope-main"),
-                new BotIconGenerationTool(context, "scope-main", settings));
+                new BotIconGenerationTool(context, "scope-main", settings), new BotCreationTool(context, "scope-main"));
         for (boolean includeDelegate : new boolean[]{true, false}) {
             List<String> names = main.createToolsNames(bots, includeDelegate);
             assertFalse(names.contains(BotCatalogTool.NAME));
+            assertFalse(names.contains(BotCreationTool.NAME));
             assertFalse(names.contains(BotIconGenerationTool.NAME));
         }
         CoreToolRegistry registry = new CoreToolRegistry(bots);
         assertTrue(registry.forDelegatedAgent().names().isEmpty());
         assertTrue(CoreAgentRuntime.crewBotCapabilityScope(registry).names().isEmpty());
-        for (String name : Arrays.asList(BotCatalogTool.NAME, BotIconGenerationTool.NAME)) {
+        for (String name : Arrays.asList(BotCatalogTool.NAME, BotIconGenerationTool.NAME, BotCreationTool.NAME)) {
             assertThrows(IllegalArgumentException.class, () -> CrewRoleTemplates.custom("Forbidden", "Mission", Collections.singletonList(name), registry));
         }
         for (String session : Arrays.asList("scope-child", ProactiveConversation.SESSION_ID, ScheduledTaskConversation.SESSION_ID)) {
             int depth = "scope-child".equals(session) ? 1 : 0;
-            CoreAgentRuntime isolated = runtime(session, depth, Arrays.asList(BotCatalogTool.NAME, BotIconGenerationTool.NAME));
+            CoreAgentRuntime isolated = runtime(session, depth, Arrays.asList(BotCatalogTool.NAME, BotIconGenerationTool.NAME, BotCreationTool.NAME));
             assertFalse(isolated.createTools().names().contains(BotCatalogTool.NAME));
+            assertFalse(isolated.createTools().names().contains(BotCreationTool.NAME));
             assertFalse(isolated.createTools().names().contains(BotIconGenerationTool.NAME));
             assertFalse(isolated.instructions().contains("Bots catalog: use list_bots"));
         }

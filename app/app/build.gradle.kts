@@ -1,10 +1,12 @@
+import java.security.MessageDigest
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-val unsignedBuild = providers.gradleProperty("unsignedBuild").map { it.toBoolean() }.getOrElse(false)
+val unsignedBuild = providers.gradleProperty("unsignedBuild").map { it.toBoolean() }.getOrElse(true)
 // Opt-in identity for a side-by-side recovery test. Never reuse the original signing config.
 val recoveryTestBuild = providers.gradleProperty("recoveryTestBuild").map { it.toBoolean() }.getOrElse(false)
 require(!recoveryTestBuild || unsignedBuild) {
@@ -29,24 +31,18 @@ android {
         applicationId = if (recoveryTestBuild) "com.jarvys.agent.recoverytest" else "com.jarvys.agent"
         minSdk = 24
         targetSdk = 35
-        versionCode = 31
-        versionName = "1.2.25-UX14.2" + if (recoveryTestBuild) "-test" else ""
+        versionCode = 37
+        versionName = "1.2.30-UX17-UX18" + if (recoveryTestBuild) "-test" else ""
         manifestPlaceholders["jarvysApplicationLabel"] = if (recoveryTestBuild) "Jarvys Prueba" else "@string/app_name"
         manifestPlaceholders["jarvysNotificationListenerLabel"] =
             if (recoveryTestBuild) "Jarvys Prueba: notificaciones" else "@string/notification_listener_label"
     }
 
-    signingConfigs {
-        create("jarvysDebug") {
-            storeFile = rootProject.file("debug.keystore")
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
-        }
-    }
     buildTypes {
         debug {
-            signingConfig = if (unsignedBuild) null else signingConfigs.getByName("jarvysDebug")
+            // Development APKs are always unsigned. The reviewed final APK is signed externally
+            // with the existing approved release identity; never synthesize a replacement key.
+            signingConfig = null
         }
         release {
             isMinifyEnabled = false
@@ -81,6 +77,7 @@ android {
 }
 
 dependencies {
+    implementation("com.android.tools.build:apksig:8.13.2")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
     add("fullImplementation", "com.google.android.gms:play-services-auth:22.0.0")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
@@ -102,4 +99,25 @@ dependencies {
     testImplementation("androidx.work:work-testing:2.12.0")
     testImplementation("androidx.compose.ui:ui-test-junit4")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+}
+
+// Compile the reusable native runtime once for this Jarvys build. Per-app generation uses
+// only this unsigned template and the in-process JVM packager, never Gradle or downloaded tools.
+val factoryAssets = layout.buildDirectory.dir("generated/apkFactoryAssets")
+val prepareApkFactoryTemplate by tasks.registering {
+    dependsOn(":apk-runtime:assembleRelease")
+    val template = project(":apk-runtime").layout.buildDirectory.file("outputs/apk/release/apk-runtime-release-unsigned.apk")
+    inputs.file(template)
+    outputs.dir(factoryAssets)
+    doLast {
+        val bytes = template.get().asFile.readBytes()
+        val hash = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+        val directory = factoryAssets.get().dir("apk_factory").asFile.apply { mkdirs() }
+        directory.resolve("template.apk").writeBytes(bytes)
+        directory.resolve("template.sha256").writeText(hash + "\n")
+    }
+}
+android.sourceSets.getByName("main").assets.srcDir(factoryAssets)
+tasks.configureEach {
+    if (name.startsWith("merge") && name.endsWith("Assets")) dependsOn(prepareApkFactoryTemplate)
 }

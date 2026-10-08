@@ -16,13 +16,13 @@ import java.io.File
 class AppNavigationBackPolicyTest {
     @Test fun explicitNavigationGraphHasOnlyChatAsRootAndBackForEveryOtherRoute() {
         assertEquals(listOf(
-            "chat", "settings", "settings/preferences",
+            "chat", "settings", "settings/preferences", "settings/archived-chats", "scheduled-tasks",
             "providers", "providers/openai", "providers/openrouter", "providers/custom", "providers/service/{serviceId}",
             "mcp", "mcp/new", "mcp/server/{serverId}", "mcp/server/{serverId}/edit",
             "skills", "connectors", "connectors/device/{connectorId}",
             "connectors/remote/{serviceId}?title={title}", "connectors/google/{serviceId}?title={title}",
             "memory", "memory/history", "memory/file?path={path}&new={new}",
-            "tasks", "tasks/detail/{taskId}", "crew", "crew/{missionId}",
+            "tasks", "tasks/detail/{taskId}", "bots", "crew", "crew/{missionId}",
             "crew/{missionId}/bot/{botId}", "workspace-preview/{projectId}",
         ), AppNavigationBackPolicy.registeredRoutePatterns)
         assertEquals(setOf("chat"), AppNavigationBackPolicy.rootRoutes)

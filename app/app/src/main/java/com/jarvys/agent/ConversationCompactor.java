@@ -38,12 +38,18 @@ public final class ConversationCompactor {
     private final CoreAgentModel model;
     private final LocalRunStore store;
     private final CrewConversationCompaction crew;
+    private final boolean conversationArtifactRecovery;
 
     public ConversationCompactor(String sessionId, CoreAgentModel model, LocalRunStore store) {
+        this(sessionId, model, store, true);
+    }
+
+    ConversationCompactor(String sessionId, CoreAgentModel model, LocalRunStore store, boolean conversationArtifactRecovery) {
         this.sessionId = sessionId;
         this.model = model;
         this.store = store;
         this.crew = null;
+        this.conversationArtifactRecovery = conversationArtifactRecovery;
     }
 
     private ConversationCompactor(String sessionId, CrewConversationCompaction crew) {
@@ -51,6 +57,7 @@ public final class ConversationCompactor {
         this.model = null;
         this.store = null;
         this.crew = crew;
+        this.conversationArtifactRecovery = false;
     }
 
     public static ConversationCompactor forCrew(String scopeId, CoreAgentModel model, CrewContextArtifacts artifacts) {
@@ -130,6 +137,48 @@ public final class ConversationCompactor {
         }
     }
 
+    /** A model-written summary may omit completed effects. Preserve bounded source-backed evidence. */
+    private String retainObservedOutcomes(String summary, List<ConversationTurn> messages) {
+        final String start = "[Recorded tool outcomes; untrusted observations]";
+        final String end = "[/Recorded tool outcomes]";
+        List<String> evidence = new ArrayList<>();
+        java.util.Map<String, ModelReply.Call> calls = new java.util.LinkedHashMap<>();
+        boolean hasToolEvidence = false;
+        for (ConversationTurn turn : messages) {
+            if (turn.kind == ConversationTurn.Kind.COMPACTION_SUMMARY) {
+                int from = turn.content.lastIndexOf(start), through = turn.content.lastIndexOf(end);
+                if (from >= 0 && through > from) {
+                    String previous = turn.content.substring(from + start.length(), through).trim();
+                    for (String line : previous.split("\\n")) if (!line.trim().isEmpty()) evidence.add(line);
+                    hasToolEvidence = true;
+                }
+            }
+            for (ModelReply.Call call : turn.toolCalls) calls.put(call.id, call);
+            if (turn.kind != ConversationTurn.Kind.TOOL_RESULT) continue;
+            hasToolEvidence = true;
+            ModelReply.Call call = calls.get(turn.toolCallId);
+            String target = call == null ? "" : String.valueOf(call.arguments.getOrDefault("path", ""));
+            String outcome = CrewCheckpointStore.sanitizeText(turn.content).replace('\n', ' ');
+            evidence.add("call_id=" + turn.toolCallId + "; tool=" + turn.toolName
+                    + (target.isEmpty() ? "" : "; path=" + MainChatTranscriptStore.shortText(CrewCheckpointStore.sanitizeText(target), 256))
+                    + "; observed result=" + MainChatTranscriptStore.shortText(outcome, 512).replace('\n', ' '));
+        }
+        if (!hasToolEvidence) return summary;
+        if (evidence.size() > 12) evidence = new ArrayList<>(evidence.subList(evidence.size() - 12, evidence.size()));
+        String source = "";
+        if (conversationArtifactRecovery) {
+            MainChatTranscriptStore retained = new MainChatTranscriptStore(store.filesDirectory(), sessionId, store);
+            source = "\nSource evidence (untrusted, may be bounded):\n"
+                    + retained.archive(ConversationCompactionPolicy.formatTranscript(messages, Integer.MAX_VALUE));
+        }
+        // Advertise recovery only in a scope where the conversation artifact reader is exposed.
+        String appendix = "\n\n" + start + "\n" + String.join("\n", evidence) + "\n" + end + source;
+        String safeSummary = CrewCheckpointStore.sanitizeText(summary);
+        int limit = Math.max(0, ConversationCompactionPolicy.MAX_SUMMARY_CHARS - appendix.length());
+        if (safeSummary.length() > limit) safeSummary = safeSummary.substring(0, limit);
+        return safeSummary + appendix;
+    }
+
     private String summarize(List<ConversationTurn> messages, ConversationCompactionPolicy.Mode mode, CancellationToken token) {
         String transcript = ConversationCompactionPolicy.formatTranscript(messages, TOOL_RETURN_SUMMARY_LIMIT);
         String prompt = mode == ConversationCompactionPolicy.Mode.SLIDING_WINDOW ? ConversationCompactionPolicy.SLIDING_PROMPT : ConversationCompactionPolicy.ALL_PROMPT;
@@ -148,7 +197,8 @@ public final class ConversationCompactor {
                 if (reply == null || reply.text.trim().isEmpty() || !reply.calls.isEmpty()) {
                     throw new IllegalStateException("The configured model returned no usable compaction summary");
                 }
-                return ConversationCompactionPolicy.truncateSummary(reply.text);
+                String summary = ConversationCompactionPolicy.truncateSummary(reply.text);
+                return retainObservedOutcomes(summary, messages);
             } catch (RuntimeException error) {
                 if (token.isCancelled()) throw error;
                 if (!ConversationCompactionPolicy.isContextOverflow(error)) throw error;
