@@ -33,6 +33,8 @@ Modo de ejecución: continuar la cola completa. Al cerrar cada pendiente, verifi
 
 Estado: correcciones implementadas y revisión dirigida completada; validación agregada final de Full/Play en curso.
 
+La primera pasada agregada ejecutó 1159 pruebas Full y 1075 Play. Detectó únicamente una expectativa antigua de la prueba de cancelación de iconos: la cancelación ahora espera al despacho final ya iniciado, igual que el controlador principal. Se actualizó esa prueba con comprobaciones más fuertes de orden, revisión e icono y se está repitiendo la suite completa, sin excluir pruebas ni cambiar esa protección.
+
 - **Primer checkpoint:** eliminada la dependencia de hard links en identidad/journal y creación de archivos de Coding, operación prohibida por Android a las apps normales. Los registros privados se promocionan completos; los archivos nuevos se crean de forma exclusiva, sin sobrescribir rutas existentes, con comprobación de tamaño y SHA-256.
 - Si una creación queda interrumpida, se conservan el destino, el staging y la evidencia de recuperación; se informa un resultado parcial o incierto y no se reejecuta automáticamente. Las actualizaciones de archivos existentes conservan el reemplazo atómico.
 - Diez regresiones dirigidas de almacenamiento aprobadas en el host (SDK 34/Robolectric), incluidas colisiones, symlinks, competencia entre creadores, copia parcial, recuperación sin replay y contenido modificado. Revisión independiente completada. Esto no sustituye la validación real en teléfono ni confirma el fallback de API 24.

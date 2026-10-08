@@ -112,6 +112,7 @@ public class BotIconServiceTest {
         String prepared = icons.save(original.id, BotIconStoreTest.png(12, 12), token);
         java.util.concurrent.CountDownLatch commitStarted = new java.util.concurrent.CountDownLatch(1);
         java.util.concurrent.CountDownLatch finishCommit = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch cancelAttempted = new java.util.concurrent.CountDownLatch(1);
         java.util.concurrent.ExecutorService workers = java.util.concurrent.Executors.newFixedThreadPool(2);
         try (BotIconService.CommitGate gate = new BotIconService.CommitGate(token)) {
             java.util.concurrent.Future<?> commit = workers.submit(() -> gate.commit(() -> {
@@ -122,16 +123,25 @@ public class BotIconServiceTest {
                 repository.setIcon(original.id, original.revision, prepared);
             }));
             assertTrue(commitStarted.await(10, java.util.concurrent.TimeUnit.SECONDS));
-            java.util.concurrent.Future<?> cancel = workers.submit(() -> { token.cancel(); });
-            long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10);
-            while (!token.isCancellationRequested() && System.nanoTime() < deadline) Thread.yield();
-            assertTrue(token.isCancellationRequested());
+            java.util.concurrent.Future<Boolean> cancel = workers.submit(() -> {
+                cancelAttempted.countDown();
+                return token.cancel();
+            });
+            assertTrue(cancelAttempted.await(10, java.util.concurrent.TimeUnit.SECONDS));
+            // The final-action gate already owns this dispatch. Cancellation must wait for it,
+            // then latch before any subsequent dispatch can start.
             assertFalse(cancel.isDone());
+            assertFalse(token.isCancellationRequested());
+            unchanged();
             finishCommit.countDown();
             commit.get(10, java.util.concurrent.TimeUnit.SECONDS);
-            cancel.get(10, java.util.concurrent.TimeUnit.SECONDS);
+            assertTrue(cancel.get(10, java.util.concurrent.TimeUnit.SECONDS));
+            assertTrue(token.isCancellationRequested());
             assertEquals(prepared, repository.definition(original.id).iconRef);
+            assertEquals(original.revision + 1, repository.definition(original.id).revision);
             assertTrue(icons.resolve(original.id, prepared).isFile());
+            assertThrows(CancellationException.class, () -> gate.commit(
+                    () -> fail("Cancellation must prevent a subsequent icon commit")));
         } finally { finishCommit.countDown(); workers.shutdownNow(); }
     }
 
