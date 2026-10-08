@@ -4,7 +4,7 @@ Actualizado: 2026-10-08 (UTC).
 
 Este archivo mantiene la cola vigente y el estado de cada etapa. Debe actualizarse con cada avance y publicarse en GitHub junto con los cambios. No sustituye las comprobaciones de código, pruebas y APK.
 
-Modo de ejecución: continuar la cola completa. Al cerrar cada pendiente, verificar y publicar el código junto con este archivo y comenzar el siguiente. No esperar feedback ni prueba manual entre etapas; conservar las limitaciones de validación o configuración externa con su estado real. La entrega consolidada y el APK firmado corresponden al final de la cola, sin presentar entregas parciales como cierre total.
+Modo de ejecución: continuar la cola completa. Al cerrar cada pendiente, verificar y publicar el código junto con este archivo y comenzar el siguiente. No esperar feedback ni prueba manual entre etapas; conservar las limitaciones de validación o configuración externa con su estado real. La entrega consolidada y el APK firmado corresponden al final de la cola, sin presentar entregas parciales como cierre total. Solo se preparan versiones intermedias cuando el usuario las solicita expresamente.
 
 ## Estado actual
 
@@ -15,7 +15,8 @@ Modo de ejecución: continuar la cola completa. Al cerrar cada pendiente, verifi
 - **APKFACTORY1 / preparación v35 implementada y validada en host:** fábrica offline nativa, empaquetado sin Gradle por aplicación, firma con identidad por app y skill exclusivo de Coding. Suites: 1238 Full, 1154 Play y 17 runtime, sin fallos; nueve pruebas de SDK JavaScript. La aceptación física Android/ARM64 e instalación/actualización con datos conservados sigue pendiente.
 - **UX16 / preparación v36 completada en host:** archivos nativos y descargas directas con 1289 pruebas Full, 1205 Play, 17 runtime y nueve JavaScript aprobadas. Aceptación física pendiente.
 - **UX17/UX18 / preparación v37 completada en código y validación de host:** panel lateral, archivados en Ajustes y vista informativa de tareas. Suites: 1320 Full, 1236 Play, 17 runtime y nueve JavaScript aprobadas. Sin incidencias nuevas de lint; lectura conservada con el límite de reflujo descrito abajo.
-- **Etapa activa:** UX19, conectores de Gmail y Drive implementados y en validación agregada para v38. No se entrega un APK parcial ni se espera feedback entre etapas.
+- **UX19 / preparación v38 completada en código y host:** conectores de Gmail y Drive, con 1467 pruebas Full, 1251 Play, 17 runtime y nueve JavaScript aprobadas. Sin incidencias nuevas de lint; Google Cloud y aceptación física siguen pendientes.
+- **Siguiente etapa:** UX20, autenticación y capacidades de GitHub. Después UX21, UX22, UX24 y las tareas críticas de prompts/harness UX25–UX26, salvo nueva priorización explícita.
 - La paridad completa con el comportamiento de v28 en un teléfono sigue pendiente de validación; la fiabilidad del agente es prioritaria antes de añadir funciones.
 
 ## Entregas previas
@@ -144,32 +145,25 @@ Diseño y límites: `app/DRAWER_NAVIGATION.md`. Los registros detallados de vali
 
 ### 4. UX19: conectores robustos de Gmail y Drive
 
-Estado: implementación y revisión independiente completadas; validación agregada en curso para preparación v38 / 1.2.31-UX19. Las 162 pruebas dirigidas aprueban con resultados frescos, incluidas 144 regresiones nuevas. Aún no se afirma una pasada completa ni acceso real a Google.
+Estado: completado en código, revisión independiente y validación de host para preparación v38 / 1.2.31-UX19. Se continúa con UX20. La configuración de Google Cloud, el acceso real y la aceptación física permanecen abiertos; las pruebas simuladas no se presentan como login o envío reales.
 
-- Corregidos el resultado nativo de autorización, la colisión de códigos de cancelación y los contratos de envío/subida. Las aprobaciones de Gmail y Drive quedan ligadas a la cuenta/sesión de autorización y se invalidan si cambia durante la revisión.
-- Gmail comprueba el permiso específico de envío o borradores antes de preparar o despachar una escritura, para no marcar como incierta una acción que no tenía permiso y nunca se envió.
-- Gmail incorpora páginas continuables, hilos y respuestas, ciclo de borradores, MIME/charset y adjuntos nativos. La derivación de destinatarios usa la sintaxis original del encabezado; nombres visibles, comentarios y palabras codificadas no conceden confianza ni añaden destinatarios.
-- Drive incorpora filtros y unidades compartidas, descarga/exportación binaria, carpetas y creación/actualización con archivos del chat y alcance drive.file. Los bytes, destino y SHA-256 quedan congelados antes de aprobar.
-- Reintentos limitados de lectura, un refresh ante 401, 403 accionables y cancelación del transporte. Las escrituras inciertas conservan un marcador privado sin contenido ni credenciales y no se repiten automáticamente, incluso tras reiniciar. La reconciliación de resultados inciertos es manual.
-- Desconexión local y revocación remota son estados distintos. Se conserva cifrada la información necesaria para reintentar una revocación fallida; olvidarla requiere una advertencia y no se presenta como revocación verificada.
-- Los archivos descargados usan adjuntos inmutables de la conversación actual; no se exponen bytes base64 al modelo ni rutas arbitrarias. Se excluye el acceso a archivos del chat desde agentes delegados o tareas de fondo.
-- Permanecen los límites de concurrencia del proveedor: reemplazo de borrador y actualización de Drive sin ETag tienen comprobación previa, sin garantía atómica frente a una edición simultánea.
-- La primera agregada detectó una inicialización prematura del diario al descubrir el catálogo; se corrigió sin debilitar la prueba existente y se añadió una regresión. Se repiten las suites completas sobre la fuente final.
-- Configuración de Google Cloud, consentimiento y comprobación física siguen pendientes. No se usaron cuentas reales ni se concedieron permisos durante la implementación.
+- AuthorizationClient interpreta los datos devueltos antes de clasificar la cancelación. Corregida la colisión entre dominios de códigos de estado. Permisos incrementales basados en el conjunto realmente concedido, sin solicitar nuevo consentimiento desde llamadas REST ordinarias.
+- Intentos de autorización y aprobaciones de escritura ligados a una generación de sesión/cuenta; cancelación, rotación, doble pulsación, cambio de cuenta y callbacks antiguos no pueden reactivar una sesión ni ejecutar una aprobación en otra cuenta.
+- Desconexión local y revocación remota diferenciadas. La revocación solo se marca verificada tras confirmación de Google; una revocación fallida conserva la información de reintento cifrada. Olvidarla requiere advertencia explícita y no se presenta como revocación. Diagnóstico local de paquete/SHA-1 y configuración, sin fingir acceso a la consola.
+- Gmail: búsqueda paginada, hilos/respuestas, borradores de lectura/creación/reemplazo/envío, MIME Unicode/charset y adjuntos. Destinatarios y confianza derivan de la sintaxis original de los encabezados; nombres visibles, comentarios y palabras codificadas no añaden destinatarios. Se conserva el formato correcto de Message frente a Draft y los encabezados de respuesta.
+- Drive: filtros, paginación y unidades compartidas, metadatos/capacidades, descarga/exportación de Docs/Sheets/Slides, archivos y carpetas. Multipart usa la ruta de upload correcta. Escrituras limitadas a drive.file y archivos autorizados para la app; sin borrado, cambios de permisos ni ampliación automática de alcance.
+- Transferencias acotadas y adjuntos nativos inmutables en el chat actual. Las cargas congelan bytes, destino y SHA-256 antes de aprobar; sin rutas arbitrarias, bytes base64 en el contexto ni acceso a archivos del chat desde agentes delegados/tareas de fondo. Límites y formatos: `app/GOOGLE_WORKSPACE.md`.
+- Transporte cancelable, HTTPS y rutas restringidas, un refresh ante 401 y 403 accionables. Backoff acotado solo para lecturas. Un diario privado de hashes bloquea la repetición de escrituras inciertas tras errores o reinicios, sin guardar contenido ni credenciales. La reconciliación es manual.
+- Los permisos de envío/borradores se comprueban antes de preparar y despachar la acción, para no bloquear como incierta una operación que nunca pudo enviarse. El diario se inicializa solo al usar una escritura; el catálogo permanece libre de acceso prematuro a esa persistencia.
+- **Validación final:** 1467 Full, 1251 Play, 17 runtime y nueve JavaScript aprobadas, sin fallos, errores ni omitidas. Son 147 regresiones nuevas en Full y 15 comunes a Play; los 165 casos específicos están incluidos en la agregada. XML frescos y 743 archivos de fuente congelados sin cambios. Las dos capturas nativas comprueban el componente de diagnóstico en 320 dp, inglés/claro y español/oscuro al 200%; no son la hoja real de consentimiento de Google.
+- La primera agregada detectó una inicialización prematura del diario durante el descubrimiento del catálogo. Se corrigió sin debilitar la prueba existente. Una comprobación final añadió el guard de permisos de escritura; se repitieron todas las suites sobre la fuente definitiva.
+- Lint regenerado sin errores ni avisos nuevos: deuda heredada de 46 errores Full / 37 Play y 275/273 avisos. Se conserva apksig 8.13.2, fijado al contrato probado de la fábrica. La dependencia de los assets generados se declara también para lint, evitando fallos de orden al combinar tareas.
+- Ambos APK v38 se verificaron sin firma y debuggable, con paquete/nombre originales, CRC y alineación correctos y permisos sin cambios. Plantilla y skill de fábrica idénticos a v37. Los 19 archivos legacy privados permanecen intactos y excluidos de publicación.
+- Límite del proveedor: reemplazar un borrador y actualizar Drive sin ETag tiene comprobación previa, sin garantía atómica frente a otra edición. El envío de borrador usa exactamente el MIME revisado. No se probaron cuentas reales, nuevos grants ni operaciones reales de correo/archivos.
 
-Diseño y límites: `app/GOOGLE_WORKSPACE.md`. Los resultados detallados de pruebas y capturas se mantienen localmente.
+Código y este archivo se publican directamente en **master**, sin PR ni sobrescribir historial. Los informes detallados, capturas y APK se mantienen fuera de las publicaciones de código. Ningún APK de esta etapa se firma o entrega como cierre de la cola.
 
-- Mantener AuthorizationClient en Android y leer la respuesta del proveedor antes de clasificar una salida como cancelación. Cubrir retorno a la app, rotación, doble pulsación, cambio de cuenta, revocación y permisos parciales.
-- Verificar proyecto, APIs habilitadas, consentimiento/usuarios de prueba y coincidencia de paquete y SHA-1 del APK instalado. Esta configuración externa sigue pendiente de comprobar.
-- Corregir contratos REST defectuosos también presentes en v28: `messages.send` recibe `raw` en la raíz de Message; `drafts.create` conserva el contenedor `message`; la subida multipart de Drive usa `/upload/drive/v3/files`.
-- Gmail: búsqueda paginada con continuación, hilos/respuestas, MIME y charset, descarga de adjuntos, borradores y envío con revisión y autorización.
-- Drive: búsqueda paginada y filtros, carpetas/unidades compartidas, descarga/exportación, creación y actualización con transferencias acotadas.
-- Resiliencia: un refresh ante 401, errores 403 accionables, backoff acotado con jitter/Retry-After ante 429/5xx, cancelación efectiva y protección contra envíos/subidas duplicados tras resultados ambiguos. No registrar tokens ni contenido privado.
-- Adaptar clientes y patrones de herramientas respetando sus licencias. No copiar flujos OAuth de servidor ni reintentos de escritura sin ajustarlos al runtime Android.
-- Aceptación: comprobar método, ruta, headers y esquema en tests; cubrir login bloqueado/cancelado, caducidad, revocación, permisos parciales, paginación, MIME/adjuntos, cargas, cancelación y deduplicación. Después, realizar una prueba manual autorizada en el APK firmado; los mocks no prueban el acceso real.
-- Mantener permisos mínimos y no crear ni ampliar autorizaciones persistentes sin aprobación.
-
-Referencias: [AuthorizationClient](https://developer.android.com/identity/authorization), [Gmail messages.send](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/send), [Drive files.create](https://developers.google.com/workspace/drive/api/reference/rest/v3/files/create), [cliente oficial Java](https://github.com/googleapis/google-api-java-client), [Google Workspace CLI](https://github.com/googleworkspace/cli), [Google Workspace MCP](https://github.com/taylorwilsdon/google_workspace_mcp).
+Referencias: [AuthorizationClient](https://developer.android.com/identity/authorization), [Gmail messages.send](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/send), [Drive uploads](https://developers.google.com/workspace/drive/api/guides/manage-uploads). Se adaptaron contratos y patrones, sin copiar implementaciones externas ni trasladar OAuth de servidor al APK.
 
 ### 5. UX20: autenticación y capacidades de GitHub
 
@@ -202,6 +196,23 @@ Estado: pendiente; se abordará después de UX22 sin alterar la validación de l
 - La tarjeta de trabajo debe resolver el mismo icono estable que la cuadrícula de Bots, tanto para bots personalizados con icono generado como para plantillas integradas.
 - Conservar la identidad del icono al actualizar y reabrir; usar un fallback solo cuando no exista un icono válido.
 - Mostrar el efecto únicamente mientras el bot esté ejecutando trabajo real y respetar ciclo de vida, visibilidad y movimiento reducido.
+
+### 9. UX25: prompt de producción y harness de Coding
+
+Estado: investigación prioritaria en curso; implementación después de UX24, salvo repriorización explícita.
+
+- Redactar un prompt original y completo para Coding, contrastando referencias públicas con el comportamiento real del harness de Jarvys.
+- Auditar herramientas disponibles, lectura/escritura, ejecución, planificación, verificación, recuperación, contexto y entrega. No prometer capacidades que el runtime no expone.
+- Convertir el contrato en pruebas de comportamiento del agente y del harness, incluidas interrupciones, fallos, límites y continuidad; no limitar la tarea a cambiar un texto.
+- Mantener la investigación y clones temporales fuera del proyecto y las publicaciones; respetar procedencia/licencias y no copiar instrucciones privadas o credenciales.
+
+### 10. UX26: contrato del agente principal
+
+Estado: investigación prioritaria en curso; implementación después de UX25, salvo repriorización explícita.
+
+- Contrastar referencias oficiales de OpenClaw y el runtime actual para definir un contrato original de comunicación, uso de herramientas, delegación y gestión de contexto.
+- Alinear prompt y capacidades reales: decisiones, seguimiento, límites de autorización, resultados verificables y continuidad entre turnos.
+- Probar el comportamiento real en conversaciones y herramientas, incluidos fallos y recuperación; conservar privacidad y separación de datos no confiables.
 
 ## Validaciones que siguen abiertas
 
