@@ -130,7 +130,13 @@ class TasksScreensComposeTest {
 
         val historyTask = fixture.addTask("Keep history", TaskState.Active, nextRun = now + 180_000L)
         fixture.ledger.appendIfAbsent(TaskRunRecord(historyTask.id, "history-run", 10L, 20L, 30L, "OK", "DELIVERED"))
-        compose.onNodeWithTag("tasks-list").performScrollToIndex(1)
+        // Storage invalidation reloads on Dispatchers.IO. A new first item can also preserve
+        // the previous lazy-list anchor, so wait for the refreshed row at its current position.
+        compose.waitUntil(8_000) {
+            compose.onNodeWithTag("tasks-list").performScrollToIndex(1)
+            runCatching { compose.onNodeWithTag("task-menu-${historyTask.id}").fetchSemanticsNode(); true }
+                .getOrDefault(false)
+        }
         compose.onNodeWithTag("task-menu-${historyTask.id}").performClick()
         compose.onNodeWithText(context.getString(R.string.tasks_delete)).performClick()
         compose.onNodeWithText(context.getString(R.string.tasks_delete_history_message, historyTask.name)).assertIsDisplayed()

@@ -32,5 +32,32 @@
     "Toolbar presentation and magnifier replaced in tests; Foundation gesture recognition, range handles and clipboard callbacks are real",
     "Activity-root captures exclude separate popup handles and toolbar",
     "Full/Play aggregate, lint and unsigned artifacts pending"
-  ]
+  ],
+  "aggregate_attempt_1": {
+    "Full": {
+      "tests": 1173,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 0
+    },
+    "Play": {
+      "tests": 1089,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "failure": "Existing task-list fixture clicked a newly inserted menu before the asynchronous IO-backed snapshot and lazy-list position were ready."
+  },
+  "test_fixture_stabilization": "Bounded synchronization with the new task menu and its first-row position; no task product changes or assertions removed.",
+  "task_fixture_focused": {
+    "Full": 5,
+    "Play": 5,
+    "failures": 0
+  },
+  "lint_attempt_1": {
+    "Full_errors": 46,
+    "Play_errors": 37,
+    "new_errors": 0,
+    "new_warnings": 0
+  }
 }

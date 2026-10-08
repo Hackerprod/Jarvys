@@ -79,10 +79,11 @@ Estado: completado en código; revisión y pruebas agregadas aprobadas. El prove
 
 ### UX23. Restaurar selección de texto en respuestas
 
-Estado: corrección mínima revisada para preparación v34 / 1.2.27-UX23; 39 pruebas dirigidas Full aprobadas. Comienza la validación agregada congelada de Full/Play, lint y APK unsigned.
+Estado: corrección mínima revisada para preparación v34 / 1.2.27-UX23; 39 pruebas dirigidas Full aprobadas. La primera pasada agregada aprobó 1089 Play; Full tuvo una carrera de sincronización en una prueba existente de Tareas, ajena a la selección. Se corrige únicamente la espera del fixture y se repite la validación congelada de ambos sabores, lint y APK unsigned.
 
 - Confirmada la omisión durante la recuperación de los dos contenedores de selección presentes en v28: cuerpo de respuesta y cuerpo de traducción. Restaurados por mensaje, sin envolver encabezados, sugerencias, acciones de pie, adjuntos ni vecinos; no se modifica la frontera táctil pasiva del compositor.
 - Una regresión de pulsación larga reproduce el fallo en la fuente P0 antes de aplicar el cambio: no se abre la selección. Se añaden pruebas de gestos, selectores, arrastre, copia, Markdown/código, enlaces, traducciones, reacciones, temas y texto grande, scroll y foco/IME.
+- La prueba existente de Tareas esperaba inmediatamente un menú recién insertado mientras la pantalla recargaba su snapshot en IO. Se añade una espera acotada a la fila y su posición, conservando clics y todas las aserciones; no cambia el producto. Sus cinco pruebas vuelven a pasar en Full y Play. El primer lint conserva exactamente la deuda P0 (46 Full / 37 Play), sin nuevos errores ni avisos.
 - Catorce nuevas regresiones verifican selección y copia reales por puntero, arrastre de selectores, aislamiento, sugerencias, código, traducción, scroll, temas/fuentes y transición de selección activa a foco del compositor. Las pruebas distinguen el cursor del campo de los selectores de rango.
 - Los toques ordinarios sobre enlaces siguen funcionando. Se aisló un comportamiento heredado de Compose 1.9: una pulsación larga directamente sobre la etiqueta de un enlace puede seleccionar y activar el enlace; se reproduce igual en el contenedor del usuario sin cambios. Esta restauración no reescribe los gestos de la dependencia.
 - La validación del host sustituye únicamente la presentación del menú y la lupa; no certifica el teléfono, el menú nativo ni un teclado físico. La compilación seguirá sin firma, sin entrega parcial ni clave nueva.
