@@ -346,8 +346,7 @@ private fun ConnectorDeviceDetailPage(
             val writes = definition.operations.filter { it.write }
             if (reads.isNotEmpty()) ConnectorPermissionGroup(context.getString(R.string.remote_service_read_tool)) {
                 reads.forEach { operation ->
-                    ConnectorOperationPolicyRow(operation.localizedDisplayText().resolve(context),
-                        context.getString(R.string.connector_policy_allow), null)
+                    ConnectorOperationPolicyRow(operation.name, operation.localizedDisplayText().resolve(context))
                 }
             }
             if (writes.isNotEmpty()) ConnectorPermissionGroup(context.getString(R.string.remote_service_write_tool)) {
@@ -416,10 +415,12 @@ private fun AutonomyPolicyRow(
     onPolicy: (AutonomyPolicy) -> Unit,
 ) {
     val context = LocalContext.current
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(operation.localizedDisplayText().resolve(context), Modifier.weight(1f), fontWeight = FontWeight.Medium,
+    ConnectorPermissionRow(modifier = Modifier.testTag("connector-policy-${operation.name}-row"), content = {
+        Text(operation.localizedDisplayText().resolve(context), fontWeight = FontWeight.Medium,
             maxLines = 2, overflow = TextOverflow.Ellipsis)
+    }, permission = {
         ConnectorPolicySelector(
+            modifier = Modifier.testTag("connector-policy-${operation.name}-control"),
             selectedLabelResource = when (configuredPolicy) {
                 AutonomyPolicy.ASK -> R.string.connector_policy_ask
                 AutonomyPolicy.ALLOW -> R.string.connector_policy_allow
@@ -431,7 +432,7 @@ private fun AutonomyPolicyRow(
                 add(ConnectorPolicyChoice(R.string.connector_policy_deny) { onPolicy(AutonomyPolicy.DENY) })
             },
         )
-    }
+    })
     if (configuredPolicy != effectivePolicy) {
         Text(
             context.getString(R.string.connector_active_policy, effectivePolicy.label(context), effectiveReason?.resolve(context).orEmpty()),
@@ -456,12 +457,11 @@ private fun ConnectorPermissionGroup(title: String, content: @Composable ColumnS
 }
 
 @Composable
-private fun ConnectorOperationPolicyRow(name: String, value: String, onSelect: (() -> Unit)?) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(name, Modifier.weight(1f), fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        if (onSelect == null) Text(value, color = MaterialTheme.colorScheme.primary, fontSize = 13.sp)
-        else TextButton(onClick = onSelect) { Text(value) }
-    }
+private fun ConnectorOperationPolicyRow(operationName: String, name: String) {
+    ConnectorPermissionRow(modifier = Modifier.testTag("connector-policy-$operationName-row"), content = {
+        Text(name, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+    }, permission = { ConnectorPolicyValue(R.string.connector_policy_allow,
+        Modifier.testTag("connector-policy-$operationName-control")) })
 }
 
 private fun AutonomyPolicy.label(context: android.content.Context): String = context.getString(when (this) {

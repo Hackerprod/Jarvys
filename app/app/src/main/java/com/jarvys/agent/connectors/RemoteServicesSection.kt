@@ -52,6 +52,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -549,11 +550,11 @@ private fun RemoteMcpToolRow(
             }
         })
     }
-    Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis,
+    ConnectorPermissionRow(modifier = Modifier.padding(vertical = 3.dp).testTag("remote-policy-${tool.wireName}-row"), content = {
+        Text(label, maxLines = 2, overflow = TextOverflow.Ellipsis,
             fontSize = 14.sp, fontWeight = FontWeight.Medium)
-        ConnectorPolicySelector(selectedResource, choices)
-    }
+    }, permission = { ConnectorPolicySelector(selectedResource, choices,
+        modifier = Modifier.testTag("remote-policy-${tool.wireName}-control")) })
 }
 
 private fun showToolLimit(context: Context) {

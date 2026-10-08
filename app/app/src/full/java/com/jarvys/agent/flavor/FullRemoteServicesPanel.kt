@@ -34,6 +34,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -72,6 +73,7 @@ import com.jarvys.agent.connectors.ConnectorDetailSection
 import com.jarvys.agent.connectors.ConnectorDetailScaffold
 import com.jarvys.agent.connectors.ConnectorPolicyChoice
 import com.jarvys.agent.connectors.ConnectorPolicySelector
+import com.jarvys.agent.connectors.ConnectorPermissionRow
 
 /** Reflected only by the Full variant; no Google API identifiers or resources enter Play sources. */
 class FullRemoteServicesPanel : FlavorRemoteServicesPanel {
@@ -166,6 +168,7 @@ internal fun GoogleServiceCard(
     val context = LocalContext.current
     val status by registry.states.collectAsState()
     val definitions by registry.definitions.collectAsState()
+    val autonomyRevision by registry.autonomyRevision.collectAsState()
     val enabled = status[connectorId] == ConnectorState.CONNECTED &&
         scopes.firstOrNull()?.first?.let(manager::isScopeGranted) == true
     var setupDialog by remember(connectorId) { mutableStateOf(false) }
@@ -283,17 +286,19 @@ internal fun GoogleServiceCard(
             @Composable fun ScopeRows(rows: List<Pair<String, Int>>) {
                 rows.forEach { (scope, labelId) ->
                     val granted = manager.isScopeGranted(scope)
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text(stringResource(labelId), Modifier.weight(1f), fontSize = 14.sp)
+                    ConnectorPermissionRow(modifier = Modifier.testTag("google-scope-${scope.substringAfterLast('/')}-row"), content = {
+                        Text(stringResource(labelId), fontSize = 14.sp)
+                    }, permission = {
                         val choices = if (granted) listOf(
                             ConnectorPolicyChoice(R.string.connector_policy_allow) {},
                             ConnectorPolicyChoice(R.string.connector_policy_deny) { disconnectScopes(scope) },
                         ) else listOf(ConnectorPolicyChoice(R.string.connector_add_permission) { authorizeScope(scope) })
                         ConnectorPolicySelector(
+                            modifier = Modifier.testTag("google-scope-${scope.substringAfterLast('/')}-control"),
                             selectedLabelResource = if (granted) R.string.connector_policy_allow else R.string.connector_add_permission,
                             choices = choices, enabled = isConfigured && !inProgress && revocation != GoogleRevocationState.PENDING && !pendingLegacy,
                         )
-                    }
+                    })
                 }
             }
             ConnectorDetailSection(stringResource(R.string.remote_service_read_tool)) { ScopeRows(readScopes) }
@@ -302,7 +307,9 @@ internal fun GoogleServiceCard(
             val writes = definition?.operations.orEmpty().filter { it.write }
             if (definition != null && writes.isNotEmpty()) ConnectorDetailSection(stringResource(R.string.connector_section_tools)) {
                 writes.forEach { operation ->
-                    val configured = registry.configuredAutonomyPolicy(definition, operation)
+                    val configured = remember(registry, definition, operation, autonomyRevision) {
+                        registry.configuredAutonomyPolicy(definition, operation)
+                    }
                     val canAllow = operation.autonomyAllowed && registry.autonomyPolicyUnavailableUiReason(definition, operation) == null
                     val choices = buildList {
                         add(ConnectorPolicyChoice(R.string.connector_policy_ask) { registry.setAutonomyPolicy(definition, operation, AutonomyPolicy.ASK) })
@@ -311,15 +318,16 @@ internal fun GoogleServiceCard(
                         })
                         add(ConnectorPolicyChoice(R.string.connector_policy_deny) { registry.setAutonomyPolicy(definition, operation, AutonomyPolicy.DENY) })
                     }
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    ConnectorPermissionRow(modifier = Modifier.testTag("google-policy-${operation.name}-row"), content = {
                         Text(if (operation.displayLabelResourceId != 0) context.getString(operation.displayLabelResourceId)
-                            else operation.displayLabel, Modifier.weight(1f), fontWeight = FontWeight.Medium)
+                            else operation.displayLabel, fontWeight = FontWeight.Medium)
+                    }, permission = {
                         ConnectorPolicySelector(when (configured) {
                             AutonomyPolicy.ASK -> R.string.connector_policy_ask
                             AutonomyPolicy.ALLOW -> R.string.connector_policy_allow
                             AutonomyPolicy.DENY -> R.string.connector_policy_deny
-                        }, choices)
-                    }
+                        }, choices, modifier = Modifier.testTag("google-policy-${operation.name}-control"))
+                    })
                 }
             }
             if (inProgress) {

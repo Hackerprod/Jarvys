@@ -17,7 +17,7 @@ Modo de ejecución: continuar la cola completa. Al cerrar cada pendiente o corre
 - **UX17/UX18 / preparación v37 completada en código y validación de host:** panel lateral, archivados en Ajustes y vista informativa de tareas. Suites: 1320 Full, 1236 Play, 17 runtime y nueve JavaScript aprobadas. Sin incidencias nuevas de lint; lectura conservada con el límite de reflujo descrito abajo.
 - **UX19 / preparación v38 completada en código y host:** conectores de Gmail y Drive, con 1467 pruebas Full, 1251 Play, 17 runtime y nueve JavaScript aprobadas. Sin incidencias nuevas de lint; Google Cloud y aceptación física siguen pendientes.
 - **UX20 / preparación v39 completada en código y host:** autenticación y capacidades de GitHub, más diagnóstico persistente del fallo de Google. Pruebas: 1600 Full, 1378 Play, 17 runtime y nueve JavaScript aprobadas; lint sin incidencias nuevas. Ambos APK originales sin firma verificados y preparados para firma y entrega. Los accesos reales de GitHub y Google siguen sin verificarse.
-- **Siguiente etapa:** UX21, alineación de permisos. Después UX22, UX24 y las tareas críticas de prompts/harness UX25–UX26, salvo nueva priorización explícita.
+- **Etapa actual:** UX21, alineación de permisos para preparación v40 / 1.2.33-UX21; implementación y pruebas dirigidas en curso. Después UX22, UX24 y las tareas críticas de prompts/harness UX25–UX26, salvo nueva priorización explícita.
 - La paridad completa con el comportamiento de v28 en un teléfono sigue pendiente de validación; la fiabilidad del agente es prioritaria antes de añadir funciones.
 
 ## Entregas previas
@@ -199,6 +199,15 @@ Estado: completado en código, revisión independiente y validación de host par
 Diseño y límites de la implementación: `app/GITHUB_CONNECTOR.md`.
 
 ### 6. UX21: alineación de permisos en conectores
+
+Estado: implementación y pruebas dirigidas en curso para preparación v40 / 1.2.33-UX21; todavía no constituye una entrega validada.
+
+- Inspeccionada la captura real de Calendar: el valor de lectura y el selector editable usaban tipografía, anchura y rellenos diferentes. Se unifican en una fila de presentación con columna derecha estable y espacio de flecha reservado también para valores informativos.
+- Aplicado a permisos nativos, scopes y operaciones de Gmail/Drive, herramientas del catálogo incluido GitHub, herramientas MCP personalizadas y la política inicial del editor MCP. Los interruptores de Ajustes y permisos avanzados ya conservaban su columna derecha centrada y no se rediseñan.
+- Etiquetas y descripciones conservan su espacio flexible; los permisos largos se ajustan a varias líneas, los controles mantienen un mínimo de 48 dp y los colores proceden del tema existente. No cambian los valores, opciones, callbacks, solicitudes OAuth, gates de escritura ni permisos por defecto.
+- La revisión nativa detectó recorte de una letra por la forma de píldora al 200 % de texto. Una regresión de píxeles reproduce la pérdida frente al mismo texto informativo; se limita el radio del selector para conservar los glifos completos.
+- La prueba de Gmail reprodujo un fallo heredado: al elegir Denegar, el valor se guardaba pero la pantalla seguía mostrando Preguntar. Se observa ahora la revisión de políticas para actualizar inmediatamente la etiqueta, sin modificar el almacenamiento ni las autorizaciones.
+- En curso: geometría e interacción sobre componentes reales, pantallas conectadas y capturas nativas de host en inglés/español, claro/oscuro, teléfono estrecho/tablet y fuente hasta 200 %. Después se repetirán suites completas, lint y APK sin firma antes de la firma externa con la identidad original.
 
 - Inspeccionar todas las vistas de conectores.
 - Fijar los controles de permisos a la derecha, en una misma columna vertical y centrados respecto de su fila.

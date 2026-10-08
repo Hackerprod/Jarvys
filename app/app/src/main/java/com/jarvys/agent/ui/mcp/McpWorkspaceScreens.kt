@@ -79,6 +79,8 @@ import com.jarvys.agent.connectors.AutonomyPolicy
 import com.jarvys.agent.connectors.ConnectorDetailScaffold
 import com.jarvys.agent.connectors.ConnectorPolicyChoice
 import com.jarvys.agent.connectors.ConnectorPolicySelector
+import com.jarvys.agent.connectors.ConnectorPermissionRow
+import com.jarvys.agent.connectors.ConnectorPolicyButton
 import com.jarvys.agent.connectors.DeviceConnectorIconTile
 
 @Composable
@@ -441,16 +443,16 @@ private fun McpToolPolicyRow(
         })
     }
     Column(Modifier.fillMaxWidth().alpha(if (enabled) 1f else 0.62f).padding(vertical = 5.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Column(Modifier.weight(1f).clickable { expanded = !expanded }, verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        ConnectorPermissionRow(modifier = Modifier.testTag("mcp-policy-${tool.wireName}-row"), content = {
+            Column(Modifier.fillMaxWidth().clickable { expanded = !expanded }, verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text(title, color = MaterialTheme.colorScheme.onSurface, fontSize = 14.sp,
                     fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (description.shortText.isNotBlank()) Text(description.shortText,
                     color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall,
                     maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
-            ConnectorPolicySelector(selected, choices, enabled = enabled)
-        }
+        }, permission = { ConnectorPolicySelector(selected, choices, enabled = enabled,
+            modifier = Modifier.testTag("mcp-policy-${tool.wireName}-control")) })
         if (description.isRemoteUntrusted) Text(stringResource(R.string.mcp_remote_untrusted_metadata),
             modifier = Modifier.padding(top = 3.dp), color = MaterialTheme.colorScheme.tertiary,
             style = MaterialTheme.typography.labelSmall)
@@ -614,11 +616,14 @@ private fun McpServerEditor(
                 JarvysGroup(modifier = Modifier.testTag("mcp-editor-tool-policy"),
                     contentPadding = PaddingValues(JarvysUiTokens.ScreenPadding)) {
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        JarvysSectionLabel(stringResource(R.string.mcp_initial_tool_permissions))
+                        ConnectorPermissionRow(content = {
+                            JarvysSectionLabel(stringResource(R.string.mcp_initial_tool_permissions))
+                        }, permission = {
+                            McpInitialToolPolicySelector(initialToolPolicy, { initialToolPolicy = it })
+                        })
                         Text(stringResource(R.string.mcp_initial_tool_permissions_help),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodySmall)
-                        McpInitialToolPolicySelector(initialToolPolicy, { initialToolPolicy = it })
                     }
                 }
             }
@@ -647,11 +652,9 @@ private fun McpInitialToolPolicySelector(
         McpInitialToolPolicy.DENY to R.string.remote_service_policy_deny,
     )
     val selectedLabel = choices.first { it.first == selected }.second
-    Box {
-        TextButton(onClick = { expanded = true }, modifier = Modifier.testTag("mcp-editor-tool-policy-selector")) {
-            Text(stringResource(selectedLabel), maxLines = 1)
-            Icon(LucideIcons.ChevronDown, contentDescription = null, modifier = Modifier.size(17.dp))
-        }
+    Box(Modifier.fillMaxWidth()) {
+        ConnectorPolicyButton(selectedLabel, onClick = { expanded = true },
+            modifier = Modifier.testTag("mcp-editor-tool-policy-selector"))
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             choices.forEach { (policy, label) ->
                 DropdownMenuItem(

@@ -3,11 +3,14 @@ package com.jarvys.agent.connectors
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.size
@@ -34,6 +37,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -159,21 +163,80 @@ internal fun ConnectorDetailScaffold(
     )
 }
 
+/** One layout contract for read-only values, native policies, OAuth scopes and MCP tools.
+ * The trailing slot never depends on the selected value. Large text wraps inside it while
+ * the left column retains nearly half of a narrow row; no touch target may overflow into its neighbour.
+ */
+@Composable
+internal fun ConnectorPermissionRow(
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit,
+    permission: @Composable () -> Unit,
+) {
+    val fontScale = LocalDensity.current.fontScale.coerceAtLeast(1f)
+    BoxWithConstraints(modifier.fillMaxWidth()) {
+        val permissionWidth = minOf(112.dp * fontScale, maxWidth * 0.5f)
+        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.weight(1f), content = content)
+            Box(Modifier.width(permissionWidth), contentAlignment = Alignment.CenterEnd) { permission() }
+        }
+    }
+}
+
 internal data class ConnectorPolicyChoice(val labelResource: Int, val onSelect: () -> Unit)
+
+/** Read access is informational. Reserving the same arrow slot keeps its value aligned. */
+@Composable
+internal fun ConnectorPolicyValue(selectedLabelResource: Int, modifier: Modifier = Modifier) {
+    Box(modifier.fillMaxWidth().heightIn(min = 48.dp).padding(vertical = 8.dp),
+        contentAlignment = Alignment.CenterEnd) {
+        ConnectorPolicyContent(selectedLabelResource, showChevron = false)
+    }
+}
+
+/** Also used by the initial-policy editor, whose menu owns its existing option semantics. */
+@Composable
+internal fun ConnectorPolicyButton(
+    selectedLabelResource: Int,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    TextButton(onClick = onClick, enabled = enabled,
+        modifier = modifier.fillMaxWidth().heightIn(min = 48.dp),
+        // A pill clips the corners of multiline labels at large font scales.
+        shape = RoundedCornerShape(8.dp),
+        contentPadding = PaddingValues(vertical = 8.dp)) {
+        ConnectorPolicyContent(selectedLabelResource, showChevron = true)
+    }
+}
+
+@Composable
+private fun ConnectorPolicyContent(selectedLabelResource: Int, showChevron: Boolean) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(stringResource(selectedLabelResource), Modifier.weight(1f),
+            style = MaterialTheme.typography.labelLarge, textAlign = TextAlign.End,
+            color = if (showChevron) androidx.compose.material3.LocalContentColor.current else MaterialTheme.colorScheme.primary)
+        if (showChevron) Icon(LucideIcons.ChevronDown, contentDescription = null, modifier = Modifier.size(17.dp))
+        else Spacer(Modifier.size(17.dp))
+    }
+}
 
 @Composable
 internal fun ConnectorPolicySelector(
     selectedLabelResource: Int,
     choices: List<ConnectorPolicyChoice>,
     enabled: Boolean = true,
+    modifier: Modifier = Modifier,
 ) {
-    var expanded by remember(selectedLabelResource, choices.size) { mutableStateOf(false) }
-    Box {
-        TextButton(onClick = { expanded = true }, enabled = enabled) {
-            Text(stringResource(selectedLabelResource), maxLines = 1)
-            Icon(LucideIcons.ChevronDown, contentDescription = null, modifier = Modifier.size(17.dp))
-        }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+    var expanded by remember(selectedLabelResource, choices.size, enabled) { mutableStateOf(false) }
+    Box(Modifier.fillMaxWidth()) {
+        ConnectorPolicyButton(selectedLabelResource, onClick = { expanded = true },
+            enabled = enabled, modifier = modifier)
+        DropdownMenu(expanded = expanded && enabled, onDismissRequest = { expanded = false }) {
             choices.forEach { choice -> DropdownMenuItem(
                 text = { Text(stringResource(choice.labelResource)) },
                 onClick = { expanded = false; choice.onSelect() },
