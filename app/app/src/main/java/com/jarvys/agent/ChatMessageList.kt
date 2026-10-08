@@ -40,10 +40,6 @@ val LocalChatComposerInset = compositionLocalOf { 0.dp }
 /** Header overlays history while this inset keeps the oldest item below its controls. */
 val LocalChatHeaderInset = compositionLocalOf { 0.dp }
 
-/** Main-chat geometry survives route transitions; other transcripts still use zero overlay insets. */
-internal data class ChatScreenInsets(val composer: Dp = 0.dp, val header: Dp = 0.dp)
-internal val LocalRetainedChatScreenInsets = compositionLocalOf { ChatScreenInsets() }
-
 /** Reverse-layout conversation timeline: item zero is the stable bottom/tail anchor. */
 @Composable
 internal fun <T> ChatMessageList(

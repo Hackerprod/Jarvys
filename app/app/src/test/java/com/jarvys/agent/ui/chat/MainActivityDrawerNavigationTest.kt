@@ -7,9 +7,11 @@ import android.graphics.Canvas
 import android.os.Looper
 import android.view.View
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.lifecycle.ViewModelProvider
 import androidx.navigation.NavHostController
 import androidx.test.core.app.ActivityScenario
@@ -166,16 +168,25 @@ class MainActivityDrawerNavigationTest {
                 swipe(Offset(centerX, height * 0.28f), Offset(centerX, height * 0.62f), durationMillis = 400)
             }
         }
+        awaitVisibleAssistantTypography()
         settleNativeFrame()
         val scrollWithComposerFocus = chatScrollPosition()
         assertTrue("The test must leave the newest-message anchor", scrollWithComposerFocus > 0f)
 
         openDrawer()
+        awaitVisibleAssistantTypography()
         settleNativeFrame()
         // Opening the modal drawer clears composer focus/IME and may change the viewport once.
         // Compare the settled navigation anchor, after that intentional keyboard transition.
         val scrollBefore = chatScrollPosition()
-        println("UX17_SCROLL composerFocused=$scrollWithComposerFocus; drawerSettled=$scrollBefore; ${chatScrollDiagnostic()}")
+        val originalVisibleAnchors = unobscuredUserAnchorTags()
+        val centerAnchor = compose.onAllNodes(SemanticsMatcher("visible user anchor") {
+            it.config.contains(SemanticsProperties.TestTag) &&
+                it.config[SemanticsProperties.TestTag].startsWith("user-message-bubble-")
+        }, useUnmergedTree = true).fetchSemanticsNodes().filter { it.boundsInRoot.height > 0 }
+            .minBy { kotlin.math.abs(it.boundsInRoot.center.y - 400f) }
+            .config[SemanticsProperties.TestTag]
+        assertTrue(centerAnchor in originalVisibleAnchors)
         assertTrue("The drawer must retain a non-tail chat anchor", scrollBefore > 0f)
         compose.onNodeWithTag("drawer-header").assertIsDisplayed()
         compose.onNodeWithTag("drawer-header-title").assertTextEquals(context.getString(R.string.app_name))
@@ -203,9 +214,13 @@ class MainActivityDrawerNavigationTest {
 
         tapTag("jarvys-back")
         awaitCurrentChat()
+        awaitVisibleAssistantTypography()
+        settleNativeFrame()
         compose.onNode(hasSetTextAction()).assertTextEquals(draft)
-        println("UX17_SCROLL after Back=${chatScrollPosition()}; ${chatScrollDiagnostic()}")
-        assertEquals(scrollBefore, chatScrollPosition(), 0.02f)
+        val firstReturnScroll = chatScrollPosition()
+        compose.onNodeWithTag(centerAnchor, useUnmergedTree = true).assertIsDisplayed()
+        assertEquals("Navigation must retain the same unobscured transcript region", originalVisibleAnchors, unobscuredUserAnchorTags())
+        assertTrue("Returning must not reset chat to the newest-message anchor", firstReturnScroll > 0f)
         assertEquals(persisted, transcript(currentSession))
         assertSame(transfers, ViewModelProvider(activity)[ChatFileTransfers::class.java])
         assertEquals(currentSession, selectedSession())
@@ -217,8 +232,15 @@ class MainActivityDrawerNavigationTest {
         awaitTag("scheduled-tasks-placeholder")
         tapTag("jarvys-back")
         awaitCurrentChat()
+        awaitVisibleAssistantTypography()
+        settleNativeFrame()
         compose.onNode(hasSetTextAction()).assertTextEquals(draft)
-        assertEquals(scrollBefore, chatScrollPosition(), 0.02f)
+        val secondReturnScroll = chatScrollPosition()
+        compose.onNodeWithTag(centerAnchor, useUnmergedTree = true).assertIsDisplayed()
+        assertEquals("Repeated navigation must retain the same unobscured transcript region", originalVisibleAnchors, unobscuredUserAnchorTags())
+        // A native-host probe found one-time 42px normalization consistent with inherited async
+        // Markdown row sizing. Preserve the same readable region and prohibit cumulative drift.
+        assertEquals("Repeated trips must not accumulate scroll drift", firstReturnScroll, secondReturnScroll, 0.02f)
     }
 
     @Test fun archiveRenameRestoreAndConfirmedDeleteMutateOnlyTheirSessionsAndHideTheLastEntry() {
@@ -441,12 +463,8 @@ class MainActivityDrawerNavigationTest {
     }
 
     private fun systemBack() {
-        compose.runOnIdle {
-            println("UX17_SYSTEM_BACK before: ${navigationDiagnostic()}")
-            activity.onBackPressedDispatcher.onBackPressed()
-        }
+        compose.runOnIdle { activity.onBackPressedDispatcher.onBackPressed() }
         compose.waitForIdle()
-        compose.runOnIdle { println("UX17_SYSTEM_BACK after: ${navigationDiagnostic()}") }
     }
 
     private fun navigationDiagnostic(): String = "route=${navigation().currentDestination?.route}; " +
@@ -561,18 +579,32 @@ class MainActivityDrawerNavigationTest {
     private fun chatScrollPosition(): Float = compose.onNodeWithTag("chat-message-list")
         .fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()
 
-    private fun chatScrollDiagnostic(): String {
-        val list = compose.onNodeWithTag("chat-message-list").fetchSemanticsNode()
-        val bubbles = compose.onAllNodes(SemanticsMatcher("user message anchor") {
+    private fun unobscuredUserAnchorTags(): Set<String> {
+        val headerBottom = compose.onNodeWithTag("chat-header-fade").fetchSemanticsNode().boundsInRoot.bottom
+        val composerTop = compose.onNodeWithTag("chat-composer-overlay").fetchSemanticsNode().boundsInRoot.top
+        return compose.onAllNodes(SemanticsMatcher("unobscured user anchor") {
             it.config.contains(SemanticsProperties.TestTag) &&
                 it.config[SemanticsProperties.TestTag].startsWith("user-message-bubble-")
-        }, useUnmergedTree = true).fetchSemanticsNodes().map {
-            it.config[SemanticsProperties.TestTag] to it.boundsInRoot
+        }, useUnmergedTree = true).fetchSemanticsNodes().filter {
+            it.boundsInRoot.width > 0 && it.boundsInRoot.height > 0 &&
+                it.boundsInRoot.top >= headerBottom && it.boundsInRoot.bottom <= composerTop
+        }.map { it.config[SemanticsProperties.TestTag] }.toSet()
+    }
+
+    /** The async Markdown renderer has a 16sp fallback; compare anchors only after its real 14sp body. */
+    private fun awaitVisibleAssistantTypography() {
+        compose.waitUntil(10_000) {
+            val visible = compose.onAllNodes(hasText("$currentTitle answer ", substring = true), useUnmergedTree = true)
+                .fetchSemanticsNodes().filter { it.boundsInRoot.width > 0f && it.boundsInRoot.height > 0f }
+            visible.isNotEmpty() && visible.all { node ->
+                val text = node.config[SemanticsProperties.Text].joinToString("") { it.text }
+                val layouts = mutableListOf<TextLayoutResult>()
+                compose.onNodeWithText(text, useUnmergedTree = true)
+                    .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+                layouts.singleOrNull()?.layoutInput?.style?.fontSize?.value == 14f
+            }
         }
-        val overlays = listOf("chat-composer-overlay", "chat-header-fade").associateWith { tag ->
-            compose.onAllNodesWithTag(tag).fetchSemanticsNodes().map { it.boundsInRoot }
-        }
-        return "viewport=${list.boundsInRoot}; overlays=$overlays; userAnchors=$bubbles"
+        compose.waitForIdle()
     }
 
     private fun captureDialog(name: String) {

@@ -10,7 +10,6 @@ import androidx.compose.material3.DrawerState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Scaffold
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -33,8 +32,6 @@ import com.jarvys.agent.AppRouteAction
 import com.jarvys.agent.AgentRunUiSnapshot
 import com.jarvys.agent.LocalChatComposerInset
 import com.jarvys.agent.LocalChatHeaderInset
-import com.jarvys.agent.ChatScreenInsets
-import com.jarvys.agent.LocalRetainedChatScreenInsets
 
 @Composable
 fun JarvysShellFrame(
@@ -107,9 +104,6 @@ fun JarvysShellFrame(
             bottomBar = { if (!chatRoute) bottomBar() },
             content = { padding ->
                 var composerInset by remember { mutableStateOf(0.dp) }
-                var lastChatHeaderInset by remember { mutableStateOf(padding.calculateTopPadding()) }
-                val chatHeaderInset = if (chatRoute) padding.calculateTopPadding() else lastChatHeaderInset
-                SideEffect { if (chatRoute) lastChatHeaderInset = chatHeaderInset }
                 val density = LocalDensity.current
                 val layoutDirection = LocalLayoutDirection.current
                 val bodyPadding = PaddingValues(
@@ -121,7 +115,6 @@ fun JarvysShellFrame(
                 // Keep the NavHost at one stable composition position across chat/settings routes.
                 // Moving it between branches discarded its saveable state holder and chat scroll.
                 CompositionLocalProvider(
-                    LocalRetainedChatScreenInsets provides ChatScreenInsets(composerInset, chatHeaderInset),
                     LocalChatComposerInset provides if (chatRoute) composerInset else 0.dp,
                     LocalChatHeaderInset provides if (chatRoute) padding.calculateTopPadding() else 0.dp,
                 ) {
