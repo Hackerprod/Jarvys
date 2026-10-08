@@ -66,10 +66,18 @@ class MainActivityImageDownloadGestureTest {
     @Test fun realImageViewerSaveGestureExportsAndOpenIsOnlyLaunchedAfterTheOpenGesture() {
         compose.waitUntil(10_000) { compose.onAllNodesWithTag("generated-image-open-${event.id}").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithTag("generated-image-open-${event.id}").performTouchInput { click() }
+        compose.waitUntil(10_000) { compose.onAllNodesWithTag("generated-image-viewer-image").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitForIdle()
+        compose.mainClock.advanceTimeByFrame()
         compose.onNodeWithTag("generated-image-save").assertIsDisplayed().performTouchInput { click() }
         val vm = ViewModelProvider(compose.activity)[ChatFileTransfers::class.java]
         val request = requireNotNull(ChatFileRequest.generated(session, event))
-        compose.waitUntil(10_000) { vm.transfers.value[request.key]?.saved == true }
+        assertEquals(context.filesDir, vm.getApplication<android.app.Application>().filesDir)
+        compose.runOnIdle { println("UX16_SAVE_GESTURE transfers=${vm.transfers.value}; request=$request; state=${AgentRunUiState.state.value.sessionId}") }
+        try { compose.waitUntil(10_000) { vm.transfers.value[request.key]?.saved == true } }
+        catch (failure: Throwable) {
+            throw AssertionError("Gesture export did not finish: ${vm.transfers.value}; notice=${vm.notice.value}; state=${AgentRunUiState.state.value.sessionId}", failure)
+        }
         compose.onNodeWithTag("chat-download-result").assertIsDisplayed()
         assertEquals(1, provider.inserts)
         assertEquals(1, provider.publishes)

@@ -7,12 +7,6 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.os.Looper
-import android.os.Handler
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.android.asCoroutineDispatcher
-import kotlinx.coroutines.test.setMain
-import kotlinx.coroutines.test.resetMain
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.core.app.ApplicationProvider
 import androidx.work.testing.WorkManagerTestInitHelper
@@ -36,7 +30,6 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /** Exercises the production MainActivity Save callback, retained VM and actual ActivityResult host. */
-@OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [34], qualifiers = "en-rUS-w360dp-h800dp-port-mdpi")
@@ -46,8 +39,6 @@ class MainActivityDownloadFlowTest {
     private var controller: ActivityController<MainActivity>? = null
 
     @Before fun setUp() {
-        // Bind Main to this Robolectric sandbox's real current looper, not a handler from a prior test.
-        Dispatchers.setMain(Handler(Looper.getMainLooper()).asCoroutineDispatcher().immediate)
         // AndroidViewModelFactory caches its Application globally; Robolectric replaces the Application per test.
         ViewModelProvider.AndroidViewModelFactory::class.java.getDeclaredField("_instance")
             .apply { isAccessible = true }.set(null, null)
@@ -57,10 +48,10 @@ class MainActivityDownloadFlowTest {
 
     @After fun cleanUp() {
         controller?.pause()?.stop()?.destroy()
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(32))
         controller = null
         secretSingleton.set(null, null)
         WorkManagerTestCleanup.close(context)
-        Dispatchers.resetMain()
     }
 
     @Test fun saveUsesDownloadsWithoutPickerAndDuplicateTapsWriteOnceThenExplicitOpenGrantsReadOnly() {
@@ -224,7 +215,7 @@ class MainActivityDownloadFlowTest {
     private fun start(session: String): MainActivity {
         controller = Robolectric.buildActivity(MainActivity::class.java,
             Intent(context, MainActivity::class.java).putExtra(MainActivity.EXTRA_OPEN_CHAT_SESSION, session)).setup()
-        Shadows.shadowOf(Looper.getMainLooper()).idle()
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(32))
         val activity = controller!!.get()
         assertEquals("VM and fixture must belong to the same Android application sandbox", context.filesDir,
             ViewModelProvider(activity)[ChatFileTransfers::class.java].getApplication<Application>().filesDir)
@@ -256,7 +247,7 @@ class MainActivityDownloadFlowTest {
     private fun await(condition: () -> Boolean) {
         val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(15)
         do {
-            Shadows.shadowOf(Looper.getMainLooper()).idle()
+            Shadows.shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(32))
             if (condition()) return
             Thread.sleep(10)
         } while (System.nanoTime() < end)
