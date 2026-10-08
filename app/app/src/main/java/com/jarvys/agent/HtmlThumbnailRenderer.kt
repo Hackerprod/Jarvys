@@ -21,6 +21,8 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import androidx.annotation.RequiresApi
+import androidx.core.graphics.createBitmap
+import androidx.core.graphics.get
 import androidx.core.net.toUri
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -136,7 +138,7 @@ internal object HtmlThumbnailRenderer {
                         if (continuation.isActive && root.isAttachedToWindow && ready.isAttachedToWindow && !finished) {
                             var bitmap: Bitmap? = null
                             try {
-                                bitmap = Bitmap.createBitmap(outputWidth, outputHeight, Bitmap.Config.ARGB_8888)
+                                bitmap = createBitmap(outputWidth, outputHeight, Bitmap.Config.ARGB_8888)
                                 val canvas = Canvas(bitmap)
                                 canvas.drawColor(Color.WHITE)
                                 canvas.scale(outputWidth.toFloat() / width, outputHeight.toFloat() / height)
@@ -249,7 +251,7 @@ internal class HtmlThumbnailClient(private val content: WorkspacePreviewContent,
 /** Blank output is an unavailable preview, never evidence of a successfully rendered application. */
 internal fun isUniformThumbnail(bitmap: Bitmap): Boolean {
     val row = IntArray(bitmap.width)
-    val first = bitmap.getPixel(0, 0)
+    val first = bitmap[0, 0]
     for (y in 0 until bitmap.height) {
         bitmap.getPixels(row, 0, bitmap.width, 0, y, bitmap.width, 1)
         if (row.any { it != first }) return false
