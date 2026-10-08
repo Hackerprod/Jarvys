@@ -83,6 +83,7 @@ class GmailConnector(
         validateArguments(operation, arguments)
         token.throwIfCancelled()
         val authorizationEpoch = oauth.currentAuthorizationEpoch()
+        requireWriteScope(operation)
         val args = JSONObject(arguments.toString())
         var draftId = ""
         var revision = ""
@@ -189,6 +190,7 @@ class GmailConnector(
         val reviewed = preparation.attachment as? ReviewedWrite ?: error("Reviewed Gmail content is missing")
         require(reviewed.owner === this && reviewed.operation == operation) { "Gmail approval does not match this action" }
         check(oauth.currentAuthorizationEpoch() == reviewed.authorizationEpoch) { "Google authorization changed after approval; review this action again." }
+        requireWriteScope(operation)
         check(!reviewed.attempted.get() && !writeJournal.isUncertain(reviewed.intentHash)) { AMBIGUOUS_WRITE }
         if (reviewed.draftId.isNotBlank()) {
             val latest = fetchDraft(reviewed.draftId, "raw", token, reviewed.authorizationEpoch).getJSONObject("message")
@@ -205,7 +207,7 @@ class GmailConnector(
             SEND_MESSAGE, REPLY_MESSAGE -> "/users/me/messages/send"
             else -> error("Unknown Gmail write operation")
         }
-        val scope = if (operation in setOf(CREATE_DRAFT, UPDATE_DRAFT, SEND_DRAFT)) GoogleOAuthProtocol.GMAIL_COMPOSE else GoogleOAuthProtocol.GMAIL_SEND
+        val scope = writeScope(operation)
         token.throwIfCancelled()
         check(reviewed.attempted.compareAndSet(false, true)) { AMBIGUOUS_WRITE }
         writeJournal.reserve(reviewed.intentHash)
@@ -240,6 +242,17 @@ class GmailConnector(
         val result = GmailContent.envelope("gmail.$operation", JSONArray().put(item), 1)
         if (!writeJournal.resolve(reviewed.intentHash)) result.put("safety_warning", "Google accepted the action but its local safety marker could not be cleared. Do not retry; verify in Gmail.")
         return result
+    }
+
+    private fun writeScope(operation: String): String =
+        if (operation in setOf(CREATE_DRAFT, UPDATE_DRAFT, SEND_DRAFT)) GoogleOAuthProtocol.GMAIL_COMPOSE else GoogleOAuthProtocol.GMAIL_SEND
+
+    private fun requireWriteScope(operation: String) {
+        require(oauth.isScopeGranted(writeScope(operation))) {
+            if (writeScope(operation) == GoogleOAuthProtocol.GMAIL_COMPOSE)
+                "Enable Gmail draft permission in Settings before preparing this action. No write was sent."
+            else "Enable Gmail send permission in Settings before preparing this action. No write was sent."
+        }
     }
 
     private fun writePayload(reviewed: ReviewedWrite): String {

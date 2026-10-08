@@ -567,4 +567,38 @@ class GmailApiContractTest {
         }
     }
 
+    @Test fun missingWritePermissionFailsBeforeApprovalReadsOrAmbiguityReservation() {
+        val operations = listOf(
+            GmailConnector.CREATE_DRAFT to args(), GmailConnector.SEND_MESSAGE to args(),
+            GmailConnector.REPLY_MESSAGE to JSONObject().put("message_id", "m1").put("body", "Reply"),
+            GmailConnector.UPDATE_DRAFT to args().put("id", "d1").put("expected_revision", "m1"),
+            GmailConnector.SEND_DRAFT to JSONObject().put("id", "d1").put("expected_revision", "m1"),
+        )
+        operations.forEach { (operation, input) ->
+            val api = Api().apply { granted = false }
+            assertFailure("permission") { runtime(api).prepareWrite(operation, input, CancellationToken.uncancellable()) }
+            assertTrue(api.calls.isEmpty())
+        }
+        val api = Api().apply { granted = false }
+        val connector = runtime(api)
+        assertFailure("permission") { perform(connector, GmailConnector.SEND_MESSAGE, args()) }
+        api.granted = true
+        api.respond(sent())
+        assertEquals("send_accepted", perform(connector, GmailConnector.SEND_MESSAGE, args()).getJSONArray("items").getJSONObject(0).getString("status"))
+        assertEquals(1, api.calls.size)
+    }
+
+    @Test fun permissionLostAfterApprovalDoesNotReserveAnUnsentWrite() {
+        val api = Api()
+        val connector = runtime(api)
+        val preparation = connector.prepareWrite(GmailConnector.SEND_MESSAGE, args(), CancellationToken.uncancellable())
+        api.granted = false
+        assertFailure("permission") { connector.invokePrepared(GmailConnector.SEND_MESSAGE, preparation.executionArguments,
+            preparation, CancellationToken.uncancellable()) }
+        assertTrue(api.calls.isEmpty())
+        api.granted = true
+        api.respond(sent())
+        assertEquals("send_accepted", perform(connector, GmailConnector.SEND_MESSAGE, args()).getJSONArray("items").getJSONObject(0).getString("status"))
+    }
+
 }

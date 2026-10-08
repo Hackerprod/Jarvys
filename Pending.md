@@ -147,6 +147,7 @@ Diseño y límites: `app/DRAWER_NAVIGATION.md`. Los registros detallados de vali
 Estado: implementación y revisión independiente completadas; validación agregada en curso para preparación v38 / 1.2.31-UX19. Las 162 pruebas dirigidas aprueban con resultados frescos, incluidas 144 regresiones nuevas. Aún no se afirma una pasada completa ni acceso real a Google.
 
 - Corregidos el resultado nativo de autorización, la colisión de códigos de cancelación y los contratos de envío/subida. Las aprobaciones de Gmail y Drive quedan ligadas a la cuenta/sesión de autorización y se invalidan si cambia durante la revisión.
+- Gmail comprueba el permiso específico de envío o borradores antes de preparar o despachar una escritura, para no marcar como incierta una acción que no tenía permiso y nunca se envió.
 - Gmail incorpora páginas continuables, hilos y respuestas, ciclo de borradores, MIME/charset y adjuntos nativos. La derivación de destinatarios usa la sintaxis original del encabezado; nombres visibles, comentarios y palabras codificadas no conceden confianza ni añaden destinatarios.
 - Drive incorpora filtros y unidades compartidas, descarga/exportación binaria, carpetas y creación/actualización con archivos del chat y alcance drive.file. Los bytes, destino y SHA-256 quedan congelados antes de aprobar.
 - Reintentos limitados de lectura, un refresh ante 401, 403 accionables y cancelación del transporte. Las escrituras inciertas conservan un marcador privado sin contenido ni credenciales y no se repiten automáticamente, incluso tras reiniciar. La reconciliación de resultados inciertos es manual.
@@ -189,7 +190,18 @@ Referencias: [AuthorizationClient](https://developer.android.com/identity/author
 - Mejorar scroll, fling y coordinación de gestos anidados del WebView, respetando quién controla cada gesto.
 - Evitar que los desplazamientos verticales o hacia arriba dentro del preview abran el panel lateral de la app.
 - Conservar navegación legítima, enlaces, zoom e interacción con el teclado.
+- Añadir **Ver en Jarvys** al adjunto de una página HTML generada, junto a Descargar y Compartir. Distinguir una página HTML de un archivo APK; abrir la página dentro de la app mediante el preview seguro.
+- Servir CSS, JavaScript, imágenes y rutas relativas únicamente desde los recursos autorizados de esa página y conservar la apertura tras reabrir el chat, sin acceso arbitrario a archivos privados ni puentes WebView inseguros.
 - Validar rendimiento y gestos en dispositivo físico; las pruebas Robolectric no bastan para demostrar fluidez real.
+
+### 8. UX24: coherencia visual de Bots
+
+Estado: pendiente; se abordará después de UX22 sin alterar la validación de la etapa actual.
+
+- Extender el efecto de trabajo activo a todo el conjunto del bot, incluido icono y nombre, en lugar de limitarlo al texto.
+- La tarjeta de trabajo debe resolver el mismo icono estable que la cuadrícula de Bots, tanto para bots personalizados con icono generado como para plantillas integradas.
+- Conservar la identidad del icono al actualizar y reabrir; usar un fallback solo cuando no exista un icono válido.
+- Mostrar el efecto únicamente mientras el bot esté ejecutando trabajo real y respetar ciclo de vida, visibilidad y movimiento reducido.
 
 ## Validaciones que siguen abiertas
 
