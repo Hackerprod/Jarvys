@@ -1346,4 +1346,6 @@ Se desconoce cómo terminaron. No se repiten automáticamente. Revisa los cambio
     <string name="github_workflow_scope">Solicitar acceso a archivos de workflows (requiere repositorios)</string>
     <string name="github_scope_review_note">Los permisos adicionales requieren tu aprobación en GitHub. Volver a conectar nunca repite automáticamente la acción pendiente.</string>
     <string name="github_required_scopes">GitHub solicitó estos permisos: %1$s. Revisa el acceso en Ajustes avanzados y vuelve a conectar, o actualiza el token en GitHub.</string>
+    <string name="chat_view_in_jarvys">Ver en Jarvys</string>
+    <string name="workspace_preview_partial">No se pudieron guardar algunos recursos. Esta vista local puede estar incompleta.</string>
 </resources>

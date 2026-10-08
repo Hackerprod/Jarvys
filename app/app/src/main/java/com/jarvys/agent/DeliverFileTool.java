@@ -30,9 +30,10 @@ final class DeliverFileTool implements CoreTool {
                 "Attach an existing file you worked on to this conversation as a durable native attachment. "
                 + "Use /project/path for shared Coding or backend files (including factory APKs), or a relative ordinary workspace path. "
                 + "Optional filename changes its download name only. Maximum 256 MiB. The immutable copy survives later workspace edits. "
+                + "UTF-8 HTML also receives an immutable offline preview of bounded, statically referenced local assets; missing or excluded assets are reported. "
                 + "Use this when the user asks for the actual file; plain paths and Markdown links do not deliver files. "
                 + "No remote upload, automatic download, install, execution, memory/skills/credentials access, or cross-chat access. Main chat only. "
-                + "The user chooses Download or Share; only report attached=true after success. Repeating unchanged bytes/name returns the same artifact.",
+                + "The user chooses Preview, Download or Share; only report attached=true after success. Repeating unchanged bytes/name and captured assets returns the same artifact.",
                 "workspace", ToolSpec.Status.IMPLEMENTED, properties, Collections.singletonList("path"));
     }
     @Override public ToolSpec declaration() { return spec; }
@@ -56,10 +57,7 @@ final class DeliverFileTool implements CoreTool {
             token.throwIfCancelled();
             conversations.appendDeliveredFile(session, artifact);
             AgentRunUiState.deliveredFileAdded(session, artifact);
-            return CoreToolResult.success(new JSONObject().put("attached", true).put("artifact_id", "delivered:" + artifact.id)
-                    .put("filename", artifact.name).put("mime_type", artifact.mimeType).put("size_bytes", artifact.sizeBytes)
-                    .put("sha256", artifacts.sha256(session, artifact))
-                    .put("delivery", "Native attachment in this conversation. The user can Download or Share it.").toString());
+            return deliveryResult(session, artifact, artifacts);
         } catch (java.util.concurrent.CancellationException cancelled) { throw cancelled; }
         catch (IOException | IllegalArgumentException unavailable) {
             return CoreToolResult.failure("Could not attach file. Check that it is an ordinary file in this conversation's workspace, within 256 MiB, and that storage is available. No file was uploaded.");
@@ -67,4 +65,23 @@ final class DeliverFileTool implements CoreTool {
             return CoreToolResult.failure("File delivery could not be confirmed. Check this conversation for the attachment before retrying the same path and filename.");
         }
     }
+    static CoreToolResult deliveryResult(String session, ChatAttachment artifact, DeliveredArtifactStore artifacts) throws Exception {
+        HtmlPreviewDescriptor preview = artifacts.previewForAttachment(session, artifact);
+        JSONObject result = new JSONObject().put("attached", true).put("artifact_id", "delivered:" + artifact.id)
+                .put("filename", artifact.name).put("mime_type", artifact.mimeType).put("size_bytes", artifact.sizeBytes)
+                .put("sha256", artifacts.sha256(session, artifact))
+                .put("delivery", "Native attachment in this conversation. The user can Download or Share it.")
+                .put("preview_available", preview != null);
+        if (preview != null) {
+            result.put("preview_id", preview.token).put("preview_entry", preview.entryPath)
+                    .put("preview_file_count", preview.fileCount).put("preview_total_bytes", preview.totalBytes)
+                    .put("preview_warnings", new org.json.JSONArray(preview.warnings))
+                    .put("preview_policy", "Immutable local HTML; external URL resource loads are blocked and no Android bridge is installed. Only bounded static dependencies are captured.");
+            return CoreToolResult.preview(result.toString(), preview.token);
+        }
+        String warning = artifacts.previewUnavailable(session, artifact);
+        if (!warning.isEmpty()) result.put("preview_warnings", new org.json.JSONArray().put(warning));
+        return CoreToolResult.success(result.toString());
+    }
+
 }

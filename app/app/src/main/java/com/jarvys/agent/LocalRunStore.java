@@ -721,13 +721,26 @@ public final class LocalRunStore {
                     .put("auditDetail", MainChatTranscriptStore.shortText(
                             CrewCheckpointStore.sanitizeText(auditDetail == null ? "" : auditDetail), 4_000))
                     .put("timestamp", System.currentTimeMillis() / 1000.0);
-            if (previewId != null && previewId.equals(WorkspaceStore.projectIdForSession(sessionId))) row.put("previewId", previewId);
+            if (previewId != null && verifiedPreview(sessionId, previewId) != null) row.put("previewId", previewId);
             synchronized (SESSION_TITLE_LOCK) { appendSessionRowLocked(conversationFile(sessionId), row); }
         } catch (Exception failure) { throw new IllegalStateException("Could not persist tool details and preview", failure); }
     }
 
     /** Only reconnect a preview to this chat's canonical existing workspace. Never create a file. */
     private String verifiedPreview(String sessionId, String recordedId) {
+        return verifiedPreview(sessionId, recordedId, null);
+    }
+
+    private String verifiedPreview(String sessionId, String recordedId, Map<String, ChatAttachment> ownedFiles) {
+        if (HtmlPreviewDescriptor.isSnapshotToken(recordedId)) {
+            try {
+                DeliveredArtifactStore artifacts = new DeliveredArtifactStore(root.getParentFile());
+                String id = recordedId.substring(HtmlPreviewDescriptor.TOKEN_PREFIX.length());
+                ChatAttachment owner = ownedFiles == null ? findChatFile(sessionId, "delivered", id) : ownedFiles.get(id);
+                HtmlPreviewDescriptor preview = owner == null ? null : artifacts.previewMetadataForAttachment(sessionId, owner);
+                return preview != null && recordedId.equals(preview.token) ? recordedId : null;
+            } catch (Exception unavailable) { return null; }
+        }
         String expected = WorkspaceStore.projectIdForSession(sessionId);
         if (recordedId == null || !expected.equals(recordedId)) return null;
         try {
@@ -1264,6 +1277,13 @@ public final class LocalRunStore {
     public synchronized List<AgentRunUiEvent> readConversationTimeline(String sessionId) {
         List<AgentRunUiEvent> events = new ArrayList<>();
         List<JSONObject> rows = readConversationRows(sessionId);
+        Map<String, ChatAttachment> ownedDeliveredFiles = new LinkedHashMap<>();
+        for (JSONObject row : rows) {
+            if ("delivered_file".equals(row.optString("type"))) {
+                ChatAttachment attachment = ChatAttachment.fromJson(row.optJSONObject("artifact"));
+                if (attachment != null) ownedDeliveredFiles.put(attachment.id, attachment);
+            }
+        }
         Map<String, CrewMissionSnapshot> latestCrew = new LinkedHashMap<>();
         Map<String, Integer> latestCrewRow = new LinkedHashMap<>();
         Set<String> consumedProactiveReplies = new HashSet<>();
@@ -1414,10 +1434,10 @@ public final class LocalRunStore {
                         ? reflectionTools.get(callId).optString("toolName", toolName) : CoreToolRegistry.humanizeToolName(toolName);
                 String recordedPreview = presentation ? row.optString("previewId", "") : "";
                 boolean legacyPreview = recordedPreview.isEmpty() && "tool_result".equals(stage) && isPreviewTool(toolName);
-                String preview = verifiedPreview(sessionId, legacyPreview ? WorkspaceStore.projectIdForSession(sessionId) : recordedPreview);
+                String preview = verifiedPreview(sessionId, legacyPreview ? WorkspaceStore.projectIdForSession(sessionId) : recordedPreview, ownedDeliveredFiles);
                 if (legacyPreview && preview != null) detail += (detail.isEmpty() ? "" : "\n\n")
                         + "Original preview details are unavailable. This opens the current verified index.html in this conversation's workspace.";
-                else if (!recordedPreview.isEmpty() && preview == null) detail += "\n\nThe recorded preview file is no longer available in this conversation's workspace.";
+                else if (!recordedPreview.isEmpty() && preview == null) detail += "\n\nThe recorded preview is no longer available in this conversation.";
                 events.add(AgentRunUiEvent.toolEvent(id++, stage, toolName, detail.isEmpty() ? null : detail,
                         callId.isEmpty() ? null : callId, preview,
                         (long) (row.optDouble("timestamp", 0) * 1000))

@@ -1346,4 +1346,6 @@ Their exit results are unknown. Do not repeat them automatically. Review project
     <string name="github_workflow_scope">Request workflow-file access (requires repository access)</string>
     <string name="github_scope_review_note">Additional permissions require your approval on GitHub. Reconnecting never repeats the pending action automatically.</string>
     <string name="github_required_scopes">GitHub requested these scopes: %1$s. Review access in Advanced settings and reconnect, or update the token in GitHub.</string>
+    <string name="chat_view_in_jarvys">View in Jarvys</string>
+    <string name="workspace_preview_partial">Some resources could not be captured. This local preview may be incomplete.</string>
 </resources>

@@ -259,6 +259,7 @@ private object Routes {
     const val CREW = AppNavigationBackPolicy.CREW
     const val CREW_BOT = AppNavigationBackPolicy.CREW_BOT
     const val WORKSPACE_PREVIEW = AppNavigationBackPolicy.WORKSPACE_PREVIEW
+    const val ARTIFACT_PREVIEW = AppNavigationBackPolicy.ARTIFACT_PREVIEW
     fun crew(missionId: String) = CrewNavigationRoutes.mission(missionId)
     fun crewBot(missionId: String, botId: String) = CrewNavigationRoutes.bot(missionId, botId)
     fun connectorDevice(id: String) = AppNavigationBackPolicy.connectorDevice(id)
@@ -1637,7 +1638,7 @@ private fun JarvysApp(
 
     JarvysShellFrame(
         drawerState = drawerState,
-        drawerGesturesEnabled = !drawerNavigationPending,
+        drawerGesturesEnabled = !drawerNavigationPending && route != Routes.WORKSPACE_PREVIEW && route != Routes.ARTIFACT_PREVIEW,
         drawerContent = {
             ConversationDrawer(
                 history = runHistory,
@@ -1795,7 +1796,10 @@ private fun JarvysApp(
                             emptyReport = null,
                             connectorRegistry = connectorRegistry,
                             onOpenPreview = { projectId ->
-                                navController.navigate("workspace-preview/${Uri.encode(projectId)}")
+                                val destination = if (HtmlPreviewDescriptor.isSnapshotToken(projectId))
+                                    "artifact-preview/${Uri.encode(conversationSessionId)}/${Uri.encode(projectId.removePrefix(HtmlPreviewDescriptor.TOKEN_PREFIX))}"
+                                else "workspace-preview/${Uri.encode(projectId)}"
+                                navController.navigate(destination) { launchSingleTop = true }
                             },
                             onOpenSkillFile = { skillFileLink = it },
                             chatWithoutMemory = chatWithoutMemory,
@@ -1924,7 +1928,15 @@ private fun JarvysApp(
                     route = Routes.WORKSPACE_PREVIEW,
                     arguments = listOf(navArgument("projectId") { type = NavType.StringType }),
                 ) { entry ->
-                    WorkspacePreviewScreen(entry.arguments?.getString("projectId").orEmpty())
+                    WorkspacePreviewScreen(entry.arguments?.getString("projectId").orEmpty(), sessionId = conversationSessionId)
+                }
+                composable(
+                    route = Routes.ARTIFACT_PREVIEW,
+                    arguments = listOf(navArgument("sessionId") { type = NavType.StringType },
+                        navArgument("artifactId") { type = NavType.StringType }),
+                ) { entry ->
+                    WorkspacePreviewScreen(HtmlPreviewDescriptor.TOKEN_PREFIX + entry.arguments?.getString("artifactId").orEmpty(),
+                        sessionId = entry.arguments?.getString("sessionId"))
                 }
             }
     }

@@ -31,8 +31,8 @@ android {
         applicationId = if (recoveryTestBuild) "com.jarvys.agent.recoverytest" else "com.jarvys.agent"
         minSdk = 24
         targetSdk = 35
-        versionCode = 40
-        versionName = "1.2.33-UX21" + if (recoveryTestBuild) "-test" else ""
+        versionCode = 41
+        versionName = "1.2.34-UX22" + if (recoveryTestBuild) "-test" else ""
         manifestPlaceholders["jarvysApplicationLabel"] = if (recoveryTestBuild) "Jarvys Prueba" else "@string/app_name"
         manifestPlaceholders["jarvysNotificationListenerLabel"] =
             if (recoveryTestBuild) "Jarvys Prueba: notificaciones" else "@string/notification_listener_label"

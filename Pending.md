@@ -18,7 +18,7 @@ Modo de ejecución: continuar la cola completa. Al cerrar cada pendiente o corre
 - **UX19 / preparación v38 completada en código y host:** conectores de Gmail y Drive, con 1467 pruebas Full, 1251 Play, 17 runtime y nueve JavaScript aprobadas. Sin incidencias nuevas de lint; Google Cloud y aceptación física siguen pendientes.
 - **UX20 / preparación v39 completada en código y host:** autenticación y capacidades de GitHub, más diagnóstico persistente del fallo de Google. Pruebas: 1600 Full, 1378 Play, 17 runtime y nueve JavaScript aprobadas; lint sin incidencias nuevas. Ambos APK originales sin firma verificados y preparados para firma y entrega. Los accesos reales de GitHub y Google siguen sin verificarse.
 - **UX21 / preparación v40 completada en código y host:** permisos alineados en todas las vistas de conectores. Pruebas finales: 1643 Full, 1416 Play, 17 runtime y nueve JavaScript aprobadas. Lint sin incidencias nuevas; ambos APK originales sin firma verificados para firma y entrega. Validación física pendiente.
-- **Siguiente etapa:** UX22, fluidez y gestos del preview web. Después UX24 y las tareas críticas de prompts/harness UX25–UX26, salvo nueva priorización explícita.
+- **Etapa en curso:** UX22 / preparación v41, fluidez y gestos del preview web y apertura interna de HTML entregado. Después UX24 y las tareas críticas de prompts/harness UX25–UX26, salvo nueva priorización explícita.
 - La paridad completa con el comportamiento de v28 en un teléfono sigue pendiente de validación; la fiabilidad del agente es prioritaria antes de añadir funciones.
 
 ## Entregas previas
@@ -217,6 +217,11 @@ Estado: completado en código, revisión independiente y validación de host par
 - Validar etiquetas largas, pantallas estrechas, tamaños grandes de texto y español/inglés, conservando áreas táctiles accesibles.
 
 ### 7. UX22: fluidez y gestos del preview web
+
+Estado: implementación en curso; todavía no validada ni preparada para entrega. Confirmado que el gesto global del panel seguía activo sobre WebView y que una recomposición podía recargar index.html después de navegar dentro de la página. Se está separando ese gesto del preview y conservando estado nativo acotado; no se atribuye aún una mejora medida de rendimiento en teléfono. La apertura de HTML requiere una instantánea inmutable y acotada de sus recursos, con validación de ámbito y persistencia.
+
+- Primer checkpoint en curso: gestos nativos sin competencia del panel, carga inicial única y estado de navegación acotado; tarjeta «Ver en Jarvys» para HTML real e instantáneas de recursos autorizados. Pruebas dirigidas y revisión independiente todavía en ejecución.
+- Se conserva JavaScript interactivo sin puentes nativos ni permisos nuevos. Se restringen cargas URL, navegación externa, archivos privados y recursos fuera de la instantánea; no se promete aislamiento absoluto de red. El posible egreso WebRTC heredado queda identificado para endurecimiento posterior y validación real de Chromium, sin degradar silenciosamente las páginas interactivas.
 
 - Aislar la causa del desplazamiento por saltos antes de aplicar cambios.
 - Mejorar scroll, fling y coordinación de gestos anidados del WebView, respetando quién controla cada gesto.

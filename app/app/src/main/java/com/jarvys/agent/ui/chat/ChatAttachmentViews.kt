@@ -36,6 +36,8 @@ import androidx.compose.ui.window.DialogProperties
 import com.jarvys.agent.AgentRunUiEvent
 import com.jarvys.agent.AttachmentStore
 import com.jarvys.agent.ChatAttachment
+import com.jarvys.agent.DeliveredArtifactStore
+import com.jarvys.agent.HtmlPreviewDescriptor
 import com.jarvys.agent.LucideIcons
 import com.jarvys.agent.R
 import java.io.File
@@ -118,11 +120,20 @@ fun UserChatAttachments(attachments: List<ChatAttachment>, sessionId: String, mo
 }
 
 @Composable
-private fun AttachmentFileCard(attachment: ChatAttachment, sessionId: String, delivered: Boolean = false) {
+private fun AttachmentFileCard(attachment: ChatAttachment, sessionId: String, delivered: Boolean = false,
+    onOpenPreview: (String) -> Unit = {}) {
     val context = LocalContext.current
     val request = remember(sessionId, attachment, delivered) { ChatFileRequest.attachment(sessionId, attachment, delivered) }
     val available by produceState<Boolean?>(null, request) {
-        value = withContext(Dispatchers.IO) { runCatching { request.resolve(context).isFile }.getOrDefault(false) }
+        value = withContext(Dispatchers.IO) { runCatching { request.requireOwnership(context); request.resolve(context).isFile }.getOrDefault(false) }
+    }
+    val preview by produceState<HtmlPreviewDescriptor?>(null, request) {
+        if (delivered && attachment.mimeType == "text/html") value = withContext(Dispatchers.IO) {
+            runCatching {
+                request.requireOwnership(context)
+                DeliveredArtifactStore(context).previewMetadataForAttachment(sessionId, attachment)
+            }.getOrNull()
+        }
     }
     Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceVariant,
         modifier = Modifier.fillMaxWidth().testTag("chat-attachment-file-${attachment.id}")) {
@@ -134,7 +145,8 @@ private fun AttachmentFileCard(attachment: ChatAttachment, sessionId: String, de
                 Text(attachment.mimeType, maxLines = 2, style = MaterialTheme.typography.labelSmall)
                 if (available == false) UnavailableAttachment(attachment.id)
                 if (available == true) ChatFileButtons(request, Modifier.padding(top = 8.dp),
-                    tagPrefix = if (delivered) "delivered-file" else "chat-file")
+                    tagPrefix = if (delivered) "delivered-file" else "chat-file",
+                    onPreview = preview?.let { descriptor -> { onOpenPreview(descriptor.token) } })
             }
         }
     }
@@ -142,14 +154,14 @@ private fun AttachmentFileCard(attachment: ChatAttachment, sessionId: String, de
 
 /** Files delivered by the agent are first-class transcript entries, not Markdown paths. */
 @Composable
-internal fun DeliveredArtifactEventCard(event: AgentRunUiEvent, sessionId: String) {
+internal fun DeliveredArtifactEventCard(event: AgentRunUiEvent, sessionId: String, onOpenPreview: (String) -> Unit = {}) {
     val attachment = event.deliveredArtifact
     Column(Modifier.fillMaxWidth().testTag("delivered-file-${event.id}")) {
         if (attachment == null) UnavailableAttachment(event.id.toString())
         else if (attachment.isImage) AttachmentImage(attachment, sessionId,
             Modifier.fillMaxWidth().heightIn(min = 160.dp, max = 360.dp).clip(RoundedCornerShape(14.dp)),
             tagPrefix = "delivered", delivered = true)
-        else AttachmentFileCard(attachment, sessionId, delivered = true)
+        else AttachmentFileCard(attachment, sessionId, delivered = true, onOpenPreview = onOpenPreview)
     }
 }
 

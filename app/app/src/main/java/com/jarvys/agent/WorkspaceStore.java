@@ -197,16 +197,29 @@ public final class WorkspaceStore {
         return new ProjectScopeStore(appFiles).open(conversationId);
     }
 
-    /** Only ordinary files in this conversation can become chat artifacts; no memory/skill mount. */
-    com.jarvys.agent.coding.ArtifactSnapshotIO.Snapshot snapshotForDelivery(String path, File target,
-            long limit, CancellationToken token) throws IOException {
+    /** Pins the same ordinary source boundaries used by delivery and bounded HTML capture. */
+    static final class DeliverySource {
+        final File root;
+        final String relative;
+        final String provenance;
+        DeliverySource(File root, String relative, String provenance) {
+            this.root = root; this.relative = relative; this.provenance = provenance;
+        }
+        com.jarvys.agent.coding.ArtifactSnapshotIO.Snapshot copy(String relative, File target,
+                long limit, CancellationToken token) throws IOException {
+            HtmlPreviewCapture.requireOrdinaryPath(relative);
+            return com.jarvys.agent.coding.ArtifactSnapshotIO.copy(root, relative, target, limit, token);
+        }
+    }
+
+    DeliverySource deliverySource(String path) throws IOException {
         if (delegatedPrivateZonesDenied || memoryOnly || !attachmentsAllowed)
             throw new IOException("File delivery is available only in the main chat");
         if (isCodingProjectPath(path)) {
             ProjectScope scope = codingProjectScope();
             String relative = scope.normalizePath(path.startsWith("/project/") ? path.substring(9) : "");
             scope.resolve(relative);
-            return com.jarvys.agent.coding.ArtifactSnapshotIO.copy(scope.rootDirectory(), relative, target, limit, token);
+            return new DeliverySource(scope.rootDirectory(), relative, "coding:" + scope.durableIdentity());
         }
         synchronized (projectLock) {
             String relative = java.util.Arrays.stream(normalizeRelativePath(path).split("/"))
@@ -216,9 +229,28 @@ public final class WorkspaceStore {
                 throw new IOException("Only ordinary workspace files can be delivered");
             if (!root.getCanonicalPath().equals(expectedAttachmentWorkspaceRoot))
                 throw new IOException("Workspace root changed");
-            return com.jarvys.agent.coding.ArtifactSnapshotIO.copy(root, relative, target, limit, token);
+            return new DeliverySource(new File(expectedAttachmentWorkspaceRoot), relative, "workspace:" + projectId);
         }
     }
+
+    /** Only ordinary files in this conversation can become chat artifacts; no memory/skill mount. */
+    com.jarvys.agent.coding.ArtifactSnapshotIO.Snapshot snapshotForDelivery(String path, File target,
+            long limit, CancellationToken token) throws IOException {
+        DeliverySource source = deliverySource(path);
+        return com.jarvys.agent.coding.ArtifactSnapshotIO.copy(source.root, source.relative, target, limit, token);
+    }
+
+    File appFilesForDelivery() throws IOException {
+        if (delegatedPrivateZonesDenied || memoryOnly || !attachmentsAllowed || conversationId == null)
+            throw new IOException("Explicit HTML previews require an owning main conversation");
+        File workspaces = root.getParentFile();
+        File jarvys = workspaces == null ? null : workspaces.getParentFile();
+        if (jarvys == null || jarvys.getParentFile() == null || !"workspaces".equals(workspaces.getName())
+                || !"jarvys".equals(jarvys.getName())) throw new IOException("Conversation storage is unavailable");
+        return jarvys.getParentFile();
+    }
+
+    String deliveryConversationId() { return conversationId; }
 
     public String codingProjectOwner() {
         if (conversationId == null) throw new IllegalArgumentException("A conversation owner is required");
@@ -710,17 +742,20 @@ public final class WorkspaceStore {
         String name = relativePath.toLowerCase(java.util.Locale.ROOT);
         if (name.endsWith(".html") || name.endsWith(".htm")) return "text/html";
         if (name.endsWith(".css")) return "text/css";
-        if (name.endsWith(".js")) return "application/javascript";
+        if (name.endsWith(".js") || name.endsWith(".mjs")) return "application/javascript";
         if (name.endsWith(".json")) return "application/json";
         if (name.endsWith(".svg")) return "image/svg+xml";
         if (name.endsWith(".png")) return "image/png";
         if (name.endsWith(".jpg") || name.endsWith(".jpeg")) return "image/jpeg";
         if (name.endsWith(".gif")) return "image/gif";
         if (name.endsWith(".webp")) return "image/webp";
+        if (name.endsWith(".avif")) return "image/avif";
+        if (name.endsWith(".bmp")) return "image/bmp";
         if (name.endsWith(".ico")) return "image/x-icon";
         if (name.endsWith(".woff2")) return "font/woff2";
         if (name.endsWith(".woff")) return "font/woff";
         if (name.endsWith(".ttf")) return "font/ttf";
+        if (name.endsWith(".otf")) return "font/otf";
         return "application/octet-stream";
     }
 

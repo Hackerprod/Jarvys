@@ -92,11 +92,16 @@ internal fun ChatFileTransferHost(transfers: ChatFileTransfers, startIntent: (In
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-internal fun ChatFileButtons(request: ChatFileRequest, modifier: Modifier = Modifier, tagPrefix: String = "chat-file") {
+internal fun ChatFileButtons(request: ChatFileRequest, modifier: Modifier = Modifier, tagPrefix: String = "chat-file",
+    onPreview: (() -> Unit)? = null) {
     val actions = LocalChatFileActions.current
     val transfer = actions.transfers[request.key]
     val busy = transfer?.busy == true || transfer?.waitingForPermission == true
     FlowRow(modifier, horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        if (onPreview != null) OutlinedButton(onClick = onPreview,
+            modifier = Modifier.testTag("$tagPrefix-preview-${request.artifactId}")) {
+            Text(stringResource(R.string.chat_view_in_jarvys))
+        }
         OutlinedButton(onClick = { actions.download(request) }, enabled = !busy,
             modifier = Modifier.testTag("$tagPrefix-download-${request.artifactId}")) {
             if (busy) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
