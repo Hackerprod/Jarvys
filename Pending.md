@@ -19,7 +19,8 @@ Modo de ejecución: continuar la cola completa. Al cerrar cada pendiente o corre
 - **UX20 / preparación v39 completada en código y host:** autenticación y capacidades de GitHub, más diagnóstico persistente del fallo de Google. Pruebas: 1600 Full, 1378 Play, 17 runtime y nueve JavaScript aprobadas; lint sin incidencias nuevas. Ambos APK originales sin firma verificados y preparados para firma y entrega. Los accesos reales de GitHub y Google siguen sin verificarse.
 - **UX21 / preparación v40 completada en código y host:** permisos alineados en todas las vistas de conectores. Pruebas finales: 1643 Full, 1416 Play, 17 runtime y nueve JavaScript aprobadas. Lint sin incidencias nuevas; ambos APK originales sin firma verificados para firma y entrega. Validación física pendiente.
 - **UX22 / preparación v41 completada en código y host:** gestos nativos del preview y apertura interna de HTML entregado. Suites finales: 1686 Full, 1459 Play, 17 runtime y nueve JavaScript aprobadas; lint sin incidencias nuevas. Ambos APK originales sin firma verificados para firma y entrega. La fluidez real de Chromium en teléfono sigue pendiente de aceptación.
-- **Etapa actual:** UX24, coherencia visual e iconos de Bots, en validación final; después UX25 y UX26, salvo nueva priorización explícita.
+- **UX24 / preparación v42 completada en código y host:** efecto de trabajo sobre icono y nombre e identidad visual compartida entre cuadrícula y misiones. Suites finales: 1701 Full, 1474 Play, 17 runtime y nueve JavaScript aprobadas; sin incidencias nuevas de lint. Ambos APK originales sin firma verificados para firma y entrega.
+- **Siguiente etapa:** UX25, prompt de producción y harness de Coding; después UX26, salvo nueva priorización explícita.
 - La paridad completa con el comportamiento de v28 en un teléfono sigue pendiente de validación; la fiabilidad del agente es prioritaria antes de añadir funciones.
 
 ## Entregas previas
@@ -245,14 +246,18 @@ Diseño, límites y aceptación física: app/FILE_DELIVERY.md y app/WEB_PREVIEW_
 
 ### 8. UX24: coherencia visual de Bots
 
-Estado: implementación completada para preparación v42 / 1.2.35-UX24; primera pasada dirigida Full aprobada, validación final de ambos sabores y revisión de artefactos en curso. Todavía no constituye una entrega firmada.
+Estado: completado en código, revisión independiente y validación de host para preparación v42 / 1.2.35-UX24. Ambos APK sin firma quedan verificados para firma con la identidad original y entrega; la aceptación física sigue pendiente.
 
 - Un único barrido y destellos abarcan el icono y el nombre completo, incluidos nombres multilínea. Se conservan las dos columnas, la cabecera de Ajustes y la ausencia de contenedores externos.
 - Cuadrícula, tarjetas de misión, lista/detalle de bots, mensajes y atribución de aprobaciones comparten iconos escalables: terminal para Coding, teléfono para Android-use y el PNG privado generado del bot personalizado. La identidad se resuelve por el ID estable del perfil, nunca por el nombre, color o ID temporal de ejecución.
 - Las actualizaciones del icono se observan en vivo y al reabrir una misión persistida; no se congela una referencia antigua que la generación siguiente pueda retirar. Los resultados de carga antiguos no sustituyen revisiones más recientes ni muestran imágenes de otro bot.
-- Referencias aún en carga muestran un marcador neutro; solo imágenes ausentes, inválidas o ilegibles usan el fallback compartido. Se conservan límites de tamaño y lectura exclusivamente en el almacén privado correspondiente al bot.
+- Una vez resuelta la referencia del icono, su decodificación muestra un marcador neutro hasta terminar; imágenes ausentes, inválidas o ilegibles usan el fallback compartido. La lectura inicial de metadatos puede mostrar brevemente el icono genérico. Se conservan límites de tamaño y lectura exclusivamente en el almacén privado correspondiente al bot.
 - El efecto se activa solo en ejecución real, con movimiento reducido, visibilidad y ciclo de vida respetados. La iluminación conserva contraste de texto e iconos en ambos temas. No cambia permisos, perfiles de ejecución, aprobación ni inmutabilidad de plantillas.
-- La primera pasada aprueba 84 casos dirigidos Full. Las regresiones nuevas comprueban igualdad de píxeles de iconos a 28/42/72 dp, cambios de icono y reapertura JSON, nombres duplicados, carga/fallback, atribución/detalle/debate, estados de ejecución, alcance visual y contraste. Las capturas de host no certifican rendimiento ni aceptación física.
+- **Validación final:** 1701 Full, 1474 Play, 17 runtime y nueve JavaScript aprobadas, sin fallos, errores ni omitidas. Las 15 regresiones nuevas y 84 casos dirigidos por sabor están incluidos en las agregadas. Se verifican igualdad exacta de píxeles de iconos a 28/42/72 dp, cambios y reapertura JSON, nombres duplicados, carga/fallback, atribución/detalle/debate, estados de ejecución, alcance visual y contraste.
+- 178 capturas nativas frescas archivadas en total. Los pares de movimiento cambian independientemente el icono y el nombre; los estados inactivos y de movimiento reducido permanecen estáticos. La matriz español/inglés, claro/oscuro y texto al 200% conserva dos columnas sin recortes. Los PNG generados son fixtures sintéticos persistidos; no se atribuye una llamada real al proveedor ni aceptación física.
+- Fuente congelada durante pruebas, lint y compilación. La sesión inicial de validación se interrumpió durante la compilación de Play; Full ya había terminado con XML frescos. Se conservaron esos resultados y solo se repitió la etapa pendiente de Play/runtime, comprobando de nuevo todos los hashes de fuente.
+- Lint regenerado sin incidencias nuevas: persisten 46 errores y 274 avisos Full, 37 errores y 272 avisos Play; runtime sin errores y cuatro avisos heredados. Ambos APK son unsigned y debuggable, con paquete `com.jarvys.agent`, nombre Jarvys, versión 42, CRC y alineación verificados, permisos sin cambios y assets de fábrica idénticos a v41.
+- Revisión independiente de fuente, resultados frescos, capturas y artefactos aprobada. Los 19 archivos legacy privados siguen intactos y excluidos de las publicaciones. No se declara rendimiento, TalkBack ni instalación/actualización física comprobados.
 
 ### 9. UX25: prompt de producción y harness de Coding
 
