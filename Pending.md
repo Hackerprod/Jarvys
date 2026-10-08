@@ -4,7 +4,7 @@ Actualizado: 2026-10-08 (UTC).
 
 Este archivo mantiene la cola vigente y el estado de cada etapa. Debe actualizarse con cada avance y publicarse en GitHub junto con los cambios. No sustituye las comprobaciones de código, pruebas y APK.
 
-Modo de ejecución: continuar la cola completa. Al cerrar cada pendiente, verificar y publicar el código junto con este archivo y comenzar el siguiente. No esperar feedback ni prueba manual entre etapas; conservar las limitaciones de validación o configuración externa con su estado real. La entrega consolidada y el APK firmado corresponden al final de la cola, sin presentar entregas parciales como cierre total. Solo se preparan versiones intermedias cuando el usuario las solicita expresamente.
+Modo de ejecución: continuar la cola completa. Al cerrar cada pendiente o corrección, verificar y publicar el código junto con este archivo, entregar el APK firmado con la identidad original y comenzar el siguiente. No esperar feedback ni prueba manual entre etapas; conservar las limitaciones de validación o configuración externa con su estado real. Los checkpoints de código en curso no equivalen a una entrega terminada: el APK se comparte cuando su etapa queda validada.
 
 ## Estado actual
 
@@ -165,12 +165,21 @@ Código y este archivo se publican directamente en **master**, sin PR ni sobresc
 
 Referencias: [AuthorizationClient](https://developer.android.com/identity/authorization), [Gmail messages.send](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/send), [Drive uploads](https://developers.google.com/workspace/drive/api/guides/manage-uploads). Se adaptaron contratos y patrones, sin copiar implementaciones externas ni trasladar OAuth de servidor al APK.
 
+### Incidencia de Gmail en v38: diagnóstico visible
+
+Estado: corrección acotada implementada y en validación para incluir en v39. Una prueba real sigue mostrando un fallo genérico de autorización; esa evidencia no permite identificar su causa. El error solo aparecía en un Toast truncado y se descartaban la fase y el código numérico del proveedor.
+
+- Conservar únicamente código numérico, fase permitida y categoría local; nunca el mensaje bruto, Intent, tokens o contenido de la cuenta.
+- Mostrar el diagnóstico completo y persistente en la vista, con reintento y acceso a la información de configuración ya existente.
+- Probar la presentación y clasificación con dobles de prueba. No declarar solucionado el acceso real a Gmail sin nueva evidencia del proveedor/dispositivo.
+
 ### 5. UX20: autenticación y capacidades de GitHub
 
-Estado: implementación y revisión independiente completadas; fuente congelada para validación agregada para preparación v39 / 1.2.32-UX20. Las 188 pruebas dirigidas de GitHub y MCP aprueban, incluidas 124 regresiones nuevas respecto de UX19. Todavía faltan las suites agregadas, lint y la verificación de ambos APK sin firma.
+Estado: implementación y revisión independiente completadas; contrato de escritura corregido y en validación agregada final para preparación v39 / 1.2.32-UX20. Las 191 pruebas dirigidas de GitHub y MCP aprueban, incluidas 127 regresiones nuevas respecto de UX19. La primera agregada aprobó 1591 Full, 1375 Play y 17 runtime, pero se repetirá tras corregir el parámetro real de protección de merge y retirar los aliases de escritura sin precondición. Todavía faltan lint final y la verificación de ambos APK de preparación.
 
 - Corregida la carrera del intento de inicio de sesión: recomponer, cancelar, volver del navegador o recrear la Activity no permite que un callback antiguo guarde credenciales ni cancele un intento nuevo.
 - Metadatos OAuth completos y cifrados, caducidad de refresh, identidad de autorización y scopes requeridos visibles. Repo y workflow se solicitan solo mediante selección explícita; reconectar no repite acciones pendientes.
+- Contrato de merge contrastado con el servidor oficial: se exige `expectedHeadSha` anunciado por su esquema. `push_files` y `delete_file` se sustituyen por el commit nativo con SHA esperado; no se envían parámetros que el servidor ignoraría.
 - Herramientas agrupadas y opt-in, con límite de contexto y permisos conservados. Escrituras revisadas por repositorio y método, con argumentos congelados y nueva comprobación de cuenta, permiso y generación al despachar o renovar.
 - Puente nativo acotado para crear/actualizar Discussions, commits multifichero con SHA de base atómico y checks de un SHA exacto. El resto usa el MCP oficial; los comentarios/hilos identificados por nodo se vinculan previamente a su repositorio.
 - Reintentos solo para lecturas seguras o un rechazo 401 definitivo. Una respuesta perdida, reanudación SSE fallida o ejecución GraphQL incierta conserva un marcador privado persistente y bloquea la repetición automática.
@@ -239,6 +248,6 @@ Estado: investigación y contrato original preparados; implementación después 
 ## Entregas y respaldo
 
 - Usar el paquete original `com.jarvys.agent` y el nombre **Jarvys** para las entregas normales.
-- Compilar sin firma durante el desarrollo; firmar la entrega validada con la clave aprobada existente. No generar otra clave como sustitución automática.
+- Compilar sin firma durante el desarrollo; al completar cada pendiente o corrección, firmar y entregar el APK validado con la clave aprobada existente. No generar otra clave como sustitución automática. Esta regla vigente sustituye el plan histórico de esperar al final de toda la cola.
 - Publicar progresivamente el código y este **Pending.md**, y verificar el resultado remoto antes de afirmar que quedó respaldado.
 - Mantener en este archivo requisitos y estado del producto, sin conversaciones privadas, credenciales ni datos de usuarios.

@@ -60,6 +60,33 @@ class GitHubExecutionIntegrationTest {
         context.getSharedPreferences("jarvys_mcp_servers", Context.MODE_PRIVATE).edit().clear().commit()
     }
 
+    @Test fun discoveryReplacesUnguardedAliasesAndMergeDispatchUsesAdvertisedWireKey() {
+        val h = harness(listOf(remote("push_files"), remote("delete_file"), remote("merge_pull_request")))
+        val names = h.repository.get(h.config.id)!!.tools.map { it.wireName }
+        assertFalse(names.contains("push_files")); assertFalse(names.contains("delete_file"))
+        assertTrue(names.contains(GitHubNativeBridge.COMMIT_FILES))
+        h.enable("merge_pull_request")
+        assertThrows(IllegalArgumentException::class.java) { h.call("merge_pull_request", target().put("pullNumber", 7).put("sha", head)) }
+        assertTrue(h.calls.isEmpty()); assertTrue(h.presenter.shown.isEmpty())
+        h.approved("merge_pull_request", target().put("pullNumber", 7).put("expectedHeadSha", head))
+        assertEquals(head, h.calls.single().second.getString("expectedHeadSha"))
+        assertFalse(h.calls.single().second.has("sha"))
+    }
+
+    @Test fun removingMergeGuardFromLiveSchemaDuringApprovalBlocksDispatchWithoutPoisoningIntent() {
+        val h = harness(listOf(remote("merge_pull_request")))
+        h.enable("merge_pull_request")
+        val args = target().put("pullNumber", 7).put("expectedHeadSha", head)
+        val pending = h.start("merge_pull_request", args)
+        val (id, _) = h.awaitApproval()
+        val current = h.repository.get(h.config.id)!!
+        h.repository.updateTools(h.config.id, current.tools.map { if(it.wireName == "merge_pull_request") it.copy(inputSchemaJson = "{\"type\":\"object\",\"properties\":{}}") else it })
+        h.gate.resolve(id, ApprovalDecision.APPROVED)
+        assertTrue(h.failure(pending) is IllegalArgumentException)
+        assertTrue(h.calls.isEmpty())
+        assertFalse(h.journal.isUncertain(h.intent("merge_pull_request", args)))
+    }
+
     @Test fun deepArgumentSnapshotMatchesApprovalEvenWhenCallerMutatesOriginalWhileWaiting() {
         val h = harness(listOf(remote("issue_write")))
         h.enable("issue_write")
@@ -110,11 +137,10 @@ class GitHubExecutionIntegrationTest {
             "pull_request_review_write" to target().put("method", "create").put("pullNumber", 1).put("commitID", head),
             "add_comment_to_pending_review" to target().put("pullNumber", 1).put("body", "Reviewed comment"),
             "update_pull_request_branch" to target().put("pullNumber", 1).put("expectedHeadSha", head),
-            "merge_pull_request" to target().put("pullNumber", 1).put("sha", head),
+            "merge_pull_request" to target().put("pullNumber", 1).put("expectedHeadSha", head),
             "sub_issue_write" to target().put("method", "add").put("issue_number", 1),
             "discussion_comment_write" to target().put("method", "add").put("discussionNumber", 1).put("body", "Reviewed"),
             "actions_run_trigger" to target().put("method", "run_workflow").put("workflow_id", "ci.yml"),
-            "delete_file" to target().put("branch", "feature/review").put("path", "old.txt").put("sha", base),
             "create_or_update_file" to target().put("branch", "feature/review").put("path", "file.txt").put("content", "Reviewed text").put("message", "Update file"),
             GitHubNativeBridge.CREATE_DISCUSSION to target().put("categoryId", "DIC_1").put("title", "Reviewed").put("body", "Reviewed"),
             GitHubNativeBridge.UPDATE_DISCUSSION to target().put("discussionNumber", 1).put("expectedUpdatedAt", "2026-10-08T10:00:00Z").put("title", "Reviewed").put("body", "Reviewed"),
@@ -549,7 +575,9 @@ class GitHubExecutionIntegrationTest {
     }
 
     private fun remote(name: String, readOnly: Boolean = false) = McpToolConfig(name, name,
-        "Untrusted test metadata", "{\"type\":\"object\"}", annotations = McpToolAnnotations(readOnlyHint = readOnly))
+        "Untrusted test metadata", JSONObject().put("type", "object").put("properties", JSONObject().apply {
+            if (name == "merge_pull_request") put("expectedHeadSha", JSONObject().put("type", "string"))
+        }).toString(), annotations = McpToolAnnotations(readOnlyHint = readOnly))
     private fun target() = JSONObject().put("owner", "octo").put("repo", "repo")
     private fun issueArgs() = target().put("method", "create").put("title", "Reviewed title").put("body", "Reviewed body")
     private fun prArgs() = target().put("title", "Reviewed PR").put("head", "feature/review").put("base", "main").put("body", "Fixes #7")

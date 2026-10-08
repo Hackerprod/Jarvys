@@ -14,7 +14,7 @@ Only reviewed capability groups are sent in `X-MCP-Toolsets`: context, repositor
 
 Reads use a reviewed name/method allowlist. GitHub writes require a frozen repository and method-specific review, even if an older general Allow preference exists. The review includes target, branch/number/SHA, changed paths, content previews and explicit truncation/digests. Choosing a capability does not authorize an external action or grant GitHub account scopes. Permission, configuration, connection generation and account epoch are checked again at dispatch and authenticated retry boundaries.
 
-Ordinary branch, file, issue, PR, review and Discussion-comment operations use the official MCP tools. File content follows the current MCP literal UTF-8 contract, not the older Base64 input convention. A draft PR is the default when omitted. Merge requires a reviewed head SHA; updating a PR branch requires its expected head SHA. Workflow changes, destructive methods, reviews and merges remain individually reviewed. Branch protection or organization policy is never bypassed.
+Ordinary branch, single-file create/update, issue, PR, review and Discussion-comment operations use the official MCP tools. File content follows the current MCP literal UTF-8 contract, not the older Base64 input convention. A draft PR is the default when omitted. Merge requires the upstream `expectedHeadSha` field and a server schema advertising that guard; updating a PR branch requires its expected head SHA. Workflow changes, destructive methods, reviews and merges remain individually reviewed. Branch protection or organization policy is never bypassed.
 
 ## Narrow native API gaps
 
@@ -24,6 +24,8 @@ The fixed GitHub GraphQL bridge adds only:
 - `jarvys_update_discussion`: validates repository, discussion and observed `updatedAt`; the preflight is not atomic and a concurrent edit can still race
 - `jarvys_commit_files`: bounded UTF-8 additions/deletions using `createCommitOnBranch` and required `expectedHeadOid`; updates are atomic with respect to that head and never force-push
 - `jarvys_commit_checks`: reads a specific commit OID and paginated check/status contexts, never silently substituting a moving branch or PR head; no checks is not a success verdict
+
+The upstream `push_files` and `delete_file` aliases are omitted from discovery because they lack a caller-supplied expected-head precondition; both are served by the atomic native commit tool.
 
 No arbitrary GraphQL, URLs or credentials are accepted as tool arguments. The native path verifies returned repository/commit/discussion identity and URLs. Node-only MCP comment/review-thread mutations have a native read-only target-binding preflight. Credential-like content and unsafe paths are rejected by both native and direct-file paths; this is a bounded guard, not a guarantee that every possible secret encoding can be detected.
 
@@ -35,12 +37,13 @@ A lazy persistent journal stores only intent digests before dispatch. An ambiguo
 
 ## Validation boundary
 
-The stage uses protocol, fake-vault, Compose lifecycle, bridge and integration tests. A host test is not proof of real OAuth App configuration, organization access, consent, Android networking or physical-device behavior. Development APKs keep the original package/name and remain unsigned; the approved original identity is used only for the final consolidated delivery.
+The stage uses protocol, fake-vault, Compose lifecycle, bridge and integration tests. A host test is not proof of real OAuth App configuration, organization access, consent, Android networking or physical-device behavior. Development APKs keep the original package/name and remain unsigned; the approved original identity signs each completed, validated stage for delivery under the current project workflow.
 
 ## Primary references
 
 - [Official MCP server](https://github.com/github/github-mcp-server) and [remote configuration](https://github.com/github/github-mcp-server/blob/main/docs/remote-server.md)
 - [OAuth Device Flow and refresh](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps)
+- [Current repository tool contracts](https://github.com/github/github-mcp-server/blob/main/pkg/github/repositories.go) and [PR tool contracts](https://github.com/github/github-mcp-server/blob/main/pkg/github/pullrequests.go)
 - [MCP scope behavior](https://github.com/github/github-mcp-server/blob/main/docs/scope-filtering.md)
 - [GitHub commit GraphQL contract](https://docs.github.com/en/graphql/reference/commits) and [CommittableBranch input](https://docs.github.com/en/graphql/reference/git#committablebranch)
 - [Discussions GraphQL contract](https://docs.github.com/en/graphql/reference/discussions)

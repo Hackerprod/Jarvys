@@ -295,8 +295,10 @@ class McpConnectionManager internal constructor(
             current.catalogServiceId == "github" && githubEpoch(current) == epoch) {
             "GitHub configuration or account changed during review; prepare a new operation"
         }
-        require(repository.exposedTools().any { it.serverId == tool.serverId && it.wireName == tool.wireName && it.access == tool.access }) {
-            "GitHub tool permission changed during review; no operation was sent"
+        val currentTool = repository.exposedTools().firstOrNull { it.serverId == tool.serverId && it.wireName == tool.wireName && it.access == tool.access }
+            ?: throw IllegalArgumentException("GitHub tool permission changed during review; no operation was sent")
+        if (tool.wireName == "merge_pull_request") require(currentTool.inputSchema.optJSONObject("properties")?.has("expectedHeadSha") == true) {
+            "GitHub merge precondition changed during review; no operation was sent"
         }
         if (tool.access == McpToolAccess.WRITE) require(writeApproval.policy(tool) != com.jarvys.agent.connectors.AutonomyPolicy.DENY) {
             "GitHub write permission was disabled during review"
@@ -383,10 +385,11 @@ class McpConnectionManager internal constructor(
         val current = repository.get(serverId) ?: return
         if (current.endpoint != expected.endpoint || current.authMode != expected.authMode || current.catalogServiceId != expected.catalogServiceId ||
             current.oauthClientId != expected.oauthClientId || current.githubToolsets != expected.githubToolsets) return
+        val remote = if (current.catalogServiceId == "github") discovered.filterNot { it.wireName in GitHubOperationPolicy.replacedRemoteWrites } else discovered
         val native = if (current.catalogServiceId == "github") githubBridge.tools().filter {
             GitHubOperationPolicy.group(it.wireName) in current.githubToolsets && discovered.none { remote -> remote.wireName == it.wireName }
         } else emptyList()
-        val application = McpInitialToolPolicy.apply(current, discovered + native)
+        val application = McpInitialToolPolicy.apply(current, remote + native)
         repository.updateTools(serverId, application.tools)
         application.newWritePolicies.forEach { (wireName, policy) ->
             val tool = application.tools.firstOrNull { it.wireName == wireName } ?: return@forEach

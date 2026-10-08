@@ -74,7 +74,7 @@ class GitHubOperationPolicyTest {
     }
 
     @Test fun mergeBranchUpdateAndNewReviewRequireTheObservedExactSha() {
-        val operations = listOf("merge_pull_request" to "sha", "update_pull_request_branch" to "expectedHeadSha", "pull_request_review_write" to "commitID")
+        val operations = listOf("merge_pull_request" to "expectedHeadSha", "update_pull_request_branch" to "expectedHeadSha", "pull_request_review_write" to "commitID")
         for ((name, key) in operations) {
             fun args() = target().put("pullNumber", 7).apply { if (name == "pull_request_review_write") put("method", "create") }
             assertThrows(IllegalArgumentException::class.java) { prepare(name, args()) }
@@ -105,12 +105,20 @@ class GitHubOperationPolicyTest {
         assertTrue(runCatching { prepare("create_or_update_file", args(content = "unpaired \uD800")) }.isFailure)
     }
 
-    @Test fun deletingAFileRequiresObservedBlobShaAndValidRepositoryRelativePath() {
-        fun args() = target().put("branch", "feature/review").put("path", "old.txt").put("message", "Remove old file")
-        assertThrows(IllegalArgumentException::class.java) { prepare("delete_file", args()) }
-        assertThrows(IllegalArgumentException::class.java) { prepare("delete_file", args().put("sha", "main")) }
-        assertThrows(IllegalArgumentException::class.java) { prepare("delete_file", args().put("sha", sha).put("path", ".git/config")) }
-        assertEquals(sha, prepare("delete_file", args().put("sha", sha)).getString("sha"))
+    @Test fun unguardedDeleteFileIsReplacedByAtomicCommitDeletion() {
+        val args = target().put("branch", "feature/review").put("path", "old.txt").put("message", "Remove old file").put("sha", sha)
+        val failure = assertThrows(IllegalStateException::class.java) { prepare("delete_file", args) }
+        assertTrue(failure.message.orEmpty().contains("jarvys_commit_files"))
+        assertTrue(GitHubOperationPolicy.replacedRemoteWrites.containsAll(listOf("delete_file", "push_files")))
+    }
+
+    @Test fun mergeUsesAdvertisedExpectedHeadShaWireContractAndRejectsIgnoredShaAlias() {
+        val args = target().put("pullNumber", 7)
+        assertThrows(IllegalArgumentException::class.java) { prepare("merge_pull_request", JSONObject(args.toString()).put("sha", sha)) }
+        val result = prepare("merge_pull_request", args.put("expectedHeadSha", sha))
+        assertEquals(sha, result.getString("expectedHeadSha")); assertFalse(result.has("sha"))
+        val oldServer = definition("merge_pull_request").copy(inputSchema = JSONObject().put("type", "object"))
+        assertThrows(IllegalArgumentException::class.java) { GitHubOperationPolicy.prepare(config, oldServer, args) }
     }
 
     @Test fun nativeExactShaChecksAreReviewedReadOperationsInTheRepositoryCapabilityGroup() {
@@ -165,7 +173,9 @@ class GitHubOperationPolicyTest {
     private fun prepare(name: String, args: JSONObject) = GitHubOperationPolicy.prepare(config, definition(name), args)
     private fun definition(name: String, readHint: Boolean = false): McpToolDefinition {
         val annotations = McpToolAnnotations(readOnlyHint = readHint, title = "Remote title")
-        return McpToolDefinition(config.id, config.alias, name, "mcp_github_$name", "Untrusted remote metadata", JSONObject(),
+        return McpToolDefinition(config.id, config.alias, name, "mcp_github_$name", "Untrusted remote metadata", JSONObject().put("properties", JSONObject().apply {
+            if (name == "merge_pull_request") put("expectedHeadSha", JSONObject().put("type", "string"))
+        }),
             "github", annotations, McpToolSecurity.classify("github", name, annotations))
     }
 }

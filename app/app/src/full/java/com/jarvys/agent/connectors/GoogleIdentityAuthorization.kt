@@ -21,10 +21,40 @@ data class GoogleIdentityGrant(val accessToken: String, val grantedScopes: Set<S
 
 enum class GoogleIdentityFailure { PLAY_SERVICES_UNAVAILABLE, USER_CANCELLED, SCOPE_NOT_GRANTED, ACCESS_BLOCKED, NETWORK, OTHER }
 
+enum class GoogleAuthorizationPhase { REQUEST, RESOLUTION, RESULT, PLAY_SERVICES, LOCAL_STATE, UNKNOWN }
+enum class GoogleAuthorizationFailureCategory { PROVIDER, CANCELLED, TIMEOUT, PLAY_SERVICES, LOCAL_STATE, UNEXPECTED_RESPONSE, UNKNOWN }
+
+/** Safe diagnostic fields only: never retain provider messages, account names, tokens or Intent extras. */
+data class GoogleAuthorizationDiagnostic(
+    val phase: GoogleAuthorizationPhase,
+    val category: GoogleAuthorizationFailureCategory,
+    val apiStatusCode: Int? = null,
+) {
+    companion object {
+        fun from(error: Throwable, phase: GoogleAuthorizationPhase = GoogleAuthorizationPhase.UNKNOWN): GoogleAuthorizationDiagnostic {
+            val chain = generateSequence(error) { it.cause }.take(12).toList()
+            chain.filterIsInstance<GoogleIdentityAuthorizationException>().firstNotNullOfOrNull { it.diagnostic }?.let { return it }
+            val apiCode = chain.filterIsInstance<com.google.android.gms.common.api.ApiException>().firstOrNull()?.statusCode
+            val category = when {
+                apiCode != null -> GoogleAuthorizationFailureCategory.PROVIDER
+                chain.any { it is GoogleOAuthException } -> GoogleAuthorizationFailureCategory.PROVIDER
+                chain.any { it is ActivityAuthorizationCancelledException || it is java.util.concurrent.CancellationException } -> GoogleAuthorizationFailureCategory.CANCELLED
+                chain.any { it is java.util.concurrent.TimeoutException || it is InterruptedException } -> GoogleAuthorizationFailureCategory.TIMEOUT
+                chain.any { it is GoogleIdentityAuthorizationException && it.reason == GoogleIdentityFailure.SCOPE_NOT_GRANTED } -> GoogleAuthorizationFailureCategory.UNEXPECTED_RESPONSE
+                chain.any { it is GoogleIdentityAuthorizationException } -> GoogleAuthorizationFailureCategory.UNKNOWN
+                chain.any { it is IllegalStateException || it is IllegalArgumentException } -> GoogleAuthorizationFailureCategory.LOCAL_STATE
+                else -> GoogleAuthorizationFailureCategory.UNKNOWN
+            }
+            return GoogleAuthorizationDiagnostic(phase, category, apiCode)
+        }
+    }
+}
+
 class GoogleIdentityAuthorizationException(
     val reason: GoogleIdentityFailure,
     message: String,
     cause: Throwable? = null,
+    val diagnostic: GoogleAuthorizationDiagnostic? = null,
 ) : IllegalStateException(message, cause)
 
 data class GoogleIdentitySessionState(val connected: Boolean, val scopes: Set<String>, val accountEmail: String?)
@@ -127,21 +157,23 @@ class GooglePlayServicesAuthorizationClient(
         val client = Identity.getAuthorizationClient(appContext)
         val requestBuilder = AuthorizationRequest.builder().setRequestedScopes(scopes.map(::Scope))
         accountEmail?.takeIf(String::isNotBlank)?.let { requestBuilder.setAccount(Account(it, GOOGLE_ACCOUNT_TYPE)) }
-        val first = await(token) { client.authorize(requestBuilder.build()) }
+        val first = await(token, GoogleAuthorizationPhase.REQUEST) { client.authorize(requestBuilder.build()) }
         val firstDecision = GoogleIdentityPolicy.decision(first.hasResolution(), first.accessToken,
             GoogleIdentityPolicy.normalizeScopes(first.grantedScopes), scopes)
         val result = if (firstDecision == GoogleIdentityDecision.RESOLUTION_PENDING) {
             if (!allowResolution) throw GoogleIdentityAuthorizationException(GoogleIdentityFailure.SCOPE_NOT_GRANTED,
                 "Google needs authorization; reconnect this feature in Settings")
             val pending = first.pendingIntent ?: throw GoogleIdentityAuthorizationException(
-                GoogleIdentityFailure.OTHER, "Google returned a resolution without a PendingIntent")
+                GoogleIdentityFailure.OTHER, "Google returned a resolution without a PendingIntent",
+                diagnostic = GoogleAuthorizationDiagnostic(GoogleAuthorizationPhase.REQUEST, GoogleAuthorizationFailureCategory.UNEXPECTED_RESPONSE))
             val responseIntent = try { resolutionBroker.launch(pending, AUTH_TIMEOUT_MS, token) }
-                catch (error: Exception) { throw classify(error) }
+                catch (error: Exception) { throw classify(error, GoogleAuthorizationPhase.RESOLUTION) }
             try { client.getAuthorizationResultFromIntent(responseIntent) }
-            catch (error: Exception) { throw classify(error) }
+            catch (error: Exception) { throw classify(error, GoogleAuthorizationPhase.RESULT) }
         } else first
         token.throwIfCancelled()
-        return toGrant(result, scopes)
+        return try { toGrant(result, scopes) }
+        catch (error: Exception) { throw classify(error, GoogleAuthorizationPhase.RESULT) }
     }
 
     override fun clearToken(accessToken: String) = clearTokenCancellable(accessToken, CancellationToken.uncancellable())
@@ -168,7 +200,8 @@ class GooglePlayServicesAuthorizationClient(
         val returnedRequested = granted.intersect(requested)
         when (GoogleIdentityPolicy.decision(result.hasResolution(), token, granted, returnedRequested)) {
             GoogleIdentityDecision.RESOLUTION_PENDING -> throw GoogleIdentityAuthorizationException(
-                GoogleIdentityFailure.OTHER, "Google authorization still needs resolution")
+                GoogleIdentityFailure.OTHER, "Google authorization still needs resolution",
+                diagnostic = GoogleAuthorizationDiagnostic(GoogleAuthorizationPhase.RESULT, GoogleAuthorizationFailureCategory.UNEXPECTED_RESPONSE))
             GoogleIdentityDecision.SCOPE_DENIED -> throw GoogleIdentityAuthorizationException(
                 GoogleIdentityFailure.SCOPE_NOT_GRANTED, "Google did not grant the enabled feature scope")
             GoogleIdentityDecision.TOKEN_MISSING -> throw GoogleIdentityAuthorizationException(
@@ -187,23 +220,28 @@ class GooglePlayServicesAuthorizationClient(
         if (failure != null) throw GoogleIdentityAuthorizationException(
             failure,
             "Google Play services is unavailable (status $status)",
+            diagnostic = GoogleAuthorizationDiagnostic(GoogleAuthorizationPhase.PLAY_SERVICES,
+                GoogleAuthorizationFailureCategory.PLAY_SERVICES),
         )
     }
 
-    private fun <T> await(token: CancellationToken = CancellationToken.uncancellable(), task: () -> com.google.android.gms.tasks.Task<T>): T {
-        val pending = try { task() } catch (error: Exception) { throw classify(error) }
+    private fun <T> await(token: CancellationToken = CancellationToken.uncancellable(),
+                          phase: GoogleAuthorizationPhase = GoogleAuthorizationPhase.UNKNOWN,
+                          task: () -> com.google.android.gms.tasks.Task<T>): T {
+        val pending = try { task() } catch (error: Exception) { throw classify(error, phase) }
         val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(AUTH_TIMEOUT_MS)
         while (true) {
             token.throwIfCancelled()
             try { return Tasks.await(pending, 200, TimeUnit.MILLISECONDS).also { token.throwIfCancelled() } }
             catch (error: java.util.concurrent.TimeoutException) {
-                if (System.nanoTime() >= deadline) throw classify(error)
-            } catch (error: Exception) { throw classify(error) }
+                if (System.nanoTime() >= deadline) throw classify(error, phase)
+            } catch (error: Exception) { throw classify(error, phase) }
         }
     }
 
-    internal fun classify(error: Exception): GoogleIdentityAuthorizationException {
-        if (error is GoogleIdentityAuthorizationException) return error
+    internal fun classify(error: Exception, phase: GoogleAuthorizationPhase = GoogleAuthorizationPhase.UNKNOWN): GoogleIdentityAuthorizationException {
+        if (error is GoogleIdentityAuthorizationException) return GoogleIdentityAuthorizationException(error.reason,
+            "Google authorization could not be completed", diagnostic = error.diagnostic ?: GoogleAuthorizationDiagnostic.from(error, phase))
         val chain = generateSequence<Throwable>(error) { it.cause }.take(12).toList()
         val reason = when {
             chain.any { it is ActivityAuthorizationCancelledException || it is java.util.concurrent.CancellationException } -> GoogleIdentityFailure.USER_CANCELLED
@@ -211,7 +249,8 @@ class GooglePlayServicesAuthorizationClient(
             else -> GoogleIdentityPolicy.apiStatusFailure(chain.filterIsInstance<com.google.android.gms.common.api.ApiException>().firstOrNull()?.statusCode)
         }
         // Do not retain a provider exception as a cause: its message may contain sensitive data.
-        return GoogleIdentityAuthorizationException(reason, "Google authorization could not be completed")
+        return GoogleIdentityAuthorizationException(reason, "Google authorization could not be completed",
+            diagnostic = GoogleAuthorizationDiagnostic.from(error, phase))
     }
 
     companion object {

@@ -30,6 +30,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -58,6 +59,9 @@ import com.jarvys.agent.connectors.GoogleIdentityAuthorizationException
 import com.jarvys.agent.connectors.GoogleIdentityFailure
 import com.jarvys.agent.connectors.GoogleRevocationState
 import com.jarvys.agent.connectors.GoogleConfigurationDiagnostics
+import com.jarvys.agent.connectors.GoogleAuthorizationDiagnostic
+import com.jarvys.agent.connectors.GoogleAuthorizationPhase
+import com.jarvys.agent.connectors.GoogleAuthorizationFailureCategory
 import com.jarvys.agent.connectors.GmailConnector
 import com.jarvys.agent.connectors.DriveConnector
 import com.jarvys.agent.mcp.McpConnectionStatus
@@ -177,6 +181,10 @@ internal fun GoogleServiceCard(
     var clientId by remember(identityMode) { mutableStateOf(manager.configuredClientId()) }
     var accountLabel by remember(identityMode) { mutableStateOf(manager.configuredAccountLabel()) }
     var clientSecret by remember(identityMode) { mutableStateOf("") }
+    // Only localized app-authored text and the explicitly clicked scope are saved across recreation.
+    // Never retain the Throwable, provider text, account details or Intent in UI state.
+    var authorizationError by rememberSaveable(connectorId) { mutableStateOf<String?>(null) }
+    var failedScope by rememberSaveable(connectorId) { mutableStateOf<String?>(null) }
 
     if (!selected) {
         val currentState = status[connectorId]
@@ -198,6 +206,7 @@ internal fun GoogleServiceCard(
     val identityAccount = if (identityMode) manager.identityAccountEmail() else manager.configuredAccountLabel()
     val primaryActionLabel = when {
         inProgress -> R.string.full_google_authorizing
+        authorizationError != null -> R.string.full_google_retry_authorization
         identityMode && reauthorize -> R.string.full_google_reauthorize
         identityMode -> R.string.full_google_connect_integrated
         !isConfigured -> R.string.full_google_configure
@@ -210,9 +219,13 @@ internal fun GoogleServiceCard(
         else {
             manager.authorize(activity, scope) { result ->
                 result.onSuccess {
+                    authorizationError = null; failedScope = null
                     runCatching { registry.connect(connectorId) }
                     Toast.makeText(context, R.string.full_google_auth_success, Toast.LENGTH_LONG).show()
-                }.onFailure { error -> Toast.makeText(context, googleOAuthErrorMessage(context, error), Toast.LENGTH_LONG).show() }
+                }.onFailure { error ->
+                    failedScope = scope
+                    authorizationError = googleOAuthDiagnosticMessage(context, error)
+                }
             }
         }
     }
@@ -238,6 +251,7 @@ internal fun GoogleServiceCard(
         onPrimaryAction = {
             when {
                 !identityMode && !isConfigured -> setupDialog = true
+                authorizationError != null && scopes.any { it.first == failedScope } -> authorizeScope(requireNotNull(failedScope))
                 else -> scopes.firstOrNull()?.first?.let(::authorizeScope)
             }
         },
@@ -250,13 +264,20 @@ internal fun GoogleServiceCard(
                 registry.disconnect(DriveConnector.ID)
                 clientId = ""; accountLabel = ""
             }.onSuccess {
+                authorizationError = null; failedScope = null
                 Toast.makeText(context, R.string.full_google_local_disconnected, Toast.LENGTH_LONG).show()
                 onDetailExit()
             }
                 .onFailure { error -> Toast.makeText(context, error.message.orEmpty(), Toast.LENGTH_LONG).show() }
         },
         showIdentityHeader = false,
+        error = authorizationError,
         content = {
+            if (authorizationError != null) {
+                TextButton(onClick = { failedScope?.takeIf { scope -> scopes.any { it.first == scope } }?.let(::authorizeScope) },
+                    enabled = !inProgress && revocation != GoogleRevocationState.PENDING && !pendingLegacy,
+                    modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.full_google_retry_authorization)) }
+            }
             val readScopes = scopes.filter { it.first.endsWith("readonly") }
             val writeScopes = scopes.filterNot { it.first.endsWith("readonly") }
             @Composable fun ScopeRows(rows: List<Pair<String, Int>>) {
@@ -340,6 +361,7 @@ internal fun GoogleServiceCard(
             if (!identityMode) TextButton(onClick = {
                 runCatching {
                     manager.useIdentityMode(); identityMode = true
+                    authorizationError = null; failedScope = null
                     registry.disconnect(GmailConnector.ID); registry.disconnect(DriveConnector.ID)
                     clientId = ""; accountLabel = ""; clientSecret = ""
                 }.onFailure { Toast.makeText(context, googleOAuthErrorMessage(context, it), Toast.LENGTH_LONG).show() }
@@ -397,6 +419,7 @@ internal fun GoogleServiceCard(
         confirmButton = { TextButton(onClick = {
             runCatching {
                 manager.configure(clientId, clientSecret, accountLabel)
+                authorizationError = null; failedScope = null
                 identityMode = false
                 registry.disconnect(connectorId)
                 setupDialog = false
@@ -430,6 +453,34 @@ internal fun googleOAuthErrorMessage(context: Context, error: Throwable): String
         GoogleOAuthError.CALLBACK_TIMEOUT -> context.getString(R.string.full_google_error_callback_timeout)
         GoogleOAuthError.OTHER -> context.getString(R.string.full_google_auth_error)
     }
+}
+
+/** Display only our localized guidance and closed diagnostic fields, never Throwable.message. */
+internal fun googleOAuthDiagnosticMessage(context: Context, error: Throwable): String {
+    val diagnostic = GoogleAuthorizationDiagnostic.from(error)
+    val phase = when (diagnostic.phase) {
+        GoogleAuthorizationPhase.REQUEST -> R.string.full_google_phase_request
+        GoogleAuthorizationPhase.RESOLUTION -> R.string.full_google_phase_resolution
+        GoogleAuthorizationPhase.RESULT -> R.string.full_google_phase_result
+        GoogleAuthorizationPhase.PLAY_SERVICES -> R.string.full_google_phase_services
+        GoogleAuthorizationPhase.LOCAL_STATE -> R.string.full_google_phase_local
+        GoogleAuthorizationPhase.UNKNOWN -> R.string.full_google_phase_unknown
+    }
+    val category = when (diagnostic.category) {
+        GoogleAuthorizationFailureCategory.PROVIDER -> R.string.full_google_failure_provider
+        GoogleAuthorizationFailureCategory.CANCELLED -> R.string.full_google_failure_cancelled
+        GoogleAuthorizationFailureCategory.TIMEOUT -> R.string.full_google_failure_timeout
+        GoogleAuthorizationFailureCategory.PLAY_SERVICES -> R.string.full_google_failure_services
+        GoogleAuthorizationFailureCategory.LOCAL_STATE -> R.string.full_google_failure_local
+        GoogleAuthorizationFailureCategory.UNEXPECTED_RESPONSE -> R.string.full_google_failure_response
+        GoogleAuthorizationFailureCategory.UNKNOWN -> R.string.full_google_failure_unknown
+    }
+    return buildList {
+        add(googleOAuthErrorMessage(context, error))
+        add(context.getString(R.string.full_google_diagnostic_phase, context.getString(phase)))
+        add(context.getString(R.string.full_google_diagnostic_category, context.getString(category)))
+        diagnostic.apiStatusCode?.let { add(context.getString(R.string.full_google_diagnostic_api_code, it)) }
+    }.joinToString("\n\n")
 }
 
 @Composable

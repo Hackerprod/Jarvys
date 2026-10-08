@@ -109,4 +109,21 @@
     <string name="full_google_op_drive_export">Exportar documento de Google</string>
     <string name="full_google_op_drive_update">Actualizar archivo de Drive</string>
     <string name="full_google_op_drive_folder">Crear carpeta de Drive</string>
+    <string name="full_google_retry_authorization">Reintentar autorización</string>
+    <string name="full_google_diagnostic_phase">Paso: %1$s</string>
+    <string name="full_google_diagnostic_category">Categoría del fallo: %1$s</string>
+    <string name="full_google_diagnostic_api_code">Código de estado de la API de Google: %1$d</string>
+    <string name="full_google_phase_request">Solicitando autorización a Google</string>
+    <string name="full_google_phase_resolution">Abriendo o esperando la autorización de Google</string>
+    <string name="full_google_phase_result">Leyendo el resultado de autorización de Google</string>
+    <string name="full_google_phase_services">Comprobando los servicios de Google Play</string>
+    <string name="full_google_phase_local">Actualizando la conexión en Jarvys</string>
+    <string name="full_google_phase_unknown">No disponible</string>
+    <string name="full_google_failure_provider">Google devolvió un error; el código por sí solo no identifica su causa</string>
+    <string name="full_google_failure_cancelled">Autorización interrumpida o cancelada</string>
+    <string name="full_google_failure_timeout">La autorización agotó el tiempo de espera o se interrumpió</string>
+    <string name="full_google_failure_services">Servicios de Google Play no disponibles</string>
+    <string name="full_google_failure_local">Estado local de conexión o autorización</string>
+    <string name="full_google_failure_response">Respuesta de autorización inesperada</string>
+    <string name="full_google_failure_unknown">Causa sin identificar</string>
 </resources>

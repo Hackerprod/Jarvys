@@ -12,6 +12,7 @@ internal object GitHubOperationPolicy {
     const val ENDPOINT = "https://api.githubcopilot.com/mcp/"
     val defaultToolsets = linkedSetOf("context", "repos", "issues", "pull_requests", "discussions")
     val supportedToolsets = defaultToolsets + "actions"
+    val replacedRemoteWrites = setOf("push_files", "delete_file")
     val readNames = setOf("jarvys_commit_checks", "get_me", "search_repositories", "search_code", "get_file_contents", "get_commit",
         "list_commits", "search_commits", "list_branches", "list_tags", "get_tag", "get_latest_release",
         "list_releases", "get_release_by_tag", "issue_read", "search_issues", "list_issues", "pull_request_read",
@@ -70,15 +71,19 @@ internal object GitHubOperationPolicy {
             require(!secret.containsMatchIn(args.toString())) { "GitHub write contains a credential-like value; remove secrets before publishing" }
             if (name == "create_pull_request" && !args.has("draft")) args.put("draft", true)
             when (name) {
-                "push_files" -> error("Use jarvys_commit_files with the observed expectedHeadOid for guarded multi-file commits")
+                "push_files", "delete_file" -> error("Use jarvys_commit_files with the observed expectedHeadOid for guarded additions or deletions")
                 "create_branch" -> require(args.optString("from_branch").isNotBlank()) { "Choose an explicit source branch before creating a branch" }
-                "create_or_update_file", "delete_file" -> {
+                "create_or_update_file" -> {
                     path(args.getString("path")); branch(args.getString("branch"))
                     if (name == "create_or_update_file") GitHubNativeBridge.validateFileWrite(args.getString("path"), args.getString("content"))
-                    if (name == "delete_file") require(sha.matches(args.optString("sha"))) { "Read the current blob SHA before deleting a file" }
                     if (args.has("sha")) require(sha.matches(args.optString("sha"))) { "Invalid observed file SHA" }
                 }
-                "merge_pull_request" -> require(sha.matches(args.optString("sha"))) { "Merge requires the exact reviewed head SHA" }
+                "merge_pull_request" -> {
+                    require(!args.has("sha") && sha.matches(args.optString("expectedHeadSha"))) { "Merge requires the exact reviewed expectedHeadSha" }
+                    require(tool.inputSchema.optJSONObject("properties")?.has("expectedHeadSha") == true) {
+                        "This GitHub server does not advertise guarded merge; update the connector or review and merge on GitHub"
+                    }
+                }
                 "update_pull_request_branch" -> require(sha.matches(args.optString("expectedHeadSha"))) { "Updating a PR branch requires its exact observed head SHA" }
                 "pull_request_review_write" -> if (args.optString("method") == "create") {
                     require(sha.matches(args.optString("commitID"))) { "Review creation requires the exact reviewed commitID" }
@@ -127,12 +132,12 @@ internal object GitHubOperationPolicy {
                             val content = item.optString("content")
                             add("  ${item.optString("path")}: ${content.toByteArray(Charsets.UTF_8).size} bytes; SHA-256 ${digest(content)}")
                             if (content.isNotEmpty()) add(preview(content, 700))
-                        } else add(preview(item.toString(), 400))
+                        } else add(preview(item?.toString() ?: "(empty)", 400))
                     }
                     if (value.length() > 30) add("Additional ${value.length() - 30} entries omitted; inspect the complete change before approving.")
                 }
                 value is JSONObject -> add("$key: ${preview(redact(value).toString(), 1500)}")
-                else -> add("$key: ${preview(value.toString(), if (key in setOf("body", "content", "message")) 4000 else 800)}")
+                else -> add("$key: ${preview(value?.toString() ?: "(empty)", if (key in setOf("body", "content", "message")) 4000 else 800)}")
             }
         }
     }
