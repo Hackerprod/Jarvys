@@ -330,6 +330,9 @@ object AgentRunUiState {
                     || event.kind == "generated_image" && persistedEvents.none {
                         it.kind == "generated_image" && it.generatedImagePath == event.generatedImagePath
                     }
+                    || event.kind == "delivered_file" && persistedEvents.none {
+                        it.kind == "delivered_file" && it.deliveredArtifact?.id == event.deliveredArtifact?.id
+                    }
         } else emptyList()
         val durableEvents = authoritativePersisted.filterNot { event ->
             event.kind == "user_decision" && event.decisionId in livePendingDecisionIds

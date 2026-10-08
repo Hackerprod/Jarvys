@@ -19,6 +19,8 @@ public final class ArtifactSnapshotIO {
     Snapshot(long bytes, String sha256) { this.bytes = bytes; this.sha256 = sha256; }
   }
 
+  // Conservative API24-compatible admission: never evict other cached work to create an attachment.
+  @android.annotation.SuppressLint("UsableSpace")
   public static Snapshot copy(File root, String relative, File target, long limit,
       CancellationToken token) throws IOException {
     if (relative == null || relative.isEmpty() || relative.startsWith("/")

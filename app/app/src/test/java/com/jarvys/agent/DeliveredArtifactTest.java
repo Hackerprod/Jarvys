@@ -27,13 +27,22 @@ public class DeliveredArtifactTest {
     private LocalRunStore ledger;
     private DeliveredArtifactStore artifacts;
     private WorkspaceStore workspace;
+    private Object priorSecrets;
     private final String session = "delivery-chat";
-    @Before public void setUp() {
+    @Before public void setUp() throws Exception {
+        Context context = ApplicationProvider.getApplicationContext();
+        java.lang.reflect.Field singleton = SecretStore.class.getDeclaredField("singleton"); singleton.setAccessible(true);
+        priorSecrets = singleton.get(null);
+        singleton.set(null, new SecretStore(context.getSharedPreferences("delivery-fixture", Context.MODE_PRIVATE)));
         files = temporary.getRoot(); ledger = new LocalRunStore(files);
         artifacts = new DeliveredArtifactStore(new File(files, "jarvys"));
         workspace = new WorkspaceStore(new File(files, "jarvys/workspaces"), WorkspaceStore.projectIdForSession(session),
                 null, null, null, session, false);
         ledger.appendConversationMessage(session, "user", "Attach the report");
+    }
+    @After public void tearDown() throws Exception {
+        java.lang.reflect.Field singleton = SecretStore.class.getDeclaredField("singleton"); singleton.setAccessible(true); singleton.set(null,priorSecrets);
+        ArtifactOsShadow.reset();
     }
     private DeliverFileTool tool() { return new DeliverFileTool(session, workspace, artifacts, ledger); }
     private Map<String,Object> args(String path) { return Collections.singletonMap("path", path); }
@@ -43,7 +52,7 @@ public class DeliveredArtifactTest {
     }
     @Test public void nativeSnapshotSurvivesWorkspaceEditAndProcessRecreation() throws Exception {
         workspace.write("report.txt", "original");
-        CoreToolResult result = tool().execute(args("report.txt"), CancellationToken.uncancellable());
+        CoreToolResult result = tool().execute(args("./report.txt"), CancellationToken.uncancellable());
         assertTrue(result.content, result.success);
         ChatAttachment file = delivered(); assertEquals("report.txt", file.name); assertEquals(8, file.sizeBytes);
         workspace.write("report.txt", "replacement");
@@ -54,6 +63,40 @@ public class DeliveredArtifactTest {
         assertFalse(result.content.contains("original"));
         assertEquals(artifacts.sha256(session,file), new JSONObject(result.content).getString("sha256"));
     }
+    @Test @Config(sdk = 24, shadows = {ArtifactOsShadow.class, ArtifactOsShadow.Descriptor.class})
+    public void api24UsesDescriptorCheckedStreamingWithoutNioProjectCalls() throws Exception {
+        workspace.write("legacy.txt", "Android 7 snapshot");
+        CoreToolResult result = tool().execute(args("legacy.txt"), CancellationToken.uncancellable());
+        assertTrue(result.content,result.success);
+        assertEquals("Android 7 snapshot", new String(Files.readAllBytes(artifacts.resolve(session,delivered()).toPath()),StandardCharsets.UTF_8));
+    }
+    @Test public void longCompactedConversationKeepsDurableFileCardAndChecksumWithoutReexecution() throws Exception {
+        workspace.write("report.txt", "original bytes");
+        assertTrue(tool().execute(args("report.txt"),CancellationToken.uncancellable()).success);
+        ChatAttachment artifact = delivered(); String sha = artifacts.sha256(session,artifact);
+        for (int i=0;i<80;i++) { ledger.appendConversationMessage(session,"user","Follow-up " + i); ledger.appendConversationMessage(session,"assistant","Discussed " + i); }
+        ledger.appendCompaction(session,"Earlier work produced a report attachment.",150,"automatic","all",150);
+        workspace.write("report.txt","new workspace version");
+        LocalRunStore reopened = new LocalRunStore(files);
+        assertEquals(1,reopened.readConversationTimeline(session).stream().filter(e -> e.getDeliveredArtifact()!=null).count());
+        assertEquals(artifact,reopened.findChatFile(session,"delivered",artifact.id));
+        assertEquals(sha,new DeliveredArtifactStore(new File(files,"jarvys")).sha256(session,artifact));
+        assertEquals("original bytes",new String(Files.readAllBytes(artifacts.resolve(session,artifact).toPath()),StandardCharsets.UTF_8));
+    }
+
+    @Test public void staleTimelineRefreshKeepsLiveDeliveredFileAndFreshRefreshDeduplicates() throws Exception {
+        workspace.write("live.txt","safe");
+        AgentRunUiState.resetSession(session);
+        AgentRunUiState.beginRun(session,"Attach live file",Collections.emptyList());
+        java.util.List<AgentRunUiEvent> before = ledger.readConversationTimeline(session);
+        assertTrue(tool().execute(args("live.txt"),CancellationToken.uncancellable()).success);
+        AgentRunUiState.refreshPersistedSession(session,before);
+        assertEquals(1,AgentRunUiState.INSTANCE.getState().getValue().getEvents().stream().filter(e -> e.getDeliveredArtifact()!=null).count());
+        AgentRunUiState.refreshPersistedSession(session,ledger.readConversationTimeline(session));
+        assertEquals(1,AgentRunUiState.INSTANCE.getState().getValue().getEvents().stream().filter(e -> e.getDeliveredArtifact()!=null).count());
+        AgentRunUiState.resetSession(session);
+    }
+
     @Test public void repeatedDeliveryCoalescesAndChangedVersionHasNewIdentity() throws Exception {
         workspace.write("same.txt", "one");
         assertTrue(tool().execute(args("same.txt"), CancellationToken.uncancellable()).success);
@@ -78,7 +121,7 @@ public class DeliveredArtifactTest {
     }
     @Test public void appPrivateAbsoluteTraversalMemorySkillsAndOtherChatCannotBeDelivered() throws Exception {
         File secret = new File(files, "secret-token"); Files.write(secret.toPath(), "sentinel".getBytes(StandardCharsets.UTF_8));
-        for (String path : Arrays.asList(secret.getPath(), "../secret-token", "/memory/private.md", "/skills/private.md", "memory/private.md", "skills/private.md", "attachments/private.txt", "/project/../secret-token"))
+        for (String path : Arrays.asList(secret.getPath(), "../secret-token", "/memory/private.md", "/skills/private.md", "memory/private.md", "./memory/private.md", "skills/private.md", "attachments/private.txt", "/project/../secret-token"))
             assertFalse(path, tool().execute(args(path), CancellationToken.uncancellable()).success);
         workspace.write("owned.txt", "mine"); tool().execute(args("owned.txt"), CancellationToken.uncancellable());
         assertThrows(IllegalArgumentException.class, () -> artifacts.resolve("another-chat", delivered()));

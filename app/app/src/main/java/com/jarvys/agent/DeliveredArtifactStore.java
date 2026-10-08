@@ -39,6 +39,7 @@ public final class DeliveredArtifactStore {
             CancellationToken token) throws IOException {
         synchronized (lock) {
             File directory = directory(session, true);
+            cleanupStaging(directory);
             File staged = File.createTempFile(".delivery-", ".tmp", directory);
             try {
                 ArtifactSnapshotIO.Snapshot copied = workspace.snapshotForDelivery(path, staged, MAX_BYTES, token);
@@ -106,6 +107,19 @@ public final class DeliveredArtifactStore {
         synchronized (lock) {
             try { return delete(directory(session, false)); }
             catch (IOException | RuntimeException unavailable) { return false; }
+        }
+    }
+
+    private void cleanupStaging(File directory) throws IOException {
+        File[] files = directory.listFiles();
+        if (files == null) throw new IOException("Could not inspect attachment storage");
+        // Snapshot writers are serialized; these private names cannot be created by project tools.
+        for (File file : files) {
+            String name = file.getName();
+            if ((name.startsWith(".delivery-") || name.startsWith(".metadata-")) && name.endsWith(".tmp")) {
+                verify(file);
+                if (!file.isFile() || !file.delete()) throw new IOException("Could not remove interrupted attachment copy");
+            }
         }
     }
 

@@ -41,7 +41,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 29)
+@Config(sdk = 29, shadows = {ArtifactOsShadow.class, ArtifactOsShadow.Descriptor.class})
 public class DownloadStoreTest {
     private Context context;
     private FakeDownloadsProvider media;
@@ -156,6 +156,21 @@ public class DownloadStoreTest {
             assertTrue(first.displayName.getBytes(StandardCharsets.UTF_8).length <= 180);
             assertEquals(DownloadStore.Status.ALREADY_SAVED, export(source).status);
         }
+    }
+
+    @Test public void unpairedSurrogatesAreReplacedAndReceiptsSurviveUtf8Restart() throws Exception {
+        String invalidName = "high-\ud800-low-\udc00-valid-\ud83d\udcc4.txt";
+        String sanitized = "high-_-low-_-valid-\ud83d\udcc4.txt";
+        assertEquals(sanitized, DownloadStore.sanitizeDisplayName(invalidName));
+        DownloadStore.Source source = source(invalidName, BYTES);
+        DownloadStore.Result first = export(source);
+        assertEquals(DownloadStore.Status.SAVED, first.status);
+        assertTrue(first.displayName.startsWith("high-_-low-_-valid-\ud83d\udcc4"));
+        DownloadStore.Result restarted = export(source);
+        assertEquals(DownloadStore.Status.ALREADY_SAVED, restarted.status);
+        assertEquals(first.displayName, restarted.displayName);
+        assertEquals(first.uri, restarted.uri);
+        assertEquals(1, media.inserts);
     }
 
     @Test public void recoversCopyingRowWithoutLeakingAPartialOrDuplicatingSavedFile() throws Exception {
@@ -356,6 +371,72 @@ public class DownloadStoreTest {
                 () -> { throw new IOException("unavailable"); });
         assertEquals(DownloadStore.Status.ERROR, export(throwing).status);
         assertEquals(0, directory.list().length);
+    }
+
+    @Test @Config(sdk = 28) public void legacyExclusiveOpenRejectsReplacementSymlinkWithoutTruncatingVictim() throws Exception {
+        org.robolectric.Shadows.shadowOf(RuntimeEnvironment.getApplication()).grantPermissions(Manifest.permission.WRITE_EXTERNAL_STORAGE);
+        ShadowEnvironment.setExternalStorageState(Environment.MEDIA_MOUNTED);
+        File victim = new File(context.getFilesDir(), "must-not-truncate.txt");
+        Files.write(victim.toPath(), BYTES);
+        DownloadStore.Source source = new DownloadStore.Source("legacy-race", "before-open", "result.txt", "text/plain", BYTES.length,
+                () -> {
+                    DownloadStore.Journal entry = DownloadStore.readJournal(context, DownloadStore.key("legacy-race", "before-open"));
+                    File partial = DownloadStore.checkedLegacyFile(entry, true);
+                    assertFalse("No separate create/reopen window", partial.exists());
+                    ArtifactOsShadow.beforeOpen = () -> {
+                        try { Files.createSymbolicLink(partial.toPath(), victim.toPath()); }
+                        catch (IOException error) { throw new AssertionError(error); }
+                    };
+                    return new ByteArrayInputStream(BYTES);
+                });
+        DownloadStore.Result result = export(source);
+        assertEquals(DownloadStore.Status.ERROR, result.status);
+        assertArrayEquals(BYTES, Files.readAllBytes(victim.toPath()));
+        assertEquals(0, media.inserts);
+    }
+
+    @Test @Config(sdk = 28) public void legacyOpenedDescriptorMustStillResolveToExpectedPathBeforeAnyBytes() throws Exception {
+        org.robolectric.Shadows.shadowOf(RuntimeEnvironment.getApplication()).grantPermissions(Manifest.permission.WRITE_EXTERNAL_STORAGE);
+        ShadowEnvironment.setExternalStorageState(Environment.MEDIA_MOUNTED);
+        File victim = new File(context.getFilesDir(), "must-not-follow.txt");
+        File relocated = new File(context.getFilesDir(), "relocated-empty-partial");
+        Files.write(victim.toPath(), BYTES);
+        DownloadStore.Source source = new DownloadStore.Source("legacy-race", "after-open", "result.txt", "text/plain", BYTES.length,
+                () -> {
+                    DownloadStore.Journal entry = DownloadStore.readJournal(context, DownloadStore.key("legacy-race", "after-open"));
+                    File partial = DownloadStore.checkedLegacyFile(entry, true);
+                    ArtifactOsShadow.afterOpen = () -> {
+                        try {
+                            Files.move(partial.toPath(), relocated.toPath());
+                            Files.createSymbolicLink(partial.toPath(), victim.toPath());
+                        } catch (IOException error) { throw new AssertionError(error); }
+                    };
+                    return new ByteArrayInputStream(BYTES);
+                });
+        DownloadStore.Result result = export(source);
+        assertEquals(DownloadStore.Status.ERROR, result.status);
+        assertArrayEquals(BYTES, Files.readAllBytes(victim.toPath()));
+        assertTrue(relocated.isFile());
+        assertEquals("Path verification happens before the first output byte", 0, relocated.length());
+    }
+
+    @Test @Config(sdk = 28) public void legacyReadOnlyProviderRejectsSwapBetweenPathValidationAndOpen() throws Exception {
+        org.robolectric.Shadows.shadowOf(RuntimeEnvironment.getApplication()).grantPermissions(Manifest.permission.WRITE_EXTERNAL_STORAGE);
+        ShadowEnvironment.setExternalStorageState(Environment.MEDIA_MOUNTED);
+        DownloadStore.Result saved = export(source("provider-race.txt", BYTES));
+        assertEquals(DownloadStore.Status.SAVED, saved.status);
+        File download = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), saved.displayName);
+        File victim = new File(context.getFilesDir(), "private-victim.txt");
+        byte[] secret = "private bytes never granted".getBytes(StandardCharsets.UTF_8);
+        Files.write(victim.toPath(), secret);
+        ArtifactOsShadow.beforeOpen = () -> {
+            try {
+                Files.delete(download.toPath());
+                Files.createSymbolicLink(download.toPath(), victim.toPath());
+            } catch (IOException error) { throw new AssertionError(error); }
+        };
+        assertThrows(FileNotFoundException.class, () -> readProvider().openFile(saved.uri, "r"));
+        assertArrayEquals(secret, Files.readAllBytes(victim.toPath()));
     }
 
     private DownloadContentProvider readProvider() {

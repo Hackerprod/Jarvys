@@ -1207,9 +1207,6 @@ After:
     <string name="image_action_share">Share</string>
     <string name="image_open_accessibility">Open generated image: %1$s</string>
     <string name="image_viewer_close">Close image viewer</string>
-    <string name="image_share_chooser">Share generated image</string>
-    <string name="image_save_succeeded">Image saved.</string>
-    <string name="image_save_failed">Could not save this image to the selected location.</string>
     <string name="attachment_model_decode">Cannot read image %1$s on this Android device. It may be damaged or use an unsupported format. Try JPEG or PNG. The message is saved.</string>
     <string name="attachment_model_file_failed">Cannot prepare attached file %1$s for the workspace. The message and attachment are saved.</string>
     <string name="attachment_model_memory">There is not enough available memory to prepare %1$s. The message is saved; try again after closing other apps.</string>
@@ -1327,10 +1324,11 @@ Their exit results are unknown. Do not repeat them automatically. Review project
     <string name="chat_download_saving">Saving…</string>
     <string name="chat_download_complete">Saved to Downloads</string>
     <string name="chat_download_location">%1$s is ready in Downloads.</string>
-    <string name="chat_download_failed">Could not complete the download</string>
-    <string name="chat_download_permission_denied">This Android version needs storage permission to save in Downloads. No file was saved. You can share the file instead, or grant storage permission in Android settings and try again.</string>
-    <string name="chat_download_open_failed">No compatible app could open this file. It remains in Downloads if it was saved.</string>
-    <string name="chat_download_retry">No complete file was saved. Tap Download to try again.</string>
+    <string name="chat_download_failed">Could not confirm the download</string>
+    <string name="chat_download_permission_denied">This Android version needs storage permission to save in Downloads. No new file was saved. You can share the file instead, or grant storage permission in Android settings and try again.</string>
+    <string name="chat_download_open_failed">The file could not be opened. If it was saved, you can find it in Downloads.</string>
+    <string name="chat_download_retry">The download could not be confirmed. Check Downloads before trying again.</string>
     <string name="chat_download_open">Open</string>
     <string name="chat_file_preview_unavailable">Preview unavailable. Download or share the original file.</string>
+    <string name="chat_download_open_failed_title">Could not open the file</string>
 </resources>

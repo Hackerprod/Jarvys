@@ -18,10 +18,11 @@ import org.robolectric.util.ReflectionHelpers;
 @Implements(Os.class)
 public class ArtifactOsShadow {
     public static Runnable beforeOpen, afterOpen;
-    private static final Map<FileDescriptor,FileInputStream> owners = new IdentityHashMap<>();
-    @Resetter public static void reset() { beforeOpen = null; afterOpen = null; owners.clear(); }
+    private static final Map<FileDescriptor,Path> directories = new IdentityHashMap<>();
+    private static final Map<FileDescriptor,Closeable> owners = new IdentityHashMap<>();
+    @Resetter public static void reset() { beforeOpen = null; afterOpen = null; owners.clear(); directories.clear(); }
     @Implementation protected static StructStat lstat(String path) throws ErrnoException { return stat(Paths.get(path), LinkOption.NOFOLLOW_LINKS); }
-    @Implementation protected static StructStat fstat(FileDescriptor fd) throws ErrnoException { return stat(Paths.get("/proc/self/fd/" + descriptor(fd))); }
+    @Implementation protected static StructStat fstat(FileDescriptor fd) throws ErrnoException { return stat(directories.containsKey(fd) ? directories.get(fd) : Paths.get("/proc/self/fd/" + descriptor(fd))); }
     private static int descriptor(FileDescriptor fd) { return ReflectionHelpers.getField(fd, "fd"); }
     private static StructStat stat(Path path, LinkOption... options) throws ErrnoException {
         try {
@@ -36,18 +37,34 @@ public class ArtifactOsShadow {
         Runnable hook = beforeOpen; beforeOpen = null; if (hook != null) hook.run();
         try {
             if ((flags & OsConstants.O_NOFOLLOW) != 0 && Files.isSymbolicLink(Paths.get(path))) throw new IOException("symlink");
-            FileInputStream input = new FileInputStream(path); FileDescriptor fd = input.getFD(); owners.put(fd,input);
+            if (Files.isDirectory(Paths.get(path))) { FileDescriptor fd = new FileDescriptor(); directories.put(fd,Paths.get(path)); return fd; }
+            FileDescriptor fd;
+            if ((flags & OsConstants.O_WRONLY) != 0 || (flags & OsConstants.O_RDWR) != 0) {
+                // Deterministic host adapter for the production exclusive write-open contract.
+                if ((flags & OsConstants.O_CREAT) != 0 && (flags & OsConstants.O_EXCL) != 0)
+                    Files.createFile(Paths.get(path));
+                else if ((flags & OsConstants.O_CREAT) != 0 && !Files.exists(Paths.get(path)))
+                    Files.createFile(Paths.get(path));
+                RandomAccessFile output = new RandomAccessFile(path, "rw");
+                if ((flags & OsConstants.O_TRUNC) != 0) output.setLength(0);
+                fd = output.getFD(); owners.put(fd, output);
+            } else {
+                FileInputStream input = new FileInputStream(path);
+                fd = input.getFD(); owners.put(fd, input);
+            }
             hook = afterOpen; afterOpen = null; if (hook != null) hook.run();
             return fd;
         } catch (IOException failure) { throw new ErrnoException("open", OsConstants.EIO); }
     }
     @Implementation protected static void close(FileDescriptor fd) throws ErrnoException {
-        try { FileInputStream input = owners.remove(fd); if (input != null) input.close(); else new FileInputStream(fd).close(); }
+        if (directories.remove(fd) != null) return;
+        try { Closeable owner = owners.remove(fd); if (owner != null) owner.close(); else new FileInputStream(fd).close(); }
         catch (IOException failure) { throw new ErrnoException("close", OsConstants.EIO); }
     }
+    @Implementation protected static void fsync(FileDescriptor fd) { /* Host receipt-order test; not a hardware fsync claim. */ }
     @Implementation protected static String readlink(String path) throws ErrnoException {
         try { return Files.readSymbolicLink(Paths.get(path)).toString(); }
-        catch (IOException failure) { throw new ErrnoException("readlink", OsConstants.EIO); }
+        catch (IOException failure) { throw new ErrnoException("readlink", Files.exists(Paths.get(path), LinkOption.NOFOLLOW_LINKS) ? OsConstants.EINVAL : OsConstants.ENOENT); }
     }
     @Implements(ParcelFileDescriptor.class)
     public static class Descriptor extends ShadowParcelFileDescriptor {

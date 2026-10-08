@@ -35,7 +35,8 @@ internal fun ChatFileTransferHost(transfers: ChatFileTransfers, startIntent: (In
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission(), transfers::permissionResult)
     LaunchedEffect(permissionRequest) {
         if (permissionRequest != null && transfers.claimPermissionRequest()) {
-            permission.launch(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            runCatching { permission.launch(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) }
+                .onFailure { transfers.permissionResult(false) }
         }
     }
     val launch by transfers.launch.collectAsState()
@@ -54,7 +55,11 @@ internal fun ChatFileTransferHost(transfers: ChatFileTransfers, startIntent: (In
         AlertDialog(
             onDismissRequest = transfers::dismissNotice,
             modifier = Modifier.testTag("chat-download-result"),
-            title = { Text(stringResource(if (success) R.string.chat_download_complete else R.string.chat_download_failed)) },
+            title = { Text(stringResource(when {
+                success -> R.string.chat_download_complete
+                current.failure == ChatFileTransfer.Failure.OPEN -> R.string.chat_download_open_failed_title
+                else -> R.string.chat_download_failed
+            })) },
             text = { Text(if (success) context.getString(R.string.chat_download_location, current.result!!.displayName) else
                 context.getString(when (current.failure) {
                     ChatFileTransfer.Failure.PERMISSION -> R.string.chat_download_permission_denied

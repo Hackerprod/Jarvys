@@ -28,7 +28,7 @@ public final class DownloadContentProvider extends ContentProvider {
             }
             File file = DownloadStore.checkedLegacyFile(entry, false);
             if (!file.isFile() || file.length() != entry.bytes) throw new IOException("Download changed");
-            return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY);
+            return com.jarvys.agent.coding.VerifiedArtifactInput.openReadOnly(file);
         } catch (Exception error) { throw missing(); }
     }
 

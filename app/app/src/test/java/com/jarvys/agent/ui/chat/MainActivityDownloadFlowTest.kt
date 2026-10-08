@@ -7,6 +7,12 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.os.Looper
+import android.os.Handler
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.android.asCoroutineDispatcher
+import kotlinx.coroutines.test.setMain
+import kotlinx.coroutines.test.resetMain
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.core.app.ApplicationProvider
 import androidx.work.testing.WorkManagerTestInitHelper
@@ -30,6 +36,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /** Exercises the production MainActivity Save callback, retained VM and actual ActivityResult host. */
+@OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [34], qualifiers = "en-rUS-w360dp-h800dp-port-mdpi")
@@ -39,6 +46,11 @@ class MainActivityDownloadFlowTest {
     private var controller: ActivityController<MainActivity>? = null
 
     @Before fun setUp() {
+        // Bind Main to this Robolectric sandbox's real current looper, not a handler from a prior test.
+        Dispatchers.setMain(Handler(Looper.getMainLooper()).asCoroutineDispatcher().immediate)
+        // AndroidViewModelFactory caches its Application globally; Robolectric replaces the Application per test.
+        ViewModelProvider.AndroidViewModelFactory::class.java.getDeclaredField("_instance")
+            .apply { isAccessible = true }.set(null, null)
         secretSingleton.set(null, SecretStore(context.getSharedPreferences("ux16-ui-test-secrets", 0)))
         WorkManagerTestInitHelper.initializeTestWorkManager(context)
     }
@@ -48,6 +60,7 @@ class MainActivityDownloadFlowTest {
         controller = null
         secretSingleton.set(null, null)
         WorkManagerTestCleanup.close(context)
+        Dispatchers.resetMain()
     }
 
     @Test fun saveUsesDownloadsWithoutPickerAndDuplicateTapsWriteOnceThenExplicitOpenGrantsReadOnly() {
@@ -111,13 +124,16 @@ class MainActivityDownloadFlowTest {
         val release = CountDownLatch(1)
         provider.beforeOutputOpen = Runnable { entered.countDown(); check(release.await(10, TimeUnit.SECONDS)) }
         val source = generated("download-source-${UUID.randomUUID()}")
-        val nextSession = "download-other-${UUID.randomUUID()}"
         try {
             val activity = start(source.session)
             val vm = ViewModelProvider(activity)[ChatFileTransfers::class.java]
             save(activity, source)
             assertTrue(entered.await(10, TimeUnit.SECONDS))
-            controller!!.newIntent(Intent(activity, MainActivity::class.java).putExtra(MainActivity.EXTRA_OPEN_CHAT_SESSION, nextSession))
+            MainActivity::class.java.getDeclaredMethod("newChat").apply { isAccessible = true }.invoke(activity)
+            val nextSession = selectedSession(activity)
+            assertNotEquals(source.session, nextSession)
+            assertEquals("Original deep-link intent is intentionally stale", source.session,
+                activity.intent.getStringExtra(MainActivity.EXTRA_OPEN_CHAT_SESSION))
             controller!!.recreate()
             val rotated = controller!!.get()
             assertSame(vm, ViewModelProvider(rotated)[ChatFileTransfers::class.java])
@@ -186,6 +202,8 @@ class MainActivityDownloadFlowTest {
         await { vm.notice.value?.failure == ChatFileTransfer.Failure.PERMISSION }
         assertFalse(vm.notice.value!!.saved)
         assertFalse(vm.transfers.value[source.request.key]!!.waitingForPermission)
+        val permissionIntent = Shadows.shadowOf(activity).nextStartedActivity
+        assertTrue(permissionIntent == null || permissionIntent.action == "android.content.pm.action.REQUEST_PERMISSIONS")
         assertNull(Shadows.shadowOf(activity).nextStartedActivity)
         assertEquals(source.session, selectedSession(activity))
     }
@@ -207,7 +225,10 @@ class MainActivityDownloadFlowTest {
         controller = Robolectric.buildActivity(MainActivity::class.java,
             Intent(context, MainActivity::class.java).putExtra(MainActivity.EXTRA_OPEN_CHAT_SESSION, session)).setup()
         Shadows.shadowOf(Looper.getMainLooper()).idle()
-        return controller!!.get()
+        val activity = controller!!.get()
+        assertEquals("VM and fixture must belong to the same Android application sandbox", context.filesDir,
+            ViewModelProvider(activity)[ChatFileTransfers::class.java].getApplication<Application>().filesDir)
+        return activity
     }
 
     private fun save(activity: MainActivity, source: GeneratedFixture) {
@@ -239,6 +260,7 @@ class MainActivityDownloadFlowTest {
             if (condition()) return
             Thread.sleep(10)
         } while (System.nanoTime() < end)
-        assertTrue("Asynchronous Activity download flow did not settle", condition())
+        val vm = controller?.get()?.let { ViewModelProvider(it)[ChatFileTransfers::class.java] }
+        assertTrue("Activity download did not settle: transfers=${vm?.transfers?.value}; notice=${vm?.notice?.value}; launch=${vm?.launch?.value}", condition())
     }
 }

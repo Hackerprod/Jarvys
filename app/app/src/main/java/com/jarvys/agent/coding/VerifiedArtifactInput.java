@@ -12,8 +12,16 @@ import java.io.IOException;
 import java.io.InputStream;
 
 /** Check the inode actually opened, not just the pathname before/after a potentially hostile rename. */
-final class VerifiedArtifactInput {
+public final class VerifiedArtifactInput {
     private VerifiedArtifactInput() { }
+    /** Used for an already scoped public download, whose path may be mutable outside the app. */
+    public static ParcelFileDescriptor openReadOnly(File verifiedPath) throws IOException {
+        File canonical = verifiedPath.getCanonicalFile();
+        if (!verifiedPath.getAbsoluteFile().equals(canonical)) throw new IOException("Download path changed");
+        try (InputStream input = open(canonical, identity(canonical))) {
+            return ParcelFileDescriptor.dup(((FileInputStream) input).getFD());
+        }
+    }
     static StructStat identity(File source) throws IOException {
         try { return Os.lstat(source.getPath()); }
         catch (ErrnoException invalid) { throw new IOException("Could not identify artifact source", invalid); }

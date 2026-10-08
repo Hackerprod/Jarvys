@@ -3,6 +3,7 @@ package com.jarvys.agent.ui.chat
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.Canvas
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,9 +29,12 @@ import com.jarvys.agent.GeneratedImageIntents
 import com.jarvys.agent.GeneratedImageStore
 import com.jarvys.agent.JarvysThemeMode
 import com.jarvys.agent.R
+import com.jarvys.agent.BuildConfig
+import com.jarvys.agent.TestCaptureDirectories
 import com.jarvys.agent.ui.JarvysOwnTheme
 import com.jarvys.agent.ui.motion.LocalReducedMotion
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.util.UUID
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -93,6 +97,17 @@ class GeneratedImageComposeTest {
         val imageSemantics = compose.onNodeWithTag("generated-image-viewer-image").fetchSemanticsNode().config
         assertTrue(imageSemantics[SemanticsProperties.ContentDescription].any { it.contains(prompt) })
         assertPromptLabelsNotVisible(prompt, event.generatedImageRevisedPrompt!!)
+        compose.runOnIdle {
+            val view = org.robolectric.shadows.ShadowDialog.getLatestDialog().window!!.decorView
+            val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+            try {
+                view.draw(Canvas(bitmap))
+                val directory = TestCaptureDirectories.named("ux16-file-delivery-${BuildConfig.FLAVOR}")
+                val file = File(directory, "generated-image-viewer-save-share.png")
+                file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                println("UX16_CAPTURE=${file.absolutePath}")
+            } finally { bitmap.recycle() }
+        }
 
         compose.onNodeWithTag("generated-image-save").performClick()
         assertEquals(event.id, saveEvent?.id)

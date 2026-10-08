@@ -3,6 +3,8 @@ package com.jarvys.agent
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.background
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -58,7 +60,7 @@ class DeliveredFileUiTest {
         compose.setContent {
             JarvysOwnTheme(if (dark) JarvysThemeMode.DARK else JarvysThemeMode.LIGHT) {
                 CompositionLocalProvider(LocalChatFileActions provides ChatFileActions(states, downloads::add, shares::add)) {
-                    Column(Modifier.fillMaxSize().padding(16.dp)) { DeliveredArtifactEventCard(event, session) }
+                    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(16.dp)) { DeliveredArtifactEventCard(event, session) }
                 }
             }
         }
@@ -78,7 +80,8 @@ class DeliveredFileUiTest {
 
     @Test fun deliveredImageRestoresAsImageAndViewerHasDownloadShareWithoutTinyFilename() {
         val session = "delivered-image-${UUID.randomUUID()}"
-        val workspace = WorkspaceStore(compose.activity, WorkspaceStore.projectIdForSession(session), session)
+        val workspace = WorkspaceStore(File(compose.activity.filesDir, "jarvys/workspaces"),
+            WorkspaceStore.projectIdForSession(session), null, null, null, session, false)
         workspace.write("landscape.png", "staged")
         val image = Bitmap.createBitmap(120, 80, Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.BLUE) }
         workspace.resolvePreviewPath("landscape.png").outputStream().use { image.compress(Bitmap.CompressFormat.PNG, 100, it) }
@@ -125,6 +128,7 @@ class DeliveredFileUiTest {
         compose.onNodeWithTag("chat-preview-download-${attachment.id}").assertIsDisplayed().performClick()
         compose.onNodeWithTag("chat-preview-share-${attachment.id}").assertIsDisplayed()
         assertEquals(attachment.id, requests.single().artifactId)
+        capture("unsupported-image-actions")
     }
 
     @Test fun missingRestoredFileHasHonestUnavailableStateWithoutEnabledDownload() {
@@ -141,7 +145,8 @@ class DeliveredFileUiTest {
     }
 
     private fun deliver(session: String, filename: String, body: String): ChatAttachment {
-        val workspace = WorkspaceStore(compose.activity, WorkspaceStore.projectIdForSession(session), session)
+        val workspace = WorkspaceStore(File(compose.activity.filesDir, "jarvys/workspaces"),
+            WorkspaceStore.projectIdForSession(session), null, null, null, session, false)
         workspace.write(filename, body)
         return DeliveredArtifactStore(compose.activity).snapshot(session, workspace, filename, null, CancellationToken.uncancellable())
             .also { LocalRunStore(compose.activity).appendDeliveredFile(session, it) }

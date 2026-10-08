@@ -11,6 +11,11 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
 import android.os.Looper;
+import android.os.ParcelFileDescriptor;
+import android.system.ErrnoException;
+import android.system.Os;
+import android.system.OsConstants;
+import android.system.StructStat;
 import android.provider.MediaStore;
 import android.util.AtomicFile;
 
@@ -20,6 +25,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.Closeable;
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileDescriptor;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -139,6 +145,8 @@ public final class DownloadStore {
         String key = key(source.scopeKey, source.artifactKey);
         Journal entry = readJournal(context, key);
         if (entry != null) {
+            if (entry.media && Build.VERSION.SDK_INT < 29)
+                return failure(Status.ERROR, source, "download_platform_changed");
             if (!entry.fingerprint.equals(fingerprint(source)))
                 return failure(Status.ERROR, source, "artifact_key_reused");
             // Any inaccessible/indeterminate row fails closed, rather than creating a duplicate.
@@ -164,7 +172,7 @@ public final class DownloadStore {
         boolean published = false;
         try {
             token.throwIfCancelled();
-            if (fresh.media) {
+            if (Build.VERSION.SDK_INT >= 29 && fresh.media) {
                 ContentValues values = new ContentValues();
                 values.put(MediaStore.MediaColumns.DISPLAY_NAME, fresh.displayName);
                 values.put(MediaStore.MediaColumns.MIME_TYPE, fresh.mimeType);
@@ -176,8 +184,7 @@ public final class DownloadStore {
                 fresh.mediaUri = inserted.toString();
             } else {
                 ensureLegacyRoot();
-                // createNewFile never truncates an existing download or follows a preexisting link.
-                if (!legacyFile(fresh, true).createNewFile()) throw new IOException("Temporary name collision");
+                // Creation happens once, exclusively, on the descriptor retained through copy().
             }
             fresh.stage = COPYING;
             writeJournal(key, fresh);
@@ -214,7 +221,7 @@ public final class DownloadStore {
         for (int attempt = 0; attempt < 20; attempt++) {
             entry.nonce = UUID.randomUUID().toString().replace("-", "");
             entry.displayName = uniqueName(source.displayName, entry.nonce.substring(0, 12));
-            if (entry.media) {
+            if (Build.VERSION.SDK_INT >= 29 && entry.media) {
                 if (findMedia(entry) == null) return entry;
             } else if (!legacyFile(entry, false).exists() && !legacyFile(entry, true).exists()) return entry;
         }
@@ -229,7 +236,7 @@ public final class DownloadStore {
             try {
                 token.throwIfCancelled();
                 OutputStream opened = entry.media ? resolver.openOutputStream(Uri.parse(entry.mediaUri), "w")
-                        : new FileOutputStream(legacyFile(entry, true), false);
+                        : openLegacyOutput(entry);
                 if (opened == null) throw new IOException("Output unavailable");
                 try (OutputStream output = opened) {
                     Runnable removeOutput = token.registerCancelAction(() -> CANCEL_IO.execute(() -> closeQuietly(output)));
@@ -265,11 +272,37 @@ public final class DownloadStore {
         token.throwIfCancelled();
     }
 
+    private FileOutputStream openLegacyOutput(Journal entry) throws IOException {
+        File expected = legacyFile(entry, true);
+        FileDescriptor descriptor = null;
+        try {
+            // O_EXCL prevents replacement/truncation, O_NOFOLLOW rejects a symlink at the final
+            // component, and the proc check catches an ancestor swapped during the open itself.
+            descriptor = Os.open(expected.getPath(), OsConstants.O_WRONLY | OsConstants.O_CREAT
+                    | OsConstants.O_EXCL | OsConstants.O_NOFOLLOW, 0600);
+            StructStat actual = Os.fstat(descriptor);
+            if (!OsConstants.S_ISREG(actual.st_mode) || actual.st_size != 0)
+                throw new IOException("Not a new ordinary download file");
+            try (ParcelFileDescriptor duplicate = ParcelFileDescriptor.dup(descriptor)) {
+                String openedPath = Os.readlink("/proc/self/fd/" + duplicate.getFd());
+                if (!expected.getAbsolutePath().equals(openedPath))
+                    throw new IOException("Opened download is outside its expected location");
+            }
+            FileOutputStream output = new FileOutputStream(descriptor);
+            descriptor = null; // This exact descriptor remains owned by copy's try-with-resources.
+            return output;
+        } catch (ErrnoException error) {
+            throw new IOException("Could not securely create download", error);
+        } finally {
+            if (descriptor != null) try { Os.close(descriptor); } catch (ErrnoException ignored) { }
+        }
+    }
+
     private void publish(Journal entry, CancellationToken token) throws Exception {
         // The cancellation gate only marks the commit boundary. Never hold the token's lock across
         // provider/disk IO: cancel() may be called by the Activity on its main thread.
         if (!token.runIfActive(() -> { })) throw new CancellationException("Download cancelled");
-        if (entry.media) {
+        if (Build.VERSION.SDK_INT >= 29 && entry.media) {
             ContentValues values = new ContentValues();
             values.put(MediaStore.MediaColumns.IS_PENDING, 0);
             if (resolver.update(Uri.parse(entry.mediaUri), values, null, null) != 1)
@@ -284,7 +317,7 @@ public final class DownloadStore {
     }
 
     private boolean isComplete(Journal entry) throws Exception {
-        if (entry.media) {
+        if (Build.VERSION.SDK_INT >= 29 && entry.media) {
             Uri uri = entry.mediaUri.isEmpty() ? findMedia(entry) : Uri.parse(entry.mediaUri);
             if (uri == null) return false;
             try (Cursor rows = resolver.query(includePending(uri), new String[]{MediaStore.MediaColumns.SIZE,
@@ -307,6 +340,7 @@ public final class DownloadStore {
 
     private boolean exists(Journal entry) throws IOException {
         if (!entry.media) return legacyFile(entry, false).exists();
+        if (Build.VERSION.SDK_INT < 29) throw new IOException("Downloads platform changed");
         if (entry.mediaUri.isEmpty()) throw new IOException("Missing download row");
         try (Cursor row = resolver.query(includePending(Uri.parse(entry.mediaUri)),
                 new String[]{MediaStore.MediaColumns._ID}, null, null, null)) {
@@ -315,12 +349,14 @@ public final class DownloadStore {
         }
     }
 
+    @androidx.annotation.RequiresApi(29)
     @SuppressWarnings("deprecation")
     private static Uri includePending(Uri uri) {
         return MediaStore.setIncludePending(uri);
     }
 
     private Uri findMedia(Journal entry) throws IOException {
+        if (Build.VERSION.SDK_INT < 29) throw new IOException("Downloads platform changed");
         String selection = MediaStore.MediaColumns.DISPLAY_NAME + "=? AND "
                 + MediaStore.MediaColumns.RELATIVE_PATH + "=?";
         try (Cursor rows = resolver.query(includePending(MediaStore.Downloads.EXTERNAL_CONTENT_URI),
@@ -335,7 +371,7 @@ public final class DownloadStore {
     }
 
     private void cleanup(String key, Journal entry) throws Exception {
-        if (entry.media) {
+        if (Build.VERSION.SDK_INT >= 29 && entry.media) {
             Uri uri = entry.mediaUri.isEmpty() ? findMedia(entry) : Uri.parse(entry.mediaUri);
             if (uri != null) {
                 // Journal state can lag a committed publish after process death or a provider error.
@@ -399,7 +435,7 @@ public final class DownloadStore {
         if (!root.getCanonicalFile().equals(expectedRoot)
                 || !canonical.equals(new File(expectedRoot, file.getName())))
             throw new IOException("Unsafe Downloads path");
-        return file;
+        return canonical; // Pin the path already checked; never resolve the alias a second time.
     }
 
     static File journalRoot(Context context) { return new File(context.getFilesDir(), "jarvys/download_results"); }
@@ -497,7 +533,10 @@ public final class DownloadStore {
             int point = input.codePointAt(offset);
             offset += Character.charCount(point);
             if (Character.isISOControl(point) || Character.getType(point) == Character.FORMAT) continue;
-            if (point == '/' || point == '\\' || point == ':' || point == '*' || point == '?' || point == '"'
+            // codePointAt returns a surrogate value only for an unpaired UTF-16 code unit.
+            // Replace it before UTF-8/JSON persistence so the receipt remains byte-stable.
+            if (point >= Character.MIN_SURROGATE && point <= Character.MAX_SURROGATE) name.append('_');
+            else if (point == '/' || point == '\\' || point == ':' || point == '*' || point == '?' || point == '"'
                     || point == '<' || point == '>' || point == '|') name.append('_');
             else name.appendCodePoint(point);
         }
