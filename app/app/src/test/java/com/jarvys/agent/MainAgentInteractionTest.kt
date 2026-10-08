@@ -416,6 +416,24 @@ class MainAgentInteractionTest {
         }
     }
 
+    @Test @Config(sdk = [32], qualifiers = "en")
+    fun selectedAppLocaleSurvivesApplicationContextNormalization() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val original = AppLanguageRuntime.current(context)
+        val defaultLocale = java.util.Locale.getDefault()
+        try {
+            AppLanguageRuntime.select(context, AppLanguageChoice.SPANISH)
+            assertEquals("es", CoreAgentRuntime.responseLocale(context.applicationContext).language)
+            assertTrue(MainAgentPrompt.core(CoreAgentRuntime.responseLocale(context.applicationContext), true)
+                .contains("Runtime response locale: es"))
+            AppLanguageRuntime.select(context, AppLanguageChoice.ENGLISH)
+            assertEquals("en", CoreAgentRuntime.responseLocale(context.applicationContext).language)
+        } finally {
+            AppLanguageRuntime.select(context, original)
+            java.util.Locale.setDefault(defaultLocale)
+        }
+    }
+
     private fun worker(service: AgentForegroundService) = AgentForegroundService::class.java.getDeclaredField("worker")
         .apply { isAccessible = true }.get(service) as ExecutorService
 

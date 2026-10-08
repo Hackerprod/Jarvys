@@ -1535,14 +1535,18 @@ public final class CoreAgentRuntime {
         .run(objective, Collections.emptyList(), token, null);
   }
 
+  static Locale responseLocale(Context context) {
+    return context == null ? Locale.getDefault()
+        : AppLanguageRuntime.localizedContext(context).getResources().getConfiguration().getLocales().get(0);
+  }
+
   String instructions() {
     return instructions(createTools(), depth == 0 && MessageReactionTool.isOrdinaryChat(sessionId));
   }
 
   String instructions(CoreToolRegistry effective, boolean mainChat) {
     List<String> declared = effective.names();
-    String base = mainChat ? MainAgentPrompt.core(context == null ? Locale.getDefault()
-        : context.getResources().getConfiguration().getLocales().get(0), true) : BASE_INSTRUCTIONS;
+    String base = mainChat ? MainAgentPrompt.core(responseLocale(context), true) : BASE_INSTRUCTIONS;
     StringBuilder prompt =
         new StringBuilder(
             withMemoryInstructions(
