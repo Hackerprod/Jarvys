@@ -1,0 +1,307 @@
+{
+  "schemaVersion": 1,
+  "stage": "APKFACTORY1",
+  "status": "Offline MVP implemented and host-validated; physical-device acceptance not performed",
+  "sourceCommit": "fe2662c66078d079fee3768dc2f136868f526f3c",
+  "appTree": "ad772e97405bd188ed3d2fc93d340f4e265826d0",
+  "checkedAtUtc": "2026-10-08T06:56:02.839756+00:00",
+  "runtime": {
+    "version": 1,
+    "factoryMinimumApi": 26,
+    "generatedApplicationMinimumApi": 24,
+    "targetApi": 35,
+    "templateSha256": "2be7120507818dede560c2063bf2fd67e811e8381c849b0a60d3d86eb254f0fc",
+    "templateBytes": 930074,
+    "perApplicationGradle": false,
+    "perApplicationNativeCompiler": false,
+    "capabilities": [
+      "storage",
+      "export",
+      "share",
+      "clipboard",
+      "haptics",
+      "device"
+    ],
+    "androidPermissions": [],
+    "origin": "https://app.jarvys.invalid",
+    "nativeLibraries": false,
+    "skillBytes": 11516,
+    "skillScope": "built-in Coding only; ordinary Coding remains available when disabled"
+  },
+  "tests": {
+    "source_changed": [],
+    "flavors": {
+      "Full": {
+        "counts": {
+          "tests": 1238,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "expected_tests": 1238,
+        "stale_results": [],
+        "failures": []
+      },
+      "Play": {
+        "counts": {
+          "tests": 1154,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "expected_tests": 1154,
+        "stale_results": [],
+        "failures": []
+      },
+      "Runtime": {
+        "counts": {
+          "tests": 17,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "expected_tests": 17,
+        "stale_results": [],
+        "failures": []
+      }
+    }
+  },
+  "javascriptSdkTests": {
+    "tests": 9,
+    "failures": 0
+  },
+  "binaryParserStandaloneChecks": 340,
+  "lint": {
+    "main": {
+      "full": {
+        "counts": {
+          "Error": 46,
+          "Warning": 282,
+          "Hint": 4
+        },
+        "baseline_counts": {
+          "Error": 46,
+          "Warning": 282,
+          "Hint": 4
+        },
+        "fresh": true,
+        "new_errors": [],
+        "resolved_errors": [],
+        "new_warnings": []
+      },
+      "play": {
+        "counts": {
+          "Error": 37,
+          "Warning": 274,
+          "Hint": 4
+        },
+        "baseline_counts": {
+          "Error": 37,
+          "Warning": 274,
+          "Hint": 4
+        },
+        "fresh": true,
+        "new_errors": [],
+        "resolved_errors": [],
+        "new_warnings": []
+      }
+    },
+    "runtimeIssues": [
+      {
+        "id": "OldTargetApi",
+        "severity": "Warning",
+        "message": "Not targeting the latest versions of Android; compatibility modes apply. Consider testing and updating this version. Consult the `android.os.Build.VERSION_CODES` javadoc for details."
+      },
+      {
+        "id": "RequiresFeature",
+        "severity": "Warning",
+        "message": "`addWebMessageListener` should only be called if the feature `WEB_MESSAGE_LISTENER` is present; to check call `androidx.webkit.WebViewFeature#isFeatureSupported`"
+      },
+      {
+        "id": "DataExtractionRules",
+        "severity": "Warning",
+        "message": "The attribute `android:dataExtractionRules` only applies for Android 12 and higher; since `minSdkVersion` is API 24 you should also set `android:fullBackupContent`"
+      },
+      {
+        "id": "IconLauncherShape",
+        "severity": "Warning",
+        "message": "Launcher icons should not fill every pixel of their square region; see the design guide for details"
+      }
+    ],
+    "runtimeErrors": 0,
+    "runtimeWarnings": 4
+  },
+  "jarvysApks": {
+    "full": {
+      "sha256": "76f338d460ece500e1f606402718f8d7f0101f662c05f8f6b8383884a4b9718d",
+      "bytes": 20179040,
+      "package": "com.jarvys.agent",
+      "version_code": 35,
+      "version_name": "1.2.28-APKFACTORY1",
+      "label": "Jarvys",
+      "unsigned_verified": true,
+      "zip_crc_verified": true,
+      "alignment_verified": true,
+      "permissions_unchanged": true,
+      "debuggable": true,
+      "filename": "Jarvys-APKFACTORY1-full-v35-unsigned.apk"
+    },
+    "play": {
+      "sha256": "b0d56ff683fd64703da4ad57b7fa7a91cd5df0d6a7d3ada2cd1bd0fe2a2e24ce",
+      "bytes": 18821505,
+      "package": "com.jarvys.agent",
+      "version_code": 35,
+      "version_name": "1.2.28-APKFACTORY1",
+      "label": "Jarvys",
+      "unsigned_verified": true,
+      "zip_crc_verified": true,
+      "alignment_verified": true,
+      "permissions_unchanged": true,
+      "debuggable": true,
+      "filename": "Jarvys-APKFACTORY1-play-v35-unsigned.apk"
+    }
+  },
+  "generatedArtifactVerification": {
+    "Full": [
+      {
+        "appId": "org.example.first",
+        "versionCode": 1,
+        "certificateSha256": "9acc0357e2850624c3911ef8d7b9f06d0c83d3d888dd5a4fe1565243bd62d596",
+        "testKeyOnly": true,
+        "privateKeyPersisted": false,
+        "signedSha256": "01700bae33dc51535bfe299d5180ad8fd49aa2cd6fed0d7b1718517f82196631",
+        "bytes": 2809157,
+        "dexSha256": {
+          "classes.dex": "0e1894662a169e0170d51a6a9154222696b9b94f3d2a84f8fa0e26225b249b8f"
+        },
+        "nativeLibraries": false,
+        "permissions": [],
+        "aapt2MetadataVerified": true,
+        "alignmentVerified": true,
+        "signatureVerified": true,
+        "installed": false
+      },
+      {
+        "appId": "org.example.second",
+        "versionCode": 1,
+        "certificateSha256": "f727659802203d64568f0952d0a78476b29715da0447fb0a511451610369c42c",
+        "testKeyOnly": true,
+        "privateKeyPersisted": false,
+        "signedSha256": "cc14e28f3b5222d906d762aef29caf25ade68ae3100e1e667f39e20d205791d6",
+        "bytes": 2809157,
+        "dexSha256": {
+          "classes.dex": "0e1894662a169e0170d51a6a9154222696b9b94f3d2a84f8fa0e26225b249b8f"
+        },
+        "nativeLibraries": false,
+        "permissions": [],
+        "aapt2MetadataVerified": true,
+        "alignmentVerified": true,
+        "signatureVerified": true,
+        "installed": false
+      },
+      {
+        "appId": "org.example.first",
+        "versionCode": 2,
+        "certificateSha256": "9acc0357e2850624c3911ef8d7b9f06d0c83d3d888dd5a4fe1565243bd62d596",
+        "testKeyOnly": true,
+        "privateKeyPersisted": false,
+        "signedSha256": "1883bb57c75e131b10e043cc55625f7e2c79d89fe5207a5ba51d38a3ee9fde1e",
+        "bytes": 2809157,
+        "dexSha256": {
+          "classes.dex": "0e1894662a169e0170d51a6a9154222696b9b94f3d2a84f8fa0e26225b249b8f"
+        },
+        "nativeLibraries": false,
+        "permissions": [],
+        "aapt2MetadataVerified": true,
+        "alignmentVerified": true,
+        "signatureVerified": true,
+        "installed": false
+      }
+    ],
+    "Play": [
+      {
+        "appId": "org.example.first",
+        "versionCode": 1,
+        "certificateSha256": "b922a3f1cb12f9465e8d9fac8ac2aff064eab1ef5eb1bbd666aa4f0c5ac74f50",
+        "testKeyOnly": true,
+        "privateKeyPersisted": false,
+        "signedSha256": "9c446a36f56d27751d6360237743e54950e9ffe886479da018584b1f15afc51c",
+        "bytes": 2809157,
+        "dexSha256": {
+          "classes.dex": "0e1894662a169e0170d51a6a9154222696b9b94f3d2a84f8fa0e26225b249b8f"
+        },
+        "nativeLibraries": false,
+        "permissions": [],
+        "aapt2MetadataVerified": true,
+        "alignmentVerified": true,
+        "signatureVerified": true,
+        "installed": false
+      },
+      {
+        "appId": "org.example.second",
+        "versionCode": 1,
+        "certificateSha256": "1783b4c627b0c59d3cca640e2563f209df3a61598cafe094a4a92bfa0ce18fa0",
+        "testKeyOnly": true,
+        "privateKeyPersisted": false,
+        "signedSha256": "4f296d92d8b1bde7436a5fb79e374b002c81901f37ed9c8f82c2dc48682caf0c",
+        "bytes": 2809157,
+        "dexSha256": {
+          "classes.dex": "0e1894662a169e0170d51a6a9154222696b9b94f3d2a84f8fa0e26225b249b8f"
+        },
+        "nativeLibraries": false,
+        "permissions": [],
+        "aapt2MetadataVerified": true,
+        "alignmentVerified": true,
+        "signatureVerified": true,
+        "installed": false
+      },
+      {
+        "appId": "org.example.first",
+        "versionCode": 2,
+        "certificateSha256": "b922a3f1cb12f9465e8d9fac8ac2aff064eab1ef5eb1bbd666aa4f0c5ac74f50",
+        "testKeyOnly": true,
+        "privateKeyPersisted": false,
+        "signedSha256": "a448bf8caa413ac612aef9c9e8c4df0b8f95500e736fc9aa8e6008198df34368",
+        "bytes": 2809157,
+        "dexSha256": {
+          "classes.dex": "0e1894662a169e0170d51a6a9154222696b9b94f3d2a84f8fa0e26225b249b8f"
+        },
+        "nativeLibraries": false,
+        "permissions": [],
+        "aapt2MetadataVerified": true,
+        "alignmentVerified": true,
+        "signatureVerified": true,
+        "installed": false
+      }
+    ]
+  },
+  "review": {
+    "independentReview": true,
+    "reportedSourceFindingsResolved": true,
+    "sourceUnchangedAcrossFinalChecks": true
+  },
+  "githubSourceChecks": {
+    "statuses": [],
+    "exposedPullRequestWorkflows": [],
+    "note": "No merge or deployment requested."
+  },
+  "notPerformed": [
+    "Physical Android ARM64 generation",
+    "AndroidKeyStore hardware/provider signing",
+    "Native WebView/SAF/clipboard behavior on a physical device",
+    "Installation of two generated apps side-by-side",
+    "Installed update with retained user data",
+    "Final signing/delivery of the Jarvys APK"
+  ],
+  "additionalLimits": [
+    "Generated-app keys are non-exportable and may be lost by clearing/uninstalling Jarvys or losing the device; no silent replacement or key-backup promise.",
+    "Browser sample smoke was not completed because the cloud Chromium environment could not start; JVM/SDK tests are not visual or device validation.",
+    "Native capabilities outside the listed runtime require a reviewed template update.",
+    "Main Jarvys artifacts are unsigned and debuggable; final original-key delivery follows the rest of the queue."
+  ],
+  "references": {
+    "design": "app/APK_FACTORY.md",
+    "runtimeContract": "app/apk-runtime/docs/RUNTIME.md",
+    "skill": "app/app/src/main/assets/skills/com.jarvys.apk-factory/SKILL.md"
+  }
+}
