@@ -6,6 +6,7 @@ import android.graphics.Matrix
 import android.media.ExifInterface
 import android.text.format.Formatter
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -13,6 +14,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -53,29 +55,53 @@ fun PendingChatAttachments(attachments: List<PendingChatAttachment>, sessionId: 
     onRemove: (String) -> Unit, modifier: Modifier = Modifier) {
     Row(modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         attachments.forEach { pending ->
-            Surface(Modifier.width(150.dp).testTag("pending-attachment-${pending.id}"),
-                shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
-                Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Box(Modifier.fillMaxWidth().height(88.dp)) {
-                        if (pending.kind == ChatAttachment.Kind.IMAGE && pending.attachment != null) {
-                            AttachmentImage(pending.attachment, sessionId, Modifier.fillMaxSize(), tagPrefix = "pending")
-                        } else Icon(LucideIcons.FileText, null, Modifier.align(Alignment.Center).size(28.dp))
-                        IconButton(onClick = { onRemove(pending.id) }, modifier = Modifier.align(Alignment.TopEnd).size(40.dp)) {
-                            Icon(LucideIcons.X, stringResource(R.string.chat_attachment_remove, pending.displayName), Modifier.size(18.dp))
+            key(sessionId, pending.id) {
+                val isImage = pending.kind == ChatAttachment.Kind.IMAGE
+                // Recovered v28: images are compact previews, never filename/size cards.
+                Surface(Modifier.width(if (isImage) 136.dp else 168.dp).testTag("pending-attachment-${pending.id}"),
+                    shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceVariant,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+                    if (isImage && pending.attachment != null && !pending.copying && pending.error == null) {
+                        Box(Modifier.fillMaxWidth().height(96.dp)) {
+                            AttachmentImage(pending.attachment, sessionId, Modifier.fillMaxSize(),
+                                interactive = false, tagPrefix = "pending")
+                            RemovePendingAttachment(pending, onRemove, Modifier.align(Alignment.TopEnd).padding(4.dp)
+                                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.94f), CircleShape))
                         }
-                    }
-                    Text(pending.displayName, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelMedium)
-                    when {
-                        pending.copying -> Row(verticalAlignment = Alignment.CenterVertically) {
-                            CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
-                            Text(stringResource(R.string.chat_attachment_copying), Modifier.padding(start = 5.dp), style = MaterialTheme.typography.labelSmall)
+                    } else {
+                        Row(Modifier.fillMaxWidth().padding(start = 10.dp), verticalAlignment = Alignment.Top) {
+                            Column(Modifier.weight(1f).padding(vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                if (!isImage) {
+                                    Icon(LucideIcons.FileText, null, Modifier.size(22.dp), tint = MaterialTheme.colorScheme.primary)
+                                    Text(pending.displayName, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelLarge)
+                                }
+                                when {
+                                    pending.copying -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
+                                        Text(stringResource(R.string.chat_attachment_copying), Modifier.testTag("chat-attachment-copying-${pending.id}"),
+                                            style = MaterialTheme.typography.labelSmall)
+                                    }
+                                    pending.error != null -> Text(pending.error.ifBlank { stringResource(R.string.chat_attachment_copy_failed) },
+                                        Modifier.testTag("chat-attachment-error-${pending.id}"), color = MaterialTheme.colorScheme.error,
+                                        style = MaterialTheme.typography.labelSmall)
+                                    !isImage -> Text(Formatter.formatShortFileSize(LocalContext.current, pending.sizeBytes),
+                                        style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                            RemovePendingAttachment(pending, onRemove)
                         }
-                        pending.error != null -> Text(pending.error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
-                        else -> Text(Formatter.formatShortFileSize(LocalContext.current, pending.sizeBytes), style = MaterialTheme.typography.labelSmall)
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun RemovePendingAttachment(pending: PendingChatAttachment, onRemove: (String) -> Unit,
+    modifier: Modifier = Modifier) {
+    IconButton(onClick = { onRemove(pending.id) }, modifier = modifier.size(48.dp).testTag("chat-attachment-remove-${pending.id}")) {
+        Icon(LucideIcons.X, stringResource(R.string.chat_attachment_remove, pending.displayName), Modifier.size(18.dp))
     }
 }
 
@@ -144,10 +170,10 @@ private fun ChatAttachmentViewer(attachment: ChatAttachment, sessionId: String, 
     val context = LocalContext.current
     val store = remember(context) { AttachmentStore(context) }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(Modifier.fillMaxSize(), color = Color.Black) {
+        Surface(Modifier.fillMaxSize().testTag("chat-attachment-viewer-${attachment.id}"), color = Color.Black) {
             Column {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    IconButton(onClick = onDismiss) { Icon(LucideIcons.X,
+                    IconButton(onClick = onDismiss, modifier = Modifier.testTag("chat-attachment-viewer-close")) { Icon(LucideIcons.X,
                         stringResource(R.string.chat_attachment_close_preview), tint = Color.White) }
                 }
                 BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -165,7 +191,7 @@ private fun ChatAttachmentViewer(attachment: ChatAttachment, sessionId: String, 
                             GeneratedImageGeometry(width.toFloat(), height.toFloat(), image.width.toFloat(), image.height.toFloat())
                         }
                         var transform by remember(attachment.id, geometry) { mutableStateOf(GeneratedImageTransform()) }
-                        Box(Modifier.fillMaxSize().clip(RoundedCornerShape(0.dp))
+                        Box(Modifier.fillMaxSize().clip(RoundedCornerShape(0.dp)).testTag("chat-attachment-viewport")
                             .pointerInput(geometry) { detectTransformGestures { centroid, pan, zoom, _ ->
                                 transform = geometry.gesture(transform, zoom, pan.x, pan.y, centroid.x, centroid.y)
                             } }, contentAlignment = Alignment.Center) {

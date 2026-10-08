@@ -1,0 +1,26 @@
+{
+  "version_code": 30,
+  "version_name": "1.2.24-UX14.1",
+  "suite": "Final combined regression suite including ineligible-current-target correction",
+  "execution": "Local JVM/Robolectric; not a phone or live-account test",
+  "variants": {
+    "full": {
+      "counts": {
+        "tests": 977,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "classes": 205
+    },
+    "play": {
+      "counts": {
+        "tests": 893,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "classes": 185
+    }
+  }
+}

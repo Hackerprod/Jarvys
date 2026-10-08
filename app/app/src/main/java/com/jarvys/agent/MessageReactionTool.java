@@ -40,10 +40,11 @@ public final class MessageReactionTool implements CoreTool {
         for (int i = 0; i < messages.size(); i++) {
             JSONObject row = messages.get(i);
             String id = stableMessageId(sessionId, row, i);
+            // Never relabel an older eligible row as current when the latest user row is ineligible.
+            if ("user".equals(row.optString("role"))) latest = id;
             if (!seenIds.add(id)) duplicates.add(id);
             if (!"user".equals(row.optString("role")) || !row.optString("proactiveThreadKey").isEmpty()) continue;
             uniqueUserTargets.put(id, i);
-            latest = id;
         }
         for (String duplicate : duplicates) uniqueUserTargets.remove(duplicate);
         currentUserId = uniqueUserTargets.containsKey(latest) ? latest : "";

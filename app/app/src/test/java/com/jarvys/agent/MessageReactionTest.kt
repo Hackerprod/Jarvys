@@ -48,6 +48,13 @@ class MessageReactionTest {
         assertFalse(MessageReactionEmoji.isValid("https://example.com"))
     }
 
+    @Test fun distributedEmojiDataIncludesItsLicenseNotice() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val notice = context.assets.open("licenses/UNICODE-LICENSE.txt").bufferedReader().use { it.readText() }
+        assertTrue(notice.contains("UNICODE LICENSE V3"))
+        assertTrue(notice.contains("Copyright © 1991-2026 Unicode, Inc."))
+    }
+
     @Test fun addReplaceRemoveAndNoOpsPersistWithoutAlteringHistoryOrIdentity() {
         val id = store.appendConversationMessage(session, "user", "  Keep **this** verbatim  ")
         val answer = store.appendConversationMessage(session, "assistant", "answer")
@@ -313,6 +320,20 @@ class MessageReactionTest {
         CoreAgentLoop(model, CoreToolRegistry(listOf(tool)), "system", session).run("hello", emptyList(), token, listener)
         assertEquals(listOf("tool_error"), stages)
         assertEquals("", store.readConversationTimeline(session).single().reactionEmoji)
+    }
+
+    @Test fun ineligibleNewestUserNeverRelabelsAnOlderMessageAsTheCurrentRequest() {
+        val older = store.appendConversationMessage(session, "user", "ordinary message")
+        store.appendConversationMessage(session, "user", "thread-scoped reply", null, "", "", "", "thread-one")
+        val tool = MessageReactionTool(store, session)
+        val currentOnly = tool.prepareModelMetadata(emptyList(), "thread-scoped reply")
+        assertFalse(currentOnly.contains(older))
+        assertFalse(currentOnly.contains("Current incoming user request"))
+        assertFalse(tool.execute(args(older, "👍"), token).success)
+        val historical = tool.prepareModelMetadata(store.loadConversationContext(session), "thread-scoped reply")
+        assertTrue(historical.contains(older))
+        assertTrue(historical.contains("Transcript entry 1"))
+        assertFalse(historical.contains("Current incoming user request"))
     }
 
     @Test fun duplicateAcrossUserAndAssistantIdsIsNotExposed() {
