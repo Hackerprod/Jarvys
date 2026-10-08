@@ -330,6 +330,17 @@ Estado: pendiente; solicitud del 8 de octubre de 2026, añadida a la cola despu�
 - Crear el dibujo y la animación de forma independiente; no copiar código de la referencia sujeto a MIT más Commons Clause.
 - Validar integración, estados, temas, texto grande, contraste, movimiento reducido y visibilidad. Esta tarea se implementará por separado después de UX28, sin ampliar UX27.
 
+### 14. UX30: densidad y claridad del menú lateral
+
+Estado: pendiente; solicitud del 8 de octubre de 2026, añadida a la cola después de UX29.
+
+- Reducir el espaciado vertical entre Nuevo chat, Bots y Tareas programadas, manteniendo objetivos táctiles accesibles y la jerarquía del menú lateral.
+- Quitar el texto «Pinned» redundante dentro de las filas de chats anclados; conservar el encabezado de sección salvo que la revisión de la captura confirme otra necesidad.
+- Presentar el menú de acciones de cada chat con tres puntos verticales.
+- Ocultar detalles o secciones vacías de chats, incluida la sección de anclados cuando no contenga elementos, sin perder acceso a los chats existentes.
+- Contrastar la composición con la captura aportada y validar estado vacío/con chats, chats anclados, acciones, navegación, temas, idiomas y texto grande.
+- Implementar como tarea separada después de UX29; no ampliar el alcance de UX27 ni cambiar permisos o comportamiento de las conversaciones.
+
 ## Validaciones que siguen abiertas
 
 - Preview web: endurecer y comprobar en Chromium real el posible egreso WebRTC heredado. Las restricciones de URL/CSP no equivalen a aislamiento absoluto de red; conservar el contrato HTML/CSS/JavaScript interactivo sin puentes privados ni permisos nuevos.
