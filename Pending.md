@@ -14,7 +14,8 @@ Modo de ejecución: continuar la cola completa. Al cerrar cada pendiente, verifi
 - **UX23 / preparación v34 cerrada en código y host:** selección por mensaje restaurada para respuestas y traducciones. Suites finales: 1173 Full y 1089 Play, cero fallos/errores/omitidas. Lint sin cambios respecto al P0 (46 Full / 37 Play); ambos APK unsigned verificados. Se conserva el límite de validación física y el comportamiento heredado del enlace descritos abajo.
 - **APKFACTORY1 / preparación v35 implementada y validada en host:** fábrica offline nativa, empaquetado sin Gradle por aplicación, firma con identidad por app y skill exclusivo de Coding. Suites: 1238 Full, 1154 Play y 17 runtime, sin fallos; nueve pruebas de SDK JavaScript. La aceptación física Android/ARM64 e instalación/actualización con datos conservados sigue pendiente.
 - **UX16 / preparación v36 completada en host:** archivos nativos y descargas directas con 1289 pruebas Full, 1205 Play, 17 runtime y nueve JavaScript aprobadas. Aceptación física pendiente.
-- **Etapa activa:** UX17/UX18 consolidada para v37; después UX19 y la cola restante. No se entrega un APK parcial ni se espera feedback entre etapas.
+- **UX17/UX18 / preparación v37 completada en código y validación de host:** panel lateral, archivados en Ajustes y vista informativa de tareas. Suites: 1320 Full, 1236 Play, 17 runtime y nueve JavaScript aprobadas. Sin incidencias nuevas de lint; lectura conservada con el límite de reflujo descrito abajo.
+- **Siguiente etapa:** UX19, conectores de Gmail y Drive. No se entrega un APK parcial ni se espera feedback entre etapas.
 - La paridad completa con el comportamiento de v28 en un teléfono sigue pendiente de validación; la fiabilidad del agente es prioritaria antes de añadir funciones.
 
 ## Entregas previas
@@ -128,26 +129,18 @@ Diseño y límites: `app/FILE_DELIVERY.md`. Evidencia reproducible: `recovery/va
 
 ### 3. UX17/UX18: reorganizar el panel lateral y Ajustes
 
-Estado: implementación v37 / 1.2.30-UX17-UX18 en curso. Referencia visual inspeccionada; se valida la reorganización y la navegación antes de cerrar la etapa.
+Estado: completado en código y validación acotada de host para preparación v37 / 1.2.30-UX17-UX18. Se continúa con UX19 sin esperar feedback ni entregar un APK parcial; aceptación física pendiente al finalizar la cola.
 
-- Cabecera y búsqueda desplegable implementadas, con estado conservado al cerrar el panel, limpiar/cancelar y botón Atrás.
-- Archivados pasan a una pantalla de Ajustes con visibilidad condicional; filas y confirmaciones de acciones compartidas con el panel.
-- La nueva entrada de Tareas programadas abre una vista informativa pendiente de implementación. El gestor de tareas ya existente en Ajustes y su runtime se conservan sin cambios.
-- Revisión y prueba nativa de Atrás aprobadas: primero cancela la búsqueda, después cierra el panel y solo después vuelve de la pantalla anidada. El callback se registra durante la vida del panel abierto para conservar prioridad sobre NavHost.
-- Una prueba real de doble pulsación encontró que el panel podía quedarse encima del destino nuevo. Navegación protegida verificada: cierra el panel antes de cambiar de pantalla e ignora pulsaciones/gestos repetidos durante el cierre.
-- El recorrido de ida y vuelta detectó pérdida de scroll porque el contenedor recreaba NavHost al cambiar entre chat y Ajustes. Se mantiene ahora una única posición de composición para preservar su estado guardable; se valida el scroll exacto antes de cerrar la etapa. Se retiraron los experimentos de retención de insets que no cambiaban el resultado, manteniendo únicamente las correcciones verificadas de navegación.
-- La pasada final dirigida ampliada aprueba 72 casos, incluidos los recorridos nativos de archivo, cambio de chat, adjuntos, rotación, reinicio, búsqueda y Atrás. Los diálogos ejecutan renombrar, validar, guardar, restaurar y eliminar con pulsaciones reales. Se prepara la pasada agregada final con fuente congelada. La revisión de lint detectó una etiqueta ya sin uso y un nombre de helper de prueba; ambos se limpiaron antes de repetir los controles finales.
-- **Límite de scroll explícito:** el host conserva los mismos mensajes de la región visible y el punto de lectura, pero registra un desplazamiento único de 42 px al primer regreso. El segundo regreso queda exactamente estable, sin deriva acumulativa. Los tamaños medidos apuntan a la normalización del índice/offset mientras reaparece el Markdown asíncrono heredado; es una inferencia, no una causa demostrada. No se promete conservación exacta de píxeles. La prueba exige el mismo conjunto de mensajes completamente visibles entre las barras, el mensaje central legible y borrador/sesión/datos intactos. Aceptación física pendiente; no se añade otro sistema de scroll.
-- Capturas nativas inspeccionadas en ambos temas, español/inglés y texto al 200%; los primeros recorridos de archivo, filtros y acciones aprueban. Validación de Activity en curso: regreso a conversaciones y conservación de adjuntos aprobados después de corregir el bombeo de callbacks del host; se comprueban diálogos nativos y doble pulsación. Las métricas precisas y capturas confirman que el título de Ajustes no se recorta al 200%, sin cambiar la geometría existente. Este respaldo es WIP; no afirma suites completas aprobadas, aceptación física ni APK listo.
-- Nueve pruebas del SDK JavaScript aprobadas; fábrica, permisos y clave original se conservan. No se ha firmado ni entregado un APK.
+- Cabecera **Jarvys**, lupa arriba a la derecha y orden **New chat / Nuevo chat**, **Bots**, **Tareas programadas**. Búsqueda desplegable con consulta conservada, limpiar/cancelar y Atrás. Se retiran recarga y archivados del panel. Encabezados de chats sin iconos; **Pinned / Fijados** solo aparece con filas ancladas visibles, sin duplicarlas en actuales.
+- **Chats archivados** aparece en Ajustes solo cuando existen. Se puede abrir, restaurar, renombrar o eliminar mediante las validaciones y confirmaciones compartidas; se conserva la protección de chats del sistema. Al retirar el último, la pantalla queda vacía y la entrada desaparece. Persistencia comprobada al recrear y relanzar la Activity.
+- La nueva vista de tareas indica honestamente que todavía no está disponible. El gestor y runtime existentes permanecen intactos; no se crean tareas. Se corrigen la prioridad de Atrás, el cierre interrumpido por doble pulsación y la recreación de NavHost que perdía estado al salir del chat.
+- **Pruebas finales:** 1320 Full, 1236 Play, 17 runtime y nueve JavaScript aprobadas, sin fallos, errores ni omitidas. También aprueban 72 casos dirigidos, incluidos siete recorridos nativos. Fuente congelada sin cambios y capturas revisadas en ambos temas, español/inglés, 320/360 dp y texto al 200%. Borradores, sesión, conversación, adjuntos y transferencias se conservan.
+- La primera suite Full tuvo un timeout aislado en la lista de tareas existente. El caso aislado y la suite Full completa aprobaron después sin cambiar fuente, aserciones ni timeout. La causa exacta no está demostrada.
+- **Límite de scroll:** en el host se conservan los mismos mensajes completamente visibles y el punto central de lectura, con un reflujo único de 42 px al primer regreso. El segundo queda exactamente estable, sin deriva acumulativa. Los tamaños apuntan al Markdown asíncrono heredado, pero es una inferencia. No se promete conservación exacta de píxeles ni se añade otro sistema de scroll; queda la aceptación física.
+- Lint sin incidencias nuevas: persisten 46 errores Full / 37 Play; los avisos bajan a 281/273. Runtime: cero errores y cuatro avisos heredados. Revisión independiente aprobada para este alcance.
+- Ambos APK v37 están compilados **sin firma**, con identidad, permisos, CRC y alineación verificados. Plantilla y skill de fábrica conservados. Los cinco grupos legacy privados siguen intactos y excluidos de las publicaciones.
 
-- Cabecera con el título **Jarvys** y la lupa de búsqueda en la esquina superior derecha, junto al título.
-- Orden de menús: **New chat**, después **Bots** y después **Tareas programadas**. Esta indicación sustituye la anterior que colocaba Bots primero.
-- Bots y Tareas programadas conservan sus iconos; la futura pantalla de tareas debe representar honestamente su disponibilidad, sin simular un planificador operativo.
-- Mostrar el encabezado **Pinned** únicamente cuando haya chats anclados. Encabezados de chats sin iconos.
-- Quitar **Archived** del panel y situar **Chats archivados** en Ajustes; mostrar ese menú solo si existen conversaciones archivadas. Conservar restauración y acciones sobre conversaciones.
-- Quitar el icono de recarga del panel lateral.
-- Antes de implementar, revisar la referencia visual proporcionada. Aceptación: orden y cabecera en español/inglés, ambos temas y texto grande; estados con/sin chats anclados y archivados, búsqueda funcional y navegación correcta.
+Diseño y límites: `app/DRAWER_NAVIGATION.md`. Los registros detallados de validación y los artefactos se conservan localmente. No se firmó ni entregó ningún APK; firma final con la clave original al terminar la cola.
 
 ### 4. UX19: conectores robustos de Gmail y Drive
 
