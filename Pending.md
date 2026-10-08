@@ -16,7 +16,8 @@ Modo de ejecución: continuar la cola completa. Al cerrar cada pendiente o corre
 - **UX16 / preparación v36 completada en host:** archivos nativos y descargas directas con 1289 pruebas Full, 1205 Play, 17 runtime y nueve JavaScript aprobadas. Aceptación física pendiente.
 - **UX17/UX18 / preparación v37 completada en código y validación de host:** panel lateral, archivados en Ajustes y vista informativa de tareas. Suites: 1320 Full, 1236 Play, 17 runtime y nueve JavaScript aprobadas. Sin incidencias nuevas de lint; lectura conservada con el límite de reflujo descrito abajo.
 - **UX19 / preparación v38 completada en código y host:** conectores de Gmail y Drive, con 1467 pruebas Full, 1251 Play, 17 runtime y nueve JavaScript aprobadas. Sin incidencias nuevas de lint; Google Cloud y aceptación física siguen pendientes.
-- **Siguiente etapa:** UX20, autenticación y capacidades de GitHub. Después UX21, UX22, UX24 y las tareas críticas de prompts/harness UX25–UX26, salvo nueva priorización explícita.
+- **UX20 / preparación v39 completada en código y host:** autenticación y capacidades de GitHub, más diagnóstico persistente del fallo de Google. Pruebas: 1600 Full, 1378 Play, 17 runtime y nueve JavaScript aprobadas; lint sin incidencias nuevas. Ambos APK originales sin firma verificados y preparados para firma y entrega. Los accesos reales de GitHub y Google siguen sin verificarse.
+- **Siguiente etapa:** UX21, alineación de permisos. Después UX22, UX24 y las tareas críticas de prompts/harness UX25–UX26, salvo nueva priorización explícita.
 - La paridad completa con el comportamiento de v28 en un teléfono sigue pendiente de validación; la fiabilidad del agente es prioritaria antes de añadir funciones.
 
 ## Entregas previas
@@ -167,15 +168,20 @@ Referencias: [AuthorizationClient](https://developer.android.com/identity/author
 
 ### Incidencia de Gmail en v38: diagnóstico visible
 
-Estado: corrección acotada implementada y en validación para incluir en v39. Una prueba real sigue mostrando un fallo genérico de autorización; esa evidencia no permite identificar su causa. El error solo aparecía en un Toast truncado y se descartaban la fase y el código numérico del proveedor.
+Estado: corrección acotada completada y validada en host para v39. Una prueba real de v38 mostró un fallo genérico de autorización; esa evidencia no permite identificar su causa. Se corrigieron el Toast truncado y la pérdida de fase/código, pero no se declara resuelto el inicio de sesión real.
 
 - Conservar únicamente código numérico, fase permitida y categoría local; nunca el mensaje bruto, Intent, tokens o contenido de la cuenta.
 - Mostrar el diagnóstico completo y persistente en la vista, con reintento y acceso a la información de configuración ya existente.
 - Probar la presentación y clasificación con dobles de prueba. No declarar solucionado el acceso real a Gmail sin nueva evidencia del proveedor/dispositivo.
+- Seis regresiones nuevas aprobadas, incluidas restauración del diagnóstico y reintento incremental READ+COMPOSE sin añadir SEND. Capturas nativas del componente revisadas en inglés/claro y español/oscuro a 320 dp y 200% de texto; no son consentimiento real ni validación física.
 
 ### 5. UX20: autenticación y capacidades de GitHub
 
-Estado: implementación y revisión independiente completadas; contrato de escritura corregido y en validación agregada final para preparación v39 / 1.2.32-UX20. Las 191 pruebas dirigidas de GitHub y MCP aprueban, incluidas 127 regresiones nuevas respecto de UX19. La primera agregada aprobó 1591 Full, 1375 Play y 17 runtime, pero se repetirá tras corregir el parámetro real de protección de merge y retirar los aliases de escritura sin precondición. Todavía faltan lint final y la verificación de ambos APK de preparación.
+Estado: completado en código, revisión independiente y validación de host para preparación v39 / 1.2.32-UX20. Suites finales: 1600 Full, 1378 Play, 17 runtime y nueve JavaScript, sin fallos, errores ni omitidas. Se incorporan 127 regresiones comunes de GitHub/MCP y seis de diagnóstico Google en Full. Se continúa con UX21 sin esperar una prueba manual; los límites externos permanecen explícitos.
+
+- Fuente congelada: 756 archivos de app sin cambios durante pruebas, lint y compilación. Play requirió repetir la suite completa, sin modificar código ni aserciones, tras un fallo aislado de visibilidad inicial en una prueba heredada de imagen asíncrona; la repetición completa aprobó.
+- Lint fresco sin incidencias nuevas: 46 errores y 275 advertencias heredados en Full, 37 y 273 en Play; runtime conserva cuatro advertencias. Lint no se presenta como libre de errores.
+- Ambos APK de desarrollo sin firma conservan paquete `com.jarvys.agent`, nombre Jarvys y versión 39; CRC, alineación de 16 KiB, permisos sin cambios y contenido de la fábrica/skill idéntico a v38. Revisión independiente de los APK reales aprobada; preparados para firmar con la identidad original y entregar conforme al modo vigente.
 
 - Corregida la carrera del intento de inicio de sesión: recomponer, cancelar, volver del navegador o recrear la Activity no permite que un callback antiguo guarde credenciales ni cancele un intento nuevo.
 - Metadatos OAuth completos y cifrados, caducidad de refresh, identidad de autorización y scopes requeridos visibles. Repo y workflow se solicitan solo mediante selección explícita; reconectar no repite acciones pendientes.
