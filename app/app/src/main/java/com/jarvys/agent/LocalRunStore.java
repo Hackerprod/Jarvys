@@ -424,6 +424,48 @@ public final class LocalRunStore {
         appendMessageMarker(sessionId, "assistant_translation_hidden", messageId);
     }
 
+    /** Commits ownership before the runtime reports a successful native attachment. Repeats are idempotent. */
+    public synchronized void appendDeliveredFile(String sessionId, ChatAttachment artifact) {
+        new DeliveredArtifactStore(root.getParentFile()).resolve(sessionId, artifact);
+        synchronized (SESSION_TITLE_LOCK) {
+            for (JSONObject row : readConversationRows(sessionId)) {
+                if ("delivered_file".equals(row.optString("type"))) {
+                    ChatAttachment existing = ChatAttachment.fromJson(row.optJSONObject("artifact"));
+                    if (existing != null && existing.id.equals(artifact.id)) {
+                        if (!existing.equals(artifact)) throw new IllegalStateException("Delivered artifact metadata differs");
+                        return;
+                    }
+                }
+            }
+            try {
+                JSONObject row = new JSONObject().put("type", "delivered_file").put("artifact", artifact.toJson())
+                        .put("timestamp", System.currentTimeMillis() / 1000.0);
+                appendSessionRowLocked(conversationFile(sessionId), row);
+            } catch (Exception failure) { throw new IllegalStateException("Could not persist delivered file", failure); }
+        }
+    }
+
+    public synchronized ChatAttachment findChatFile(String sessionId, String kind, String id) {
+        if (conversationMetadata.read(sessionId).deleted) return null;
+        for (JSONObject row : readConversationRows(sessionId)) {
+            if ("delivered".equals(kind) && "delivered_file".equals(row.optString("type"))) {
+                ChatAttachment attachment = ChatAttachment.fromJson(row.optJSONObject("artifact"));
+                if (attachment != null && attachment.id.equals(id)) return attachment;
+            } else if ("attachment".equals(kind)) {
+                for (ChatAttachment attachment : attachmentsForRow(sessionId, row)) if (attachment.id.equals(id)) return attachment;
+            }
+        }
+        return null;
+    }
+
+    public synchronized boolean ownsGeneratedFile(String sessionId, String path) {
+        if (conversationMetadata.read(sessionId).deleted) return false;
+        for (JSONObject row : readConversationRows(sessionId))
+            if ("generated_image".equals(row.optString("type")) && "COMPLETED".equals(row.optString("status"))
+                    && path.equals(row.optString("imagePath"))) return true;
+        return false;
+    }
+
     /** Persists an image reference and prompt only; raw image bytes stay in GeneratedImageStore. */
     public synchronized void appendGeneratedImageEvent(String sessionId, String relativePath,
                                                         String prompt, String revisedPrompt,
@@ -482,6 +524,8 @@ public final class LocalRunStore {
             } catch (IOException | RuntimeException failure) { complete = false; }
             try { complete &= new GeneratedImageStore(root.getParentFile()).deleteSession(sessionId); }
             catch (RuntimeException failure) { complete = false; }
+            try { complete &= new DeliveredArtifactStore(root.getParentFile()).deleteSession(sessionId); }
+            catch (RuntimeException failure) { complete = false; }
             try { complete &= new AttachmentStore(root.getParentFile()).deleteSession(sessionId); }
             catch (RuntimeException failure) { complete = false; }
             try {
@@ -524,7 +568,7 @@ public final class LocalRunStore {
 
     public synchronized boolean conversationHasPrivateImagesOrAttachments(String sessionId) {
         for (JSONObject row : readConversationRows(sessionId)) {
-            if (!attachmentsForRow(sessionId, row).isEmpty() || "generated_image".equals(row.optString("type"))) return true;
+            if (!attachmentsForRow(sessionId, row).isEmpty() || "generated_image".equals(row.optString("type")) || "delivered_file".equals(row.optString("type"))) return true;
         }
         return false;
     }
@@ -1325,6 +1369,10 @@ public final class LocalRunStore {
                         .copyMetadata(messageId, row.optLong("durationMs", 0)).copyStage(
                             AgentRunUiEvent.assistantStageForOutcome(row.optString("status", ""))));
                 }
+            } else if ("delivered_file".equals(type)) {
+                ChatAttachment artifact = ChatAttachment.fromJson(row.optJSONObject("artifact"));
+                if (artifact != null) events.add(AgentRunUiEvent.deliveredFileEvent(id++, artifact,
+                        (long) (row.optDouble("timestamp", 0) * 1000)));
             } else if ("generated_image".equals(type)) {
                 events.add(AgentRunUiEvent.generatedImageEvent(id++,
                         row.has("imagePath") ? row.optString("imagePath", null) : null,

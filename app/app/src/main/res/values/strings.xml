@@ -1321,4 +1321,16 @@ Their exit results are unknown. Do not repeat them automatically. Review project
     <string name="chat_open_current_preview">Open current preview</string>
     <string name="connector_tool_unconfirmed">Unconfirmed %1$s</string>
     <string name="connector_tool_not_started">Not run: %1$s</string>
+
+    <!-- Chat delivery and direct Downloads export. -->
+    <string name="chat_download_action">Download</string>
+    <string name="chat_download_saving">Saving…</string>
+    <string name="chat_download_complete">Saved to Downloads</string>
+    <string name="chat_download_location">%1$s is ready in Downloads.</string>
+    <string name="chat_download_failed">Could not complete the download</string>
+    <string name="chat_download_permission_denied">This Android version needs storage permission to save in Downloads. No file was saved. You can share the file instead, or grant storage permission in Android settings and try again.</string>
+    <string name="chat_download_open_failed">No compatible app could open this file. It remains in Downloads if it was saved.</string>
+    <string name="chat_download_retry">No complete file was saved. Tap Download to try again.</string>
+    <string name="chat_download_open">Open</string>
+    <string name="chat_file_preview_unavailable">Preview unavailable. Download or share the original file.</string>
 </resources>

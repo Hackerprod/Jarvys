@@ -4,7 +4,6 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import androidx.activity.ComponentActivity
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.width
@@ -52,7 +51,7 @@ class GeneratedImageComposeTest {
     private val session = "compose-image-session"
 
     @Test
-    fun successfulImageDecodesOffMainOpensViewerAndSaveShareActionsCreateExpectedIntents() {
+    fun successfulImageDecodesOffMainOpensViewerAndInvokesSaveShareActions() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val store = GeneratedImageStore(context)
         val path = store.save(session, UUID.randomUUID().toString(), pngFixture())
@@ -61,15 +60,12 @@ class GeneratedImageComposeTest {
         val event = successEvent(path, prompt)
         var saveEvent: AgentRunUiEvent? = null
         var shareEvent: AgentRunUiEvent? = null
-        var createDocumentIntent: Intent? = null
         var shareIntent: Intent? = null
         compose.setContent {
             JarvysOwnTheme(JarvysThemeMode.LIGHT) {
                 CompositionLocalProvider(LocalReducedMotion provides true) {
                     GeneratedImageEventCard(event, session, onSave = {
                         saveEvent = it
-                        createDocumentIntent = ActivityResultContracts.CreateDocument("image/png")
-                            .createIntent(context, "lighthouse.png")
                     }, onShare = {
                         shareEvent = it
                         shareIntent = GeneratedImageIntents.shareIntent(context, store.resolve(session, path))
@@ -78,6 +74,7 @@ class GeneratedImageComposeTest {
             }
         }
         compose.onNodeWithTag("generated-image-${event.id}").assertIsDisplayed()
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("generated-image-open-${event.id}").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithTag("generated-image-open-${event.id}").assertIsDisplayed()
         compose.waitUntil(5_000) {
             compose.onAllNodesWithTag("generated-image-thumbnail-${event.id}", useUnmergedTree = true)
@@ -99,10 +96,7 @@ class GeneratedImageComposeTest {
 
         compose.onNodeWithTag("generated-image-save").performClick()
         assertEquals(event.id, saveEvent?.id)
-        val createDocument = requireNotNull(createDocumentIntent)
-        assertEquals(Intent.ACTION_CREATE_DOCUMENT, createDocument.action)
-        assertEquals("image/png", createDocument.type)
-        assertEquals("lighthouse.png", createDocument.getStringExtra(Intent.EXTRA_TITLE))
+        // The production Activity/backend export path is covered in MainActivityDownloadFlowTest.
 
         compose.onNodeWithTag("generated-image-share").performClick()
         assertEquals(event.id, shareEvent?.id)
@@ -126,6 +120,7 @@ class GeneratedImageComposeTest {
                 }
             }
         }
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("generated-image-missing-${missing.id}").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithTag("generated-image-missing-${missing.id}").assertIsDisplayed()
         compose.onNodeWithTag("generated-image-missing-${missing.id}")
             .assertTextContains(ApplicationProvider.getApplicationContext<Context>().getString(R.string.image_missing_file))

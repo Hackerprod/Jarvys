@@ -33,6 +33,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.jarvys.agent.AgentRunUiEvent
 import com.jarvys.agent.AttachmentStore
 import com.jarvys.agent.ChatAttachment
 import com.jarvys.agent.LucideIcons
@@ -117,11 +118,11 @@ fun UserChatAttachments(attachments: List<ChatAttachment>, sessionId: String, mo
 }
 
 @Composable
-private fun AttachmentFileCard(attachment: ChatAttachment, sessionId: String) {
+private fun AttachmentFileCard(attachment: ChatAttachment, sessionId: String, delivered: Boolean = false) {
     val context = LocalContext.current
-    val store = remember(context) { AttachmentStore(context) }
-    val available by produceState<Boolean?>(null, sessionId, attachment) {
-        value = withContext(Dispatchers.IO) { runCatching { store.resolve(sessionId, attachment).isFile }.getOrDefault(false) }
+    val request = remember(sessionId, attachment, delivered) { ChatFileRequest.attachment(sessionId, attachment, delivered) }
+    val available by produceState<Boolean?>(null, request) {
+        value = withContext(Dispatchers.IO) { runCatching { request.resolve(context).isFile }.getOrDefault(false) }
     }
     Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceVariant,
         modifier = Modifier.fillMaxWidth().testTag("chat-attachment-file-${attachment.id}")) {
@@ -132,8 +133,23 @@ private fun AttachmentFileCard(attachment: ChatAttachment, sessionId: String) {
                 Text(Formatter.formatShortFileSize(context, attachment.sizeBytes), style = MaterialTheme.typography.labelSmall)
                 Text(attachment.mimeType, maxLines = 2, style = MaterialTheme.typography.labelSmall)
                 if (available == false) UnavailableAttachment(attachment.id)
+                if (available == true) ChatFileButtons(request, Modifier.padding(top = 8.dp),
+                    tagPrefix = if (delivered) "delivered-file" else "chat-file")
             }
         }
+    }
+}
+
+/** Files delivered by the agent are first-class transcript entries, not Markdown paths. */
+@Composable
+internal fun DeliveredArtifactEventCard(event: AgentRunUiEvent, sessionId: String) {
+    val attachment = event.deliveredArtifact
+    Column(Modifier.fillMaxWidth().testTag("delivered-file-${event.id}")) {
+        if (attachment == null) UnavailableAttachment(event.id.toString())
+        else if (attachment.isImage) AttachmentImage(attachment, sessionId,
+            Modifier.fillMaxWidth().heightIn(min = 160.dp, max = 360.dp).clip(RoundedCornerShape(14.dp)),
+            tagPrefix = "delivered", delivered = true)
+        else AttachmentFileCard(attachment, sessionId, delivered = true)
     }
 }
 
@@ -145,30 +161,40 @@ private fun UnavailableAttachment(id: String) {
 
 @Composable
 private fun AttachmentImage(attachment: ChatAttachment, sessionId: String, modifier: Modifier,
-    interactive: Boolean = true, tagPrefix: String = "chat") {
+    interactive: Boolean = true, tagPrefix: String = "chat", delivered: Boolean = false) {
     val context = LocalContext.current
-    val store = remember(context) { AttachmentStore(context) }
-    var loaded by remember(sessionId, attachment) { mutableStateOf(false) }
-    val bitmap by produceState<Bitmap?>(null, sessionId, attachment) {
-        value = resolveAttachmentPreview(store, sessionId, attachment, 640, 640)
+    val request = remember(sessionId, attachment, delivered) { ChatFileRequest.attachment(sessionId, attachment, delivered) }
+    var loaded by remember(request) { mutableStateOf(false) }
+    var sourceAvailable by remember(request) { mutableStateOf(false) }
+    val bitmap by produceState<Bitmap?>(null, request) {
+        val file = withContext(Dispatchers.IO) { runCatching { request.resolve(context) }.getOrNull() }
+        value = file?.let { decodeChatAttachmentPreview(it, 640, 640) }
+        sourceAvailable = file != null
         loaded = true
     }
     var showViewer by remember(sessionId, attachment.id) { mutableStateOf(false) }
     Box(modifier.background(MaterialTheme.colorScheme.surfaceVariant)
         .testTag("$tagPrefix-attachment-image-${attachment.id}")
-        .then(if (interactive && bitmap != null) Modifier.clickable { showViewer = true } else Modifier),
+        .then(if (interactive && sourceAvailable) Modifier.clickable { showViewer = true } else Modifier),
         contentAlignment = Alignment.Center) {
         bitmap?.let { Image(it.asImageBitmap(), stringResource(R.string.chat_attachment_open_image, attachment.name),
             Modifier.fillMaxSize(), contentScale = ContentScale.Fit) }
-            ?: if (loaded) UnavailableAttachment(attachment.id) else CircularProgressIndicator(Modifier.size(24.dp))
+            ?: if (loaded) {
+                Column(Modifier.padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    if (sourceAvailable) Text(stringResource(R.string.chat_file_preview_unavailable))
+                    else UnavailableAttachment(attachment.id)
+                    if (interactive && sourceAvailable) ChatFileButtons(request, tagPrefix = "chat-preview")
+                }
+            } else CircularProgressIndicator(Modifier.size(24.dp))
     }
-    if (showViewer) ChatAttachmentViewer(attachment, sessionId) { showViewer = false }
+    if (showViewer) ChatAttachmentViewer(request) { showViewer = false }
 }
 
 @Composable
-private fun ChatAttachmentViewer(attachment: ChatAttachment, sessionId: String, onDismiss: () -> Unit) {
+private fun ChatAttachmentViewer(request: ChatFileRequest, onDismiss: () -> Unit) {
     val context = LocalContext.current
-    val store = remember(context) { AttachmentStore(context) }
+    val attachment = requireNotNull(request.attachment)
+    val sessionId = request.sessionId
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.fillMaxSize().testTag("chat-attachment-viewer-${attachment.id}"), color = Color.Black) {
             Column {
@@ -176,13 +202,13 @@ private fun ChatAttachmentViewer(attachment: ChatAttachment, sessionId: String, 
                     IconButton(onClick = onDismiss, modifier = Modifier.testTag("chat-attachment-viewer-close")) { Icon(LucideIcons.X,
                         stringResource(R.string.chat_attachment_close_preview), tint = Color.White) }
                 }
-                BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                BoxWithConstraints(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                     val density = LocalDensity.current
                     val width = with(density) { maxWidth.roundToPx() }.coerceAtLeast(1)
                     val height = with(density) { maxHeight.roundToPx() }.coerceAtLeast(1)
                     var loaded by remember(sessionId, attachment) { mutableStateOf(false) }
                     val bitmap by produceState<Bitmap?>(null, sessionId, attachment, width to height) {
-                        value = resolveAttachmentPreview(store, sessionId, attachment, width, height)
+                        value = resolveAttachmentPreview(context, request, width, height)
                         loaded = true
                     }
                     val image = bitmap
@@ -200,17 +226,18 @@ private fun ChatAttachmentViewer(attachment: ChatAttachment, sessionId: String, 
                                 translationX = transform.panX; translationY = transform.panY
                             }, contentScale = ContentScale.Fit)
                         }
-                    } else if (loaded) UnavailableAttachment(attachment.id) else Text(
+                    } else if (loaded) Text(stringResource(R.string.chat_file_preview_unavailable), color = Color.White) else Text(
                         stringResource(R.string.chat_attachment_preview_loading), color = Color.White)
                 }
+                ChatFileButtons(request, Modifier.padding(12.dp), tagPrefix = "chat-viewer")
             }
         }
     }
 }
 
-private suspend fun resolveAttachmentPreview(store: AttachmentStore, sessionId: String,
-    attachment: ChatAttachment, width: Int, height: Int): Bitmap? = withContext(Dispatchers.IO) {
-    val file = runCatching { store.resolve(sessionId, attachment) }.getOrNull() ?: return@withContext null
+private suspend fun resolveAttachmentPreview(context: android.content.Context, request: ChatFileRequest,
+    width: Int, height: Int): Bitmap? = withContext(Dispatchers.IO) {
+    val file = runCatching { request.resolve(context) }.getOrNull() ?: return@withContext null
     decodeChatAttachmentPreview(file, width, height)
 }
 

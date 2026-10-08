@@ -1321,4 +1321,16 @@ Se desconoce cómo terminaron. No se repiten automáticamente. Revisa los cambio
     <string name="chat_open_current_preview">Abrir vista previa actual</string>
     <string name="connector_tool_unconfirmed">Sin confirmar: %1$s</string>
     <string name="connector_tool_not_started">Sin ejecutar: %1$s</string>
+
+    <!-- Chat delivery and direct Downloads export. -->
+    <string name="chat_download_action">Descargar</string>
+    <string name="chat_download_saving">Guardando…</string>
+    <string name="chat_download_complete">Guardado en Descargas</string>
+    <string name="chat_download_location">%1$s está listo en Descargas.</string>
+    <string name="chat_download_failed">No se pudo completar la descarga</string>
+    <string name="chat_download_permission_denied">Esta versión de Android necesita permiso de almacenamiento para guardar en Descargas. No se guardó ningún archivo. Puedes compartirlo, o conceder el permiso en los ajustes de Android y volver a intentarlo.</string>
+    <string name="chat_download_open_failed">No hay una aplicación compatible para abrir este archivo. Si se guardó, sigue en Descargas.</string>
+    <string name="chat_download_retry">No se guardó un archivo completo. Pulsa Descargar para volver a intentarlo.</string>
+    <string name="chat_download_open">Abrir</string>
+    <string name="chat_file_preview_unavailable">Vista previa no disponible. Descarga o comparte el archivo original.</string>
 </resources>

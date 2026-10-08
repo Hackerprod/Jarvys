@@ -112,6 +112,13 @@ Evidencia reproducible y límites: `recovery/validation/apkfactory-v1.json`. La 
 
 ### 2. UX16: adjuntos y descargas directas
 
+Estado: implementación en curso para preparación v36 / 1.2.29-UX16. Primer checkpoint de código respaldado durante la validación; todavía no se declara completado ni se entrega APK parcial.
+
+- Añadida entrega nativa mediante `deliver_file`, limitada al chat principal y a los archivos de su workspace o proyecto Coding `/project/`, incluidos binarios y APK de la fábrica. Conserva una copia independiente, referencia estable, tamaño, MIME y SHA-256; la respuesta de herramienta y la tarjeta sobreviven la reapertura sin volver a ejecutar la entrega.
+- Unificado el flujo de descarga de imágenes generadas, adjuntos y archivos entregados: copia en segundo plano a Downloads del sistema mediante MediaStore en Android 10+, sin selector por archivo. Android 7–9 exige el permiso de almacenamiento limitado a API 28; una denegación se comunica y mantiene Compartir como alternativa.
+- Incorporados límites de tamaño, nombres seguros, colisiones, deduplicación, recibos recuperables, cancelación y limpieza de operaciones pendientes. Se preservan los archivos ya publicados aunque el usuario los cambie. Los proveedores aceptan únicamente referencias propias de la conversación y concesiones de lectura para Abrir/Compartir.
+- La revisión independiente detectó rutas de acceso obsoletas, carreras al abrir archivos y pérdida de controles en imágenes no decodificables; se han endurecido estos casos. Continúan las pruebas dirigidas, la revisión final y la validación agregada. La comprobación del descriptor y de MediaStore utiliza adaptadores de host; la aceptación física sigue pendiente.
+
 - Entregar los archivos trabajados como adjuntos nativos del chat.
 - Descargar archivos e imágenes a Downloads del sistema sin abrir un selector por archivo.
 - Validar ámbitos, rutas, MIME, nombres, colisiones y archivos parciales; mostrar éxito/error y la acción Abrir.

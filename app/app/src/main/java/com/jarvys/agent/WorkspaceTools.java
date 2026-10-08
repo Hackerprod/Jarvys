@@ -74,6 +74,7 @@ public final class WorkspaceTools {
         MemorySearchIndexCoordinator.forContext(context, projectId, effectiveMemoryAllowed);
     List<CoreTool> tools = new ArrayList<>(create(workspace, coordinator));
     tools.add(new SearchFiles(workspace, coordinator));
+    if (BotCatalogTool.isAvailable(context, 0, sessionId)) tools.add(new DeliverFileTool(context, sessionId, workspace));
     return Collections.unmodifiableList(tools);
   }
 
@@ -146,6 +147,7 @@ public final class WorkspaceTools {
     Map<WorkspaceStore, WorkspaceStore> views = new IdentityHashMap<>();
     List<CoreTool> restricted = new ArrayList<>();
     for (CoreTool tool : tools) {
+      if (tool instanceof DeliverFileTool) continue;
       if (tool instanceof WorkspaceTool) {
         WorkspaceTool original = (WorkspaceTool) tool;
         if (!denyPrivateZones

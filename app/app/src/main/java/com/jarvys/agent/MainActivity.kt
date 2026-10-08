@@ -20,6 +20,12 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.core.content.FileProvider
 import com.jarvys.agent.ui.chat.PendingChatAttachment
+import com.jarvys.agent.ui.chat.ChatFileActions
+import com.jarvys.agent.ui.chat.ChatFileRequest
+import com.jarvys.agent.ui.chat.ChatFileTransfers
+import com.jarvys.agent.ui.chat.ChatFileTransferHost
+import com.jarvys.agent.ui.chat.LocalChatFileActions
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.AnimatedVisibility
@@ -332,26 +338,7 @@ class MainActivity : ComponentActivity() {
     private val skillImportExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "JarvysSkillImport").apply { isDaemon = true }
     }
-    private val imageSaveExecutor = Executors.newSingleThreadExecutor { runnable ->
-        Thread(runnable, "JarvysImageSave").apply { isDaemon = true }
-    }
-    private var pendingGeneratedImageSource: File? = null
-    private val generatedImageSaveLauncher = registerForActivityResult(ActivityResultContracts.CreateDocument("image/png")) { uri ->
-        val source = pendingGeneratedImageSource
-        pendingGeneratedImageSource = null
-        if (uri == null || source == null) return@registerForActivityResult
-        imageSaveExecutor.execute {
-            val result = runCatching {
-                val output = contentResolver.openOutputStream(uri)
-                    ?: throw IllegalStateException("Could not open the selected image destination")
-                output.use { target -> FileInputStream(source).use { input -> input.copyTo(target) } }
-            }
-            runOnUiThread {
-                if (result.isSuccess) toast(getString(R.string.image_save_succeeded))
-                else toast(getString(R.string.image_save_failed), Toast.LENGTH_LONG)
-            }
-        }
-    }
+    private lateinit var fileTransfers: ChatFileTransfers
     private val skillImportLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let(::importSkillMarkdown)
     }
@@ -390,6 +377,7 @@ class MainActivity : ComponentActivity() {
         mcpConnectionManager.connectEnabledServers()
         localRunStore = LocalRunStore(this)
         attachmentDrafts = ViewModelProvider(this)[AttachmentDraftViewModel::class.java]
+        fileTransfers = ViewModelProvider(this)[ChatFileTransfers::class.java]
         attachmentPickerSession = savedInstanceState?.getString("attachment_picker_session")
         assistantSpeechController = AssistantSpeechController(
             this,
@@ -435,8 +423,8 @@ class MainActivity : ComponentActivity() {
             ?: savedInstanceState?.getString(STATE_PROACTIVE_TARGET_MESSAGE)
         pendingTaskId = TaskDeepLink.existingTaskId(this,
             intent?.getStringExtra(EXTRA_OPEN_TASK) ?: savedInstanceState?.getString(STATE_OPEN_TASK))
-        conversationSessionId = intent?.getStringExtra(EXTRA_OPEN_CHAT_SESSION)
-            ?: savedInstanceState?.getString(STATE_SESSION_ID)
+        conversationSessionId = savedInstanceState?.getString(STATE_SESSION_ID)
+            ?: intent?.getStringExtra(EXTRA_OPEN_CHAT_SESSION)
             ?: getSharedPreferences("jarvys_chat", MODE_PRIVATE).getString("active_session_id", null)
             ?: java.util.UUID.randomUUID().toString()
         val openingProactiveThread = conversationSessionId == ProactiveConversation.SESSION_ID
@@ -472,6 +460,9 @@ class MainActivity : ComponentActivity() {
         }
         setContent {
             val pendingAttachments by attachmentDrafts.drafts.collectAsState()
+            val transfers by fileTransfers.transfers.collectAsState()
+            // Capture the rendered conversation, never the mutable selection after an asynchronous action.
+            val fileActionSession = conversationSessionId
             val attachmentSending by attachmentDrafts.sending.collectAsState()
             val agentState by AgentRunUiState.state.collectAsState()
             val taskDataRevision by TaskDataChanges.revision.collectAsState()
@@ -497,6 +488,9 @@ class MainActivity : ComponentActivity() {
                 if (Build.VERSION.SDK_INT >= 29) window.isNavigationBarContrastEnforced = false
             }
             JarvysOwnTheme(themeMode) {
+                CompositionLocalProvider(LocalChatFileActions provides ChatFileActions(
+                    transfers, fileTransfers::download, fileTransfers::share, fileTransfers::open, fileTransfers::cancel,
+                )) {
                 SafDocumentPickerHost(this@MainActivity)
                 JarvysApp(
                     providersRepository = providersRepository,
@@ -602,14 +596,16 @@ class MainActivity : ComponentActivity() {
                     onImportSkillMarkdown = ::importSkillText,
                     onImportSkillGitHub = ::importSkillFromGitHub,
                     onHistoryUpdated = ::refreshRunHistory,
-                    onSaveGeneratedImage = ::saveGeneratedImage,
-                    onShareGeneratedImage = ::shareGeneratedImage,
+                    onSaveGeneratedImage = { event -> saveGeneratedImage(fileActionSession, event) },
+                    onShareGeneratedImage = { event -> shareGeneratedImage(fileActionSession, event) },
                     mcpServerRepository = mcpServerRepository,
                     mcpConnectionManager = mcpConnectionManager,
                     mcpOAuthManager = mcpOAuthManager,
                     skillRepository = skillRepository,
                     connectorRegistry = connectorRegistry,
                 )
+                ChatFileTransferHost(fileTransfers) { intent -> startActivity(intent) }
+                }
             }
         }
     }
@@ -1021,25 +1017,12 @@ ${event.text}
         else historyEvents = events
     }
 
-    private fun shareGeneratedImage(event: AgentRunUiEvent) {
-        val path = event.generatedImagePath ?: return
-        runCatching {
-            val file = GeneratedImageStore(this).resolve(conversationSessionId, path)
-            val send = GeneratedImageIntents.shareIntent(this, file)
-            startActivity(Intent.createChooser(send, getString(R.string.image_share_chooser)))
-        }.onFailure {
-            toast(getString(R.string.image_missing_file), Toast.LENGTH_LONG)
-        }
+    private fun shareGeneratedImage(sessionId: String, event: AgentRunUiEvent) {
+        ChatFileRequest.generated(sessionId, event)?.let(fileTransfers::share)
     }
 
-    private fun saveGeneratedImage(event: AgentRunUiEvent) {
-        val path = event.generatedImagePath ?: return
-        runCatching { GeneratedImageStore(this).resolve(conversationSessionId, path) }
-            .onSuccess { file ->
-                pendingGeneratedImageSource = file
-                generatedImageSaveLauncher.launch(file.name)
-            }
-            .onFailure { toast(getString(R.string.image_missing_file), Toast.LENGTH_LONG) }
+    private fun saveGeneratedImage(sessionId: String, event: AgentRunUiEvent) {
+        ChatFileRequest.generated(sessionId, event)?.let(fileTransfers::download)
     }
 
     private fun undoMemoryRevisionFromChat(revisionId: Long) {

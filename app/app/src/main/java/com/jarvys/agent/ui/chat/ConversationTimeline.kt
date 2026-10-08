@@ -280,6 +280,9 @@ private fun JarvysConversationEvent(
         "crew_mission" -> event.crewMissionSnapshot?.let { mission ->
             CrewMissionCard(mission, onOpen = { onOpenCrewMission(mission.missionId) })
         }
+        "delivered_file" -> TimelineArrival(animateEntry) {
+            DeliveredArtifactEventCard(event, generatedImageSessionId)
+        }
         "generated_image" -> TimelineArrival(animateEntry) {
             GeneratedImageEventCard(event, generatedImageSessionId, onSaveGeneratedImage, onShareGeneratedImage)
         }

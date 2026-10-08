@@ -261,6 +261,7 @@ public final class CoreAgentRuntime {
     CoreToolRegistry toolRegistry = createTools();
     if (!mainChat) {
       List<String> available = new ArrayList<>(toolRegistry.names());
+      available.remove("deliver_file");
       available.remove("generate_image");
       available.remove("generate_bot_icon");
       available.remove("list_bots");
@@ -357,7 +358,7 @@ public final class CoreAgentRuntime {
   }
 
   static boolean lambda$runInternal$0(String name) {
-    return ("generate_image".equals(name) || "generate_bot_icon".equals(name) || "list_bots".equals(name) || "create_bot".equals(name) || "list_image_references".equals(name)) ? false : true;
+    return ("deliver_file".equals(name) || "generate_image".equals(name) || "generate_bot_icon".equals(name) || "list_bots".equals(name) || "create_bot".equals(name) || "list_image_references".equals(name)) ? false : true;
   }
 
   /** Run-bound interactive capability, never part of inherited generic or Crew tool inventories. */
@@ -1132,6 +1133,7 @@ public final class CoreAgentRuntime {
   static boolean lambda$crewBotCapabilityScope$15(String name) {
     return (UserDecisionTool.NAME.equals(name)
             || "search_files".equals(name)
+            || "deliver_file".equals(name)
             || "generate_image".equals(name)
             || "generate_bot_icon".equals(name)
             || "list_bots".equals(name)
@@ -1187,7 +1189,7 @@ public final class CoreAgentRuntime {
       }
     }
     for (CoreTool tool3 : this.workspaceTools) {
-      if (this.depth <= 0 || !"search_files".equals(tool3.declaration().name)) {
+      if (this.depth <= 0 || (!"search_files".equals(tool3.declaration().name) && !"deliver_file".equals(tool3.declaration().name))) {
         if (allowed(tool3)) {
           tools.add(tool3);
         }
@@ -1268,7 +1270,7 @@ public final class CoreAgentRuntime {
     List<String> names = new ArrayList<>();
     for (CoreTool tool : includedMcpTools) {
       String name = tool.declaration().name;
-      if (BotCatalogTool.NAME.equals(name) || BotIconGenerationTool.NAME.equals(name) || BotCreationTool.NAME.equals(name)) continue;
+      if (DeliverFileTool.NAME.equals(name) || BotCatalogTool.NAME.equals(name) || BotIconGenerationTool.NAME.equals(name) || BotCreationTool.NAME.equals(name)) continue;
       if (!includeDelegate || !"search_files".equals(name)) {
         if (!includeDelegate
             || (!"generate_image".equals(name) && !"list_image_references".equals(name))) {
@@ -1589,6 +1591,10 @@ public final class CoreAgentRuntime {
               + " write/edit there. Relative file paths still address the existing workspace;"
               + " adopting legacy files requires an explicit reviewed copy through a project-scoped"
               + " Crew profile.");
+      prompt.append("\nFile delivery: when the user requests an actual file, use deliver_file with its existing "
+          + "workspace path (or /project/path for Coding/backend output). It creates a native, immutable attachment. "
+          + "A path or Markdown link alone is not delivery. The user taps Download to save to OS Downloads; "
+          + "delivery never installs or executes a file. Check the tool result before saying it is attached.");
       prompt.append("\nAPK factory discovery: delegate Android APK requests to the built-in Coding bot "
           + "with crew_spawn role=coding when Crew is available. Coding loads the factory skill and "
           + "checks its local offline runtime capabilities. Full factory instructions and apk_factory "

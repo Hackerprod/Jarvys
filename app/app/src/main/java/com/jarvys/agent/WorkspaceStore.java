@@ -197,6 +197,28 @@ public final class WorkspaceStore {
         return new ProjectScopeStore(appFiles).open(conversationId);
     }
 
+    /** Only ordinary files in this conversation can become chat artifacts; no memory/skill mount. */
+    com.jarvys.agent.coding.ArtifactSnapshotIO.Snapshot snapshotForDelivery(String path, File target,
+            long limit, CancellationToken token) throws IOException {
+        if (delegatedPrivateZonesDenied || memoryOnly || !attachmentsAllowed)
+            throw new IOException("File delivery is available only in the main chat");
+        if (isCodingProjectPath(path)) {
+            ProjectScope scope = codingProjectScope();
+            String relative = path.startsWith("/project/") ? path.substring(9) : "";
+            scope.resolve(relative);
+            return com.jarvys.agent.coding.ArtifactSnapshotIO.copy(scope.rootDirectory(), relative, target, limit, token);
+        }
+        synchronized (projectLock) {
+            String relative = normalizeRelativePath(path);
+            if (relative.equals("memory") || relative.startsWith("memory/") || relative.equals("skills")
+                    || relative.startsWith("skills/") || relative.equals("attachments") || relative.startsWith("attachments/"))
+                throw new IOException("Only ordinary workspace files can be delivered");
+            if (!root.getCanonicalPath().equals(expectedAttachmentWorkspaceRoot))
+                throw new IOException("Workspace root changed");
+            return com.jarvys.agent.coding.ArtifactSnapshotIO.copy(root, relative, target, limit, token);
+        }
+    }
+
     public String codingProjectOwner() {
         if (conversationId == null) throw new IllegalArgumentException("A conversation owner is required");
         return "captain:" + conversationId;

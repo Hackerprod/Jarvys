@@ -63,6 +63,7 @@ data class AgentRunUiEvent(
     val generatedImageStatus: String? = null,
     val generatedImageError: String? = null,
     val attachments: List<ChatAttachment> = emptyList(),
+    val deliveredArtifact: ChatAttachment? = null,
     val toolAuditDetail: String? = null,
     val reactionEmoji: String = "",
     val previewIsCurrent: Boolean = false,
@@ -123,6 +124,11 @@ data class AgentRunUiEvent(
         fun crewMissionEvent(id: Long, snapshot: CrewMissionSnapshot): AgentRunUiEvent =
             AgentRunUiEvent(id, "crew_mission", snapshot.status, snapshot.title,
                 timestampMillis = snapshot.startedAtMillis, crewMissionSnapshot = snapshot)
+
+        @JvmStatic
+        fun deliveredFileEvent(id: Long, artifact: ChatAttachment, timestampMillis: Long): AgentRunUiEvent =
+            AgentRunUiEvent(id = id, kind = "delivered_file", text = artifact.name,
+                deliveredArtifact = artifact, timestampMillis = timestampMillis)
 
         @JvmStatic
         fun generatedImageEvent(id: Long, relativePath: String?, prompt: String, revisedPrompt: String?,
@@ -302,7 +308,7 @@ object AgentRunUiState {
     fun refreshPersistedSession(sessionId: String, persistedEvents: List<AgentRunUiEvent>) = synchronized(lock) {
         val current = _state.value
         if (current.sessionId != sessionId) return@synchronized
-        val durableKinds = setOf("user", "assistant", "assistant_translation", "compaction", "compaction_error", "memory", "crew_mission", "tool", "user_decision", "generated_image")
+        val durableKinds = setOf("user", "assistant", "assistant_translation", "compaction", "compaction_error", "memory", "crew_mission", "tool", "user_decision", "generated_image", "delivered_file")
         val liveInFlightToolIds = if (current.running) current.events.asSequence()
             .filter { it.kind == "tool" && it.stage in setOf("tool_call", "tool_progress", "approval_waiting") }
             .mapNotNull { it.toolCallId }.toSet() else emptySet()
@@ -350,6 +356,15 @@ object AgentRunUiState {
         } else {
             _state.value = current.copy(events = append(events, updated))
         }
+    }
+
+    @JvmStatic
+    fun deliveredFileAdded(sessionId: String, artifact: ChatAttachment) = synchronized(lock) {
+        val current = _state.value
+        if (current.sessionId != sessionId) return@synchronized
+        if (current.events.any { it.kind == "delivered_file" && it.deliveredArtifact?.id == artifact.id }) return@synchronized
+        _state.value = current.copy(events = append(current.events,
+            AgentRunUiEvent.deliveredFileEvent(nextEventId++, artifact, System.currentTimeMillis())))
     }
 
     @JvmStatic
@@ -712,7 +727,7 @@ object AgentRunUiState {
 
     private fun append(existing: List<AgentRunUiEvent>, item: AgentRunUiEvent): List<AgentRunUiEvent> {
         val result = existing + item
-        val durableKinds = setOf("user", "assistant", "compaction", "compaction_error", "memory", "crew_mission", "user_decision", "generated_image")
+        val durableKinds = setOf("user", "assistant", "compaction", "compaction_error", "memory", "crew_mission", "user_decision", "generated_image", "delivered_file")
         // Pending approvals are live requests with blocked workers behind them; evicting one
         // would orphan the ApprovalGate latch. Keep all pending cards even when history is busy.
         fun evictable(event: AgentRunUiEvent) = event.kind !in durableKinds
