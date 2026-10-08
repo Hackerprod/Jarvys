@@ -318,7 +318,7 @@ Contrato y límites: app/CREW_TASKS.md. Código y Pending.md respaldados directa
 
 ### 12. UX28: miniaturas HTML y acciones de archivos
 
-Estado: en implementación para preparación v46 / 1.2.39-UX28. Tarjeta compacta con miniatura local y acciones por iconos; renderizado automático sin JavaScript ni almacenamiento DOM, recursos limitados al HTML inmutable. Caché acotada por huella y conversación, revocación por generación tras borrado y presupuesto de memoria de imágenes retenidas. Compilación de fuente y 106 pruebas dirigidas aprobadas, incluidas 65 regresiones nuevas de caché, límites, ciclo de vida e interfaz. Los ajustes del harness conservan las aserciones y distinguen la ejecución de Chromium no disponible. La primera agregada detectó solo dos aserciones históricas de Full que esperaban tamaño y MIME separados; Play terminó con salida 137 y XML obsoletos, por lo que se considera incompleto. Se conserva la comprobación de imágenes sin metadatos y se exige el texto compacto completo de los documentos. Se repiten todas las suites en invocaciones separadas, lint y APK sobre una nueva fuente congelada. No se afirma validación visual de Chromium en el host.
+Estado: en implementación para preparación v46 / 1.2.39-UX28. Tarjeta compacta con miniatura local y acciones por iconos; renderizado automático sin JavaScript ni almacenamiento DOM, recursos limitados al HTML inmutable. Caché acotada por huella y conversación, revocación por generación tras borrado y presupuesto de memoria de imágenes retenidas. Compilación de fuente y 106 pruebas dirigidas aprobadas, incluidas 65 regresiones nuevas de caché, límites, ciclo de vida e interfaz. Los ajustes del harness conservan las aserciones y distinguen la ejecución de Chromium no disponible. La primera agregada detectó solo dos aserciones históricas de Full que esperaban tamaño y MIME separados; Play terminó con salida 137 y XML obsoletos, por lo que se considera incompleto. Se conserva la comprobación de imágenes sin metadatos y se exige el texto compacto completo de los documentos. Se repiten todas las suites, lint y APK sobre una nueva fuente congelada. Los procesos del host que terminaron con salida 137 no cuentan como validados; las pruebas usan ahora temporales en disco, memoria acotada y reinicio periódico de sus workers, sin cambiar el producto ni reducir las comprobaciones. No se afirma validación visual de Chromium en el host.
 
 - Mostrar una miniatura real del contenido HTML entregado y abrir el preview al tocarla; no sustituirla por una imagen genérica o un diseño inventado.
 - Eliminar el botón textual «View in Jarvys» de esa tarjeta y reorganizar sus acciones inferiores como iconos claros, con etiquetas de accesibilidad y objetivos táctiles adecuados.
@@ -348,12 +348,23 @@ Estado: pendiente; solicitud del 8 de octubre de 2026, añadida a la cola despu�
 - Contrastar la composición con la captura aportada y validar estado vacío/con chats, chats anclados, acciones, navegación, temas, idiomas y texto grande.
 - Implementar como tarea separada después de UX29; no ampliar el alcance de UX27 ni cambiar permisos o comportamiento de las conversaciones.
 
+### 15. UX31: gestión nativa de Gmail
+
+Estado: pendiente, después de UX30. La conexión de Gmail y Drive ya ha sido confirmada como funcional; ampliar la gestión de Gmail se audita como una tarea separada.
+
+- Auditar las herramientas nativas existentes, sus esquemas y los permisos OAuth realmente concedidos, antes de incorporar nuevas acciones. Mantener Gmail y Drive conectados y no ampliar el alcance de UX28.
+- Permitir organizar correo y etiquetas, clasificar mensajes como spam y corregir falsos positivos devolviéndolos a correo válido; revisar también búsqueda y lectura de las carpetas afectadas.
+- Añadir, cuando el conector y los permisos lo admitan, envío a la papelera y restauración, distinguiendo archivar, eliminar de forma recuperable y borrar definitivamente. Conservar identidad de mensaje/hilo, resultados verificables y errores parciales sin repetir escrituras ambiguas.
+- Usar el conjunto mínimo de scopes para las operaciones aprobadas. Cualquier ampliación persistente de acceso debe pasar por el consentimiento explícito correspondiente; una conexión existente no demuestra que pueda modificar correo.
+- El vaciado o borrado permanente, si se incorpora, requiere confirmación explícita por acción, con mensajes, alcance y consecuencias claros. No presentar acciones sensibles como limpieza reversible.
+- Probar permisos insuficientes, denegaciones, spam/no-spam, etiquetas, papelera/restauración, búsquedas, auditoría, cancelación y verificación de resultados. No actuar sobre correo real ni cambiar concesiones OAuth durante esta fase de planificación.
+
 ## Validaciones que siguen abiertas
 
 - Preview web: endurecer y comprobar en Chromium real el posible egreso WebRTC heredado. Las restricciones de URL/CSP no equivalen a aislamiento absoluto de red; conservar el contrato HTML/CSS/JavaScript interactivo sin puentes privados ni permisos nuevos.
 
 - Comprobar en dispositivo la recuperación de proyectos/archivos, imágenes y gestos, selección/copia, ejecución real y flujos de autenticación. Las pruebas del host no equivalen a una pasada completa en teléfono.
-- Continuar el diagnóstico del error DNS en el intercambio OAuth del login de navegador. No hay una regresión demostrada frente a v28; el flujo de código de dispositivo sigue siendo una alternativa disponible.
+- Gmail y Drive: conexión confirmada como funcional. Auditar por separado en UX31 las capacidades de gestión de Gmail y sus scopes efectivos; el error DNS anterior se conserva como diagnóstico histórico, sin tratar la conexión actual como bloqueada.
 - Android-use está limitado a conectores nativos del dispositivo registrados. No incorpora todavía el puente de accesibilidad heredado ni herramientas ADB/Python.
 - La recuperación reanudable de misiones corresponde a perfiles versionados con proyecto de conversación; las misiones legacy no deben relanzarse automáticamente tras reiniciar.
 - Mantener visible la deuda de lint heredada y evitar errores nuevos. Indicar el tipo de compilación y las comprobaciones realizadas en cada entrega.
