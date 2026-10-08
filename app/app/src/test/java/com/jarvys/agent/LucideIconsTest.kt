@@ -27,8 +27,9 @@ class LucideIconsTest {
         assertTrue("Relative path moveto must restart from SVG origin", accessibility!!.contains("M 0 0 m18 19"))
         assertEquals("Four following SVG elements each reset to origin", 4,
             Regex("M 0 0").findAll(accessibility).count())
-        assertEquals(56, LucideIcons.all().size)
+        assertEquals(57, LucideIcons.all().size)
         assertTrue(LucideIcons.all().any { it.name == "Mic" })
+        assertTrue(LucideIcons.all().any { it.name == "Share" })
     }
 
     @Test fun appSourceDoesNotUseMaterialIconGlyphs() {

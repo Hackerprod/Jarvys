@@ -76,7 +76,7 @@ class HtmlThumbnailLifecycleUiTest {
             }
             // Custom @Resetter methods are not automatically registered by this Robolectric setup.
             // Clear only test observations after proving that production resources were released.
-            HtmlThumbnailLifecycleShadow.resetRecorder()
+            HtmlThumbnailLifecycleShadow.resetThumbnailLifecycle()
         }
     }
 
