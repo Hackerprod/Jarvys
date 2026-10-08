@@ -2,7 +2,8 @@ package com.jarvys.agent.connectors
 
 import android.accounts.Account
 import android.content.Context
-import androidx.activity.result.IntentSenderRequest
+import com.jarvys.agent.CancellationToken
+import com.google.android.gms.common.api.CommonStatusCodes
 import com.google.android.gms.auth.api.identity.AuthorizationRequest
 import com.google.android.gms.auth.api.identity.AuthorizationResult
 import com.google.android.gms.auth.api.identity.ClearTokenRequest
@@ -14,7 +15,9 @@ import com.google.android.gms.common.api.Scope
 import com.google.android.gms.tasks.Tasks
 import java.util.concurrent.TimeUnit
 
-data class GoogleIdentityGrant(val accessToken: String, val grantedScopes: Set<String>, val accountEmail: String?)
+data class GoogleIdentityGrant(val accessToken: String, val grantedScopes: Set<String>, val accountEmail: String?) {
+    override fun toString(): String = "GoogleIdentityGrant(scopes=${grantedScopes.size}, accountKnown=${accountEmail != null})"
+}
 
 enum class GoogleIdentityFailure { PLAY_SERVICES_UNAVAILABLE, USER_CANCELLED, SCOPE_NOT_GRANTED, ACCESS_BLOCKED, NETWORK, OTHER }
 
@@ -77,11 +80,30 @@ object GoogleIdentityPolicy {
     }
 
     fun shouldReauthorizeAfter401(attempt: Int): Boolean = attempt == 0
+
+    /** ApiException codes belong to CommonStatusCodes, never ConnectionResult (16 means different things). */
+    fun apiStatusFailure(statusCode: Int?): GoogleIdentityFailure = when (statusCode) {
+        CommonStatusCodes.CANCELED -> GoogleIdentityFailure.USER_CANCELLED
+        CommonStatusCodes.NETWORK_ERROR, CommonStatusCodes.TIMEOUT -> GoogleIdentityFailure.NETWORK
+        CommonStatusCodes.DEVELOPER_ERROR -> GoogleIdentityFailure.ACCESS_BLOCKED
+        CommonStatusCodes.API_NOT_CONNECTED -> GoogleIdentityFailure.PLAY_SERVICES_UNAVAILABLE
+        else -> GoogleIdentityFailure.OTHER
+    }
 }
 
 interface GoogleIdentityAuthorization {
     fun authorize(scopes: Set<String>, accountEmail: String?): GoogleIdentityGrant
+    fun authorizeCancellable(scopes: Set<String>, accountEmail: String?, token: CancellationToken,
+                             allowResolution: Boolean): GoogleIdentityGrant {
+        token.throwIfCancelled()
+        return authorize(scopes, accountEmail).also { token.throwIfCancelled() }
+    }
     fun clearToken(accessToken: String)
+    fun clearTokenCancellable(accessToken: String, token: CancellationToken) {
+        token.throwIfCancelled()
+        clearToken(accessToken)
+        token.throwIfCancelled()
+    }
     fun revoke(scopes: Set<String>, accountEmail: String?)
 }
 
@@ -92,7 +114,12 @@ class GooglePlayServicesAuthorizationClient(
 ) : GoogleIdentityAuthorization {
     private val appContext = context.applicationContext
 
-    override fun authorize(scopes: Set<String>, accountEmail: String?): GoogleIdentityGrant {
+    override fun authorize(scopes: Set<String>, accountEmail: String?): GoogleIdentityGrant =
+        authorizeCancellable(scopes, accountEmail, CancellationToken.uncancellable(), true)
+
+    override fun authorizeCancellable(scopes: Set<String>, accountEmail: String?, token: CancellationToken,
+                                      allowResolution: Boolean): GoogleIdentityGrant {
+        token.throwIfCancelled()
         require(scopes.isNotEmpty() && scopes.all { it in GoogleOAuthProtocol.ALLOWED_SCOPES }) {
             "Only explicitly enabled Gmail and Drive scopes may be requested"
         }
@@ -100,25 +127,30 @@ class GooglePlayServicesAuthorizationClient(
         val client = Identity.getAuthorizationClient(appContext)
         val requestBuilder = AuthorizationRequest.builder().setRequestedScopes(scopes.map(::Scope))
         accountEmail?.takeIf(String::isNotBlank)?.let { requestBuilder.setAccount(Account(it, GOOGLE_ACCOUNT_TYPE)) }
-        val first = await { client.authorize(requestBuilder.build()) }
+        val first = await(token) { client.authorize(requestBuilder.build()) }
         val firstDecision = GoogleIdentityPolicy.decision(first.hasResolution(), first.accessToken,
             GoogleIdentityPolicy.normalizeScopes(first.grantedScopes), scopes)
         val result = if (firstDecision == GoogleIdentityDecision.RESOLUTION_PENDING) {
+            if (!allowResolution) throw GoogleIdentityAuthorizationException(GoogleIdentityFailure.SCOPE_NOT_GRANTED,
+                "Google needs authorization; reconnect this feature in Settings")
             val pending = first.pendingIntent ?: throw GoogleIdentityAuthorizationException(
                 GoogleIdentityFailure.OTHER, "Google returned a resolution without a PendingIntent")
-            val responseIntent = try { resolutionBroker.launch(pending, AUTH_TIMEOUT_MS) }
+            val responseIntent = try { resolutionBroker.launch(pending, AUTH_TIMEOUT_MS, token) }
                 catch (error: Exception) { throw classify(error) }
             try { client.getAuthorizationResultFromIntent(responseIntent) }
             catch (error: Exception) { throw classify(error) }
         } else first
+        token.throwIfCancelled()
         return toGrant(result, scopes)
     }
 
-    override fun clearToken(accessToken: String) {
+    override fun clearToken(accessToken: String) = clearTokenCancellable(accessToken, CancellationToken.uncancellable())
+    override fun clearTokenCancellable(accessToken: String, token: CancellationToken) {
+        token.throwIfCancelled()
         if (accessToken.isBlank()) return
         requirePlayServices()
         val request = ClearTokenRequest.builder().setToken(accessToken).build()
-        await { Identity.getAuthorizationClient(appContext).clearToken(request) }
+        await(token) { Identity.getAuthorizationClient(appContext).clearToken(request) }
     }
 
     override fun revoke(scopes: Set<String>, accountEmail: String?) {
@@ -132,7 +164,9 @@ class GooglePlayServicesAuthorizationClient(
     private fun toGrant(result: AuthorizationResult, requested: Set<String>): GoogleIdentityGrant {
         val token = result.accessToken.orEmpty()
         val granted = GoogleIdentityPolicy.normalizeScopes(result.grantedScopes)
-        when (GoogleIdentityPolicy.decision(result.hasResolution(), token, granted, requested)) {
+        // Return partial grants to the manager, which replaces its snapshot and verifies the clicked feature.
+        val returnedRequested = granted.intersect(requested)
+        when (GoogleIdentityPolicy.decision(result.hasResolution(), token, granted, returnedRequested)) {
             GoogleIdentityDecision.RESOLUTION_PENDING -> throw GoogleIdentityAuthorizationException(
                 GoogleIdentityFailure.OTHER, "Google authorization still needs resolution")
             GoogleIdentityDecision.SCOPE_DENIED -> throw GoogleIdentityAuthorizationException(
@@ -156,27 +190,28 @@ class GooglePlayServicesAuthorizationClient(
         )
     }
 
-    private fun <T> await(task: () -> com.google.android.gms.tasks.Task<T>): T = try {
-        Tasks.await(task(), AUTH_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-    } catch (error: Exception) {
-        throw classify(error)
+    private fun <T> await(token: CancellationToken = CancellationToken.uncancellable(), task: () -> com.google.android.gms.tasks.Task<T>): T {
+        val pending = try { task() } catch (error: Exception) { throw classify(error) }
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(AUTH_TIMEOUT_MS)
+        while (true) {
+            token.throwIfCancelled()
+            try { return Tasks.await(pending, 200, TimeUnit.MILLISECONDS).also { token.throwIfCancelled() } }
+            catch (error: java.util.concurrent.TimeoutException) {
+                if (System.nanoTime() >= deadline) throw classify(error)
+            } catch (error: Exception) { throw classify(error) }
+        }
     }
 
-    private fun classify(error: Exception): GoogleIdentityAuthorizationException {
+    internal fun classify(error: Exception): GoogleIdentityAuthorizationException {
         if (error is GoogleIdentityAuthorizationException) return error
-        if (error is ActivityAuthorizationCancelledException) return GoogleIdentityAuthorizationException(
-            GoogleIdentityFailure.USER_CANCELLED, "Google authorization was cancelled", error)
-        val apiError = generateSequence<Throwable>(error) { it.cause }
-            .filterIsInstance<com.google.android.gms.common.api.ApiException>().firstOrNull()
-        val reason = when (apiError?.statusCode) {
-            ConnectionResult.SERVICE_MISSING, ConnectionResult.SERVICE_VERSION_UPDATE_REQUIRED,
-            ConnectionResult.SERVICE_DISABLED, ConnectionResult.API_UNAVAILABLE -> GoogleIdentityFailure.PLAY_SERVICES_UNAVAILABLE
-            com.google.android.gms.common.api.CommonStatusCodes.CANCELED -> GoogleIdentityFailure.USER_CANCELLED
-            com.google.android.gms.common.api.CommonStatusCodes.NETWORK_ERROR -> GoogleIdentityFailure.NETWORK
-            com.google.android.gms.common.api.CommonStatusCodes.DEVELOPER_ERROR -> GoogleIdentityFailure.ACCESS_BLOCKED
-            else -> if (error is java.util.concurrent.TimeoutException) GoogleIdentityFailure.NETWORK else GoogleIdentityFailure.OTHER
+        val chain = generateSequence<Throwable>(error) { it.cause }.take(12).toList()
+        val reason = when {
+            chain.any { it is ActivityAuthorizationCancelledException || it is java.util.concurrent.CancellationException } -> GoogleIdentityFailure.USER_CANCELLED
+            chain.any { it is java.util.concurrent.TimeoutException || it is InterruptedException } -> GoogleIdentityFailure.NETWORK
+            else -> GoogleIdentityPolicy.apiStatusFailure(chain.filterIsInstance<com.google.android.gms.common.api.ApiException>().firstOrNull()?.statusCode)
         }
-        return GoogleIdentityAuthorizationException(reason, "Google authorization could not be completed", error)
+        // Do not retain a provider exception as a cause: its message may contain sensitive data.
+        return GoogleIdentityAuthorizationException(reason, "Google authorization could not be completed")
     }
 
     companion object {

@@ -15,7 +15,7 @@ Modo de ejecución: continuar la cola completa. Al cerrar cada pendiente, verifi
 - **APKFACTORY1 / preparación v35 implementada y validada en host:** fábrica offline nativa, empaquetado sin Gradle por aplicación, firma con identidad por app y skill exclusivo de Coding. Suites: 1238 Full, 1154 Play y 17 runtime, sin fallos; nueve pruebas de SDK JavaScript. La aceptación física Android/ARM64 e instalación/actualización con datos conservados sigue pendiente.
 - **UX16 / preparación v36 completada en host:** archivos nativos y descargas directas con 1289 pruebas Full, 1205 Play, 17 runtime y nueve JavaScript aprobadas. Aceptación física pendiente.
 - **UX17/UX18 / preparación v37 completada en código y validación de host:** panel lateral, archivados en Ajustes y vista informativa de tareas. Suites: 1320 Full, 1236 Play, 17 runtime y nueve JavaScript aprobadas. Sin incidencias nuevas de lint; lectura conservada con el límite de reflujo descrito abajo.
-- **Siguiente etapa:** UX19, conectores de Gmail y Drive. No se entrega un APK parcial ni se espera feedback entre etapas.
+- **Etapa activa:** UX19, conectores de Gmail y Drive implementados y en validación agregada para v38. No se entrega un APK parcial ni se espera feedback entre etapas.
 - La paridad completa con el comportamiento de v28 en un teléfono sigue pendiente de validación; la fiabilidad del agente es prioritaria antes de añadir funciones.
 
 ## Entregas previas
@@ -144,7 +144,19 @@ Diseño y límites: `app/DRAWER_NAVIGATION.md`. Los registros detallados de vali
 
 ### 4. UX19: conectores robustos de Gmail y Drive
 
-Estado: pendiente de implementación; diagnóstico e investigación realizados.
+Estado: implementación y revisión independiente completadas; validación agregada en curso para preparación v38 / 1.2.31-UX19. Las 162 pruebas dirigidas aprueban con resultados frescos, incluidas 144 regresiones nuevas. Aún no se afirma una pasada completa ni acceso real a Google.
+
+- Corregidos el resultado nativo de autorización, la colisión de códigos de cancelación y los contratos de envío/subida. Las aprobaciones de Gmail y Drive quedan ligadas a la cuenta/sesión de autorización y se invalidan si cambia durante la revisión.
+- Gmail incorpora páginas continuables, hilos y respuestas, ciclo de borradores, MIME/charset y adjuntos nativos. La derivación de destinatarios usa la sintaxis original del encabezado; nombres visibles, comentarios y palabras codificadas no conceden confianza ni añaden destinatarios.
+- Drive incorpora filtros y unidades compartidas, descarga/exportación binaria, carpetas y creación/actualización con archivos del chat y alcance drive.file. Los bytes, destino y SHA-256 quedan congelados antes de aprobar.
+- Reintentos limitados de lectura, un refresh ante 401, 403 accionables y cancelación del transporte. Las escrituras inciertas conservan un marcador privado sin contenido ni credenciales y no se repiten automáticamente, incluso tras reiniciar. La reconciliación de resultados inciertos es manual.
+- Desconexión local y revocación remota son estados distintos. Se conserva cifrada la información necesaria para reintentar una revocación fallida; olvidarla requiere una advertencia y no se presenta como revocación verificada.
+- Los archivos descargados usan adjuntos inmutables de la conversación actual; no se exponen bytes base64 al modelo ni rutas arbitrarias. Se excluye el acceso a archivos del chat desde agentes delegados o tareas de fondo.
+- Permanecen los límites de concurrencia del proveedor: reemplazo de borrador y actualización de Drive sin ETag tienen comprobación previa, sin garantía atómica frente a una edición simultánea.
+- La primera agregada detectó una inicialización prematura del diario al descubrir el catálogo; se corrigió sin debilitar la prueba existente y se añadió una regresión. Se repiten las suites completas sobre la fuente final.
+- Configuración de Google Cloud, consentimiento y comprobación física siguen pendientes. No se usaron cuentas reales ni se concedieron permisos durante la implementación.
+
+Diseño y límites: `app/GOOGLE_WORKSPACE.md`. Los resultados detallados de pruebas y capturas se mantienen localmente.
 
 - Mantener AuthorizationClient en Android y leer la respuesta del proveedor antes de clasificar una salida como cancelación. Cubrir retorno a la app, rotación, doble pulsación, cambio de cuenta, revocación y permisos parciales.
 - Verificar proyecto, APIs habilitadas, consentimiento/usuarios de prueba y coincidencia de paquete y SHA-1 del APK instalado. Esta configuración externa sigue pendiente de comprobar.

@@ -31,8 +31,8 @@ android {
         applicationId = if (recoveryTestBuild) "com.jarvys.agent.recoverytest" else "com.jarvys.agent"
         minSdk = 24
         targetSdk = 35
-        versionCode = 37
-        versionName = "1.2.30-UX17-UX18" + if (recoveryTestBuild) "-test" else ""
+        versionCode = 38
+        versionName = "1.2.31-UX19" + if (recoveryTestBuild) "-test" else ""
         manifestPlaceholders["jarvysApplicationLabel"] = if (recoveryTestBuild) "Jarvys Prueba" else "@string/app_name"
         manifestPlaceholders["jarvysNotificationListenerLabel"] =
             if (recoveryTestBuild) "Jarvys Prueba: notificaciones" else "@string/notification_listener_label"
@@ -77,6 +77,8 @@ android {
 }
 
 dependencies {
+    // Pinned to the APK factory signing/verification contract; upgrade only with its dedicated compatibility validation.
+    //noinspection GradleDependency
     implementation("com.android.tools.build:apksig:8.13.2")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
     add("fullImplementation", "com.google.android.gms:play-services-auth:22.0.0")
@@ -119,5 +121,9 @@ val prepareApkFactoryTemplate by tasks.registering {
 }
 android.sourceSets.getByName("main").assets.srcDir(factoryAssets)
 tasks.configureEach {
-    if (name.startsWith("merge") && name.endsWith("Assets")) dependsOn(prepareApkFactoryTemplate)
+    if ((name.startsWith("merge") && name.endsWith("Assets")) || name.startsWith("lintAnalyze") ||
+        name.endsWith("LintReportModel") || name.endsWith("LintModel")) {
+        // Lint also consumes the generated asset directory; combined test/lint builds require the same producer dependency.
+        dependsOn(prepareApkFactoryTemplate)
+    }
 }

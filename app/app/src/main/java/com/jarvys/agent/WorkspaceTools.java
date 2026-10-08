@@ -148,6 +148,10 @@ public final class WorkspaceTools {
     List<CoreTool> restricted = new ArrayList<>();
     for (CoreTool tool : tools) {
       if (tool instanceof DeliverFileTool) continue;
+      if (tool instanceof CoreConnectorTool) {
+        restricted.add(((CoreConnectorTool) tool).withoutConversation());
+        continue;
+      }
       if (tool instanceof WorkspaceTool) {
         WorkspaceTool original = (WorkspaceTool) tool;
         if (!denyPrivateZones

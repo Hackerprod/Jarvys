@@ -18,7 +18,7 @@ class GoogleWorkspaceConnectorTest {
         override fun isScopeGranted(scope: String) = scope in grants
         override fun request(scope: String, method: String, url: String, body: String?, contentType: String): GoogleHttpResponse {
             requests += Triple(scope, url, body)
-            return if (responses.isEmpty()) GoogleHttpResponse(200, "{}") else responses.removeFirst()
+            return if (responses.isEmpty()) GoogleHttpResponse(200, """{"id":"accepted-id","message":{"id":"message-id"}}""") else responses.removeFirst()
         }
     }
 
@@ -46,7 +46,7 @@ class GoogleWorkspaceConnectorTest {
         assertEquals("Quarterly note", row.getString("subject"))
         assertEquals("Hello from plain text", row.getString("text"))
         assertEquals("report.pdf", row.getJSONArray("attachments").getJSONObject(0).getString("name"))
-        assertFalse(row.toString().contains("metadata-only"))
+        assertEquals("metadata-only", row.getJSONArray("attachments").getJSONObject(0).getString("attachmentId"))
 
         val htmlOnly = JSONObject().put("mimeType", "text/html").put("body", JSONObject().put("data", html))
         val text = GmailContent.messageRow(JSONObject().put("payload", htmlOnly)).getString("text")
@@ -105,8 +105,8 @@ class GoogleWorkspaceConnectorTest {
 
     @Test fun gmailAllowDowngradesUnverifiedRecipientsAndAllowsOnlyUserTypedSavedContactOrListedSender() {
         val auth = FakeAuthorization()
-        auth.responses += GoogleHttpResponse(200, "{}")
-        auth.responses += GoogleHttpResponse(200, "{}")
+        auth.responses += GoogleHttpResponse(200, """{"id":"accepted-id","message":{"id":"message-id"}}""")
+        auth.responses += GoogleHttpResponse(200, """{"id":"accepted-id","message":{"id":"message-id"}}""")
         val contacts = FakeContacts(listOf(ContactRecord(1, "Known", emails = listOf("saved@example.com"))))
         val runtime = GmailConnector(auth, contacts, { true }, { true })
         val definition = GmailConnector.definition(runtime)

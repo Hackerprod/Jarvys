@@ -9,7 +9,6 @@ import android.provider.ContactsContract
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.activity.result.IntentSenderRequest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -1550,12 +1549,9 @@ private fun JarvysApp(
         }
     }
     val googleAuthorizationResolution = remember { com.jarvys.agent.connectors.ActivityIntentSenderBroker.get() }
-    val googleAuthorizationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) {
-        googleAuthorizationResolution.complete(it)
-    }
-    DisposableEffect(googleAuthorizationResolution, googleAuthorizationLauncher) {
-        googleAuthorizationResolution.attach { request: IntentSenderRequest -> googleAuthorizationLauncher.launch(request) }
-        onDispose { googleAuthorizationResolution.detach() }
+    DisposableEffect(googleAuthorizationResolution, context) {
+        val owner = (context as? ComponentActivity)?.let { googleAuthorizationResolution.attachRegistry(it.activityResultRegistry) }
+        onDispose { owner?.let(googleAuthorizationResolution::detach) }
     }
     val navController = rememberNavController()
     SideEffect { onNavControllerReady(navController) }

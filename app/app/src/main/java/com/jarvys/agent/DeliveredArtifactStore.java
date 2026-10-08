@@ -70,6 +70,52 @@ public final class DeliveredArtifactStore {
         }
     }
 
+    /** Bounded native connector download; no intermediate agent-editable workspace file. */
+    ChatAttachment snapshotBytes(String session, byte[] bytes, String name, String requestedMime,
+            CancellationToken token) throws IOException {
+        if (bytes == null || bytes.length > ConnectorArtifactAccess.MAX_BYTES)
+            throw new IOException("Connector attachment exceeds the byte limit");
+        synchronized (lock) {
+            token.throwIfCancelled();
+            File directory = directory(session, true);
+            cleanupStaging(directory);
+            File staged = File.createTempFile(".delivery-", ".tmp", directory);
+            try {
+                byte[] immutable = bytes.clone();
+                String filename = ChatAttachment.sanitizeName(name);
+                String mime = ChatAttachment.normalizeMimeType(requestedMime);
+                String checksum;
+                try { checksum = ArtifactSnapshotIO.hex(MessageDigest.getInstance("SHA-256").digest(immutable)); }
+                catch (java.security.NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
+                String id = UUID.nameUUIDFromBytes((session + "\0" + filename + "\0" + mime + "\0" + checksum)
+                        .getBytes(StandardCharsets.UTF_8)).toString();
+                ChatAttachment attachment = new ChatAttachment(id, filename, mime, immutable.length,
+                        mime.startsWith("image/") ? ChatAttachment.Kind.IMAGE : ChatAttachment.Kind.FILE, id + "-" + filename);
+                File target = path(session, attachment.relativePath);
+                File manifest = path(session, id + ".json");
+                if (manifest.exists()) { resolve(session, attachment); return attachment; }
+                try (FileOutputStream output = new FileOutputStream(staged)) {
+                    for (int offset = 0; offset < immutable.length; offset += 8192) {
+                        token.throwIfCancelled();
+                        output.write(immutable, offset, Math.min(8192, immutable.length - offset));
+                    }
+                    output.getFD().sync();
+                }
+                token.throwIfCancelled();
+                verify(staged); verify(target);
+                if (target.exists()) {
+                    if (target.length() != immutable.length || !hash(target).equals(checksum))
+                        throw new IOException("An interrupted attachment must be inspected before retrying");
+                } else if (!staged.renameTo(target)) throw new IOException("Could not save attachment copy");
+                verify(target);
+                ArtifactSnapshotIO.syncDirectory(directory);
+                writeManifest(manifest, new JSONObject().put("attachment", attachment.toJson()).put("sha256", checksum));
+                return attachment;
+            } catch (org.json.JSONException invalid) { throw new IOException("Could not persist artifact metadata", invalid); }
+            finally { if (staged.exists()) staged.delete(); }
+        }
+    }
+
     public File resolve(String session, ChatAttachment attachment) {
         synchronized (lock) {
             try {

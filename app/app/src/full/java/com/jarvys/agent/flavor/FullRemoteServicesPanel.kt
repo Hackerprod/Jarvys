@@ -56,6 +56,8 @@ import com.jarvys.agent.connectors.GoogleOAuthError
 import com.jarvys.agent.connectors.GoogleOAuthException
 import com.jarvys.agent.connectors.GoogleIdentityAuthorizationException
 import com.jarvys.agent.connectors.GoogleIdentityFailure
+import com.jarvys.agent.connectors.GoogleRevocationState
+import com.jarvys.agent.connectors.GoogleConfigurationDiagnostics
 import com.jarvys.agent.connectors.GmailConnector
 import com.jarvys.agent.connectors.DriveConnector
 import com.jarvys.agent.mcp.McpConnectionStatus
@@ -145,7 +147,7 @@ class FullRemoteServicesPanel : FlavorRemoteServicesPanel {
 }
 
 @Composable
-private fun GoogleServiceCard(
+internal fun GoogleServiceCard(
     title: String,
     description: String,
     brandIconId: String,
@@ -160,9 +162,16 @@ private fun GoogleServiceCard(
     val context = LocalContext.current
     val status by registry.states.collectAsState()
     val definitions by registry.definitions.collectAsState()
-    val enabled = status[connectorId] == ConnectorState.CONNECTED
+    val enabled = status[connectorId] == ConnectorState.CONNECTED &&
+        scopes.firstOrNull()?.first?.let(manager::isScopeGranted) == true
     var setupDialog by remember(connectorId) { mutableStateOf(false) }
-    var inProgress by remember(connectorId) { mutableStateOf(false) }
+    var revokeDialog by remember(connectorId) { mutableStateOf(false) }
+    var forgetPendingDialog by remember(connectorId) { mutableStateOf(false) }
+    val managerRevision by manager.stateRevision.collectAsState()
+    val revocation = remember(manager, managerRevision) { manager.revocationState() }
+    val pendingLegacy = remember(manager, managerRevision) { manager.hasPendingLegacyRevocation() }
+    val clientIdentity = remember(context) { GoogleConfigurationDiagnostics.identity(context) }
+    val inProgress = remember(manager, managerRevision) { manager.isAuthorizationInProgress() }
     var identityMode by remember(connectorId) { mutableStateOf(manager.isIdentityMode()) }
     val isConfigured = manager.isConfigured()
     var clientId by remember(identityMode) { mutableStateOf(manager.configuredClientId()) }
@@ -177,7 +186,7 @@ private fun GoogleServiceCard(
             ServiceBrandIconTile(brandIconId, title)
             Text(title, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis,
                 fontSize = 16.sp, fontWeight = FontWeight.Medium)
-            if (currentState == ConnectorState.CONNECTED) Text(stringResource(R.string.connector_status_connected),
+            if (currentState == ConnectorState.CONNECTED && enabled) Text(stringResource(R.string.connector_status_connected),
                 color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, maxLines = 1)
             Icon(LucideIcons.ChevronRight, contentDescription = stringResource(R.string.connector_details_accessibility),
                 modifier = Modifier.size(22.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -199,9 +208,7 @@ private fun GoogleServiceCard(
         val activity = context as? ComponentActivity
         if (activity == null) Toast.makeText(context, R.string.full_google_config_missing, Toast.LENGTH_LONG).show()
         else {
-            inProgress = true
             manager.authorize(activity, scope) { result ->
-                inProgress = false
                 result.onSuccess {
                     runCatching { registry.connect(connectorId) }
                     Toast.makeText(context, R.string.full_google_auth_success, Toast.LENGTH_LONG).show()
@@ -213,6 +220,7 @@ private fun GoogleServiceCard(
         manager.disableScope(scope)
         registry.disconnect(GmailConnector.ID)
         registry.disconnect(DriveConnector.ID)
+        Toast.makeText(context, R.string.full_google_feature_denied, Toast.LENGTH_LONG).show()
     }
     ConnectorDetailScaffold(
         title = title,
@@ -226,7 +234,7 @@ private fun GoogleServiceCard(
         account = identityAccount,
         summary = description,
         primaryActionLabel = stringResource(primaryActionLabel),
-        primaryActionEnabled = !inProgress,
+        primaryActionEnabled = !inProgress && revocation != GoogleRevocationState.PENDING && !pendingLegacy,
         onPrimaryAction = {
             when {
                 !identityMode && !isConfigured -> setupDialog = true
@@ -237,11 +245,14 @@ private fun GoogleServiceCard(
         disconnectExplanation = stringResource(R.string.full_google_disconnect_body),
         onDisconnect = {
             runCatching {
-                manager.revokeAndClear()
+                manager.disconnectLocal()
                 registry.disconnect(GmailConnector.ID)
                 registry.disconnect(DriveConnector.ID)
                 clientId = ""; accountLabel = ""
-            }.onSuccess { onDetailExit() }
+            }.onSuccess {
+                Toast.makeText(context, R.string.full_google_local_disconnected, Toast.LENGTH_LONG).show()
+                onDetailExit()
+            }
                 .onFailure { error -> Toast.makeText(context, error.message.orEmpty(), Toast.LENGTH_LONG).show() }
         },
         showIdentityHeader = false,
@@ -259,7 +270,7 @@ private fun GoogleServiceCard(
                         ) else listOf(ConnectorPolicyChoice(R.string.connector_add_permission) { authorizeScope(scope) })
                         ConnectorPolicySelector(
                             selectedLabelResource = if (granted) R.string.connector_policy_allow else R.string.connector_add_permission,
-                            choices = choices, enabled = isConfigured && !inProgress,
+                            choices = choices, enabled = isConfigured && !inProgress && revocation != GoogleRevocationState.PENDING && !pendingLegacy,
                         )
                     }
                 }
@@ -290,7 +301,12 @@ private fun GoogleServiceCard(
                     }
                 }
             }
-            if (inProgress) Text(stringResource(R.string.full_google_authorizing), fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+            if (inProgress) {
+                Text(stringResource(R.string.full_google_authorizing), fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+                TextButton(onClick = { manager.cancelAuthorization() }) {
+                    Text(stringResource(R.string.full_google_cancel_authorization))
+                }
+            }
         },
         about = {
             Text(description)
@@ -304,15 +320,60 @@ private fun GoogleServiceCard(
             if (connectorId == GmailConnector.ID) Text(stringResource(R.string.full_google_enable_send_warning))
         },
         advanced = {
-            OutlinedButton(onClick = { setupDialog = true }, modifier = Modifier.fillMaxWidth()) {
+            GoogleConfigurationHelp(clientIdentity)
+            OutlinedButton(onClick = { revokeDialog = true }, enabled = !inProgress && revocation != GoogleRevocationState.PENDING,
+                modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.full_google_revoke_action)) }
+            GoogleRevocationStatus(revocation)
+            if (pendingLegacy) {
+                Text(stringResource(R.string.full_google_pending_legacy_help), fontSize = 12.sp)
+                TextButton(onClick = {
+                    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://myaccount.google.com/connections"))) }
+                }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.full_google_review_account_access)) }
+                OutlinedButton(onClick = { forgetPendingDialog = true },
+                    enabled = revocation != GoogleRevocationState.PENDING && !inProgress, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.full_google_forget_pending_action))
+                }
+            }
+            OutlinedButton(onClick = { setupDialog = true }, enabled = !inProgress && revocation != GoogleRevocationState.PENDING && !pendingLegacy, modifier = Modifier.fillMaxWidth()) {
                 Text(stringResource(R.string.full_google_configure))
             }
             if (!identityMode) TextButton(onClick = {
-                manager.useIdentityMode(); identityMode = true
-                registry.disconnect(GmailConnector.ID); registry.disconnect(DriveConnector.ID)
-                clientId = ""; accountLabel = ""; clientSecret = ""
-            }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.full_google_use_integrated_authorization)) }
+                runCatching {
+                    manager.useIdentityMode(); identityMode = true
+                    registry.disconnect(GmailConnector.ID); registry.disconnect(DriveConnector.ID)
+                    clientId = ""; accountLabel = ""; clientSecret = ""
+                }.onFailure { Toast.makeText(context, googleOAuthErrorMessage(context, it), Toast.LENGTH_LONG).show() }
+            }, enabled = !inProgress && revocation != GoogleRevocationState.PENDING && !pendingLegacy, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.full_google_use_integrated_authorization)) }
         },
+    )
+
+    if (forgetPendingDialog) AlertDialog(
+        onDismissRequest = { forgetPendingDialog = false },
+        title = { Text(stringResource(R.string.full_google_forget_pending_title)) },
+        text = { Text(stringResource(R.string.full_google_forget_pending_body)) },
+        confirmButton = { TextButton(onClick = {
+            runCatching { manager.forgetPendingRevocationLocally() }
+                .onSuccess { forgetPendingDialog = false; clientId = ""; accountLabel = "" }
+                .onFailure { Toast.makeText(context, googleOAuthErrorMessage(context, it), Toast.LENGTH_LONG).show() }
+        }) { Text(stringResource(R.string.full_google_forget_pending_action)) } },
+        dismissButton = { TextButton(onClick = { forgetPendingDialog = false }) { Text(stringResource(R.string.connector_cancel)) } },
+    )
+
+    if (revokeDialog) AlertDialog(
+        onDismissRequest = { revokeDialog = false },
+        title = { Text(stringResource(R.string.full_google_revoke_title)) },
+        text = { Text(stringResource(R.string.full_google_revoke_body)) },
+        confirmButton = { TextButton(onClick = {
+            revokeDialog = false
+            manager.revokeAndClear { result ->
+                registry.refreshStates()
+                Toast.makeText(context, if (result.isSuccess) R.string.full_google_revoke_verified
+                    else R.string.full_google_revoke_failed, Toast.LENGTH_LONG).show()
+            }
+            registry.disconnect(GmailConnector.ID)
+            registry.disconnect(DriveConnector.ID)
+        }) { Text(stringResource(R.string.full_google_revoke_action)) } },
+        dismissButton = { TextButton(onClick = { revokeDialog = false }) { Text(stringResource(R.string.connector_cancel)) } },
     )
 
     if (setupDialog) AlertDialog(
@@ -350,7 +411,7 @@ private fun GoogleServiceCard(
 
 }
 
-private fun googleOAuthErrorMessage(context: Context, error: Throwable): String {
+internal fun googleOAuthErrorMessage(context: Context, error: Throwable): String {
     val identityFailure = (error as? GoogleIdentityAuthorizationException)?.reason
     if (identityFailure != null) {
         return when (identityFailure) {
@@ -359,7 +420,7 @@ private fun googleOAuthErrorMessage(context: Context, error: Throwable): String 
             GoogleIdentityFailure.SCOPE_NOT_GRANTED -> context.getString(R.string.full_google_scope_not_granted)
             GoogleIdentityFailure.ACCESS_BLOCKED -> context.getString(R.string.full_google_error_access_blocked)
             GoogleIdentityFailure.NETWORK -> context.getString(R.string.full_google_network_error)
-            GoogleIdentityFailure.OTHER -> context.getString(R.string.full_google_auth_error, error.message.orEmpty().take(200))
+            GoogleIdentityFailure.OTHER -> context.getString(R.string.full_google_auth_error)
         }
     }
     return when (GoogleOAuthProtocol.mapError((error as? GoogleOAuthException)?.providerError
@@ -367,6 +428,30 @@ private fun googleOAuthErrorMessage(context: Context, error: Throwable): String 
         GoogleOAuthError.REDIRECT_MISMATCH -> context.getString(R.string.full_google_error_redirect_mismatch)
         GoogleOAuthError.ACCESS_BLOCKED -> context.getString(R.string.full_google_error_access_blocked)
         GoogleOAuthError.CALLBACK_TIMEOUT -> context.getString(R.string.full_google_error_callback_timeout)
-        GoogleOAuthError.OTHER -> context.getString(R.string.full_google_auth_error, error.message.orEmpty().take(200))
+        GoogleOAuthError.OTHER -> context.getString(R.string.full_google_auth_error)
     }
+}
+
+@Composable
+internal fun GoogleConfigurationHelp(identity: GoogleConfigurationDiagnostics.ClientIdentity) {
+    ConnectorDetailSection(stringResource(R.string.full_google_diagnostics_title)) {
+        Text(stringResource(R.string.full_google_diagnostics_body), fontSize = 13.sp)
+        Text(stringResource(R.string.full_google_diagnostics_package, identity.packageName), fontSize = 12.sp)
+        if (identity.signingSha1.isEmpty()) Text(stringResource(R.string.full_google_diagnostics_no_cert), fontSize = 12.sp)
+        identity.signingSha1.forEach { fingerprint ->
+            Text(stringResource(R.string.full_google_diagnostics_sha1, fingerprint), fontSize = 12.sp)
+        }
+    }
+}
+
+@Composable
+internal fun GoogleRevocationStatus(state: GoogleRevocationState) {
+    val resource = when (state) {
+        GoogleRevocationState.PENDING -> R.string.full_google_revoke_pending
+        GoogleRevocationState.VERIFIED -> R.string.full_google_revoke_verified
+        GoogleRevocationState.FAILED -> R.string.full_google_revoke_failed
+        GoogleRevocationState.NOT_REQUESTED -> null
+    }
+    if (resource != null) Text(stringResource(resource), fontSize = 12.sp,
+        color = if (state == GoogleRevocationState.FAILED) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
 }

@@ -129,7 +129,7 @@ public final class CoreAgentRuntime {
         new ArrayList(skills),
         null,
         discoverMcpTools(context),
-        discoverConnectorTools(context),
+        discoverConnectorTools(context, sessionId),
         WorkspaceTools.createChat(context, sessionId, !memoryDisabledForConversation),
         ConnectorRegistry.Companion.get(context),
         0,
@@ -568,7 +568,7 @@ public final class CoreAgentRuntime {
             enabled,
             null,
             discoverMcpTools(context),
-            discoverConnectorTools(context),
+            discoverConnectorTools(context, sessionId),
             WorkspaceTools.create(context, sessionId, false),
             ConnectorRegistry.Companion.get(context),
             1,
@@ -1098,7 +1098,7 @@ public final class CoreAgentRuntime {
             enabled,
             null,
             discoverMcpTools(context),
-            discoverConnectorTools(context),
+            discoverConnectorTools(context, sessionId),
             WorkspaceTools.create(context, catalogSession, false),
             ConnectorRegistry.Companion.get(context),
             1,
@@ -1809,13 +1809,13 @@ public final class CoreAgentRuntime {
     return result;
   }
 
-  private static List<CoreTool> discoverConnectorTools(Context context) {
+  private static List<CoreTool> discoverConnectorTools(Context context, String sessionId) {
     ConnectorRegistry registry = ConnectorRegistry.Companion.get(context);
     registry.refreshStates();
     List<CoreTool> result = new ArrayList<>();
     for (ConnectorDefinition definition : registry.connectedDefinitions()) {
       for (ConnectorOperation operation : definition.getOperations()) {
-        result.add(new CoreConnectorTool(registry, definition, operation));
+        result.add(new CoreConnectorTool(registry, definition, operation).withConversation(context, sessionId));
       }
     }
     return result;

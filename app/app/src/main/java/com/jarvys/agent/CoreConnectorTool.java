@@ -20,13 +20,17 @@ public final class CoreConnectorTool implements CoreTool {
     private final String requester;
     private final String requesterColorKey;
     private final ToolSpec declaration;
+    private final android.content.Context context;
+    private final String session;
 
     public CoreConnectorTool(ConnectorRegistry registry, ConnectorDefinition definition, ConnectorOperation operation) {
-        this(registry, definition, operation, null, null);
+        this(registry, definition, operation, null, null, null, null);
     }
 
     private CoreConnectorTool(ConnectorRegistry registry, ConnectorDefinition definition, ConnectorOperation operation,
-                              String requester, String requesterColorKey) {
+                              String requester, String requesterColorKey, android.content.Context context, String session) {
+        this.context = context == null ? null : context.getApplicationContext();
+        this.session = session;
         this.registry = registry;
         this.definition = definition;
         this.operation = operation;
@@ -48,13 +52,24 @@ public final class CoreConnectorTool implements CoreTool {
     }
     ConnectorRegistry connectorRegistry() { return registry; }
     CoreConnectorTool withRequester(String name, String colorKey) {
-        return new CoreConnectorTool(registry, definition, operation, name, colorKey);
+        return new CoreConnectorTool(registry, definition, operation, name, colorKey, null, null);
+    }
+
+    CoreConnectorTool withoutConversation() {
+        return new CoreConnectorTool(registry, definition, operation, requester, requesterColorKey, null, null);
+    }
+
+    CoreConnectorTool withConversation(android.content.Context context, String session) {
+        return new CoreConnectorTool(registry, definition, operation, requester, requesterColorKey, context, session);
     }
 
     @Override public CoreToolResult execute(Map<String, Object> arguments, CancellationToken token) {
-        JSONObject result = registry.invoke(definition, operation,
-                new JSONObject(arguments == null ? Collections.emptyMap() : arguments), token, requester, requesterColorKey);
-        return CoreToolResult.success(result.toString());
+        JSONObject result = ConnectorArtifactAccess.invoke(context, session, () -> registry.invoke(definition, operation,
+                new JSONObject(arguments == null ? Collections.emptyMap() : arguments), token, requester, requesterColorKey));
+        // A continuation token must never survive a silently truncated list of items.
+        // Preserve the complete structured page, or let the loop ask for a smaller/isolated result.
+        return result.has("next_page_token") ? CoreToolResult.complete(result.toString())
+                : CoreToolResult.success(result.toString());
     }
 
     public static String toolName(String connectorId, String operationName) {
