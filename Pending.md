@@ -33,7 +33,7 @@ Modo de ejecución: continuar la cola completa. Al cerrar cada pendiente, verifi
 
 Estado: correcciones implementadas y revisión dirigida completada; validación agregada final de Full/Play en curso.
 
-La primera pasada agregada ejecutó 1159 pruebas Full y 1075 Play. Detectó únicamente una expectativa antigua de la prueba de cancelación de iconos: la cancelación ahora espera al despacho final ya iniciado, igual que el controlador principal. Se actualizó esa prueba con comprobaciones más fuertes de orden, revisión e icono y se está repitiendo la suite completa, sin excluir pruebas ni cambiar esa protección.
+La repetición agregada aprobó 1159 pruebas Full y 1075 Play, sin fallos, errores ni omitidas y con todos los XML frescos. La corrección de cancelación conserva la verificación del icono, la revisión y la prohibición de commits posteriores a STOP. Lint detectó que faltaba declarar API 26 en la clase auxiliar NIO, cuyos accesos ya estaban protegidos por comprobaciones de SDK; se añadió esa anotación y se repiten las verificaciones finales antes de cerrar la etapa.
 
 - **Primer checkpoint:** eliminada la dependencia de hard links en identidad/journal y creación de archivos de Coding, operación prohibida por Android a las apps normales. Los registros privados se promocionan completos; los archivos nuevos se crean de forma exclusiva, sin sobrescribir rutas existentes, con comprobación de tamaño y SHA-256.
 - Si una creación queda interrumpida, se conservan el destino, el staging y la evidencia de recuperación; se informa un resultado parcial o incierto y no se reejecuta automáticamente. Las actualizaciones de archivos existentes conservan el reemplazo atómico.

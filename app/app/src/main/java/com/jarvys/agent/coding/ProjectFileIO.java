@@ -311,6 +311,7 @@ final class ProjectFileIO {
         stat.st_size);
   }
 
+  @androidx.annotation.RequiresApi(26)
   private static final class Nio {
     private Nio() {}
 
