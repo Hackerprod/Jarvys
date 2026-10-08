@@ -1347,4 +1347,7 @@ Their exit results are unknown. Do not repeat them automatically. Review project
     <string name="github_required_scopes">GitHub requested these scopes: %1$s. Review access in Advanced settings and reconnect, or update the token in GitHub.</string>
     <string name="chat_view_in_jarvys">View in Jarvys</string>
     <string name="workspace_preview_partial">Some resources could not be captured. This local preview may be incomplete.</string>
+    <string name="chat_interrupt_send">Stop and send this message</string>
+    <string name="chat_interrupt_pending">Waiting to start. If interrupted, copy this message to send it again.</string>
+    <string name="chat_interrupt_failed">The message could not be queued. Your draft is still here.</string>
 </resources>

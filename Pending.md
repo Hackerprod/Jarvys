@@ -281,7 +281,12 @@ Contrato, referencias y límites: app/CODING_AGENT.md. Código y Pending.md publ
 
 ### 10. UX26: contrato del agente principal
 
-Estado: investigación y contrato original preparados; implementación después de UX25, salvo repriorización explícita.
+Estado: implementación y validación UX26 en curso para v44 / 1.2.37-UX26; todavía no es una entrega validada.
+
+- Integrado un contrato original del agente principal con idioma del usuario, evidencia, recuperación causal, privacidad, límites de autorización y distinción entre progreso y finalización. El prompt de Coding v3 permanece separado; los skills se cargan mediante read_skill cuando son necesarios y las secciones operativas se ajustan a las herramientas reales del turno.
+- La delegación genérica conserva el resultado COMPLETED/PARTIAL/STOPPED/FAILED/UNKNOWN; finalizar un turno no certifica el objetivo. El texto natural junto a llamadas de herramientas se proyecta desde el registro duradero como progreso visible, sin duplicarlo en el contexto ni convertirlo en respuesta final.
+- Implementado Detener y enviar para texto en el mismo chat ordinario: guarda primero una entrada pendiente, cancela la generación previa y sus aprobaciones, espera el cierre del worker y comienza otro turno con contexto actualizado. No es inyección en caliente ni rollback. Las entradas pendientes tras interrupción se conservan visibles y seleccionables; no se ejecutan automáticamente al reiniciar.
+- La revisión inicial detectó carreras de identidad, hidratación y cierre del servicio; se están corrigiendo y comprobando con regresiones deterministas antes de congelar fuente. Las 24 evaluaciones con modelo real y la aceptación en teléfono siguen sin ejecutarse.
 
 - Preparadas 24 pruebas de aceptación; corregir la entrega de resultados de delegación, el canal de progreso natural y la incorporación de indicaciones durante una ejecución activa.
 - Contrastar referencias oficiales de OpenClaw y el runtime actual para definir un contrato original de comunicación, uso de herramientas, delegación y gestión de contexto.

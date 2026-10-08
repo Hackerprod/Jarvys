@@ -911,6 +911,65 @@ public final class LocalRunStore {
     }
 
     /** Loads model context as the latest summary plus the raw tail after its persisted boundary. */
+    /** Durable, inert input. It is not model history or permission until explicitly dispatched. */
+    public synchronized String appendInterruptRequest(String sessionId, String text,
+            List<String> skills, boolean memoryDisabled) {
+        if (!MessageReactionTool.isOrdinaryChat(sessionId) || text == null || text.trim().isEmpty()
+                || text.length() > 32000) throw new IllegalArgumentException("Invalid replacement message");
+        String id = java.util.UUID.randomUUID().toString();
+        try {
+            JSONObject row = new JSONObject().put("type", "main_interrupt_request")
+                .put("requestId", id).put("content", text).put("skills", new JSONArray(skills))
+                .put("memoryDisabled", memoryDisabled).put("timestamp", System.currentTimeMillis() / 1000.0);
+            synchronized (SESSION_TITLE_LOCK) { appendSessionRowLocked(conversationFile(sessionId), row); }
+            return id;
+        } catch (Exception error) { throw new IllegalStateException("Could not preserve replacement message", error); }
+    }
+
+    /** Called only after the old worker has unwound. Duplicate IDs never replay a started turn. */
+    synchronized JSONObject dispatchInterruptRequest(String sessionId, String requestId) {
+        synchronized (SESSION_TITLE_LOCK) {
+            JSONObject pending = null;
+            for (JSONObject row : readConversationRows(sessionId)) {
+                if (requestId.equals(row.optString("interruptRequestId"))) return null;
+                if ("main_interrupt_request".equals(row.optString("type"))
+                        && requestId.equals(row.optString("requestId"))) pending = row;
+            }
+            if (pending == null) return null;
+            try {
+                JSONObject user = new JSONObject().put("role", "user").put("messageId", requestId)
+                    .put("interruptRequestId", requestId).put("content", pending.optString("content"))
+                    .put("timestamp", System.currentTimeMillis() / 1000.0);
+                appendSessionRowLocked(conversationFile(sessionId), user);
+                return pending;
+            } catch (Exception error) { throw new IllegalStateException("Could not dispatch replacement message", error); }
+        }
+    }
+
+    /** UI projection only: the text already exists once in the model's tool-call protocol. */
+    public synchronized AgentRunUiEvent readAssistantProgress(String sessionId, String firstCallId) {
+        if (!MessageReactionTool.isOrdinaryChat(sessionId)) return null;
+        for (JSONObject row : readConversationRows(sessionId)) {
+            JSONArray calls = row.optJSONArray("calls");
+            if ("model_tool_calls".equals(row.optString("type")) && calls != null
+                    && calls.length() > 0 && calls.optJSONObject(0) != null
+                    && firstCallId.equals(calls.optJSONObject(0).optString("id")))
+                return assistantProgressEvent(row, 0L);
+        }
+        return null;
+    }
+
+    private static AgentRunUiEvent assistantProgressEvent(JSONObject row, long id) {
+        String content = row.optString("assistantText", "").trim();
+        JSONArray calls = row.optJSONArray("calls");
+        if (!row.optBoolean("assistantProgress", false) || content.isEmpty() || calls == null
+                || calls.length() == 0 || calls.optJSONObject(0) == null) return null;
+        String key = "progress-" + calls.optJSONObject(0).optString("id");
+        return AgentRunUiEvent.messageEvent(id, "assistant", WebSearchCitationMarkup.resolve(content),
+                (long) (row.optDouble("timestamp", 0) * 1000))
+                .copyMetadata(key, 0L).copyStage("PROGRESS");
+    }
+
     public synchronized List<ConversationTurn> loadConversationContext(String sessionId) {
         List<JSONObject> rows = readConversationRows(sessionId);
         List<JSONObject> messages = new ArrayList<>();
@@ -1374,6 +1433,9 @@ public final class LocalRunStore {
             } else if ("model_tool_result".equals(type)) modelResults.add(row.optString("callId"));
             else if ("model_tool_started".equals(type)) startedModelCalls.add(row.optString("callId"));
         }
+        Set<String> dispatchedInterrupts = new HashSet<>();
+        for (JSONObject row : rows) if (row.has("interruptRequestId"))
+            dispatchedInterrupts.add(row.optString("interruptRequestId"));
         Map<String, String> reactions = MessageReactionTool.isOrdinaryChat(sessionId)
                 ? readMessageReactions(rows) : java.util.Collections.emptyMap();
         int messageIndex = 0;
@@ -1416,6 +1478,12 @@ public final class LocalRunStore {
                         .copyMetadata(messageId, row.optLong("durationMs", 0)).copyStage(
                             AgentRunUiEvent.assistantStageForOutcome(row.optString("status", ""))));
                 }
+            } else if ("main_interrupt_request".equals(type)) {
+                String requestId = row.optString("requestId");
+                if (!dispatchedInterrupts.contains(requestId)) events.add(
+                    AgentRunUiEvent.messageEvent(id++, "user", row.optString("content"),
+                        (long) (row.optDouble("timestamp", 0) * 1000))
+                        .copyMetadata("pending-" + requestId, 0L).copyStage("QUEUED"));
             } else if ("delivered_file".equals(type)) {
                 ChatAttachment artifact = ChatAttachment.fromJson(row.optJSONObject("artifact"));
                 if (artifact != null) events.add(AgentRunUiEvent.deliveredFileEvent(id++, artifact,
@@ -1430,6 +1498,8 @@ public final class LocalRunStore {
             } else if ("model_tool_calls".equals(type)) {
                 String userMessageId = row.optString("userMessageId", "");
                 if (userMessageId.isEmpty() || rowIndex < latestInvalidatedToolTurnRow.getOrDefault(userMessageId, -1)) continue;
+                AgentRunUiEvent progress = assistantProgressEvent(row, id);
+                if (progress != null) { events.add(progress); id++; }
                 JSONArray calls = row.optJSONArray("calls");
                 if (calls != null) for (int callIndex = 0; callIndex < calls.length(); callIndex++) {
                     JSONObject call = calls.optJSONObject(callIndex);

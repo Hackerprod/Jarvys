@@ -25,6 +25,10 @@ public final class CoreAgentLoop {
 
         void onProgress(String stage, String message);
 
+        /** User-facing assistant text only, after durable tool intent and before any tool effect. */
+        default void onAssistantProgress(String callId, String message) { }
+
+
         default void onToolProgress(String stage, String callId, String displayName, String detail) {
             onProgress(stage, displayName);
         }
@@ -526,6 +530,10 @@ public final class CoreAgentLoop {
                 }
                 if (!replyToolCallAlreadyRecorded) transcript.add(ConversationTurn.toolCalls(reply.text, reply.calls));
                 updateTranscriptSnapshot(transcript);
+                if (listener != null && reply.text != null && !reply.text.trim().isEmpty()) {
+                    token.throwIfCancelled();
+                    listener.onAssistantProgress(reply.calls.get(0).id, reply.text.trim());
+                }
                 int remainingResultChars = limits.isUnbounded() ? Integer.MAX_VALUE : budget.toolResultsPerTurnChars;
                 int callCount = limits.maxToolCallsPerTurn == 0 ? reply.calls.size() : Math.min(reply.calls.size(), limits.maxToolCallsPerTurn);
                 String terminalText = null;

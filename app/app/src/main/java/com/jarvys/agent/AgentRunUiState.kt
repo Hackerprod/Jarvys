@@ -218,6 +218,10 @@ data class RunHistoryItem(
 
 /** Bridges the foreground service's existing AgentLoop progress callback into a Compose-observable StateFlow. */
 object AgentRunUiState {
+    private var activeGeneration: Long = Long.MIN_VALUE
+    private var ownedSessionId: String? = null
+    private var ownedRunActive = false
+
     private const val MAX_EVENTS = 300
     private var nextEventId = 1L
     private val lock = Any()
@@ -295,6 +299,7 @@ object AgentRunUiState {
         nextEventId = maxOf(nextEventId, (events.maxOfOrNull { it.id } ?: 0L) + 1L)
         _state.value = AgentRunUiSnapshot(
             sessionId = sessionId,
+            running = ownedRunActive && ownedSessionId == sessionId,
             goal = events.lastOrNull { it.kind == "user" }?.text.orEmpty(),
             events = events,
             reflecting = current.reflecting,
@@ -459,6 +464,63 @@ object AgentRunUiState {
     fun reflectionCancelled(sessionId: String, status: String) = synchronized(lock) {
         val current = _state.value
         _state.value = current.copy(reflecting = false, reflectionSessionId = sessionId, reflectionStatus = status)
+    }
+
+    @JvmStatic
+    fun bindGeneration(sessionId: String, generation: Long) = synchronized(lock) {
+        ownedSessionId = sessionId
+        activeGeneration = generation
+        ownedRunActive = true
+        if (_state.value.sessionId == sessionId) _state.value = _state.value.copy(running = true, outcome = null)
+    }
+
+    @JvmStatic
+    fun beginServiceRun(sessionId: String, goal: String, attachments: List<ChatAttachment>,
+        regeneration: Boolean, generation: Long) = synchronized(lock) {
+        if (_state.value.sessionId == sessionId || _state.value.sessionId == null) {
+            if (regeneration) beginRegenerationRun(sessionId, goal) else beginRun(sessionId, goal, attachments)
+        }
+        bindGeneration(sessionId, generation)
+    }
+
+    @JvmStatic
+    fun ownsGeneration(sessionId: String, generation: Long): Boolean = synchronized(lock) {
+        _state.value.sessionId == sessionId && ownedSessionId == sessionId && activeGeneration == generation
+    }
+
+    @JvmStatic
+    fun withGeneration(sessionId: String, generation: Long, update: Runnable) = synchronized(lock) {
+        if (ownedRunActive && ownsGeneration(sessionId, generation) && _state.value.running) update.run()
+    }
+
+    @JvmStatic
+    fun withSession(sessionId: String, update: Runnable) = synchronized(lock) {
+        if (_state.value.sessionId == sessionId) update.run()
+    }
+
+    @JvmStatic
+    fun stopPendingGeneration(sessionId: String, generation: Long) = synchronized(lock) {
+        if (ownedRunActive && ownedSessionId == sessionId && activeGeneration == generation) {
+            ownedRunActive = false
+            if (_state.value.sessionId == sessionId) _state.value = _state.value.copy(running = false, outcome = "STOPPED")
+        }
+    }
+
+    @JvmStatic
+    fun completeGeneration(sessionId: String, generation: Long, runId: String, outcome: String,
+        text: String, messageId: String, durationMs: Long) = synchronized(lock) {
+        if (ownedSessionId == sessionId && activeGeneration == generation) {
+            ownedRunActive = false
+            if (_state.value.sessionId == sessionId) complete(runId, outcome, text, messageId, durationMs)
+        }
+    }
+
+    @JvmStatic
+    fun assistantProgress(sessionId: String, progress: AgentRunUiEvent) = synchronized(lock) {
+        val current = _state.value
+        if (!current.running || current.sessionId != sessionId || progress.stage != "PROGRESS"
+            || progress.messageId.isBlank() || current.events.any { it.messageId == progress.messageId }) return@synchronized
+        _state.value = current.copy(events = append(current.events, progress.copy(id = nextEventId++)))
     }
 
     @JvmStatic

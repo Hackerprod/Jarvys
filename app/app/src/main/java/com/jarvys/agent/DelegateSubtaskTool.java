@@ -24,7 +24,7 @@ public final class DelegateSubtaskTool implements CoreTool {
   }
 
   public interface ScopedRunner {
-    String run(
+    CoreAgentLoop.Result run(
         String str,
         CoreToolRegistry coreToolRegistry,
         List<String> list,
@@ -111,16 +111,32 @@ public final class DelegateSubtaskTool implements CoreTool {
           "Subtask requested a skill outside this agent's enabled skill scope");
     }
     token.throwIfCancelled();
-    String result =
-        this.scopedRunner == null
-            ? this.runner.run(objective, requestedTools, requestedSkills, token)
-            : this.scopedRunner.run(
-                objective, this.capabilityScope, requestedTools, requestedSkills, token);
-    if (result == null || result.trim().isEmpty()) {
-      return CoreToolResult.failure("Subagent returned no final text");
+    if (this.scopedRunner != null) {
+      CoreAgentLoop.Result result = this.scopedRunner.run(
+          objective, this.capabilityScope, requestedTools, requestedSkills, token);
+      return receipt(result);
     }
-    return CoreToolResult.success(
-        result.length() <= 12000 ? result : result.substring(0, 12000) + "…[truncated]");
+    String text = this.runner.run(objective, requestedTools, requestedSkills, token);
+    // Legacy adapters cannot establish a terminal runtime outcome.
+    return receipt(text == null ? null : new CoreAgentLoop.Result("", text, 0, "UNKNOWN"));
+  }
+
+  static CoreToolResult receipt(CoreAgentLoop.Result result) {
+    if (result == null || result.text == null || result.text.trim().isEmpty())
+      return CoreToolResult.failure("Subagent returned no final text");
+    String outcome = result.outcome == null ? "UNKNOWN" : result.outcome;
+    boolean completed = "COMPLETED".equals(outcome);
+    Map<String, Object> receipt = new LinkedHashMap<>();
+    receipt.put("run_outcome", outcome);
+    receipt.put("run_id", result.runId == null ? "" : result.runId);
+    receipt.put("model_turns", result.turns);
+    receipt.put("task_verified", false);
+    receipt.put("meaning", "Runtime turn status only. Inspect the result and verify the requested outcome; never automatically replay uncertain effects.");
+    boolean truncated = result.text.length() > 12000;
+    receipt.put("text", truncated ? result.text.substring(0, 12000) : result.text);
+    receipt.put("text_truncated", truncated);
+    String content = new org.json.JSONObject(receipt).toString();
+    return completed ? CoreToolResult.success(content) : CoreToolResult.failure(content);
   }
 
   private static List<String> names(CoreToolRegistry scope, boolean recursive) {

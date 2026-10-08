@@ -340,6 +340,8 @@ internal fun IntentMessage(event: AgentRunUiEvent, sessionId: String = "") {
                         .testTag("user-message-bubble-${event.id}")) {
                     Column(Modifier.padding(start = 16.dp, top = 12.dp, end = 16.dp, bottom = contentBottom),
                         verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (event.stage == "QUEUED") Text(stringResource(R.string.chat_interrupt_pending),
+                            style = MaterialTheme.typography.labelSmall)
                         if (event.attachments.isNotEmpty()) UserChatAttachments(event.attachments, sessionId, Modifier.widthIn(max = 320.dp))
                         if (event.text.isNotBlank()) SelectionContainer {
                             AssistantMarkdown(markdown = event.text, onOpenSkillFile = {},

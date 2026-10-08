@@ -551,6 +551,7 @@ class MainActivity : ComponentActivity() {
                         com.jarvys.agent.skills.SkillScopePolicy.availableTo(it.metadata.id, null) },
                     selectedSkillIds = selectedSkillIds,
                     onSubmitMessage = ::submitMessage,
+                    onInterruptAndSend = ::interruptAndSend,
                     pendingAttachments = pendingAttachments,
                     attachmentSending = attachmentSending,
                     onRemoveAttachment = attachmentDrafts::remove,
@@ -723,6 +724,18 @@ class MainActivity : ComponentActivity() {
             runCatching { store.ensureInitialized() }
                 .onFailure { android.util.Log.w("JarvysMemory", "Could not migrate starter memory seeds", it) }
         }
+    }
+
+    private fun interruptAndSend() {
+        if (conversationActionPending || attachmentDrafts.drafts.value.isNotEmpty()) return
+        val text = goalInput
+        if (text.isBlank()) return
+        val state = AgentRunUiState.state.value
+        if (!state.running || state.compacting || state.reflecting || state.sessionId != conversationSessionId) return
+        val skills = ArrayList(skillRepository.enabledForRun().filter { it.metadata.id in selectedSkillIds }.map { it.metadata.id })
+        runCatching { AgentForegroundService.interruptAndSend(this, conversationSessionId, text, skills, chatWithoutMemory) }
+            .onSuccess { accepted -> if (accepted && goalInput == text) goalInput = "" }
+            .onFailure { toast(getString(R.string.chat_interrupt_failed), Toast.LENGTH_LONG) }
     }
 
     private fun submitMessage() {
@@ -1482,6 +1495,7 @@ private fun JarvysApp(
     availableSkills: List<SkillEntry>,
     selectedSkillIds: Set<String>,
     onSubmitMessage: () -> Unit,
+    onInterruptAndSend: () -> Unit = {},
     pendingAttachments: List<PendingChatAttachment>,
     attachmentSending: Boolean,
     onRemoveAttachment: (String) -> Unit,
@@ -1700,6 +1714,10 @@ private fun JarvysApp(
                     goal = goal,
                     onGoalChange = onGoalChange,
                     onSend = onSubmitMessage,
+                    onInterruptAndSend = onInterruptAndSend,
+                    canInterrupt = agentState.running && agentState.sessionId == conversationSessionId
+                        && MessageReactionTool.isOrdinaryChat(conversationSessionId)
+                        && !agentState.compacting && !agentState.reflecting,
                     pendingAttachments = pendingAttachments,
                     attachmentSessionId = conversationSessionId,
                     attachmentSending = attachmentSending,

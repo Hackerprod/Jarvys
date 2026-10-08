@@ -66,7 +66,15 @@ public final class AgentForegroundService extends Service {
             thread.setDaemon(true);
             return thread;
           });
+  interface ReplacementRunner {
+    void run(CancellationToken token, String sessionId, String requestId, String text,
+        ArrayList<String> skills, boolean memoryDisabled);
+  }
+  ReplacementRunner replacementRunner = (token, session, requestId, text, skills, memoryDisabled) ->
+      runRealAgent(token, text, skills, session, text, true, memoryDisabled, false, requestId);
+
   private final AtomicInteger activeReflectionTasks = new AtomicInteger();
+  private final AtomicInteger replacementTransitions = new AtomicInteger();
 
   @Override
   protected void attachBaseContext(Context base) {
@@ -273,6 +281,70 @@ public final class AgentForegroundService extends Service {
                 skillIds == null ? new ArrayList<>() : new ArrayList<>(skillIds));
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent);
     else context.startService(intent);
+  }
+
+  /** Explicit plain-text replacement, serialized after the cancelled worker. Never auto-resumed. */
+  public static boolean interruptAndSend(Context context, String sessionId, String text,
+      ArrayList<String> skills, boolean memoryDisabled) {
+    AgentForegroundService service = currentInstance;
+    if (service == null || !MessageReactionTool.isOrdinaryChat(sessionId)
+        || !sessionId.equals(AgentRunUiState.INSTANCE.getState().getValue().getSessionId())
+        || !AgentRunUiState.INSTANCE.getState().getValue().getRunning()) return false;
+    LocalRunStore store = new LocalRunStore(context);
+    String requestId = store.appendInterruptRequest(sessionId, text, skills, memoryDisabled);
+    // Persistence precedes cancellation and clearing the composer. The input is recoverable even
+    // if the service is destroyed or STOP cancels the queued replacement before it starts.
+    StopController controller = StopController.getInstance();
+    service.replacementTransitions.incrementAndGet();
+    try {
+      controller.stopRun(); // Its cancellation callbacks stop only this captain's Crew and approvals.
+      CancellationToken replacement = controller.beginRun();
+      if (replacement != null) {
+        AgentRunUiState.bindGeneration(sessionId, replacement.generation());
+        java.util.concurrent.atomic.AtomicBoolean dispatched = new java.util.concurrent.atomic.AtomicBoolean(false);
+        Runnable unregister = replacement.registerCancelAction(() -> {
+          if (!dispatched.get()) AgentRunUiState.stopPendingGeneration(sessionId, replacement.generation());
+        });
+        try {
+          Future<?> future = service.worker.submit(() -> {
+            try {
+              replacement.throwIfCancelled();
+              org.json.JSONObject pending = replacement.callIfActive(
+                  () -> store.dispatchInterruptRequest(sessionId, requestId), null);
+              if (pending == null) return;
+              dispatched.set(true);
+              unregister.run();
+              AgentRunUiState.refreshPersistedSession(sessionId, store.readConversationTimeline(sessionId));
+              com.jarvys.agent.proactive.BackgroundRunController.INSTANCE.interactiveStarted();
+              service.replacementRunner.run(replacement, sessionId, requestId, pending.optString("content"),
+                  skills, memoryDisabled);
+            } catch (RuntimeException unavailable) {
+              // The inert input remains visible and selectable; never silently replay it.
+              try {
+                if (store.readConversationMessage(sessionId, requestId) != null)
+                  store.appendConversationMessage(sessionId, "assistant", service.getString(R.string.chat_interrupt_failed),
+                      null, "", requestId, "FAILED");
+              } catch (RuntimeException ignored) { }
+              AgentRunUiState.stopPendingGeneration(sessionId, replacement.generation());
+            } finally {
+              unregister.run();
+              AgentRunUiState.stopPendingGeneration(sessionId, replacement.generation());
+              controller.completeRun(replacement);
+              service.stopServiceIfIdle();
+            }
+          });
+          controller.attachFuture(replacement, future);
+        } catch (RuntimeException rejected) {
+          unregister.run();
+          AgentRunUiState.stopPendingGeneration(sessionId, replacement.generation());
+          controller.completeRun(replacement);
+        }
+      }
+    } finally {
+      service.replacementTransitions.decrementAndGet();
+    }
+    AgentRunUiState.refreshPersistedSession(sessionId, store.readConversationTimeline(sessionId));
+    return true;
   }
 
   public static String getLastRunReport() {
@@ -551,7 +623,7 @@ public final class AgentForegroundService extends Service {
     LocalRunStore conversationStore = new LocalRunStore(this);
     String chatMessage =
         "No pude completar la tarea. Verifica la conexión del proveedor y vuelve a intentarlo.";
-    boolean userMessageRecorded = false;
+    boolean userMessageRecorded = userMessageAlreadyRecorded;
     boolean diagnosticReported = false;
     String userMessageId = existingUserMessageId;
     AgentErrorReporter.AttachmentScope privateContentScope = null;
@@ -573,8 +645,7 @@ public final class AgentForegroundService extends Service {
           || conversationStore.conversationHasPrivateCode(sessionId)) {
         privateContentScope = AgentErrorReporter.suppressForPrivateContent();
       }
-      if (regeneration) AgentRunUiState.beginRegenerationRun(sessionId, displayGoal.trim());
-      else AgentRunUiState.beginRun(sessionId, displayGoal.trim(), attachments);
+      AgentRunUiState.beginServiceRun(sessionId, displayGoal.trim(), attachments, regeneration, token.generation());
       List<ConversationTurn> conversationHistory =
           conversationStore.loadConversationContext(sessionId);
       if (userMessageAlreadyRecorded && !conversationHistory.isEmpty()) {
@@ -610,14 +681,28 @@ public final class AgentForegroundService extends Service {
       CoreAgentLoop.ProgressListener progress =
           new CoreAgentLoop.ProgressListener() {
             @Override
+            public void onAssistantProgress(String callId, String message) {
+              token.runIfActive(() -> {
+                AgentRunUiEvent progress = conversationStore.readAssistantProgress(sessionId, callId);
+                if (progress != null) AgentRunUiState.assistantProgress(sessionId, progress);
+              });
+            }
+
+            @Override
             public void onProgress(String node, String message) {
-              AgentRunUiState.onProgress(node, message);
+              token.runIfActive(() -> {
+                AgentRunUiState.withGeneration(sessionId, token.generation(),
+                    () -> AgentRunUiState.onProgress(node, message));
+              });
             }
 
             @Override
             public void onToolProgress(
                 String stage, String callId, String displayName, String detail, String previewId) {
-              AgentRunUiState.onToolProgress(stage, callId, displayName, detail, previewId);
+              token.runIfActive(() -> {
+                AgentRunUiState.withGeneration(sessionId, token.generation(),
+                    () -> AgentRunUiState.onToolProgress(stage, callId, displayName, detail, previewId));
+              });
             }
 
             @Override
@@ -630,22 +715,25 @@ public final class AgentForegroundService extends Service {
                 String reflectionSource,
                 String auditDetail) {
               persistAndShowToolProgress(conversationStore, sessionId, reflectionUserMessageId,
-                  stage, callId, displayName, detail, previewId, reflectionSource, auditDetail);
+                  stage, callId, displayName, detail, previewId, reflectionSource, auditDetail, token);
             }
 
             @Override
             public void onCompactionStarted(String trigger) {
-              AgentRunUiState.compactionStarted(sessionId, getString(R.string.compaction_running));
+              AgentRunUiState.withGeneration(sessionId, token.generation(),
+                  () -> AgentRunUiState.compactionStarted(sessionId, getString(R.string.compaction_running)));
             }
 
             @Override
             public void onCompactionCompleted(String summary, int summarizedMessages, String mode) {
-              AgentRunUiState.compactionFinished(sessionId, summary, summarizedMessages, mode);
+              AgentRunUiState.withGeneration(sessionId, token.generation(),
+                  () -> AgentRunUiState.compactionFinished(sessionId, summary, summarizedMessages, mode));
             }
 
             @Override
             public void onCompactionFailed(String message) {
-              AgentRunUiState.compactionFailed(sessionId, getString(R.string.compaction_error));
+              AgentRunUiState.withGeneration(sessionId, token.generation(),
+                  () -> AgentRunUiState.compactionFailed(sessionId, getString(R.string.compaction_error)));
             }
           };
       CoreAgentLoop.Result result =
@@ -656,6 +744,7 @@ public final class AgentForegroundService extends Service {
         if (timeoutTask != null) timeoutTask.cancel(false);
         chatMessage = result.text;
       }
+      if (!timedOut) token.throwIfCancelled();
       String proactiveThreadKey =
           conversationStore.proactiveThreadKeyForUserMessage(sessionId, userMessageId);
       String assistantMessageId =
@@ -669,7 +758,7 @@ public final class AgentForegroundService extends Service {
               timedOut ? "PARTIAL" : result.outcome,
               proactiveThreadKey);
       String responseOutcome = timedOut ? "PARTIAL" : result.outcome;
-      AgentRunUiState.complete(
+      AgentRunUiState.completeGeneration(sessionId, token.generation(),
           result.runId, responseOutcome, chatMessage, assistantMessageId, result.durationMs);
       if (proactiveThreadKey != null && !timedOut) {
         com.jarvys.agent.proactive.ProactiveInteractionDispatcher.INSTANCE.refreshNotification(
@@ -712,13 +801,16 @@ public final class AgentForegroundService extends Service {
         }
       }
       if (stopped) {
-        AgentRunUiState.complete("stopped-" + sessionId, "STOPPED", chatMessage);
+        AgentRunUiState.completeGeneration(sessionId, token.generation(), "stopped-" + sessionId,
+            "STOPPED", chatMessage, "", 0L);
         lastRunReport = chatMessage;
       } else if (timedOut) {
-        AgentRunUiState.complete("timeout-" + sessionId, "PARTIAL", chatMessage);
+        AgentRunUiState.completeGeneration(sessionId, token.generation(), "timeout-" + sessionId,
+            "PARTIAL", chatMessage, "", 0L);
         finishCoreRun(token, chatMessage);
       } else {
-        AgentRunUiState.fail(sessionId, chatMessage);
+        AgentRunUiState.completeGeneration(sessionId, token.generation(), "failed-" + sessionId,
+            "FAILED", chatMessage, "", 0L);
         finishCoreRun(token, chatMessage);
       }
     } finally {
@@ -738,6 +830,13 @@ public final class AgentForegroundService extends Service {
   static void persistAndShowToolProgress(LocalRunStore store, String sessionId, String userMessageId,
       String stage, String callId, String displayName, String detail, String previewId,
       String reflectionSource, String auditDetail) {
+    persistAndShowToolProgress(store, sessionId, userMessageId, stage, callId, displayName,
+        detail, previewId, reflectionSource, auditDetail, null);
+  }
+
+  static void persistAndShowToolProgress(LocalRunStore store, String sessionId, String userMessageId,
+      String stage, String callId, String displayName, String detail, String previewId,
+      String reflectionSource, String auditDetail, CancellationToken token) {
     if ("tool_result".equals(stage) || "tool_error".equals(stage)) {
       store.appendConversationToolPresentation(sessionId, userMessageId, displayName, stage, callId,
           detail, previewId, auditDetail);
@@ -746,7 +845,9 @@ public final class AgentForegroundService extends Service {
             "web".equals(reflectionSource) ? "web_search" : displayName, reflectionSource, stage, callId);
       } catch (RuntimeException ignored) { }
     }
-    AgentRunUiState.onToolProgress(stage, callId, displayName, detail, previewId, auditDetail);
+    Runnable show = () -> AgentRunUiState.onToolProgress(stage, callId, displayName, detail, previewId, auditDetail);
+    if (token == null) AgentRunUiState.withSession(sessionId, show);
+    else token.runIfActive(() -> AgentRunUiState.withGeneration(sessionId, token.generation(), show));
   }
 
   private void finishCoreRun(CancellationToken token, String report) {
@@ -834,6 +935,7 @@ public final class AgentForegroundService extends Service {
   private void stopServiceIfIdle() {
     if (StopController.getInstance().isStopped()
         && activeReflectionTasks.get() == 0
+        && replacementTransitions.get() == 0
         && !CoreAgentRuntime.hasActiveCrewBots()) stopSelf();
   }
 

@@ -124,6 +124,8 @@ fun ChatComposer(
     effortLabel: String = "",
     effortAppearance: ModelEffortAppearance? = null,
     effortMotionActive: Boolean = true,
+    canInterrupt: Boolean = false,
+    onInterruptAndSend: () -> Unit = {},
 ) {
     var trayOpen by remember { mutableStateOf(false) }
     var skillsOpen by remember { mutableStateOf(false) }
@@ -184,6 +186,12 @@ fun ChatComposer(
                     Icon(if (expanded) LucideIcons.ChevronDown else LucideIcons.ChevronUp,
                         contentDescription = stringResource(if (expanded) R.string.chat_composer_collapse else R.string.chat_composer_expand),
                         modifier = Modifier.size(18.dp))
+                }
+            }
+            if (running && canInterrupt && goal.isNotBlank() && pendingAttachments.isEmpty() && !attachmentSending) {
+                TextButton(onClick = onInterruptAndSend,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("chat-interrupt-send")) {
+                    Text(stringResource(R.string.chat_interrupt_send))
                 }
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,

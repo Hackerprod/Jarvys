@@ -87,7 +87,7 @@ final class MainChatTranscriptStore {
                             }
                             append(new JSONObject().put("type", "model_tool_calls").put("batchId", batch)
                                     .put("userMessageId", userMessageId).put("messageIndex", messageIndex)
-                                    .put("assistantText", retain(turn.content)).put("calls", calls));
+                                    .put("assistantText", retain(turn.content)).put("assistantProgress", true).put("calls", calls));
                             batches.put(turn, batch);
                         }
                         for (ModelReply.Call call : turn.toolCalls) {
