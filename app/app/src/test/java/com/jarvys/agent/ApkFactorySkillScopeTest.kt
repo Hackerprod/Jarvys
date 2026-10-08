@@ -158,7 +158,7 @@ class ApkFactorySkillScopeTest {
         val session = "factory-disabled-coding-${System.nanoTime()}"
         val runtime = CoreAgentRuntime(context, session, repo.enabledForRun())
         val role = runtime.resolveCrewProfile(CoreAgentRuntime.profileCapabilities(context, session), "coding")
-        assertEquals(2, role.profileVersion)
+        assertEquals(3, role.profileVersion)
         assertTrue(role.tools.containsAll(listOf("ls", "read", "write", "edit", "coding_patch")))
         assertFalse(role.tools.contains("apk_factory"))
         assertFalse(role.tools.contains("read_skill"))
@@ -222,7 +222,7 @@ class ApkFactorySkillScopeTest {
         assertEquals(previous.prompt, preserved.profile.prompt)
         assertEquals(previous.capabilities, preserved.profile.capabilities)
         assertEquals(previous.skillIds, preserved.profile.skillIds)
-        assertEquals(2, profiles.codingProfile().version)
+        assertEquals(3, profiles.codingProfile().version)
         val session = "factory-v1-checkpoint-${System.nanoTime()}"
         val runtime = CoreAgentRuntime(context, session, repository().enabledForRun())
         val empty = CoreToolRegistry(emptyList())

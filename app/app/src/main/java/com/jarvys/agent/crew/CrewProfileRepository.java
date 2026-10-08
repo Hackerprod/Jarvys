@@ -79,27 +79,40 @@ public final class CrewProfileRepository {
     public CrewRole resolveRole(String id, Collection<String> approvedCapabilities, Collection<String> availableSkillIds) {
         BotDefinition definition = definition(id);
         if (!definition.enabled) throw CrewProfile.invalid("bot is disabled: " + id);
-        return runtimeProfile(definition, availableSkillIds).resolveRole(approvedCapabilities, availableSkillIds);
+        return runtimeProfile(definition, approvedCapabilities, availableSkillIds).resolveRole(approvedCapabilities, availableSkillIds);
     }
 
     public List<CrewRole> resolveRoles(Collection<String> approvedCapabilities, Collection<String> availableSkillIds) {
         List<CrewRole> result = new ArrayList<>();
         for (BotDefinition definition : definitions()) if (definition.enabled) {
-            result.add(runtimeProfile(definition, availableSkillIds).resolveRole(approvedCapabilities, availableSkillIds));
+            result.add(runtimeProfile(definition, approvedCapabilities, availableSkillIds).resolveRole(approvedCapabilities, availableSkillIds));
         }
         return Collections.unmodifiableList(result);
     }
 
-    /** Optional factory availability narrows the immutable template only for this run. */
-    private static CrewProfile runtimeProfile(BotDefinition definition, Collection<String> availableSkillIds) {
+    /** One runtime resolver for spawn, resume, and live capability revalidation.
+     * Only the immutable Coding identity gains supported execution names; this is availability,
+     * never command approval. The persisted template and custom copies remain unchanged.
+     */
+    public static CrewProfile runtimeProfile(BotDefinition definition,
+            Collection<String> approvedCapabilities, Collection<String> availableSkillIds) {
+        if (!definition.enabled) throw CrewProfile.invalid("bot is disabled: " + definition.id);
         CrewProfile profile = definition.profile;
-        if (!definition.builtIn || !CrewRoleTemplates.CODING.equals(profile.id)
-                || availableSkillIds.contains(com.jarvys.agent.skills.SkillScopePolicy.APK_FACTORY_ID)) return profile;
+        if (!definition.builtIn || !CrewRoleTemplates.CODING.equals(profile.id)) return profile;
         List<String> skills = new ArrayList<>(profile.skillIds);
-        skills.remove(com.jarvys.agent.skills.SkillScopePolicy.APK_FACTORY_ID);
         List<String> capabilities = new ArrayList<>(profile.capabilities);
-        capabilities.remove(com.jarvys.agent.skills.SkillScopePolicy.APK_FACTORY_TOOL);
-        if (skills.isEmpty()) capabilities.remove("read_skill");
+        if (!availableSkillIds.contains(com.jarvys.agent.skills.SkillScopePolicy.APK_FACTORY_ID)) {
+            skills.remove(com.jarvys.agent.skills.SkillScopePolicy.APK_FACTORY_ID);
+            capabilities.remove(com.jarvys.agent.skills.SkillScopePolicy.APK_FACTORY_TOOL);
+            if (skills.isEmpty()) capabilities.remove("read_skill");
+        }
+        // Treat execution as one lifecycle contract. An incomplete flavor/parent ceiling cannot
+        // expose a launch without its status, logs, completion, and cancellation interfaces.
+        if (approvedCapabilities.containsAll(com.jarvys.agent.flavor.CodingExecutionTools.NAMES)) {
+            for (String name : com.jarvys.agent.flavor.CodingExecutionTools.NAMES) {
+                if (!capabilities.contains(name)) capabilities.add(name);
+            }
+        }
         return new CrewProfile(profile.id, profile.version, profile.name, profile.description, profile.prompt,
                 skills, capabilities, profile.workspaceMode);
     }
@@ -269,7 +282,8 @@ public final class CrewProfileRepository {
                     if (!seen.add(profile.id)) throw CrewProfile.invalid("duplicate profile id: " + profile.id);
                     // A pristine old Coding default needs no clone. Any customization, old workspace,
                     // or revision is retained under a deterministic custom ID, never promoted to runtime.
-                    if (profile.id.equals(CrewRoleTemplates.CODING) && sameProfile(profile, CrewProfile.codingDefault())) continue;
+                    if (profile.id.equals(CrewRoleTemplates.CODING) && (sameProfile(profile, CrewProfile.codingDefault())
+                            || sameProfile(profile, CrewProfile.codingVersionTwo()))) continue;
                     if (!isCustomId(profile.id)) {
                         profile = profile.withIdentity("custom-legacy-" + profile.id + "-" + digest(profile.toJson().toString()));
                     }

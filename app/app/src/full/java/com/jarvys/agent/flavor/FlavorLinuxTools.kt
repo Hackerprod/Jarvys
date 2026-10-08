@@ -8,6 +8,7 @@ import com.jarvys.agent.coding.ProjectScopeStore
 import com.jarvys.agent.crew.CrewManager
 import com.jarvys.agent.crew.CrewProfile
 import com.jarvys.agent.crew.CrewProfileRepository
+import com.jarvys.agent.skills.SkillRepository
 import com.jarvys.agent.connectors.AutonomyPolicy
 import com.jarvys.agent.linux.CodingJobManager
 import com.jarvys.agent.linux.LinuxExecAutonomy
@@ -105,8 +106,23 @@ object FlavorLinuxTools {
         val selected = CodingExecutionTools.NAMES.filter(bot.role.tools::contains)
         if (selected.isEmpty()) return emptyList()
         val app = context.applicationContext
-        val scope = ProjectScopeStore(app.filesDir).open(conversationId)
-        val manager = projectJobManager(app)
+        return createProfileForRuntime(app, conversationId, bot, crew, budget,
+            ProjectScopeStore(app.filesDir).open(conversationId), projectJobManager(app),
+            ProjectInspectionRuntime(app), ApprovalGate.INSTANCE, LinuxExecAutonomy.get(app),
+            LinuxOutputSanitizer.from(app))
+    }
+
+    /** Dependency seam exercises the real profile and approval path without launching native code on host. */
+    internal fun createProfileForRuntime(context: Context, conversationId: String, bot: CrewManager.Bot,
+            crew: CrewManager, budget: CorePromptBudget, scope: ProjectScope, manager: CodingJobManager,
+            runtime: LinuxRuntime, gate: ApprovalGate, autonomy: LinuxExecAutonomy,
+            sanitizer: LinuxOutputSanitizer): List<CoreTool> {
+        if (!available(context, conversationId, 0) || bot.role.profileVersion <= 0 ||
+            bot.role.workspaceMode != CrewProfile.WorkspaceMode.CONVERSATION_PROJECT) return emptyList()
+        val selected = CodingExecutionTools.NAMES.filter(bot.role.tools::contains)
+        if (selected.isEmpty()) return emptyList()
+        require(scope.conversationId() == conversationId) { "Project belongs to another conversation" }
+        val app = context.applicationContext
         val owners = ConcurrentHashMap.newKeySet<String>()
         crew.registerOwnedWork(bot, object : CrewManager.OwnedWork {
             override fun pending(): Boolean = owners.any(manager::hasPending)
@@ -117,15 +133,18 @@ object FlavorLinuxTools {
             if (bot.role.profileVersion <= 0 || bot.role.workspaceMode != CrewProfile.WorkspaceMode.CONVERSATION_PROJECT ||
                 name !in bot.role.tools) return false
             return runCatching {
-                val profile = profiles.profile(bot.role.id)
+                val definition = profiles.definition(bot.role.id)
+                val selectedSkills = SkillRepository.get(app).enabledForProfile(bot.role.id).map { it.metadata.id }
+                val profile = CrewProfileRepository.runtimeProfile(definition,
+                    profileCapabilityNames(app, conversationId), selectedSkills)
                 profile.version == bot.role.profileVersion && profile.workspaceMode == CrewProfile.WorkspaceMode.CONVERSATION_PROJECT &&
                     name in profile.capabilities
             }.getOrDefault(false)
         }
         fun permitted(name: String, token: CancellationToken) = available(app, conversationId, 0) && token === bot.token &&
             !token.isCancelled && selectedNow(name)
-        return CodingExecutionTools(scope, manager, ProjectInspectionRuntime(app), ApprovalGate.INSTANCE,
-            LinuxExecAutonomy.get(app), LinuxOutputSanitizer.from(app), budget, bot.name, bot.role.colorKey,
+        return CodingExecutionTools(scope, manager, runtime, gate,
+            autonomy, sanitizer, budget, bot.name, bot.role.colorKey,
             owner = { token ->
                 check(permitted(CodingExecutionTools.JOBS, token)) { "Current profile no longer permits project job access" }
                 scope.validate()

@@ -422,6 +422,10 @@ public final class CrewManager implements AutoCloseable {
             if (support == null) throw new IllegalStateException("Resume is unavailable in this runtime");
             try {
                 ResumePlan plan = support.reconcile(bot);
+                if (bot.role.missionAccess == CrewMissionAccess.READ_ONLY
+                        && plan.role.missionAccess != CrewMissionAccess.READ_ONLY) {
+                    throw new IllegalStateException("Resume cannot elevate a read-only mission");
+                }
                 validateCurrentProfile(plan.role);
                 bot.role = plan.role;
                 bot.token = bot.freshToken();
@@ -554,6 +558,11 @@ public final class CrewManager implements AutoCloseable {
     }
 
     public Bot spawn(String roleId, String mission, List<String> requestedTools, String requestedName) {
+        return spawn(roleId, mission, requestedTools, requestedName, CrewMissionAccess.STANDARD);
+    }
+
+    public Bot spawn(String roleId, String mission, List<String> requestedTools, String requestedName,
+            CrewMissionAccess missionAccess) {
         if (mission == null || mission.trim().isEmpty()) throw new IllegalArgumentException("mission must be a non-empty string");
         CrewRole role;
         if ("custom".equalsIgnoreCase(roleId)) {
@@ -570,6 +579,11 @@ public final class CrewManager implements AutoCloseable {
                 role = role.withTools(selected);
             }
         }
+        if (missionAccess == CrewMissionAccess.READ_ONLY
+                && (role.profileVersion <= 0 || role.workspaceMode != CrewProfile.WorkspaceMode.CONVERSATION_PROJECT)) {
+            throw new IllegalArgumentException("read_only requires a versioned conversation-project profile");
+        }
+        role = role.withMissionAccess(missionAccess);
         validateRole(role);
         validateCurrentProfile(role);
         String id = "bot-" + UUID.randomUUID();
@@ -618,6 +632,9 @@ public final class CrewManager implements AutoCloseable {
     }
 
     private void validateRole(CrewRole role) {
+        if (role.tools.contains("project_exec") && !role.tools.contains("project_jobs")) {
+            throw new IllegalArgumentException("project_exec requires project_jobs for output and cancellation");
+        }
         for (String name : role.tools) {
             if ("delete".equals(name)) throw new IllegalArgumentException("Bots cannot receive memory deletion tools");
             if (isCaptainOnly(name)) throw new IllegalArgumentException("Bots cannot receive captain-only Crew tools");
@@ -863,6 +880,9 @@ public final class CrewManager implements AutoCloseable {
         Bot sender = "chief".equals(from) ? null : bots.get(from);
         if (!"chief".equals(from) && sender == null) throw new IllegalArgumentException("Unknown Crew sender");
         if (sender != null && terminal(sender.status)) throw new IllegalArgumentException("A stopped or finished bot cannot send messages");
+        if (sender != null && sender.role.missionAccess == CrewMissionAccess.READ_ONLY && !"chief".equals(to)) {
+            throw new IllegalArgumentException("Read-only missions can message only the captain; they cannot dispatch work to another bot");
+        }
         Bot recipient = "chief".equals(to) ? null : bots.get(to);
         if (!"chief".equals(to) && recipient == null) throw new IllegalArgumentException("Unknown Crew recipient");
         if (text == null || text.trim().isEmpty()) throw new IllegalArgumentException("text must be non-empty");

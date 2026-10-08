@@ -19,15 +19,15 @@ public final class CrewTools {
 
     public static List<CoreTool> captain(CrewManager manager, CoreToolRegistry captainTools) {
         return Arrays.asList(
-                new CaptainTool("crew_spawn", "Spawn a role-scoped Crew bot to work concurrently on a mission. Role may be a built-in role id or custom; custom roles require name and an explicit tools list.",
-                        schema(props("role", "string", "mission", "string", "tools", "array", "name", "string"), "mission", "role")) {
+                new CaptainTool("crew_spawn", "Spawn a role-scoped Crew bot to work concurrently on a mission. Role may be a built-in role id or custom; custom roles require name and an explicit tools list. For project review, explanation, or planning without implementation, set mission_access=read_only. That persistent restriction removes project/board mutation, commands, packaging, nested delegation, and messages to other workers; standard never grants approval.",
+                        schema(props("role", "string", "mission", "string", "tools", "array", "name", "string", "mission_access", "string"), "mission", "role")) {
                     @Override CoreToolResult run(Map<String,Object> a, CancellationToken token) {
                         token.throwIfCancelled();
                         String role = string(a,"role");
                         String mission = string(a,"mission");
                         List<String> tools = strings(a.get("tools"), "tools");
                         CrewManager.Bot bot = manager.spawn(role, mission, a.containsKey("tools") ? tools : null,
-                                optionalString(a,"name"));
+                                optionalString(a,"name"), CrewMissionAccess.parse(a.containsKey("mission_access") ? string(a,"mission_access") : null));
                         return CoreToolResult.success("Spawned " + bot.name + " (" + bot.id + ") status=" + bot.status());
                     }
                 },
@@ -103,7 +103,7 @@ public final class CrewTools {
                 return CoreToolResult.success(CrewManager.formatMessages(answer));
             }
         });
-        if (bot.role.tools.contains("report_done")) tools.add(new BotTool("report_done", "Submit this work cycle's result to the captain. A later follow-up may reanimate the bot with its retained transcript.",
+        if (bot.role.tools.contains("report_done")) tools.add(new BotTool("report_done", "Submit this work cycle's verified, partial, or blocked result to the captain, with exact source/artifact refs, executed checks, unrun checks and limitations. A tool exit code alone does not establish test coverage or final-source validity. A later follow-up retains the mission restriction.",
                 schema(props("result","string","refs","array"),"result")) {
             @Override CoreToolResult run(Map<String,Object> a, CancellationToken token) {
                 token.throwIfCancelled(); manager.reportDone(bot, string(a,"result"), strings(a.get("refs"),"refs"));

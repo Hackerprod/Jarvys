@@ -26,7 +26,7 @@ public class CrewProfileRecoveryTest {
     public void codingDefaultRetainsExplicitCapabilitiesAndProjectScope() {
         CrewProfile profile = CrewProfile.codingDefault();
         assertEquals("coding", profile.id);
-        assertEquals(2, profile.version);
+        assertEquals(3, profile.version);
         assertEquals(CrewProfile.WorkspaceMode.CONVERSATION_PROJECT, profile.workspaceMode);
         assertFalse(profile.capabilities.contains("project_exec"));
         assertTrue(profile.capabilities.contains("coding_patch"));
@@ -88,7 +88,7 @@ public class CrewProfileRecoveryTest {
         CrewProfile saved = repository.save(initial, initial.capabilities, initial.skillIds);
         assertEquals(2, saved.version);
         assertEquals(2, repository.profile(initial.id).version);
-        assertEquals(2, repository.codingProfile().version);
+        assertEquals(3, repository.codingProfile().version);
         assertThrows(IllegalArgumentException.class, ()->repository.save(initial, initial.capabilities, initial.skillIds));
         File file = new File(root, "crew_profiles/profiles.json");
         assertEquals(3, new JSONObject(new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8)).getInt("schemaVersion"));

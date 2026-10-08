@@ -18,6 +18,7 @@ public final class CrewRole {
     public final int profileVersion;
     public final List<String> skillIds;
     public final CrewProfile.WorkspaceMode workspaceMode;
+    public final CrewMissionAccess missionAccess;
 
     public CrewRole(String id, String name, String colorKey, String missionPrompt,
                     List<String> tools, String model) {
@@ -33,12 +34,22 @@ public final class CrewRole {
     public CrewRole(String id, String name, String colorKey, String missionPrompt,
                     List<String> tools, String model, String description, int profileVersion,
                     List<String> skillIds, CrewProfile.WorkspaceMode workspaceMode) {
+        this(id, name, colorKey, missionPrompt, tools, model, description, profileVersion, skillIds,
+                workspaceMode, CrewMissionAccess.STANDARD);
+    }
+
+    public CrewRole(String id, String name, String colorKey, String missionPrompt,
+                    List<String> tools, String model, String description, int profileVersion,
+                    List<String> skillIds, CrewProfile.WorkspaceMode workspaceMode, CrewMissionAccess missionAccess) {
+        if (missionAccess == null) throw new IllegalArgumentException("mission access is required");
+        this.missionAccess = missionAccess;
         this.id = required(id, "id");
         this.name = required(name, "name");
         this.colorKey = required(colorKey, "colorKey");
         this.missionPrompt = required(missionPrompt, "missionPrompt");
         LinkedHashSet<String> unique = new LinkedHashSet<>(tools == null ? Collections.emptyList() : tools);
         if (unique.size() != (tools == null ? 0 : tools.size())) throw new IllegalArgumentException("Duplicate role tools are not allowed");
+        unique.removeIf(nameToCheck -> !missionAccess.permits(nameToCheck));
         this.tools = Collections.unmodifiableList(new ArrayList<>(unique));
         this.model = model == null || model.trim().isEmpty() ? null : model.trim();
         this.description = required(description, "description");
@@ -50,12 +61,21 @@ public final class CrewRole {
         if (selectedSkills.size() != (skillIds == null ? 0 : skillIds.size())) {
             throw new IllegalArgumentException("Duplicate role skills are not allowed");
         }
-        this.skillIds = Collections.unmodifiableList(new ArrayList<>(selectedSkills));
+        this.skillIds = this.tools.contains("read_skill")
+                ? Collections.unmodifiableList(new ArrayList<>(selectedSkills)) : Collections.emptyList();
     }
 
     public CrewRole withTools(Collection<String> selectedTools) {
         return new CrewRole(id, name, colorKey, missionPrompt, new ArrayList<>(selectedTools), model,
-                description, profileVersion, skillIds, workspaceMode);
+                description, profileVersion, skillIds, workspaceMode, missionAccess);
+    }
+
+    public CrewRole withMissionAccess(CrewMissionAccess access) {
+        if (missionAccess == CrewMissionAccess.READ_ONLY && access != missionAccess) {
+            throw new IllegalArgumentException("A read-only mission cannot be elevated; start a new authorized mission");
+        }
+        return new CrewRole(id, name, colorKey, missionPrompt, tools, model,
+                description, profileVersion, skillIds, workspaceMode, access);
     }
 
     private static String required(String value, String field) {

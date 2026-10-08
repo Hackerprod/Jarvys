@@ -261,9 +261,11 @@ Estado: completado en código, revisión independiente y validación de host par
 
 ### 9. UX25: prompt de producción y harness de Coding
 
-Estado: investigación y propuesta original preparadas; implementación después de UX24, salvo repriorización explícita.
+Estado: implementación y pruebas dirigidas en curso para v43 / 1.2.36-UX25; todavía no se declara validada ni entregada.
 
-- La auditoría detectó que Coding integrado no declara ejecución aunque el backend Full existe para perfiles personalizados. Alinear declaración y runtime bajo aprobación, sin activar permisos automáticamente.
+- Integrado contrato original en inglés en Coding v3 y resolver efectivo para exponer ejecución Full en la plantilla integrada, con aprobación por comando conservada. El backend Full ya existía; no se presenta como eliminado ni recién creado. Play no incorpora ejecución.
+- Añadido modo explícito read_only persistente con herramientas de lectura, sin mutaciones ni delegación lateral a otro bot. No se clasifica automáticamente el lenguaje natural; el capitán debe seleccionar el modo y respetar la petición del usuario. Timeout de comandos de 900 segundos por defecto, hasta 3600 por petición explícita, sin Allow silencioso.
+- Los recibos muestran el comando redactado y su estado real; report_done sigue sin certificar semánticamente las pruebas ni vincularlas universalmente a hashes de la fuente final. Esa brecha y la evaluación con modelo/dispositivo reales quedan explícitas en app/CODING_AGENT.md.
 - Preparadas 18 pruebas de aceptación para integrar el prompt, ejecución y recuperación.
 - Redactar un prompt original y completo para Coding, contrastando referencias públicas con el comportamiento real del harness de Jarvys.
 - Auditar herramientas disponibles, lectura/escritura, ejecución, planificación, verificación, recuperación, contexto y entrega. No prometer capacidades que el runtime no expone.

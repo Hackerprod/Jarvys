@@ -50,7 +50,7 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
             if (bot.scopeIdentity().isEmpty()) {
                 bot.setScopeIdentity(new ProjectScopeStore(this.context.getFilesDir()).open(this.conversation).durableIdentity());
             }
-            JSONObject metadata = new JSONObject().put("conversationId", this.conversation).put("botId", bot.id).put("missionId", bot.missionId).put("mission", bot.mission).put("name", bot.name).put("status", bot.status().name()).put("result", bot.result()).put("error", bot.error()).put("startedAtMillis", bot.startedAtMillis()).put("finishedAtMillis", bot.finishedAtMillis()).put("completedCycles", bot.completedCycles()).put("jobOwners", new JSONArray((Collection)bot.recoveredJobOwners())).put("role", new CrewProfile(bot.role.id, bot.role.profileVersion, bot.role.name, bot.role.description, bot.role.missionPrompt, bot.role.skillIds, bot.role.tools, bot.role.workspaceMode).toJson()).put("messages", encodeMessages(messages, bot.id)).put("pending", encodeMessages(pending, bot.id));
+            JSONObject metadata = new JSONObject().put("conversationId", this.conversation).put("botId", bot.id).put("missionId", bot.missionId).put("mission", bot.mission).put("missionAccess", bot.role.missionAccess.value).put("name", bot.name).put("status", bot.status().name()).put("result", bot.result()).put("error", bot.error()).put("startedAtMillis", bot.startedAtMillis()).put("finishedAtMillis", bot.finishedAtMillis()).put("completedCycles", bot.completedCycles()).put("jobOwners", new JSONArray((Collection)bot.recoveredJobOwners())).put("role", new CrewProfile(bot.role.id, bot.role.profileVersion, bot.role.name, bot.role.description, bot.role.missionPrompt, bot.role.skillIds, bot.role.tools, bot.role.workspaceMode).toJson()).put("messages", encodeMessages(messages, bot.id)).put("pending", encodeMessages(pending, bot.id));
             this.store.save(this.conversation, bot.id, metadata, bot.scopeIdentity(), bot.checkpoint(), bot.artifactOwnership());
         } catch (Exception failure) {
             throw new IllegalStateException("Could not save the bot checkpoint; no further work is safe", failure);
@@ -93,7 +93,9 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
                         if (profile.workspaceMode != CrewProfile.WorkspaceMode.CONVERSATION_PROJECT) {
                             throw new IllegalStateException("Checkpoint workspace is not resumable");
                         }
-                        CrewRole role = profile.resolveRole(profile.capabilities, profile.skillIds);
+                        CrewRole role = profile.resolveRole(profile.capabilities, profile.skillIds)
+                                .withMissionAccess(com.jarvys.agent.crew.CrewMissionAccess.parse(
+                                        data.has("missionAccess") ? data.getString("missionAccess") : null));
                         List<String> owners = strings(data.getJSONArray("jobOwners"));
                         for (String owner : owners) validateOwner(visible.id, owner);
                         String state = data.getString("status");

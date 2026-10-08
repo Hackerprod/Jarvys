@@ -43,13 +43,15 @@ class CodingExecutionToolsTest {
         val store = InMemoryConnectorAutonomyStore()
         val autonomy = LinuxExecAutonomy(store, { true })
         var executed = 0
+        var timeout: Long? = null
+        var budget = CorePromptBudget.standard()
         var requests = 0
         var capability = true
         var decision = ApprovalDecision.APPROVED
         var duringApproval: () -> Unit = { }
         lateinit var gate: ApprovalGate
-        val jobs = CodingJobManager(files, CodingJobManager.Backend { _, _, _, _, _, output, launch ->
-            launch(); executed++; output.onChunk(LinuxOutputStream.STDOUT, "verified\n"); LinuxExecResult(0)
+        val jobs = CodingJobManager(files, CodingJobManager.Backend { _, _, _, limit, _, output, launch ->
+            launch(); executed++; timeout = limit; output.onChunk(LinuxOutputStream.STDOUT, "verified\n"); LinuxExecResult(0)
         }, executor = Executor { it.run() })
         init {
             gate = ApprovalGate(presenter = object : ApprovalPresenter {
@@ -60,7 +62,7 @@ class CodingExecutionToolsTest {
             })
         }
         val tools get() = CodingExecutionTools(scope, jobs, runtime, gate, autonomy, LinuxOutputSanitizer(emptyList(), emptyList()),
-            CorePromptBudget.standard(), "Bot", "coding", { "chat/bot/1" }, { _, _ -> capability }).create(CodingExecutionTools.NAMES)
+            budget, "Bot", "coding", { "chat/bot/1" }, { _, _ -> capability }).create(CodingExecutionTools.NAMES)
             .associateBy { it.declaration().name }
         fun execute(extra: Map<String, Any> = emptyMap()) = tools.getValue(CodingExecutionTools.EXEC).execute(
             mapOf("command" to "test", "expected_scope_version" to scope.version()) + extra, CancellationToken.cancellable())
@@ -99,4 +101,42 @@ class CodingExecutionToolsTest {
         f.duringApproval = { f.scope.acquireWriter("other", f.scope.version()).use { it.markChanged() } }
         assertFalse(f.execute().success); assertEquals(0, f.executed)
     }
+    @Test fun executionTimeoutIsFiniteByDefaultAndStrictlyBoundedBeforeApproval() {
+        val f = Fixture(folder.newFolder())
+        assertTrue(f.execute().success)
+        assertEquals(900_000L, f.timeout)
+        assertTrue(f.execute(mapOf("timeout_seconds" to 3600)).success)
+        assertEquals(3_600_000L, f.timeout)
+        assertFalse(f.execute(mapOf("timeout_seconds" to 3601)).success)
+        assertFalse(f.execute(mapOf("timeout_seconds" to 1.5)).success)
+        assertFalse(f.execute(mapOf("timeout_seconds" to Long.MAX_VALUE)).success)
+        assertEquals(2, f.requests)
+        assertEquals(2, f.executed)
+    }
+
+    @Test fun longCommandPreviewCannotConsumeTheBudgetNeededForJobLogsAndLifecycle() {
+        val f = Fixture(folder.newFolder())
+        f.budget = CorePromptBudget(4096, 256, 1, 256, 2048)
+        val result = f.execute(mapOf("command" to "echo fixture\n".repeat(1000)))
+        assertTrue(result.content, result.success)
+        val receipt = JSONObject(result.content)
+        assertTrue(receipt.getBoolean("command_truncated"))
+        assertEquals(128, receipt.getString("command").length)
+        assertEquals(13_000, receipt.getInt("command_chars"))
+        assertTrue(result.content.length < 2048)
+        val token = CancellationToken.cancellable()
+        val jobs = f.tools.getValue(CodingExecutionTools.JOBS)
+        val list = jobs.execute(mapOf("action" to "list"), token)
+        assertTrue(list.content, list.success)
+        assertEquals(1, JSONObject(list.content).getJSONArray("jobs").length())
+        for (action in listOf("read", "wait")) {
+            val page = jobs.execute(mapOf("action" to action, "job_id" to receipt.getString("job_id"),
+                "wait_seconds" to 1), token)
+            assertTrue(page.content, page.success)
+            assertEquals("[stdout] verified\n", JSONObject(page.content).getString("output"))
+            assertTrue(page.content.length <= 2048)
+        }
+        assertEquals(1, f.executed)
+    }
+
 }

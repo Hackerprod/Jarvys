@@ -49,10 +49,10 @@ class CodingExecutionTools internal constructor(
             when (name) {
                 EXEC -> {
                     properties = linkedMapOf("command" to type("string"), "cwd" to type("string"),
-                        "expected_scope_version" to type("integer"), "timeout_seconds" to type("integer"),
+                        "expected_scope_version" to type("integer"), "timeout_seconds" to mapOf("type" to "integer", "minimum" to 1, "maximum" to MAX_TIMEOUT_SECONDS, "default" to DEFAULT_TIMEOUT_SECONDS),
                         "required_tools" to mapOf("type" to "array", "items" to type("string")))
                     required = listOf("command", "expected_scope_version")
-                    description = "Start one approved non-interactive command job in this exact project. ASK on every invocation, even when principal commands are allowed. Stdin is closed; no PTY, daemon service or automatic installation. Requires current expected_scope_version; holds the project writer lease until reaped. Poll project_jobs; never repeat an uncertain command."
+                    description = "Start one approved non-interactive command job in this exact project. ASK on every invocation, even when principal commands are allowed. Stdin is closed; no PTY, daemon service or automatic installation. Uses a 900-second default timeout; explicit timeout_seconds must be 1..3600. Requires current expected_scope_version; holds the project writer lease until reaped. Poll project_jobs; never repeat an uncertain command."
                 }
                 JOBS -> {
                     properties = linkedMapOf("action" to mapOf("type" to "string", "enum" to listOf("list", "read", "wait", "cancel")),
@@ -102,7 +102,9 @@ class CodingExecutionTools internal constructor(
         val prior = jobs.recoverySummaries(scope)
         val unreadable = jobs.recoveryIssueCount(scope)
         val version = integer(arguments["expected_scope_version"], "expected_scope_version", 0)
-        val timeout = arguments["timeout_seconds"]?.let { Math.multiplyExact(integer(it, "timeout_seconds", 1), 1000L) }
+        val timeoutSeconds = arguments["timeout_seconds"]?.let { integer(it, "timeout_seconds", 1) } ?: DEFAULT_TIMEOUT_SECONDS
+        require(timeoutSeconds <= MAX_TIMEOUT_SECONDS) { "timeout_seconds must not exceed $MAX_TIMEOUT_SECONDS; split longer work into observable stages" }
+        val timeout = Math.multiplyExact(timeoutSeconds, 1000L)
         val rawTools = arguments["required_tools"] ?: emptyList<String>()
         require(rawTools is List<*> && rawTools.all { it is String && it.matches(Regex("[A-Za-z0-9_.+-]+")) }) {
             "required_tools must be an array of executable names"
@@ -137,8 +139,7 @@ class CodingExecutionTools internal constructor(
             ConnectorUiText(R.string.full_project_exec_effects, fallback = "Effects: may read, write or delete project files, execute programs and use this app's network access. A project writer lease is held until process cleanup."),
             ConnectorUiText(R.string.full_project_exec_warning, fallback = "PRoot is not a security sandbox; the prepared system rootfs is shared and writable. Project cwd and a limited mount do not contain malicious code or isolate it from this app's privileges."),
             ConnectorUiText(R.string.full_project_exec_noninteractive, fallback = "Non-interactive: stdin is closed. A read-only environment probe runs before the literal command. Missing packages are never installed automatically."),
-            timeout?.let { ConnectorUiText(R.string.full_project_exec_timeout, listOf(it / 1000), "Requested timeout (seconds): ${it / 1000}") }
-                ?: ConnectorUiText(R.string.full_project_exec_no_timeout, fallback = "No command timeout requested; STOP/cancel remains available."))
+            ConnectorUiText(R.string.full_project_exec_timeout, listOf(timeoutSeconds), "Requested timeout (seconds): $timeoutSeconds"))
         if (prior.isNotEmpty()) {
             val ids = prior.joinToString("\n") { "${it.id}: ${it.state}" }
             lines += ConnectorUiText(R.string.full_project_exec_prior_outcomes, listOf(ids), "Prior interrupted or uncertain jobs in this project:\n$ids\nTheir exit results are unknown. Do not repeat them automatically. Inspect the project before approving new effects.")
@@ -217,7 +218,11 @@ class CodingExecutionTools internal constructor(
         return path
     }
     private fun snapshotJson(s: CodingJobManager.Snapshot) = JSONObject().put("job_id", s.id).put("owner", s.owner)
-        .put("project_id", s.scopeId).put("cwd", s.cwd).put("state", s.state.name).put("terminal", s.state.terminal)
+        .put("project_id", s.scopeId).put("cwd", s.cwd).put("command", s.redactedCommand.take((responseBudget / 16).coerceAtMost(1024)))
+        .put("command_truncated", s.redactedCommand.length > (responseBudget / 16).coerceAtMost(1024))
+        .put("command_chars", s.redactedCommand.length)
+        .put("verification_notice", "Process evidence only: inspect the log, check discovery/counts and final source/artifact identity before claiming tests or builds passed. A later edit may invalidate earlier checks.")
+        .put("state", s.state.name).put("terminal", s.state.terminal)
         .put("created_at", s.createdAt).put("started_at", s.startedAt ?: JSONObject.NULL).put("finished_at", s.finishedAt ?: JSONObject.NULL)
         .put("exit_code", s.exitCode ?: JSONObject.NULL).put("log_artifact", s.logArtifact).put("log_bytes", s.logBytes)
         .put("log_complete", s.logComplete).put("error", sanitizer.scrub(s.error))
@@ -233,6 +238,8 @@ class CodingExecutionTools internal constructor(
     }
     private fun type(name: String) = mapOf("type" to name)
     companion object {
+        internal const val DEFAULT_TIMEOUT_SECONDS = 900L
+        internal const val MAX_TIMEOUT_SECONDS = 3600L
         const val EXEC = "project_exec"
         const val JOBS = "project_jobs"
         const val STATUS = "project_environment_status"

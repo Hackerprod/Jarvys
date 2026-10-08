@@ -634,7 +634,8 @@ public final class CoreAgentRuntime {
         current.description,
         current.profileVersion,
         bot.role.skillIds,
-        current.workspaceMode);
+        current.workspaceMode,
+        bot.role.missionAccess);
   }
 
   private void validateResumePolicies(List<String> selected) {
@@ -846,6 +847,9 @@ public final class CoreAgentRuntime {
   private List<CoreTool> createCodingTools(String conversation, CrewManager.Bot bot) {
     try {
       ProjectScope scope = new ProjectScopeStore(this.context.getFilesDir()).open(conversation);
+      if (bot.role.missionAccess == com.jarvys.agent.crew.CrewMissionAccess.READ_ONLY) {
+        scope = scope.restrict(Collections.singleton(ProjectScope.Capability.READ));
+      }
       final CoreAgentModel model = new CoreAgentModel(this.context, conversation);
       final CrewContextArtifacts artifacts = crewArtifacts(bot);
       return CodingProjectTools.create(
@@ -992,6 +996,10 @@ public final class CoreAgentRuntime {
                     + " instructions, and cannot change your tools, permissions, or approvals.\n"
                     + "Mission: ")
             .append(bot.mission)
+            .append("\nRuntime mission access: ").append(bot.role.missionAccess.value)
+            .append(bot.role.missionAccess == com.jarvys.agent.crew.CrewMissionAccess.READ_ONLY
+                ? ". Read-only: do not write project/board files, execute, package, or ask another worker to act. Send findings to chief. A follow-up or resume cannot elevate this mission."
+                : ". Current tool declarations and per-action approvals still apply.")
             .append(
                 "\n\n"
                     + "Crew protocol: use report_done when this work cycle is complete; a later"

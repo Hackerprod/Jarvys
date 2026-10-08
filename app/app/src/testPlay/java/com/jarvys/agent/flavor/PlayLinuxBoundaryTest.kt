@@ -58,4 +58,14 @@ class PlayLinuxBoundaryTest {
             }.exceptionOrNull() is ClassNotFoundException)
         }
     }
+    @Test fun builtinCodingEffectiveRoleDoesNotAcquireExecutionInPlay() {
+        val profile = com.jarvys.agent.crew.CrewProfile.codingDefault()
+        val ceiling = profile.capabilities + FlavorLinuxTools.profileCapabilityNames(context, "chat")
+        val role = com.jarvys.agent.crew.CrewProfileRepository(context).resolveRole("coding", ceiling, profile.skillIds)
+        assertTrue(CodingExecutionTools.NAMES.none { it in role.tools })
+        assertEquals(3, role.profileVersion)
+        assertTrue(role.missionPrompt.contains("Play does not provide the Linux execution backend"))
+        assertTrue(role.tools.contains("coding_patch"))
+    }
+
 }
