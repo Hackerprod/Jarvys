@@ -61,7 +61,8 @@ class UserMarkdownRecoveryComposeTest {
         val source = "**Bold** and `inline_code`\n\n- first item\n- second item"
         val event = user(source)
         install { IntentMessage(event) }
-        val node = awaitText("Bold and inline_code")
+        // The renderer pads inline code with one space on each side of the styled span.
+        val node = awaitText("Bold and  inline_code ")
         val richText = node.fetchSemanticsNode().config[SemanticsProperties.Text].single()
         assertTrue(richText.spanStyles.any { it.item.fontWeight == FontWeight.Bold })
         assertTrue(richText.spanStyles.any { it.item.fontFamily == FontFamily.Monospace })
