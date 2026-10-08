@@ -220,7 +220,9 @@ Estado: completado en código, revisión independiente y validación de host par
 
 Estado: implementación en curso; todavía no validada ni preparada para entrega. Confirmado que el gesto global del panel seguía activo sobre WebView y que una recomposición podía recargar index.html después de navegar dentro de la página. Se está separando ese gesto del preview y conservando estado nativo acotado; no se atribuye aún una mejora medida de rendimiento en teléfono. La apertura de HTML requiere una instantánea inmutable y acotada de sus recursos, con validación de ámbito y persistencia.
 
-- Primer checkpoint en curso: gestos nativos sin competencia del panel, carga inicial única y estado de navegación acotado; tarjeta «Ver en Jarvys» para HTML real e instantáneas de recursos autorizados. Pruebas dirigidas y revisión independiente todavía en ejecución.
+- Primer checkpoint respaldado: gestos nativos sin competencia del panel, carga inicial única y estado de navegación acotado; tarjeta «Ver en Jarvys» para HTML real e instantáneas de recursos autorizados. La revisión independiente de fuente y cuatro capturas nativas ha aprobado el candidato; 58 pruebas dirigidas Full pasan sin fallos. Play y las suites agregadas, lint y APK siguen pendientes de cierre.
+- La prueba de sensibilidad repone temporalmente las dos conductas antiguas y reproduce la cancelación del gesto diagonal y la recarga de index.html. La fuente corregida se restaura byte por byte antes de validar; no es una medida de fluidez física.
+- Recuperación ampliada: los resultados duraderos de herramientas restauran el token exacto de la instantánea aunque falte su presentación UI. Un resultado incompleto, token ajeno o archivo explícito no disponible nunca se sustituye por un index.html distinto.
 - Se conserva JavaScript interactivo sin puentes nativos ni permisos nuevos. Se restringen cargas URL, navegación externa, archivos privados y recursos fuera de la instantánea; no se promete aislamiento absoluto de red. El posible egreso WebRTC heredado queda identificado para endurecimiento posterior y validación real de Chromium, sin degradar silenciosamente las páginas interactivas.
 
 - Aislar la causa del desplazamiento por saltos antes de aplicar cambios.
@@ -261,6 +263,8 @@ Estado: investigación y contrato original preparados; implementación después 
 - Probar el comportamiento real en conversaciones y herramientas, incluidos fallos y recuperación; conservar privacidad y separación de datos no confiables.
 
 ## Validaciones que siguen abiertas
+
+- Preview web: endurecer y comprobar en Chromium real el posible egreso WebRTC heredado. Las restricciones de URL/CSP no equivalen a aislamiento absoluto de red; conservar el contrato HTML/CSS/JavaScript interactivo sin puentes privados ni permisos nuevos.
 
 - Comprobar en dispositivo la recuperación de proyectos/archivos, imágenes y gestos, selección/copia, ejecución real y flujos de autenticación. Las pruebas del host no equivalen a una pasada completa en teléfono.
 - Continuar el diagnóstico del error DNS en el intercambio OAuth del login de navegador. No hay una regresión demostrada frente a v28; el flujo de código de dispositivo sigue siendo una alternativa disponible.

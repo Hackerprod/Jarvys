@@ -133,6 +133,7 @@ public class HtmlPreviewSnapshotTest {
             assertThrows(path, java.io.IOException.class, () -> store.openPreview(session, preview.token, path));
         assertThrows(IllegalArgumentException.class, () -> store.resolvePreview("other-chat", preview.token));
         assertThrows(IllegalArgumentException.class, () -> store.previewForAttachment("other-chat", attachment));
+        assertThrows(java.io.IOException.class, () -> store.snapshot("other-chat", workspace, "index.html", null, CancellationToken.uncancellable()));
         assertFalse(deliver("link.svg").success);
     }
 
@@ -185,9 +186,13 @@ public class HtmlPreviewSnapshotTest {
         assertTrue(renamed.success); assertNull(renamed.previewId);
         CoreToolResult apk = deliver("package.apk"); assertNull(apk.previewId); assertEquals("application/vnd.android.package-archive", attachment(apk).mimeType);
         ChatAttachment connector = store.snapshotBytes(session, "<html>legacy single file</html>".getBytes(StandardCharsets.UTF_8), "legacy.html", "text/html", CancellationToken.uncancellable());
+        File legacyManifest = new File(files, "jarvys/delivered/" + session + "/" + connector.id + ".json");
+        byte[] beforeManifest = Files.readAllBytes(legacyManifest.toPath());
+        write("legacy.html", "<html>mutable source must never be used</html>");
         HtmlPreviewDescriptor legacy = store.previewForAttachment(session, connector);
         assertNotNull(legacy); assertEquals(1, legacy.fileCount); assertTrue(legacy.warnings.toString().contains("linked assets were not captured"));
         assertEquals("<html>legacy single file</html>", asset(store, legacy, legacy.entryPath));
+        assertArrayEquals(beforeManifest, Files.readAllBytes(legacyManifest.toPath()));
         assertThrows(java.io.IOException.class, () -> store.openPreview(session, legacy.token, "missing.css"));
         ChatAttachment spoofed = store.snapshotBytes(session, new byte[] {'<', 'h', 't', 'm', 'l', '>', 0}, "spoofed.html", "text/html", CancellationToken.uncancellable());
         assertNull(store.previewForAttachment(session, spoofed));
@@ -214,6 +219,8 @@ public class HtmlPreviewSnapshotTest {
         ChatAttachment attachment = attachment(deliver("index.html")); HtmlPreviewDescriptor preview = store.previewForAttachment(session, attachment);
         File asset = new File(files, "jarvys/delivered/" + session + "/" + attachment.id + ".preview/app.js");
         Files.write(asset.toPath(), "let x = 2;".getBytes(StandardCharsets.UTF_8));
+        // Timeline projection validates metadata only; actual open is the integrity gate.
+        assertEquals(preview.token, store.previewMetadataForAttachment(session, attachment).token);
         assertThrows(IllegalArgumentException.class, () -> store.resolvePreview(session, preview.token));
         assertThrows(java.io.IOException.class, () -> store.openPreview(session, preview.token, "app.js"));
         Files.write(asset.toPath(), "let x = 1;".getBytes(StandardCharsets.UTF_8));
@@ -235,6 +242,125 @@ public class HtmlPreviewSnapshotTest {
         DeliveredArtifactStore reopened = new DeliveredArtifactStore(failIfCredentials);
         HtmlPreviewDescriptor preview = reopened.previewForAttachment(session, attachment);
         assertEquals("<html>static offline</html>", asset(reopened, preview, preview.entryPath));
+    }
+
+    @Test public void deliveredAndExplicitPreviewToolPresentationsRestoreOwnedSnapshotWithoutReplayOrReflectionLeak() throws Exception {
+        String user = ledger.appendConversationMessage(session, "user", "Create and preview the page");
+        write("index.html", "<html><script src='app.js'></script></html>");
+        write("app.js", "window.value = 'saved original';");
+        CoreToolResult delivered = deliver("index.html"); ChatAttachment attachment = attachment(delivered);
+        CoreToolResult explicit = previewTool(workspace).execute(Collections.singletonMap("path", "index.html"), CancellationToken.uncancellable());
+        assertTrue(explicit.content, explicit.success); assertEquals(delivered.previewId, explicit.previewId);
+        String privateDiagnostic = "private-api-token-fixture-not-for-reflection";
+        ledger.appendConversationToolPresentation(session, user, "Deliver File", "tool_result", "snapshot-delivery",
+                delivered.content + " " + privateDiagnostic, delivered.previewId, "Attach local file");
+        ledger.appendReflectionToolEvent(session, user, "Deliver File", "workspace", "tool_result", "snapshot-delivery");
+        ledger.appendConversationToolPresentation(session, user, "Preview Workspace", "tool_result", "snapshot-explicit",
+                explicit.content, explicit.previewId, "Preview captured HTML");
+        ledger.appendReflectionToolEvent(session, user, "Preview Workspace", "workspace", "tool_result", "snapshot-explicit");
+        ledger.appendConversationMessage(session, "assistant", "The page is ready.");
+        write("index.html", "<html>Changed source must not replace the snapshot</html>");
+        assertTrue(new File(workspaceRoot, "app.js").delete());
+        AgentRunUiState.resetSession(session);
+        for (int repeat = 0; repeat < 3; repeat++) {
+            LocalRunStore reopened = new LocalRunStore(files);
+            java.util.List<AgentRunUiEvent> timeline = reopened.readConversationTimeline(session);
+            assertEquals(1, timeline.stream().filter(e -> e.getDeliveredArtifact() != null).count());
+            assertEquals(delivered.previewId, timeline.stream().filter(e -> "snapshot-delivery".equals(e.getToolCallId())).findFirst().get().getPreviewId());
+            assertEquals(explicit.previewId, timeline.stream().filter(e -> "snapshot-explicit".equals(e.getToolCallId())).findFirst().get().getPreviewId());
+            assertEquals(attachment, reopened.findChatFile(session, "delivered", attachment.id));
+            DeliveredArtifactStore persisted = new DeliveredArtifactStore(new File(files, "jarvys"));
+            assertEquals("window.value = 'saved original';", asset(persisted, persisted.resolvePreview(session, delivered.previewId), "app.js"));
+            String reflection = reopened.buildReflectionPayload(session).text;
+            assertFalse(reflection.contains(privateDiagnostic)); assertFalse(reflection.contains(delivered.previewId));
+            assertFalse(reflection.contains("saved original"));
+        }
+        assertEquals("<html>Changed source must not replace the snapshot</html>", workspace.read("index.html"));
+        assertFalse(new File(workspaceRoot, "app.js").exists());
+        assertTrue(ledger.deleteConversation(session));
+        assertNull(new LocalRunStore(files).findChatFile(session, "delivered", attachment.id));
+        assertFalse(new LocalRunStore(files).readConversationTimeline(session).stream().anyMatch(e -> e.getPreviewId() != null));
+        assertThrows(IllegalArgumentException.class, () -> store.resolvePreview(session, delivered.previewId));
+        assertFalse(previewTool(workspace).execute(Collections.singletonMap("path", "index.html"), CancellationToken.uncancellable()).success);
+    }
+
+    @Test public void alienSnapshotTokenCannotBecomeAnUnrelatedLegacyWorkspacePreview() throws Exception {
+        write("index.html", "<html>Owner snapshot</html>"); CoreToolResult owner = deliver("index.html"); assertTrue(owner.success);
+        String alien = "alien-preview-chat";
+        String alienUser = ledger.appendConversationMessage(alien, "user", "Inspect only my own page");
+        WorkspaceStore alienWorkspace = new WorkspaceStore(new File(files, "jarvys/workspaces"), WorkspaceStore.projectIdForSession(alien),
+                null, null, null, alien, false);
+        alienWorkspace.write("index.html", "<html>Unrelated alien page</html>");
+        ledger.appendConversationToolPresentation(alien, alienUser, "Preview Workspace", "tool_result", "alien-snapshot",
+                "An unavailable snapshot was requested", owner.previewId, "Preview requested HTML");
+        AgentRunUiEvent restored = new LocalRunStore(files).readConversationTimeline(alien).stream()
+                .filter(e -> "alien-snapshot".equals(e.getToolCallId())).findFirst().get();
+        assertNull(restored.getPreviewId());
+        assertNull(ledger.findChatFile(alien, "delivered", attachment(owner).id));
+        assertThrows(IllegalArgumentException.class, () -> store.resolvePreview(alien, owner.previewId));
+    }
+
+    @Test public void missingToolPresentationRecoversExplicitSnapshotFromModelResultAndNeverGuessesCurrentIndex() throws Exception {
+        String user = ledger.appendConversationMessage(session, "user", "Preview the explicit page");
+        write("index.html", "<html>Unrelated current workspace home</html>");
+        write("pages/site.html", "<html><script src='app.js'></script></html>");
+        write("pages/app.js", "window.version = 'captured';");
+        CoreToolResult explicit = previewTool(workspace).execute(Collections.singletonMap("path", "pages/site.html"), CancellationToken.uncancellable());
+        ChatAttachment attachment = attachment(explicit);
+        String batch = "snapshot-without-presentation";
+        org.json.JSONArray calls = new org.json.JSONArray();
+        for (String id : Arrays.asList("recover-exact", "recover-truncated", "recover-malformed"))
+            calls.put(new JSONObject().put("id", id).put("name", "preview_workspace")
+                    .put("arguments", new JSONObject().put("path", "pages/site.html")));
+        // An ordinary no-path sibling proves recovery must inspect this exact call's arguments.
+        calls.put(new JSONObject().put("id", "recover-legacy").put("name", "preview_workspace").put("arguments", new JSONObject()));
+        ledger.appendModelTranscriptRow(session, new JSONObject().put("type", "model_tool_calls").put("schemaVersion", 1)
+                .put("batchId", batch).put("userMessageId", user).put("messageIndex", 1)
+                .put("assistantText", "").put("timestamp", 1).put("calls", calls));
+        Map<String,String> outputs = new LinkedHashMap<>();
+        outputs.put("recover-exact", explicit.content);
+        outputs.put("recover-truncated", "{\"preview_available\":true,\"preview_id\":\"" + explicit.previewId);
+        outputs.put("recover-malformed", "Preview output retained elsewhere [Text omitted]");
+        outputs.put("recover-legacy", "Local HTML preview is ready to open.");
+        for (Map.Entry<String,String> result : outputs.entrySet())
+            ledger.appendModelTranscriptRow(session, new JSONObject().put("type", "model_tool_result").put("schemaVersion", 1)
+                    .put("batchId", batch).put("callId", result.getKey()).put("toolName", "preview_workspace")
+                    .put("timestamp", 2).put("output", result.getValue()));
+        // No tool_presentation is written: model evidence is the only surviving tool record.
+        write("pages/site.html", "<html>Mutable replacement</html>");
+        assertTrue(new File(workspaceRoot, "pages/app.js").delete());
+        java.util.List<AgentRunUiEvent> timeline = new LocalRunStore(files).readConversationTimeline(session);
+        assertEquals(1, timeline.stream().filter(e -> e.getDeliveredArtifact() != null).count());
+        assertEquals(attachment, timeline.stream().filter(e -> e.getDeliveredArtifact() != null).findFirst().get().getDeliveredArtifact());
+        assertEquals(explicit.previewId, timeline.stream().filter(e -> "recover-exact".equals(e.getToolCallId())).findFirst().get().getPreviewId());
+        for (String id : Arrays.asList("recover-truncated", "recover-malformed"))
+            assertNull(id, timeline.stream().filter(e -> id.equals(e.getToolCallId())).findFirst().get().getPreviewId());
+        assertEquals(workspace.projectId(), timeline.stream().filter(e -> "recover-legacy".equals(e.getToolCallId())).findFirst().get().getPreviewId());
+        assertEquals("window.version = 'captured';", asset(store, store.resolvePreview(session, explicit.previewId), "pages/app.js"));
+        assertEquals("<html>Unrelated current workspace home</html>", workspace.read("index.html"));
+        assertEquals("<html>Mutable replacement</html>", workspace.read("pages/site.html"));
+    }
+
+    @Test public void unicodePathsUseByteCapsAndOversizedManifestsFailBeforePersistence() throws Exception {
+        String segment = String.join("", Collections.nCopies(120, "é"));
+        String valid = segment + "/" + segment + "/" + segment + "/icon.svg";
+        HtmlPreviewCapture.requireOrdinaryPath(valid);
+        String oversized = segment + "/" + segment + "/" + segment + "/" + segment + "/" + segment + "/icon.svg";
+        assertThrows(java.io.IOException.class, () -> HtmlPreviewCapture.requireOrdinaryPath(oversized));
+        assertThrows(java.io.IOException.class, () -> HtmlPreviewCapture.requireOrdinaryPath(String.join("", Collections.nCopies(128, "é")) + ".svg"));
+        write("index.html", "<html><img src='" + valid + "'></html>"); write(valid, "<svg></svg>");
+        ChatAttachment attachment = attachment(deliver("index.html"));
+        HtmlPreviewDescriptor descriptor = store.previewForAttachment(session, attachment);
+        assertEquals(2, descriptor.fileCount); assertEquals("<svg></svg>", asset(store, descriptor, valid));
+        File manifest = new File(files, "jarvys/delivered/" + session + "/" + attachment.id + ".json");
+        File rejected = new File(manifest.getParentFile(), "oversized.json");
+        java.lang.reflect.Method writeManifest = DeliveredArtifactStore.class.getDeclaredMethod("writeManifest", File.class, JSONObject.class);
+        writeManifest.setAccessible(true);
+        JSONObject huge = new JSONObject().put("oversized", String.join("", Collections.nCopies(DeliveredArtifactStore.MAX_MANIFEST_BYTES, "x")));
+        java.lang.reflect.InvocationTargetException failure = assertThrows(java.lang.reflect.InvocationTargetException.class, () -> writeManifest.invoke(store, rejected, huge));
+        assertTrue(failure.getCause() instanceof java.io.IOException); assertFalse(rejected.exists());
+        try (RandomAccessFile file = new RandomAccessFile(manifest, "rw")) { file.setLength(DeliveredArtifactStore.MAX_MANIFEST_BYTES + 1L); }
+        assertThrows(IllegalArgumentException.class, () -> store.previewMetadataForAttachment(session, attachment));
     }
 
     @Test public void supportedScriptImageAndFontExtensionsHaveExactNoSniffMimeTypes() {

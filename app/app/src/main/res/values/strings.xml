@@ -959,7 +959,7 @@ description: Explicit preferences about language, tone, style, and how to help t
     <string name="chat_instructions_unavailable">Standalone instruction injection is not configured. Choose a skill to provide bounded guidance.</string>
     <string name="drawer_current_conversation">Current conversation</string>
     <string name="drawer_history_summary">%1$s · %2$d steps · %3$d turns</string>
-    <string name="workspace_preview_missing">No index.html was found in this workspace.</string>
+    <string name="workspace_preview_missing">The page or its resources are unavailable in this conversation.</string>
     <string name="provider_connection_status">CONNECTION STATUS</string>
     <string name="provider_chatgpt_codex_name">ChatGPT Codex</string>
     <string name="provider_openrouter_name">OpenRouter</string>

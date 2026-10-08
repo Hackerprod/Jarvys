@@ -221,13 +221,13 @@ final class HtmlPreviewCapture {
     }
 
     static void requireOrdinaryPath(String path) throws IOException {
-        if (path == null || path.isEmpty() || path.length() > 1024 || path.startsWith("/") || path.indexOf('\\') >= 0
+        if (path == null || path.isEmpty() || path.length() > 1024 || path.getBytes(StandardCharsets.UTF_8).length > 1024 || path.startsWith("/") || path.indexOf('\\') >= 0
                 || path.indexOf('%') >= 0 || path.indexOf(':') >= 0 || path.indexOf('?') >= 0 || path.indexOf('#') >= 0)
             throw new IOException("A bounded ordinary project path is required");
         String[] parts = path.split("/", -1);
         if (parts.length > MAX_DEPTH) throw new IOException("Asset path is too deep");
         for (String part : parts) {
-            if (part.isEmpty() || part.startsWith(".") || part.length() > 255) throw new IOException("Hidden or relative path segments are unavailable");
+            if (part.isEmpty() || part.startsWith(".") || part.getBytes(StandardCharsets.UTF_8).length > 255) throw new IOException("Hidden or relative path segments are unavailable");
             for (int i = 0; i < part.length(); i++) if (Character.isISOControl(part.charAt(i))) throw new IOException("Control characters are unavailable in asset paths");
         }
         String first = parts[0].toLowerCase(Locale.ROOT);

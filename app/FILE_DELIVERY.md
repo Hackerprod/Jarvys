@@ -29,7 +29,7 @@ Per-artifact durable receipts serialize duplicate taps and reconcile interrupted
 
 Host tests exercise real production stores, tools, timeline restoration and Activity controls with simulated provider/permission boundaries. Descriptor tests use an explicit Unix-identity kernel adapter because Robolectric's default fstat shadow does not model opened descriptors accurately. Those tests do not certify physical Android behavior.
 
-Physical acceptance remains required on Android 24 and Android 29+: descriptor path aliases and `/proc/self/fd` availability, MediaStore visibility, permission UI, read-only sharing, process recreation, and external viewers. Jarvys development APKs remain unsigned; final delivery uses the existing approved signing identity after the full product queue.
+Physical acceptance remains required on Android 24 and Android 29+: descriptor path aliases and `/proc/self/fd` availability, MediaStore visibility, permission UI, read-only sharing, process recreation, and external viewers. Jarvys development APKs remain unsigned; final delivery uses the existing approved signing identity after each validated stage.
 
 Platform references:
 - [Android shared storage and MediaStore](https://developer.android.com/training/data-storage/shared/media)

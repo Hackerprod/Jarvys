@@ -2,11 +2,15 @@ package com.jarvys.agent
 
 import android.os.Bundle
 import android.view.MotionEvent
+import android.view.View
 import android.webkit.WebBackForwardList
 import android.webkit.WebView
 import org.robolectric.annotation.Implementation
 import org.robolectric.annotation.Implements
+import org.robolectric.annotation.RealObject
 import org.robolectric.shadows.ShadowWebView
+import org.robolectric.shadow.api.Shadow
+import org.robolectric.util.ReflectionHelpers.ClassParameter
 
 /**
  * Records calls at the native WebView boundary while retaining Robolectric's history implementation.
@@ -17,6 +21,7 @@ import org.robolectric.shadows.ShadowWebView
  */
 @Implements(WebView::class)
 class WorkspacePreviewRecordingShadow : ShadowWebView() {
+    @RealObject private lateinit var realWebView: WebView
     data class Touch(
         val action: Int,
         val actionIndex: Int,
@@ -41,6 +46,27 @@ class WorkspacePreviewRecordingShadow : ShadowWebView() {
         private set
     var nativeTouchResult = true
     var nativeTouchFailure: RuntimeException? = null
+
+    @Implementation
+    fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        // Robolectric's empty Chromium provider otherwise leaves WebView measured at 0×0.
+        // Honor the actual AndroidView parent's constraints to establish a native hit target;
+        // this models neither DOM geometry nor scrolling and does not bypass touch dispatch.
+        View::class.java.getDeclaredMethod("setMeasuredDimension", Int::class.javaPrimitiveType,
+            Int::class.javaPrimitiveType).apply { isAccessible = true }.invoke(realWebView,
+            View.MeasureSpec.getSize(widthMeasureSpec), View.MeasureSpec.getSize(heightMeasureSpec))
+    }
+
+    @Implementation
+    fun setFrame(left: Int, top: Int, right: Int, bottom: Int): Boolean =
+        // WebView delegates even its outer Android View frame to the absent Chromium provider.
+        // Use Android View's real frame implementation, so measured native hit targets are laid
+        // out by the unmodified AndroidViewHolder instead of staying at 0×0 in this JVM harness.
+        Shadow.directlyOn<Boolean, View>(realWebView, View::class.java, "setFrame",
+            ClassParameter.from(Int::class.javaPrimitiveType!!, left),
+            ClassParameter.from(Int::class.javaPrimitiveType!!, top),
+            ClassParameter.from(Int::class.javaPrimitiveType!!, right),
+            ClassParameter.from(Int::class.javaPrimitiveType!!, bottom))
 
     @Implementation
     override fun onTouchEvent(event: MotionEvent): Boolean {

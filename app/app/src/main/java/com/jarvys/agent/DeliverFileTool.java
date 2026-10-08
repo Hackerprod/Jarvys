@@ -30,7 +30,7 @@ final class DeliverFileTool implements CoreTool {
                 "Attach an existing file you worked on to this conversation as a durable native attachment. "
                 + "Use /project/path for shared Coding or backend files (including factory APKs), or a relative ordinary workspace path. "
                 + "Optional filename changes its download name only. Maximum 256 MiB. The immutable copy survives later workspace edits. "
-                + "UTF-8 HTML also receives an immutable offline preview of bounded, statically referenced local assets; missing or excluded assets are reported. "
+                + "UTF-8 HTML also receives an immutable in-app preview of bounded, statically referenced local assets; missing or excluded assets are reported. "
                 + "Use this when the user asks for the actual file; plain paths and Markdown links do not deliver files. "
                 + "No remote upload, automatic download, install, execution, memory/skills/credentials access, or cross-chat access. Main chat only. "
                 + "The user chooses Preview, Download or Share; only report attached=true after success. Repeating unchanged bytes/name and captured assets returns the same artifact.",

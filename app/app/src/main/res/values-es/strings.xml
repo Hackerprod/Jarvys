@@ -959,7 +959,7 @@ description: Preferencias explícitas sobre idioma, tono, estilo y forma de ayud
     <string name="chat_instructions_unavailable">La inyección independiente de instrucciones no está configurada. Elige un skill para aportar guía acotada.</string>
     <string name="drawer_current_conversation">Conversación actual</string>
     <string name="drawer_history_summary">%1$s · %2$d pasos · %3$d turnos</string>
-    <string name="workspace_preview_missing">No hay index.html en este espacio de trabajo.</string>
+    <string name="workspace_preview_missing">La página o sus recursos no están disponibles en esta conversación.</string>
     <string name="provider_connection_status">ESTADO DE CONEXIÓN</string>
     <string name="provider_chatgpt_codex_name">ChatGPT Codex</string>
     <string name="provider_openrouter_name">OpenRouter</string>

@@ -721,7 +721,10 @@ public final class LocalRunStore {
                     .put("auditDetail", MainChatTranscriptStore.shortText(
                             CrewCheckpointStore.sanitizeText(auditDetail == null ? "" : auditDetail), 4_000))
                     .put("timestamp", System.currentTimeMillis() / 1000.0);
-            if (previewId != null && verifiedPreview(sessionId, previewId) != null) row.put("previewId", previewId);
+            if (previewId != null) {
+                row.put("previewExpected", true);
+                if (verifiedPreview(sessionId, previewId) != null) row.put("previewId", previewId);
+            }
             synchronized (SESSION_TITLE_LOCK) { appendSessionRowLocked(conversationFile(sessionId), row); }
         } catch (Exception failure) { throw new IllegalStateException("Could not persist tool details and preview", failure); }
     }
@@ -754,6 +757,30 @@ public final class LocalRunStore {
 
     private static boolean isPreviewTool(String name) {
         return "preview_workspace".equals(name) || "Preview Workspace".equalsIgnoreCase(name);
+    }
+
+    private static boolean isExplicitPreviewCall(JSONObject batch, String callId) {
+        JSONArray calls = batch == null ? null : batch.optJSONArray("calls");
+        if (calls == null) return false;
+        for (int index = 0; index < calls.length(); index++) {
+            JSONObject call = calls.optJSONObject(index);
+            if (call == null || !callId.equals(call.optString("id")) || !isPreviewTool(call.optString("name"))) continue;
+            JSONObject arguments = call.optJSONObject("arguments");
+            return arguments != null && arguments.has("path");
+        }
+        return false;
+    }
+
+    /** A tool result may be durable before its UI presentation. Tokens still require owned manifests. */
+    private static String modelPreviewToken(String toolName, String output) {
+        if (!(isPreviewTool(toolName) || "deliver_file".equals(toolName) || "Deliver File".equalsIgnoreCase(toolName))
+                || output == null || output.length() > 16_384) return "";
+        try {
+            JSONObject result = new JSONObject(output);
+            String token = result.optString("preview_id", "");
+            return result.optBoolean("attached", false) && result.optBoolean("preview_available", false)
+                    && HtmlPreviewDescriptor.isSnapshotToken(token) ? token : "";
+        } catch (Exception incomplete) { return ""; }
     }
 
     /** Persists only a trust marker; connector/MCP/workspace result bodies never enter reflection storage. */
@@ -1432,12 +1459,17 @@ public final class LocalRunStore {
                 String toolName = row.optString("toolName", "tool");
                 if (modelResult) toolName = reflectionTools.containsKey(callId)
                         ? reflectionTools.get(callId).optString("toolName", toolName) : CoreToolRegistry.humanizeToolName(toolName);
-                String recordedPreview = presentation ? row.optString("previewId", "") : "";
-                boolean legacyPreview = recordedPreview.isEmpty() && "tool_result".equals(stage) && isPreviewTool(toolName);
+                String recordedPreview = presentation ? row.optString("previewId", "")
+                        : modelResult ? modelPreviewToken(toolName, detail) : "";
+                boolean previewExpected = row.optBoolean("previewExpected", false)
+                        || (modelResult && (isExplicitPreviewCall(sourceCall, callId)
+                            || (isPreviewTool(toolName) && sourceCall == null)));
+                boolean legacyPreview = recordedPreview.isEmpty() && !previewExpected
+                        && "tool_result".equals(stage) && isPreviewTool(toolName);
                 String preview = verifiedPreview(sessionId, legacyPreview ? WorkspaceStore.projectIdForSession(sessionId) : recordedPreview, ownedDeliveredFiles);
                 if (legacyPreview && preview != null) detail += (detail.isEmpty() ? "" : "\n\n")
                         + "Original preview details are unavailable. This opens the current verified index.html in this conversation's workspace.";
-                else if (!recordedPreview.isEmpty() && preview == null) detail += "\n\nThe recorded preview is no longer available in this conversation.";
+                else if ((!recordedPreview.isEmpty() || previewExpected) && preview == null) detail += "\n\nThe recorded preview is no longer available in this conversation.";
                 events.add(AgentRunUiEvent.toolEvent(id++, stage, toolName, detail.isEmpty() ? null : detail,
                         callId.isEmpty() ? null : callId, preview,
                         (long) (row.optDouble("timestamp", 0) * 1000))

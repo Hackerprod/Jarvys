@@ -4,12 +4,14 @@ import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.net.Uri
 import android.os.SystemClock
 import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebSettings
+import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.*
@@ -19,6 +21,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.navigation.NavHostController
 import androidx.test.core.app.ApplicationProvider
 import androidx.work.testing.WorkManagerTestInitHelper
+import java.io.File
 import java.util.UUID
 import org.junit.Assert.*
 import org.junit.Rule
@@ -260,6 +263,76 @@ class MainActivityWorkspacePreviewGestureTest {
         assertPreviewWithDrawerClosed(web)
     }
 
+    @Test
+    @Config(shadows = [WorkspacePreviewRecordingShadow::class, ArtifactOsShadow::class, ArtifactOsShadow.Descriptor::class])
+    fun deliveredHtmlCardUsesItsOwningArtifactRouteAcrossRecreationBackAndReopen() {
+        awaitChat()
+        compose.onNode(hasSetTextAction()).performTextInput(draft)
+        val workspace = WorkspaceStore(File(context.filesDir, "jarvys/workspaces"), projectId,
+            null, null, null, session, false)
+        val capturedHtml = workspace.read("index.html")
+        val artifacts = DeliveredArtifactStore(context)
+        val attachment = artifacts.snapshot(session, workspace, "index.html", null, CancellationToken.uncancellable())
+        store.appendDeliveredFile(session, attachment)
+        val descriptor = requireNotNull(artifacts.previewForAttachment(session, attachment))
+        workspace.write("index.html", "<!doctype html><h1>Changed after delivery</h1>")
+        val before = transcript()
+        compose.runOnIdle { AgentRunUiState.refreshPersistedSession(session, store.readConversationTimeline(session)) }
+        val previewTag = "delivered-file-preview-${attachment.id}"
+        compose.waitUntil(10_000) { compose.onAllNodesWithTag(previewTag).fetchSemanticsNodes().size == 1 }
+        compose.onNodeWithTag(previewTag).performScrollTo()
+        settleNativeFrame()
+        compose.onNodeWithTag(previewTag).assertIsDisplayed().performTouchInput { click() }
+        val first = awaitWebView()
+        settleNativeFrame()
+
+        fun assertOwnedRouteAndBytes(web: WebView) {
+            compose.runOnIdle {
+                val entry = requireNotNull(navigation().currentBackStackEntry)
+                assertEquals(AppNavigationBackPolicy.ARTIFACT_PREVIEW, entry.destination.route)
+                assertEquals(session, entry.arguments?.getString("sessionId"))
+                assertEquals(descriptor.artifactId, entry.arguments?.getString("artifactId"))
+                assertEquals(descriptor.token, HtmlPreviewDescriptor.TOKEN_PREFIX + entry.arguments?.getString("artifactId"))
+                val response = web.webViewClient.shouldInterceptRequest(web, object : WebResourceRequest {
+                    override fun getUrl(): Uri = Uri.parse(web.url)
+                    override fun isForMainFrame() = true
+                    override fun isRedirect() = false
+                    override fun hasGesture() = true
+                    override fun getMethod() = "GET"
+                    override fun getRequestHeaders(): Map<String, String> = emptyMap()
+                })
+                assertEquals(200, requireNotNull(response).statusCode)
+                assertEquals(capturedHtml, response.data.bufferedReader().use { it.readText() })
+            }
+            compose.onNodeWithTag("drawer-header").assertIsNotDisplayed()
+        }
+        assertOwnedRouteAndBytes(first)
+        drag(first, Offset(.01f, .5f), Offset(.9f, .5f), 400)
+        assertOwnedRouteAndBytes(first)
+        compose.runOnIdle { recording(first).pushEntryToHistory(requireNotNull(first.url)) }
+        compose.activityRule.scenario.recreate()
+        val recreated = awaitWebView()
+        assertNotSame(first, recreated)
+        assertOwnedRouteAndBytes(recreated)
+        assertEquals(1, recording(recreated).restoreCalls)
+        assertTrue(recording(recreated).loadedUrls.isEmpty())
+        compose.runOnIdle { compose.activity.onBackPressedDispatcher.onBackPressed() }
+        awaitChat()
+        assertEquals(before, transcript())
+        assertEquals(session, selectedSession())
+        compose.onNode(hasSetTextAction()).assertTextEquals(draft)
+        compose.onNodeWithTag(previewTag).performScrollTo()
+        settleNativeFrame()
+        compose.onNodeWithTag(previewTag).performTouchInput { click() }
+        val reopened = awaitWebView()
+        assertNotSame(recreated, reopened)
+        assertOwnedRouteAndBytes(reopened)
+        compose.runOnIdle { compose.activity.onBackPressedDispatcher.onBackPressed() }
+        awaitChat()
+        assertEquals(before, transcript())
+        compose.onNode(hasSetTextAction()).assertTextEquals(draft)
+    }
+
     private fun openExistingPreview(): WebView {
         awaitChat()
         settleNativeFrame()
@@ -284,6 +357,7 @@ class MainActivityWorkspacePreviewGestureTest {
     private fun awaitWebView(): WebView {
         var found: WebView? = null
         compose.waitUntil(10_000) {
+            compose.onAllNodes(isRoot()).fetchSemanticsNodes()
             compose.runOnUiThread { found = findWebView(compose.activity.window.decorView) }
             found != null
         }
@@ -324,7 +398,10 @@ class MainActivityWorkspacePreviewGestureTest {
         first: Offset, second: Offset? = null) {
         val normalized = listOfNotNull(first, second)
         compose.runOnUiThread {
-            assertTrue("Native hit area must be measured before injection", web.width > 0 && web.height > 0)
+            val parent = web.parent as? View
+            assertTrue("Native hit area must be measured before injection: web=${web.width}x${web.height}, " +
+                "measured=${web.measuredWidth}x${web.measuredHeight}, parent=${parent?.width}x${parent?.height}",
+                web.width > 0 && web.height > 0)
             val location = IntArray(2).also(web::getLocationInWindow)
             val properties = Array(normalized.size) { index -> MotionEvent.PointerProperties().apply {
                 id = index

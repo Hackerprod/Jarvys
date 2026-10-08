@@ -23,6 +23,7 @@ import org.json.JSONObject;
 /** Immutable per-chat delivered copies outside every agent-editable workspace/mount. */
 public final class DeliveredArtifactStore {
     public static final long MAX_BYTES = 256L * 1024 * 1024;
+    static final int MAX_MANIFEST_BYTES = 1024 * 1024;
     private static final Map<String, Object> LOCKS = new ConcurrentHashMap<>();
     private final File root;
     private final String expected;
@@ -417,10 +418,12 @@ public final class DeliveredArtifactStore {
     }
 
     private void writeManifest(File target, JSONObject record) throws IOException {
+        byte[] encoded = record.toString().getBytes(StandardCharsets.UTF_8);
+        if (encoded.length > MAX_MANIFEST_BYTES) throw new IOException("Artifact manifest exceeds its metadata limit");
         File staged = File.createTempFile(".metadata-", ".tmp", target.getParentFile());
         try {
             try (FileOutputStream output = new FileOutputStream(staged)) {
-                output.write(record.toString().getBytes(StandardCharsets.UTF_8)); output.getFD().sync();
+                output.write(encoded); output.getFD().sync();
             }
             verify(staged); verify(target);
             if (target.exists() || !staged.renameTo(target)) throw new IOException("Could not persist attachment manifest");
@@ -430,11 +433,11 @@ public final class DeliveredArtifactStore {
 
     private JSONObject readManifest(File file) throws Exception {
         verify(file);
-        if (!file.isFile() || file.length() > 192 * 1024) throw new IOException("Artifact manifest missing or oversized");
+        if (!file.isFile() || file.length() > MAX_MANIFEST_BYTES) throw new IOException("Artifact manifest missing or oversized");
         try (InputStream input = new FileInputStream(file); ByteArrayOutputStream bytes = new ByteArrayOutputStream()) {
             byte[] buffer = new byte[1024]; int count;
             while ((count = input.read(buffer)) != -1) {
-                if (bytes.size() + count > 192 * 1024) throw new IOException("Artifact manifest oversized");
+                if (bytes.size() + count > MAX_MANIFEST_BYTES) throw new IOException("Artifact manifest oversized");
                 bytes.write(buffer, 0, count);
             }
             return new JSONObject(bytes.toString("UTF-8"));

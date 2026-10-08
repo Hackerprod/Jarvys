@@ -72,7 +72,7 @@ internal class PreviewPageState(private var saved: Bundle = Bundle()) {
                 web.url?.takeIf { it.length <= 4096 }?.let { putString("url", it) }
             }
             val native = Bundle()
-            if (runCatching { web.saveState(native) }.getOrNull() != null && native.parcelBytes() <= MAX_HISTORY_BYTES) {
+            if (runCatching { web.saveState(native) != null && native.parcelBytes() <= MAX_HISTORY_BYTES }.getOrDefault(false)) {
                 next.putBundle("history", native)
             }
             saved = next
@@ -82,8 +82,7 @@ internal class PreviewPageState(private var saved: Bundle = Bundle()) {
 
     fun release(web: WebView) {
         if (view !== web) return
-        capture()
-        view = null
+        try { capture() } finally { view = null }
     }
 
     private fun Bundle.parcelBytes(): Int {

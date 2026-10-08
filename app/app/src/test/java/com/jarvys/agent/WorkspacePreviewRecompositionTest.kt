@@ -10,6 +10,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.test.core.app.ApplicationProvider
 import java.util.UUID
@@ -128,6 +129,7 @@ class WorkspacePreviewRecompositionTest {
     private fun awaitWebView(excluding: WebView? = null): WebView {
         var found: WebView? = null
         compose.waitUntil(10_000) {
+            compose.onAllNodes(isRoot()).fetchSemanticsNodes()
             compose.runOnUiThread { found = findWebView(compose.activity.window.decorView) }
             found != null && found !== excluding
         }
