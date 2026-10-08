@@ -52,7 +52,7 @@ public final class CrewMissionNotifier {
                     ? new Notification.Builder(context, CHANNEL_ID) : new Notification.Builder(context);
             Notification notification = builder.setSmallIcon(android.R.drawable.ic_dialog_info)
                     .setContentTitle(context.getString(R.string.crew_result_notification_title))
-                    .setContentText(context.getString(R.string.crew_result_notification_text, mission.title))
+                    .setContentText(context.getString(R.string.crew_result_notification_text, mission.title.isEmpty() ? context.getString(R.string.crew_task_untitled) : mission.title))
                     .setContentIntent(content).setAutoCancel(true).build();
             manager.notify(NOTIFICATION_ID_BASE + (key.hashCode() & 0x3fffffff), notification);
             return true;

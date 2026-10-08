@@ -10,11 +10,13 @@ import java.util.List;
  * Versioned, immutable projection used by the live UI and the per-chat append-only ledger.
  */
 public final class CrewMissionSnapshot {
-    public static final int SCHEMA_VERSION = 1;
+    public static final int SCHEMA_VERSION = 2;
     public final String missionId;
     public final String conversationId;
     public final String processId;
     public final String title;
+    public final String originalInstructions;
+    public final String titleSource;
     public final String status;
     public final String synthesis;
     public final long startedAtMillis;
@@ -23,10 +25,20 @@ public final class CrewMissionSnapshot {
     public final List<CrewMessage> messages;
 
     public CrewMissionSnapshot(String missionId, String conversationId, String processId, String title, String status, String synthesis, long startedAtMillis, long finishedAtMillis, List<CrewBotSnapshot> bots, List<CrewMessage> messages) {
+        this(missionId, conversationId, processId, title, title, CrewMissionTitle.LEGACY,
+                status, synthesis, startedAtMillis, finishedAtMillis, bots, messages);
+    }
+
+    public CrewMissionSnapshot(String missionId, String conversationId, String processId, String title,
+            String originalInstructions, String titleSource, String status, String synthesis,
+            long startedAtMillis, long finishedAtMillis, List<CrewBotSnapshot> bots, List<CrewMessage> messages) {
         this.missionId = missionId;
         this.conversationId = conversationId;
         this.processId = processId;
-        this.title = title == null ? "" : title;
+        CrewMissionTitle presentation = CrewMissionTitle.stored(title, titleSource);
+        this.title = presentation.title;
+        this.titleSource = presentation.source;
+        this.originalInstructions = originalInstructions == null ? "" : originalInstructions;
         this.status = status == null ? "RUNNING" : status;
         this.synthesis = synthesis == null ? "" : synthesis;
         this.startedAtMillis = startedAtMillis;
@@ -53,7 +65,9 @@ public final class CrewMissionSnapshot {
         }
         String recoveredStatus = "RUNNING".equals(status) ? "INTERRUPTED" : status;
         changed |= !recoveredStatus.equals(status);
-        return changed ? new CrewMissionSnapshot(missionId, conversationId, CrewProcessIdentity.ID, title, recoveredStatus, synthesis, startedAtMillis, System.currentTimeMillis(), recovered, messages) : this;
+        return changed ? new CrewMissionSnapshot(missionId, conversationId, CrewProcessIdentity.ID, title,
+                originalInstructions, titleSource, recoveredStatus, synthesis, startedAtMillis,
+                System.currentTimeMillis(), recovered, messages) : this;
     }
 
     public JSONObject toJson() {
@@ -65,6 +79,8 @@ public final class CrewMissionSnapshot {
             row.put("conversationId", conversationId);
             row.put("processId", processId);
             row.put("title", title);
+            row.put("originalInstructions", originalInstructions);
+            row.put("titleSource", titleSource);
             row.put("status", status);
             row.put("synthesis", synthesis);
             row.put("startedAtMillis", startedAtMillis);
@@ -112,7 +128,8 @@ public final class CrewMissionSnapshot {
     }
 
     public static CrewMissionSnapshot fromJson(JSONObject row) {
-        if (row.optInt("crewSchemaVersion", 0) != SCHEMA_VERSION) return null;
+        int version = row.optInt("crewSchemaVersion", 0);
+        if (version != 1 && version != SCHEMA_VERSION) return null;
         try {
             List<CrewBotSnapshot> bots = new ArrayList<>();
             JSONArray botRows = row.optJSONArray("bots");
@@ -134,7 +151,12 @@ public final class CrewMissionSnapshot {
                 if (refRows != null) for (int ref = 0; ref < refRows.length(); ref++) refs.add(refRows.optString(ref));
                 messages.add(new CrewMessage(value.optString("id"), value.optString("conversationId"), value.optString("from"), value.optString("to"), CrewMessage.Type.valueOf(value.optString("type")), value.optString("text"), refs, value.optLong("timestampMillis")));
             }
-            return new CrewMissionSnapshot(row.optString("missionId"), row.optString("conversationId"), row.optString("processId"), row.optString("title"), row.optString("status"), row.optString("synthesis"), row.optLong("startedAtMillis"), row.optLong("finishedAtMillis"), bots, messages);
+            String rawTitle = row.opt("title") instanceof String ? row.optString("title") : "";
+            String instructions = version == 1 ? rawTitle
+                    : row.opt("originalInstructions") instanceof String ? row.optString("originalInstructions") : "";
+            return new CrewMissionSnapshot(row.optString("missionId"), row.optString("conversationId"), row.optString("processId"),
+                    rawTitle, instructions, version == 1 ? CrewMissionTitle.LEGACY : row.optString("titleSource"),
+                    row.optString("status"), row.optString("synthesis"), row.optLong("startedAtMillis"), row.optLong("finishedAtMillis"), bots, messages);
         } catch (Exception failure) {
             return null;
         }

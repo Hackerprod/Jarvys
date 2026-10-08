@@ -365,7 +365,6 @@
     <string name="crew_mode_auto">Auto</string>
     <string name="crew_mode_always">Always</string>
     <string name="crew_open_workspace">Open crew</string>
-    <string name="crew_mission_in_progress">Mission in progress</string>
     <string name="crew_synthesized_by">Synthesized by Jarvys · %1$d bots · %2$s</string>
     <string name="crew_view_how">See how</string>
     <string name="crew_view_debate_count">View debate · %1$d messages</string>
@@ -405,7 +404,6 @@
     <string name="crew_board_file">Shared note</string>
     <string name="crew_board_back">Back to board</string>
     <string name="crew_bots_empty">No bots have joined this mission yet.</string>
-    <string name="crew_message_route">%1$s → %2$s</string>
     <string name="crew_type_task">Task</string>
     <string name="crew_type_finding">Finding</string>
     <string name="crew_type_critique">Critique</string>
@@ -423,7 +421,6 @@
     <string name="crew_message_placeholder">Message this bot</string>
     <string name="crew_send_message">Send</string>
     <string name="crew_redirect">Redirect</string>
-    <string name="crew_mission_label">Mission</string>
     <string name="crew_bot_thread_empty">No messages for this bot yet.</string>
     <string name="crew_bot_error">Bot error: %1$s</string>
     <string name="crew_persistence_error">Crew mission could not be saved.</string>
@@ -1352,4 +1349,12 @@ Their exit results are unknown. Do not repeat them automatically. Review project
     <string name="chat_interrupt_failed">The message could not be queued. Your draft is still here.</string>
     <string name="chat_other_run_active">A task is already running. Open its chat to stop it, or wait before sending.</string>
     <string name="chat_interrupt_start_failed">This turn could not finish. Check the chat before trying again.</string>
+    <string name="crew_task_untitled">Untitled task</string>
+    <string name="crew_settings_title">Task options</string>
+    <string name="crew_view_instructions">View instructions</string>
+    <string name="crew_instructions_title">Instructions</string>
+    <string name="crew_close_panel">Close</string>
+    <string name="crew_message_action">Message a bot</string>
+    <string name="crew_message_recipient">To %1$s</string>
+    <string name="crew_message_short">Message</string>
 </resources>

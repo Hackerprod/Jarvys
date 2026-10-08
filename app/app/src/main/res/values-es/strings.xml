@@ -365,7 +365,6 @@
     <string name="crew_mode_auto">Auto</string>
     <string name="crew_mode_always">Siempre</string>
     <string name="crew_open_workspace">Abrir tripulación</string>
-    <string name="crew_mission_in_progress">Misión en curso</string>
     <string name="crew_synthesized_by">Sintetizado por Jarvys · %1$d bots · %2$s</string>
     <string name="crew_view_how">Ver cómo</string>
     <string name="crew_view_debate_count">Ver debate · %1$d mensajes</string>
@@ -405,7 +404,6 @@
     <string name="crew_board_file">Nota compartida</string>
     <string name="crew_board_back">Volver a la pizarra</string>
     <string name="crew_bots_empty">Aún no se unieron bots a esta misión.</string>
-    <string name="crew_message_route">%1$s → %2$s</string>
     <string name="crew_type_task">Tarea</string>
     <string name="crew_type_finding">Hallazgo</string>
     <string name="crew_type_critique">Crítica</string>
@@ -423,7 +421,6 @@
     <string name="crew_message_placeholder">Escribe a este bot</string>
     <string name="crew_send_message">Enviar</string>
     <string name="crew_redirect">Redirigir</string>
-    <string name="crew_mission_label">Misión</string>
     <string name="crew_bot_thread_empty">Este bot aún no tiene mensajes.</string>
     <string name="crew_bot_error">Error del bot: %1$s</string>
     <string name="crew_persistence_error">No se pudo guardar la misión de Crew.</string>
@@ -1352,4 +1349,12 @@ Se desconoce cómo terminaron. No se repiten automáticamente. Revisa los cambio
     <string name="chat_interrupt_failed">No se pudo guardar el mensaje pendiente. Tu borrador sigue aquí.</string>
     <string name="chat_other_run_active">Ya hay una tarea en ejecución. Puedes detenerla en su chat o esperar para enviar.</string>
     <string name="chat_interrupt_start_failed">No se pudo completar este turno. Revisa el chat antes de intentarlo de nuevo.</string>
+    <string name="crew_task_untitled">Tarea sin título</string>
+    <string name="crew_settings_title">Opciones de la tarea</string>
+    <string name="crew_view_instructions">Ver instrucciones</string>
+    <string name="crew_instructions_title">Instrucciones</string>
+    <string name="crew_close_panel">Cerrar</string>
+    <string name="crew_message_action">Enviar mensaje</string>
+    <string name="crew_message_recipient">Para %1$s</string>
+    <string name="crew_message_short">Mensaje</string>
 </resources>

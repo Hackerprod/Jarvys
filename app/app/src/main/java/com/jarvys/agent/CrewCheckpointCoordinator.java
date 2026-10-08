@@ -7,6 +7,7 @@ import com.jarvys.agent.crew.CrewBotSnapshot;
 import com.jarvys.agent.crew.CrewManager;
 import com.jarvys.agent.crew.CrewMessage;
 import com.jarvys.agent.crew.CrewMissionSnapshot;
+import com.jarvys.agent.crew.CrewMissionTitle;
 import com.jarvys.agent.crew.CrewProfile;
 import com.jarvys.agent.crew.CrewRole;
 import com.jarvys.agent.crew.CrewRoleTemplates;
@@ -51,6 +52,10 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
                 bot.setScopeIdentity(new ProjectScopeStore(this.context.getFilesDir()).open(this.conversation).durableIdentity());
             }
             JSONObject metadata = new JSONObject().put("conversationId", this.conversation).put("botId", bot.id).put("missionId", bot.missionId).put("mission", bot.mission).put("missionAccess", bot.role.missionAccess.value).put("name", bot.name).put("status", bot.status().name()).put("result", bot.result()).put("error", bot.error()).put("startedAtMillis", bot.startedAtMillis()).put("finishedAtMillis", bot.finishedAtMillis()).put("completedCycles", bot.completedCycles()).put("jobOwners", new JSONArray((Collection)bot.recoveredJobOwners())).put("role", new CrewProfile(bot.role.id, bot.role.profileVersion, bot.role.name, bot.role.description, bot.role.missionPrompt, bot.role.skillIds, bot.role.tools, bot.role.workspaceMode).toJson()).put("messages", encodeMessages(messages, bot.id)).put("pending", encodeMessages(pending, bot.id));
+            CrewMissionTitle title = bot.missionTitle();
+            metadata.put("missionPresentation", new JSONObject().put("schemaVersion", 1)
+                    .put("title", title.title).put("titleSource", title.source)
+                    .put("originalInstructions", bot.originalInstructions()));
             this.store.save(this.conversation, bot.id, metadata, bot.scopeIdentity(), bot.checkpoint(), bot.artifactOwnership());
         } catch (Exception failure) {
             throw new IllegalStateException("Could not save the bot checkpoint; no further work is safe", failure);
@@ -69,7 +74,7 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
                 JSONObject data = saved.metadata;
                 CrewProfile profile = CrewProfile.fromJson(data.getJSONObject("role"));
                 CrewBotSnapshot bot = new CrewBotSnapshot(saved.botId, profile.id, profile.name, data.getString("name"), profile.id, data.getString("mission"), data.getString("status"), data.optString("error"), data.optString("result"), "", profile.capabilities, data.getLong("startedAtMillis"), data.getLong("finishedAtMillis"));
-                missions.add(new CrewMissionSnapshot(data.getString("missionId"), this.conversation, "recovered", data.getString("mission"), "INTERRUPTED", "", data.getLong("startedAtMillis"), saved.savedAtMs, Collections.singletonList(bot), Collections.emptyList()));
+                missions.add(recoveredMission(data, bot, saved.savedAtMs));
             } catch (Exception invalid) {
                 restoreIssue(manager, "A saved checkpoint has invalid mission metadata. Original evidence has been preserved.");
             }
@@ -101,7 +106,8 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
                         String state = data.getString("status");
                         CrewManager.Status.valueOf(state);
                         CrewBotSnapshot precise = new CrewBotSnapshot(visible.id, role.id, role.name, data.getString("name"), role.colorKey, data.getString("mission"), state, data.optString("error"), data.optString("result"), "", role.tools, data.getLong("startedAtMillis"), data.getLong("finishedAtMillis"));
-                        manager.restoreBot(mission, precise, role, saved.loop, saved.artifactOwnership, saved.scopeIdentity, owners, data.getLong("completedCycles"), decodeMessages(data.getJSONArray("messages"), visible.id, false), decodeMessages(data.getJSONArray("pending"), visible.id, true), "");
+                        CrewMissionSnapshot presentation = withCheckpointPresentation(mission, recoveredMission(data, precise, saved.savedAtMs));
+                        manager.restoreBot(presentation, precise, role, saved.loop, saved.artifactOwnership, saved.scopeIdentity, owners, data.getLong("completedCycles"), decodeMessages(data.getJSONArray("messages"), visible.id, false), decodeMessages(data.getJSONArray("pending"), visible.id, true), "");
                         continue;
                     }
                 } catch (Exception invalid) {
@@ -113,12 +119,39 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
         }
     }
 
+    private CrewMissionSnapshot recoveredMission(JSONObject data, CrewBotSnapshot bot, long savedAtMillis) throws JSONException {
+        JSONObject presentation = data.optJSONObject("missionPresentation");
+        CrewMissionTitle title = CrewMissionTitle.fallback();
+        String instructions = "";
+        if (presentation != null && presentation.optInt("schemaVersion", 0) == 1) {
+            title = CrewMissionTitle.stored(presentation.opt("title"), presentation.optString("titleSource"));
+            Object original = presentation.opt("originalInstructions");
+            if (original instanceof String) instructions = (String) original;
+        }
+        // Older checkpoints contain only bot instructions; never relabel them as the user's request.
+        return new CrewMissionSnapshot(data.getString("missionId"), this.conversation, "recovered", title.title,
+                instructions, title.source, "INTERRUPTED", "", data.getLong("startedAtMillis"), savedAtMillis,
+                Collections.singletonList(bot), Collections.emptyList());
+    }
+
+    private static CrewMissionSnapshot withCheckpointPresentation(CrewMissionSnapshot ledger, CrewMissionSnapshot checkpoint) {
+        // Checkpoints commit before the ledger. Recover a first accepted title that reached its
+        // checkpoint but not its ledger row, without renaming an already-titled ledger mission.
+        boolean useCheckpointTitle = CrewMissionTitle.FALLBACK.equals(ledger.titleSource);
+        return new CrewMissionSnapshot(ledger.missionId, ledger.conversationId, ledger.processId,
+                useCheckpointTitle ? checkpoint.title : ledger.title,
+                ledger.originalInstructions.isEmpty() ? checkpoint.originalInstructions : ledger.originalInstructions,
+                useCheckpointTitle ? checkpoint.titleSource : ledger.titleSource, ledger.status, ledger.synthesis,
+                ledger.startedAtMillis, ledger.finishedAtMillis, ledger.bots, ledger.messages);
+    }
+
     private void restoreIssue(CrewManager manager, String note) {
         if (manager.bot("checkpoint-recovery-issue") != null) {
             return;
         }
         CrewBotSnapshot visible = new CrewBotSnapshot("checkpoint-recovery-issue", "checkpoint", "Saved work", "Saved work", CrewRoleTemplates.CODING, "Review unavailable saved work", "FAILED", note, "", "", Collections.emptyList(), 0L, 0L);
-        CrewMissionSnapshot mission = new CrewMissionSnapshot("checkpoint-recovery-issue", this.conversation, "recovered", "Saved work", "FAILED", "", 0L, 0L, Collections.singletonList(visible), Collections.emptyList());
+        CrewMissionSnapshot mission = new CrewMissionSnapshot("checkpoint-recovery-issue", this.conversation, "recovered",
+                "", "", CrewMissionTitle.FALLBACK, "FAILED", "", 0L, 0L, Collections.singletonList(visible), Collections.emptyList());
         manager.restoreBot(mission, visible, new CrewRole("checkpoint", "Saved work", CrewRoleTemplates.CODING, "History only", Collections.emptyList(), null), null, new JSONObject(), "", Collections.emptyList(), 0L, Collections.emptyList(), Collections.emptyList(), note);
     }
 

@@ -283,7 +283,7 @@ public final class CoreAgentRuntime {
       crewManager = configureCrewManager(base, model, listener);
       crewManager.attachCaptain(token);
       toolRegistry = base.with(captainCrewTools(mode, crewManager, base));
-      crewMissionId = crewManager.beginMission(UUID.randomUUID().toString(), request.trim());
+      crewMissionId = crewManager.beginMission(UUID.randomUUID().toString(), request);
     }
     List<ConnectorRegistry> registries = new ArrayList<>();
     if (depth == 0) {
@@ -1700,6 +1700,13 @@ public final class CoreAgentRuntime {
                 + " verification, consider Crew; answer simple one-step questions directly without"
                 + " spawning bots. ");
       }
+      prompt.append(
+          "In the same turn as your first crew_spawn, supply task_title: a semantic title for the entire user mission,"
+              + " typically 3–6 words in the user's language and at most 60 Unicode code points, as single-line plain text."
+              + " Describe the complete objective rather than one worker's subtask, independently of bot name and role."
+              + " Generate it yourself from the request, never from a fixed phrase, keyword rule, or template by task type."
+              + " Keep the full instructions in mission; task_title is display metadata and never an execution prompt or permission."
+              + " Reuse that title for later bots and retries; the first valid title is retained. Do not make a separate title-generation call. ");
       prompt.append(
           "Give each bot a precise mission with the necessary context (bots do not see this"
               + " conversation), desired evidence and result format. Use crew_wait, inspect all"

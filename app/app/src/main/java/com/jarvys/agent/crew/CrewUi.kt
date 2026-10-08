@@ -34,12 +34,17 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -359,9 +364,14 @@ fun CrewMissionCard(
                     modifier = Modifier.size(28.dp), testTag = "crew-orb-captain",
                     background = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.54f)
                         .compositeOver(MaterialTheme.colorScheme.background))
-                Text(stringResource(R.string.crew_synthesized_by, snapshot.bots.size, elapsed),
-                    Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurface,
-                    style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text(crewMissionTitle(snapshot), modifier = Modifier.testTag("crew-card-title"),
+                        color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(stringResource(R.string.crew_synthesized_by, snapshot.bots.size, elapsed),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
                 TextButton(onClick = onOpen) { Text(stringResource(R.string.crew_view_how)) }
             }
         }
@@ -372,14 +382,17 @@ fun CrewMissionCard(
         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh) {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(stringResource(R.string.crew_mission_in_progress), color = MaterialTheme.colorScheme.onSurface,
-                    style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold,
+                Text(crewMissionStatus(snapshot.status), color = MaterialTheme.colorScheme.primary,
+                    style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Medium,
                     modifier = Modifier.weight(1f))
                 Text(elapsed, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.labelSmall, modifier = Modifier.testTag("crew-elapsed"))
+                    style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = 96.dp).testTag("crew-elapsed"))
             }
-            Text(snapshot.title, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(crewMissionTitle(snapshot), color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.testTag("crew-card-title"),
+                style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
+                maxLines = 2, overflow = TextOverflow.Ellipsis)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalArrangement = Arrangement.spacedBy(7.dp),
                 modifier = Modifier.testTag("crew-orb-row")) {
                 CrewBotAvatar(stringResource(R.string.crew_captain_name), "captain", "periwinkle", snapshot.status,
@@ -405,9 +418,10 @@ fun CrewMissionCard(
                     Text(bot.name, color = readableThemeInk(CrewOrbPalette.color(bot.colorKey),
                         MaterialTheme.colorScheme.surfaceContainerHigh, MaterialTheme.colorScheme.onSurface),
                         style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.SemiBold, maxLines = 1)
+                        fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f))
                     Text(status, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(2f))
                 }
             }
             if (snapshot.bots.isEmpty()) LinearProgressIndicator(Modifier.fillMaxWidth().testTag("crew-progress"))
@@ -442,6 +456,8 @@ fun CrewMissionScreen(
     onCrewModeChange: (CrewMode) -> Unit = {},
 ) {
     var configuringCoding by remember { mutableStateOf(false) }
+    var showSettings by remember(snapshot?.missionId) { mutableStateOf(false) }
+    var showInstructions by remember(snapshot?.missionId) { mutableStateOf(false) }
     if (configuringCoding) {
         CrewCodingProfileSettings(onClose = { configuringCoding = false }, conversationId = snapshot?.conversationId)
         return
@@ -466,40 +482,90 @@ fun CrewMissionScreen(
             onBoardReferenceConsumed()
         }
     }
-    BoxWithConstraints(Modifier.fillMaxSize().testTag("crew-mission-screen")) {
-        val headerMaxHeight = if (snapshot == null) maxHeight * 0.6f else maxHeight / 3
-        Column(Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxWidth().heightIn(max = headerMaxHeight)
-            .verticalScroll(rememberScrollState()).testTag("crew-mission-header")) {
-        CrewModePicker(crewMode, onCrewModeChange, modifier = Modifier.padding(horizontal = JarvysUiTokens.ScreenPadding))
-        TextButton(onClick = { configuringCoding = true }, modifier = Modifier.fillMaxWidth().testTag("crew-configure-coding")) {
-            Text(stringResource(R.string.bots_runtime_details))
-        }
-        if (snapshot != null) Row(Modifier.fillMaxWidth().padding(horizontal = JarvysUiTokens.ScreenPadding, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            CrewBotAvatar(stringResource(R.string.crew_captain_name), "captain", "periwinkle", snapshot.status,
-                testTag = "crew-orb-captain")
-            Column(Modifier.weight(1f)) {
-                Text(snapshot.title, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text(crewMissionStatus(snapshot.status), color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodySmall)
+    if (showSettings) AlertDialog(
+        onDismissRequest = { showSettings = false },
+        title = { Text(stringResource(R.string.crew_settings_title)) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                CrewModePicker(crewMode, onCrewModeChange, stacked = true)
+                if (snapshot != null && snapshot.originalInstructions.isNotBlank()) TextButton(
+                    onClick = { showSettings = false; showInstructions = true },
+                    modifier = Modifier.fillMaxWidth().testTag("crew-view-instructions"),
+                ) { Text(stringResource(R.string.crew_view_instructions)) }
+                TextButton(onClick = { showSettings = false; configuringCoding = true },
+                    modifier = Modifier.fillMaxWidth().testTag("crew-configure-coding")) {
+                    Text(stringResource(R.string.bots_runtime_details))
+                }
             }
-            if (readOnly) JarvysTag(stringResource(R.string.crew_read_only))
-        }
+        },
+        confirmButton = { TextButton(onClick = { showSettings = false }) { Text(stringResource(R.string.crew_close_panel)) } },
+    )
+    if (showInstructions && snapshot != null) CrewInstructionsDialog(snapshot.originalInstructions) { showInstructions = false }
+    if (showAskPicker && !readOnly && snapshot != null) AlertDialog(
+        onDismissRequest = { showAskPicker = false },
+        title = { Text(stringResource(R.string.crew_ask_bot)) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                snapshot.bots.filter { it.status != "INTERRUPTED" && !it.resumeRequired }.forEach { bot ->
+                    TextButton(onClick = { showAskPicker = false; onAskBot(bot.id, "") },
+                        modifier = Modifier.fillMaxWidth().testTag("crew-pick-bot-${bot.id}")) {
+                        Text(stringResource(R.string.crew_ask_named_bot, bot.name))
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = { showAskPicker = false }) { Text(stringResource(R.string.crew_close_panel)) } },
+    )
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+    val compactHeight = maxHeight < 420.dp
+    Column(Modifier.fillMaxSize().testTag("crew-mission-screen")) {
+        if (snapshot == null) {
+            CrewModePicker(crewMode, onCrewModeChange, modifier = Modifier.padding(horizontal = JarvysUiTokens.ScreenPadding))
+            TextButton(onClick = { configuringCoding = true }, modifier = Modifier.fillMaxWidth().testTag("crew-configure-coding")) {
+                Text(stringResource(R.string.bots_runtime_details))
+            }
+        } else {
+            Surface(Modifier.fillMaxWidth().padding(horizontal = JarvysUiTokens.ScreenPadding, vertical = 8.dp)
+                .testTag("crew-mission-header"),
+                color = MaterialTheme.colorScheme.surfaceContainerLow, shape = RoundedCornerShape(20.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.16f))) {
+                Row(Modifier.padding(start = 14.dp, top = 12.dp, end = 4.dp, bottom = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    CrewBotAvatar(stringResource(R.string.crew_captain_name), "captain", "periwinkle", snapshot.status,
+                        modifier = Modifier.size(36.dp), testTag = "crew-orb-captain",
+                        background = MaterialTheme.colorScheme.surfaceContainerLow)
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(crewMissionTitle(snapshot), modifier = Modifier.testTag("crew-detail-title"),
+                            color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold, maxLines = if (compactHeight) 1 else 2, overflow = TextOverflow.Ellipsis)
+                        Text(crewMissionStatus(snapshot.status), modifier = Modifier.testTag("crew-mission-status"),
+                            color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
+                        if (readOnly) Text(stringResource(R.string.crew_read_only),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
+                    }
+                    IconButton(onClick = { showSettings = true }, modifier = Modifier.size(48.dp).testTag("crew-mission-settings")) {
+                        Icon(LucideIcons.Settings, stringResource(R.string.crew_settings_title),
+                            tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                    }
+                }
+            }
         }
         if (snapshot == null) {
             CrewEmptyState()
             return@Column
         }
-        Row(Modifier.fillMaxWidth().padding(horizontal = JarvysUiTokens.ScreenPadding),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            CrewTabChip(stringResource(R.string.crew_tab_debate), tab == CrewScreenTab.DEBATE,
-                Modifier.testTag("crew-tab-debate")) { tab = CrewScreenTab.DEBATE }
-            CrewTabChip(stringResource(R.string.crew_tab_board), tab == CrewScreenTab.BOARD,
-                Modifier.testTag("crew-tab-board")) { tab = CrewScreenTab.BOARD }
-            CrewTabChip(stringResource(R.string.crew_tab_bots), tab == CrewScreenTab.BOTS,
-                Modifier.testTag("crew-tab-bots")) { tab = CrewScreenTab.BOTS }
+        TabRow(selectedTabIndex = tab.ordinal, containerColor = MaterialTheme.colorScheme.background,
+            contentColor = MaterialTheme.colorScheme.primary, divider = {}) {
+            listOf(Triple(CrewScreenTab.DEBATE, R.string.crew_tab_debate, "debate"),
+                Triple(CrewScreenTab.BOARD, R.string.crew_tab_board, "board"),
+                Triple(CrewScreenTab.BOTS, R.string.crew_tab_bots, "bots")).forEach { (value, label, tag) ->
+                Tab(selected = tab == value, onClick = { tab = value },
+                    modifier = Modifier.heightIn(min = 48.dp).testTag("crew-tab-$tag")) {
+                    Text(stringResource(label), modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp)
+                        .testTag("crew-tab-label-$tag"), style = MaterialTheme.typography.labelLarge,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
         }
         Spacer(Modifier.height(8.dp))
         when {
@@ -511,6 +577,7 @@ fun CrewMissionScreen(
                     isRunning = snapshot.active(),
                     messageKey = { it.id },
                     isUserMessage = { it.from == "user" },
+                    composerInset = 0.dp, headerInset = 0.dp,
                     modifier = Modifier.weight(1f).fillMaxWidth().testTag("crew-debate-list"),
                     itemContent = { message -> CrewMessageRow(message, snapshot.bots, onBoardReference = { ref ->
                         selectedBoardFile = ref
@@ -563,23 +630,23 @@ fun CrewMissionScreen(
             }
         }
         if (!readOnly) Row(Modifier.fillMaxWidth().padding(horizontal = JarvysUiTokens.ScreenPadding, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            OutlinedButton(onClick = { showAskPicker = !showAskPicker }, modifier = Modifier.weight(1f)
-                .testTag("crew-ask-bot")) { Text(stringResource(R.string.crew_ask_bot)) }
-            OutlinedButton(onClick = onStopAll, modifier = Modifier.weight(1f).testTag("crew-stop-all")) {
-                Text(stringResource(R.string.crew_stop_all))
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Button(onClick = { showAskPicker = !showAskPicker }, modifier = Modifier.weight(1f).heightIn(min = 48.dp)
+                .testTag("crew-ask-bot")) {
+                Icon(LucideIcons.MessageSquare, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(if (compactHeight) R.string.crew_message_short else R.string.crew_message_action),
+                    style = MaterialTheme.typography.labelLarge)
+            }
+            if (snapshot.active() || snapshot.bots.any { it.active() }) IconButton(
+                onClick = onStopAll, modifier = Modifier.size(48.dp).testTag("crew-stop-all")) {
+                Icon(LucideIcons.CircleStop, stringResource(R.string.crew_stop_all),
+                    tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(20.dp))
             }
         }
-        if (showAskPicker && !readOnly) Column(Modifier.fillMaxWidth().padding(horizontal = JarvysUiTokens.ScreenPadding),
-            verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                snapshot.bots.filter { it.status != "INTERRUPTED" && !it.resumeRequired }.forEach { bot ->
-                TextButton(onClick = { showAskPicker = false; onAskBot(bot.id, "") }, modifier = Modifier.fillMaxWidth()) {
-                    Text(stringResource(R.string.crew_ask_named_bot, bot.name))
-                }
-            }
-        }
+
     }
-}
+    }
 }
 
 @Composable
@@ -596,9 +663,11 @@ fun CrewBotDetailScreen(
 ) {
     val bot = snapshot?.bots?.firstOrNull { it.id == botId }
     var message by remember(botId) { mutableStateOf("") }
+    var showBotInstructions by remember(botId) { mutableStateOf(false) }
     val conversation = remember(snapshot?.missionId, botId, snapshot?.messages) {
         snapshot?.messages.orEmpty().filter { it.from == botId || it.to == botId }
     }
+    if (showBotInstructions && bot != null) CrewInstructionsDialog(bot.mission) { showBotInstructions = false }
     Column(Modifier.fillMaxSize().testTag("crew-bot-detail")) {
         if (bot == null) {
             CrewEmptyState()
@@ -625,10 +694,10 @@ fun CrewBotDetailScreen(
             }
             items(bot.tools) { JarvysTag(it) }
         }
-        Text(stringResource(R.string.crew_mission_label), Modifier.padding(horizontal = JarvysUiTokens.ScreenPadding, vertical = 6.dp),
-            color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelMedium)
-        Text(bot.mission, Modifier.fillMaxWidth().padding(horizontal = JarvysUiTokens.ScreenPadding),
-            color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyMedium)
+        TextButton(onClick = { showBotInstructions = true }, modifier = Modifier.fillMaxWidth()
+            .padding(horizontal = JarvysUiTokens.ScreenPadding).testTag("crew-bot-view-instructions")) {
+            Text(stringResource(R.string.crew_view_instructions))
+        }
         if (bot.status == "FAILED") JarvysGroup(
             modifier = Modifier.fillMaxWidth().padding(horizontal = JarvysUiTokens.ScreenPadding),
             containerColor = MaterialTheme.colorScheme.errorContainer,
@@ -694,16 +763,23 @@ fun CrewResumePanel(canResume: Boolean, note: String, onResume: () -> Unit) {
 }
 
 @Composable
-fun CrewModePicker(mode: CrewMode, onChange: (CrewMode) -> Unit, onOpenCrew: (() -> Unit)? = null, modifier: Modifier = Modifier) {
+fun CrewModePicker(mode: CrewMode, onChange: (CrewMode) -> Unit, onOpenCrew: (() -> Unit)? = null, modifier: Modifier = Modifier, stacked: Boolean = false) {
     JarvysGroup(modifier = modifier, contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp)) {
         Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 JarvysSectionLabel(stringResource(R.string.crew_mode_title), Modifier.weight(1f))
                 if (onOpenCrew != null) TextButton(onClick = onOpenCrew) { Text(stringResource(R.string.crew_open_workspace)) }
             }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                listOf(CrewMode.OFF to R.string.crew_mode_off, CrewMode.AUTO to R.string.crew_mode_auto,
-                    CrewMode.ALWAYS to R.string.crew_mode_always).forEach { (value, label) ->
+            val modes = listOf(CrewMode.OFF to R.string.crew_mode_off, CrewMode.AUTO to R.string.crew_mode_auto,
+                CrewMode.ALWAYS to R.string.crew_mode_always)
+            if (stacked) Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                modes.forEach { (value, label) ->
+                    FilterChip(selected = mode == value, onClick = { onChange(value) },
+                        label = { Text(stringResource(label)) }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                            .testTag("crew-mode-${value.name.lowercase()}"))
+                }
+            } else Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                modes.forEach { (value, label) ->
                     FilterChip(selected = mode == value, onClick = { onChange(value) },
                         label = { Text(stringResource(label), maxLines = 1) }, modifier = Modifier.weight(1f)
                             .testTag("crew-mode-${value.name.lowercase()}"))
@@ -738,6 +814,34 @@ private fun CrewMessageRow(message: CrewMessage, bots: List<CrewBotSnapshot>, on
     val color = readableThemeInk(identity,
         MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.52f).compositeOver(MaterialTheme.colorScheme.background),
         MaterialTheme.colorScheme.onSurface)
+    if (message.type == CrewMessage.Type.STATUS) {
+        Row(Modifier.fillMaxWidth().testTag("crew-message-${message.id}")
+            .padding(vertical = 2.dp), horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.Top) {
+            CrewBotAvatar(senderName, sender?.roleId ?: if (message.from == "chief") "captain" else message.from,
+                sender?.colorKey ?: if (message.from == "chief") "periwinkle" else null,
+                sender?.status ?: "DONE", sender?.waitingReason,
+                modifier = Modifier.size(22.dp), testTag = "crew-message-orb-${message.id}")
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(senderName, color = color, style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f))
+                    Text(stringResource(R.string.crew_message_recipient, recipientName),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                }
+                Text(localizeCrewActivity(message.text), color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall)
+                message.refs.forEach { ref ->
+                    TextButton(onClick = { onBoardReference(ref) }, modifier = Modifier.testTag("crew-ref-${message.id}")) {
+                        Text(ref, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+        }
+        return
+    }
     Row(Modifier.fillMaxWidth().testTag("crew-message-${message.id}"),
         horizontalArrangement = if (message.from == "user") Arrangement.End else Arrangement.Start,
         verticalAlignment = Alignment.Top) {
@@ -752,12 +856,14 @@ private fun CrewMessageRow(message: CrewMessage, bots: List<CrewBotSnapshot>, on
             shape = RoundedCornerShape(15.dp)) {
             Column(Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                    Text(senderName, color = color, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-                    Text(stringResource(R.string.crew_message_route, senderName, recipientName),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall,
+                    Text(senderName, color = color, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold,
                         modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    JarvysTag(crewMessageType(message.type))
+                    Text(stringResource(R.string.crew_message_recipient, recipientName),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                 }
+                Text(crewMessageType(message.type), color = MaterialTheme.colorScheme.primary,
+                    style = MaterialTheme.typography.labelSmall)
                 if (message.type == CrewMessage.Type.CRITIQUE) {
                     Surface(color = CrewOrbPalette.Critic, shape = RoundedCornerShape(4.dp), modifier = Modifier.fillMaxWidth().height(3.dp)) { }
                 }
@@ -775,8 +881,20 @@ private fun CrewMessageRow(message: CrewMessage, bots: List<CrewBotSnapshot>, on
 }
 
 @Composable
-private fun CrewTabChip(label: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    FilterChip(selected, onClick, label = { Text(label, maxLines = 1) }, modifier = modifier)
+internal fun crewMissionTitle(snapshot: CrewMissionSnapshot): String =
+    snapshot.title.ifBlank { stringResource(R.string.crew_task_untitled) }
+
+@Composable
+private fun CrewInstructionsDialog(instructions: String, onClose: () -> Unit) {
+    AlertDialog(onDismissRequest = onClose,
+        modifier = Modifier.testTag("crew-instructions-dialog"),
+        title = { Text(stringResource(R.string.crew_instructions_title)) },
+        text = { SelectionContainer {
+            Text(instructions, modifier = Modifier.verticalScroll(rememberScrollState()).testTag("crew-full-instructions"),
+                color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyMedium)
+        } },
+        confirmButton = { TextButton(onClick = onClose) { Text(stringResource(R.string.crew_close_panel)) } },
+    )
 }
 
 @Composable

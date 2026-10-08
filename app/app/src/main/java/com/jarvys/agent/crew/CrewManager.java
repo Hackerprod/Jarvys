@@ -23,6 +23,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.DoubleSupplier;
 import java.util.function.Predicate;
@@ -112,6 +114,7 @@ public final class CrewManager implements AutoCloseable {
         public volatile CrewRole role;
         public final String mission;
         public final String missionId;
+        private final MissionState missionState;
         public volatile CancellationToken token = CancellationToken.crewChild();
         private volatile Status status = Status.QUEUED;
         private volatile String result = "";
@@ -148,13 +151,19 @@ public final class CrewManager implements AutoCloseable {
         private final Set<String> observedWork = ConcurrentHashMap.newKeySet();
         private String ownerPrefix = "";
 
-        private Bot(String id, String name, CrewRole role, String mission, String missionId) {
+        private Bot(String id, String name, CrewRole role, String mission, MissionState missionState) {
             this.id = id;
             this.name = name;
             this.role = role;
             this.mission = mission;
-            this.missionId = missionId;
+            this.missionState = missionState;
+            this.missionId = missionState.id;
         }
+
+        /** Immutable title value and full request, read without acquiring manager/worker locks. */
+        public CrewMissionTitle missionTitle() { return missionState.title.get(); }
+
+        public String originalInstructions() { return missionState.originalInstructions; }
 
         public Status status() {
             return status;
@@ -261,15 +270,23 @@ public final class CrewManager implements AutoCloseable {
 
     private static final class MissionState {
         final String id;
-        final String title;
+        final AtomicReference<CrewMissionTitle> title = new AtomicReference<>(CrewMissionTitle.fallback());
+        final AtomicLong presentationGeneration = new AtomicLong();
+        final AtomicBoolean presenting = new AtomicBoolean();
+        volatile String originalInstructions;
         long startedAtMillis = System.currentTimeMillis();
         volatile String status = "RUNNING";
         volatile String synthesis = "";
         volatile long finishedAtMillis;
 
-        MissionState(String id, String title) {
+        MissionState(String id, String originalInstructions) {
             this.id = id;
-            this.title = title;
+            this.originalInstructions = originalInstructions == null ? "" : originalInstructions;
+        }
+
+        void acceptTitle(CrewMissionTitle candidate) {
+            if (!CrewMissionTitle.FALLBACK.equals(candidate.source))
+                title.compareAndSet(CrewMissionTitle.fallback(), candidate);
         }
     }
     private final String conversationId;
@@ -297,6 +314,7 @@ public final class CrewManager implements AutoCloseable {
     private final Map<String, Bot> bots = new ConcurrentHashMap<>();
     private final Map<String, Integer> observedDefinitionRevisions = new ConcurrentHashMap<>();
     private final Map<String, MissionState> missions = new ConcurrentHashMap<>();
+    private final Object missionAdmissionLock = new Object();
     private volatile String currentMissionId;
     private final ExecutorService executor;
     private final AtomicReference<Runnable> unregisterCaptain = new AtomicReference<>(()->{
@@ -355,15 +373,18 @@ public final class CrewManager implements AutoCloseable {
     public synchronized Bot restoreBot(CrewMissionSnapshot missionSnapshot, CrewBotSnapshot snapshot, CrewRole role, CoreAgentLoop.Checkpoint checkpoint, JSONObject ownership, String scopeIdentity, List<String> jobOwners, long completedCycles, List<CrewMessage> messages, List<CrewMessage> pending, String issue) {
         if (!conversationId.equals(missionSnapshot.conversationId)) throw new IllegalArgumentException("Wrong checkpoint conversation");
         if (bots.containsKey(snapshot.id)) return bots.get(snapshot.id);
-        missions.computeIfAbsent(missionSnapshot.missionId, (id)->{
-            MissionState mission = new MissionState(id, missionSnapshot.title);
+        MissionState restoredMission = missions.computeIfAbsent(missionSnapshot.missionId, (id)->{
+            MissionState mission = new MissionState(id, missionSnapshot.originalInstructions);
             mission.startedAtMillis = missionSnapshot.startedAtMillis;
             mission.finishedAtMillis = missionSnapshot.finishedAtMillis;
             mission.status = "RUNNING".equals(missionSnapshot.status) ? "INTERRUPTED" : missionSnapshot.status;
             mission.synthesis = missionSnapshot.synthesis;
             return mission;
         });
-        Bot bot = new Bot(snapshot.id, snapshot.name, role, snapshot.mission, missionSnapshot.missionId);
+        restoredMission.acceptTitle(CrewMissionTitle.stored(missionSnapshot.title, missionSnapshot.titleSource));
+        // An orphan older checkpoint has no user request. A newer sibling may supply it.
+        if (restoredMission.originalInstructions.isEmpty()) restoredMission.originalInstructions = missionSnapshot.originalInstructions;
+        Bot bot = new Bot(snapshot.id, snapshot.name, role, snapshot.mission, restoredMission);
         bot.ownerPrefix = conversationId + "/" + bot.id + "/";
         bot.status = snapshot.active() ? Status.INTERRUPTED : Status.valueOf(snapshot.status);
         if (checkpoint != null && bot.status == Status.DONE && pending.stream().anyMatch((message)->!checkpoint.appliedIncomingIds.contains(message.id))) {
@@ -470,10 +491,12 @@ public final class CrewManager implements AutoCloseable {
         }
     }
 
-    public String beginMission(String missionId, String title) {
+    public String beginMission(String missionId, String originalInstructions) {
         String id = missionId == null || missionId.trim().isEmpty() ? UUID.randomUUID().toString() : missionId;
-        missions.put(id, new MissionState(id, title == null ? "" : title));
-        currentMissionId = id;
+        synchronized (missionAdmissionLock) {
+            missions.putIfAbsent(id, new MissionState(id, originalInstructions));
+            currentMissionId = id;
+        }
         return id;
     }
 
@@ -563,6 +586,11 @@ public final class CrewManager implements AutoCloseable {
 
     public Bot spawn(String roleId, String mission, List<String> requestedTools, String requestedName,
             CrewMissionAccess missionAccess) {
+        return spawn(roleId, mission, requestedTools, requestedName, missionAccess, null);
+    }
+
+    public Bot spawn(String roleId, String mission, List<String> requestedTools, String requestedName,
+            CrewMissionAccess missionAccess, Object taskTitle) {
         if (mission == null || mission.trim().isEmpty()) throw new IllegalArgumentException("mission must be a non-empty string");
         CrewRole role;
         if ("custom".equalsIgnoreCase(roleId)) {
@@ -588,16 +616,24 @@ public final class CrewManager implements AutoCloseable {
         validateCurrentProfile(role);
         String id = "bot-" + UUID.randomUUID();
         String name = requestedName == null || requestedName.trim().isEmpty() ? role.name : requestedName.trim();
-        String missionId = currentMissionId;
-        if (missionId == null || !missions.containsKey(missionId) || !"RUNNING".equals(missions.get(missionId).status)) {
-            missionId = beginMission(UUID.randomUUID().toString(), mission.trim());
+        MissionState missionState;
+        CrewMissionTitle candidate = CrewMissionTitle.agent(taskTitle);
+        synchronized (missionAdmissionLock) {
+            missionState = currentMissionId == null ? null : missions.get(currentMissionId);
+            if (missionState == null || !"RUNNING".equals(missionState.status)) {
+                // Direct/legacy spawn callers do not supply the original user request.
+                String idForMission = beginMission(UUID.randomUUID().toString(), "");
+                missionState = missions.get(idForMission);
+            }
+            missionState.acceptTitle(candidate);
         }
-        Bot bot = new Bot(id, name, role, mission.trim(), missionId);
+        String missionId = missionState.id;
+        Bot bot = new Bot(id, name, role, mission, missionState);
         bot.ownerPrefix = conversationId + "/" + bot.id + "/";
         bot.cycleScheduled = true;
         bots.put(id, bot);
         bot.checkpointChanged = ()->persistCheckpoint(bot);
-        bus.send("chief", id, CrewMessage.Type.TASK, mission.trim(), Collections.emptyList());
+        bus.send("chief", id, CrewMessage.Type.TASK, mission, Collections.emptyList());
         try {
             publishMission(missionId);
             executor.execute(()->runBot(bot));
@@ -1097,8 +1133,27 @@ public final class CrewManager implements AutoCloseable {
 
     private void publishPresentation(String missionId) {
         MissionState mission = missions.get(missionId);
-        SnapshotListener listener = snapshotListener;
-        if (mission != null && listener != null && !botsFor(missionId).isEmpty()) listener.onChanged(snapshot(mission));
+        if (mission == null) return;
+        mission.presentationGeneration.incrementAndGet();
+        if (!mission.presenting.compareAndSet(false, true)) return;
+        RuntimeException deliveryFailure = null;
+        for (;;) {
+            long observed = mission.presentationGeneration.get();
+            try {
+                SnapshotListener listener = snapshotListener;
+                if (listener != null && !botsFor(missionId).isEmpty()) listener.onChanged(snapshot(mission));
+            } catch (RuntimeException failure) {
+                if (deliveryFailure == null) deliveryFailure = failure;
+            } finally {
+                mission.presenting.set(false);
+            }
+            // One drainer orders snapshots and callbacks. Other publishers only mark dirty and
+            // never wait while holding a worker lock. Recheck after release to avoid lost updates.
+            if (mission.presentationGeneration.get() == observed || !mission.presenting.compareAndSet(false, true)) {
+                if (deliveryFailure != null) throw deliveryFailure;
+                return;
+            }
+        }
     }
 
     private List<Bot> botsFor(String missionId) {
@@ -1117,7 +1172,10 @@ public final class CrewManager implements AutoCloseable {
         }
         List<CrewMessage> missionMessages = new ArrayList<>();
         for (CrewMessage message : bus.snapshot()) if (ids.contains(message.from) || ids.contains(message.to)) missionMessages.add(message);
-        return new CrewMissionSnapshot(mission.id, conversationId, CrewProcessIdentity.ID, mission.title, mission.status, mission.synthesis, mission.startedAtMillis, mission.finishedAtMillis, botSnapshots, missionMessages);
+        CrewMissionTitle title = mission.title.get();
+        return new CrewMissionSnapshot(mission.id, conversationId, CrewProcessIdentity.ID, title.title,
+                mission.originalInstructions, title.source, mission.status, mission.synthesis,
+                mission.startedAtMillis, mission.finishedAtMillis, botSnapshots, missionMessages);
     }
 
     public static String formatMessages(List<CrewMessage> messages) {

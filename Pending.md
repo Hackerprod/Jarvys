@@ -301,13 +301,20 @@ Contrato, referencias y límites: app/MAIN_AGENT.md. Código y Pending.md respal
 
 ### 11. UX27: títulos breves y detalle de tareas
 
-Estado: en implementación; solicitud del 8 de octubre de 2026, después de finalizar UX26.
+Estado: implementado y en validación para v45 / 1.2.38-UX27. La revisión independiente de fuente no deja bloqueos abiertos; agregadas finales de ambos sabores, lint y verificación de APK siguen pendientes.
 
 - Separar el título breve de una tarea de sus instrucciones completas. El propio agente debe generar el nombre según la tarea real, sin frases fijas por tipo ni detectores de palabras clave; la app solo valida longitud y presentación. No repetir todo el mensaje original como nombre en tarjetas o en la cabecera del detalle. Para datos antiguos ausentes o inválidos, usar únicamente un fallback neutral, sin fingir un resumen semántico.
 - Mantener el mismo título coherente entre tarjeta y detalle, con límites de longitud y tratamiento visual para nombres largos.
 - Conservar íntegros el contenido original, la identidad de la tarea, su persistencia y las instrucciones que recibe el agente. Los cambios de presentación no deben truncar la misión ni alterar permisos.
 - Rediseñar el interior del detalle de tareas con una jerarquía clara, mejor espaciado y una composición limpia coherente con el estilo azul de Jarvys y las referencias aportadas.
 - Validar tarjetas y detalle, nombres extensos, pantallas estrechas, texto grande, temas e idiomas, sin ocultar estados, progreso, resultados o controles necesarios.
+
+- Añadido task_title a la misma llamada de delegación: nombre semántico del agente, límite de 60 puntos de código Unicode y primer título válido estable. Los títulos ausentes o inválidos usan una etiqueta neutral localizada, sin generar resúmenes por reglas.
+- El esquema 2 mantiene título, origen e instrucciones completas; lee también el esquema 1 sin reescribir el historial. La recuperación conserva instrucciones y restaura metadatos válidos de checkpoints cuando el ledger anterior todavía tenía fallback. La publicación ordenada evita que un callback antiguo sustituya un título ya aceptado.
+- El resumen de misión pasa al principio, las opciones globales a un diálogo desplazable y las instrucciones íntegras a una vista seleccionable. Actividad compacta con emisor y destinatario conservados, pestañas azules legibles y controles accesibles; sin recorte artificial de cabecera a un tercio de pantalla.
+- Pruebas nuevas para Unicode, títulos invisibles, persistencia, concurrencia, recuperación, ausencia de llamadas extra al modelo, matriz visual 320/360/412 dp y texto 100/200 %, incluidos diálogos y selección/copia. Los fixtures son locales; no certifican calidad del modelo real ni aceptación física.
+
+Contrato y límites: app/CREW_TASKS.md.
 
 ### 12. UX28: miniaturas HTML y acciones de archivos
 

@@ -20,14 +20,14 @@ public final class CrewTools {
     public static List<CoreTool> captain(CrewManager manager, CoreToolRegistry captainTools) {
         return Arrays.asList(
                 new CaptainTool("crew_spawn", "Spawn a role-scoped Crew bot to work concurrently on a mission. Role may be a built-in role id or custom; custom roles require name and an explicit tools list. For project review, explanation, or planning without implementation, set mission_access=read_only. That persistent restriction removes project/board mutation, commands, packaging, nested delegation, and messages to other workers; standard never grants approval.",
-                        schema(props("role", "string", "mission", "string", "tools", "array", "name", "string", "mission_access", "string"), "mission", "role")) {
+                        spawnSchema()) {
                     @Override CoreToolResult run(Map<String,Object> a, CancellationToken token) {
                         token.throwIfCancelled();
                         String role = string(a,"role");
-                        String mission = string(a,"mission");
+                        String mission = originalString(a,"mission");
                         List<String> tools = strings(a.get("tools"), "tools");
                         CrewManager.Bot bot = manager.spawn(role, mission, a.containsKey("tools") ? tools : null,
-                                optionalString(a,"name"), CrewMissionAccess.parse(a.containsKey("mission_access") ? string(a,"mission_access") : null));
+                                optionalString(a,"name"), CrewMissionAccess.parse(a.containsKey("mission_access") ? string(a,"mission_access") : null), a.get("task_title"));
                         return CoreToolResult.success("Spawned " + bot.name + " (" + bot.id + ") status=" + bot.status());
                     }
                 },
@@ -137,6 +137,17 @@ public final class CrewTools {
         return new ToolSpec(name,"jarvys/crew",description,"crew",ToolSpec.Status.IMPLEMENTED,
                 Collections.emptyMap(),Collections.emptyList(),schema);
     }
+    private static Map<String,Object> spawnSchema() {
+        Map<String,Object> schema = schema(props("role", "string", "mission", "string", "tools", "array",
+                "name", "string", "mission_access", "string", "task_title", "string"), "mission", "role");
+        @SuppressWarnings("unchecked") Map<String,Object> properties = (Map<String,Object>) schema.get("properties");
+        Map<String,Object> title = new LinkedHashMap<>();
+        title.put("type", "string");
+        title.put("description", "Write a short semantic title for the entire user mission in the same turn as this spawn: typically 3–6 words in the user's language, at most 60 Unicode code points, single-line plain text. Name the complete objective, independently of this bot's name or subtask. Keep full execution instructions in mission. Reuse the first accepted task_title for later bots and retries. This optional display metadata never grants permissions; invalid or missing titles use a neutral UI fallback.");
+        title.put("maxLength", CrewMissionTitle.MAX_CODE_POINTS);
+        properties.put("task_title", title);
+        return schema;
+    }
     private static Map<String,Object> schema(Map<String,String> properties,String... required) {
         Map<String,Object> typed = new LinkedHashMap<>();
         for (Map.Entry<String,String> entry:properties.entrySet()) typed.put(entry.getKey(),Collections.singletonMap("type",entry.getValue()));
@@ -150,6 +161,12 @@ public final class CrewTools {
     private static String string(Map<String,Object> args,String field) {
         Object value=args.get(field); if (!(value instanceof String) || ((String)value).trim().isEmpty())
             throw new IllegalArgumentException(field+" must be a non-empty string"); return ((String)value).trim();
+    }
+    private static String originalString(Map<String,Object> args,String field) {
+        Object value = args.get(field);
+        if (!(value instanceof String) || ((String) value).trim().isEmpty())
+            throw new IllegalArgumentException(field + " must be a non-empty string");
+        return (String) value;
     }
     private static String optionalString(Map<String,Object> args,String field) {
         Object value=args.get(field); if(value==null)return null; if(!(value instanceof String))throw new IllegalArgumentException(field+" must be a string");
