@@ -43,6 +43,9 @@ public final class CoreConnectorTool implements CoreTool {
     String displayName() { return operation.getDisplayLabel(); }
     String usageNote() { return definition.usageNote(); }
     String connectorId() { return definition.getId(); }
+    boolean isOnDevice() {
+        return definition.getPresentationGroup() == com.jarvys.agent.connectors.ConnectorPresentationGroup.ON_DEVICE;
+    }
     ConnectorRegistry connectorRegistry() { return registry; }
     CoreConnectorTool withRequester(String name, String colorKey) {
         return new CoreConnectorTool(registry, definition, operation, name, colorKey);

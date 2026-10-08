@@ -43,9 +43,11 @@ public class CrewProfileRecoveryTest {
         profile.remove("workspaceMode");
         String source = new JSONObject().put("schemaVersion", 1).put("profiles", new JSONArray().put(profile)).toString();
         Map<String, CrewProfile> decoded = CrewProfileRepository.decode(source);
-        assertEquals(CrewProfile.WorkspaceMode.LEGACY_CHAT, decoded.get("coding").workspaceMode);
-        assertEquals(1, decoded.get("coding").version);
-        assertThrows(IllegalArgumentException.class, ()->decoded.get("coding").resolveRole(decoded.get("coding").capabilities, Collections.emptyList()));
+        CrewProfile migrated = decoded.values().stream().filter(value -> value.id.startsWith("custom-legacy-coding-")).findFirst().get();
+        assertEquals(CrewProfile.WorkspaceMode.LEGACY_CHAT, migrated.workspaceMode);
+        assertEquals(1, migrated.version);
+        assertEquals(CrewProfile.WorkspaceMode.CONVERSATION_PROJECT, decoded.get("coding").workspaceMode);
+        assertThrows(IllegalArgumentException.class, ()->migrated.resolveRole(migrated.capabilities, Collections.emptyList()));
         assertEquals(CrewProfile.WorkspaceMode.CONVERSATION_PROJECT, CrewProfileRepository.decode(new JSONObject().put("schemaVersion", 2).put("profiles", new JSONArray().put(CrewProfile.codingDefault().toJson())).toString()).get("coding").workspaceMode);
     }
 
@@ -58,7 +60,7 @@ public class CrewProfileRecoveryTest {
         assertThrows(IllegalArgumentException.class, ()->CrewProfile.fromJson(fractional));
         JSONObject duplicate = new JSONObject().put("schemaVersion", 2).put("profiles", new JSONArray().put(CrewProfile.codingDefault().toJson()).put(CrewProfile.codingDefault().toJson()));
         assertThrows(IllegalArgumentException.class, ()->CrewProfileRepository.decode(duplicate.toString()));
-        JSONObject future = new JSONObject().put("schemaVersion", 3).put("profiles", new JSONArray());
+        JSONObject future = new JSONObject().put("schemaVersion", 4).put("profiles", new JSONArray());
         assertThrows(IllegalArgumentException.class, ()->CrewProfileRepository.decode(future.toString()));
         assertThrows(IllegalArgumentException.class, ()->new CrewProfile("coding", 1, "Name", "Description", "Prompt", Collections.emptyList(), Arrays.asList("read", "read")));
     }
@@ -78,16 +80,18 @@ public class CrewProfileRecoveryTest {
     }
 
     @Test
-    public void savingChecksRevisionAndWritesSchemaTwoWithoutResettingCorruptEvidence() throws Exception {
+    public void savingCustomChecksRevisionAndWritesSchemaThreeWithoutResettingCorruptEvidence() throws Exception {
         File root = temporary.newFolder();
         CrewProfileRepository repository = new CrewProfileRepository(root);
-        CrewProfile initial = repository.codingProfile();
+        CrewProfile initial = CrewProfile.codingDefault().withIdentity(CrewProfileRepository.newCustomId());
+        repository.create(initial, initial.capabilities, initial.skillIds);
         CrewProfile saved = repository.save(initial, initial.capabilities, initial.skillIds);
         assertEquals(2, saved.version);
-        assertEquals(2, repository.codingProfile().version);
+        assertEquals(2, repository.profile(initial.id).version);
+        assertEquals(1, repository.codingProfile().version);
         assertThrows(IllegalArgumentException.class, ()->repository.save(initial, initial.capabilities, initial.skillIds));
         File file = new File(root, "crew_profiles/profiles.json");
-        assertEquals(2, new JSONObject(new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8)).getInt("schemaVersion"));
+        assertEquals(3, new JSONObject(new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8)).getInt("schemaVersion"));
         Files.write(file.toPath(), "broken evidence".getBytes(StandardCharsets.UTF_8));
         assertThrows(IllegalArgumentException.class, repository::codingProfile);
         assertEquals("broken evidence", new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8));

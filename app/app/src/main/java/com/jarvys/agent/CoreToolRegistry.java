@@ -113,6 +113,16 @@ public final class CoreToolRegistry {
     return Collections.unmodifiableList(names);
   }
 
+  /** Native Android connectors only; remote service connectors retain their separate scope. */
+  public List<String> onDeviceConnectorToolNames() {
+    List<String> names = new ArrayList<>();
+    for (Map.Entry<String, CoreTool> entry : this.tools.entrySet()) {
+      if (entry.getValue() instanceof CoreConnectorTool
+          && ((CoreConnectorTool) entry.getValue()).isOnDevice()) names.add(entry.getKey());
+    }
+    return Collections.unmodifiableList(names);
+  }
+
   public List<ConnectorRegistry> connectorRegistries() {
     List<ConnectorRegistry> registries = new ArrayList<>();
     for (CoreTool tool : this.tools.values()) {

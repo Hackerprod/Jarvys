@@ -37,6 +37,11 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
     }
 
     @Override
+    public boolean canPersist(CrewManager.Bot bot) {
+        return bot.role.profileVersion > 0 && bot.role.workspaceMode == CrewProfile.WorkspaceMode.CONVERSATION_PROJECT;
+    }
+
+    @Override
     public void persist(CrewManager.Bot bot, List<CrewMessage> messages, List<CrewMessage> pending) {
         if (bot.role.profileVersion <= 0 || bot.role.workspaceMode != CrewProfile.WorkspaceMode.CONVERSATION_PROJECT) {
             return;

@@ -19,6 +19,7 @@ public final class CrewRoleTemplates {
     public static final String WRITER = "redactor";
     public static final String OPERATOR = "operador";
     public static final String CODING = "coding";
+    public static final String ANDROID_USE = "android-use";
     private CrewRoleTemplates() { }
 
     public static List<CrewRole> all(Collection<String> captainTools) {
@@ -60,7 +61,7 @@ public final class CrewRoleTemplates {
         List<String> allowed = new ArrayList<>();
         for (String tool : selectedTools) {
             if ("delete".equals(tool)) throw new IllegalArgumentException("Bots cannot receive memory deletion tools");
-            if (Arrays.asList("crew_spawn", "crew_stop", "crew_wait", "crew_list", "crew_send").contains(tool))
+            if (CrewManager.isCaptainOnly(tool))
                 throw new IllegalArgumentException("Bots cannot receive captain-only Crew tools");
             if (Arrays.asList("msg_send", "board_post", "board_read", "ask_chief", "report_done").contains(tool)) {
                 allowed.add(tool);
