@@ -11,6 +11,7 @@ import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.math.BigInteger
@@ -22,18 +23,13 @@ import java.security.cert.X509Certificate
 /** Keys are generated only in RAM for this test; no real identity or private-key fixture is shipped. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk=[34])
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 class FactoryApkSignerTest {
     @get:Rule val folder=TemporaryFolder()
     @Test fun exactSignerVerifiesTwoIdsAndSameKeyUpdateWithDistinctAppKeys() {
         val context=ApplicationProvider.getApplicationContext<Context>()
         val template=context.assets.open("apk_factory/template.apk").use{it.readBytes()}
-        val icon=context.assets.open("apk_factory/template.apk").use{ /* template's PNG is found from ZIP */
-            java.util.zip.ZipInputStream(it).use { zip ->
-                var found:ByteArray?=null
-                while(true){val entry=zip.nextEntry ?: break;if(entry.name.startsWith("res/")&&entry.name.endsWith(".png")){found=zip.readBytes();break}}
-                found ?: error("Template launcher PNG missing")
-            }
-        }
+        val icon=FactoryIcon.render("icon.json", """{"schemaVersion":1,"background":"#112233","shapes":[{"type":"circle","cx":96,"cy":96,"r":60,"fill":"#FFFFFF"}]}""".toByteArray())
         val keys=List(2){KeyPairGenerator.getInstance("RSA").apply{initialize(2048)}.generateKeyPair()}
         val certs=keys.map{pair -> certificate(pair.public.encoded){data->Signature.getInstance("SHA256withRSA").run{initSign(pair.private);update(data);sign()}}}
         val prints=mutableListOf<String>()
@@ -49,6 +45,14 @@ class FactoryApkSignerTest {
             assertTrue(result.isVerified);assertTrue(result.isVerifiedUsingV2Scheme);assertTrue(result.isVerifiedUsingV3Scheme)
             assertEquals(id,TemplateApk.inspect(output.readBytes()).appId)
             assertEquals(version,TemplateApk.inspect(output.readBytes()).versionCode)
+            System.getProperty("jarvys.factory.evidenceDir")?.let { path ->
+                val evidence=File(path).apply{mkdirs()}
+                input.copyTo(File(evidence,"$index-unsigned.apk"),overwrite=true)
+                output.copyTo(File(evidence,"$index-signed.apk"),overwrite=true)
+                File(evidence,"$index.json").writeText(JSONObject().put("appId",id).put("versionCode",version)
+                    .put("certificateSha256",prints.last()).put("testKeyOnly",true).put("privateKeyPersisted",false)
+                    .put("signedSha256",com.jarvys.agent.coding.ProjectScope.sha256(output.readBytes())).toString())
+            }
         }
         assertEquals(prints[0],prints[2]);assertNotEquals(prints[0],prints[1])
     }

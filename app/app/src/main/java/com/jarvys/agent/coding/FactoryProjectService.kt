@@ -108,6 +108,7 @@ internal class FactoryProjectService(
     }
     fun sign(inputPath: String, expectedSha: String, outputPath: String, expectedVersion: Long, token: CancellationToken): JSONObject {
         checkActive(token)
+        check(Build.VERSION.SDK_INT >= 26) { "Native factory signing requires Android 8/API 26 or newer" }
         require(expectedSha.matches(Regex("[a-f0-9]{64}"))) { "expected_sha256 is required" }
         FactorySpec.relativePath(inputPath)
         scope.acquireWriter(owner, expectedVersion).use { lease ->

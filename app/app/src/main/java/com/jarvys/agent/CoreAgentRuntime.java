@@ -789,10 +789,14 @@ public final class CoreAgentRuntime {
         scoped = scoped.with(Collections.singletonList(ApkFactoryTools.create(context, factoryScope, bot.id,
             () -> {
               try {
-                checkCrewToolPolicies(bot);
+                BotDefinition current = new CrewProfileRepository(context).definition(CrewRoleTemplates.CODING);
                 return !bot.token.isCancellationRequested() && bot.role.profileVersion > 0
-                    && CrewRoleTemplates.CODING.equals(bot.role.id) && bot.role.tools.contains(ApkFactoryTools.NAME);
-              } catch (RuntimeException revoked) { return false; }
+                    && current.enabled && current.builtIn && current.profile.version == bot.role.profileVersion
+                    && CrewRoleTemplates.CODING.equals(bot.role.id) && bot.role.tools.contains(ApkFactoryTools.NAME)
+                    && SkillRepository.Companion.get(context).enabledForProfile(CrewRoleTemplates.CODING).stream()
+                        .anyMatch(skill -> SkillScopePolicy.APK_FACTORY_ID.equals(skill.getMetadata().getId()))
+                    && factoryScope.durableIdentity().equals(bot.scopeIdentity());
+              } catch (RuntimeException | IOException revoked) { return false; }
             })));
 
       } catch (IOException unavailable) {
