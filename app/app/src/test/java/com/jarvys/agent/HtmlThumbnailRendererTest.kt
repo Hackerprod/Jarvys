@@ -25,6 +25,10 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import org.robolectric.annotation.Implementation
+import org.robolectric.annotation.Implements
+import org.robolectric.fakes.RoboWebSettings
+import org.robolectric.shadows.ShadowWebView
 
 /**
  * Actual WebView settings and request-client policy, exercised with immutable delivered fixtures.
@@ -37,7 +41,9 @@ import org.robolectric.annotation.GraphicsMode
 class HtmlThumbnailRendererTest {
     private val context: Context get() = ApplicationProvider.getApplicationContext()
 
-    @Test fun staticWebViewDisablesExecutionStorageNetworkAndDeviceAccess() {
+    @Test
+    @Config(shadows = [HtmlThumbnailSettingsShadow::class, ArtifactOsShadow::class, ArtifactOsShadow.Descriptor::class])
+    fun staticWebViewDisablesExecutionStorageNetworkAndDeviceAccess() {
         val fixture = fixture()
         val web = createStaticThumbnailWebView(context, fixture.content, {}, {})
         try {
@@ -54,7 +60,8 @@ class HtmlThumbnailRendererTest {
                 assertFalse(supportMultipleWindows())
                 assertTrue(mediaPlaybackRequiresUserGesture)
                 assertEquals(WebSettings.LOAD_NO_CACHE, cacheMode)
-                assertTrue(offscreenPreRaster)
+                assertEquals("Production requests prerasterization; RoboWebSettings 4.16 has a no-op setter and false getter",
+                    listOf(true), (this as HtmlThumbnailRecordingSettings).offscreenPreRasterWrites)
                 assertFalse(supportZoom())
             }
             assertFalse(CookieManager.getInstance().acceptThirdPartyCookies(web))
@@ -459,4 +466,20 @@ class HtmlThumbnailRendererTest {
         }
         fun completeVisualState() { visualRequests.single().let { (id, callback) -> callback.onComplete(id) } }
     }
+}
+
+/** Preserves RoboWebSettings behavior; records only the currently unimplemented preraster API. */
+class HtmlThumbnailRecordingSettings : RoboWebSettings() {
+    val offscreenPreRasterWrites = mutableListOf<Boolean>()
+    override fun setOffscreenPreRaster(enabled: Boolean) {
+        offscreenPreRasterWrites += enabled
+        super.setOffscreenPreRaster(enabled)
+    }
+}
+
+/** Used only by the actual WebView factory-settings test, never to supply rendered pixels. */
+@Implements(WebView::class)
+class HtmlThumbnailSettingsShadow : ShadowWebView() {
+    private val recordingSettings = HtmlThumbnailRecordingSettings()
+    @Implementation override fun getSettings(): WebSettings = recordingSettings
 }

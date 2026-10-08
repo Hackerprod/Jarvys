@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.semantics.contentDescription
@@ -134,6 +135,12 @@ internal fun ChatFileIconButtons(request: ChatFileRequest, modifier: Modifier = 
     val actions = LocalChatFileActions.current
     val transfer = actions.transfers[request.key]
     val busy = transfer?.busy == true || transfer?.waitingForPermission == true
+    val colors = IconButtonDefaults.filledTonalIconButtonColors(
+        containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+        contentColor = MaterialTheme.colorScheme.primary,
+        disabledContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.06f),
+        disabledContentColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.38f),
+    )
     val saving = stringResource(R.string.chat_download_saving)
     val download = stringResource(R.string.chat_file_action_named,
         stringResource(R.string.chat_download_action), request.displayName)
@@ -145,20 +152,20 @@ internal fun ChatFileIconButtons(request: ChatFileRequest, modifier: Modifier = 
         stringResource(R.string.chat_download_open), request.displayName)
     FlowRow(modifier, horizontalArrangement = Arrangement.spacedBy(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        FilledTonalIconButton(onClick = { actions.download(request) }, enabled = !busy,
+        FilledTonalIconButton(colors = colors, onClick = { actions.download(request) }, enabled = !busy,
             modifier = Modifier.size(48.dp).testTag("$tagPrefix-download-${request.artifactId}")
                 .semantics { contentDescription = download; if (busy) stateDescription = saving }) {
             if (busy) CircularProgressIndicator(Modifier.size(20.dp).clearAndSetSemantics {}, strokeWidth = 2.dp)
             else Icon(LucideIcons.Download, null, Modifier.size(22.dp))
         }
-        if (busy) FilledTonalIconButton(onClick = { actions.cancel(request) },
+        if (busy) FilledTonalIconButton(colors = colors, onClick = { actions.cancel(request) },
             modifier = Modifier.size(48.dp).testTag("$tagPrefix-cancel-${request.artifactId}")) {
             Icon(LucideIcons.X, cancel, Modifier.size(22.dp))
-        } else FilledTonalIconButton(onClick = { actions.share(request) },
+        } else FilledTonalIconButton(colors = colors, onClick = { actions.share(request) },
             modifier = Modifier.size(48.dp).testTag("$tagPrefix-share-${request.artifactId}")) {
             Icon(LucideIcons.Share, share, Modifier.size(22.dp))
         }
-        if (transfer?.saved == true) FilledTonalIconButton(onClick = { actions.open(request) },
+        if (transfer?.saved == true) FilledTonalIconButton(colors = colors, onClick = { actions.open(request) },
             modifier = Modifier.size(48.dp).testTag("$tagPrefix-open-${request.artifactId}")) {
             Icon(LucideIcons.Eye, open, Modifier.size(22.dp))
         }

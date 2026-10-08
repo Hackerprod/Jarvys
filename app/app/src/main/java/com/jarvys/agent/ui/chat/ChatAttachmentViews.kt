@@ -122,6 +122,14 @@ fun UserChatAttachments(attachments: List<ChatAttachment>, sessionId: String, mo
 @Composable
 private fun AttachmentFileCard(attachment: ChatAttachment, sessionId: String, delivered: Boolean = false,
     onOpenPreview: (String) -> Unit = {}) {
+    key(sessionId, attachment, delivered) {
+        ScopedAttachmentFileCard(attachment, sessionId, delivered, onOpenPreview)
+    }
+}
+
+@Composable
+private fun ScopedAttachmentFileCard(attachment: ChatAttachment, sessionId: String, delivered: Boolean,
+    onOpenPreview: (String) -> Unit) {
     val context = LocalContext.current
     val request = remember(sessionId, attachment, delivered) { ChatFileRequest.attachment(sessionId, attachment, delivered) }
     val available by produceState<Boolean?>(null, request) {

@@ -142,7 +142,8 @@ internal object HtmlThumbnailRenderer {
                                 canvas.scale(outputWidth.toFloat() / width, outputHeight.toFloat() / height)
                                 ready.draw(canvas)
                                 finish(bitmap)
-                            } catch (_: Exception) { bitmap?.recycle(); finish(null) }
+                            } catch (_: OutOfMemoryError) { bitmap?.recycle(); finish(null) }
+                            catch (_: Exception) { bitmap?.recycle(); finish(null) }
                         } else finish(null)
                     }, onFailed = { finish(null) })
                     web = view
@@ -155,12 +156,14 @@ internal object HtmlThumbnailRenderer {
                 }
             }
         } finally {
-            web?.apply {
-                stopLoading(); onPause()
-                (parent as? ViewGroup)?.removeView(this)
-                destroy()
+            web?.let { view ->
+                // A failed provider must not skip detachment or leave the global render slot held.
+                runCatching { view.stopLoading() }
+                runCatching { view.onPause() }
+                runCatching { (view.parent as? ViewGroup)?.removeView(view) }
+                runCatching { view.destroy() }
             }
-            (holder.parent as? ViewGroup)?.removeView(holder)
+            runCatching { (holder.parent as? ViewGroup)?.removeView(holder) }
         }
     }
 }

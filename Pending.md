@@ -318,7 +318,7 @@ Contrato y límites: app/CREW_TASKS.md. Código y Pending.md respaldados directa
 
 ### 12. UX28: miniaturas HTML y acciones de archivos
 
-Estado: en implementación para preparación v46 / 1.2.39-UX28. Tarjeta compacta con miniatura local y acciones por iconos; renderizado automático sin JavaScript ni almacenamiento DOM, recursos limitados al HTML inmutable. Caché acotada por huella y conversación, revocación por generación tras borrado y presupuesto de memoria de imágenes retenidas. Compilación de fuente aprobada; pruebas dirigidas, revisión y validación final en curso. No se afirma validación visual de Chromium en el host.
+Estado: en implementación para preparación v46 / 1.2.39-UX28. Tarjeta compacta con miniatura local y acciones por iconos; renderizado automático sin JavaScript ni almacenamiento DOM, recursos limitados al HTML inmutable. Caché acotada por huella y conversación, revocación por generación tras borrado y presupuesto de memoria de imágenes retenidas. Compilación de fuente aprobada y 26 pruebas de caché/seguridad aprobadas en la primera ejecución dirigida completa. Añadidas 65 regresiones de caché, límites, ciclo de vida e interfaz; se corrigen particularidades del harness de WebView/Looper sin eliminar aserciones. Revisión y validación final en curso. No se afirma validación visual de Chromium en el host.
 
 - Mostrar una miniatura real del contenido HTML entregado y abrir el preview al tocarla; no sustituirla por una imagen genérica o un diseño inventado.
 - Eliminar el botón textual «View in Jarvys» de esa tarjeta y reorganizar sus acciones inferiores como iconos claros, con etiquetas de accesibilidad y objetivos táctiles adecuados.
