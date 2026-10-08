@@ -1,6 +1,5 @@
 package com.jarvys.agent.coding
 
-import android.os.Build
 import androidx.annotation.RequiresApi
 import com.jarvys.agent.CancellationToken
 import com.jarvys.agent.apkfactory.FactorySpec
@@ -18,7 +17,7 @@ internal object FactoryProjectFiles {
             while (true) {
                 token.throwIfCancelled()
                 val count = input.read(buffer)
-                if (count < 0) break
+                if (count < 0) { break }
                 require(output.size().toLong() + count <= maxBytes) { "File exceeds factory size limit: $path" }
                 output.write(buffer, 0, count)
             }
@@ -36,7 +35,7 @@ internal object FactoryProjectFiles {
             while (true) {
                 token.throwIfCancelled()
                 val count = input.read(buffer)
-                if (count < 0) break
+                if (count < 0) { break }
                 total += count
                 require(total <= maxBytes) { "File grew beyond factory size limit: $path" }
                 digest.update(buffer, 0, count)
@@ -47,7 +46,6 @@ internal object FactoryProjectFiles {
 
     @RequiresApi(26)
     fun website(scope: ProjectScope, directory: String, token: CancellationToken): Map<String, ByteArray> {
-        require(Build.VERSION.SDK_INT >= 26) { "Native factory requires Android 8 or newer for bounded directory enumeration" }
         val result = sortedMapOf<String, ByteArray>()
         var total = 0L
         var visited = 0
@@ -56,24 +54,24 @@ internal object FactoryProjectFiles {
             val folder = scope.resolve(relative)
             require(ProjectFileIO.attributes(folder).isDirectory) { "webDir must be an ordinary directory" }
             java.nio.file.Files.newDirectoryStream(folder.toPath()).use { children ->
-            for (child in children) {
-                token.throwIfCancelled()
-                require(++visited <= 256) { "Website contains more than 256 total directory entries" }
-                val path = "$relative/${child.fileName}"
-                FactorySpec.relativePath(path)
-                val resolved = scope.resolve(path)
-                val attributes = ProjectFileIO.attributes(resolved)
-                if (attributes.isDirectory) visit(path, depth + 1)
-                else {
-                    require(attributes.isRegularFile) { "Website contains a special file" }
-                    require(result.size < FactorySpec.MAX_WEB_FILES) { "Website has too many files" }
-                    val data = read(scope, path, FactorySpec.MAX_FILE_BYTES, token)
-                    total += data.size
-                    require(total <= FactorySpec.MAX_WEB_BYTES) { "Website exceeds 8 MiB" }
-                    val inside = path.removePrefix("$directory/")
-                    result[inside] = data
+                for (child in children) {
+                    token.throwIfCancelled()
+                    require(++visited <= 256) { "Website contains more than 256 total directory entries" }
+                    val path = "$relative/${child.fileName}"
+                    FactorySpec.relativePath(path)
+                    val resolved = scope.resolve(path)
+                    val attributes = ProjectFileIO.attributes(resolved)
+                    if (attributes.isDirectory) visit(path, depth + 1)
+                    else {
+                        require(attributes.isRegularFile) { "Website contains a special file" }
+                        require(result.size < FactorySpec.MAX_WEB_FILES) { "Website has too many files" }
+                        val data = read(scope, path, FactorySpec.MAX_FILE_BYTES, token)
+                        total += data.size
+                        require(total <= FactorySpec.MAX_WEB_BYTES) { "Website exceeds 8 MiB" }
+                        val inside = path.removePrefix("$directory/")
+                        result[inside] = data
+                    }
                 }
-            }
             }
         }
         visit(directory, 0)

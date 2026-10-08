@@ -1,6 +1,7 @@
 package com.jarvys.factory.runtime;
 
 import android.app.Activity;
+import android.annotation.SuppressLint;
 import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
 import android.content.ClipData;
@@ -96,8 +97,15 @@ public final class FactoryActivity extends Activity {
         }
     }
 
+    // JavaScript is required for reviewed local assets; network, file access and frames are blocked,
+    // and the native message listener independently enforces exact origin and main-frame identity.
+    @SuppressLint("SetJavaScriptEnabled")
     @SuppressWarnings("deprecation")
     private void initializeWebView() {
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+            showError("Please update Android System WebView to use this application safely.");
+            return;
+        }
         webView = new WebView(this);
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
@@ -336,7 +344,7 @@ public final class FactoryActivity extends Activity {
         Export(Reply reply, String text) { this.reply = reply; this.text = text; }
     }
     private void safePost(JavaScriptReplyProxy proxy, String response) {
-        if (destroyed) return;
+        if (destroyed || !WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) return;
         try { proxy.postMessage(response); } catch (RuntimeException ignored) { /* originating frame was destroyed */ }
     }
     private void showError(String message) {
@@ -348,7 +356,9 @@ public final class FactoryActivity extends Activity {
     @Override protected void onDestroy() {
         destroyed = true; generation++; pending.clear(); export = null; uiOwner = null; io.shutdownNow();
         if (webView != null) {
-            try { WebViewCompat.removeWebMessageListener(webView, BRIDGE_NAME); } catch (RuntimeException ignored) { }
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+                try { WebViewCompat.removeWebMessageListener(webView, BRIDGE_NAME); } catch (RuntimeException ignored) { }
+            }
             webView.stopLoading(); webView.destroy(); webView = null;
         }
         super.onDestroy();

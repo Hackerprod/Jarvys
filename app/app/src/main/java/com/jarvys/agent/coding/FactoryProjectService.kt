@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import android.util.AtomicFile
 import com.jarvys.agent.CancellationToken
+import com.jarvys.agent.apkfactory.FactoryJson
 import com.jarvys.agent.apkfactory.FactoryIcon
 import com.jarvys.agent.apkfactory.FactoryApkSigner
 import com.jarvys.agent.apkfactory.FactorySigningIdentity
@@ -59,13 +60,13 @@ internal class FactoryProjectService(
     }
     fun build(specPath: String, outputPath: String, expectedVersion: Long, token: CancellationToken): JSONObject {
         checkActive(token)
-        check(Build.VERSION.SDK_INT >= 26) { "Native APK generation requires Android 8/API 26 or newer for bounded project file access. Generated apps support API 24+." }
+        if (Build.VERSION.SDK_INT < 26) throw IllegalStateException("Native APK generation requires Android 8/API 26 or newer for bounded project file access. Generated apps support API 24+.")
         FactorySpec.relativePath(specPath)
         scope.require(ProjectScope.Capability.WRITE)
         scope.acquireWriter(owner, expectedVersion).use { lease ->
             FactoryProjectFiles.output(scope, outputPath)
             val source = FactoryProjectFiles.read(scope, specPath, FactorySpec.MAX_SPEC_BYTES, token)
-            val spec = FactorySpec.parse(JSONObject(String(source, Charsets.UTF_8)))
+            val spec = FactorySpec.parse(FactoryJson.objectFrom(source, FactorySpec.MAX_SPEC_BYTES))
             require(!outputPath.startsWith(spec.webDir + "/")) { "Output cannot be inside webDir" }
             val iconSource = FactoryProjectFiles.read(scope, spec.icon, FactorySpec.MAX_FILE_BYTES, token)
             val icon = FactoryIcon.render(spec.icon, iconSource)
@@ -108,7 +109,7 @@ internal class FactoryProjectService(
     }
     fun sign(inputPath: String, expectedSha: String, outputPath: String, expectedVersion: Long, token: CancellationToken): JSONObject {
         checkActive(token)
-        check(Build.VERSION.SDK_INT >= 26) { "Native factory signing requires Android 8/API 26 or newer" }
+        if (Build.VERSION.SDK_INT < 26) throw IllegalStateException("Native factory signing requires Android 8/API 26 or newer")
         require(expectedSha.matches(Regex("[a-f0-9]{64}"))) { "expected_sha256 is required" }
         FactorySpec.relativePath(inputPath)
         scope.acquireWriter(owner, expectedVersion).use { lease ->

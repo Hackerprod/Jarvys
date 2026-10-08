@@ -43,6 +43,20 @@ class FactorySpecTest {
     @Test fun nativeCapabilitiesCannotBeInventedByManifestFlags() {
         rejects{it.put("nativeCode","classes.dex")};rejects{it.put("providerAuthority","shared")}
     }
+    @Test fun projectJsonRejectsDeepNestingAndMalformedUtf8BeforeRecursiveParsing() {
+        val nested=("{\"x\":"+"[".repeat(2000)+"0"+"]".repeat(2000)+"}").toByteArray()
+        assertThrows(Exception::class.java){FactoryJson.objectFrom(nested,16*1024)}
+        assertThrows(Exception::class.java){FactoryJson.objectFrom(byteArrayOf(123,34,120,34,58,34,0xc3.toByte(),34,125),1024)}
+        val valid=FactoryJson.objectFrom(spec().put("name","Brackets [ ] { } \"quoted\"").toString().toByteArray(),16*1024)
+        assertTrue(valid.getString("name").contains("[ ]"))
+    }
+    @Test fun strictJsonEnforcesAdjacentDepthBoundaryAndAsciiEscapes() {
+        fun nested(levels:Int)=("{\"x\":"+"[".repeat(levels)+"0"+"]".repeat(levels)+"}").toByteArray()
+        FactoryJson.objectFrom(nested(7),16*1024)
+        assertThrows(Exception::class.java){FactoryJson.objectFrom(nested(8),16*1024)}
+        val nonAsciiEscape="{\"x\":\""+'\\'+"uＦＦＦＦ\"}"
+        assertThrows(Exception::class.java){FactoryJson.objectFrom(nonAsciiEscape.toByteArray(),16*1024)}
+    }
     @Test fun emptyCapabilitiesDoNotGainNativeAccess() {
         val value=FactorySpec.parse(spec().put("capabilities",JSONArray()))
         assertTrue(value.capabilities.isEmpty())

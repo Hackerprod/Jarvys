@@ -1,4 +1,4 @@
-package com.jarvys.factory.runtime;
+package com.jarvys.agent.apkfactory;
 
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -7,17 +7,17 @@ import java.util.HashSet;
 import java.util.Set;
 
 /** A small JSON grammar guard: Android's JSONObject alone also accepts non-JSON input. */
-final class StrictJson {
+final class FactoryJsonGrammar {
     private final String source;
     private int at;
     private int tokens;
-    private StrictJson(String source) { this.source = source; }
+    private FactoryJsonGrammar(String source) { this.source = source; }
 
-    static JSONObject object(String source, int maxBytes) throws FactoryException {
+    static JSONObject parseObject(String source, int maxBytes) {
         if (source == null || source.length() > maxBytes || source.getBytes(StandardCharsets.UTF_8).length > maxBytes)
-            throw new FactoryException("TOO_LARGE", "JSON exceeds the size limit.");
+            throw new IllegalArgumentException("JSON exceeds the size limit.");
         try {
-            StrictJson parser = new StrictJson(source);
+            FactoryJsonGrammar parser = new FactoryJsonGrammar(source);
             parser.space();
             if (parser.at == source.length() || source.charAt(parser.at) != '{') throw new IllegalArgumentException();
             parser.value(0);
@@ -25,7 +25,7 @@ final class StrictJson {
             if (parser.at != source.length()) throw new IllegalArgumentException();
             return new JSONObject(source);
         } catch (JSONException | IllegalArgumentException e) {
-            throw new FactoryException("INVALID_REQUEST", "Expected a bounded, valid JSON object.");
+            throw new IllegalArgumentException("Expected a bounded, strict JSON object.", e);
         }
     }
 
@@ -42,7 +42,7 @@ final class StrictJson {
         return false;
     }
     private void value(int depth) throws JSONException {
-        if (depth > 8 || ++tokens > 1024) throw new IllegalArgumentException();
+        if (depth > 8 || ++tokens > 8192) throw new IllegalArgumentException();
         space();
         if (at == source.length()) throw new IllegalArgumentException();
         char c = source.charAt(at);

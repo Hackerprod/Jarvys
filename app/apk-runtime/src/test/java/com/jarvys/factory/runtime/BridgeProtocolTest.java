@@ -44,6 +44,7 @@ public class BridgeProtocolTest {
         FactoryConfig all = config("[\"storage\"]");
         String[] invalid = {"{'v':1}", "{v:1}", "{\"v\":1,}", "{\"v\":1,\"v\":1}", "{\"v\":1} /* comment */", "{\"a\":NaN}", "{\"a\":01}", "{\"a\":\"line\nline\"}", "{\"a\":[[[[[[[[[[1]]]]]]]]]]}"};
         for (String raw : invalid) rejected("INVALID_REQUEST", BridgeProtocol.ORIGIN, true, raw, all);
+        rejected("INVALID_REQUEST", BridgeProtocol.ORIGIN, true, "{\"x\":\"" + '\\' + "uＦＦＦＦ\"}", all);
     }
     @Test public void boundedMessagesAndUtf8Values() throws Exception {
         FactoryConfig all = config("[\"storage\"]");

@@ -23,7 +23,7 @@ The host can prove the portable algorithm, inspect its Android bytecode and deco
 - Actual application identity is obtained from `Context.getPackageName()`. No generated `BuildConfig.APPLICATION_ID`, user app resource ID or shared provider authority is embedded in native behavior.
 - One launcher icon resource is retained at its compiled ID. The resource table package name changes; the runtime does not hardcode that numeric ID. No content provider is installed.
 - Trusted local origin: `https://app.jarvys.invalid`. WebViewCompat's message listener is registered for that exact origin, and every request checks both origin and main-frame status.
-- Remote navigation, file/content access, network loading, frames, workers, popup windows, arbitrary intents, shell commands, reflection and native JavaScript interfaces are disabled.
+- Remote navigation, file/content access, network loading, frames, workers, popup windows, arbitrary intents, shell commands, reflection and native JavaScript interfaces are disabled. Android 12+ cloud/device-transfer rules explicitly exclude app data; export remains a user-controlled operation.
 - The API accepts bounded, typed JSON requests through a Promise-based SDK. Unsupported methods, malformed arguments, unselected capabilities and excessive requests fail explicitly.
 - HTML must load JavaScript from local files. The CSP does not allow inline JavaScript or eval.
 
@@ -81,6 +81,7 @@ Development Jarvys APKs remain unsigned until the entire authorized queue is val
 - [AOSP binary resource structures](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/libs/androidfw/include/androidfw/ResourceTypes.h)
 - [Android WebView native-bridge risks](https://developer.android.com/privacy-and-security/risks/insecure-webview-native-bridges)
 - [AndroidX WebKit](https://developer.android.com/jetpack/androidx/releases/webkit)
+- [Android backup and transfer rules](https://developer.android.com/identity/data/autobackup)
 - [Android Keystore](https://developer.android.com/privacy-and-security/keystore)
 - [AOSP apksig](https://android.googlesource.com/platform/tools/apksig/)
 

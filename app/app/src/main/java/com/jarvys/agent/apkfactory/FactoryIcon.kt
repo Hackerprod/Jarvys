@@ -3,7 +3,8 @@ package com.jarvys.agent.apkfactory
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
-import android.graphics.Color
+import androidx.core.graphics.toColorInt
+import androidx.core.graphics.createBitmap
 import android.graphics.Paint
 import android.graphics.Path
 import org.json.JSONArray
@@ -15,12 +16,12 @@ internal object FactoryIcon {
     const val SIZE = 192
     fun render(path: String, bytes: ByteArray): ByteArray = if (path.endsWith(".png", true)) validatePng(bytes) else {
         require(path.endsWith(".json", true) && bytes.size <= 16 * 1024) { "Icon must be a PNG or bounded vector JSON file" }
-        val json = JSONObject(String(bytes, Charsets.UTF_8))
+        val json = FactoryJson.objectFrom(bytes, 16 * 1024)
         fields(json, setOf("schemaVersion", "background", "shapes"))
         require(json.opt("schemaVersion") == 1) { "Unsupported icon schemaVersion" }
         val shapes = json.opt("shapes") as? JSONArray ?: error("Icon shapes must be an array")
         require(shapes.length() in 1..32) { "Use 1–32 icon shapes" }
-        val bitmap = Bitmap.createBitmap(SIZE, SIZE, Bitmap.Config.ARGB_8888)
+        val bitmap = createBitmap(SIZE, SIZE, Bitmap.Config.ARGB_8888)
         try {
             val canvas = Canvas(bitmap)
             canvas.drawColor(color(json.opt("background")))
@@ -76,7 +77,7 @@ internal object FactoryIcon {
     }
     private fun color(value: Any?): Int {
         require(value is String && value.matches(Regex("#[0-9a-fA-F]{6}"))) { "Icon colors must be opaque #RRGGBB strings" }
-        return Color.parseColor(value)
+        return value.toColorInt()
     }
     private fun number(value: Any?): Float {
         require(value is Number) { "Icon coordinates must be numbers" }

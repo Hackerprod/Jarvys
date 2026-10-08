@@ -149,6 +149,16 @@ class FactoryProjectServiceTest {
         val f=Fixture();File(f.root,"grow.txt").writeBytes(ByteArray(1025))
         assertThrows(Exception::class.java){FactoryProjectFiles.sha(f.scope,"grow.txt",1024,CancellationToken.cancellable())}
     }
+    @Test fun androidLenientJsonCannotBypassDepthGuardUsingCommentsOrSingleQuotes() {
+        val f=Fixture()
+        val attack="{/*\"*/\"x\":"+"[".repeat(2000)+"0"+"]".repeat(2000)+"/*\"*/}"
+        File(f.root,"factory.json").writeText(attack)
+        assertThrows(Exception::class.java){f.build()}
+        for(value in listOf("{#\"\n\"x\":1}","{'x':1}","{unquoted:1}","{\"x\":1,\"x\":2}")) {
+            assertThrows(Exception::class.java){com.jarvys.agent.apkfactory.FactoryJson.objectFrom(value.toByteArray(),16*1024)}
+        }
+        assertFalse(File(f.root,"notes.apk").exists())
+    }
     @Test fun toolSchemaRejectsExtraFieldsAndCannotDelegate() {
         val f=Fixture();val tool=ApkFactoryTools.Tool(f.service)
         assertFalse(tool.canDelegate());assertFalse(tool.execute(mapOf("action" to "inspect","command" to "echo bad"),CancellationToken.cancellable()).success)
