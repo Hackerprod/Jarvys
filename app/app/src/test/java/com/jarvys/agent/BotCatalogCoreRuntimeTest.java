@@ -23,6 +23,8 @@ import java.util.concurrent.TimeUnit;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.Test;
+import org.junit.Before;
+import org.junit.After;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
@@ -30,6 +32,25 @@ import org.robolectric.annotation.Config;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 34)
 public class BotCatalogCoreRuntimeTest {
+    private Object previousSecrets;
+
+    @Before public void installTestSecretStorage() throws Exception {
+        Context context = ApplicationProvider.getApplicationContext();
+        android.content.SharedPreferences preferences = context.getSharedPreferences("bot-catalog-runtime-secrets", Context.MODE_PRIVATE);
+        assertTrue(preferences.edit().clear().commit());
+        Field singleton = SecretStore.class.getDeclaredField("singleton");
+        singleton.setAccessible(true);
+        previousSecrets = singleton.get(null);
+        // Existing package-local test seam; production encryption and policy paths are unchanged.
+        singleton.set(null, new SecretStore(preferences));
+    }
+
+    @After public void restoreSecretStorage() throws Exception {
+        Field singleton = SecretStore.class.getDeclaredField("singleton");
+        singleton.setAccessible(true);
+        singleton.set(null, previousSecrets);
+    }
+
     @Test public void captainCatalogOnlyContainsEnabledShortMetadataNeverChildInstructions() {
         Context context = ApplicationProvider.getApplicationContext();
         CrewProfileRepository repository = new CrewProfileRepository(context);
@@ -57,6 +78,7 @@ public class BotCatalogCoreRuntimeTest {
             repository.setEnabled(definition.id, definition.revision, false);
             CoreToolResult result = tools.invoke("board_read", Collections.emptyMap(), bot.token);
             assertFalse(result.success);
+            assertTrue(result.content, result.content.contains("disabled"));
             assertTrue(bot.token.isCancellationRequested());
         }
     }

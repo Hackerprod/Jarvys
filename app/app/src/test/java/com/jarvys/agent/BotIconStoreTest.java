@@ -98,9 +98,16 @@ public class BotIconStoreTest {
         Files.createSymbolicLink(linkedFile.toPath(), new File(outside, "missing.png").toPath());
         assertThrows(IllegalArgumentException.class, () -> store.resolve("custom-orchid", linkedFile.getName()));
         assertThrows(IllegalArgumentException.class, () -> store.delete("custom-orchid", linkedFile.getName()));
+        assertTrue(Files.isSymbolicLink(linkedFile.toPath()));
+        File danglingBot = new File(realFiles, "bot_icons/custom-dangling");
+        Files.createSymbolicLink(danglingBot.toPath(), new File(outside, "missing-bot").toPath());
+        assertThrows(IllegalArgumentException.class, () -> store.delete("custom-dangling", ref));
         File otherFiles = temporary.newFolder("other-files");
         Files.createSymbolicLink(new File(otherFiles, "bot_icons").toPath(), outside.toPath());
         assertThrows(IllegalArgumentException.class, () -> new BotIconStore(otherFiles));
+        File danglingRootFiles = temporary.newFolder("dangling-root-files");
+        Files.createSymbolicLink(new File(danglingRootFiles, "bot_icons").toPath(), new File(outside, "missing-root").toPath());
+        assertThrows(IllegalArgumentException.class, () -> new BotIconStore(danglingRootFiles));
     }
 
     static byte[] png(int width, int height) {

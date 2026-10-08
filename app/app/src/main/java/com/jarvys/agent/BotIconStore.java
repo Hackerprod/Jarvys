@@ -3,6 +3,7 @@ package com.jarvys.agent;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.os.Build;
 import android.system.ErrnoException;
 import android.system.Os;
 import android.system.OsConstants;
@@ -169,13 +170,31 @@ public final class BotIconStore {
     }
 
     private static void verify(File file) throws IOException {
-        try {
-            if (Os.readlink(file.getAbsolutePath()) != null) throw new IllegalArgumentException("Bot icon symlinks are not allowed");
-        } catch (ErrnoException error) {
-            if (error.errno != OsConstants.ENOENT && error.errno != OsConstants.EINVAL) throw new IOException(error);
+        // File.exists/isFile/canonical paths follow links and cannot reliably detect a dangling
+        // link. Inspect the directory entry itself before any existence check, including deletion.
+        boolean symbolicLink;
+        if (Build.VERSION.SDK_INT >= 26) {
+            symbolicLink = Api26.isSymbolicLink(file);
+        } else {
+            try { symbolicLink = OsConstants.S_ISLNK(Os.lstat(file.getAbsolutePath()).st_mode); }
+            catch (ErrnoException error) {
+                if (error.errno != OsConstants.ENOENT) throw new IOException(error);
+                symbolicLink = false;
+            }
         }
-        if (!file.getCanonicalFile().equals(file.getAbsoluteFile())) {
+        if (symbolicLink || !file.getCanonicalFile().equals(file.getAbsoluteFile())) {
             throw new IllegalArgumentException("Bot icon symlinks are not allowed");
+        }
+    }
+
+    @android.annotation.TargetApi(26)
+    private static final class Api26 {
+        static boolean isSymbolicLink(File file) throws IOException {
+            try {
+                return java.nio.file.Files.readAttributes(file.toPath(),
+                        java.nio.file.attribute.BasicFileAttributes.class,
+                        java.nio.file.LinkOption.NOFOLLOW_LINKS).isSymbolicLink();
+            } catch (java.nio.file.NoSuchFileException absent) { return false; }
         }
     }
 

@@ -29,7 +29,10 @@ class ConversationActionsComposeTest {
             ConversationDrawer(listOf(row), "other", null, "", false, "r", true, {}, {}, {}, {},
                 onConversationAction = { _, action, _ -> actions += action })
         } }
-        fun openMenu() = compose.onNodeWithContentDescription(context.getString(R.string.drawer_chat_actions, "Saved chat")).performClick()
+        fun openMenu() {
+            showText("Saved chat")
+            compose.onNodeWithContentDescription(context.getString(R.string.drawer_chat_actions, "Saved chat")).performClick()
+        }
         openMenu()
         compose.onNodeWithText(context.getString(R.string.drawer_rename_chat)).performClick()
         compose.onNodeWithText(context.getString(R.string.drawer_cancel_action)).performClick()
@@ -39,7 +42,7 @@ class ConversationActionsComposeTest {
         compose.onNodeWithText(context.getString(R.string.drawer_delete_chat)).assertIsDisplayed()
         compose.onNodeWithText(context.getString(R.string.drawer_cancel_action)).performClick()
         assertTrue(actions.isEmpty())
-        compose.onNodeWithText("Saved chat").assertIsDisplayed()
+        showText("Saved chat").assertIsDisplayed()
     }
 
     @Test fun switchingArchiveViewsDoesNotOpenOrMutateChats() {
@@ -51,14 +54,25 @@ class ConversationActionsComposeTest {
             ConversationDrawer(listOf(normal, archived), "other", null, "", false, null, true, {}, {}, { opens++ }, {},
                 onConversationAction = { _, _, _ -> mutations++ })
         } }
-        compose.onNodeWithText("Normal").assertIsDisplayed()
+        showText("Normal").assertIsDisplayed()
         compose.onNodeWithText("Archived").assertDoesNotExist()
-        compose.onNodeWithText(context.getString(R.string.drawer_archived_chats)).performClick()
-        compose.onNodeWithText("Archived").assertIsDisplayed()
+        toggleArchive()
+        showText("Archived").assertIsDisplayed()
         compose.onNodeWithText("Normal").assertDoesNotExist()
-        compose.onNodeWithText(context.getString(R.string.drawer_back_to_chats)).performClick()
-        compose.onNodeWithText("Normal").assertIsDisplayed()
+        toggleArchive()
+        showText("Normal").assertIsDisplayed()
         assertEquals(0, opens)
         assertEquals(0, mutations)
     }
+
+    private fun showText(text: String): SemanticsNodeInteraction {
+        compose.onNodeWithTag("conversation-drawer-scroll").performScrollToNode(hasText(text))
+        return compose.onNodeWithText(text)
+    }
+
+    private fun toggleArchive() {
+        compose.onNodeWithTag("conversation-drawer-scroll").performScrollToNode(hasTestTag("drawer-archive-toggle"))
+        compose.onNodeWithTag("drawer-archive-toggle").performClick()
+    }
+
 }

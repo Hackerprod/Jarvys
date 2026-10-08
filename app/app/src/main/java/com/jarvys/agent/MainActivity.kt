@@ -245,6 +245,7 @@ private object Routes {
     const val MEMORY = AppNavigationBackPolicy.MEMORY
     const val TASKS = AppNavigationBackPolicy.TASKS
     const val TASK_DETAIL = AppNavigationBackPolicy.TASK_DETAIL
+    const val BOTS = AppNavigationBackPolicy.BOTS
     const val CREW_EMPTY = AppNavigationBackPolicy.CREW_EMPTY
     const val CREW = AppNavigationBackPolicy.CREW
     const val CREW_BOT = AppNavigationBackPolicy.CREW_BOT
@@ -1663,6 +1664,10 @@ private fun JarvysApp(
                     scope.launch { drawerState.close() }
                     navController.navigate(Routes.CHAT) { launchSingleTop = true }
                 },
+                onOpenBots = {
+                    scope.launch { drawerState.close() }
+                    navController.navigate(Routes.BOTS) { launchSingleTop = true }
+                },
                 onOpenSettings = {
                     scope.launch { drawerState.close() }
                     navController.navigate(Routes.SETTINGS) { launchSingleTop = true }
@@ -1857,6 +1862,25 @@ private fun JarvysApp(
                         }
                     },
                 )
+                composable(Routes.BOTS) {
+                    val owner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+                    var working by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
+                    LaunchedEffect(owner) {
+                        owner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                            try {
+                                while (true) {
+                                    working = CoreAgentRuntime.workingBotCounts()
+                                    kotlinx.coroutines.delay(500)
+                                }
+                            } finally { working = emptyMap() }
+                        }
+                    }
+                    com.jarvys.agent.crew.BotsCatalogScreen(
+                        conversationId = conversationSessionId,
+                        working = working,
+                        onClose = { if (!navController.popBackStack()) navController.navigate(Routes.CHAT) { launchSingleTop = true } },
+                    )
+                }
                 crewDestinations(
                     navController = navController,
                     board = crewBoard,

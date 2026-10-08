@@ -23,7 +23,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -46,8 +45,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -78,6 +80,7 @@ fun ConversationDrawer(
     onResumeActive: () -> Unit,
     onOpenHistory: (String) -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenBots: () -> Unit = {},
     actionsEnabled: Boolean = true,
     onConversationAction: (String, ConversationAction, String?) -> Unit = { _, _, _ -> },
 ) {
@@ -115,87 +118,99 @@ fun ConversationDrawer(
         drawerContainerColor = MaterialTheme.colorScheme.surface,
     ) {
         Column(Modifier.fillMaxSize()) {
-            Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Column(Modifier.weight(1f)) {
-                        Text(stringResource(R.string.drawer_chats_heading),
-                            style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-                        Text(stringResource(R.string.chat_drawer_local_profile),
-                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    Button(onClick = onNewConversation, modifier = Modifier.heightIn(min = 48.dp),
-                        shape = RoundedCornerShape(14.dp)) {
-                        Icon(LucideIcons.MessageCirclePlus, contentDescription = null, modifier = Modifier.size(17.dp))
-                        Spacer(Modifier.width(7.dp))
-                        Text(stringResource(R.string.drawer_new_chat))
-                    }
+            // Menus and conversation groups share a scroll container so large text never hides chats.
+            val rows = buildList {
+                if (activeVisible) add(activeRecord)
+                addAll(visibleHistory)
+            }
+            val pinnedRows = if (archived) emptyList() else rows.filter { it.pinned }
+            val currentRows = if (archived) rows else rows.filterNot { it.pinned }
+            LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth().testTag("conversation-drawer-scroll"),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 14.dp)) {
+                item(key = "menu-bots") {
+                    DrawerMenuRow(stringResource(R.string.drawer_bots), LucideIcons.Bot,
+                        Modifier.testTag("drawer-open-bots"), onOpenBots)
                 }
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                    Surface(Modifier.weight(1f).heightIn(min = 48.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.58f),
-                        shape = RoundedCornerShape(13.dp)) {
-                        Row(Modifier.padding(horizontal = 13.dp), verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                            Icon(LucideIcons.Search, contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
-                            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-                                if (filter.isEmpty()) Text(stringResource(R.string.drawer_search_hint),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f))
-                                BasicTextField(value = filter, onValueChange = { filter = it }, singleLine = true,
-                                    modifier = Modifier.fillMaxWidth(),
-                                    textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
-                                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary))
-                            }
-                            if (filter.isNotEmpty()) IconButton(onClick = { filter = "" },
-                                modifier = Modifier.size(40.dp).semantics { contentDescription = clearDescription }) {
-                                Icon(LucideIcons.X, contentDescription = null, modifier = Modifier.size(17.dp))
+                item(key = "menu-new-chat") {
+                    DrawerMenuRow(stringResource(R.string.drawer_new_chat), LucideIcons.MessageCirclePlus,
+                        Modifier.testTag("drawer-new-chat"), onNewConversation)
+                }
+                item(key = "chat-search") {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                        Surface(Modifier.weight(1f).heightIn(min = 48.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.58f),
+                            shape = RoundedCornerShape(13.dp)) {
+                            Row(Modifier.padding(horizontal = 13.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                                Icon(LucideIcons.Search, contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+                                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                                    if (filter.isEmpty()) Text(stringResource(R.string.drawer_search_hint),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f))
+                                    BasicTextField(value = filter, onValueChange = { filter = it }, singleLine = true,
+                                        modifier = Modifier.fillMaxWidth().testTag("drawer-search"),
+                                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary))
+                                }
+                                if (filter.isNotEmpty()) IconButton(onClick = { filter = "" },
+                                    modifier = Modifier.size(40.dp).semantics { contentDescription = clearDescription }) {
+                                    Icon(LucideIcons.X, contentDescription = null, modifier = Modifier.size(17.dp))
+                                }
                             }
                         }
-                    }
-                    IconButton(onClick = {
-                        if (filter.isNotEmpty()) filter = ""
-                        else scope.launch { listState.animateScrollToItem(if (activeVisible) 1 else 0) }
-                    }, modifier = Modifier.size(48.dp).semantics { contentDescription = historyDescription }) {
-                        Icon(LucideIcons.History, contentDescription = null, modifier = Modifier.size(20.dp))
-                    }
-                }
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    JarvysSectionLabel(stringResource(if (archived) R.string.drawer_archived_chats else R.string.drawer_history_section))
-                    Spacer(Modifier.weight(1f))
-                    TextButton(onClick = { archived = !archived; filter = "" }) {
-                        Text(stringResource(if (archived) R.string.drawer_back_to_chats else R.string.drawer_archived_chats))
+                        IconButton(onClick = {
+                            if (filter.isNotEmpty()) filter = ""
+                            else scope.launch { listState.animateScrollToItem(if (archived) 4 else 5 + pinnedRows.size.coerceAtLeast(1)) }
+                        }, modifier = Modifier.size(48.dp).semantics { contentDescription = historyDescription }) {
+                            Icon(LucideIcons.History, contentDescription = null, modifier = Modifier.size(20.dp))
+                        }
                     }
                 }
-            }
-
-            LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
-                if (activeVisible) item(key = "active-session") {
-                    SessionRow(drawerConversationTitle(activeTitle, activeGoal,
-                        stringResource(R.string.drawer_chat_fallback)),
-                        selected = isChatRoute && selectedHistoryId == null,
-                        active = true,
-                        onClick = onResumeActive, pinned = activeRecord.pinned, archived = activeRecord.archived,
-                        actionsEnabled = actionsEnabled, managed = isManagedSystemConversation(activeSessionId),
-                        onAction = { action(activeRecord, it) })
+                item(key = "archive-toggle") {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        TextButton(onClick = { archived = !archived; filter = "" }, Modifier.testTag("drawer-archive-toggle")) {
+                            Text(stringResource(if (archived) R.string.drawer_back_to_chats else R.string.drawer_archived_chats))
+                        }
+                    }
                 }
-                if (visibleHistory.isEmpty() && !activeVisible) item(key = "history-empty") {
+                if (!archived) {
+                    item(key = "pinned-heading") {
+                        DrawerGroupHeading(stringResource(R.string.drawer_pinned_section), "drawer-pinned-heading")
+                    }
+                    items(pinnedRows, key = { "pinned-" + it.id }) { record ->
+                        val active = activeVisible && record.sessionId == activeSessionId
+                        SessionRow(drawerConversationTitle(if (active) activeTitle else record.title,
+                            if (active) activeGoal else record.goal, stringResource(R.string.drawer_chat_fallback)),
+                            selected = isChatRoute && if (active) selectedHistoryId == null else selectedHistoryId == record.id,
+                            active = active, onClick = { if (active) onResumeActive() else onOpenHistory(record.id) },
+                            pinned = record.pinned, archived = record.archived, actionsEnabled = actionsEnabled,
+                            managed = isManagedSystemConversation(record.sessionId), onAction = { action(record, it) })
+                    }
+                    if (pinnedRows.isEmpty()) item(key = "pinned-empty") {
+                        Text(stringResource(R.string.drawer_no_pinned_chats), Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                item(key = "current-heading") {
+                    DrawerGroupHeading(stringResource(if (archived) R.string.drawer_archived_chats else R.string.drawer_current_chats),
+                        "drawer-current-heading")
+                }
+                if (currentRows.isEmpty()) item(key = "history-empty") {
                     Text(stringResource(if (filter.isNotBlank()) R.string.drawer_search_no_results else if (archived) R.string.drawer_no_archived_chats else R.string.drawer_no_chats),
-                        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 24.dp),
+                        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 14.dp),
                         color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
                 }
-                items(visibleHistory, key = { it.id }) { record ->
-                    SessionRow(drawerConversationTitle(record.title, record.goal,
-                        stringResource(R.string.drawer_chat_fallback)),
-                        selected = isChatRoute && selectedHistoryId == record.id,
-                        active = false,
-                        onClick = { onOpenHistory(record.id) }, pinned = record.pinned, archived = record.archived,
-                        actionsEnabled = actionsEnabled, managed = isManagedSystemConversation(record.sessionId),
-                        onAction = { action(record, it) })
+                items(currentRows, key = { "current-" + it.id }) { record ->
+                    val active = activeVisible && record.sessionId == activeSessionId
+                    SessionRow(drawerConversationTitle(if (active) activeTitle else record.title,
+                        if (active) activeGoal else record.goal, stringResource(R.string.drawer_chat_fallback)),
+                        selected = isChatRoute && if (active) selectedHistoryId == null else selectedHistoryId == record.id,
+                        active = active, onClick = { if (active) onResumeActive() else onOpenHistory(record.id) },
+                        pinned = record.pinned, archived = record.archived, actionsEnabled = actionsEnabled,
+                        managed = isManagedSystemConversation(record.sessionId), onAction = { action(record, it) })
                 }
             }
 
@@ -261,7 +276,7 @@ private fun SessionRow(title: String, selected: Boolean, active: Boolean, onClic
         Text(title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium,
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
             maxLines = 2, overflow = TextOverflow.Ellipsis)
-        if (pinned) Text(stringResource(R.string.drawer_pinned), style = MaterialTheme.typography.labelSmall,
+        if (pinned) Text(stringResource(R.string.drawer_pinned), Modifier.testTag("drawer-pinned-marker"), style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.primary)
         Box {
             IconButton(enabled = actionsEnabled, onClick = { menuOpen = true }, modifier = Modifier.size(40.dp)) {
@@ -279,5 +294,23 @@ private fun SessionRow(title: String, selected: Boolean, active: Boolean, onClic
                     onClick = { menuOpen = false; onAction(ConversationAction.DELETE) }, enabled = actionsEnabled)
             }
         }
+    }
+}
+
+@Composable
+private fun DrawerGroupHeading(title: String, tag: String) {
+    Box(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 12.dp).testTag(tag).semantics { heading() }) {
+        JarvysSectionLabel(title)
+    }
+}
+
+@Composable
+private fun DrawerMenuRow(title: String, icon: androidx.compose.ui.graphics.vector.ImageVector,
+    modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Row(modifier.fillMaxWidth().heightIn(min = 52.dp).clickable(role = Role.Button, onClick = onClick)
+        .padding(horizontal = 12.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        Icon(icon, contentDescription = null, modifier = Modifier.size(23.dp), tint = MaterialTheme.colorScheme.primary)
+        Text(title, style = MaterialTheme.typography.titleMedium)
     }
 }
