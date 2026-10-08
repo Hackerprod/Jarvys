@@ -87,9 +87,10 @@ class AttachmentDisplayRecoveryTest {
         awaitReactionDrawIdle(compose)
         assertHiddenMetadata(image)
         compose.onAllNodesWithText(document.name, useUnmergedTree = true).assertCountEquals(2)
-        compose.onAllNodesWithText(Formatter.formatShortFileSize(fixtures.context, document.sizeBytes), useUnmergedTree = true)
-            .assertCountEquals(2)
-        compose.onNodeWithText(document.mimeType, useUnmergedTree = true).assertIsDisplayed()
+        val documentSize = Formatter.formatShortFileSize(fixtures.context, document.sizeBytes)
+        // Pending files retain their standalone size; sent file cards use compact size + MIME.
+        compose.onAllNodesWithText(documentSize, useUnmergedTree = true).assertCountEquals(1)
+        compose.onNodeWithText("$documentSize • ${document.mimeType}", useUnmergedTree = true).assertIsDisplayed()
         val preview = compose.onNodeWithTag("pending-attachment-${image.id}").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
         val density = compose.activity.resources.displayMetrics.density
         assertEquals(136f * density, preview.width, 0.1f)
