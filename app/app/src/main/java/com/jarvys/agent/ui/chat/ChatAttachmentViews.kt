@@ -125,9 +125,11 @@ private fun AttachmentFileCard(attachment: ChatAttachment, sessionId: String, de
     val context = LocalContext.current
     val request = remember(sessionId, attachment, delivered) { ChatFileRequest.attachment(sessionId, attachment, delivered) }
     val available by produceState<Boolean?>(null, request) {
+        value = null
         value = withContext(Dispatchers.IO) { runCatching { request.requireOwnership(context); request.resolve(context).isFile }.getOrDefault(false) }
     }
     val preview by produceState<HtmlPreviewDescriptor?>(null, request) {
+        value = null
         if (delivered && attachment.mimeType == "text/html") value = withContext(Dispatchers.IO) {
             runCatching {
                 request.requireOwnership(context)

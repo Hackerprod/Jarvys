@@ -25,6 +25,7 @@ public final class DeliveredArtifactStore {
     public static final long MAX_BYTES = 256L * 1024 * 1024;
     static final int MAX_MANIFEST_BYTES = 1024 * 1024;
     private static final Map<String, Object> LOCKS = new ConcurrentHashMap<>();
+    private static final Map<String, Long> THUMBNAIL_GENERATIONS = new ConcurrentHashMap<>();
     private final File root;
     private final String expected;
     private final Object lock;
@@ -389,9 +390,17 @@ public final class DeliveredArtifactStore {
         }
     }
 
-    <T> T withThumbnailStorage(String session, ChatAttachment owner, String fingerprint,
+    long thumbnailGeneration(String session) throws IOException {
+        synchronized (lock) {
+            directory(session, false);
+            return THUMBNAIL_GENERATIONS.getOrDefault(expected + "\0" + session, 0L);
+        }
+    }
+
+    <T> T withThumbnailStorage(String session, ChatAttachment owner, String fingerprint, long generation,
             ThumbnailOperation<T> operation) throws IOException {
         synchronized (lock) {
+            if (thumbnailGeneration(session) != generation) throw new IOException("Thumbnail request was revoked by deletion");
             ThumbnailStorage storage = new ThumbnailStorage(session, directory(session, false));
             storage.requireLiveSession();
             try {
@@ -405,7 +414,12 @@ public final class DeliveredArtifactStore {
 
     public boolean deleteSession(String session) {
         synchronized (lock) {
-            try { return delete(directory(session, false)); }
+            try {
+                File directory = directory(session, false);
+                String key = expected + "\0" + session;
+                THUMBNAIL_GENERATIONS.put(key, THUMBNAIL_GENERATIONS.getOrDefault(key, 0L) + 1);
+                return delete(directory);
+            }
             catch (IOException | RuntimeException unavailable) { return false; }
         }
     }

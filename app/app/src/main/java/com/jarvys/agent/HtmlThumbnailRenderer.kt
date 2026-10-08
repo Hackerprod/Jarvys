@@ -43,8 +43,10 @@ internal object HtmlThumbnailRenderer {
     private val renderer = Mutex()
     private val queued = AtomicInteger()
 
+    private val memory = ThumbnailMemoryBudget(HtmlThumbnailStore.MAX_MEMORY_BYTES)
+
     suspend fun load(context: Context, host: ViewGroup, session: String, descriptor: HtmlPreviewDescriptor,
-        viewportWidth: Int, token: CancellationToken): Bitmap? {
+        viewportWidth: Int, token: CancellationToken): HtmlThumbnailImage? {
         if (queued.incrementAndGet() > MAX_QUEUED) { queued.decrementAndGet(); return null }
         try {
             return renderer.withLock {
@@ -54,45 +56,57 @@ internal object HtmlThumbnailRenderer {
                 val height = (width * 2 / 3).coerceAtLeast(1)
                 val outputWidth = width.coerceAtMost(768)
                 val outputHeight = (outputWidth * 2 / 3).coerceAtLeast(1)
-                val configuration = context.resources.configuration
-                val policy = "static-js-off-v1/$width/$height/${configuration.densityDpi}/${configuration.uiMode}"
-                val store = HtmlThumbnailStore(context.applicationContext)
-                val key = withContext(Dispatchers.IO) { store.prepare(session, descriptor.token, outputWidth, outputHeight, policy) }
-                val cached = withContext(Dispatchers.IO) { store.read(key) }
-                token.throwIfCancelled()
-                if (cached != null) return@withLock withContext(Dispatchers.Default) {
-                    BitmapFactory.decodeByteArray(cached, 0, cached.size)
-                }
-                val content = withContext(Dispatchers.IO) {
-                    val checked = DeliveredArtifactStore(context).resolvePreview(session, descriptor.token)
-                    check(LocalRunStore(context).findChatFile(session, "delivered", checked.artifactId) != null)
-                    WorkspacePreviewContent(context.applicationContext, null, session, checked, thumbnail = true)
-                }
-                val bitmap = withContext(Dispatchers.Main.immediate) {
-                    render(context, host, content, width, height, outputWidth, outputHeight)
-                } ?: return@withLock null
+                val reservation = memory.acquire(outputWidth * outputHeight * 4) ?: return@withLock null
+                var transferred = false
+                var bitmap: Bitmap? = null
                 try {
-                    currentCoroutineContext().ensureActive()
+                    val configuration = context.resources.configuration
+                    val policy = "static-js-off-v1/$width/$height/${configuration.densityDpi}/${configuration.uiMode}/" +
+                        "${configuration.fontScale}/${configuration.locales.toLanguageTags().take(64)}"
+                    val store = HtmlThumbnailStore(context.applicationContext)
+                    val key = withContext(Dispatchers.IO) { store.prepare(session, descriptor.token, outputWidth, outputHeight, policy) }
+                    val cached = withContext(Dispatchers.IO) { store.read(key) }
                     token.throwIfCancelled()
-                    if (withContext(Dispatchers.Default) { isUniformThumbnail(bitmap) }) {
-                        bitmap.recycle(); return@withLock null
-                    }
-                    val bytes = withContext(Dispatchers.Default) {
-                        val output = object : ByteArrayOutputStream() {
-                            override fun write(b: ByteArray, off: Int, len: Int) {
-                                require(count.toLong() + len <= 2L * 1024 * 1024)
-                                super.write(b, off, len)
-                            }
-                            override fun write(b: Int) { require(count < 2 * 1024 * 1024); super.write(b) }
+                    if (cached != null) {
+                        bitmap = withContext(Dispatchers.Default) { BitmapFactory.decodeByteArray(cached, 0, cached.size) }
+                    } else {
+                        val content = withContext(Dispatchers.IO) {
+                            val checked = DeliveredArtifactStore(context).resolvePreview(session, descriptor.token)
+                            check(LocalRunStore(context).findChatFile(session, "delivered", checked.artifactId) != null)
+                            WorkspacePreviewContent(context.applicationContext, null, session, checked, thumbnail = true)
                         }
-                        check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output))
-                        output.toByteArray()
+                        bitmap = withContext(Dispatchers.Main.immediate) {
+                            render(context, host, content, width, height, outputWidth, outputHeight)
+                        }
+                        val rendered = bitmap ?: return@withLock null
+                        currentCoroutineContext().ensureActive()
+                        token.throwIfCancelled()
+                        if (withContext(Dispatchers.Default) { isUniformThumbnail(rendered) }) return@withLock null
+                        val bytes = withContext(Dispatchers.Default) {
+                            val output = object : ByteArrayOutputStream() {
+                                override fun write(b: ByteArray, off: Int, len: Int) {
+                                    require(count.toLong() + len <= HtmlThumbnailStore.MAX_ENCODED_BYTES)
+                                    super.write(b, off, len)
+                                }
+                                override fun write(b: Int) { require(count < HtmlThumbnailStore.MAX_ENCODED_BYTES); super.write(b) }
+                            }
+                            check(rendered.compress(Bitmap.CompressFormat.PNG, 100, output))
+                            output.toByteArray()
+                        }
+                        if (!withContext(Dispatchers.IO) { store.write(key, bytes, token) }) return@withLock null
                     }
-                    val saved = withContext(Dispatchers.IO) { store.write(key, bytes, token) }
-                    if (!saved) { bitmap.recycle(); null } else bitmap
-                } catch (failure: Exception) { bitmap.recycle(); throw failure }
+                    // Cached and freshly rendered images both recheck the owning live generation.
+                    if (!withContext(Dispatchers.IO) { store.isCurrent(key) }) return@withLock null
+                    token.throwIfCancelled()
+                    currentCoroutineContext().ensureActive()
+                    val result = bitmap ?: return@withLock null
+                    HtmlThumbnailImage(result, reservation).also { transferred = true }
+                } finally {
+                    if (!transferred) { bitmap?.recycle(); reservation.close() }
+                }
             }
         } catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: OutOfMemoryError) { return null }
         catch (_: Exception) { return null }
         finally { queued.decrementAndGet() }
     }
@@ -198,7 +212,7 @@ internal class HtmlThumbnailClient(private val content: WorkspacePreviewContent,
             val input = content.open(path)
             if (request.method == "HEAD") input.close()
             WebResourceResponse(mime, if (mime.startsWith("text/") || mime.contains("svg")) "UTF-8" else null,
-                200, "OK", mapOf("Cache-Control" to "no-store", "X-Content-Type-Options" to "nosniff",
+                200, "OK", mapOf("Cache-Control" to "no-store", "X-Content-Type-Options" to "nosniff", "X-DNS-Prefetch-Control" to "off",
                     "Content-Security-Policy" to "default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; " +
                         "font-src 'self' data:; script-src 'none'; connect-src 'none'; object-src 'none'; " +
                         "frame-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none'; media-src 'none'"),
@@ -238,4 +252,28 @@ internal fun isUniformThumbnail(bitmap: Bitmap): Boolean {
         if (row.any { it != first }) return false
     }
     return true
+}
+
+
+/** Reservation follows the displayed image, not just its short-lived render request. */
+internal class ThumbnailMemoryBudget(private val maximum: Int) {
+    private val retained = AtomicInteger()
+    val retainedBytes: Int get() = retained.get()
+    fun acquire(bytes: Int): Reservation? {
+        if (bytes <= 0 || bytes > maximum) return null
+        while (true) {
+            val before = retained.get()
+            if (before.toLong() + bytes > maximum) return null
+            if (retained.compareAndSet(before, before + bytes)) return Reservation(bytes)
+        }
+    }
+    inner class Reservation internal constructor(private val bytes: Int) : AutoCloseable {
+        private val closed = java.util.concurrent.atomic.AtomicBoolean()
+        override fun close() { if (closed.compareAndSet(false, true)) retained.addAndGet(-bytes) }
+    }
+}
+
+internal class HtmlThumbnailImage(val bitmap: Bitmap, private val reservation: ThumbnailMemoryBudget.Reservation) : AutoCloseable {
+    // Compose may still have an in-flight frame, so do not manually recycle a published bitmap.
+    override fun close() { reservation.close() }
 }

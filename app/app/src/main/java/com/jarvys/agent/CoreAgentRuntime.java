@@ -1611,7 +1611,7 @@ public final class CoreAgentRuntime {
       prompt.append("\nFile delivery: when the user requests an actual file, use deliver_file with its existing "
           + "workspace path (or /project/path for Coding/backend output). It creates a native, immutable attachment. "
           + "A path or Markdown link alone is not delivery. The user taps Download to save to OS Downloads; "
-          + "delivery never installs or executes a file. HTML can include a View in Jarvys action with bounded local assets; "
+          + "delivery never installs or executes a file. HTML can include a tappable local preview thumbnail with bounded local assets; "
           + "check preview_available and warnings before promising it opens completely. Check the tool result before saying it is attached.");
     }
     if (mainChat) {

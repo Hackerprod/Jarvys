@@ -26,8 +26,8 @@ import java.util.zip.Inflater;
 /**
  * Disposable PNG derivatives of transcript-owned, immutable HTML deliveries. This class never
  * executes HTML, reads a workspace, creates a conversation, or changes a delivered artifact.
- * All methods doing IO belong on a worker thread. Keep decoded bitmaps in the renderer's bounded
- * memory cache; it must revalidate ownership with isCurrent before serving a memory hit.
+ * All methods doing IO belong on a worker thread. The renderer accounts for retained decoded
+ * images with a bounded lease and revalidates ownership with isCurrent before publishing pixels.
  */
 public final class HtmlThumbnailStore {
     public static final int MAX_ENCODED_BYTES = 2 * 1024 * 1024;
@@ -35,6 +35,7 @@ public final class HtmlThumbnailStore {
     public static final int MAX_MEMORY_BYTES = 8 * 1024 * 1024;
     public static final long MAX_DISK_BYTES = 16L * 1024 * 1024;
     public static final int MAX_DISK_ENTRIES = 128;
+    private static final int MAX_SCANNED_NODES = 4096;
     private static final String DIRECTORY = ".html-thumbnails";
     private static final byte[] PNG = {(byte) 137, 80, 78, 71, 13, 10, 26, 10};
     private final LocalRunStore ledger;
@@ -46,7 +47,9 @@ public final class HtmlThumbnailStore {
     public static final class Key {
         public final String session, token, artifactId, cacheId, fingerprint, policyVersion;
         public final int width, height;
-        private Key(String session, HtmlPreviewDescriptor preview, int width, int height, String policy) {
+        private final long generation;
+        private Key(String session, HtmlPreviewDescriptor preview, int width, int height, String policy, long generation) {
+            this.generation = generation;
             this.session = session; token = preview.token; artifactId = preview.artifactId;
             fingerprint = preview.contentFingerprint; this.width = width; this.height = height;
             policyVersion = policy;
@@ -73,12 +76,13 @@ public final class HtmlThumbnailStore {
                 || policyVersion == null || policyVersion.length() < 1 || policyVersion.length() > 256
                 || policyVersion.indexOf('\0') >= 0) throw new IOException("Invalid thumbnail request");
         ChatAttachment owner = owned(session, token.substring(HtmlPreviewDescriptor.TOKEN_PREFIX.length()));
+        long generation = delivered.thumbnailGeneration(session);
         final HtmlPreviewDescriptor preview;
         try { preview = delivered.previewForAttachment(session, owner); }
         catch (IllegalArgumentException invalid) { throw new IOException("HTML preview is unavailable", invalid); }
         if (preview == null) throw new IOException("The delivered artifact has no HTML preview");
-        Key key = new Key(session, preview, width, height, policyVersion);
-        delivered.withThumbnailStorage(session, owner, key.fingerprint, storage -> null);
+        Key key = new Key(session, preview, width, height, policyVersion, generation);
+        delivered.withThumbnailStorage(session, owner, key.fingerprint, key.generation, storage -> null);
         owned(key); // A concurrent deletion cannot publish a usable newly prepared capability.
         return key;
     }
@@ -87,7 +91,7 @@ public final class HtmlThumbnailStore {
     public boolean isCurrent(Key key) {
         try {
             ChatAttachment owner = owned(key);
-            delivered.withThumbnailStorage(key.session, owner, key.fingerprint, storage -> null);
+            delivered.withThumbnailStorage(key.session, owner, key.fingerprint, key.generation, storage -> null);
             owned(key);
             return true;
         } catch (IOException | RuntimeException unavailable) { return false; }
@@ -96,7 +100,7 @@ public final class HtmlThumbnailStore {
     /** A corrupt, oversized, or absent derivative is a cache miss. Ownership failures are errors. */
     public byte[] read(Key key) throws IOException {
         ChatAttachment owner = owned(key);
-        byte[] result = delivered.withThumbnailStorage(key.session, owner, key.fingerprint, storage -> {
+        byte[] result = delivered.withThumbnailStorage(key.session, owner, key.fingerprint, key.generation, storage -> {
             File directory = cacheDirectory(storage, false);
             if (!directory.exists()) return null;
             File target = new File(directory, key.cacheId + ".png");
@@ -137,7 +141,7 @@ public final class HtmlThumbnailStore {
         if (key == null) throw new IOException("Thumbnail identity is missing");
         validatePng(immutable, key.width, key.height);
         ChatAttachment owner = owned(key);
-        return delivered.withThumbnailStorage(key.session, owner, key.fingerprint, storage -> {
+        return delivered.withThumbnailStorage(key.session, owner, key.fingerprint, key.generation, storage -> {
             token.throwIfCancelled();
             storage.requireLiveSession();
             File directory = cacheDirectory(storage, true);
@@ -203,7 +207,9 @@ public final class HtmlThumbnailStore {
         long total = 0;
         storage.verifyPath(storage.deliveredRoot);
         File[] sessions = storage.deliveredRoot.listFiles();
-        if (sessions == null) throw new IOException("Delivered storage is unavailable");
+        if (sessions == null || sessions.length > MAX_SCANNED_NODES)
+            throw new IOException("Delivered storage listing exceeds thumbnail scan limits");
+        int scanned = sessions.length;
         for (File session : sessions) {
             storage.verifyPath(session);
             if (!session.isDirectory()) continue;
@@ -211,7 +217,9 @@ public final class HtmlThumbnailStore {
             if (!directory.exists()) continue;
             if (!directory.isDirectory()) throw new IOException("Invalid thumbnail cache directory");
             File[] files = directory.listFiles();
-            if (files == null) throw new IOException("Thumbnail cache is unavailable");
+            if (files == null || files.length > MAX_SCANNED_NODES - scanned)
+                throw new IOException("Thumbnail cache listing exceeds scan limits");
+            scanned += files.length;
             for (File file : files) {
                 storage.verifyPath(file);
                 String name = file.getName();

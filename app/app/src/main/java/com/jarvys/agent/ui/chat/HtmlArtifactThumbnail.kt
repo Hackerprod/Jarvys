@@ -34,10 +34,11 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.jarvys.agent.CancellationToken
 import com.jarvys.agent.HtmlPreviewDescriptor
+import com.jarvys.agent.HtmlThumbnailImage
 import com.jarvys.agent.HtmlThumbnailRenderer
 import com.jarvys.agent.R
 
-private data class ThumbnailPixels(val bitmap: Bitmap? = null, val loading: Boolean = false)
+private data class ThumbnailPixels(val image: HtmlThumbnailImage? = null, val loading: Boolean = false)
 
 /** Only visible, resumed cards request pixels. A page is never run to make its thumbnail. */
 @Composable
@@ -61,8 +62,11 @@ internal fun HtmlArtifactThumbnail(request: ChatFileRequest, descriptor: HtmlPre
         value = ThumbnailPixels(loading = active)
         if (active) {
             val root = context.thumbnailActivity()?.window?.decorView as? ViewGroup
-            val bitmap = root?.let { HtmlThumbnailRenderer.load(context, it, request.sessionId, descriptor, width, token) }
-            if (!token.isCancellationRequested) value = ThumbnailPixels(bitmap)
+            val image = root?.let { HtmlThumbnailRenderer.load(context, it, request.sessionId, descriptor, width, token) }
+            if (!token.isCancellationRequested) {
+                value = ThumbnailPixels(image)
+                awaitDispose { image?.close() }
+            } else image?.close()
         }
     }
     val label = stringResource(R.string.chat_html_thumbnail_open, request.displayName)
@@ -79,7 +83,7 @@ internal fun HtmlArtifactThumbnail(request: ChatFileRequest, descriptor: HtmlPre
             .semantics { contentDescription = label }
             .clickable(role = Role.Button, onClickLabel = label, onClick = onOpen),
             contentAlignment = Alignment.Center) {
-            val image = pixels.bitmap
+            val image = pixels.image?.bitmap
             if (image != null) Image(image.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
             else Column(Modifier.padding(16.dp).testTag("html-thumbnail-status-${request.artifactId}"),
                 horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {

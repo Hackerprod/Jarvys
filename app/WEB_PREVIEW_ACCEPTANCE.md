@@ -1,8 +1,8 @@
-# UX22 physical-device acceptance
+# Web preview physical-device acceptance (UX22/UX28)
 
 Host tests do not run Chromium. This checklist remains unverified until executed with the delivered Jarvys APK on actual Android WebView.
 
-1. Deliver an HTML page containing long vertical content, a horizontal overflow region, an editable input, an ordinary local page link, a local CSS file, a JavaScript button and a local image. Repeat with explicit `preview_workspace` path under `/project/`. Confirm View in Jarvys, Download and Share are separate native actions.
+1. Deliver an HTML page containing long vertical content, a horizontal overflow region, an editable input, an ordinary local page link, a local CSS file, a JavaScript button and a local image. Repeat with explicit `preview_workspace` path under `/project/`. Confirm the thumbnail itself opens the internal preview, no textual View in Jarvys button appears, and Download/Share are separate icon actions.
 2. Open the preview. Scroll slowly and fling vertically, diagonally and horizontally from the left edge and center. The page should scroll naturally and the app drawer must stay closed. Pinch with two fingers, cancel a gesture, tap and select text. Record WebView version/device and frame traces before making any performance assertion.
 3. Focus the HTML input, type with the real soft keyboard, select text, dismiss the keyboard and rotate. Confirm content remains usable. Native history/URL/scroll restoration is bounded; arbitrary JavaScript heap/form state after process death is not promised.
 4. Follow the local page link and fragment. Trigger app-state changes while the page stays open. The preview must not jump to index.html on ordinary recomposition. Press the native Back control to return to the same chat; reopen and check navigation/reading position. Repeat Activity recreation and process recreation separately.
@@ -11,3 +11,12 @@ Host tests do not run Chromium. This checklist remains unverified until executed
 7. Confirm external URL navigation, `file:`, `content:`, `intent:`, automatic downloads, forms, frames and workers do not launch external apps or access private data. Ordinary scripts are enabled. The inherited WebRTC data-channel/ICE network path is not guaranteed blocked; test that separately before any claim of airtight offline isolation.
 8. Use Download on the HTML card and verify the original file in OS Downloads. Share only when explicitly pressed. Previewing must not open the APK installer, execute an APK, upload the page or change account/device permissions.
 9. Repeat in English/Spanish, light/dark, narrow phone width, large text, TalkBack and reduced motion. Check visible and spoken labels, minimum touch targets, Back priority, keyboard obstruction and no clipped actions.
+
+
+## UX28 thumbnail acceptance
+
+10. Before opening the page, inspect its real static thumbnail with local CSS, fonts and images. Check that pixels correspond to the delivered immutable snapshot, not an illustration or newer workspace. Repeat HTML and CSS-only changes and reopen both old and new cards. Record actual device/WebView version and screenshots.
+11. Try a JavaScript-only application and an empty page. Scripts must not execute during chat rendering; the static caption and unavailable placeholder must be honest and remain tappable. Opening the interactive page may execute its existing permitted scripts, but entered data or navigated pages must not become thumbnail screenshots.
+12. Observe network traffic while cards render, including external image/font URLs, fetch/WebSocket/WebRTC code, DNS-prefetch/preconnect links, SVG references and meta refresh. Confirm automatic thumbnails do not execute scripts or perform external resource/network activity. No airtight network claim is made before this check.
+13. Scroll rapidly through many HTML cards, background/foreground, rotate, switch chats, delete a chat during rendering and reopen. Check one bounded renderer, prompt cancellation/cleanup, no visible hidden WebView, no input interception, no stale image or recreated deleted cache. Capture memory/frame traces before performance claims.
+14. At narrow width and 200% text in English/Spanish and both themes, use TalkBack to open the thumbnail and activate Download/Share; test busy cancellation, permission denial, saved-file Open and long names. Each action must keep a distinct spoken label and at least 48 dp target. Non-HTML files and unavailable originals remain correct.
