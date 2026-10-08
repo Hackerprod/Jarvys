@@ -1777,6 +1777,13 @@ private fun JarvysApp(
             }
             NavHost(navController = navController, startDestination = Routes.CHAT, modifier = Modifier.padding(padding)) {
                 composable(Routes.CHAT) {
+                    // Both outgoing and restored chat use their retained overlay geometry from
+                    // their first frame, even while the outer route metadata is transitioning.
+                    val chatInsets = LocalRetainedChatScreenInsets.current
+                    CompositionLocalProvider(
+                        LocalChatComposerInset provides chatInsets.composer,
+                        LocalChatHeaderInset provides chatInsets.header,
+                    ) {
                     val conversationKey = selectedHistoryRunId ?: if (showingNewChat) "new" else agentState.sessionId ?: conversationSessionId
                     Crossfade(targetState = conversationKey,
                         animationSpec = if (LocalReducedMotion.current) androidx.compose.animation.core.snap()
@@ -1828,6 +1835,7 @@ private fun JarvysApp(
                             onSaveGeneratedImage = onSaveGeneratedImage,
                             onShareGeneratedImage = onShareGeneratedImage,
                         )
+                    }
                     }
                 }
                 composable(Routes.ARCHIVED_CHATS) {

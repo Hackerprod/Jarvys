@@ -166,11 +166,17 @@ class MainActivityDrawerNavigationTest {
                 swipe(Offset(centerX, height * 0.28f), Offset(centerX, height * 0.62f), durationMillis = 400)
             }
         }
-        compose.waitForIdle()
-        val scrollBefore = chatScrollPosition()
-        assertTrue("The test must leave the newest-message anchor", scrollBefore > 0f)
+        settleNativeFrame()
+        val scrollWithComposerFocus = chatScrollPosition()
+        assertTrue("The test must leave the newest-message anchor", scrollWithComposerFocus > 0f)
 
         openDrawer()
+        settleNativeFrame()
+        // Opening the modal drawer clears composer focus/IME and may change the viewport once.
+        // Compare the settled navigation anchor, after that intentional keyboard transition.
+        val scrollBefore = chatScrollPosition()
+        println("UX17_SCROLL composerFocused=$scrollWithComposerFocus; drawerSettled=$scrollBefore; ${chatScrollDiagnostic()}")
+        assertTrue("The drawer must retain a non-tail chat anchor", scrollBefore > 0f)
         compose.onNodeWithTag("drawer-header").assertIsDisplayed()
         compose.onNodeWithTag("drawer-header-title").assertTextEquals(context.getString(R.string.app_name))
         compose.onNodeWithTag("drawer-new-chat").assertIsDisplayed()
@@ -198,6 +204,7 @@ class MainActivityDrawerNavigationTest {
         tapTag("jarvys-back")
         awaitCurrentChat()
         compose.onNode(hasSetTextAction()).assertTextEquals(draft)
+        println("UX17_SCROLL after Back=${chatScrollPosition()}; ${chatScrollDiagnostic()}")
         assertEquals(scrollBefore, chatScrollPosition(), 0.02f)
         assertEquals(persisted, transcript(currentSession))
         assertSame(transfers, ViewModelProvider(activity)[ChatFileTransfers::class.java])
@@ -243,7 +250,10 @@ class MainActivityDrawerNavigationTest {
 
         chooseConversationAction(titleB, R.string.drawer_unarchive)
         compose.waitUntil(10_000) { !store.readConversationMetadata(archivedB).archived }
-        compose.waitUntil(10_000) { compose.onAllNodesWithText(titleB).fetchSemanticsNodes().isEmpty() }
+        compose.waitUntil(10_000) {
+            compose.onAllNodes(hasText(titleB) and hasAnyAncestor(hasTestTag("archived-chats-list")))
+                .fetchSemanticsNodes().isEmpty()
+        }
         assertTrue(store.readConversationMetadata(archivedA).archived)
         assertEquals(archivedBBefore, transcript(archivedB))
 
@@ -341,6 +351,7 @@ class MainActivityDrawerNavigationTest {
         openArchives()
         chooseConversationAction(titleA, R.string.drawer_rename_chat)
         compose.onNode(hasSetTextAction() and hasAnyAncestor(isDialog())).performTextReplacement("Durable archive name")
+        pumpPendingNativeRoots()
         tapText(R.string.drawer_save_name)
         awaitText("Durable archive name")
         compose.activityRule.scenario.close()
@@ -472,6 +483,10 @@ class MainActivityDrawerNavigationTest {
     /** A just-created dialog can have a native root still awaiting host measurement in Robolectric. */
     private fun pumpPendingNativeRoots() {
         repeat(2) {
+            // Drain the framework's finite Compose frame work before traversing new Android windows.
+            val environment = requireNotNull(testField(compose, "environment"))
+            val idling = requireNotNull(testField(environment, "composeIdlingResource"))
+            compose.runOnUiThread { idling.javaClass.getMethod("isIdleNow").invoke(idling) }
             compose.mainClock.advanceTimeByFrame()
             Shadows.shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(32))
             compose.runOnUiThread {
@@ -480,14 +495,17 @@ class MainActivityDrawerNavigationTest {
                 registeredNativeRoots().filterNotNull().forEach { root ->
                     method.invoke(root)
                     val view = rootInterface.getMethod("getView").invoke(root) as View
-                    println("UX17_NATIVE_ROOT before parent=${view.parent?.javaClass?.simpleName}; " +
-                        "size=${view.width}x${view.height}; pending=${rootInterface.getMethod("getHasPendingMeasureOrLayout").invoke(root)}")
                     if (view.parent?.javaClass?.simpleName == "DialogLayout") {
                         val decor = view.rootView
                         val width = decor.width.takeIf { it > 0 } ?: decor.measuredWidth
                         val availableHeight = (decor.resources.configuration.screenHeightDp * decor.resources.displayMetrics.density).toInt()
                         if (width > 0 && availableHeight > 0) {
-                            decor.forceLayout()
+                            var nativeParent: View? = view
+                            while (nativeParent != null) {
+                                nativeParent.forceLayout()
+                                if (nativeParent === decor) break
+                                nativeParent = nativeParent.parent as? View
+                            }
                             decor.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
                                 View.MeasureSpec.makeMeasureSpec(availableHeight, View.MeasureSpec.AT_MOST))
                             decor.layout(decor.left, decor.top, decor.left + decor.measuredWidth, decor.top + decor.measuredHeight)
@@ -495,8 +513,6 @@ class MainActivityDrawerNavigationTest {
                             try { decor.draw(Canvas(bitmap)) } finally { bitmap.recycle() }
                         }
                     }
-                    println("UX17_NATIVE_ROOT after parent=${view.parent?.javaClass?.simpleName}; " +
-                        "size=${view.width}x${view.height}; pending=${rootInterface.getMethod("getHasPendingMeasureOrLayout").invoke(root)}")
                 }
             }
         }
@@ -544,6 +560,20 @@ class MainActivityDrawerNavigationTest {
 
     private fun chatScrollPosition(): Float = compose.onNodeWithTag("chat-message-list")
         .fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()
+
+    private fun chatScrollDiagnostic(): String {
+        val list = compose.onNodeWithTag("chat-message-list").fetchSemanticsNode()
+        val bubbles = compose.onAllNodes(SemanticsMatcher("user message anchor") {
+            it.config.contains(SemanticsProperties.TestTag) &&
+                it.config[SemanticsProperties.TestTag].startsWith("user-message-bubble-")
+        }, useUnmergedTree = true).fetchSemanticsNodes().map {
+            it.config[SemanticsProperties.TestTag] to it.boundsInRoot
+        }
+        val overlays = listOf("chat-composer-overlay", "chat-header-fade").associateWith { tag ->
+            compose.onAllNodesWithTag(tag).fetchSemanticsNodes().map { it.boundsInRoot }
+        }
+        return "viewport=${list.boundsInRoot}; overlays=$overlays; userAnchors=$bubbles"
+    }
 
     private fun captureDialog(name: String) {
         compose.runOnIdle {
