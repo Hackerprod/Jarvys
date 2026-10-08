@@ -301,13 +301,23 @@ Contrato, referencias y límites: app/MAIN_AGENT.md. Código y Pending.md respal
 
 ### 11. UX27: títulos breves y detalle de tareas
 
-Estado: pendiente; solicitud del 8 de octubre de 2026. La revisión de referencia es independiente de UX26 y no modifica su app congelada.
+Estado: en implementación; solicitud del 8 de octubre de 2026, después de finalizar UX26.
 
-- Separar el título breve de una tarea de sus instrucciones completas. No repetir todo el mensaje original como nombre en tarjetas o en la cabecera del detalle.
+- Separar el título breve de una tarea de sus instrucciones completas. El propio agente debe generar el nombre según la tarea real, sin frases fijas por tipo ni detectores de palabras clave; la app solo valida longitud y presentación. No repetir todo el mensaje original como nombre en tarjetas o en la cabecera del detalle. Para datos antiguos ausentes o inválidos, usar únicamente un fallback neutral, sin fingir un resumen semántico.
 - Mantener el mismo título coherente entre tarjeta y detalle, con límites de longitud y tratamiento visual para nombres largos.
 - Conservar íntegros el contenido original, la identidad de la tarea, su persistencia y las instrucciones que recibe el agente. Los cambios de presentación no deben truncar la misión ni alterar permisos.
 - Rediseñar el interior del detalle de tareas con una jerarquía clara, mejor espaciado y una composición limpia coherente con el estilo azul de Jarvys y las referencias aportadas.
 - Validar tarjetas y detalle, nombres extensos, pantallas estrechas, texto grande, temas e idiomas, sin ocultar estados, progreso, resultados o controles necesarios.
+
+### 12. UX28: miniaturas HTML y acciones de archivos
+
+Estado: pendiente; solicitud del 8 de octubre de 2026, añadida a la cola después de UX27.
+
+- Mostrar una miniatura real del contenido HTML entregado y abrir el preview al tocarla; no sustituirla por una imagen genérica o un diseño inventado.
+- Eliminar el botón textual «View in Jarvys» de esa tarjeta y reorganizar sus acciones inferiores como iconos claros, con etiquetas de accesibilidad y objetivos táctiles adecuados.
+- Mantener la apertura, identidad, propiedad y persistencia del archivo, sus referencias y los límites de seguridad del preview; no ampliar permisos ni acceso a archivos privados.
+- Ajustar composición, jerarquía y espaciado a las dos capturas de referencia aportadas, dentro del estilo azul de Jarvys.
+- Validar HTML ordinario y de proyecto, miniaturas en carga o fallidas, apertura al tocar, acciones, reapertura del chat, pantallas estrechas, texto grande, temas e idiomas. Una miniatura o prueba de host no certifica por sí sola interacción o rendimiento en dispositivo físico.
 
 ## Validaciones que siguen abiertas
 
