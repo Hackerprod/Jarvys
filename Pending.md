@@ -348,16 +348,17 @@ Estado: pendiente; solicitud del 8 de octubre de 2026, añadida a la cola despu�
 - Contrastar la composición con la captura aportada y validar estado vacío/con chats, chats anclados, acciones, navegación, temas, idiomas y texto grande.
 - Implementar como tarea separada después de UX29; no ampliar el alcance de UX27 ni cambiar permisos o comportamiento de las conversaciones.
 
-### 15. UX31: gestión nativa de Gmail
+### 15. UX31: cobertura general de gestión de Gmail
 
-Estado: pendiente, después de UX30. La conexión de Gmail y Drive ya ha sido confirmada como funcional; ampliar la gestión de Gmail se audita como una tarea separada.
+Estado: pendiente, después de UX30. Gmail y Drive ya conectan; ampliar Gmail como un conjunto genérico de capacidades, no como un flujo centrado en spam. La auditoría debe cubrir las operaciones que admita la API y los permisos realmente concedidos.
 
-- Auditar las herramientas nativas existentes, sus esquemas y los permisos OAuth realmente concedidos, antes de incorporar nuevas acciones. Mantener Gmail y Drive conectados y no ampliar el alcance de UX28.
-- Permitir organizar correo y etiquetas, clasificar mensajes como spam y corregir falsos positivos devolviéndolos a correo válido; revisar también búsqueda y lectura de las carpetas afectadas.
-- Añadir, cuando el conector y los permisos lo admitan, envío a la papelera y restauración, distinguiendo archivar, eliminar de forma recuperable y borrar definitivamente. Conservar identidad de mensaje/hilo, resultados verificables y errores parciales sin repetir escrituras ambiguas.
-- Usar el conjunto mínimo de scopes para las operaciones aprobadas. Cualquier ampliación persistente de acceso debe pasar por el consentimiento explícito correspondiente; una conexión existente no demuestra que pueda modificar correo.
-- El vaciado o borrado permanente, si se incorpora, requiere confirmación explícita por acción, con mensajes, alcance y consecuencias claros. No presentar acciones sensibles como limpieza reversible.
-- Probar permisos insuficientes, denegaciones, spam/no-spam, etiquetas, papelera/restauración, búsquedas, auditoría, cancelación y verificación de resultados. No actuar sobre correo real ni cambiar concesiones OAuth durante esta fase de planificación.
+- **Inventario y búsqueda:** auditar herramientas, esquemas y resultados. Buscar en todas las páginas necesarias, con paginación/cursor, filtros de etiquetas y alcance explícito; permitir incluir spam y papelera cuando corresponda. Leer mensajes, hilos, estado y adjuntos sin recortes ocultos ni resultados incompletos presentados como completos.
+- **Organización:** crear, consultar, editar y eliminar etiquetas cuando la API lo permita; aplicar o quitar etiquetas a mensajes/hilos o selecciones verificadas. Cubrir leído/no leído, archivar/desarchivar, destacados/importantes y demás etiquetas de sistema admitidas, respetando sus restricciones. Spam/no-spam debe ser una capacidad más de este inventario, sin reglas temáticas hardcodeadas ni limitación del conjunto a ese caso.
+- **Ciclo de vida del correo:** enviar a papelera, restaurar y distinguir borrado recuperable de borrado permanente. Si se incorpora purga/vaciado, mostrar exactamente qué mensajes y cuentas se afectarían y exigir confirmación explícita por acción para el lote irreversible.
+- **Composición y comunicación:** cubrir borradores, edición, envío, respuesta y adjuntos cuando estén soportados y autorizados. Diferenciar preparar de enviar; verificar destinatarios, conversación, cuenta emisora y propósito, sin inferir permiso de envío por haber pedido un borrador.
+- **Ámbito y lotes:** distinguir operación sobre mensaje, hilo y selección; conservar IDs de cuenta, mensaje e hilo y una instantánea verificable de los objetivos. Usar operaciones por lote si aportan valor, con límites, paginación, cancelación, progreso, recibos por resultado y reanudación segura; no repetir escrituras ambiguas ni ampliar silenciosamente una selección mientras cambia el buzón.
+- **Permisos y autonomía:** normalizar la equivalencia real entre scopes de lectura, modificación y acceso completo, además de los específicos de composición, envío o etiquetas. Construir capacidades a partir de concesiones efectivas, no del nombre de un scope aislado ni de la mera conexión. Usar mínimo privilegio, solicitar consentimiento para cualquier ampliación persistente y mantener las confirmaciones exigidas por el tipo de acción. Evitar preguntas duplicadas cuando la acción concreta ya esté autorizada; eso no elimina la confirmación del borrado irreversible ni autoriza acciones externas no solicitadas.
+- **Verificación:** cubrir cuentas distintas, permisos parciales/supersets, denegaciones, búsquedas multipágina, etiquetas y estados, papelera/restauración, composición/envío, adjuntos, operaciones sobre hilos, lotes, cambios concurrentes, cancelación, recibos y recuperación. Revisar paridad de catálogo, UI, plan de aprobación y ejecución. No actuar sobre correo real ni cambiar concesiones OAuth durante esta planificación.
 
 ## Validaciones que siguen abiertas
 
