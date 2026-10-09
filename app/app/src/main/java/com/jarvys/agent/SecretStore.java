@@ -93,10 +93,21 @@ public final class SecretStore {
 
     public synchronized void saveCodexTokens(String accessToken, String refreshToken,
                                               long expiresAtMillis, String accountId) {
+        saveCodexTokens(accessToken, refreshToken, expiresAtMillis, accountId, false);
+    }
+
+    synchronized void refreshCodexTokens(String accessToken, String refreshToken, long expiresAtMillis, String accountId) {
+        saveCodexTokens(accessToken, refreshToken, expiresAtMillis, accountId, true);
+    }
+
+    private void saveCodexTokens(String accessToken, String refreshToken, long expiresAtMillis, String accountId, boolean refresh) {
         if (empty(accessToken) || empty(refreshToken) || empty(accountId)) {
             throw new IllegalArgumentException("Codex OAuth response omitted required credential fields");
         }
+        String authorizationId = refresh && accountId.equals(preferences.getString("codex_account_id", null))
+                ? preferences.getString("codex_authorization_id", "legacy") : java.util.UUID.randomUUID().toString();
         boolean saved = preferences.edit()
+                .putString("codex_authorization_id", authorizationId)
                 .putString("codex_access_token", accessToken)
                 .putString("codex_refresh_token", refreshToken)
                 .putLong("codex_expires_at", expiresAtMillis)
@@ -111,12 +122,13 @@ public final class SecretStore {
         String account = preferences.getString("codex_account_id", null);
         long expires = preferences.getLong("codex_expires_at", 0L);
         if (empty(access) || empty(refresh) || empty(account) || expires <= 0) return null;
-        return new CodexCredentials(access, refresh, expires, account);
+        return new CodexCredentials(access, refresh, expires, account, preferences.getString("codex_authorization_id", "legacy"));
     }
 
     public synchronized void clearCodexTokens() {
         if (!preferences.edit().remove("codex_access_token").remove("codex_refresh_token")
-                .remove("codex_expires_at").remove("codex_account_id").commit()) {
+                .remove("codex_expires_at").remove("codex_account_id")
+                .putString("codex_authorization_id", java.util.UUID.randomUUID().toString()).commit()) {
             throw new IllegalStateException("Could not remove encrypted ChatGPT OAuth credentials");
         }
     }
@@ -203,8 +215,11 @@ public final class SecretStore {
         public final String refreshToken;
         public final long expiresAtMillis;
         public final String accountId;
+        /** Non-secret authorization generation; refresh preserves it, new login/disconnect replaces it. */
+        public final String authorizationId;
 
-        private CodexCredentials(String accessToken, String refreshToken, long expiresAtMillis, String accountId) {
+        private CodexCredentials(String accessToken, String refreshToken, long expiresAtMillis, String accountId, String authorizationId) {
+            this.authorizationId = authorizationId;
             this.accessToken = accessToken;
             this.refreshToken = refreshToken;
             this.expiresAtMillis = expiresAtMillis;

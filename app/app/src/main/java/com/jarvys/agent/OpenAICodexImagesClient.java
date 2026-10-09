@@ -88,8 +88,12 @@ final class OpenAICodexImagesClient {
                 if (count == 0) {
                     int one = source.read();
                     if (one == -1) break;
+                    if (output.size() >= CodexImageGenerationClient.MAX_RESPONSE_BYTES) throw new IOException("Image response exceeds limit");
                     output.write(one);
-                } else output.write(buffer, 0, count);
+                } else {
+                    if (count > CodexImageGenerationClient.MAX_RESPONSE_BYTES - output.size()) throw new IOException("Image response exceeds limit");
+                    output.write(buffer, 0, count);
+                }
             }
             return output.toString(StandardCharsets.UTF_8.name());
         }

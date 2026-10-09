@@ -57,6 +57,7 @@ public final class ProjectMutationService {
     public final Kind kind;
     public final String path;
     public final String text;
+    private final byte[] binary;
 
     private Operation(
         Kind kind,
@@ -66,6 +67,12 @@ public final class ProjectMutationService {
         List<Hunk> hunks,
         String destination,
         String expectedDestinationSha) {
+      this(kind, path, expectedSha, text, hunks, destination, expectedDestinationSha, null);
+    }
+
+    private Operation(Kind kind, String path, String expectedSha, String text, List<Hunk> hunks,
+        String destination, String expectedDestinationSha, byte[] binary) {
+      this.binary = binary == null ? null : binary.clone();
       this.kind = kind;
       this.path = path;
       this.expectedSha = expectedSha;
@@ -170,6 +177,9 @@ public final class ProjectMutationService {
 
     default void afterPromotion(String path) throws IOException {}
 
+    /** Last live authority check before the filesystem publication boundary. */
+    default void beforePromotion(String path) throws IOException {}
+
     default void afterCreationChunk(String path, long copied) throws IOException {}
 
     default void afterEffectBeforeJournal(String path) throws IOException {}
@@ -222,8 +232,9 @@ public final class ProjectMutationService {
       this.destinationBefore = destinationBefore;
       this.beforeSha = ProjectMutationService.hash(before);
       this.destinationSha = ProjectMutationService.hash(destinationBefore);
-      this.changeDiff =
-          ProjectMutationService.diff(
+      this.changeDiff = op.binary != null
+          ? "Binary asset: " + (before == null ? 0 : before.length) + " -> " + after.length + " bytes"
+          : ProjectMutationService.diff(
               destination == null ? path : destination,
               destination == null ? before : destinationBefore,
               after);
@@ -248,14 +259,46 @@ public final class ProjectMutationService {
       long expectedScopeVersion,
       List<Operation> operations,
       CancellationToken token) {
+    try (ProjectScope.WriterLease lease = scope.acquireWriter(owner, expectedScopeVersion)) {
+      return applyHeld(scope, lease, operations, token);
+    } catch (IOException failure) {
+      return new Result(failure instanceof ProjectScope.ConflictException ? Status.CONFLICT : Status.FAILED,
+          Collections.emptyList(), failure.getMessage(), scope.version(), Collections.emptyList());
+    }
+  }
+
+  /** Runtime-owned binary source; never exposed as a base64/text mutation argument. */
+  public interface BinarySource { byte[] produce() throws IOException; }
+
+  /** Validate before consuming provider quota, holding the same scoped writer lease until receipt. */
+  public Result produceBinary(ProjectScope scope, String owner, long expectedScopeVersion,
+      String path, String expectedSha, BinarySource source, CancellationToken token) throws IOException {
+    token.throwIfCancelled();
+    try (ProjectScope.WriterLease lease = scope.acquireWriter(owner, expectedScopeVersion)) {
+      String relative = ordinaryPath(scope, path);
+      requireExpected(expectedSha);
+      checkExpected(expectedSha, hash(read(scope, relative, token)), relative);
+      byte[] bytes = source.produce();
+      token.throwIfCancelled();
+      lease.validate();
+      if (bytes == null || bytes.length == 0 || bytes.length > maxMaterializedBytes)
+        throw new IOException("Binary output exceeds the bounded asset budget");
+      Operation operation = new Operation(Kind.WRITE, relative, expectedSha, null, null, null, null, bytes);
+      return applyHeld(scope, lease, Collections.singletonList(operation), token);
+    }
+  }
+
+  private Result applyHeld(ProjectScope scope, ProjectScope.WriterLease lease,
+      List<Operation> operations, CancellationToken token) {
     List<Applied> applied = new ArrayList<>();
     List<String> cleanupWarnings = new ArrayList<>();
     CancellationToken cancellation = token == null ? CancellationToken.uncancellable() : token;
     ProjectMutationJournal.Transaction journal = null;
-    try (ProjectScope.WriterLease lease = scope.acquireWriter(owner, expectedScopeVersion)) {
+    try {
+      lease.validate();
       List<Plan> plans = preflight(scope, operations, cancellation);
       cancellation.throwIfCancelled();
-      journal = new ProjectMutationJournal(scope).begin(owner, journalChanges(scope, plans));
+      journal = new ProjectMutationJournal(scope).begin(lease.owner, journalChanges(scope, plans));
       for (int i = 0; i < plans.size(); i++) {
         Plan plan = plans.get(i);
         cancellation.throwIfCancelled();
@@ -390,7 +433,7 @@ public final class ProjectMutationService {
           after = encode(op.text, null);
           break;
         case WRITE:
-          after = encode(op.text, before);
+          after = op.binary == null ? encode(op.text, before) : op.binary;
           break;
         case EDIT:
           if (op.hunks.isEmpty()) throw new IOException("An edit needs at least one exact hunk");
@@ -434,7 +477,7 @@ public final class ProjectMutationService {
           decode(before);
           break;
       }
-      if (after != null) decode(after);
+      if (after != null && op.binary == null) decode(after);
       if (after != null && after.length > maxMaterializedBytes) {
         throw new IOException(
             "Mutation exceeds the text materialization budget; use a smaller edit or an authorized"
@@ -594,10 +637,14 @@ public final class ProjectMutationService {
       if (permissionsFrom != null)
         ProjectFileIO.preservePermissions(scope.resolve(permissionsFrom), staged);
       scope.resolve(relative);
+      lease.validate();
+      token.throwIfCancelled();
+      if (observer != null) observer.beforePromotion(relative);
       if (ProjectScope.MISSING.equals(expected)) {
         try {
           ProjectFileIO.copyNew(staged, target, hash(bytes), bytes.length, copied -> {
             token.throwIfCancelled();
+            lease.validate();
             if (observer != null) observer.afterCreationChunk(relative, copied);
           });
           promoted = true;

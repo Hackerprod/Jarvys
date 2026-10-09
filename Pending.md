@@ -530,7 +530,7 @@ Límites: falta aceptación en teléfono de WebView/Chromium, barras del sistema
 
 ### 21. UX36: generación de imágenes en Coding y descripción fiel de sus capacidades
 
-Estado: corrección crítica en cola después de UX35 y antes de fases posteriores de memoria. Auditoría de solo lectura en curso; no ampliar el alcance de UX34 fase 0.
+Estado: implementación en progreso sobre UX35 v53. Auditoría terminada y primer checkpoint de código para herramientas de imagen acotadas al proyecto, transferencia explícita de referencias y persistencia binaria con diario. Se están corrigiendo observaciones de revisión independiente y ejecutando pruebas enfocadas con proveedores sintéticos. No se han completado los gates finales Full/Play, lint, revisión ni APK v54; no se ha llamado a un proveedor real ni validado en dispositivo. UX34 permanece exclusivamente en fase 0.
 
 - Auditar el inventario efectivo de herramientas de Coding integrado en Full y las variantes/perfiles aplicables: selección de capacidades, registro, delegación, creación y reanudación de bots. Verificar si generación/edición de imágenes está realmente disponible y dónde se pierde o queda fuera del inventario.
 - Proponer e integrar una capacidad genérica para que Coding genere o edite imágenes cuando el trabajo lo necesite, usando la implementación real existente o una ampliación justificada. No incorporar decisiones por tipo fijo de proyecto, palabras clave, ejemplos particulares ni rutinas centradas en una imagen concreta.

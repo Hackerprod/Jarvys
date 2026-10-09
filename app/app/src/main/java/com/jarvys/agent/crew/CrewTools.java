@@ -28,7 +28,7 @@ public final class CrewTools {
                         List<String> tools = strings(a.get("tools"), "tools");
                         CrewManager.Bot bot = manager.spawn(role, mission, a.containsKey("tools") ? tools : null,
                                 optionalString(a,"name"), CrewMissionAccess.parse(a.containsKey("mission_access") ? string(a,"mission_access") : null), a.get("task_title"));
-                        return CoreToolResult.success("Spawned " + bot.name + " (" + bot.id + ") status=" + bot.status());
+                        return CoreToolResult.success("Spawned " + bot.name + " (" + bot.id + ") status=" + bot.status() + "; selected_tools=" + bot.role.tools + "; actual declarations become available through crew_list after initialization.");
                     }
                 },
                 new CaptainTool("crew_send", "Send an untrusted message from the captain to a Crew bot. A DONE bot may re-enter a follow-up work cycle; STOPPED or FAILED bots require an explicit user message.",

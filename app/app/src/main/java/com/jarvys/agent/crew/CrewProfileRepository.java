@@ -106,6 +106,7 @@ public final class CrewProfileRepository {
             capabilities.remove(com.jarvys.agent.skills.SkillScopePolicy.APK_FACTORY_TOOL);
             if (skills.isEmpty()) capabilities.remove("read_skill");
         }
+        if (approvedCapabilities.contains("project_image") && !capabilities.contains("project_image")) capabilities.add("project_image");
         // Treat execution as one lifecycle contract. An incomplete flavor/parent ceiling cannot
         // expose a launch without its status, logs, completion, and cancellation interfaces.
         if (approvedCapabilities.containsAll(com.jarvys.agent.flavor.CodingExecutionTools.NAMES)) {

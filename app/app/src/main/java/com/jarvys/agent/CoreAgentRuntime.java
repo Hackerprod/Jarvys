@@ -68,6 +68,8 @@ public final class CoreAgentRuntime {
   private static final Map<String, CrewManager> CREWS = new ConcurrentHashMap();
   private static final int MAX_SUBAGENT_DEPTH = 2;
   private final List<String> allowedTools;
+  // Only the trusted history reconstruction path sets this, never generic delegation.
+  private boolean restoredCrewScope;
   private final CorePromptBudget budget;
   private final ConnectorRegistry connectorRegistry;
   private final List<CoreTool> connectorTools;
@@ -267,6 +269,7 @@ public final class CoreAgentRuntime {
       available.remove("list_bots");
       available.remove("create_bot");
       available.remove("list_image_references");
+      available.remove(ImportProjectImageTool.NAME);
       toolRegistry = toolRegistry.subset(available);
     }
     final MainChatTranscriptStore transcriptStore = mainChat && context != null
@@ -442,6 +445,7 @@ public final class CoreAgentRuntime {
         });
     final List<String> profileCeiling = new ArrayList<>(crewCapabilities.names());
     profileCeiling.addAll(CodingProjectTools.names());
+    if (projectImagesAllowed()) profileCeiling.add(ProjectImageTool.NAME);
     profileCeiling.add(ApkFactoryTools.NAME);
     profileCeiling.add("read_skill");
     profileCeiling.addAll(FlavorLinuxTools.profileCapabilityNames(this.context, this.sessionId));
@@ -576,6 +580,7 @@ public final class CoreAgentRuntime {
             CorePromptBudget.standard(),
             true,
             true);
+    runtime.restoredCrewScope = true;
     return runtime.configureCrewManager(
         runtime.createTools(), new CoreAgentModel(context, sessionId), null);
   }
@@ -763,6 +768,11 @@ public final class CoreAgentRuntime {
                     })
                 .collect(Collectors.toList());
     selected.removeAll(executionSelected);
+    final boolean imageSelected = selected.remove(ProjectImageTool.NAME);
+    if (imageSelected && (!projectScope || bot.role.profileVersion <= 0
+        || bot.role.missionAccess == com.jarvys.agent.crew.CrewMissionAccess.READ_ONLY || !projectImagesAllowed())) {
+      throw new IllegalArgumentException("Project image capability is unavailable in this mission");
+    }
     final boolean factorySelected = selected.remove(ApkFactoryTools.NAME);
     if (factorySelected && (!projectScope || bot.role.profileVersion <= 0 || !CrewRoleTemplates.CODING.equals(bot.role.id))) {
       throw new IllegalArgumentException("APK factory is reserved for the built-in Coding project");
@@ -785,6 +795,19 @@ public final class CoreAgentRuntime {
                             }
                           })
                       .collect(Collectors.toList()));
+    }
+    if (imageSelected) {
+      try {
+        ProjectScope imageScope = new ProjectScopeStore(context.getFilesDir()).open(sessionId);
+        scoped = scoped.with(Collections.singletonList(new ProjectImageTool(context, imageScope, bot.id,
+            () -> {
+              bot.token.throwIfCancelled();
+              checkCrewToolPolicies(bot);
+              if (!projectImagesAllowed() || !bot.role.tools.contains(ProjectImageTool.NAME)
+                  || bot.role.missionAccess == com.jarvys.agent.crew.CrewMissionAccess.READ_ONLY)
+                throw new IllegalStateException("Project image capability was revoked");
+            }, text -> crewArtifacts(bot).reference(crewArtifacts(bot).save(text, CancellationToken.uncancellable())))));
+      } catch (IOException unavailable) { throw new IllegalStateException("Project image scope is unavailable", unavailable); }
     }
     if (factorySelected) {
       try {
@@ -928,6 +951,7 @@ public final class CoreAgentRuntime {
             .append(crewBotInstructions(bot))
             .append("\nActual declared tools: ")
             .append(withRecovery.names());
+    if (tools.names().contains(ProjectImageTool.NAME)) sbAppend.append("\n").append(com.jarvys.agent.coding.CodingAgentInstructions.IMAGE_GUIDANCE);
     if (bot.role.workspaceMode == CrewProfile.WorkspaceMode.CONVERSATION_PROJECT) {
       str =
           codingScopeInstructions(this.sessionId)
@@ -1116,6 +1140,7 @@ public final class CoreAgentRuntime {
             true);
     List<String> ceiling = new ArrayList<>(crewBotCapabilityScope(runtime.createTools()).names());
     ceiling.addAll(CodingProjectTools.names());
+    if (ProjectImageTool.available(context, catalogSession)) ceiling.add(ProjectImageTool.NAME);
     ceiling.add(ApkFactoryTools.NAME);
     ceiling.add("read_skill");
     ceiling.addAll(FlavorLinuxTools.profileCapabilityNames(context, catalogSession));
@@ -1144,6 +1169,8 @@ public final class CoreAgentRuntime {
             || "search_files".equals(name)
             || "deliver_file".equals(name)
             || "generate_image".equals(name)
+            || ImportProjectImageTool.NAME.equals(name)
+            || ProjectImageTool.NAME.equals(name)
             || "generate_bot_icon".equals(name)
             || "list_bots".equals(name)
             || "create_bot".equals(name)
@@ -1205,6 +1232,8 @@ public final class CoreAgentRuntime {
       }
     }
     if (BotCatalogTool.isAvailable(this.context, this.depth, this.sessionId)) {
+      CoreTool imageImport = new ImportProjectImageTool(this.context, this.sessionId);
+      if (allowed(imageImport)) tools.add(imageImport);
       CoreTool catalog = new BotCatalogTool(this.context, this.sessionId);
       if (allowed(catalog)) tools.add(catalog);
       CoreTool creator = new BotCreationTool(this.context, this.sessionId);
@@ -1279,7 +1308,7 @@ public final class CoreAgentRuntime {
     List<String> names = new ArrayList<>();
     for (CoreTool tool : includedMcpTools) {
       String name = tool.declaration().name;
-      if (DeliverFileTool.NAME.equals(name) || BotCatalogTool.NAME.equals(name) || BotIconGenerationTool.NAME.equals(name) || BotCreationTool.NAME.equals(name)) continue;
+      if (ImportProjectImageTool.NAME.equals(name) || ProjectImageTool.NAME.equals(name) || DeliverFileTool.NAME.equals(name) || BotCatalogTool.NAME.equals(name) || BotIconGenerationTool.NAME.equals(name) || BotCreationTool.NAME.equals(name)) continue;
       if (!includeDelegate || !"search_files".equals(name)) {
         if (!includeDelegate
             || (!"generate_image".equals(name) && !"list_image_references".equals(name))) {
@@ -1295,6 +1324,11 @@ public final class CoreAgentRuntime {
       names.add("delegate_subtask");
     }
     return names;
+  }
+
+  private boolean projectImagesAllowed() {
+    return this.context != null && (this.depth == 0 || this.restoredCrewScope && this.depth == 1) && ProjectImageTool.available(this.context, this.sessionId)
+        && CoreToolAccessPolicy.matches(ProjectImageTool.NAME, null, this.allowedTools);
   }
 
   private boolean allowed(CoreTool tool) {
@@ -1571,6 +1605,10 @@ public final class CoreAgentRuntime {
                 })) {
       prompt.append("\n\n").append(AgentPrompts.memorySearchGuidance(this.context));
     }
+    if (declared.contains(ImportProjectImageTool.NAME)) prompt.append("\nProject image references: import_project_image copies only an explicitly user-authorized image_ref into /project/ with hash/version guards. Give Coding the confirmed relative path and hash; private generated images and chat attachments are not legacy files for coding_adopt.");
+    if (mainChat && declared.contains("crew_spawn")) prompt.append(projectImagesAllowed()
+        ? "\nCoding can currently receive project_image for authorized project generation/editing using the existing ChatGPT account. Delegate useful visual asset work with the user's relevant visual requirements; it is optional, not mandatory for every project. Check the spawned worker's actual declared tools and result, rather than claiming it cannot generate images or generating them yourself as a prerequisite. Tool availability does not authorize unrelated private inputs or extra scope."
+        : "\nThe current runtime does not expose the project_image backend to Coding. Do not promise generation/editing; continue other authorized coding work and report this limitation when relevant.");
     if (declared.contains("generate_image")) {
       prompt.append("\n\n").append(AgentPrompts.imageGenerationGuidance(this.context));
     }

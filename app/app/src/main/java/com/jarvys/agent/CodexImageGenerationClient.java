@@ -15,6 +15,8 @@ import java.util.Set;
 
 /** Dedicated image request path; image bytes never pass through the chat model context. */
 public final class CodexImageGenerationClient {
+    static final int MAX_RESPONSE_BYTES = 96 * 1024 * 1024;
+    static final int MAX_IMAGE_BYTES = 32 * 1024 * 1024;
     public static final String DEFAULT_FORMAT = "png";
     static final String EDIT_MODEL = "gpt-image-2";
     public static final int MAX_EDIT_REFERENCES = 5;
@@ -57,6 +59,40 @@ public final class CodexImageGenerationClient {
                         (forceRefresh, currentToken) -> oauth.getValidCredentials(forceRefresh, currentToken),
                         (payload, credentials, currentSession, currentToken) -> OpenAICodexImagesClient.sendEditRequest(
                                 payload, (SecretStore.CodexCredentials) credentials, currentSession, currentToken)));
+    }
+
+    /** Revalidates live mission/account authority for initial dispatch and the existing 401 retry. */
+    CodexImageGenerationClient(CodexOAuthManager oauth, ProviderSettings settings, Runnable guard, String account) {
+        this(settings, (request, sessionId, token) -> scopedRequest(request, sessionId, token, settings.getModel(), oauth, guard, account, false),
+                (request, sessionId, token) -> scopedRequest(request, sessionId, token, EDIT_MODEL, oauth, guard, account, true));
+    }
+
+    private static ProviderHttp.Response scopedRequest(JSONObject request, String sessionId, CancellationToken token,
+            String model, CodexOAuthManager oauth, Runnable guard, String account, boolean edit) {
+        return scopedRequest(request, sessionId, token, model, guard, account,
+                (refresh, currentToken) -> oauth.getValidCredentials(refresh, currentToken),
+                (payload, value, currentSession, currentToken) -> edit
+                        ? OpenAICodexImagesClient.sendEditRequest(payload, (SecretStore.CodexCredentials)value, currentSession, currentToken)
+                        : OpenAICodexResponsesClient.sendImageRequest(payload, (SecretStore.CodexCredentials)value, currentSession, currentToken));
+    }
+
+    static ProviderHttp.Response scopedRequest(JSONObject request, String sessionId, CancellationToken token,
+            String model, Runnable guard, String account,
+            CodexAuthenticatedRequestExecutor.CredentialProvider credentialsSource,
+            CodexAuthenticatedRequestExecutor.Sender sender) {
+        return CodexAuthenticatedRequestExecutor.execute(request, sessionId, token, model,
+                (refresh, currentToken) -> {
+                    currentToken.throwIfCancelled(); guard.run();
+                    SecretStore.CodexCredentials credentials = (SecretStore.CodexCredentials)credentialsSource.get(refresh, currentToken);
+                    guard.run();
+                    if (credentials == null || !account.equals(credentials.accountId)) throw new IllegalStateException("Image account changed");
+                    return credentials;
+                }, (payload, value, currentSession, currentToken) -> {
+                    currentToken.throwIfCancelled(); guard.run();
+                    SecretStore.CodexCredentials credentials = (SecretStore.CodexCredentials) value;
+                    if (!account.equals(credentials.accountId)) throw new IllegalStateException("Image account changed");
+                    return sender.send(payload, credentials, currentSession, currentToken);
+                });
     }
 
     CodexImageGenerationClient(ProviderSettings settings, RequestExecutor executor) {
@@ -153,15 +189,17 @@ public final class CodexImageGenerationClient {
     }
 
     static byte[] strictBase64(String encoded) {
+        if (encoded == null || encoded.length() > ((long) MAX_IMAGE_BYTES + 2) / 3 * 4) throw new IllegalArgumentException("Image exceeds decode limit");
         if (!ImageEditInput.isCanonicalBase64(encoded)) throw new IllegalArgumentException("Invalid image encoding");
         byte[] bytes = Base64.decode(encoded, Base64.NO_WRAP);
         if (!Base64.encodeToString(bytes, Base64.NO_WRAP).equals(encoded)) throw new IllegalArgumentException("Invalid image encoding");
         return bytes;
     }
 
-    private static boolean isCompletePng(byte[] bytes) {
+    static boolean isCompletePng(byte[] bytes) {
+        if (!isPng(bytes)) return false;
         byte[] signature = {(byte) 0x89, 'P', 'N', 'G', 13, 10, 26, 10};
-        if (bytes == null || bytes.length < signature.length) return false;
+        if (bytes == null || bytes.length < signature.length || bytes.length > MAX_IMAGE_BYTES) return false;
         for (int i = 0; i < signature.length; i++) if (bytes[i] != signature[i]) return false;
         int offset = 8;
         boolean header = false;
@@ -395,12 +433,12 @@ public final class CodexImageGenerationClient {
         String encoded = item.optString("result", "");
         if (encoded.isEmpty() || (!status.isEmpty() && !"completed".equals(status))) return Candidate.EMPTY;
         final byte[] bytes;
-        try { bytes = Base64.decode(encoded, Base64.DEFAULT); }
+        try { if (encoded.length() > ((long) MAX_IMAGE_BYTES + 2) / 3 * 4) throw new IllegalArgumentException("Image exceeds decode limit"); bytes = Base64.decode(encoded, Base64.DEFAULT); }
         catch (IllegalArgumentException invalid) {
             throw failure(CodexImageGenerationException.Kind.INVALID_IMAGE, null, "invalid_base64",
                     "The provider returned image data that could not be decoded.", 0L, scrub(lastEvent, prompt, null), invalid);
         }
-        if (!isPng(bytes)) {
+        if (!isCompletePng(bytes)) {
             throw failure(CodexImageGenerationException.Kind.INVALID_IMAGE, null, "invalid_png",
                     "The provider response was not a valid PNG image.", 0L, scrub(lastEvent, prompt, null), null);
         }
@@ -410,12 +448,12 @@ public final class CodexImageGenerationClient {
 
     private static boolean isPng(byte[] bytes) {
         byte[] signature = new byte[]{(byte) 0x89, 'P', 'N', 'G', 13, 10, 26, 10};
-        if (bytes == null || bytes.length < signature.length) return false;
+        if (bytes == null || bytes.length < signature.length || bytes.length > MAX_IMAGE_BYTES) return false;
         for (int i = 0; i < signature.length; i++) if (bytes[i] != signature[i]) return false;
         BitmapFactory.Options bounds = new BitmapFactory.Options();
         bounds.inJustDecodeBounds = true;
         BitmapFactory.decodeByteArray(bytes, 0, bytes.length, bounds);
-        return bounds.outWidth > 0 && bounds.outHeight > 0;
+        return bounds.outWidth > 0 && bounds.outHeight > 0 && (long) bounds.outWidth * bounds.outHeight <= 16L * 1024 * 1024;
     }
 
     private static List<String> dataPayloads(String body) {

@@ -47,7 +47,7 @@ import org.robolectric.annotation.Config;
 public class CodingMissionAccessRuntimeTest {
     private static final List<String> MUTATING = Arrays.asList("write", "edit", "coding_patch",
             "coding_adopt", "apk_factory", "project_exec", "project_jobs", "board_post",
-            "delegate_subtask", "crew_spawn", "mcp_untrusted_write", "unknown_future_tool");
+            "delegate_subtask", "crew_spawn", "project_image", "import_project_image", "mcp_untrusted_write", "unknown_future_tool");
     private static final List<String> REVIEW = Arrays.asList("ls", "read", "coding_grep", "coding_glob",
             "read_skill", "board_read", "msg_send", "ask_chief", "report_done");
     private static final CoreToolRegistry EMPTY = new CoreToolRegistry(Collections.emptyList());

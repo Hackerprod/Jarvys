@@ -330,7 +330,7 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
       boolean successful = status >= 200 && status < 300;
       InputStream responseStream =
           successful ? connection.getInputStream() : connection.getErrorStream();
-      String rawResponseBody = responseStream == null ? "" : readFullBody(responseStream, token);
+      String rawResponseBody = responseStream == null ? "" : readFullBody(responseStream, token, captureRetryAfter ? CodexImageGenerationClient.MAX_RESPONSE_BYTES : Integer.MAX_VALUE);
       String responseBody = successful ? normalizeSseBody(rawResponseBody) : rawResponseBody;
       if (!successful && logErrors) {
         logHttpError(status, sessionId, rawResponseBody);
@@ -437,7 +437,7 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
     }
   }
 
-  private static String readFullBody(InputStream input, CancellationToken token)
+  private static String readFullBody(InputStream input, CancellationToken token, int limit)
       throws java.io.IOException {
     try (InputStream in = input;
         ByteArrayOutputStream output = new ByteArrayOutputStream()) {
@@ -445,6 +445,7 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
       int read;
       while ((read = in.read(buffer)) != -1) {
         token.throwIfCancelled();
+        if (read > limit - output.size()) throw new java.io.IOException("Provider response exceeds its bounded image limit");
         output.write(buffer, 0, read);
       }
       return output.toString(StandardCharsets.UTF_8.name());

@@ -204,8 +204,9 @@ public final class CodexOAuthManager {
                 SecretStore.CodexCredentials latest = secrets.getCodexCredentials();
                 if (latest == null) throw new IllegalStateException("ChatGPT session was disconnected");
                 if (!current.accessToken.equals(latest.accessToken) || !current.refreshToken.equals(latest.refreshToken)
-                        || !current.accountId.equals(latest.accountId) || current.expiresAtMillis != latest.expiresAtMillis) return latest;
-                persistTokens(refreshed);
+                        || !current.accountId.equals(latest.accountId) || !current.authorizationId.equals(latest.authorizationId)
+                        || current.expiresAtMillis != latest.expiresAtMillis) return latest;
+                persistTokens(refreshed, true);
                 return secrets.getCodexCredentials();
             }
         }
@@ -332,10 +333,13 @@ public final class CodexOAuthManager {
         return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;");
     }
 
-    private void persistTokens(TokenReply tokens) {
+    private void persistTokens(TokenReply tokens) { persistTokens(tokens, false); }
+
+    private void persistTokens(TokenReply tokens, boolean refresh) {
         try {
             synchronized (secrets) {
-                secrets.saveCodexTokens(tokens.accessToken, tokens.refreshToken, tokens.expiresAtMillis, tokens.accountId);
+                if (refresh) secrets.refreshCodexTokens(tokens.accessToken, tokens.refreshToken, tokens.expiresAtMillis, tokens.accountId);
+                else secrets.saveCodexTokens(tokens.accessToken, tokens.refreshToken, tokens.expiresAtMillis, tokens.accountId);
                 SecretStore.CodexCredentials saved = secrets.getCodexCredentials();
                 if (saved == null || !tokens.accessToken.equals(saved.accessToken) || !tokens.refreshToken.equals(saved.refreshToken)
                         || !tokens.accountId.equals(saved.accountId) || tokens.expiresAtMillis != saved.expiresAtMillis) {

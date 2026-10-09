@@ -131,7 +131,7 @@ public final class CrewProfile {
 
     public static boolean isWorkspaceCapabilityCompatible(WorkspaceMode mode, String capability) {
         if (mode == WorkspaceMode.LEGACY_CHAT) {
-            return !Arrays.asList("coding_grep", "coding_glob", "coding_patch", "coding_adopt", com.jarvys.agent.skills.SkillScopePolicy.APK_FACTORY_TOOL, CodingExecutionTools.EXEC, CodingExecutionTools.JOBS, CodingExecutionTools.STATUS).contains(capability);
+            return !Arrays.asList("project_image", "coding_grep", "coding_glob", "coding_patch", "coding_adopt", com.jarvys.agent.skills.SkillScopePolicy.APK_FACTORY_TOOL, CodingExecutionTools.EXEC, CodingExecutionTools.JOBS, CodingExecutionTools.STATUS).contains(capability);
         }
         return mode == WorkspaceMode.CONVERSATION_PROJECT && !"preview_workspace".equals(capability);
     }
