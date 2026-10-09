@@ -48,7 +48,10 @@ internal class FactoryProjectService(
         return JSONObject().put("schemaVersion", 1).put("runtimeVersion", 1)
             .put("templateSha256", ProjectScope.sha256(bytes)).put("templateBytes", bytes.size)
             .put("templatePackage", manifest.appId).put("implementedCapabilities", JSONArray(FactorySpec.CAPABILITIES))
-            .put("manifestPermissions", JSONArray()).put("perAppGradleRequired", false).put("nativeToolchainRequired", false)
+            .put("manifestPermissions", JSONArray(manifest.permissions))
+            .put("manifestFeatures", JSONArray(manifest.plan.features)).put("manifestQueries", JSONArray(manifest.plan.queries))
+            .put("exportedComponents", JSONArray(manifest.plan.exportedComponents)).put("allowedHosts", JSONArray(manifest.plan.hosts))
+            .put("dexSha256", JSONObject(manifest.dexSha256)).put("perAppGradleRequired", false).put("nativeToolchainRequired", false)
             .put("factoryMinimumApi", 26).put("factoryAvailable", Build.VERSION.SDK_INT >= 26).put("generatedAppMinimumApi", 24)
             .put("supportedAbis", "Architecture-neutral JVM/Android code; physical device validation is still required")
             .put("scope_version", scope.version()).put("project_id", scope.id())
@@ -80,7 +83,8 @@ internal class FactoryProjectService(
             replacements["assets/factory-provenance.json"] = JSONObject().put("schemaVersion", 1).put("runtimeVersion", 1)
                 .put("templateSha256", ProjectScope.sha256(template)).put("sourceSha256", JSONObject(sources))
                 .put("renderedIconSha256", ProjectScope.sha256(icon)).toString().toByteArray(Charsets.UTF_8)
-            val bytes = TemplateApk.build(template, TemplateApk.Spec(spec.appId, spec.name, spec.versionCode, spec.versionName), icon, replacements)
+            val bytes = TemplateApk.build(template, TemplateApk.Spec(spec.appId, spec.name, spec.versionCode, spec.versionName, spec.capabilities), icon, replacements)
+            val manifest = TemplateApk.verify(bytes, TemplateApk.Spec(spec.appId, spec.name, spec.versionCode, spec.versionName, spec.capabilities))
             require(bytes.size <= MAX_APK_BYTES) { "Generated APK exceeds factory size limit" }
             checkActive(token)
             sources.forEach { (path, sha) -> check(FactoryProjectFiles.sha(scope, path, if (path == specPath) FactorySpec.MAX_SPEC_BYTES else FactorySpec.MAX_FILE_BYTES, token) == sha) { "Factory source changed before publication: $path" } }
@@ -91,7 +95,7 @@ internal class FactoryProjectService(
             val receipt = JSONObject().put("schemaVersion", 1).put("buildId", id).put("state", "staged")
                 .put("projectIdentity", scope.durableIdentity()).put("projectId", scope.id()).put("outputPath", outputPath)
                 .put("apkSha256", sha).put("apkBytes", bytes.size).put("templateSha256", ProjectScope.sha256(template))
-                .put("renderedIconSha256", ProjectScope.sha256(icon)).put("spec", spec.toJson()).put("sources", JSONObject(sources)).put("signed", false)
+                .put("manifestContract", "closed-v1-current").put("renderedIconSha256", ProjectScope.sha256(icon)).put("dexSha256", JSONObject(manifest.dexSha256)).put("spec", spec.toJson()).put("sources", JSONObject(sources)).put("signed", false)
             saveReceipt(sha, receipt)
             try {
                 FactoryProjectFiles.publish(scope, outputPath, staged, lease, token) { checkActive(token) }
@@ -120,14 +124,27 @@ internal class FactoryProjectService(
             val bytes = FactoryProjectFiles.read(scope, inputPath, MAX_APK_BYTES, token)
             check(ProjectScope.sha256(bytes) == expectedSha) { "Unsigned APK changed; build it again from inspected source" }
             val spec = FactorySpec.parse(receipt.getJSONObject("spec"))
-            val manifest = TemplateApk.inspect(bytes)
-            check(manifest.appId == spec.appId && manifest.versionCode == spec.versionCode && manifest.label == spec.name && manifest.permissions.isEmpty()) {
-                "APK does not match its validated factory build"
+            val expectedManifest = TemplateApk.Spec(spec.appId, spec.name, spec.versionCode, spec.versionName, spec.capabilities)
+            val manifest = if (receipt.has("manifestContract")) {
+                check(receipt.getString("manifestContract") == "closed-v1-current") { "Unsupported factory receipt manifest contract" }
+                TemplateApk.verify(bytes, expectedManifest)
+            } else TemplateApk.verifyExistingV1(bytes, expectedManifest)
+            // v1 receipts predate inventory storage; their exact artifact hash/project binding remains authoritative.
+            if (receipt.has("dexSha256")) {
+                val saved = receipt.getJSONObject("dexSha256")
+                check(saved.keys().asSequence().toSet() == manifest.dexSha256.keys &&
+                    manifest.dexSha256.all { (name, sha) -> saved.getString(name) == sha }) { "DEX inventory differs from build receipt" }
             }
             val approvedState = synchronized(SIGN_LOCK) { identities.state(spec.appId) }
             check(spec.versionCode > approvedState.lastVersion) { "Use a higher versionCode than the last signed release (${approvedState.lastVersion})" }
             val lines = mutableListOf("App: ${spec.name} (${spec.appId}), version ${spec.versionName} / ${spec.versionCode}",
-                "Unsigned SHA-256: $expectedSha", "Output in this Coding project: $outputPath", "Declared capabilities: ${spec.capabilities.joinToString().ifEmpty { "none" }}; no Android manifest permissions.")
+                "Unsigned SHA-256: $expectedSha", "Output in this Coding project: $outputPath", "Declared capabilities: ${spec.capabilities.joinToString().ifEmpty { "none" }}",
+                "Decoded Android permissions: ${manifest.permissions.joinToString().ifEmpty { "none" }}",
+                "Decoded exported components: ${manifest.plan.exportedComponents.joinToString()}",
+                "Decoded features/queries/allowed hosts: ${manifest.plan.features.joinToString().ifEmpty { "none" }} / ${manifest.plan.queries.joinToString().ifEmpty { "none" }} / ${manifest.plan.hosts.joinToString().ifEmpty { "none" }}",
+                "Runtime DEX inventory: ${manifest.dexSha256.size} exact files, verified against the build.")
+            if (manifest.plan.profile != com.jarvys.factory.contract.ManifestPlan.Profile.CURRENT)
+                lines += "Previously built v1 runtime: this artifact keeps its older window behavior. Rebuild from the project to receive the current runtime."
             if (approvedState.existing) lines += "Reuse this app's existing signing identity: ${approvedState.fingerprint}"
             else lines += "Create a new, persistent, non-exportable signing key for this app only in this device's AndroidKeyStore."
             lines += "Clearing or uninstalling Jarvys, losing this device, or losing its Keystore key can permanently prevent updates to apps signed here. Keys cannot currently be backed up or transferred. No replacement key will be generated silently."
@@ -156,8 +173,9 @@ internal class FactoryProjectService(
                     val certificate = FactoryApkSigner.sign(input, output, identity.key, identity.certificate)
                     checkActive(token)
                     val outputBytes = output.readBytes()
-                    val signedInfo = TemplateApk.inspect(outputBytes)
-                    check(signedInfo.appId == spec.appId && signedInfo.versionCode == spec.versionCode) { "Signed APK identity changed" }
+                    val signedInfo = TemplateApk.verifyAgainstPlan(outputBytes, manifest.plan)
+                    TemplateApk.verifyUnchangedPayload(bytes, outputBytes)
+                    check(signedInfo.dexSha256 == manifest.dexSha256) { "Signed APK DEX inventory changed" }
                     val signedSha = ProjectScope.sha256(outputBytes)
                     val signed = JSONObject(receipt.toString()).put("buildId", id).put("state", "signed_staged")
                         .put("outputPath", outputPath).put("apkSha256", signedSha).put("apkBytes", outputBytes.size)

@@ -100,3 +100,26 @@ test('native rate limit immediately rejects outstanding requests', async () => {
   await assert.rejects(promise, { code: 'RATE_LIMITED' });
   assert.equal(env.timers.size, 0);
 });
+
+test('all SDK calls exactly match the catalog and explicit native validator/dispatch cases', async () => {
+  const path = require('node:path');
+  const catalog = fs.readFileSync(path.join(__dirname, '../../factory-contract/src/main/java/com/jarvys/factory/contract/CapabilityCatalog.java'), 'utf8');
+  const rows = [...catalog.matchAll(/\b([A-Z][A-Z_]+)\("([a-z]+\.[a-z]+)", (?:"[a-z]+"|null)\)/g)];
+  assert.equal(rows.length, 10);
+  const env = environment();
+  const args = { 'storage.get': ['key'], 'storage.set': ['key', 'value'], 'storage.remove': ['key'],
+    'export.text': [{ filename: 'test.txt', text: 'hello' }], 'share.text': [{ text: 'hello' }],
+    'clipboard.write': ['hello'], 'haptics.perform': ['tap'] };
+  const exposed = Object.entries(env.api).flatMap(([group, values]) => Object.keys(values).map(name => group + '.' + name));
+  assert.deepEqual(exposed.sort(), rows.map(r => r[2]).sort());
+  for (const [, , wire] of rows) {
+    const [group, method] = wire.split('.');
+    const pending = env.api[group][method](...(args[wire] || []));
+    assert.equal(env.sent.at(-1).method, wire); env.reply(env.sent.at(-1), null); await pending;
+  }
+  for (const name of ['BridgeProtocol', 'FactoryActivity']) {
+    const java = fs.readFileSync(path.join(__dirname, '../src/main/java/com/jarvys/factory/runtime/' + name + '.java'), 'utf8');
+    const cases = [...java.matchAll(/case ([A-Z][A-Z_]+):/g)].map(r => r[1]);
+    assert.deepEqual(cases.sort(), rows.map(r => r[1]).sort(), name);
+  }
+});

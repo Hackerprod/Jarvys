@@ -83,6 +83,234 @@ public class TemplateApkTest {
         }
     }
 
+
+    @Test public void all64SelectionsHaveTheSameClosedZeroPermissionManifest() throws Exception {
+        byte[] apk=build();
+        com.jarvys.factory.contract.ManifestPlan base=TemplateApk.inspect(apk).plan;
+        com.jarvys.factory.contract.ManifestAudit.Document decoded=com.jarvys.factory.contract.ManifestAudit.read(unzip(apk).get("AndroidManifest.xml"));
+        for(int mask=0;mask<64;mask++) {
+            List<String> requested=new ArrayList<>();
+            for(int bit=0;bit<6;bit++) if((mask&(1<<bit))!=0) requested.add(com.jarvys.factory.contract.CapabilityCatalog.NAMES.get(bit));
+            com.jarvys.factory.contract.ManifestPlan plan=new com.jarvys.factory.contract.ManifestPlan(spec.appId,spec.label,spec.versionCode,spec.versionName,base.iconResourceId,base.backupResourceId,requested);
+            decoded.verify(plan); assertTrue(plan.permissions.isEmpty()); assertTrue(plan.features.isEmpty());
+            assertTrue(plan.queries.isEmpty()); assertTrue(plan.hosts.isEmpty()); assertEquals(1,plan.exportedComponents.size());
+            List<String> snapshot=new ArrayList<>(plan.capabilities); requested.clear(); assertEquals(snapshot,plan.capabilities);
+            assertThrows(UnsupportedOperationException.class,()->plan.nodes.clear());
+            assertThrows(UnsupportedOperationException.class,()->plan.nodes.get(0).attributes.clear());
+            assertThrows(UnsupportedOperationException.class,()->plan.capabilities.clear());
+        }
+    }
+    @Test public void callerIdentityVersionAndResourcePlanCannotBeSubstituted() throws Exception {
+        byte[] apk=build();
+        for(TemplateApk.Spec wrong:new TemplateApk.Spec[]{new TemplateApk.Spec("org.example.other","Factory notes",1,"1.0"),
+                new TemplateApk.Spec(spec.appId,"Wrong",1,"1.0"),new TemplateApk.Spec(spec.appId,spec.label,2,"1.0"),
+                new TemplateApk.Spec(spec.appId,spec.label,1,"wrong")}) rejects(()->TemplateApk.verify(apk,wrong));
+        com.jarvys.factory.contract.ManifestPlan base=TemplateApk.inspect(apk).plan;
+        com.jarvys.factory.contract.ManifestPlan wrong=new com.jarvys.factory.contract.ManifestPlan(spec.appId,spec.label,1,"1.0",base.backupResourceId,base.iconResourceId,Collections.emptyList());
+        rejects(()->com.jarvys.factory.contract.ManifestAudit.read(unzip(apk).get("AndroidManifest.xml")).verify(wrong));
+    }
+    @Test public void independentReaderRejectsEveryAttributeTypeResourceIdAndValueMutation() throws Exception {
+        byte[] original=unzip(template).get("AndroidManifest.xml"); int count=0;
+        for(int p=8;p<original.length;p+=int32(original,p+4)) if(u16(original,p)==0x102) {
+            for(int a=p+36;a<p+int32(original,p+4);a+=20) {
+                byte[] wrongType=original.clone();wrongType[a+15]=(byte)0x7f;rejectManifest(wrongType);
+                byte[] wrongData=original.clone();set32(wrongData,a+16,int32(original,a+16)^0x40000000);rejectManifest(wrongData);
+                byte[] invalidRaw=original.clone();set32(invalidRaw,a+8,0x7fffffff);rejectManifest(invalidRaw);count++;
+            }
+        }
+        assertEquals(23,count);
+        int resourceCount=0;
+        for(int p=8;p<original.length;p+=int32(original,p+4)) if(u16(original,p)==0x180)
+            for(int a=p+8;a<p+int32(original,p+4);a+=4) {
+                byte[] bad=original.clone();set32(bad,a,int32(bad,a)^1);rejectManifest(bad);resourceCount++;
+            }
+        assertTrue(resourceCount>=16);
+    }
+    @Test public void independentReaderRejectsMissingDuplicateAndUnexpectedAttributes() throws Exception {
+        byte[] original=unzip(template).get("AndroidManifest.xml");
+        int root=-1,application=-1;
+        for(int p=8;p<original.length;p+=int32(original,p+4)) if(u16(original,p)==0x102) {
+            if(root<0) root=p; else if(u16(original,p+28)>5) application=p;
+        }
+        assertTrue(root>=0 && application>=0);
+        int copied=root+36;
+        for(int a=root+36;a<root+int32(original,root+4);a+=20) if(int32(original,a)==-1 && (original[a+15]&255)==3) copied=a;
+        byte[] unknown=insert(original,application+int32(original,application+4),Arrays.copyOfRange(original,copied,copied+20));
+        set32(unknown,application+4,int32(original,application+4)+20);set16(unknown,application+28,u16(original,application+28)+1);rejectManifest(unknown);
+        byte[] duplicate=insert(original,application+36,Arrays.copyOfRange(original,application+36,application+56));
+        set32(duplicate,application+4,int32(original,application+4)+20);set16(duplicate,application+28,u16(original,application+28)+1);rejectManifest(duplicate);
+        byte[] missing=new byte[original.length-20];System.arraycopy(original,0,missing,0,application+36);
+        System.arraycopy(original,application+56,missing,application+36,original.length-application-56);
+        set32(missing,4,missing.length);set32(missing,application+4,int32(original,application+4)-20);set16(missing,application+28,u16(original,application+28)-1);rejectManifest(missing);
+    }
+    @Test public void independentReaderRejectsDuplicateNodesNamespacesAndSpecialIndexes() throws Exception {
+        byte[] original=unzip(template).get("AndroidManifest.xml");
+        for(int p=8;p<original.length;p+=int32(original,p+4)) {
+            int kind=u16(original,p),size=int32(original,p+4);
+            if(kind==0x102) {
+                byte[] bad=original.clone();set16(bad,p+30,1);rejectManifest(bad);
+                byte[] wrongNamespace=original.clone();set32(wrongNamespace,p+16,int32(original,p+20));rejectManifest(wrongNamespace);
+                if(p+size<original.length && u16(original,p+size)==0x103) {
+                    int complete=size+int32(original,p+size+4);
+                    rejectManifest(insert(original,p,Arrays.copyOfRange(original,p,p+complete)));
+                }
+            }
+            if(kind==0x100 || kind==0x101) rejectManifest(insert(original,p,Arrays.copyOfRange(original,p,p+size)));
+        }
+    }
+    @Test public void independentReaderRejectsEveryTruncationWithCheckedErrors() throws Exception {
+        byte[] original=unzip(template).get("AndroidManifest.xml");
+        for(int length=0;length<original.length;length++) {
+            byte[] bad=Arrays.copyOf(original,length);
+            rejects(()->com.jarvys.factory.contract.ManifestAudit.read(bad));
+        }
+        for(int p=8;p<original.length;p+=int32(original,p+4)) {
+            byte[] bad=original.clone();set32(bad,p+4,0x7ffffffc);rejectManifest(bad);
+        }
+    }
+    @Test public void secondaryDexInventoryIsCompleteImmutableAndExactlyPreserved() throws Exception {
+        Map<String,byte[]> files=unzip(template);
+        // Synthetic packaging fixture only; not an installable multidex compatibility claim.
+        files.put("classes2.dex",files.get("classes.dex").clone());
+        byte[] apk=TemplateApk.build(zip(files,false),spec,icon,assets);
+        TemplateApk.ManifestInfo info=TemplateApk.inspect(apk);
+        assertEquals(2,info.dexSha256.size());assertArrayEquals(files.get("classes2.dex"),unzip(apk).get("classes2.dex"));
+        assertThrows(UnsupportedOperationException.class,()->info.dexSha256.clear());
+        for(String name:new String[]{"classes1.dex","classes02.dex","classes3.dex","assets/classes2.dex","other.dex","CLASSES.DEX"}) {
+            Map<String,byte[]> invalid=unzip(template);invalid.put(name,files.get("classes.dex"));
+            rejects(()->TemplateApk.build(zip(invalid,false),spec,icon,assets));
+        }
+        for(int offset:new int[]{0,7,32,36,40}) {
+            Map<String,byte[]> invalid=unzip(template);byte[] corrupt=files.get("classes.dex").clone();corrupt[offset]^=1;invalid.put("classes2.dex",corrupt);
+            rejects(()->TemplateApk.build(zip(invalid,false),spec,icon,assets));
+        }
+    }
+    @Test public void missingOrWrongBackupResourceCannotMatchTheClosedPlan() throws Exception {
+        byte[] apk=build();int backupId=TemplateApk.inspect(apk).plan.backupResourceId;
+        Map<String,byte[]> files=unzip(template);byte[] xml=files.get("AndroidManifest.xml");
+        boolean found=false;
+        for(int p=8;p<xml.length;p+=int32(xml,p+4)) if(u16(xml,p)==0x102)
+            for(int a=p+36;a<p+int32(xml,p+4);a+=20) if((xml[a+15]&255)==1 && int32(xml,a+16)==backupId) {
+                set32(xml,a+16,TemplateApk.inspect(apk).iconResourceId);found=true;
+            }
+        assertTrue(found);rejects(()->TemplateApk.build(zip(files,false),spec,icon,assets));
+    }
+
+    @Test public void slashNamedElementCannotImpersonateTheExpectedParentTree() throws Exception {
+        byte[] original=unzip(template).get("AndroidManifest.xml");int application=-1,endApplication=-1;
+        for(int p=8;p<original.length;p+=int32(original,p+4)) if(u16(original,p)==0x102 && u16(original,p+28)>7) application=p;
+        assertTrue(application>=0);int name=int32(original,application+20);
+        for(int p=application;p<original.length;p+=int32(original,p+4)) if(u16(original,p)==0x103 && int32(original,p+20)==name) endApplication=p;
+        int insertAt=application+int32(original,application+4);assertTrue(endApplication>insertAt);
+        ByteArrayOutputStream changed=new ByteArrayOutputStream();changed.write(original,0,insertAt);
+        changed.write(original,endApplication,24);changed.write(original,insertAt,endApplication-insertAt);
+        changed.write(original,endApplication+24,original.length-endApplication-24);
+        rejectManifest(renamePoolString(changed.toByteArray(),"activity","application/activity"));
+    }
+    @Test public void backupIncludesTraversalMissingDomainsAndQualifiedResourcesAreRejected() throws Exception {
+        TemplateApk.ManifestInfo info=TemplateApk.inspect(template);
+        Map<String,byte[]> original=unzip(template);String backupPath=null;
+        for(Map.Entry<String,byte[]> e:original.entrySet()) if(e.getKey().endsWith(".xml") && !e.getKey().equals("AndroidManifest.xml")) {
+            try { com.jarvys.factory.contract.ManifestAudit.verifyBackupRules(e.getValue());backupPath=e.getKey(); } catch(IOException ignored) { }
+        }
+        assertNotNull(backupPath);byte[] backup=original.get(backupPath);
+        for(String[] mutation:new String[][]{{"exclude","include"},{".",".."},{"root","unknown"},{"device-transfer","unexpected"}}) {
+            byte[] bad=renamePoolString(backup,mutation[0],mutation[1]);
+            rejects(()->com.jarvys.factory.contract.ManifestAudit.verifyBackupRules(bad));
+            Map<String,byte[]> files=unzip(template);files.put(backupPath,bad);
+            rejects(()->TemplateApk.build(zip(files,false),spec,icon,assets));
+        }
+        for(int resourceId:new int[]{info.plan.iconResourceId,info.plan.backupResourceId}) {
+            Map<String,byte[]> files=unzip(template);mutateResource(files.get("resources.arsc"),resourceId,"locale");
+            rejects(()->TemplateApk.build(zip(files,false),spec,icon,assets));
+        }
+    }
+    @Test public void signingCannotChangeAnyResourceOrWebsiteEntry() throws Exception {
+        byte[] apk=build();TemplateApk.verifyUnchangedPayload(apk,apk);TemplateApk.verifyUnchangedPayload(apk,alignedZip(unzip(apk)));
+        for(String name:new String[]{"resources.arsc","assets/www/index.html","classes.dex"}) {
+            Map<String,byte[]> files=unzip(apk);byte[] changed=files.get(name).clone();changed[changed.length-1]^=1;files.put(name,changed);
+            byte[] different=alignedZip(files);rejects(()->TemplateApk.verifyUnchangedPayload(apk,different));
+        }
+        Map<String,byte[]> extra=unzip(apk);extra.put("assets/extra.txt",utf8("extra"));
+        rejects(()->TemplateApk.verifyUnchangedPayload(apk,alignedZip(extra)));
+    }
+    private static byte[] alignedZip(Map<String,byte[]> files) throws IOException {
+        ByteArrayOutputStream bytes=new ByteArrayOutputStream();
+        try(ZipOutputStream out=new ZipOutputStream(bytes)) {
+            for(Map.Entry<String,byte[]> e:files.entrySet()) {
+                ZipEntry entry=new ZipEntry(e.getKey());entry.setTime(946728000000L);entry.setMethod(ZipEntry.STORED);
+                CRC32 crc=new CRC32();crc.update(e.getValue());entry.setSize(e.getValue().length);entry.setCompressedSize(e.getValue().length);entry.setCrc(crc.getValue());
+                int padding=(4-(bytes.size()+30+utf8(e.getKey()).length+4)%4)%4;byte[] extra=new byte[4+padding];
+                set16(extra,0,0xf17e);set16(extra,2,padding);entry.setExtra(extra);
+                out.putNextEntry(entry);out.write(e.getValue());out.closeEntry();
+            }
+        }
+        return bytes.toByteArray();
+    }
+    private static byte[] renamePoolString(byte[] xml,String old,String replacement) throws IOException {
+        int pool=8,size=int32(xml,pool+4),count=int32(xml,pool+8),flags=int32(xml,pool+16),start=int32(xml,pool+20);boolean utf8=(flags&256)!=0;
+        List<String> values=new ArrayList<>();boolean found=false;
+        for(int i=0;i<count;i++) {
+            int[] at={pool+start+int32(xml,pool+28+4*i)};int units=poolLength(xml,at,utf8),length=utf8?poolLength(xml,at,true):units*2;
+            String value=new String(xml,at[0],length,utf8?StandardCharsets.UTF_8:StandardCharsets.UTF_16LE);
+            if(value.equals(old)){value=replacement;found=true;}values.add(value);
+        }
+        assertTrue("Pool string absent: "+old,found);
+        ByteArrayOutputStream data=new ByteArrayOutputStream();int[] offsets=new int[count];
+        for(int i=0;i<count;i++) {
+            String value=values.get(i);byte[] encoded=value.getBytes(utf8?StandardCharsets.UTF_8:StandardCharsets.UTF_16LE);offsets[i]=data.size();
+            emitPoolLength(data,value.length(),utf8);if(utf8)emitPoolLength(data,encoded.length,true);data.write(encoded);data.write(0);if(!utf8)data.write(0);
+        }
+        while(data.size()%4!=0)data.write(0);byte[] next=new byte[28+count*4+data.size()];
+        set16(next,0,1);set16(next,2,28);set32(next,4,next.length);set32(next,8,count);set32(next,16,utf8?256:0);set32(next,20,28+count*4);
+        for(int i=0;i<count;i++)set32(next,28+i*4,offsets[i]);System.arraycopy(data.toByteArray(),0,next,28+count*4,data.size());
+        byte[] result=new byte[xml.length-size+next.length];System.arraycopy(xml,0,result,0,8);System.arraycopy(next,0,result,8,next.length);
+        System.arraycopy(xml,8+size,result,8+next.length,xml.length-8-size);set32(result,4,result.length);return result;
+    }
+
+    @Test public void legacyV1LayoutIsAcceptedOnlyThroughExplicitReceiptCompatibility() throws Exception {
+        Map<String,byte[]> files=unzip(build());
+        byte[] old=removeAttributeById(files.get("AndroidManifest.xml"),0x0101022b);files.put("AndroidManifest.xml",old);
+        byte[] legacy=alignedZip(files);
+        rejects(()->TemplateApk.verify(legacy,spec));
+        TemplateApk.ManifestInfo accepted=TemplateApk.verifyExistingV1(legacy,spec);
+        assertEquals(com.jarvys.factory.contract.ManifestPlan.Profile.V1_BEFORE_SAFE_AREA,accepted.plan.profile);
+        TemplateApk.verifyAgainstPlan(legacy,accepted.plan);
+        rejects(()->TemplateApk.verifyExistingV1(legacy,new TemplateApk.Spec(spec.appId,spec.label,2,spec.versionName)));
+        byte[] unsafe=renamePoolString(old,"android.intent.action.MAIN","android.intent.action.VIEW");
+        files.put("AndroidManifest.xml",unsafe);
+        rejects(()->TemplateApk.verifyExistingV1(alignedZip(files),spec));
+        assertEquals(com.jarvys.factory.contract.ManifestPlan.Profile.CURRENT,TemplateApk.verifyExistingV1(build(),spec).plan.profile);
+    }
+    public static byte[] legacyArtifactFixture(byte[] current) throws IOException {
+        Map<String,byte[]> files=unzip(current);
+        files.put("AndroidManifest.xml",removeAttributeById(files.get("AndroidManifest.xml"),0x0101022b));
+        return alignedZip(files);
+    }
+    private static byte[] removeAttributeById(byte[] xml,int id) throws IOException {
+        int nameIndex=-1;
+        for(int p=8;p<xml.length;p+=int32(xml,p+4)) if(u16(xml,p)==0x180)
+            for(int a=p+8;a<p+int32(xml,p+4);a+=4) if(int32(xml,a)==id) nameIndex=(a-p-8)/4;
+        assertTrue(nameIndex>=0);
+        for(int p=8;p<xml.length;p+=int32(xml,p+4)) if(u16(xml,p)==0x102)
+            for(int a=p+36;a<p+int32(xml,p+4);a+=20) if(int32(xml,a+4)==nameIndex) {
+                byte[] result=new byte[xml.length-20];System.arraycopy(xml,0,result,0,a);
+                System.arraycopy(xml,a+20,result,a,xml.length-a-20);set32(result,4,result.length);
+                set32(result,p+4,int32(xml,p+4)-20);set16(result,p+28,u16(xml,p+28)-1);return result;
+            }
+        throw new AssertionError("Attribute absent");
+    }
+    private void rejectManifest(byte[] candidate) throws Exception {
+        com.jarvys.factory.contract.ManifestPlan plan=TemplateApk.inspect(template).plan;
+        rejects(()->com.jarvys.factory.contract.ManifestAudit.read(candidate).verify(plan));
+        Map<String,byte[]> files=unzip(template);files.put("AndroidManifest.xml",candidate);
+        rejects(()->TemplateApk.build(zip(files,false),spec,icon,assets));
+    }
+    private static byte[] insert(byte[] original,int offset,byte[] added) {
+        byte[] result=new byte[original.length+added.length];System.arraycopy(original,0,result,0,offset);
+        System.arraycopy(added,0,result,offset,added.length);System.arraycopy(original,offset,result,offset+added.length,original.length-offset);
+        set32(result,4,result.length);return result;
+    }
     @Test public void deterministicZipDoesNotDependOnMapInsertionOrderOrTimezone() throws Exception {
         byte[] first = build();
         Map<String, byte[]> reverse = new LinkedHashMap<>();
@@ -309,7 +537,7 @@ public class TemplateApkTest {
                 for(int i=0;i<entryCount;i++){int relative=int32(b,offsets+4*i);if(relative==-1)continue;
                     // Use the entry index from the real manifest reference, never a guessed numeric ID.
                     if(i!=wantedEntry)continue;int e=q+start+relative;
-                    if(kind.equals("compact"))set16(b,e+2,8);else if(kind.equals("key"))set32(b,e+4,0x7fffffff);else if(kind.equals("value"))b[e+11]=1;else throw new AssertionError(kind);
+                    if(kind.equals("locale"))b[q+28]=101;else if(kind.equals("compact"))set16(b,e+2,8);else if(kind.equals("key"))set32(b,e+4,0x7fffffff);else if(kind.equals("value"))b[e+11]=1;else throw new AssertionError(kind);
                     return;
                 }
             }

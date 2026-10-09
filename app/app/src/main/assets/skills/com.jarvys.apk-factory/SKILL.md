@@ -71,3 +71,11 @@ Validate the application against the requested workflows and its actual capabili
 When device execution is available and authorized, test two distinct applicationIds coexisting and a higher-version update with the same signing identity preserving stored data. An emulator/host test is not evidence of a physical ARM64 device run. A successful local package transform or signature check is not evidence that the app launched, that native APIs worked, or that installation succeeded.
 
 Return a concise summary of what the app does, source and APK references, applicationId/version, whether the APK is unsigned or signed, actual checks with results, and remaining limitations. Include unsupported requirements or missing authorization clearly. Keep logs and full implementation details out of the captain's brief summary; leave inspectable evidence in the project. Never claim builds, signatures, launches, exports, installations or successful upgrades that the corresponding tool or device result did not confirm.
+
+## Closed v1 manifest verification (UX42 F0a-1)
+
+The six listed capabilities remain the entire implemented ceiling. A shared immutable catalog drives spec/config/bridge/introspection; schema and SDK are still v1. All 64 selections keep zero Android permissions and only the existing launcher. Do not claim Runtime2, additional native methods, new manifest-node construction or completion of F0a.
+
+Build/sign independently decode the actual AXML and compare every closed node/typed attribute/resource binding with the plan. Backup exclusions and every classes*.dex name/hash are checked; signing preserves all ZIP payload entries. Inspect and approval report the verified manifest and DEX inventory. Do not infer these values from desired JavaScript APIs.
+
+Existing v1 projects/receipts are preserved. A receipted pre-UX35 artifact may retain its older window behavior, explicitly disclosed during signing. Unsupported layouts require rebuilding the original project without replacing its app ID or retained key. An installed/signed update still requires a higher version. No new key policy, network permission or installation action is included. Host AXML/aapt2/signature checks do not prove Android hardware, sandbox, Keystore, WebView or installation acceptance.

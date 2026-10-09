@@ -37,6 +37,14 @@ assets/www/style.css          # optional
 
 The default `src/main/assets/www` is a runnable offline-notes acceptance fixture. Replace those assets for other apps; the native runtime contains no notes-specific behavior. The fixture provides explicit save, reopen, delete, and export flows. It limits notes to 20, each 60 title characters and 600 body characters, to fit native storage quotas. It does not silently fall back to temporary browser memory if native storage fails.
 
+## Shared v1 contract (UX42 F0a-1)
+
+`:factory-contract` is a dependency-free Java library shared with the factory. Its immutable CapabilityCatalog contains exactly six implemented capabilities and ten methods. FactoryConfig, BridgeProtocol and explicit FactoryActivity dispatch use it, and SDK parity tests compare the actual JS calls with catalog/validator/handler cases. No reflection, new bridge API, schema v2 or SDK v2 is introduced.
+
+The factory uses a closed immutable ManifestPlan and a separate read-only AXML auditor to validate the actual compiled tree, typed attributes, resource bindings and backup rules before/after packaging and signing. All 64 selections still request zero Android permissions; only the existing launcher is exported. Every classes*.dex name/hash and all signed payload entries are checked. This is F0a-1 only; new node constructors and native capabilities remain later work. See [the packaging contract](../../APK_FACTORY.md#closed-capability-and-manifest-contract-ux42-f0a-1).
+
+The historical pre-UX35 manifest remains accepted only through the receipt-bound v1 compatibility path. It lacks the newer windowSoftInputMode but does not acquire new capabilities; new builds use the current profile. Updating this shared compiled code changes the template DEX, so already generated apps still need their own same-ID/same-key, higher-version rebuild.
+
 ## Native window and safe area
 
 The runtime retains NoActionBar and visible system bars. FactoryWindowPolicy creates the native decor before applying explicit light/dark chrome and icon contrast, then reserves the union of system bars, cutouts and IME in one shared root for the WebView and errors. Handled types are zeroed before child dispatch, including native legacy stable/cutout metadata; updates continue after keyboard dismissal and unhandled gesture types remain intact. API 24/25 use a black navigation bar because dark navigation icons are unavailable. See [the factory contract](../../APK_FACTORY.md#window-and-safe-area-contract-ux35).

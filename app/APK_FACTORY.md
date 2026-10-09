@@ -53,6 +53,18 @@ Runtime 1 implements `storage`, `export`, `share`, `clipboard`, `haptics` and `d
 
 This offline template declares **zero Android permissions**. Its JavaScript cannot request camera, microphone, contacts, location, Internet, notifications, package installation or broad filesystem access. Adding any such API requires a reviewed native template update, appropriate per-app manifest selection, current Android permission checks and a new acceptance pass. Listing a desired method in JavaScript cannot add native code that is absent from DEX.
 
+### Closed capability and manifest contract (UX42 F0a-1)
+
+This is the first bounded foundation of F0a, not Runtime2 or the complete selective-manifest phase. Pure Java `:factory-contract` owns the six existing capabilities and ten wire methods (including ungated, non-sensitive `runtime.info`). FactorySpec, FactoryConfig, bridge validation, dispatch and runtime introspection use that catalog. The native validators and handlers remain explicit switches. SDK/schema/protocol stay v1; no new method, permission, component or network access is enabled. All 64 capability subsets have the same zero-permission launcher manifest.
+
+`ManifestPlan` is an immutable, closed expected tree with exact names, namespaces, Android attribute resource IDs, types and values. It pins API 24/35/compile 36, the launcher, theme, backup/cleartext policy and compiled icon/backup references. Project JSON cannot supply XML, nodes or arbitrary manifest attributes. Constructors for additional permission/feature/component/query nodes belong to F0a-2 and are not implemented here.
+
+`ManifestAudit` is a read-only AXML decoder with no transformer helpers. TemplateApk compares the actual decoded tree to the plan before and after generation. It rejects unknown/missing/duplicate nodes and attributes, invalid namespaces, resource IDs, raw/typed disagreements, unsupported types, ambiguous element names and truncation. Resource bindings resolve by compiled type/name, retaining an unqualified XML fallback and the nodpi launcher; the backup XML must exclude exactly the existing nine domains for both cloud backup and device transfer. Template hash authentication remains mandatory. The trusted AAPT template may contain a palette-optimized PNG; generated icons retain the normalized RGB/RGBA validation.
+
+Every canonical, contiguous `classes*.dex` entry is inventoried by name and SHA-256, header-checked and retained byte for byte. The receipt records the inventory without changing schema v1. Signing rechecks the exact project/hash/version receipt, compares the decoded manifest to its plan, and verifies that every ZIP payload entry is unchanged after v2/v3 signing. Approval uses these verified permissions, exported components, features/queries/hosts and DEX inventory; it grants no Android runtime permission and does not install anything.
+
+Previously completed v1 receipts remain usable. Receipt-less or foreign artifacts are still rejected. Older receipts may use the exact published pre-UX35 manifest profile, whose sole difference is absence of `windowSoftInputMode`; approval discloses the old window behavior. New receipts require the current closed profile. Unsupported older layouts get a rebuild instruction without replacing the receipt or signing identity. Rebuilds preserve the app ID/key and use a higher version when updating an already signed release. Reconstructed historical v35 sources and packager are host compatibility evidence, not recovery of a user's device data.
+
 ## C. Packaging and signing
 
 ### Input files
@@ -96,7 +108,7 @@ Host acceptance covers two distinct IDs and an update, labels/icons/resource-pac
 
 Physical acceptance still requires a supported Android ARM64 device with a current WebView: generate and sign two apps; install both with explicit approval; write different notes; kill/relaunch each; export via SAF; sign an increased-version update with the first app's retained key; install that update and confirm data survives. Also test denial/cancellation, background/rotation, oversized inputs, uninstall/key-loss messaging and obsolete WebView. Do not infer any of those results from package inspection or JVM tests.
 
-Development Jarvys APKs remain unsigned until the entire authorized queue is validated. Detailed measured results and remaining limitations are recorded with the repository's validation evidence and root `Pending.md`.
+Each completed pending item or correction is backed up and handed off for its separately authorized signing and delivery; completing the entire queue is not a delivery prerequisite. Development builds remain unsigned until that handoff. Detailed measured results and remaining limitations are recorded with the repository's validation evidence and root `Pending.md`.
 
 ## References and licenses
 

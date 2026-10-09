@@ -32,6 +32,7 @@ class FactoryProjectServiceTest {
         val root=scope.rootDirectory()
         @Volatile var active=true
         var requested=0
+        var lastSummary:ApprovalSummary?=null
         var obtained=0
         var decision=ApprovalDecision.DENIED
         var duringApproval:()->Unit={}
@@ -44,7 +45,7 @@ class FactoryProjectServiceTest {
         init {
             gate=ApprovalGate(presenter=object:ApprovalPresenter {
                 override fun show(id:String,summary:ApprovalSummary) {
-                    requested++;assertFalse(summary.allowAlwaysAvailable)
+                    lastSummary=summary;requested++;assertFalse(summary.allowAlwaysAvailable)
                     assertTrue(summary.lines.any{it.contains("non-exportable")})
                     assertTrue(summary.lines.any{it.contains("uninstalling Jarvys")})
                     duringApproval();gate.resolve(id,decision)
@@ -85,6 +86,43 @@ class FactoryProjectServiceTest {
         assertNotEquals(a.appId,b.appId);assertEquals(a.appId,a2.appId);assertEquals(2,a2.versionCode)
         fun dex(name:String)=ZipFile(File(f.root,name)).use{it.getInputStream(it.getEntry("classes.dex")).readBytes()}
         assertArrayEquals(dex("a.apk"),dex("b.apk"));assertArrayEquals(dex("a.apk"),dex("a2.apk"))
+    }
+
+    private fun receiptFile(f:Fixture,sha:String):File = File(f.context.noBackupFilesDir,
+        "apk-factory/builds/${f.scope.id()}/$sha-${ProjectScope.sha256("notes.apk".toByteArray())}.json")
+    private fun legacyReceipt(f:Fixture,keepCurrentContract:Boolean):String {
+        val built=f.build();val oldSha=built.getString("sha256");val file=File(f.root,"notes.apk")
+        val legacy=com.jarvys.agent.apkfactory.TemplateApkTest.legacyArtifactFixture(file.readBytes())
+        val sha=ProjectScope.sha256(legacy);file.writeBytes(legacy)
+        val receipt=JSONObject(receiptFile(f,oldSha).readText()).put("apkSha256",sha).put("apkBytes",legacy.size)
+        if(!keepCurrentContract) {receipt.remove("manifestContract");receipt.remove("dexSha256")}
+        receiptFile(f,sha).writeText(receipt.toString());return sha
+    }
+    @Test fun legacyLayoutAndV1ReceiptReachApprovalWithoutCreatingKeys() {
+        val f=Fixture();val sha=legacyReceipt(f,false)
+        assertThrows(Exception::class.java){f.service.sign("notes.apk",sha,"signed.apk",f.scope.version(),CancellationToken.cancellable())}
+        assertEquals(1,f.requested);assertEquals(0,f.obtained);assertFalse(File(f.root,"signed.apk").exists())
+        assertTrue(f.lastSummary!!.lines.any{it.contains("older window behavior")})
+        assertTrue(f.lastSummary!!.lines.any{it=="Decoded Android permissions: none"})
+        assertTrue(f.lastSummary!!.lines.any{it.contains("com.jarvys.factory.runtime.FactoryActivity")})
+        assertEquals(sha,ProjectScope.sha256(File(f.root,"notes.apk").readBytes()))
+    }
+    @Test fun newlyRecordedContractCannotFallBackToTheLegacyLayout() {
+        val f=Fixture();val sha=legacyReceipt(f,true)
+        assertThrows(Exception::class.java){f.service.sign("notes.apk",sha,"signed.apk",f.scope.version(),CancellationToken.cancellable())}
+        assertEquals(0,f.requested);assertEquals(0,f.obtained)
+    }
+    @Test fun staleDexInventoryInReceiptFailsBeforeApproval() {
+        val f=Fixture();val built=f.build();val sha=built.getString("sha256");val file=receiptFile(f,sha)
+        val receipt=JSONObject(file.readText());receipt.getJSONObject("dexSha256").put("classes.dex","0".repeat(64));file.writeText(receipt.toString())
+        assertThrows(Exception::class.java){f.service.sign("notes.apk",sha,"signed.apk",f.scope.version(),CancellationToken.cancellable())}
+        assertEquals(0,f.requested);assertEquals(0,f.obtained)
+    }
+    @Test fun cancellationDuringApprovalCannotCreateIdentityOrPublish() {
+        val f=Fixture();val built=f.build();val token=CancellationToken.cancellable();f.decision=ApprovalDecision.APPROVED
+        f.duringApproval={token.cancel()}
+        assertThrows(Exception::class.java){f.service.sign("notes.apk",built.getString("sha256"),"signed.apk",f.scope.version(),token)}
+        assertEquals(1,f.requested);assertEquals(0,f.obtained);assertFalse(File(f.root,"signed.apk").exists())
     }
     @Test fun collisionAndSymlinkInputsNeverOverwriteExistingContent() {
         val f=Fixture();File(f.root,"notes.apk").writeText("existing")

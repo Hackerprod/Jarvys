@@ -1,5 +1,9 @@
 package com.jarvys.agent.apkfactory;
 
+import com.jarvys.factory.contract.ManifestPlan;
+import com.jarvys.factory.contract.ManifestAudit;
+import com.jarvys.factory.contract.CapabilityCatalog;
+
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -36,31 +40,113 @@ public final class TemplateApk {
     public static final class Spec {
         public final String appId, label, versionName;
         public final int versionCode;
+        public final List<String> capabilities;
         public Spec(String appId, String label, int versionCode, String versionName) {
+            this(appId, label, versionCode, versionName, Collections.<String>emptyList());
+        }
+        public Spec(String appId, String label, int versionCode, String versionName, Iterable<String> capabilities) {
             this.appId=appId; this.label=label; this.versionCode=versionCode; this.versionName=versionName;
+            this.capabilities=CapabilityCatalog.select(capabilities);
         }
     }
     public static final class ManifestInfo {
         public final String appId, label, versionName, activityClass;
         public final int versionCode, iconResourceId;
         public final List<String> permissions;
+        public final ManifestPlan plan;
+        public final Map<String,String> dexSha256;
         private ManifestInfo(String id, String label, int code, String version, int icon,
                              String activity, List<String> permissions) {
+            this(id, label, code, version, icon, activity, permissions, null, Collections.<String,String>emptyMap());
+        }
+        private ManifestInfo(String id, String label, int code, String version, int icon, String activity,
+                             List<String> permissions, ManifestPlan plan, Map<String,String> dexSha256) {
             this.appId=id; this.label=label; this.versionCode=code; this.versionName=version;
+            this.plan=plan; this.dexSha256=Collections.unmodifiableMap(new TreeMap<>(dexSha256));
             this.iconResourceId=icon; this.activityClass=activity;
             this.permissions=Collections.unmodifiableList(new ArrayList<>(permissions));
         }
     }
     public static ManifestInfo inspect(byte[] apk) throws IOException {
-        Map<String,byte[]> zip=readZip(apk,true);
-        ManifestInfo info=new Xml(required(zip,"AndroidManifest.xml")).info();
+        return inspectFiles(readZip(apk,true), null, ManifestPlan.Profile.CURRENT);
+    }
+    /** Validate against caller-approved identity/capabilities, never metadata supplied by the APK alone. */
+    public static ManifestInfo verify(byte[] apk, Spec expected) throws IOException {
+        validateSpec(expected);
+        return inspectFiles(readZip(apk,true), expected, ManifestPlan.Profile.CURRENT);
+    }
+    /** Only the receipt-owning service may opt in to the exact historical v1 profile. */
+    public static ManifestInfo verifyExistingV1(byte[] apk, Spec expected) throws IOException {
+        validateSpec(expected);
+        Map<String,byte[]> files=readZip(apk,true);
+        try { return inspectFiles(files,expected,ManifestPlan.Profile.CURRENT); }
+        catch(IOException current) {
+            try { return inspectFiles(files,expected,ManifestPlan.Profile.V1_BEFORE_SAFE_AREA); }
+            catch(IOException legacy) { throw new IOException("Artifact does not match a supported v1 manifest. Rebuild the original project with the same appId and retained key; no receipt or key was replaced.",legacy); }
+        }
+    }
+    public static ManifestInfo verifyAgainstPlan(byte[] apk, ManifestPlan plan) throws IOException {
+        Map<String,byte[]> files=readZip(apk,true);
+        ManifestAudit.read(required(files,"AndroidManifest.xml")).verify(plan);
+        return inspectFiles(files,new Spec(plan.appId,plan.label,plan.versionCode,plan.versionName,plan.capabilities),plan.profile);
+    }
+    /** v2/v3 signing adds a signing block, but must not alter any ZIP entry, not even resources. */
+    public static void verifyUnchangedPayload(byte[] unsigned, byte[] signed) throws IOException {
+        Map<String,byte[]> before=readZip(unsigned,true),after=readZip(signed,true);
+        check(before.keySet().equals(after.keySet()),"Signed APK entry set changed");
+        for(String name:before.keySet()) check(Arrays.equals(before.get(name),after.get(name)),"Signed APK payload changed: "+name);
+    }
+    private static ManifestInfo inspectFiles(Map<String,byte[]> zip, Spec expected, ManifestPlan.Profile profile) throws IOException {
+        byte[] manifest=required(zip,"AndroidManifest.xml");
+        ManifestInfo info=new Xml(manifest).info();
+        ManifestAudit.Document decoded=ManifestAudit.read(manifest);
         byte[] resources=required(zip,"resources.arsc");
         String iconPath=resolveIconPath(resources,info.iconResourceId);
         check(zip.containsKey(iconPath),"Referenced launcher icon is missing");
+        ManifestAudit.Attribute backup=decoded.attribute("manifest/application",ManifestPlan.ANDROID,"dataExtractionRules");
+        check(backup.type==1 && backup.value instanceof Integer,"Backup rules must be a resource reference");
+        int backupId=(Integer)backup.value;
+        String backupPath=resolveResourcePath(resources,backupId,"xml","factory_backup_rules",".xml");
+        ManifestAudit.verifyBackupRules(required(zip,backupPath));
+        // AAPT may palette-optimize the trusted bundled template icon. Generated icons are
+        // normalized RGB/RGBA by FactoryIcon and must retain that checked representation.
+        if(!TEMPLATE_PACKAGE.equals(info.appId)) checkPng(required(zip,iconPath));
         check(info.appId.equals(resourcePackageName(resources)),"Manifest/resource package names differ");
-        byte[] dex=required(zip,"classes.dex");
-        check(dex.length>=112 && dex[0]=='d' && dex[1]=='e' && dex[2]=='x' && dex[3]=='\n',"Missing valid DEX header");
-        return info;
+        ManifestPlan plan;
+        try {
+            plan=new ManifestPlan(expected==null?info.appId:expected.appId, expected==null?info.label:expected.label,
+                expected==null?info.versionCode:expected.versionCode, expected==null?info.versionName:expected.versionName,
+                info.iconResourceId,backupId,expected==null?Collections.<String>emptyList():expected.capabilities,profile);
+        } catch(IllegalArgumentException error) { throw new IOException("Invalid manifest plan identity",error); }
+        decoded.verify(plan);
+        return new ManifestInfo(info.appId,info.label,info.versionCode,info.versionName,info.iconResourceId,
+            info.activityClass,plan.permissions,plan,dexInventory(zip));
+    }
+    private static Map<String,String> dexInventory(Map<String,byte[]> files) throws IOException {
+        Map<String,String> result=new TreeMap<>();
+        for(Map.Entry<String,byte[]> entry:files.entrySet()) {
+            String name=entry.getKey();
+            if(!name.toLowerCase(java.util.Locale.ROOT).endsWith(".dex")) continue;
+            check(name.matches("classes(?:[2-9]|[1-9][0-9]+)?\\.dex"),"Unexpected DEX path");
+            byte[] dex=entry.getValue();
+            check(dex.length>=112 && dex[0]=='d' && dex[1]=='e' && dex[2]=='x' && dex[3]=='\n' && dex[7]==0,
+                "Missing valid DEX header");
+            String version=new String(dex,4,3,StandardCharsets.US_ASCII);
+            check(Arrays.asList("035","037","038","039","040").contains(version),"Unsupported DEX format");
+            check(u32(dex,32)==dex.length && u32(dex,36)==112 && u32(dex,40)==0x12345678L,"DEX header bounds differ");
+            result.put(name,sha256(dex));
+        }
+        check(!result.isEmpty(),"Missing DEX inventory");
+        for(int i=1;i<=result.size();i++) check(result.containsKey(i==1?"classes.dex":"classes"+i+".dex"),"Non-contiguous DEX inventory");
+        return Collections.unmodifiableMap(result);
+    }
+    private static String sha256(byte[] bytes) {
+        try {
+            byte[] digest=java.security.MessageDigest.getInstance("SHA-256").digest(bytes);
+            StringBuilder result=new StringBuilder();
+            for(byte value:digest) { result.append(Character.forDigit((value>>>4)&15,16)); result.append(Character.forDigit(value&15,16)); }
+            return result.toString();
+        } catch(java.security.NoSuchAlgorithmException error) { throw new AssertionError(error); }
     }
     public static byte[] build(byte[] template, Spec spec, byte[] iconPng,
                                Map<String,byte[]> assetReplacements) throws IOException {
@@ -75,10 +161,9 @@ public final class TemplateApk {
                     u.endsWith(".DSA") || u.endsWith(".EC") || u.equals("META-INF/MANIFEST.MF"))),
                     "Template has signature entries");
         }
-        byte[] dex=required(files,"classes.dex");
-        check(dex.length>=112 && dex[0]=='d' && dex[1]=='e' && dex[2]=='x' && dex[3]=='\n',"Missing valid DEX header");
+        Map<String,String> originalDex=dexInventory(files);
         Xml xml=new Xml(required(files,"AndroidManifest.xml"));
-        ManifestInfo old=xml.info();
+        ManifestInfo old=inspectFiles(files,null,ManifestPlan.Profile.CURRENT);
         check(TEMPLATE_PACKAGE.equals(old.appId) && "FACTORY_APP_LABEL".equals(old.label) &&
                 "FACTORY_VERSION".equals(old.versionName) && old.versionCode==1,"Template markers differ");
         check(ACTIVITY.equals(old.activityClass) && old.permissions.isEmpty(),"Unexpected runtime or permissions");
@@ -98,10 +183,14 @@ public final class TemplateApk {
             files.put(e.getKey(),e.getValue().clone());
         }
         byte[] result=writeZip(files);
-        ManifestInfo actual=inspect(result);
+        ManifestPlan expectedPlan=new ManifestPlan(spec.appId,spec.label,spec.versionCode,spec.versionName,
+            old.plan.iconResourceId,old.plan.backupResourceId,spec.capabilities);
+        ManifestInfo actual=verifyAgainstPlan(result,expectedPlan);
         check(actual.appId.equals(spec.appId) && actual.label.equals(spec.label) &&
                 actual.versionCode==spec.versionCode && actual.versionName.equals(spec.versionName),"Output metadata differs");
-        check(Arrays.equals(dex,required(readZip(result),"classes.dex")),"DEX changed");
+        check(originalDex.equals(actual.dexSha256),"DEX inventory or bytes changed");
+        Map<String,byte[]> outputFiles=readZip(result);
+        for(String name:originalDex.keySet()) check(Arrays.equals(files.get(name),outputFiles.get(name)),"DEX changed: "+name);
         return result;
     }
     private static void validateSpec(Spec s) throws IOException {
@@ -305,6 +394,7 @@ public final class TemplateApk {
                 }
                 check(c.type==0x102||c.type==0x103,"Unsupported XML node");
                 check(integer(n,16)==NONE,"Element namespace unsupported"); String name=pool.get(integer(n,20));
+                check(name.matches("[a-z][a-z-]*"),"Invalid template element name");
                 if(c.type==0x103) {
                     check(c.size==24 && !stack.isEmpty() && name.equals(stack.get(stack.size()-1)),"XML end mismatch");
                     stack.remove(stack.size()-1); if(stack.isEmpty()) rootClosed=true; continue;
@@ -365,6 +455,9 @@ public final class TemplateApk {
     }
     /** Resolve the template's single drawable/factory_icon through ARSC, even after AAPT path shortening. */
     private static String resolveIconPath(byte[] b,int iconId) throws IOException {
+        return resolveResourcePath(b,iconId,"drawable","factory_icon",".png");
+    }
+    private static String resolveResourcePath(byte[] b,int iconId,String resourceType,String resourceName,String suffix) throws IOException {
         check(b.length<=8*1024*1024,"Resource table too large"); Chunk root=new Chunk(b,0,b.length);
         check(root.type==2 && root.header==12 && root.size==b.length && u32(b,8)==1,"Expected one resource package");
         Pool values=null; String path=null; int packages=0,matches=0;
@@ -382,7 +475,7 @@ public final class TemplateApk {
                 Pool types=new Pool(Arrays.copyOfRange(b,tc.offset,tc.offset+tc.size));
                 Pool keys=new Pool(Arrays.copyOfRange(b,kc.offset,kc.offset+kc.size));
                 int wantedType=(iconId>>>16)&255,wantedEntry=iconId&65535;
-                check("drawable".equals(types.get(wantedType-1)),"Launcher resource is not drawable");
+                check(resourceType.equals(types.get(wantedType-1)),"Launcher resource is not drawable");
                 for(int q=p+c.header;q<p+c.size;) {
                     Chunk child=new Chunk(b,q,p+c.size);
                     if(child.type==0x201) check(child.header>=24,"Invalid resource type header");
@@ -394,12 +487,18 @@ public final class TemplateApk {
                             long relative=u32(b,q+child.header+4*wantedEntry);
                             if(relative!=0xffffffffL) {
                                 check(relative<=child.size-start-16,"Invalid launcher entry bounds"); int e=q+start+(int)relative;
+                                int configSize=small(b,q+20);
+                                check(configSize>=28 && configSize<=64 && child.header==20+configSize,"Unsupported resource configuration");
+                                for(int r=4;r<configSize;r++) {
+                                    int expected=(resourceType.equals("drawable") && (r==14 || r==15))?255:0;
+                                    check((b[q+20+r]&255)==expected,"Resource lacks its unqualified default/nodpi configuration");
+                                }
                                 int size=u16(b,e),flags=u16(b,e+2);
                                 check(size==8 && (flags&~6)==0,"Complex/compact launcher resource unsupported");
-                                check("factory_icon".equals(keys.get(small(b,e+4))),"Launcher resource name differs");
+                                check(resourceName.equals(keys.get(small(b,e+4))),"Launcher resource name differs");
                                 check(u16(b,e+size)==8 && b[e+size+2]==0 && b[e+size+3]==3,"Launcher resource is not a file string");
                                 path=values.get(small(b,e+size+4)); validName(path);
-                                check(path.startsWith("res/") && path.endsWith(".png") && !path.endsWith(".9.png"),"Invalid launcher resource path");
+                                check(path.startsWith("res/") && path.endsWith(suffix) && !path.endsWith(".9.png"),"Invalid launcher resource path");
                                 check(++matches==1,"Multiple launcher resource configurations unsupported");
                             }
                         }
