@@ -1,4 +1,6 @@
-# Original Jarvys mascot: final v2 source and host proof
+# Original Jarvys mascot: v2 source and host proof
+
+**Design revision required:** after this technical review, the user rejected the choreography as too similar and perceptibly brief. This v2 source remains a reproducible historical proof, not an accepted final design or a resource approved for APK delivery.
 
 Small, source-only backup for the original Jarvys asset. This package contains no
 compiled programs, vendored dependencies, preview images, caches, or test logs.

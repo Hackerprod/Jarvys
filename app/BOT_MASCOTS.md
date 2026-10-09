@@ -1,5 +1,7 @@
 # Local mascot authoring (UX40, in progress)
 
+**Delivery hold:** the first original Jarvys choreography was rejected after its preview. A more expressive, distinctly timed revision is required before APK delivery. Existing v2 technical tests do not constitute design acceptance.
+
 The native writer and agent tools compile and save original vector scenes locally. This checkpoint integrates an **experimental, initially disabled Android playback path** and an original Jarvys mascot in the existing account avatar and chief/captain identity. Physical Android playback is **not yet validated**. Custom-bot PNG/glyph fallback and the two-column catalog remain available. `LOCAL_COMPILED` is compilation/integrity evidence, not rendering acceptance, offline model inference, or completed UX40.
 
 ## Source and authority
