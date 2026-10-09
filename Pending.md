@@ -25,8 +25,8 @@ Modo de ejecución: continuar la cola completa. Al cerrar cada pendiente o corre
 - **UX27 / preparación v45 completada en host:** títulos de misión y detalle compacto; 1846 Full, 1613 Play, 17 runtime y nueve JavaScript aprobadas, con revisión independiente.
 - **UX28 / preparación v46 completada en host:** tarjetas HTML con miniatura local estática y acciones por iconos; 1911 Full, 1678 Play, 17 runtime y nueve JavaScript aprobadas, sin nuevos diagnósticos de lint. Ambos APK unsigned verificados para firma original; Chromium y aceptación física pendientes.
 - **UX29 / preparación v47 completada en host:** indicador nativo de puntos; 1930 Full, 1697 Play, 17 runtime y nueve JavaScript aprobadas, sin nuevos diagnósticos de lint. Ambos APK unsigned verificados para firma original; aceptación física pendiente.
-- **UX30 / preparación v48 en curso:** densidad del menú lateral, títulos sin etiqueta repetida y secciones vacías ocultas. Código local en validación; todavía no se declara listo el APK.
-- **Siguiente etapa:** cobertura general de Gmail en UX31, tras cerrar UX30.
+- **UX30 / preparación v48 completada en host:** menú lateral compacto, etiquetas redundantes retiradas y secciones vacías ocultas. 1948 Full, 1715 Play, 17 runtime y nueve JavaScript aprobadas; 80 capturas y revisión independiente, sin nuevos diagnósticos de lint. Ambos APK unsigned verificados para firma original; aceptación física pendiente.
+- **Siguiente etapa:** UX32, sustituir el icono de la aplicación por el PNG aportado el 9 de octubre para las futuras compilaciones; después cobertura general de Gmail en UX31. v48 ya estaba compilada al llegar esta nueva solicitud y no se reconstruye para incluirla.
 - La paridad completa con el comportamiento de v28 en un teléfono sigue pendiente de validación; la fiabilidad del agente es prioritaria antes de añadir funciones.
 
 ## Entregas previas
@@ -360,18 +360,33 @@ Estado: completado en código, revisión independiente y validación de host par
 
 ### 14. UX30: densidad y claridad del menú lateral
 
-Estado: en implementación y validación de host para preparación v48 / 1.2.41-UX30. Captura original revisada: se conserva el encabezado Pinned y se retira únicamente la etiqueta repetida de cada fila. No se declara aceptación física ni APK listo.
+Estado: completado en código, revisión independiente y validación de host para preparación v48 / 1.2.41-UX30. Ambos APK sin firma verificados para firma externa con la identidad existente y entrega; aceptación física pendiente. Se continúa con UX32 y luego UX31 sin esperar feedback.
 
-- Reducir el espaciado vertical entre Nuevo chat, Bots y Tareas programadas, manteniendo objetivos táctiles accesibles y la jerarquía del menú lateral.
-- Quitar el texto «Pinned» redundante dentro de las filas de chats anclados; conservar el encabezado de sección salvo que la revisión de la captura confirme otra necesidad.
-- Presentar el menú de acciones de cada chat con tres puntos verticales.
-- Ocultar detalles o secciones vacías de chats, incluida la sección de anclados cuando no contenga elementos, sin perder acceso a los chats existentes.
-- Contrastar la composición con la captura aportada y validar estado vacío/con chats, chats anclados, acciones, navegación, temas, idiomas y texto grande.
-- Implementar como tarea separada después de UX29; no ampliar el alcance de UX27 ni cambiar permisos o comportamiento de las conversaciones.
+- Los menús Nuevo chat, Bots y Tareas programadas forman un grupo sin huecos entre filas, con altura táctil mínima de 48 dp y relleno vertical de 8 dp. Las etiquetas siguen creciendo y ajustándose a varias líneas cuando aumenta el tamaño del texto.
+- La captura original confirma que debe conservarse el encabezado Pinned/Fijados y retirarse únicamente la etiqueta repetida dentro de cada fila. El estado y las acciones Anclar/Desanclar permanecen intactos.
+- Los tres puntos de acciones son verticales únicamente en el menú lateral. El componente compartido conserva por defecto el marcador y los puntos horizontales de la pantalla de archivados; no cambia el icono global ni otras superficies.
+- Chats actuales y Fijados ocultan su encabezado cuando no tienen filas visibles. Se retira el texto normal de sección vacía. Una búsqueda explícita sin coincidencias conserva su mensaje localizado, calculado sobre todas las filas: una coincidencia anclada o activa ya no produce un falso estado vacío.
+- Se conservan selección, deduplicación por sesión, apertura del chat activo e histórico, pulsación larga, Anclar/Desanclar, Renombrar, Archivar/Restaurar, confirmación de borrado, protección de chats gestionados, acciones deshabilitadas, búsqueda y navegación Atrás. No cambian permisos, almacenamiento, runtime ni las implementaciones UX26–UX29.
+- Aprobadas 18 nuevas regresiones en ambas variantes, 49 pruebas enfocadas Full y las suites completas frescas: 1948 Full, 1715 Play, 17 runtime y nueve JavaScript; cero fallos, errores u omitidas. Las 80 capturas nativas cubren 320 dp, inglés/español, claro/oscuro y fuentes 100/200 %, con navegación, tres chats anclados, menú de acciones, panel vacío y búsqueda vacía. Se comprueban objetivos reales de 48 dp, límites de texto, semántica de encabezados y las transiciones vacías/con contenido.
+- Lint no introduce errores ni advertencias: permanecen 46 errores y 273 advertencias heredados en Full, 37 errores y 269 advertencias en Play; runtime conserva cuatro advertencias. Los errores heredados hacen que el comando de lint devuelva estado de fallo; la comparación de diagnósticos no presenta regresiones.
+- Ambos APK conservan paquete com.jarvys.agent, etiqueta Jarvys y permisos de v47. Versión 48 / 1.2.41-UX30, CRC y alineación de 16 KB comprobados, sin código de pruebas filtrado ni huecos ZIP. Los activos de fábrica son idénticos a v47; Play no incorpora las clases de ejecución Linux. Permanecen unsigned y debuggable para firma externa con la clave original.
+- SHA-256 Full: 55d91df909232aa4aa1881e7b8027e4ce1334ab2629ebb2c0a190c517eac7ef8.
+- SHA-256 Play: 3c1d69a11340cb52450d2c063070bfc8643d9037f30c4bc784a75f82b62fbf0b.
 
-### 15. UX31: cobertura general de gestión de Gmail
+Contrato y límites: app/DRAWER_NAVIGATION.md. Fuente validada: 6b7add00a7deb9878e7cabf644cecd70377b9d29; el checkpoint final actualiza únicamente Pending.md sin modificar el árbol de la aplicación ni reconstruir los APK. Las pruebas del host no certifican instalación, teléfono físico, TalkBack o teclado real.
 
-Estado: pendiente, después de UX30. Gmail y Drive ya conectan; ampliar Gmail como un conjunto genérico de capacidades, no como un flujo centrado en spam. La auditoría debe cubrir las operaciones que admita la API y los permisos realmente concedidos.
+### 15. UX32: icono de aplicación para futuras compilaciones
+
+Estado: pendiente; solicitud del 9 de octubre de 2026. Prioridad antes de UX31. La preparación v48 de UX30 ya estaba compilada y verificada cuando llegó esta solicitud, por lo que se mantiene inmutable.
+
+- Usar el PNG nuevo aportado por el usuario como icono de Jarvys a partir de la siguiente compilación; inspeccionar el archivo original antes de generar las variantes.
+- Adaptar el recurso a los formatos y densidades de icono que utilice la aplicación, conservando proporciones, transparencia y legibilidad. Comprobar el recorte de iconos adaptativos y las variantes existentes que resulten aplicables.
+- Mantener paquete, nombre, permisos e identidad de firma; no reutilizar ni generar una clave nueva. No cambiar otras imágenes de la interfaz sin una necesidad comprobada del icono.
+- Validar recursos, manifiestos, ambas variantes, capturas o previsualizaciones pertinentes y los APK resultantes. Publicar código y Pending.md en master y entregar el APK actualizado antes de continuar con UX31.
+
+### 16. UX31: cobertura general de gestión de Gmail
+
+Estado: pendiente, después de UX32. Gmail y Drive ya conectan; ampliar Gmail como un conjunto genérico de capacidades, no como un flujo centrado en spam. La auditoría debe cubrir las operaciones que admita la API y los permisos realmente concedidos.
 
 - **Inventario y búsqueda:** auditar herramientas, esquemas y resultados. Buscar en todas las páginas necesarias, con paginación/cursor, filtros de etiquetas y alcance explícito; permitir incluir spam y papelera cuando corresponda. Leer mensajes, hilos, estado y adjuntos sin recortes ocultos ni resultados incompletos presentados como completos.
 - **Organización:** crear, consultar, editar y eliminar etiquetas cuando la API lo permita; aplicar o quitar etiquetas a mensajes/hilos o selecciones verificadas. Cubrir leído/no leído, archivar/desarchivar, destacados/importantes y demás etiquetas de sistema admitidas, respetando sus restricciones. Spam/no-spam debe ser una capacidad más de este inventario, sin reglas temáticas hardcodeadas ni limitación del conjunto a ese caso.
