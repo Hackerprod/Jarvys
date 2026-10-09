@@ -232,9 +232,19 @@
     "installation_or_update": false
   },
   "delivery": {
-    "signed": false,
-    "sent": false,
-    "signing_owner": "Separate approved debug signing workflow"
+    "signed": true,
+    "sent": true,
+    "send_acceptance_utc": "2026-10-09T18:07:42Z",
+    "source_commit": "c23e8717ed7db98179315b4899f7222f378a1352",
+    "filename": "Jarvys-UX41-full-v58-debug-signed.apk",
+    "bytes": 31583658,
+    "sha256": "7c614bb0f7fb4d965975587676a3b2462c4be487224e610e6872ada9acfc7a3e",
+    "library_version": 23,
+    "identity": "Same approved D7 DEBUG ONLY identity as v56/v57",
+    "certificate_sha1": "D7:C0:1F:59:79:78:32:3E:32:CA:AF:22:E9:F6:00:9A:B7:2F:32:B8",
+    "signing_owner": "Separate approved debug signing workflow",
+    "play_still_unsigned": true,
+    "physical_installation_or_acceptance_claimed": false
   },
   "limitations": [
     "Conservative unsupported or ambiguous HTML can pass through and remain wide when no usable viewport exists.",
