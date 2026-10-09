@@ -12,6 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import com.jarvys.agent.R
@@ -116,7 +117,9 @@ class JarvysMascotUiTest {
         var onScreen by mutableStateOf(true)
         var showAccount by mutableStateOf(true)
         compose.setContent { MaterialTheme {
-            if (showAccount) Box(Modifier.offset(y = if (onScreen) 0.dp else 2000.dp)) {
+            if (showAccount) Box(Modifier.offset {
+                IntOffset(0, (if (onScreen) 0.dp else 2000.dp).roundToPx())
+            }) {
                 JarvysMascotAccountMenu(null, sessionId, liveVisible, surfaceVisible) { close ->
                     DropdownMenuItem(text = { Text("Close test menu") }, onClick = close)
                 }
