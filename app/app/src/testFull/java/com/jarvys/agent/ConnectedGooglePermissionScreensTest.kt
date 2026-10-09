@@ -49,8 +49,10 @@ class ConnectedGooglePermissionScreensTest {
     private lateinit var drive: ConnectorDefinition
     private val gmailScopes = listOf(
         GoogleOAuthProtocol.GMAIL_READ to R.string.full_google_scope_gmail_read,
+        GoogleOAuthProtocol.GMAIL_MODIFY to R.string.full_google_scope_gmail_modify,
         GoogleOAuthProtocol.GMAIL_COMPOSE to R.string.full_google_scope_gmail_compose,
-        GoogleOAuthProtocol.GMAIL_SEND to R.string.full_google_scope_gmail_send)
+        GoogleOAuthProtocol.GMAIL_SEND to R.string.full_google_scope_gmail_send,
+        GoogleOAuthProtocol.GMAIL_FULL to R.string.full_google_scope_gmail_full)
     private val driveScopes = listOf(
         GoogleOAuthProtocol.DRIVE_READ to R.string.full_google_scope_drive_read,
         GoogleOAuthProtocol.DRIVE_FILE to R.string.full_google_scope_drive_file)
@@ -91,7 +93,7 @@ class ConnectedGooglePermissionScreensTest {
         gmail = GmailConnector.definition(GmailConnector(manager, contacts, { false }, { false }))
         drive = DriveConnector.definition(manager)
         registry.register(gmail); registry.register(drive)
-        if (GoogleOAuthProtocol.GMAIL_READ in scopes) registry.connect(gmail.id)
+        if (manager.isScopeGranted(GoogleOAuthProtocol.GMAIL_READ)) registry.connect(gmail.id)
         if (GoogleOAuthProtocol.DRIVE_READ in scopes) registry.connect(drive.id)
     }
     private fun show(gmailSelected: Boolean, scale: Float = 1f, dark: Boolean = false) {
@@ -110,7 +112,7 @@ class ConnectedGooglePermissionScreensTest {
             }
         }
     }
-    private fun scopeTag(scope: String) = "google-scope-${scope.substringAfterLast('/')}"
+    private fun scopeTag(scope: String) = "google-scope-${scope.removeSuffix("/").substringAfterLast('/')}"
     private fun policyTag(operation: ConnectorOperation) = "google-policy-${operation.name}"
     private fun pick(prefix: String, label: Int) {
         compose.onNodeWithTag("$prefix-control").performScrollTo().performClick()
@@ -122,9 +124,9 @@ class ConnectedGooglePermissionScreensTest {
         compose.onNodeWithTag("$prefix-row", useUnmergedTree = true).performScrollTo()
         val row = compose.onNodeWithTag("$prefix-row", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
         val control = compose.onNodeWithTag("$prefix-control").fetchSemanticsNode().boundsInRoot
-        assertEquals("right edge", row.right, control.right, 1f)
-        assertEquals("vertical center", row.center.y, control.center.y, 1f)
-        assertTrue("48 dp touch target", control.height >= 48f)
+        assertEquals("$prefix right edge", row.right, control.right, 1f)
+        assertEquals("$prefix vertical center", row.center.y, control.center.y, 1f)
+        assertTrue("$prefix 48 dp touch target", control.height >= 48f)
     }
     private fun policy(prefix: String, resource: Int) =
         compose.onNodeWithTag("$prefix-control").assertTextContains(compose.activity.getString(resource))
@@ -141,7 +143,7 @@ class ConnectedGooglePermissionScreensTest {
         assertEquals(ConnectorState.CONNECTED, registry.state(gmail))
         gmailScopes.forEach { (scope, _) ->
             geometry(scopeTag(scope))
-            capture("gmail-scope-${scope.substringAfterLast('/')}-${if (dark) "es-dark-large" else "en-light"}")
+            capture("gmail-scope-${scope.removeSuffix("/").substringAfterLast('/')}-${if (dark) "es-dark-large" else "en-light"}")
             policy(scopeTag(scope), if (scope == GoogleOAuthProtocol.GMAIL_READ) R.string.connector_policy_allow
                 else R.string.connector_add_permission)
         }
@@ -151,6 +153,9 @@ class ConnectedGooglePermissionScreensTest {
         pick(scopeTag(GoogleOAuthProtocol.GMAIL_READ), R.string.connector_policy_allow)
         gmail.operations.filter { it.write }.forEach { operation ->
             geometry(policyTag(operation)); policy(policyTag(operation), R.string.connector_policy_ask)
+            if (operation.name in setOf("modify_messages", "delete_messages", "delete_label")) {
+                capture("gmail-ux31-operation-${operation.name}-${if (dark) "es-dark-large" else "en-light"}")
+            }
         }
         assertTrue(authorizations.isEmpty()); assertTrue(policies.changes.isEmpty())
         assertEquals(setOf(GoogleOAuthProtocol.GMAIL_READ), manager.grantedScopes())
@@ -187,9 +192,10 @@ class ConnectedGooglePermissionScreensTest {
                 authorizations.size == 1 && !manager.isAuthorizationInProgress()
         }
         policy(composeScope, R.string.connector_policy_allow)
-        policy(scopeTag(GoogleOAuthProtocol.GMAIL_SEND), R.string.connector_add_permission)
+        policy(scopeTag(GoogleOAuthProtocol.GMAIL_SEND), R.string.connector_policy_allow)
         assertEquals(listOf(setOf(GoogleOAuthProtocol.GMAIL_READ, GoogleOAuthProtocol.GMAIL_COMPOSE)), authorizations.toList())
-        assertFalse(manager.isScopeGranted(GoogleOAuthProtocol.GMAIL_SEND))
+        assertTrue(manager.isScopeGranted(GoogleOAuthProtocol.GMAIL_SEND))
+        assertFalse(GoogleOAuthProtocol.GMAIL_SEND in manager.grantedScopes())
         assertTrue(policies.changes.isEmpty()); assertEquals(0, requests.get()); assertEquals(0, revocations.get())
     }
 
@@ -233,5 +239,67 @@ class ConnectedGooglePermissionScreensTest {
         assertTrue(authorizations.isEmpty()); assertTrue(policies.changes.isEmpty())
         assertEquals(0, requests.get()); assertEquals(0, revocations.get())
         compose.onNodeWithTag("${scopeTag(GoogleOAuthProtocol.GMAIL_READ)}-control").assertDoesNotExist()
+    }
+
+    @Test fun modifyGrantShowsEffectiveCapabilitiesAndSeparateActualGrantsWithoutOpeningConsent() = effectiveCapabilities(1f, false)
+
+    @Test @Config(qualifiers = "es-rES-w320dp-h800dp-port-mdpi")
+    fun modifyGrantSpanishTwoTimesTextKeepsNewScopeRowsAccessible() = effectiveCapabilities(2f, true)
+
+    private fun effectiveCapabilities(scale: Float, dark: Boolean) {
+        seed(setOf(GoogleOAuthProtocol.GMAIL_MODIFY))
+        show(true, scale, dark)
+        val suffix = if (dark) "es-dark-large" else "en-light"
+        compose.onNodeWithTag("google-actual-grants").performScrollTo()
+            .assertTextContains("gmail.modify")
+        capture("gmail-ux31-actual-grants-$suffix")
+        gmailScopes.forEach { (scope, _) ->
+            geometry(scopeTag(scope))
+            policy(scopeTag(scope), if (scope == GoogleOAuthProtocol.GMAIL_FULL) R.string.connector_add_permission
+                else R.string.connector_policy_allow)
+            capture("gmail-ux31-${scope.removeSuffix("/").substringAfterLast('/') }-$suffix")
+        }
+        assertEquals(setOf(GoogleOAuthProtocol.GMAIL_MODIFY), manager.grantedScopes())
+        assertFalse(manager.isScopeGranted(GoogleOAuthProtocol.GMAIL_FULL))
+        assertTrue(authorizations.isEmpty()); assertTrue(policies.changes.isEmpty())
+        assertEquals(0, requests.get()); assertEquals(0, revocations.get())
+    }
+
+    @Test fun explicitModifyClickOnlyRunsOAuthAndDoesNotChangeToolAutonomy() {
+        seed(setOf(GoogleOAuthProtocol.GMAIL_READ))
+        show(true)
+        pick(scopeTag(GoogleOAuthProtocol.GMAIL_MODIFY), R.string.connector_add_permission)
+        compose.waitUntil(5_000) {
+            compose.onAllNodes(isPopup()).fetchSemanticsNodes().isEmpty() &&
+                authorizations.size == 1 && !manager.isAuthorizationInProgress()
+        }
+        assertEquals(listOf(setOf(GoogleOAuthProtocol.GMAIL_READ, GoogleOAuthProtocol.GMAIL_MODIFY)), authorizations.toList())
+        assertFalse(manager.isScopeGranted(GoogleOAuthProtocol.GMAIL_FULL))
+        assertTrue(policies.changes.isEmpty()); assertEquals(0, requests.get()); assertEquals(0, revocations.get())
+    }
+
+    @Test fun explicitFullClickOnlyRunsOAuthAndNeverDeletesMailOrChangesAutonomy() {
+        seed(setOf(GoogleOAuthProtocol.GMAIL_MODIFY))
+        show(true)
+        pick(scopeTag(GoogleOAuthProtocol.GMAIL_FULL), R.string.connector_add_permission)
+        compose.waitUntil(5_000) {
+            compose.onAllNodes(isPopup()).fetchSemanticsNodes().isEmpty() &&
+                authorizations.size == 1 && !manager.isAuthorizationInProgress()
+        }
+        assertEquals(listOf(setOf(GoogleOAuthProtocol.GMAIL_MODIFY, GoogleOAuthProtocol.GMAIL_FULL)), authorizations.toList())
+        policy(scopeTag(GoogleOAuthProtocol.GMAIL_FULL), R.string.connector_policy_allow)
+        assertTrue(policies.changes.isEmpty()); assertEquals(0, requests.get()); assertEquals(0, revocations.get())
+    }
+
+    @Test fun denyingReadCapabilityBackedByFullGrantDisconnectsEveryEffectiveCapability() {
+        seed(setOf(GoogleOAuthProtocol.GMAIL_FULL, GoogleOAuthProtocol.DRIVE_READ))
+        show(true)
+        pick(scopeTag(GoogleOAuthProtocol.GMAIL_READ), R.string.connector_policy_deny)
+        assertTrue(manager.grantedScopes().isEmpty())
+        gmailScopes.forEach { assertFalse(manager.isScopeGranted(it.first)) }
+        assertEquals(ConnectorState.DISCONNECTED, registry.state(gmail))
+        assertEquals(ConnectorState.DISCONNECTED, registry.state(drive))
+        assertTrue(authorizations.isEmpty()); assertTrue(policies.changes.isEmpty())
+        assertEquals(0, requests.get()); assertEquals(0, revocations.get())
     }
 }

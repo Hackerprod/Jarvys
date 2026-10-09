@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="full_google_scope_gmail_modify">Gestionar correo · Opcional</string>
+    <string name="full_google_scope_gmail_full">Borrado permanente · Acceso completo opcional</string>
+    <string name="full_google_section_manage">Gestión del buzón</string>
+    <string name="full_google_section_compose_send">Borradores y envío</string>
+    <string name="full_google_section_irreversible">Acciones irreversibles · opcionales</string>
+    <string name="full_google_capability_explanation">Los permisos de Google determinan las acciones disponibles en la API. Las políticas de herramientas de abajo controlan por separado Preguntar, Permitir y Denegar. Abrir esta pantalla nunca concede permisos.</string>
+    <string name="full_google_actual_grants">Scopes realmente concedidos por Google: %1$s</string>
+    <string name="full_google_granted_through">Disponible mediante %1$s</string>
+    <string name="full_google_scope_deny_explanation">Denegar un permiso de Google desconecta Gmail y Drive localmente. Para bloquear solo una acción, usa su política de herramienta abajo.</string>
+    <string name="full_google_modify_explanation">gmail.modify permite a Google leer, preparar y enviar correo, además de gestionar etiquetas, archivo, estado de lectura, spam, papelera y restauración. No permite borrar mensajes de forma permanente. Estos permisos de Google no autorizan acciones autónomas en la app.</string>
+    <string name="full_google_full_explanation">El acceso completo incluye lectura, borradores, envío, gestión del buzón y borrado permanente de mensajes. Actívalo solo si lo necesitas. Cada acción irreversible exige revisar los objetivos exactos y no admite Permitir. Eliminar una etiqueta también borra de forma permanente sus asignaciones y exige revisión.</string>
+    <string name="full_google_operation_scope_unavailable">No disponible · Falta un permiso de Google</string>
+    <string name="full_google_irreversible_operation">Irreversible · Revisar cada acción</string>
+    <string name="full_google_legacy_send_unverified">Este token de Google solo para envío no permite verificar su cuenta. El envío no está disponible hasta que actives explícitamente un permiso que permita verificarla, como borradores, o reconectes con la autorización de Android. No se solicitan permisos adicionales automáticamente.</string>
+    <string name="full_google_account_mismatch">Los permisos de Google pertenecen a cuentas distintas o la cuenta ha cambiado. No se envió ninguna acción. Reconecta la cuenta prevista y revisa la acción otra vez.</string>
+    <string name="full_google_account_unverified">Google no devolvió una cuenta de Gmail verificable. No se envió ninguna acción.</string>
+    <string name="full_google_account_pin_failed">No se pudo guardar la cuenta de Google verificada. No se envió ninguna acción.</string>
+</resources>

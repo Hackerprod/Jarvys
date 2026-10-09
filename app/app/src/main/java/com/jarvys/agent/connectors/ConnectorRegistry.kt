@@ -58,6 +58,8 @@ data class ConnectorDefinition(
     val permissionLabelResourceId: Int = 0,
     val connectionPermissions: List<String> = readPermissions,
     val presentationGroup: ConnectorPresentationGroup = ConnectorPresentationGroup.ON_DEVICE,
+    /** Live service grants are distinct from Android permissions and local autonomy policy. */
+    val operationAccessGranted: ((String) -> Boolean)? = null,
 ) {
     constructor(
         id: String,
@@ -179,7 +181,7 @@ class ConnectorRegistry private constructor(
 
     fun autonomyPolicyUnavailableReason(definition: ConnectorDefinition, operation: ConnectorOperation): String? {
         if (configuredAutonomyPolicy(definition, operation) != AutonomyPolicy.ALLOW) return null
-        if (!operation.autonomyAllowed) return "This operation requires confirmation in the system app."
+        if (!operation.autonomyAllowed) return "This operation requires explicit confirmation."
         if (state(definition) != ConnectorState.CONNECTED) return "Reconnect this connector to use Allow mode."
         val missing = writePermissions(definition, operation).firstOrNull { !permissionGranted(it) }
         if (missing != null) return "Grant ${missing.substringAfterLast('.')} permission to use Allow mode."
@@ -219,7 +221,7 @@ class ConnectorRegistry private constructor(
 
     private fun autonomyAllowUnavailableReason(definition: ConnectorDefinition, operation: ConnectorOperation): ConnectorUiText? {
         if (!operation.write) return ConnectorUiText(R.string.approval_autonomy_operation_unavailable, fallback = "Allow mode is only available for write operations.")
-        if (!operation.autonomyAllowed) return ConnectorUiText(R.string.approval_autonomy_system_confirmation, fallback = "This operation requires confirmation in the system app.")
+        if (!operation.autonomyAllowed) return ConnectorUiText(R.string.approval_autonomy_system_confirmation, fallback = "This operation requires explicit confirmation.")
         if (state(definition) != ConnectorState.CONNECTED) return ConnectorUiText(
             R.string.approval_autonomy_reconnect_required, fallback = "Reconnect this connector to use Allow mode.",
         )
@@ -249,7 +251,8 @@ class ConnectorRegistry private constructor(
     fun setAutonomyPolicy(definition: ConnectorDefinition, operation: ConnectorOperation, policy: AutonomyPolicy) {
         require(operation.write) { "Autonomy policy applies only to write operations" }
         if (policy == AutonomyPolicy.ALLOW) {
-            require(operation.autonomyAllowed) { "This operation requires confirmation in the system app and cannot use Allow" }
+            require(operation.autonomyAllowed) { "This operation requires explicit confirmation and cannot use Allow" }
+            require(definition.operationAccessGranted?.invoke(operation.name) != false) { "Authorize the operation's service permission before enabling Allow" }
             require(state(definition) == ConnectorState.CONNECTED) { "Connect this device connector before changing its autonomy policy" }
             require(writePermissions(definition, operation).all(permissionGranted)) { "Grant the operation permission before enabling Allow" }
             require(autonomyNotifier.canPost()) { "Enable Jarvys notifications before enabling Allow" }
@@ -359,6 +362,11 @@ class ConnectorRegistry private constructor(
                arguments: JSONObject, token: CancellationToken, requester: String?,
                requesterColorKey: String?): JSONObject {
         val current = get(definition.id) ?: error("El conector ${definition.name} ya no está disponible")
+        val selectedOperation = current.operations.firstOrNull { it.name == operation.name }
+            ?: error("Connector operation is no longer available")
+        check(current.operationAccessGranted?.invoke(selectedOperation.name) != false) {
+            "Enable and authorize this operation's service permission in Conectores before using it. No write was sent."
+        }
         val currentState = state(current)
         if (currentState != ConnectorState.CONNECTED) {
             refreshStates()
@@ -367,41 +375,41 @@ class ConnectorRegistry private constructor(
             }
             error("${current.name} está desconectado; conectalo de nuevo en Conectores")
         }
-        val permissions = if (operation.write) writePermissions(current, operation) else readPermissions(current, operation)
-        if (!operation.write && !permissions.all(permissionGranted)) {
+        val permissions = if (selectedOperation.write) writePermissions(current, selectedOperation) else readPermissions(current, selectedOperation)
+        if (!selectedOperation.write && !permissions.all(permissionGranted)) {
                 refreshStates()
                 error("El permiso de ${current.permissionLabel} fue revocado; volvé a conectarlo en Conectores")
         }
         token.throwIfCancelled()
         val runtime = requireNotNull(current.runtime) { "El conector ${current.name} no tiene runtime" }
-        if (!operation.write) return runtime.invoke(operation.name, arguments, token)
+        if (!selectedOperation.write) return runtime.invoke(selectedOperation.name, arguments, token)
 
-        val configuredPolicy = autonomyStore.policy(current.id, operation.name)
+        val configuredPolicy = autonomyStore.policy(current.id, selectedOperation.name)
         if (configuredPolicy == AutonomyPolicy.DENY) {
-            error("La política de autonomía de ${operation.displayLabel} está en Deny")
+            error("La política de autonomía de ${selectedOperation.displayLabel} está en Deny")
         }
         var autonomousWriteValidationReason: ConnectorUiText? = null
-        if (configuredPolicy == AutonomyPolicy.ALLOW && operation.autonomyAllowed) {
+        if (configuredPolicy == AutonomyPolicy.ALLOW && selectedOperation.autonomyAllowed) {
             try {
                 (runtime as? AgentRunScopedConnectorRuntime)?.validateAutonomousWrite(
-                    operation.name, arguments, token.generation(),
+                    selectedOperation.name, arguments, token.generation(),
                 )
             } catch (failure: AutonomousWriteValidationFailure) {
                 autonomousWriteValidationReason = failure.userReason
             }
         }
         val effectivePolicy = if (autonomousWriteValidationReason != null) AutonomyPolicy.ASK
-            else autonomyPolicy(current, operation)
-        val preparation = runtime.prepareWrite(operation.name, arguments, token)
+            else autonomyPolicy(current, selectedOperation)
+        val preparation = runtime.prepareWrite(selectedOperation.name, arguments, token)
         val missingWritePermission = permissions.firstOrNull { !permissionGranted(it) }
         val autonomous = effectivePolicy == AutonomyPolicy.ALLOW
         var permissionDeniedFallback = false
         if (!autonomous) {
             val missingAutonomyPermission = if (configuredPolicy == AutonomyPolicy.ALLOW) autonomyNotifier.missingRuntimePermission() else null
             val reasonText = autonomousWriteValidationReason ?: when {
-                configuredPolicy == AutonomyPolicy.ALLOW && !operation.autonomyAllowed ->
+                configuredPolicy == AutonomyPolicy.ALLOW && !selectedOperation.autonomyAllowed ->
                     ConnectorUiText(R.string.approval_system_confirmation_reason,
-                        fallback = "This write requires confirmation in the system app and cannot run automatically.")
+                        fallback = "This action requires explicit confirmation and cannot run automatically.")
                 configuredPolicy == AutonomyPolicy.ALLOW && missingWritePermission != null ->
                     ConnectorUiText(R.string.approval_permission_required_reason,
                         listOf(missingWritePermission.substringAfterLast('.')),
@@ -421,9 +429,9 @@ class ConnectorRegistry private constructor(
                     permission = missingWritePermission,
                     lines = requestLines.map { it.fallback },
                     localizedLines = requestLines,
-                    allowAlwaysAvailable = configuredPolicy != AutonomyPolicy.ALLOW && operation.autonomyAllowed,
+                    allowAlwaysAvailable = configuredPolicy != AutonomyPolicy.ALLOW && selectedOperation.autonomyAllowed,
                     autonomyConnectorId = current.id,
-                    autonomyOperationName = operation.name,
+                    autonomyOperationName = selectedOperation.name,
                     requester = requester,
                     requesterColorKey = requesterColorKey,
                     permissionLabel = missingWritePermission?.let {
@@ -458,7 +466,7 @@ class ConnectorRegistry private constructor(
             error("Falta el permiso de escritura de ${current.name}; habilitalo en Ajustes de la app y volvé a intentar")
         }
         val result = runtime.invokePrepared(
-            operation.name,
+            selectedOperation.name,
             preparation.executionArguments,
             preparation.copy(permissionDeniedFallback = permissionDeniedFallback),
             token,
@@ -468,8 +476,8 @@ class ConnectorRegistry private constructor(
                 timestampMillis = clock(),
                 connectorId = current.id,
                 connectorName = current.name,
-                operationName = operation.name,
-                operationLabel = operation.displayLabel,
+                operationName = selectedOperation.name,
+                operationLabel = selectedOperation.displayLabel,
                 summary = autonomousActionSummary(result),
             )
             val auditSaved = runCatching { autonomyStore.appendAudit(record) }.isSuccess

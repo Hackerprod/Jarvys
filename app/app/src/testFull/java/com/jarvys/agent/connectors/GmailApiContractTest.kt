@@ -33,6 +33,12 @@ class GmailApiContractTest {
             return super<GoogleRestAuthorization>.requestBytes(scope, method, url, body, contentType, token, maxResponseBytes, requestHeaders, expectedAuthorizationEpoch)
         }
         fun respond(value: JSONObject, status: Int = 200) { replies += { GoogleHttpResponse(status, value.toString()) } }
+        override fun verifyGmailAccount(capability: String, expectedAccount: String?, token: CancellationToken, epoch: Long): String {
+            token.throwIfCancelled()
+            check(epoch == currentAuthorizationEpoch()) { "Google account epoch changed" }
+            check(expectedAccount == null || expectedAccount == "fixture@example.test") { "Google account changed" }
+            return "fixture@example.test"
+        }
         override fun isScopeGranted(scope: String) = granted
         override fun request(scope: String, method: String, url: String, body: String?, contentType: String): GoogleHttpResponse {
             calls += Request(scope, method, url, body, contentType)
@@ -91,7 +97,8 @@ class GmailApiContractTest {
         assertTrue(definition.connectionAccessGranted!!.invoke())
         api.granted = false
         assertFalse(definition.connectionAccessGranted!!.invoke())
-        assertFalse(definition.operations.any { it.name.contains("delete") || it.name.contains("share") })
+        assertFalse(definition.operations.any { it.name.contains("share") })
+        assertTrue(definition.operations.filter { it.name in GmailManagement.IRREVERSIBLE }.all { it.write && !it.autonomyAllowed })
     }
 
     @Test fun directSendHasRawAtJsonRootAndUsesOnlyTheReviewedSnapshot() {
@@ -190,7 +197,7 @@ class GmailApiContractTest {
         assertEquals("GET", api.calls.single().method)
         assertEquals("${GoogleRestEndpoints.GMAIL}/users/me/threads/thread1?format=full", api.calls.single().url)
         assertEquals(1, result.getJSONArray("items").length()); assertEquals(2, result.getInt("message_count"))
-        assertTrue(result.getBoolean("truncated")); assertFalse(result.has("next_page_token"))
+        assertTrue(result.getBoolean("truncated")); assertTrue(result.getBoolean("has_more")); assertTrue(result.has("next_page_token"))
     }
 
     @Test fun draftListAndGetUseComposeScopeAndExposeStableDraftIdWithRevision() {

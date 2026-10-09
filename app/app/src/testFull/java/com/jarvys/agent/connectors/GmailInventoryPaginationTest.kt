@@ -1,0 +1,88 @@
+package com.jarvys.agent.connectors
+
+import com.jarvys.agent.CancellationToken
+import org.json.JSONArray
+import org.json.JSONObject
+import org.junit.Assert.*
+import org.junit.Test
+
+class GmailInventoryPaginationTest {
+    private class Api : GoogleRestAuthorization {
+        val responses = ArrayDeque<JSONObject>()
+        val urls = mutableListOf<String>()
+        var epoch = 1L
+        var afterRead: (() -> Unit)? = null
+        override fun currentAuthorizationEpoch() = epoch
+        override fun isScopeGranted(scope: String) = true
+        override fun request(scope: String, method: String, url: String, body: String?, contentType: String): GoogleHttpResponse {
+            assertEquals("GET", method); urls += url
+            val response = responses.removeFirst()
+            afterRead?.also { afterRead = null }?.invoke()
+            return GoogleHttpResponse(200, response.toString())
+        }
+    }
+    private fun runtime(api: Api) = GmailConnector(api, object : ContactsGateway {
+        override fun search(query: String, limit: Int) = emptyList<ContactRecord>()
+        override fun find(contactId: Long): ContactRecord? = null
+    }, { false }, { false })
+    private fun invoke(connector: GmailConnector, operation: String, args: JSONObject) = connector.invoke(operation, args, CancellationToken.uncancellable())
+    private fun message(id: String, history: String = "10") = JSONObject().put("id", id).put("threadId", "t1")
+        .put("historyId", history).put("labelIds", JSONArray().put("INBOX").put("UNREAD"))
+        .put("payload", JSONObject().put("mimeType", "text/plain").put("body", JSONObject().put("data", "eA")))
+    private fun thread(vararg messages: JSONObject) = JSONObject().put("id", "t1").put("messages", JSONArray(messages.toList()))
+    private fun labels() = JSONObject().put("labels", JSONArray((1..57).map {
+        JSONObject().put("id", "Label_${it.toString().padStart(3, '0')}").put("name", "Label $it").put("type", "user")
+    }))
+
+    @Test fun labelInventoryReturnsEveryIdAcrossStableContinuationPages() {
+        val api = Api().apply { repeat(3) { responses += labels() } }; val connector = runtime(api)
+        val all = mutableListOf<String>(); var cursor = ""
+        repeat(3) { page ->
+            val result = invoke(connector, GmailConnector.LIST_LABELS, JSONObject().put("max_results", 25).put("page_token", cursor))
+            val items = result.getJSONArray("items"); repeat(items.length()) { all += items.getJSONObject(it).getString("id") }
+            assertEquals(page < 2, result.getBoolean("has_more")); assertEquals(57, result.getInt("label_count"))
+            cursor = result.optString("next_page_token")
+        }
+        assertEquals(57, all.size); assertEquals(57, all.distinct().size)
+    }
+    @Test fun changedLabelInventoryRejectsOldContinuationInsteadOfSkippingTargets() {
+        val api = Api().apply { responses += labels(); responses += labels().apply { getJSONArray("labels").getJSONObject(0).put("name", "Changed") } }
+        val connector = runtime(api)
+        val first = invoke(connector, GmailConnector.LIST_LABELS, JSONObject().put("max_results", 25))
+        val failure = runCatching { invoke(connector, GmailConnector.LIST_LABELS, JSONObject().put("page_token", first.getString("next_page_token"))) }.exceptionOrNull()
+        assertTrue(failure?.message.orEmpty().contains("changed"))
+    }
+    @Test fun threadContinuationReadsPreviouslyTruncatedMembersAndExposesState() {
+        val api = Api().apply { repeat(2) { responses += thread(message("m1"), message("m2")) } }; val connector = runtime(api)
+        val first = invoke(connector, GmailConnector.GET_THREAD, JSONObject().put("id", "t1").put("max_results", 1))
+        val second = invoke(connector, GmailConnector.GET_THREAD, JSONObject().put("id", "t1").put("max_results", 1).put("page_token", first.getString("next_page_token")))
+        val row = second.getJSONArray("items").getJSONObject(0)
+        assertEquals("m2", row.getString("id")); assertEquals("10", row.getString("history_id")); assertEquals(2, row.getInt("label_count"))
+        assertEquals("UNREAD", row.getJSONArray("label_ids").getString(1)); assertFalse(second.getBoolean("has_more"))
+    }
+    @Test fun threadContinuationRejectsChangedMembershipAndHistory() {
+        for (changed in listOf(thread(message("m1"), message("m2"), message("m3")), thread(message("m1", "11"), message("m2")))) {
+            val api = Api().apply { responses += thread(message("m1"), message("m2")); responses += changed }; val connector = runtime(api)
+            val first = invoke(connector, GmailConnector.GET_THREAD, JSONObject().put("id", "t1").put("max_results", 1))
+            assertTrue(runCatching { invoke(connector, GmailConnector.GET_THREAD, JSONObject().put("id", "t1").put("page_token", first.getString("next_page_token"))) }.isFailure)
+        }
+    }
+    @Test fun changedAccountDuringInventoryReadFailsWithoutReturningMixedData() {
+        val api = Api().apply { responses += labels(); afterRead = { epoch++ } }
+        val error = runCatching { invoke(runtime(api), GmailConnector.LIST_LABELS, JSONObject()) }.exceptionOrNull()
+        assertTrue(error?.message.orEmpty().contains("account changed"))
+    }
+    @Test fun providerCannotSubstituteAnotherMessageOrThreadIdentity() {
+        for ((operation, response) in listOf(GmailConnector.GET_MESSAGE to message("other"), GmailConnector.GET_THREAD to thread(message("m1")).put("id", "other"))) {
+            val api = Api().apply { responses += response }
+            val error = runCatching { invoke(runtime(api), operation, JSONObject().put("id", "wanted")) }.exceptionOrNull()
+            assertTrue(error?.message.orEmpty().contains("different"))
+        }
+    }
+    @Test fun malformedLocalInventoryCursorsAndOversizedPagesAreRejected() {
+        for (args in listOf(JSONObject().put("page_token", "garbage"), JSONObject().put("max_results", 51))) {
+            val api = Api().apply { responses += labels() }
+            assertTrue(runCatching { invoke(runtime(api), GmailConnector.LIST_LABELS, args) }.isFailure)
+        }
+    }
+}

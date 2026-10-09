@@ -75,6 +75,9 @@ import com.jarvys.agent.connectors.ConnectorPolicyChoice
 import com.jarvys.agent.connectors.ConnectorPolicySelector
 import com.jarvys.agent.connectors.ConnectorPermissionRow
 
+/** Display/test identifier for an actual scope, including the trailing-slash full-mail scope. */
+internal fun googleScopeName(scope: String): String = scope.removeSuffix("/").substringAfterLast('/')
+
 /** Reflected only by the Full variant; no Google API identifiers or resources enter Play sources. */
 class FullRemoteServicesPanel : FlavorRemoteServicesPanel {
     override fun supportsService(serviceId: String): Boolean =
@@ -100,8 +103,10 @@ class FullRemoteServicesPanel : FlavorRemoteServicesPanel {
                 registry = registry,
                 scopes = listOf(
                     GoogleOAuthProtocol.GMAIL_READ to R.string.full_google_scope_gmail_read,
+                    GoogleOAuthProtocol.GMAIL_MODIFY to R.string.full_google_scope_gmail_modify,
                     GoogleOAuthProtocol.GMAIL_COMPOSE to R.string.full_google_scope_gmail_compose,
                     GoogleOAuthProtocol.GMAIL_SEND to R.string.full_google_scope_gmail_send,
+                    GoogleOAuthProtocol.GMAIL_FULL to R.string.full_google_scope_gmail_full,
                 ),
                 selected = false,
                 onSelect = { onSelect(GmailConnector.ID, gmailTitle) },
@@ -133,8 +138,10 @@ class FullRemoteServicesPanel : FlavorRemoteServicesPanel {
                 registry = registry,
                 scopes = if (gmail) listOf(
                     GoogleOAuthProtocol.GMAIL_READ to R.string.full_google_scope_gmail_read,
+                    GoogleOAuthProtocol.GMAIL_MODIFY to R.string.full_google_scope_gmail_modify,
                     GoogleOAuthProtocol.GMAIL_COMPOSE to R.string.full_google_scope_gmail_compose,
                     GoogleOAuthProtocol.GMAIL_SEND to R.string.full_google_scope_gmail_send,
+                    GoogleOAuthProtocol.GMAIL_FULL to R.string.full_google_scope_gmail_full,
                 ) else listOf(
                     GoogleOAuthProtocol.DRIVE_READ to R.string.full_google_scope_drive_read,
                     GoogleOAuthProtocol.DRIVE_FILE to R.string.full_google_scope_drive_file,
@@ -283,18 +290,35 @@ internal fun GoogleServiceCard(
             }
             val readScopes = scopes.filter { it.first.endsWith("readonly") }
             val writeScopes = scopes.filterNot { it.first.endsWith("readonly") }
+            val actualGrants = manager.grantedScopes().filter { granted ->
+                if (connectorId == GmailConnector.ID) granted in GoogleOAuthProtocol.acceptedScopes(GoogleOAuthProtocol.GMAIL_SEND) ||
+                    granted == GoogleOAuthProtocol.GMAIL_READ else granted.startsWith("https://www.googleapis.com/auth/drive.")
+            }
+            Text(stringResource(R.string.full_google_capability_explanation), fontSize = 12.sp)
+            if (actualGrants.isNotEmpty()) Text(stringResource(R.string.full_google_actual_grants,
+                actualGrants.joinToString(", ", transform = ::googleScopeName)), fontSize = 12.sp,
+                modifier = Modifier.testTag("google-actual-grants"))
+            Text(stringResource(R.string.full_google_scope_deny_explanation), fontSize = 12.sp)
+            if (connectorId == GmailConnector.ID && !identityMode && GoogleOAuthProtocol.GMAIL_SEND in manager.grantedScopes() &&
+                !manager.isScopeGranted(GoogleOAuthProtocol.GMAIL_SEND)) {
+                Text(stringResource(R.string.full_google_legacy_send_unverified), fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.error)
+            }
             @Composable fun ScopeRows(rows: List<Pair<String, Int>>) {
                 rows.forEach { (scope, labelId) ->
-                    val granted = manager.isScopeGranted(scope)
-                    ConnectorPermissionRow(modifier = Modifier.testTag("google-scope-${scope.substringAfterLast('/')}-row"), content = {
+                    val effective = manager.effectiveGrantedScope(scope)
+                    val granted = effective != null
+                    ConnectorPermissionRow(modifier = Modifier.testTag("google-scope-${googleScopeName(scope)}-row"), content = {
                         Text(stringResource(labelId), fontSize = 14.sp)
+                        if (effective != null) Text(stringResource(R.string.full_google_granted_through, googleScopeName(effective)),
+                            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }, permission = {
                         val choices = if (granted) listOf(
                             ConnectorPolicyChoice(R.string.connector_policy_allow) {},
                             ConnectorPolicyChoice(R.string.connector_policy_deny) { disconnectScopes(scope) },
                         ) else listOf(ConnectorPolicyChoice(R.string.connector_add_permission) { authorizeScope(scope) })
                         ConnectorPolicySelector(
-                            modifier = Modifier.testTag("google-scope-${scope.substringAfterLast('/')}-control"),
+                            modifier = Modifier.testTag("google-scope-${googleScopeName(scope)}-control"),
                             selectedLabelResource = if (granted) R.string.connector_policy_allow else R.string.connector_add_permission,
                             choices = choices, enabled = isConfigured && !inProgress && revocation != GoogleRevocationState.PENDING && !pendingLegacy,
                         )
@@ -302,7 +326,19 @@ internal fun GoogleServiceCard(
                 }
             }
             ConnectorDetailSection(stringResource(R.string.remote_service_read_tool)) { ScopeRows(readScopes) }
-            if (writeScopes.isNotEmpty()) ConnectorDetailSection(stringResource(R.string.remote_service_write_tool)) { ScopeRows(writeScopes) }
+            if (connectorId == GmailConnector.ID) {
+                ConnectorDetailSection(stringResource(R.string.full_google_section_manage)) {
+                    ScopeRows(writeScopes.filter { it.first == GoogleOAuthProtocol.GMAIL_MODIFY })
+                    Text(stringResource(R.string.full_google_modify_explanation), fontSize = 12.sp)
+                }
+                ConnectorDetailSection(stringResource(R.string.full_google_section_compose_send)) {
+                    ScopeRows(writeScopes.filter { it.first in setOf(GoogleOAuthProtocol.GMAIL_COMPOSE, GoogleOAuthProtocol.GMAIL_SEND) })
+                }
+                ConnectorDetailSection(stringResource(R.string.full_google_section_irreversible)) {
+                    ScopeRows(writeScopes.filter { it.first == GoogleOAuthProtocol.GMAIL_FULL })
+                    Text(stringResource(R.string.full_google_full_explanation), fontSize = 12.sp)
+                }
+            } else if (writeScopes.isNotEmpty()) ConnectorDetailSection(stringResource(R.string.remote_service_write_tool)) { ScopeRows(writeScopes) }
             val definition = definitions.firstOrNull { it.id == connectorId }
             val writes = definition?.operations.orEmpty().filter { it.write }
             if (definition != null && writes.isNotEmpty()) ConnectorDetailSection(stringResource(R.string.connector_section_tools)) {
@@ -310,7 +346,11 @@ internal fun GoogleServiceCard(
                     val configured = remember(registry, definition, operation, autonomyRevision) {
                         registry.configuredAutonomyPolicy(definition, operation)
                     }
-                    val canAllow = operation.autonomyAllowed && registry.autonomyPolicyUnavailableUiReason(definition, operation) == null
+                    val requiredScope = if (connectorId == GmailConnector.ID) GmailConnector.requiredScope(operation.name)
+                        else GoogleOAuthProtocol.DRIVE_FILE
+                    val scopeAvailable = requiredScope != null && manager.isScopeGranted(requiredScope)
+                    val canAllow = scopeAvailable && operation.autonomyAllowed &&
+                        registry.autonomyPolicyUnavailableUiReason(definition, operation) == null
                     val choices = buildList {
                         add(ConnectorPolicyChoice(R.string.connector_policy_ask) { registry.setAutonomyPolicy(definition, operation, AutonomyPolicy.ASK) })
                         if (canAllow) add(ConnectorPolicyChoice(R.string.connector_policy_allow) {
@@ -328,6 +368,15 @@ internal fun GoogleServiceCard(
                             AutonomyPolicy.DENY -> R.string.connector_policy_deny
                         }, choices, modifier = Modifier.testTag("google-policy-${operation.name}-control"))
                     })
+                    // Keep explanatory text full-width. In the narrow label column it can make a
+                    // single 2x-text row taller than the viewport and clip the centered selector.
+                    if (!scopeAvailable) Text(stringResource(R.string.full_google_operation_scope_unavailable),
+                        fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.fillMaxWidth().testTag("google-policy-${operation.name}-unavailable"))
+                    if (connectorId == GmailConnector.ID && operation.name in setOf("delete_messages", "delete_label")) {
+                        Text(stringResource(R.string.full_google_irreversible_operation), fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.error, modifier = Modifier.fillMaxWidth())
+                    }
                 }
             }
             if (inProgress) {

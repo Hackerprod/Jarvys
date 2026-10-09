@@ -1,0 +1,29 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+  <string name="gmail_management_select">Reunir selección de mensajes</string>
+  <string name="gmail_management_selection">Consultar selección reunida</string>
+  <string name="gmail_management_batch_receipt">Consultar resultado del lote</string>
+  <string name="gmail_management_modify">Organizar mensajes</string>
+  <string name="gmail_management_trash">Mover mensajes a Papelera</string>
+  <string name="gmail_management_untrash">Restaurar mensajes de Papelera</string>
+  <string name="gmail_management_modify_threads">Organizar mensajes de hilos</string>
+  <string name="gmail_management_trash_threads">Mover mensajes de hilos a Papelera</string>
+  <string name="gmail_management_untrash_threads">Restaurar mensajes de hilos</string>
+  <string name="gmail_management_delete">Borrar definitivamente la selección</string>
+  <string name="gmail_management_get_label">Consultar etiqueta</string>
+  <string name="gmail_management_create_label">Crear etiqueta</string>
+  <string name="gmail_management_update_label">Editar etiqueta</string>
+  <string name="gmail_management_delete_label">Borrar etiqueta definitivamente</string>
+  <string name="gmail_management_account">Cuenta: %1$s</string>
+  <string name="gmail_management_count">Objetivos fijados: %1$d</string>
+  <string name="gmail_management_receipt">Resultado: %1$s</string>
+  <string name="gmail_management_targets">IDs: %1$s</string>
+  <string name="gmail_management_changes">Añadir: %1$s · Quitar: %2$s</string>
+  <string name="gmail_management_fixed_set">Solo se incluyen los mensajes reunidos. Los nuevos quedan fuera. Se omiten los cambios detectados antes de ejecutar; Gmail no garantiza una comprobación y escritura atómicas.</string>
+  <string name="gmail_management_label_preview">Etiqueta: %1$s · %2$s</string>
+  <string name="gmail_management_irreversible">Acción permanente. No se puede deshacer. La aprobación solo cubre esta cuenta y selección fija.</string>
+  <string name="gmail_management_delete_label_warning">Borrar la etiqueta la quita de todos los mensajes de esta cuenta. Los mensajes no se borran.</string>
+  <string name="gmail_management_compact">%1$s · %2$d · %3$s</string>
+    <string name="gmail_management_exclusions">Objetivos ausentes o no admitidos excluidos: %1$d</string>
+    <string name="gmail_management_records">Consultar lotes y selecciones</string>
+</resources>

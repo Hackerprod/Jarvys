@@ -1,10 +1,12 @@
-# Google Workspace connectors (UX19)
+# Google Workspace connectors (UX19, extended by UX31)
+
+Generic Gmail management, effective scopes, account proof and resumable receipts are documented in [GMAIL_MANAGEMENT.md](GMAIL_MANAGEMENT.md); that contract supersedes the original Gmail-only limitations below.
 
 ## Scope and authorization
 
 These native connectors are available in the Full distribution. They keep the existing Android Google Identity `AuthorizationClient` flow and the optional legacy Desktop OAuth client in Advanced. No client secret, service account or server OAuth flow is embedded in the APK.
 
-The connector is usable only when it is enabled and its base read scope is actually granted. Gmail read, compose and send, and Drive read and per-file write scopes are enabled separately. Interactive authorization requests the currently enabled set plus the feature selected by the user and stores only the actual granted set. A normal API call never launches consent for a new scope. Native access tokens remain in call-local memory; existing legacy refresh grants remain encrypted.
+The connector is usable only when it is enabled and its base read scope is actually granted. Gmail read, compose, send, reversible management and optional permanent deletion, and Drive read and per-file write capabilities are enabled separately. Interactive authorization requests the currently enabled set plus the feature selected by the user and stores only the actual granted set. A normal API call never launches consent for a new scope. Native access tokens remain in call-local memory; existing legacy refresh grants remain encrypted.
 
 An authorization attempt owns a monotonic session and a unique Activity result key. Cancellation, a changed account/configuration, local disconnect or Activity destruction invalidates the attempt; old callbacks cannot reconnect a new session. Write approvals capture that authorization epoch, and request-lease acquisition rejects an account/configuration change even after approval. The UI exposes authorization progress/cancel and distinguishes local disconnection from remote revocation. Remote revocation is project-wide and is reported as verified only after Google acknowledges it. A failed or interrupted request can leave the Google grant active. Legacy retry credentials remain encrypted until confirmation; explicitly forgetting the local retry credential requires a warning and does not claim remote revocation.
 

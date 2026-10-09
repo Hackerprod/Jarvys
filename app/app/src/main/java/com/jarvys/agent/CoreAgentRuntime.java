@@ -1842,6 +1842,8 @@ public final class CoreAgentRuntime {
     List<CoreTool> result = new ArrayList<>();
     for (ConnectorDefinition definition : registry.connectedDefinitions()) {
       for (ConnectorOperation operation : definition.getOperations()) {
+        if (definition.getOperationAccessGranted() != null
+            && !definition.getOperationAccessGranted().invoke(operation.getName())) continue;
         result.add(new CoreConnectorTool(registry, definition, operation).withConversation(context, sessionId));
       }
     }

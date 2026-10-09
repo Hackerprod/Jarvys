@@ -292,10 +292,10 @@
     <string name="approval_allow_failed_detail">This action was approved, but Allow mode was not enabled: %1$s</string>
     <string name="approval_permission_required_reason">Grant %1$s permission to enable automatic execution.</string>
     <string name="approval_notifications_required_reason">Enable Jarvys notifications to keep Allow mode auditable.</string>
-    <string name="approval_system_confirmation_reason">This write requires confirmation in the system app and cannot run automatically.</string>
+    <string name="approval_system_confirmation_reason">This action requires explicit confirmation and cannot run automatically.</string>
     <string name="approval_autonomy_connector_unavailable">This connector is no longer available.</string>
     <string name="approval_autonomy_operation_unavailable">This operation is no longer available.</string>
-    <string name="approval_autonomy_system_confirmation">This operation requires confirmation in the system app.</string>
+    <string name="approval_autonomy_system_confirmation">This operation requires explicit confirmation.</string>
     <string name="approval_autonomy_reconnect_required">Reconnect this connector to use Allow mode.</string>
     <string name="approval_autonomy_permission_required">Grant %1$s permission to use Allow mode.</string>
     <string name="approval_autonomy_notification_permission_required">Grant notification permission to use Allow mode.</string>

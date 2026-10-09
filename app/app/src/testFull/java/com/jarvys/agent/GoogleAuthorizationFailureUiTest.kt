@@ -96,7 +96,7 @@ class GoogleAuthorizationFailureUiTest {
             }
         }
         val addPermission = compose.activity.getString(R.string.connector_add_permission)
-        // COMPOSE is the first ungranted feature; SEND remains a separate untouched choice.
+        // COMPOSE is the first ungranted feature; its Google scope also permits sending.
         compose.onAllNodesWithText(addPermission)[0].performScrollTo().performClick()
         compose.onNode(hasText(addPermission) and hasAnyAncestor(isPopup())).performClick()
         val errorText = googleOAuthDiagnosticMessage(compose.activity, failure)
@@ -113,7 +113,8 @@ class GoogleAuthorizationFailureUiTest {
         assertEquals(listOf(setOf(GoogleOAuthProtocol.GMAIL_READ, GoogleOAuthProtocol.GMAIL_COMPOSE),
             setOf(GoogleOAuthProtocol.GMAIL_READ, GoogleOAuthProtocol.GMAIL_COMPOSE)), requested)
         assertTrue(manager.isScopeGranted(GoogleOAuthProtocol.GMAIL_COMPOSE))
-        assertFalse(manager.isScopeGranted(GoogleOAuthProtocol.GMAIL_SEND))
+        assertTrue(manager.isScopeGranted(GoogleOAuthProtocol.GMAIL_SEND))
+        assertFalse(GoogleOAuthProtocol.GMAIL_SEND in manager.grantedScopes())
     }
 
     private fun checkFailure(fontScale: Float, dark: Boolean) {

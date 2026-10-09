@@ -47,6 +47,9 @@ interface GoogleRestAuthorization {
     /** Opaque, process-local approval context; it is never an account identifier or credential. */
     fun currentAuthorizationEpoch(): Long = 0L
     fun isScopeGranted(scope: String): Boolean
+    /** Prove the actual Gmail token account before review/dispatch; unsupported implementations fail closed. */
+    fun verifyGmailAccount(capability: String, expectedAccount: String?, token: CancellationToken,
+                           epoch: Long): String = error("Gmail account verification is unavailable")
     fun request(scope: String, method: String, url: String, body: String? = null,
                 contentType: String = "application/json"): GoogleHttpResponse
     fun requestCancellable(scope: String, method: String, url: String, body: String? = null,
@@ -127,7 +130,7 @@ internal object GoogleHttpPolicy {
             method == "POST" && uri.rawQuery == null
         val valid = when {
             scope == null -> gmail || drive || oauth
-            scope.startsWith("https://www.googleapis.com/auth/gmail.") -> gmail
+            scope.startsWith("https://www.googleapis.com/auth/gmail.") || scope == GoogleOAuthProtocol.GMAIL_FULL -> gmail
             scope in setOf(GoogleOAuthProtocol.DRIVE_READ, GoogleOAuthProtocol.DRIVE_FILE) -> drive
             else -> false
         }

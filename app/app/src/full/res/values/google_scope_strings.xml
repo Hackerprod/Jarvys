@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="full_google_scope_gmail_modify">Manage mail · Optional</string>
+    <string name="full_google_scope_gmail_full">Permanent deletion · Optional full access</string>
+    <string name="full_google_section_manage">Mailbox management</string>
+    <string name="full_google_section_compose_send">Drafts and sending</string>
+    <string name="full_google_section_irreversible">Irreversible actions · optional</string>
+    <string name="full_google_capability_explanation">Google permissions determine which API actions are available. App tool policies below separately control Ask, Allow and Deny. Opening this screen never grants permissions.</string>
+    <string name="full_google_actual_grants">Scopes actually granted by Google: %1$s</string>
+    <string name="full_google_granted_through">Available through %1$s</string>
+    <string name="full_google_scope_deny_explanation">Deny on a Google permission disconnects both Gmail and Drive locally. To block only one action, use its tool policy below.</string>
+    <string name="full_google_modify_explanation">gmail.modify permits reading, drafting and sending at Google, as well as labels, archive, read state, spam, trash and restore. It cannot permanently delete messages. These Google permissions do not authorize autonomous app actions.</string>
+    <string name="full_google_full_explanation">Full mail access includes reading, drafting, sending, mailbox management and permanent message deletion. Enable it only if needed. Each irreversible action requires review of the exact targets; it cannot use Allow. Deleting a label also permanently removes its label assignments and requires review.</string>
+    <string name="full_google_operation_scope_unavailable">Unavailable · Google permission needed</string>
+    <string name="full_google_irreversible_operation">Irreversible · Review every action</string>
+    <string name="full_google_legacy_send_unverified">This send-only Google token cannot verify its account. Sending is unavailable until you explicitly enable a profile-capable permission, such as drafts, or reconnect with Android authorization. No extra permission is requested automatically.</string>
+    <string name="full_google_account_mismatch">Google permissions belong to different accounts or the account changed. No action was sent. Reconnect the intended account and review the action again.</string>
+    <string name="full_google_account_unverified">Google did not return a verifiable Gmail account. No action was sent.</string>
+    <string name="full_google_account_pin_failed">The verified Google account could not be saved. No action was sent.</string>
+</resources>

@@ -292,10 +292,10 @@
     <string name="approval_allow_failed_detail">La acción se aprobó, pero no se activó la autonomía: %1$s</string>
     <string name="approval_permission_required_reason">Concede el permiso %1$s para activar la ejecución automática.</string>
     <string name="approval_notifications_required_reason">Activa las notificaciones de Jarvys para mantener la autonomía auditable.</string>
-    <string name="approval_system_confirmation_reason">Esta escritura requiere confirmación en la aplicación del sistema y no puede ejecutarse automáticamente.</string>
+    <string name="approval_system_confirmation_reason">Esta acción requiere confirmación explícita y no puede ejecutarse automáticamente.</string>
     <string name="approval_autonomy_connector_unavailable">Este conector ya no está disponible.</string>
     <string name="approval_autonomy_operation_unavailable">Esta operación ya no está disponible.</string>
-    <string name="approval_autonomy_system_confirmation">Esta operación requiere confirmación en la aplicación del sistema.</string>
+    <string name="approval_autonomy_system_confirmation">Esta operación requiere confirmación explícita.</string>
     <string name="approval_autonomy_reconnect_required">Reconecta este conector para usar Permitir.</string>
     <string name="approval_autonomy_permission_required">Concede el permiso de %1$s para usar Permitir.</string>
     <string name="approval_autonomy_notification_permission_required">Concede el permiso de notificaciones para usar Permitir.</string>

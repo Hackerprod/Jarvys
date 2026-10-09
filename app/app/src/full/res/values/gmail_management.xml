@@ -1,0 +1,29 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+  <string name="gmail_management_select">Collect message selection</string>
+  <string name="gmail_management_selection">Read collected selection</string>
+  <string name="gmail_management_batch_receipt">Read batch receipt</string>
+  <string name="gmail_management_modify">Organize messages</string>
+  <string name="gmail_management_trash">Move messages to Trash</string>
+  <string name="gmail_management_untrash">Restore messages from Trash</string>
+  <string name="gmail_management_modify_threads">Organize thread messages</string>
+  <string name="gmail_management_trash_threads">Move thread messages to Trash</string>
+  <string name="gmail_management_untrash_threads">Restore thread messages</string>
+  <string name="gmail_management_delete">Permanently delete selected mail</string>
+  <string name="gmail_management_get_label">Read label</string>
+  <string name="gmail_management_create_label">Create label</string>
+  <string name="gmail_management_update_label">Edit label</string>
+  <string name="gmail_management_delete_label">Permanently delete label</string>
+  <string name="gmail_management_account">Account: %1$s</string>
+  <string name="gmail_management_count">Fixed targets: %1$d</string>
+  <string name="gmail_management_receipt">Receipt: %1$s</string>
+  <string name="gmail_management_targets">IDs: %1$s</string>
+  <string name="gmail_management_changes">Add: %1$s · Remove: %2$s</string>
+  <string name="gmail_management_fixed_set">Only the collected messages are included. New arrivals are excluded. Changes detected during preflight are skipped; Gmail does not provide an atomic check-and-write guarantee.</string>
+  <string name="gmail_management_label_preview">Label: %1$s · %2$s</string>
+  <string name="gmail_management_irreversible">Permanent action. It cannot be undone. This approval applies only to this account and fixed set.</string>
+  <string name="gmail_management_delete_label_warning">Deleting this label removes it from all messages in this account. Messages themselves are not deleted.</string>
+  <string name="gmail_management_compact">%1$s · %2$d · %3$s</string>
+    <string name="gmail_management_exclusions">Excluded missing/unsupported targets: %1$d</string>
+    <string name="gmail_management_records">List mailbox checkpoints</string>
+</resources>

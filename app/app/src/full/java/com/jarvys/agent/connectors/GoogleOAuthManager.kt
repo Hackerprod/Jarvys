@@ -11,6 +11,7 @@ import android.os.Looper
 import androidx.browser.customtabs.CustomTabsIntent
 import com.jarvys.agent.CancellationToken
 import com.jarvys.agent.SecretStore
+import com.jarvys.agent.R
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -21,6 +22,7 @@ import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.security.SecureRandom
+import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
@@ -43,6 +45,7 @@ class GoogleOAuthManager internal constructor(
     private val _stateRevision = MutableStateFlow(0L)
     val stateRevision: StateFlow<Long> = _stateRevision.asStateFlow()
     @Volatile private var activeActivity: WeakReference<Activity>? = null
+    @Volatile private var gmailVerifiedAccount: Pair<Long, String>? = null
     @Volatile private var revokeState = runCatching {
         GoogleRevocationState.valueOf(preferences.getString(KEY_REVOCATION_STATE, "NOT_REQUESTED").orEmpty())
     }.getOrDefault(GoogleRevocationState.NOT_REQUESTED).let {
@@ -102,17 +105,157 @@ class GoogleOAuthManager internal constructor(
         changed()
     }
 
+    /** Effective API capability; never invent implied entries in the actual grant snapshot. */
     override fun isScopeGranted(scope: String): Boolean {
         validateScope(scope)
-        // The encrypted pending marker itself is authoritative across a crash before the local preference write.
-        if (hasPendingLegacyRevocation() || preferences.getBoolean(KEY_LOCALLY_DISABLED, false)) return false
-        if (isIdentityMode()) return scope in identityGrantedScopes()
-        val owner = currentOwnerId() ?: return false
-        val encoded = scopeKey(scope)
-        val storedScopes = secrets.getConnectorSecret(owner, "grant_${encoded}_scopes").orEmpty().split(' ')
-        return scope in storedScopes && !secrets.getConnectorSecret(owner, "grant_${encoded}_refresh").isNullOrBlank()
+        return effectiveGrantedScope(scope) != null
     }
-    fun grantedScopes(): Set<String> = GoogleOAuthProtocol.ALLOWED_SCOPES.filterTo(linkedSetOf(), ::isScopeGranted)
+
+    /** Least actual accepted grant whose account can be verified for a Gmail send. */
+    fun effectiveGrantedScope(scope: String): String? {
+        validateScope(scope)
+        val granted = grantedScopes()
+        if (granted.isEmpty()) return null
+        if (isIdentityMode() || scope != GoogleOAuthProtocol.GMAIL_SEND) {
+            return GoogleOAuthProtocol.effectiveGrantedScope(scope, granted)
+        }
+        val owner = currentOwnerId() ?: return null
+        return selectLegacyGrant(scope, owner)?.first
+    }
+
+    /** Exact known Google grants that are usable locally, without capability expansion. */
+    fun grantedScopes(): Set<String> {
+        // The encrypted pending marker itself is authoritative across a crash before the preference write.
+        if (hasPendingLegacyRevocation() || preferences.getBoolean(KEY_LOCALLY_DISABLED, false)) return emptySet()
+        if (isIdentityMode()) return identityGrantedScopes()
+        val owner = currentOwnerId() ?: return emptySet()
+        return legacyGrants(owner).flatMapTo(linkedSetOf()) { it.scopes }
+    }
+
+    private data class LegacyGrant(val storageScope: String, val scopes: Set<String>)
+    private fun legacyGrants(owner: String): List<LegacyGrant> = GoogleOAuthProtocol.ALLOWED_SCOPES.mapNotNull { scope ->
+        val key = scopeKey(scope)
+        if (secrets.getConnectorSecret(owner, "grant_${key}_refresh").isNullOrBlank()) null
+        else LegacyGrant(scope, GoogleIdentityPolicy.normalizeScopes(
+            secrets.getConnectorSecret(owner, "grant_${key}_scopes").orEmpty().split(' ')))
+    }
+
+    private fun selectLegacyGrant(capability: String, owner: String): Pair<String, LegacyGrant>? {
+        val grants = legacyGrants(owner)
+        for (accepted in GoogleOAuthProtocol.acceptedScopes(capability)) {
+            val grant = grants.filter { accepted in it.scopes }.sortedBy { if (it.storageScope == accepted) 0 else 1 }
+                .firstOrNull { capability != GoogleOAuthProtocol.GMAIL_SEND ||
+                    it.scopes.any(GMAIL_PROFILE_SCOPES::contains) }
+            if (grant != null) return accepted to grant
+        }
+        return null
+    }
+
+    private class AuthorizedAccess(val scope: String, val key: String, val owner: String?,
+        val tokenScopes: Set<String>, var token: String, var nativeAccount: String?)
+
+    private fun authorizedAccess(capability: String, lease: GoogleAuthorizationSession.Lease): AuthorizedAccess {
+        if (isIdentityMode()) {
+            val actual = GoogleOAuthProtocol.effectiveGrantedScope(capability, grantedScopes())
+                ?: error(appContext.getString(R.string.full_google_scope_not_granted))
+            val grant = authorizeIdentity(actual, lease, allowResolution = false)
+            return AuthorizedAccess(actual, scopeKey(actual), null, grant.grantedScopes, grant.accessToken,
+                grant.accountEmail?.takeIf(String::isNotBlank))
+        }
+        val owner = currentOwnerId() ?: error("Configure your Google OAuth client")
+        val selected = selectLegacyGrant(capability, owner)
+            ?: if (capability == GoogleOAuthProtocol.GMAIL_SEND && GoogleOAuthProtocol.effectiveGrantedScope(capability, grantedScopes()) != null)
+                error(appContext.getString(R.string.full_google_legacy_send_unverified))
+            else error(appContext.getString(R.string.full_google_scope_not_granted))
+        val key = scopeKey(selected.second.storageScope)
+        return AuthorizedAccess(selected.first, key, owner, selected.second.scopes,
+            validAccess(owner, key, selected.first, lease), null)
+    }
+
+    private fun refreshAccess(access: AuthorizedAccess, lease: GoogleAuthorizationSession.Lease) {
+        lease.token.throwIfCancelled()
+        if (access.owner == null) {
+            identityAuthorization.clearTokenCancellable(access.token, lease.token)
+            val grant = authorizeIdentity(access.scope, lease, allowResolution = false)
+            access.token = grant.accessToken
+            access.nativeAccount = grant.accountEmail?.takeIf(String::isNotBlank)
+        } else access.token = refresh(access.owner, access.key, access.scope, lease)
+    }
+
+    private fun clearAccess(access: AuthorizedAccess, lease: GoogleAuthorizationSession.Lease) = session.withCurrent(lease) {
+        if (access.owner == null) removeIdentityScope(access.scope) else clearGrant(access.owner, access.key)
+        session.invalidate()
+        changed()
+    }
+
+    private fun canonicalGmailAccount(value: String): String {
+        check(value.length in 3..320 && value.count { it == '@' } == 1 &&
+            value.none { it.isWhitespace() || it.isISOControl() }) { appContext.getString(R.string.full_google_account_unverified) }
+        return value.lowercase(Locale.ROOT)
+    }
+
+    private fun pinGmailAccount(account: String, expected: String?, lease: GoogleAuthorizationSession.Lease): String = session.withCurrent(lease) {
+        val actual = canonicalGmailAccount(account)
+        val pinned = gmailVerifiedAccount?.takeIf { it.first == lease.generation }?.second
+        val native = if (isIdentityMode()) identityAccountEmail()?.let(::canonicalGmailAccount) else null
+        if (listOfNotNull(expected?.let(::canonicalGmailAccount), pinned, native).any { it != actual }) {
+            session.invalidate()
+            changed()
+            error(appContext.getString(R.string.full_google_account_mismatch))
+        }
+        gmailVerifiedAccount = lease.generation to actual
+        if (isIdentityMode() && identityAccountEmail() != actual) {
+            check(preferences.edit().putString(KEY_IDENTITY_EMAIL, actual).commit()) {
+                appContext.getString(R.string.full_google_account_pin_failed)
+            }
+            changed()
+        }
+        actual
+    }
+
+    private fun proveGmailAccount(access: AuthorizedAccess, expected: String?, lease: GoogleAuthorizationSession.Lease): String {
+        // Native identity is bound by the selected Account in AuthorizationClient. A null account is
+        // never identity evidence: prove it with the exact token and pin the returned profile instead.
+        if (access.owner == null && access.nativeAccount != null) {
+            return pinGmailAccount(requireNotNull(access.nativeAccount), expected, lease)
+        }
+        if (access.owner == null && access.scope == GoogleOAuthProtocol.GMAIL_SEND &&
+            access.tokenScopes.none(GMAIL_PROFILE_SCOPES::contains) && isScopeGranted(GoogleOAuthProtocol.GMAIL_READ)) {
+            // AuthorizationResult may omit email. Prove an already-granted read token, then obtain
+            // a fresh send token with that explicit Account; never reuse the unbound send token.
+            val baseline = authorizedAccess(GoogleOAuthProtocol.GMAIL_READ, lease)
+            val account = proveGmailAccount(baseline, expected, lease)
+            val pinned = authorizeIdentity(access.scope, lease, allowResolution = false)
+            access.token = pinned.accessToken
+            access.nativeAccount = pinned.accountEmail?.takeIf(String::isNotBlank)
+            return pinGmailAccount(requireNotNull(access.nativeAccount), account, lease)
+        }
+        val profileScope = access.tokenScopes.firstOrNull(GMAIL_PROFILE_SCOPES::contains)
+            ?: error(appContext.getString(R.string.full_google_legacy_send_unverified))
+        val response = GoogleRequestExecutor(transport).execute(profileScope, "GET", GMAIL_PROFILE_ENDPOINT,
+            null, "application/json", lease.token, GoogleApiLimits.MAX_RESPONSE_BYTES, emptyMap(),
+            accessToken = { session.withCurrent(lease) { access.token } },
+            refresh = { refreshAccess(access, lease) }, repeatedUnauthorized = { clearAccess(access, lease) })
+        GoogleRestEndpoints.requireSuccess(GoogleHttpResponse(response.status, response.body.toString(Charsets.UTF_8), response.headers))
+        val account = runCatching { JSONObject(response.body.toString(Charsets.UTF_8)).optString("emailAddress") }.getOrDefault("")
+        return pinGmailAccount(account, expected, lease)
+    }
+
+    override fun verifyGmailAccount(capability: String, expectedAccount: String?, token: CancellationToken, epoch: Long): String {
+        validateScope(capability)
+        require(capability in GMAIL_CAPABILITIES) { "Only Gmail accounts can be verified here" }
+        token.throwIfCancelled()
+        val lease = synchronized(this) {
+            check(revokeState != GoogleRevocationState.PENDING && !isAuthorizationInProgress() &&
+                GoogleOAuthProtocol.effectiveGrantedScope(capability, grantedScopes()) != null) {
+                "Enable this Google feature in Settings first"
+            }
+            session.acquire(expectedEpoch = epoch)
+        }
+        val unlink = token.registerCancelAction { lease.token.cancel() }
+        return try { proveGmailAccount(authorizedAccess(capability, lease), expectedAccount, lease) }
+        finally { unlink.run(); session.release(lease) }
+    }
 
     fun authorize(activity: Activity, scope: String, onComplete: (Result<Unit>) -> Unit) {
         validateScope(scope)
@@ -152,19 +295,19 @@ class GoogleOAuthManager internal constructor(
 
     private fun authorizeIdentity(scope: String, lease: GoogleAuthorizationSession.Lease, allowResolution: Boolean): GoogleIdentityGrant {
         val previousEmail = identityAccountEmail()
-        // Re-request the coherent set the user has already enabled, plus only the clicked feature.
-        // AuthorizationResult often has no email. The actual returned grant, not inferred identity, is authoritative.
         val previousScopes = identityGrantedScopes()
-        val requested = previousScopes + scope
+        // Only a user click can expand the persisted grant set. Background requests ask Google for
+        // the least already-granted scope accepted by this endpoint, never its broader siblings.
+        val requested = if (allowResolution) previousScopes +
+            (GoogleOAuthProtocol.effectiveGrantedScope(scope, previousScopes) ?: scope) else setOf(scope)
         val grant = try { identityAuthorization.authorizeCancellable(requested, previousEmail, lease.token, allowResolution) }
         catch (error: GoogleIdentityAuthorizationException) {
-            if (error.reason == GoogleIdentityFailure.SCOPE_NOT_GRANTED) session.withCurrent(lease) {
-                check(preferences.edit().remove(KEY_IDENTITY_SCOPES).putBoolean(KEY_IDENTITY_REAUTHORIZE, true).commit()) {
-                    "Could not clear Google permissions"
-                }
-                if (!allowResolution) session.invalidate()
+            if (!allowResolution && error.reason == GoogleIdentityFailure.SCOPE_NOT_GRANTED) session.withCurrent(lease) {
+                removeIdentityScope(scope)
+                session.invalidate()
                 changed()
             }
+            // A refused/cancelled expansion does not revoke previously working permissions.
             throw error
         }
         session.withCurrent(lease) {
@@ -177,22 +320,41 @@ class GoogleOAuthManager internal constructor(
                 throw GoogleIdentityAuthorizationException(GoogleIdentityFailure.SCOPE_NOT_GRANTED,
                     "Google account changed; reconnect and review this operation with the selected account")
             }
-            // Never merge permissions absent from this response, even for the same or an unknown account.
-            val scopes = GoogleIdentityPolicy.normalizeScopes(grant.grantedScopes).intersect(requested)
-            check(preferences.edit().putString(KEY_IDENTITY_SCOPES, scopes.joinToString(" "))
-                .putString(KEY_IDENTITY_EMAIL, email.orEmpty()).putBoolean(KEY_IDENTITY_REAUTHORIZE, false).commit()) {
-                "Could not save Google connection status"
+            val returned = GoogleIdentityPolicy.normalizeScopes(grant.grantedScopes)
+            if (grant.accessToken.isBlank()) throw GoogleIdentityAuthorizationException(GoogleIdentityFailure.SCOPE_NOT_GRANTED,
+                "Google did not return an access token for this feature")
+            if (!allowResolution) {
+                // A narrowed token is not evidence that unrequested sibling grants were revoked.
+                // A missing selected scope is a real change: invalidate prepared operations before I/O.
+                if (scope !in returned) {
+                    val stillGranted = (previousScopes - scope) + returned.filter {
+                        GoogleOAuthProtocol.effectiveGrantedScope(it, previousScopes) != null
+                    }
+                    check(preferences.edit().putString(KEY_IDENTITY_SCOPES, stillGranted.joinToString(" "))
+                        .putBoolean(KEY_IDENTITY_REAUTHORIZE, true).commit()) { "Could not update Google connection status" }
+                    session.invalidate()
+                    changed()
+                    throw GoogleIdentityAuthorizationException(GoogleIdentityFailure.SCOPE_NOT_GRANTED,
+                        "Google permissions changed; prepare and approve this operation again")
+                }
+            } else {
+                // The complete interactive response is authoritative, including actual supersets.
+                // Never synthesize readonly/send scopes from a modify/full grant.
+                check(preferences.edit().putString(KEY_IDENTITY_SCOPES, returned.joinToString(" "))
+                    .putString(KEY_IDENTITY_EMAIL, email.orEmpty()).putBoolean(KEY_IDENTITY_REAUTHORIZE, false).commit()) {
+                    "Could not save Google connection status"
+                }
+                changed()
             }
-            changed()
-            if (!allowResolution && scopes != previousScopes) {
-                session.invalidate()
+            if (GoogleOAuthProtocol.effectiveGrantedScope(scope, returned) == null) {
                 throw GoogleIdentityAuthorizationException(GoogleIdentityFailure.SCOPE_NOT_GRANTED,
-                    "Google permissions changed; prepare and approve this operation again")
+                    "Google did not grant the enabled feature permission")
             }
         }
-        if (scope !in grant.grantedScopes) throw GoogleIdentityAuthorizationException(GoogleIdentityFailure.SCOPE_NOT_GRANTED,
-            "Google did not grant the enabled feature permission")
-        return grant
+        // A silent request with an explicit Account remains bound even when Google omits email.
+        // Capture the request's original pin; a concurrently acquired later pin is not proof of this token.
+        return if (!allowResolution && grant.accountEmail.isNullOrBlank() && previousEmail != null)
+            grant.copy(accountEmail = previousEmail) else grant
     }
 
     private fun identityGrantedScopes(): Set<String> = GoogleIdentityPolicy.normalizeScopes(
@@ -252,8 +414,8 @@ class GoogleOAuthManager internal constructor(
                 val refresh = response.optString("refresh_token")
                 require(access.isNotBlank() && refresh.isNotBlank()) { "Google OAuth did not return access and refresh tokens" }
                 val granted = response.optString("scope").split(' ').filter(String::isNotBlank).toSet().ifEmpty { setOf(scope) }
-                require(scope in granted) { "Google did not grant the requested feature scope" }
-                session.withCurrent(lease) { saveGrant(owner, scope, access, refresh, expiry(response), granted) }
+                require(GoogleOAuthProtocol.effectiveGrantedScope(scope, granted) != null) { "Google did not grant the requested feature scope" }
+                session.withCurrent(lease) { saveGrant(owner, scopeKey(scope), access, refresh, expiry(response), GoogleIdentityPolicy.normalizeScopes(granted)) }
             } finally { unregister.run() }
         }
     }
@@ -284,27 +446,29 @@ class GoogleOAuthManager internal constructor(
         }
         val unlink = token.registerCancelAction { lease.token.cancel() }
         try {
-            var access: String
-            val native = isIdentityMode()
-            val owner = if (native) null else currentOwnerId() ?: error("Configure your Google OAuth client")
-            val key = scopeKey(scope)
-            access = if (native) authorizeIdentity(scope, lease, allowResolution = false).accessToken
-                else validAccess(requireNotNull(owner), key, scope, lease)
-            return GoogleRequestExecutor(transport).execute(scope, method, url, body, contentType, lease.token,
-                maxResponseBytes, requestHeaders, accessToken = { session.withCurrent(lease) { access } },
+            val access = authorizedAccess(scope, lease)
+            val gmailWrite = scope in GMAIL_CAPABILITIES && method != "GET"
+            val expectedAccount = if (gmailWrite) try {
+                proveGmailAccount(access, gmailVerifiedAccount?.takeIf { it.first == lease.generation }?.second, lease)
+            } catch (error: Exception) {
+                // This marker is emitted only before the mutation executor is entered. A later
+                // refresh/proof failure is not marked pre-dispatch because an attempt already ran.
+                if (error is java.util.concurrent.CancellationException) throw error
+                throw GooglePreDispatchAuthorizationException(error)
+            } else null
+            return GoogleRequestExecutor(transport).execute(access.scope, method, url, body, contentType, lease.token,
+                maxResponseBytes, requestHeaders, accessToken = { session.withCurrent(lease) { access.token } },
                 refresh = {
-                    lease.token.throwIfCancelled()
-                    if (native) {
-                        identityAuthorization.clearTokenCancellable(access, lease.token)
-                        access = authorizeIdentity(scope, lease, allowResolution = false).accessToken
-                    } else access = refresh(requireNotNull(owner), key, scope, lease)
-                }, repeatedUnauthorized = {
-                    session.withCurrent(lease) {
-                        if (native) removeIdentityScope(scope) else clearGrant(requireNotNull(owner), key)
-                        session.invalidate()
-                        changed()
+                    refreshAccess(access, lease)
+                    if (gmailWrite) proveGmailAccount(access, expectedAccount, lease)
+                }, repeatedUnauthorized = { clearAccess(access, lease) }).also { response ->
+                    session.withCurrent(lease) { Unit }
+                    // Management's explicit profile reads also pin its exact selected token's identity.
+                    if (scope in GMAIL_CAPABILITIES && method == "GET" && url == GMAIL_PROFILE_ENDPOINT && response.status in 200..299) {
+                        val account = runCatching { JSONObject(response.body.toString(Charsets.UTF_8)).optString("emailAddress") }.getOrDefault("")
+                        pinGmailAccount(account, null, lease)
                     }
-                }).also { session.withCurrent(lease) { Unit } }
+                }
         } finally { unlink.run(); session.release(lease) }
     }
 
@@ -415,14 +579,27 @@ class GoogleOAuthManager internal constructor(
         val access = response.optString("access_token")
         check(access.isNotBlank()) { "Google OAuth refresh returned no access token" }
         val rotated = response.optString("refresh_token").takeIf(String::isNotBlank) ?: refresh
-        val scopes = response.optString("scope").split(' ').filter(String::isNotBlank).toSet().ifEmpty { setOf(scope) }
-        session.withCurrent(lease) { saveGrant(owner, scope, access, rotated, expiry(response), scopes) }
+        val previous = GoogleIdentityPolicy.normalizeScopes(
+            secrets.getConnectorSecret(owner, "grant_${grant}_scopes").orEmpty().split(' '))
+        // Refresh may confirm or narrow a grant. Only explicit interactive authorization can add one.
+        val scopes = GoogleIdentityPolicy.normalizeScopes(response.optString("scope").split(' ')
+            .filter(String::isNotBlank).ifEmpty { previous.toList() }).filterTo(linkedSetOf()) {
+                GoogleOAuthProtocol.effectiveGrantedScope(it, previous) != null
+            }
+        session.withCurrent(lease) {
+            saveGrant(owner, grant, access, rotated, expiry(response), scopes)
+            if (scope !in scopes || scopes != previous) {
+                session.invalidate()
+                changed()
+                throw GoogleIdentityAuthorizationException(GoogleIdentityFailure.SCOPE_NOT_GRANTED,
+                    "Google permissions changed; prepare and approve this operation again")
+            }
+        }
         return access
     }
     private fun tokenRequest(fields: Map<String, String>, token: CancellationToken): JSONObject =
         GoogleOAuthProtocol.exchangeToken(transport, fields, token)
-    private fun saveGrant(owner: String, scope: String, access: String, refresh: String, expiresAt: Long, scopes: Set<String>) {
-        val key = scopeKey(scope)
+    private fun saveGrant(owner: String, key: String, access: String, refresh: String, expiresAt: Long, scopes: Set<String>) {
         secrets.saveConnectorSecret(owner, "grant_${key}_access", access)
         secrets.saveConnectorSecret(owner, "grant_${key}_refresh", refresh)
         secrets.saveConnectorSecret(owner, "grant_${key}_expiry", expiresAt.toString())
@@ -445,12 +622,18 @@ class GoogleOAuthManager internal constructor(
         GoogleOAuthProtocol.GMAIL_READ -> "gmail_read"
         GoogleOAuthProtocol.GMAIL_COMPOSE -> "gmail_compose"
         GoogleOAuthProtocol.GMAIL_SEND -> "gmail_send"
+        GoogleOAuthProtocol.GMAIL_MODIFY -> "gmail_modify"
+        GoogleOAuthProtocol.GMAIL_FULL -> "gmail_full"
         GoogleOAuthProtocol.DRIVE_READ -> "drive_read"
         GoogleOAuthProtocol.DRIVE_FILE -> "drive_file"
         else -> error("Unsupported Google feature scope")
     }
     private fun validateScope(scope: String) { require(scope in GoogleOAuthProtocol.ALLOWED_SCOPES) { "Unsupported Google scope" } }
     companion object {
+        private val GMAIL_CAPABILITIES = setOf(GoogleOAuthProtocol.GMAIL_READ, GoogleOAuthProtocol.GMAIL_COMPOSE,
+            GoogleOAuthProtocol.GMAIL_SEND, GoogleOAuthProtocol.GMAIL_MODIFY, GoogleOAuthProtocol.GMAIL_FULL)
+        private val GMAIL_PROFILE_SCOPES = GMAIL_CAPABILITIES - GoogleOAuthProtocol.GMAIL_SEND
+        private const val GMAIL_PROFILE_ENDPOINT = "https://gmail.googleapis.com/gmail/v1/users/me/profile"
         private const val PREFERENCES = "jarvys_full_oauth_config"
         private const val CLIENT_ID = "installed_client_id"
         private const val ACCOUNT_LABEL = "installed_account_label"
@@ -476,6 +659,9 @@ class GoogleOAuthManager internal constructor(
     }
 }
 
+/** No Gmail mutation was dispatched by the failing request. Safe to release that request's journal reservation. */
+class GooglePreDispatchAuthorizationException(cause: Exception) : IllegalStateException(cause.message, cause)
+
 class GoogleOAuthException(providerError: String) : IllegalStateException("Google OAuth authorization failed") {
     val providerError: String = providerError.takeIf { it in setOf("redirect_uri_mismatch", "access_blocked", "access_denied",
         "callback_timeout", "invalid_grant", "invalid_client", "invalid_request", "invalid_scope", "unauthorized_client") } ?: "other"
@@ -488,9 +674,25 @@ object GoogleOAuthProtocol {
     const val GMAIL_READ = "https://www.googleapis.com/auth/gmail.readonly"
     const val GMAIL_COMPOSE = "https://www.googleapis.com/auth/gmail.compose"
     const val GMAIL_SEND = "https://www.googleapis.com/auth/gmail.send"
+    const val GMAIL_MODIFY = "https://www.googleapis.com/auth/gmail.modify"
+    const val GMAIL_FULL = "https://mail.google.com/"
     const val DRIVE_READ = "https://www.googleapis.com/auth/drive.readonly"
     const val DRIVE_FILE = "https://www.googleapis.com/auth/drive.file"
-    val ALLOWED_SCOPES = setOf(GMAIL_READ, GMAIL_COMPOSE, GMAIL_SEND, DRIVE_READ, DRIVE_FILE)
+    val ALLOWED_SCOPES = setOf(GMAIL_READ, GMAIL_COMPOSE, GMAIL_SEND, GMAIL_MODIFY, GMAIL_FULL, DRIVE_READ, DRIVE_FILE)
+
+    /** Endpoint-accepted scopes ordered from least to most privilege. No grant is inferred. */
+    fun acceptedScopes(capability: String): List<String> = when (capability) {
+        GMAIL_READ -> listOf(GMAIL_READ, GMAIL_MODIFY, GMAIL_FULL)
+        GMAIL_COMPOSE -> listOf(GMAIL_COMPOSE, GMAIL_MODIFY, GMAIL_FULL)
+        GMAIL_SEND -> listOf(GMAIL_SEND, GMAIL_COMPOSE, GMAIL_MODIFY, GMAIL_FULL)
+        GMAIL_MODIFY -> listOf(GMAIL_MODIFY, GMAIL_FULL)
+        GMAIL_FULL -> listOf(GMAIL_FULL)
+        DRIVE_READ, DRIVE_FILE -> listOf(capability)
+        else -> emptyList()
+    }
+
+    fun effectiveGrantedScope(capability: String, actualGrants: Set<String>): String? =
+        acceptedScopes(capability).firstOrNull(actualGrants::contains)
     private const val URL_SAFE = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 
     fun authorizationUrl(clientId: String, redirectUri: String, scope: String, state: String, challenge: String): String {
