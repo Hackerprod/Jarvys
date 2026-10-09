@@ -644,7 +644,9 @@ public final class WorkspaceTools {
               + " Without path, opens the ordinary workspace index.html as a live preview."
               + " An explicit path (including /project/site/index.html) captures an immutable HTML preview"
               + " and native attachment in the owning main chat, with bounded local CSS/JS/images."
-              + " External resources are disabled; missing assets and capture limits are reported.",
+              + " External resources are disabled; missing assets and capture limits are reported."
+              + " Phone HTML should author a device-width viewport and responsive CSS; the viewer preserves"
+              + " explicit viewport declarations and never rewrites source/downloads or fixes desktop-width CSS.",
           WorkspaceTools.properties("path", "string"),
           Collections.emptyList());
     }

@@ -210,6 +210,10 @@ internal fun createPreviewWebView(context: Context, content: WorkspacePreviewCon
         settings.blockNetworkLoads = true
         settings.javaScriptCanOpenWindowsAutomatically = false
         settings.setSupportMultipleWindows(false)
+        // Honor authored mobile viewports. Missing viewports get a bounded, presentation-only
+        // default in the main-document response; never shrink a fixed desktop layout to fit.
+        settings.useWideViewPort = true
+        settings.loadWithOverviewMode = false
         settings.setSupportZoom(true)
         settings.builtInZoomControls = true
         settings.displayZoomControls = false
@@ -228,10 +232,15 @@ private class WorkspacePreviewClient(private val content: WorkspacePreviewConten
             val mime = WorkspaceStore.mimeType(path)
             val headers = PreviewResponsePolicy.interactiveHeaders()
             val encoding = if (mime.startsWith("text/") || mime.contains("javascript") || mime.contains("json") || mime.contains("svg")) "UTF-8" else null
-            val input = content.open(path)
-            if (request.method == "HEAD") input.close()
+            val source = content.open(path)
+            val input = if (request.method == "HEAD") {
+                source.close()
+                ByteArrayInputStream(byteArrayOf())
+            } else if (request.isForMainFrame && mime == "text/html") {
+                PreviewMobileViewport.forRendering(source)
+            } else source
             WebResourceResponse(mime, encoding, 200, "OK", headers,
-                if (request.method == "HEAD") ByteArrayInputStream(byteArrayOf()) else input)
+                input)
         } catch (_: Exception) {
             response(404, "Local preview resource is unavailable")
         }

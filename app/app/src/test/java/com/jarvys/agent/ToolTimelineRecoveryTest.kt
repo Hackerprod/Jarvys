@@ -154,7 +154,10 @@ class ToolTimelineRecoveryTest {
             }
             val response = web.webViewClient.shouldInterceptRequest(web, request)
             assertEquals(200, response!!.statusCode)
-            assertEquals("<h1>Gardening preview persisted</h1>", response.data.bufferedReader().use { it.readText() })
+            assertEquals(PreviewMobileViewport.META + "<h1>Gardening preview persisted</h1>",
+                response.data.bufferedReader().use { it.readText() })
+            assertEquals("Mobile presentation must not rewrite the persisted original",
+                "<h1>Gardening preview persisted</h1>", previewStore.read("index.html"))
             assertEquals("History restore must not re-run the write", 1, writes.get())
         }
         AgentRunUiState.resetSession("reopen-cleanup")

@@ -1,0 +1,246 @@
+{
+  "schema": 1,
+  "task": "UX41 mobile Web preview",
+  "date_utc": "2026-10-09",
+  "version_code": 58,
+  "version_name": "1.2.51-UX41",
+  "source": {
+    "base_commit": "c30b0c89c121e4964e77784b1d3d598707404a4d",
+    "frozen_files": 919,
+    "final_source_manifest_sha256": "46ab3d06da386b0f4d58d2385d1a1550587ed6eafbd6efb2f83bba319eea3dba",
+    "pre_refinement_manifest_sha256": "6f7d5fe2a5a326c5a6c96bd5d7db4e9991e26dc62f3aacf03f0b67d83447c6e9",
+    "refinement_changed_files": [
+      "app/FILE_DELIVERY.md",
+      "app/WEB_PREVIEW_ACCEPTANCE.md",
+      "app/app/src/main/java/com/jarvys/agent/PreviewMobileViewport.kt",
+      "app/app/src/test/java/com/jarvys/agent/PreviewMobileViewportIntegrationTest.kt",
+      "app/app/src/test/java/com/jarvys/agent/PreviewMobileViewportTest.kt"
+    ],
+    "unchanged_files_between_gates": 914
+  },
+  "scope": {
+    "native_viewport_support": true,
+    "overview": false,
+    "ua_override": false,
+    "scale_override": false,
+    "text_zoom_override": false,
+    "presentation_only_utf8_main_frame_get": true,
+    "inspection_limit_bytes": 1048576,
+    "limit_basis": "Existing captured HTML per-file budget, not an Android API limit",
+    "source_snapshot_download_bytes_unchanged": true,
+    "authored_viewports_preserved": true,
+    "security_headers_origins_manifests_unchanged": true,
+    "ordinary_svg_supported_with_bounded_conservative_preflight": true
+  },
+  "tests": {
+    "pre_refinement_aggregate": {
+      "run": "ux41-v58-final-recheck-20261009T172915-5273e9de",
+      "passed": true,
+      "rows": [
+        {
+          "task": ":app:testFullDebugUnitTest",
+          "totals": {
+            "tests": 2533,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "suite_count": 336,
+          "guarded_forks": 6,
+          "blocked_attempts": 8
+        },
+        {
+          "task": ":app:testPlayDebugUnitTest",
+          "totals": {
+            "tests": 2151,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "suite_count": 297,
+          "guarded_forks": 5,
+          "blocked_attempts": 8
+        },
+        {
+          "task": ":apk-runtime:testDebugUnitTest",
+          "totals": {
+            "tests": 64,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "suite_count": 5,
+          "guarded_forks": 1,
+          "blocked_attempts": 0
+        },
+        {
+          "task": ":apk-runtime:testReleaseUnitTest",
+          "totals": {
+            "tests": 64,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "suite_count": 5,
+          "guarded_forks": 1,
+          "blocked_attempts": 0
+        }
+      ],
+      "scope": "Fresh host JVM/Robolectric only. Guarded HTTP(S) attempts were intercepted; not an Android network or rendering claim."
+    },
+    "final_source_targeted": {
+      "run": "ux41-svg-final-20261009T174730-6b488f63",
+      "passed": true,
+      "rows": [
+        {
+          "task": ":app:testFullDebugUnitTest",
+          "totals": {
+            "tests": 91,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "suite_count": 9,
+          "guarded_forks": 1,
+          "blocked_attempts": 2
+        },
+        {
+          "task": ":app:testPlayDebugUnitTest",
+          "totals": {
+            "tests": 91,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0
+          },
+          "suite_count": 9,
+          "guarded_forks": 1,
+          "blocked_attempts": 2
+        }
+      ],
+      "scope": "Fresh host JVM/Robolectric only. Guarded HTTP(S) attempts were intercepted; not an Android network or rendering claim."
+    },
+    "javascript": {
+      "passed": 9,
+      "failed": 0,
+      "skipped": 0,
+      "runtime_unchanged_after_check": true,
+      "log_sha256": "9282de6936a855331b6968f8b3d2b5e97259057b750c55961d9dc91761b96489"
+    },
+    "regression_cases_added_per_flavor": 45,
+    "final_targeted_does_not_claim_full_aggregate_rerun": true
+  },
+  "lint": [
+    {
+      "variant": "fullDebug",
+      "baseline_counts": {
+        "Error": 46,
+        "Warning": 264,
+        "Hint": 3
+      },
+      "current_counts": {
+        "Error": 46,
+        "Warning": 264,
+        "Hint": 3
+      },
+      "added": [],
+      "removed": [],
+      "passed": true
+    },
+    {
+      "variant": "playDebug",
+      "baseline_counts": {
+        "Error": 37,
+        "Warning": 260,
+        "Hint": 3
+      },
+      "current_counts": {
+        "Error": 37,
+        "Warning": 260,
+        "Hint": 3
+      },
+      "added": [],
+      "removed": [],
+      "passed": true
+    },
+    {
+      "variant": "release",
+      "baseline_counts": {
+        "Warning": 5
+      },
+      "current_counts": {
+        "Warning": 5
+      },
+      "added": [],
+      "removed": [],
+      "passed": true
+    }
+  ],
+  "artifact_preparation": {
+    "helper_sha256": "2753032c493b48c1d9420a7100e24f997d8ba295d52aa870af015f91fcfa7990",
+    "unsigned_verified_raw_and_handoff": true,
+    "zip_crc_and_16k_alignment": true,
+    "elf_page_size_compatibility_claimed": false,
+    "unchanged_permissions_security_launcher_factory_mascot_native_libraries_vs_v57": true,
+    "entry_contents_equal_gradle_outputs": true,
+    "artifacts": [
+      {
+        "flavor": "full",
+        "sha256": "4faacacc07255bcc2f62ff1fa4e651d505a7a2f86d72586ac7a029b68efd5c13",
+        "bytes": 31552519,
+        "version_code": 58,
+        "version_name": "1.2.51-UX41",
+        "package": "com.jarvys.agent",
+        "unsigned": true,
+        "debuggable": true,
+        "factory_template_sha256": "a8812359aec3ce70457c6ac52fb0f869096c7d4552343167bd044d1e4adb7cba",
+        "filename": "Jarvys-UX41-full-v58-unsigned.apk"
+      },
+      {
+        "flavor": "play",
+        "sha256": "9d695a38a4d54380796ed157ff9a0844d503473ecb155dfc33e56c12240d6702",
+        "bytes": 30068645,
+        "version_code": 58,
+        "version_name": "1.2.51-UX41",
+        "package": "com.jarvys.agent",
+        "unsigned": true,
+        "debuggable": true,
+        "factory_template_sha256": "a8812359aec3ce70457c6ac52fb0f869096c7d4552343167bd044d1e4adb7cba",
+        "filename": "Jarvys-UX41-play-v58-unsigned.apk"
+      }
+    ]
+  },
+  "review": {
+    "independent_source_and_refinement": "approved",
+    "independent_artifact_review": "approved"
+  },
+  "retained_failures": [
+    {
+      "run": "ux41-focused-1-20261009T170854-b1951d79",
+      "reason": "Two test-harness errors: unsupported fontScale qualifier and API24 WebView client getter. Corrected without dropping assertions."
+    },
+    {
+      "run": "ux41-v58-final-gates-20261009T171618-7bbd4451",
+      "reason": "Full2533 passed. Play2151 had one MainAgentComposerTest.englishLargeLight visibility failure. Identical-source isolated11 and complete aggregate rerun passed. Async markdown readiness is a code-backed hypothesis, not demonstrated cause."
+    }
+  ],
+  "physical_acceptance": {
+    "android_layout_zoom_ime_rotation": false,
+    "reported_html_reproduced": false,
+    "native_webview_network_enforcement": false,
+    "old_provider_webrtc_risk_closed": false,
+    "jni_rive_playback": false,
+    "installation_or_update": false
+  },
+  "delivery": {
+    "signed": false,
+    "sent": false,
+    "signing_owner": "Separate approved debug signing workflow"
+  },
+  "limitations": [
+    "Conservative unsupported or ambiguous HTML can pass through and remain wide when no usable viewport exists.",
+    "Fixed desktop CSS and explicitly wide authored viewports are preserved.",
+    "JVM/Robolectric tests do not execute Chromium.",
+    "Host HTTP(S) guard is not whole-process or Android network isolation.",
+    "Existing UX40 manual-consent pilot and UX39 old-provider acceptance remain open."
+  ]
+}

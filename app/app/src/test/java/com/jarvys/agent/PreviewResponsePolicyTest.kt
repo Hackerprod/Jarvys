@@ -214,8 +214,8 @@ class PreviewResponsePolicyTest {
         val workspace = WorkspaceStore(File(context.filesDir, "jarvys/workspaces"), WorkspaceStore.projectIdForSession(session),
             null, null, null, session, false)
         val resources = linkedMapOf(
-            "index.html" to "<!doctype html><link rel=\"stylesheet\" href=\"style.css\"><script src=\"app.js\"></script><script type=\"module\" src=\"module.js\"></script><img src=\"icon.svg\"><a href=\"next.html\">Next</a><button onclick=\"this.textContent='ok'\">Tap</button>",
-            "next.html" to "<!doctype html><p id=\"section\">Next local page</p>",
+            "index.html" to "<!doctype html><meta name=viewport content=\"width=device-width, initial-scale=1\"><link rel=\"stylesheet\" href=\"style.css\"><script src=\"app.js\"></script><script type=\"module\" src=\"module.js\"></script><img src=\"icon.svg\"><a href=\"next.html\">Next</a><button onclick=\"this.textContent='ok'\">Tap</button>",
+            "next.html" to "<!doctype html><meta name=viewport content=\"width=device-width, initial-scale=1\"><p id=\"section\">Next local page</p>",
             "style.css" to "body { color: #123456; }", "app.js" to "window.interactive=true;",
             "module.js" to "export const local = true;", "icon.svg" to "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\"/>",
         ).mapValues { it.value.toByteArray(Charsets.UTF_8) }
