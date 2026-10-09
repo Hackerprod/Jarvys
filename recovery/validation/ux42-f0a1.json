@@ -1,0 +1,373 @@
+{
+  "stage": "UX42 F0a-1",
+  "status": "F0a-1 host validated, D7 test artifact verified and native send accepted; physical acceptance and later slices remain open",
+  "source": {
+    "production_checkpoint": "d218e73a0a3d3d62a1a781fa3c2537a4e4355006",
+    "tested_checkpoint": "3c582898f0cb4e635168c26ae4758ece4970c01a",
+    "app_tree": "7cd023c4ebd59b1801256be99147cc9aa92bfeb1",
+    "frozen_app_files": 924,
+    "file_manifest_sha256": "55ff208161e66a2c3ea8778ae278b6207d576a09574ab087047b8e57d1a0c97b",
+    "source_unchanged_during_final_gates": true,
+    "file_manifest_sha256_definition": "SHA-256 of the UTF-8 JSON serialization of the files path-to-SHA256 map, with sort_keys=true and separators=(comma,colon); not the surrounding snapshot file bytes."
+  },
+  "version": {
+    "code": 59,
+    "name": "1.2.52-UX42-F0a1"
+  },
+  "tests": {
+    "aggregate_run": "ux42-final-aggregate-20261009T192024-fab8827c",
+    "aggregate": {
+      "app:testFullDebugUnitTest": {
+        "totals": {
+          "tests": 2559,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "forks": 6,
+        "blockedAttempts": 8,
+        "passed": true
+      },
+      "app:testPlayDebugUnitTest": {
+        "totals": {
+          "tests": 2177,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "forks": 5,
+        "blockedAttempts": 8,
+        "passed": true
+      },
+      "apk-runtime:testDebugUnitTest": {
+        "totals": {
+          "tests": 65,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "forks": 1,
+        "blockedAttempts": 0,
+        "passed": true
+      },
+      "apk-runtime:testReleaseUnitTest": {
+        "totals": {
+          "tests": 65,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "forks": 1,
+        "blockedAttempts": 0,
+        "passed": true
+      }
+    },
+    "focused_service_signing": {
+      "run": "ux42-service-signing-focused-20261009T191747-6c01e759",
+      "tests": 21,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "guard_forks": 1,
+      "blocked_attempts": 0,
+      "new_regressions": [
+        "successful current receipt service signing, exact payload and durable publication",
+        "successful historical receipt service signing, retained plan and warning"
+      ]
+    },
+    "javascript": {
+      "tests": 10,
+      "failures": 0,
+      "skipped": 0
+    },
+    "interrupted_runs": [
+      "ux42-final-aggregate-20261009T190252-cbc53aca (executor interrupted, no completed record)",
+      "ux42-restored-aggregate-20261009T191226-dca42c30 (paused for priority v58 delivery, exit130 before tests)"
+    ]
+  },
+  "lint": {
+    "fullDebug": {
+      "baseline_counts": {
+        "Error": 46,
+        "Warning": 264,
+        "Hint": 3
+      },
+      "current_counts": {
+        "Error": 46,
+        "Warning": 264,
+        "Hint": 3
+      },
+      "added": [],
+      "removed": [],
+      "passed": true
+    },
+    "playDebug": {
+      "baseline_counts": {
+        "Error": 37,
+        "Warning": 260,
+        "Hint": 3
+      },
+      "current_counts": {
+        "Error": 37,
+        "Warning": 260,
+        "Hint": 3
+      },
+      "added": [],
+      "removed": [],
+      "passed": true
+    },
+    "release": {
+      "baseline_counts": {
+        "Warning": 5
+      },
+      "current_counts": {
+        "Warning": 5
+      },
+      "added": [],
+      "removed": [],
+      "passed": true
+    },
+    "baseline_commit": "7a47122",
+    "baseline_run": "ux42-lint-v58-baseline-20261009T193225-71d86c1a",
+    "current_run": "ux42-lint-final-20261009T194215-b29d28a5"
+  },
+  "factory_artifacts": {
+    "hostOnly": true,
+    "fixtureCount": 6,
+    "apkCount": 12,
+    "passed": true,
+    "rows": [
+      {
+        "fixture": "app-testFullDebugUnitTest/0",
+        "appId": "org.example.first",
+        "versionCode": 1,
+        "certificateSha256": "01d3d35f383637cc4de6534fb7871df1307c10314816937ab5bdf430ae941ead",
+        "unsignedSha256": "47441250d31f80d86a1ebd95fe2a165546af5b71591ca16e85d5faffaa287f56",
+        "signedSha256": "d38cd80113c37afbc1e5a840f7696115528baa5eee8643d1921f5090dc18c221",
+        "manifestDumpSha256": "1ba2c14b9bdbaaebd0bce2e89521f7079a75814a6a946b56731227d4bbb1d1b0",
+        "dexSha256": {
+          "classes.dex": "4a7fd298913dbbde3145380589c0cfaaca4ca488e0b846faac137bc5624e830a"
+        }
+      },
+      {
+        "fixture": "app-testFullDebugUnitTest/1",
+        "appId": "org.example.second",
+        "versionCode": 1,
+        "certificateSha256": "8a7d0c589982aac39c43f93498112fae6bc045c1469f671db99a8fa4cf1f43c4",
+        "unsignedSha256": "9b8fd550bca097c093722635ee0e75714668f901c42837b40b6f1f6ee851c99e",
+        "signedSha256": "8043cf5bd5d12f9f5e36b6178fc5f02bb368025e6ed05de9d504c6e474f9304c",
+        "manifestDumpSha256": "b9e8837a2d362449cc656f4a9d75b224b07e37ea897c0d4f111f7a7acaf2b84a",
+        "dexSha256": {
+          "classes.dex": "4a7fd298913dbbde3145380589c0cfaaca4ca488e0b846faac137bc5624e830a"
+        }
+      },
+      {
+        "fixture": "app-testFullDebugUnitTest/2",
+        "appId": "org.example.first",
+        "versionCode": 2,
+        "certificateSha256": "01d3d35f383637cc4de6534fb7871df1307c10314816937ab5bdf430ae941ead",
+        "unsignedSha256": "8257e2d82ece08e2c4699e3f6d8ad18b6e1d1be7e9cc0b1c2ee2d54d15ac6ee0",
+        "signedSha256": "cf50e345f2fb6bbdcafc58896ef508d39b51d70aec20fc86213130cf7d6b9003",
+        "manifestDumpSha256": "57f0b155f4cdb7d0ce5a1a3057de1f2f53bbca2db56b3a6e7bcdb2f565cb83e8",
+        "dexSha256": {
+          "classes.dex": "4a7fd298913dbbde3145380589c0cfaaca4ca488e0b846faac137bc5624e830a"
+        }
+      },
+      {
+        "fixture": "app-testPlayDebugUnitTest/0",
+        "appId": "org.example.first",
+        "versionCode": 1,
+        "certificateSha256": "de18c7d82d401bbe12331b8c5866c0409a0f9b3a80f76fcaea3ab9d77fd35b6b",
+        "unsignedSha256": "47441250d31f80d86a1ebd95fe2a165546af5b71591ca16e85d5faffaa287f56",
+        "signedSha256": "72534a477ab492512c0012eaa24a39f176fcdc0f34273520a34eeebb675a0fdd",
+        "manifestDumpSha256": "1ba2c14b9bdbaaebd0bce2e89521f7079a75814a6a946b56731227d4bbb1d1b0",
+        "dexSha256": {
+          "classes.dex": "4a7fd298913dbbde3145380589c0cfaaca4ca488e0b846faac137bc5624e830a"
+        }
+      },
+      {
+        "fixture": "app-testPlayDebugUnitTest/1",
+        "appId": "org.example.second",
+        "versionCode": 1,
+        "certificateSha256": "3f767c029e06b835dada4ce4b782fb42d1d62715ee3731e8b132fc38d72f1990",
+        "unsignedSha256": "9b8fd550bca097c093722635ee0e75714668f901c42837b40b6f1f6ee851c99e",
+        "signedSha256": "ab8fa8ef010f09fe6c4435d41c4009eae73c3715743a8514ff4f834161d4baee",
+        "manifestDumpSha256": "b9e8837a2d362449cc656f4a9d75b224b07e37ea897c0d4f111f7a7acaf2b84a",
+        "dexSha256": {
+          "classes.dex": "4a7fd298913dbbde3145380589c0cfaaca4ca488e0b846faac137bc5624e830a"
+        }
+      },
+      {
+        "fixture": "app-testPlayDebugUnitTest/2",
+        "appId": "org.example.first",
+        "versionCode": 2,
+        "certificateSha256": "de18c7d82d401bbe12331b8c5866c0409a0f9b3a80f76fcaea3ab9d77fd35b6b",
+        "unsignedSha256": "8257e2d82ece08e2c4699e3f6d8ad18b6e1d1be7e9cc0b1c2ee2d54d15ac6ee0",
+        "signedSha256": "be2c59582c4163f3033dc75aea7a94af2d5e9624b9fb32e86fe6ef67fe9e5173",
+        "manifestDumpSha256": "57f0b155f4cdb7d0ce5a1a3057de1f2f53bbca2db56b3a6e7bcdb2f565cb83e8",
+        "dexSha256": {
+          "classes.dex": "4a7fd298913dbbde3145380589c0cfaaca4ca488e0b846faac137bc5624e830a"
+        }
+      }
+    ],
+    "limits": "Ephemeral signing fixtures; no Android installation, key-provider or physical WebView/SAF acceptance."
+  },
+  "application_unsigned_artifacts": [
+    {
+      "flavor": "full",
+      "raw_sha256": "3f6bf546133fe6f6de664e1ade8ec6be02a60c54bdf38bf351c6c40d704c6a20",
+      "sha256": "4f3c850f101a8fcc1ff4bcf21652f76703d64c7c13ff080a2094d4617166289b",
+      "bytes": 31579098,
+      "entry_count": 260,
+      "entry_contents_identical_to_gradle": true,
+      "crc_verified": true,
+      "aligned_16k": true,
+      "zip_gaps": false,
+      "unsigned": true,
+      "package": "com.jarvys.agent",
+      "version_code": 59,
+      "version_name": "1.2.52-UX42-F0a1",
+      "label": "Jarvys",
+      "debuggable": true,
+      "class_definitions": 27364,
+      "host_guard_or_test_classes": false,
+      "factory_template_sha256": "f77cca8a52189dd03b62a243ca1970ba0cd7a3947d3d21d09182cafcf8b9454f",
+      "permissions": [
+        "package: com.jarvys.agent",
+        "uses-permission: name='android.permission.READ_SMS'",
+        "uses-permission: name='android.permission.SEND_SMS'",
+        "uses-permission: name='android.permission.READ_CALL_LOG'",
+        "uses-permission: name='android.permission.INTERNET'",
+        "uses-permission: name='android.permission.WRITE_EXTERNAL_STORAGE' maxSdkVersion='28'",
+        "uses-permission: name='android.permission.FOREGROUND_SERVICE'",
+        "uses-permission: name='android.permission.FOREGROUND_SERVICE_SPECIAL_USE'",
+        "uses-permission: name='android.permission.POST_NOTIFICATIONS'",
+        "uses-permission: name='android.permission.SYSTEM_ALERT_WINDOW'",
+        "uses-permission: name='android.permission.READ_CALENDAR'",
+        "uses-permission: name='android.permission.WRITE_CALENDAR'",
+        "uses-permission: name='android.permission.READ_CONTACTS'",
+        "uses-permission: name='android.permission.CALL_PHONE'",
+        "uses-permission: name='android.permission.ACCESS_COARSE_LOCATION'",
+        "uses-permission: name='android.permission.ACCESS_FINE_LOCATION'",
+        "uses-permission: name='android.permission.WAKE_LOCK'",
+        "uses-permission: name='android.permission.RECEIVE_BOOT_COMPLETED'",
+        "permission: com.jarvys.agent.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION",
+        "uses-permission: name='com.jarvys.agent.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION'"
+      ]
+    },
+    {
+      "flavor": "play",
+      "raw_sha256": "16b174f1035923a70173e9b0ebe22a5020dfa7247f4f8387b4bf5581e4e7fe06",
+      "sha256": "1cb8a8aec991cec20c5ecfc03f2ee639e113f16a7eda1a76fe95393e743692c5",
+      "bytes": 30095192,
+      "entry_count": 191,
+      "entry_contents_identical_to_gradle": true,
+      "crc_verified": true,
+      "aligned_16k": true,
+      "zip_gaps": false,
+      "unsigned": true,
+      "package": "com.jarvys.agent",
+      "version_code": 59,
+      "version_name": "1.2.52-UX42-F0a1",
+      "label": "Jarvys",
+      "debuggable": true,
+      "class_definitions": 25002,
+      "host_guard_or_test_classes": false,
+      "factory_template_sha256": "f77cca8a52189dd03b62a243ca1970ba0cd7a3947d3d21d09182cafcf8b9454f",
+      "permissions": [
+        "package: com.jarvys.agent",
+        "uses-permission: name='android.permission.INTERNET'",
+        "uses-permission: name='android.permission.WRITE_EXTERNAL_STORAGE' maxSdkVersion='28'",
+        "uses-permission: name='android.permission.FOREGROUND_SERVICE'",
+        "uses-permission: name='android.permission.FOREGROUND_SERVICE_SPECIAL_USE'",
+        "uses-permission: name='android.permission.POST_NOTIFICATIONS'",
+        "uses-permission: name='android.permission.SYSTEM_ALERT_WINDOW'",
+        "uses-permission: name='android.permission.READ_CALENDAR'",
+        "uses-permission: name='android.permission.WRITE_CALENDAR'",
+        "uses-permission: name='android.permission.READ_CONTACTS'",
+        "uses-permission: name='android.permission.CALL_PHONE'",
+        "uses-permission: name='android.permission.ACCESS_COARSE_LOCATION'",
+        "uses-permission: name='android.permission.ACCESS_FINE_LOCATION'",
+        "uses-permission: name='android.permission.WAKE_LOCK'",
+        "uses-permission: name='android.permission.RECEIVE_BOOT_COMPLETED'",
+        "permission: com.jarvys.agent.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION",
+        "uses-permission: name='com.jarvys.agent.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION'"
+      ]
+    }
+  ],
+  "build": {
+    "run": "ux42-apks-final-20261009T194817-71c7dd45",
+    "tasks": [
+      ":app:assembleFullDebug",
+      ":app:assemblePlayDebug",
+      ":app:assembleFullRelease"
+    ],
+    "exit_code": 0,
+    "unsigned_build": true,
+    "release_lint_vital_executed": true,
+    "source_changes_for_build": false,
+    "host_ordering_fix": "External init orders app lint tasks after prepareApkFactoryTemplate; no lint checks suppressed."
+  },
+  "skill_bytes": 13294,
+  "limitations": [
+    "F0a-1 only: catalog and closed existing manifest contract; no new native capability, permission, component, network access or schema/SDK version.",
+    "F0a-2 typed additional node constructors, later F0/F1/F2/F3 and UX43 remain open; UX34 later phases retain explicit approval gates.",
+    "Robolectric/JVM and host AXML/ZIP/DEX/signature evidence does not establish physical Android, Keystore, WebView, installation, update/data preservation or hardware behavior.",
+    "Debug D7 identity is for testing only; release build mode does not make this a production release.",
+    "Inherited lint debt remains; no claim of lint-clean."
+  ],
+  "independent_review": {
+    "passed": true,
+    "scope": [
+      "exact source lineage and frozen hashes",
+      "recounted XML/JS and lint evidence",
+      "Full/Play debug manifests and raw ZIP payload",
+      "Full release package/version/non-debuggable state and production/native/assets preservation",
+      "absence of host guard/test classes",
+      "runtime catalog/template authentication",
+      "all twelve fixture APK payloads and actual certificates"
+    ],
+    "production_blockers": []
+  },
+  "application_release_unsigned": {
+    "bytes": 26909692,
+    "sha256": "666b5b5a5f48e81e4d9bace6e55a35dcaacb2c8eb19147b186298bdaae188a4f",
+    "debuggable": false,
+    "minified": false,
+    "native_libraries": 16,
+    "debug_assets_preserved": true,
+    "added_assets": "ART baseline profiles",
+    "purpose": "ARM64-only D7 test-delivery packaging; not production"
+  },
+  "signed_test_delivery": {
+    "bytes": 18703790,
+    "sha256": "8bdbe8d538123885bc85713b94954928a6c1bbaaee10fb1d501d28929b3ca7ed",
+    "source_unsigned_sha256": "666b5b5a5f48e81e4d9bace6e55a35dcaacb2c8eb19147b186298bdaae188a4f",
+    "retained_entries": 237,
+    "retained_entries_identical": true,
+    "removed_entries": [
+      "lib/armeabi-v7a/libandroidx.graphics.path.so",
+      "lib/armeabi-v7a/libc++_shared.so",
+      "lib/armeabi-v7a/librive-android.so",
+      "lib/x86/libandroidx.graphics.path.so",
+      "lib/x86/libc++_shared.so",
+      "lib/x86/librive-android.so",
+      "lib/x86_64/libandroidx.graphics.path.so",
+      "lib/x86_64/libc++_shared.so",
+      "lib/x86_64/librive-android.so"
+    ],
+    "zip_crc": true,
+    "zipalign_16k": true,
+    "filename": "Jarvys-UX42-F0a1-full-v59-arm64-test.apk",
+    "abi": "arm64-v8a",
+    "debuggable": false,
+    "identity_purpose": "D7 testing only, not production",
+    "certificate_sha1": "d7c01f597978323e32caaf22e9f6009ab72f32b8",
+    "certificate_sha256": "d2de47ccf48e02f58ecf4633392ff3f119e925aad1abaa7921c7ce163cfcec4e",
+    "signature_v2": true,
+    "signature_v3": true,
+    "native_send_accepted_utc": "2026-10-09T19:54:47.224569Z",
+    "device_installation_or_acceptance": false,
+    "zip_alignment_is_not_elf_compatibility": true
+  }
+}
