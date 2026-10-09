@@ -9,8 +9,8 @@ import java.security.MessageDigest
 
 /** Original application identity, never a mutable catalog bot or an externally supplied Rive file. */
 internal object JarvysMascotAssets {
-    const val SOURCE_SHA256 = "e9f4d597db5b5db04732357ea1e64f228b20602a4c12c42021a73b0522a57e2f"
-    const val ASSET_SHA256 = "1b8b702bbe38156e690d442cbed82a35d939e25fec0e91804b261199e9b1ae68"
+    const val SOURCE_SHA256 = "983546e91329e6ab22e1191fbfb0f3c240384c8eabbacc62a1d96951e39e236b"
+    const val ASSET_SHA256 = "514c6cfb16008eb6ecfd13c136ab6032c2ebd615c11f2325491fa762fc73981a"
     private val lock = Any()
     @Volatile private var cached: ByteArray? = null
 

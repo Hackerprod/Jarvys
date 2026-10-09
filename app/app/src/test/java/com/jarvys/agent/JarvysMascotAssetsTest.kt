@@ -19,14 +19,14 @@ class JarvysMascotAssetsTest {
     @Test fun originalSourceCompilesExactlyToThePackagedBinary() {
         val source = asset("source.json")
         val binary = asset("asset.riv")
-        assertEquals(32705, source.size)
-        assertEquals(13720, binary.size)
+        assertEquals(41445, source.size)
+        assertEquals(18237, binary.size)
         val validated = JarvysMascotAssets.validate(source, binary)
         assertArrayEquals(binary, validated)
         val compiled = BotMascotSceneCompiler.compileProduct(source)
         assertEquals(JarvysMascotAssets.ASSET_SHA256, compiled.sha256)
         assertEquals(61, compiled.validation.complexity.nodeCount)
-        assertEquals(521, compiled.validation.complexity.keyframeCount)
+        assertEquals(872, compiled.validation.complexity.keyframeCount)
     }
 
     @Test fun rejectsAlteredSourceAndAlteredBinaryBeforeNativeImport() {
