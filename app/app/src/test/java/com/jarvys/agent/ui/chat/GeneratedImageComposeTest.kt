@@ -14,6 +14,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextContains
@@ -46,12 +47,18 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.StandardTestDispatcher
 
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [34])
 class GeneratedImageComposeTest {
-    @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
+    // Queue IO-completed recomposition onto the test clock instead of resuming View work
+    // on the IO worker through Compose 1.x's default UnconfinedTestDispatcher.
+    @OptIn(ExperimentalTestApi::class)
+    @get:Rule val compose = createAndroidComposeRule<ComponentActivity>(
+        effectContext = StandardTestDispatcher(),
+    )
     private val session = "compose-image-session"
 
     @Test
