@@ -1,0 +1,500 @@
+{
+  "work_item": "UX42 / F0a-2",
+  "status": "host_validated_test_delivery_accepted",
+  "versionCode": 60,
+  "versionName": "1.2.53-UX42-F0a2",
+  "source": {
+    "base_commit": "269aec6727e82c1df293c37110f43c98892660a0",
+    "checkpoints": [
+      "37d37d330eed12a727ba822c2d4044e7f300140c",
+      "ab0eed9da2ab5b1e4e8ad6957d184532d63acadb"
+    ],
+    "validated_source_commit": "ab0eed9da2ab5b1e4e8ad6957d184532d63acadb",
+    "app_tree": "3bd46801ff6daec0869b1915cbef3c340f8470c6",
+    "frozen_app_files": 927,
+    "freeze_sha256": "101d746a2dc12b24622eb8a1d46b420510a5fc12611f5f6827cfbf2cb79c9a86"
+  },
+  "scope": {
+    "construction_only": true,
+    "schema_version": 1,
+    "sdk_version": 1,
+    "capabilities": [
+      "storage",
+      "export",
+      "share",
+      "clipboard",
+      "haptics",
+      "device"
+    ],
+    "wire_methods": 10,
+    "production_contributions_empty": true,
+    "new_capabilities_or_permissions": false,
+    "production_base_parser_retained": true,
+    "constructors": [
+      "standard and SDK23 permissions with optional bounded max SDK",
+      "Android hardware features with explicit required boolean",
+      "private activities/services/receivers/providers",
+      "bounded actions/categories/MIME and scheme data",
+      "package and intent queries",
+      "string/integer/boolean/resource metadata"
+    ],
+    "deferred": [
+      "activating nonempty capability contributions",
+      "compiled resource name/type/existence and handler binding for extra metadata",
+      "exported additional entrypoints",
+      "provider queries and richer intent data",
+      "new native handlers and SDK/schema changes",
+      "full F0a and F0b/F0c/F1-F3"
+    ]
+  },
+  "tests": {
+    "focused": {
+      "run": "ux42-f0a2-final-focused-20261009T201123-3a7e2e50",
+      "totals": {
+        "tests": 62,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "guard_forks": 1,
+      "blocked_attempts": 0
+    },
+    "aggregate": {
+      "app-testFullDebugUnitTest": {
+        "run": "ux42-f0a2-final-aggregate-20261009T201441-53473388",
+        "totals": {
+          "tests": 2571,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "suites": 337,
+        "guard_forks": 6,
+        "blocked_attempts": 8,
+        "passed": true
+      },
+      "app-testPlayDebugUnitTest": {
+        "run": "ux42-f0a2-final-aggregate-20261009T201441-53473388",
+        "totals": {
+          "tests": 2189,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "suites": 298,
+        "guard_forks": 5,
+        "blocked_attempts": 8,
+        "passed": true
+      },
+      "apk-runtime-testDebugUnitTest": {
+        "run": "ux42-f0a2-final-aggregate-20261009T201441-53473388",
+        "totals": {
+          "tests": 65,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "suites": 5,
+        "guard_forks": 1,
+        "blocked_attempts": 0,
+        "passed": true
+      },
+      "apk-runtime-testReleaseUnitTest": {
+        "run": "ux42-f0a2-final-aggregate-20261009T201441-53473388",
+        "totals": {
+          "tests": 65,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "suites": 5,
+        "guard_forks": 1,
+        "blocked_attempts": 0,
+        "passed": true
+      }
+    },
+    "javascript": {
+      "tests": 10,
+      "failures": 0,
+      "skipped": 0
+    },
+    "failed_environment_attempt": {
+      "run": "ux42-f0a2-focused-20261009T200336-21f9597a",
+      "cause": "Restored incremental DEX transform metadata referenced old workspace path; generated transform directory isolated and fresh retry passed. No checks or production policies disabled.",
+      "passed": false
+    }
+  },
+  "constructor_aapt2": {
+    "passed": true,
+    "hostOnly": true,
+    "rows": [
+      {
+        "source": "app-testFullDebugUnitTest/typed-manifest/AndroidManifest.xml",
+        "manifestSha256": "1a90c615986c1ef24ef1fc312c35d1d266fc9b44a5363cc87b755d0de4410f4a",
+        "aapt2DumpSha256": "8742111de1189db66053722b80a0311927065f1c2267d47c94a5ef6c59a84359",
+        "nodes": 44,
+        "attributes": 69,
+        "explicitParentsVerified": true,
+        "extendedConstructionOnly": true
+      },
+      {
+        "source": "app-testFullDebugUnitTest/typed-manifest/base-manifest.xml",
+        "manifestSha256": "55eb58a9c54946092e7eb589d15e0e99a4b02796092bc076cd335ddf9e64fac9",
+        "aapt2DumpSha256": "89b070556761fc0de75afd03f80a8c75d600842d255c32f299ea6b8195dcfe1e",
+        "nodes": 7,
+        "attributes": 23,
+        "explicitParentsVerified": true,
+        "extendedConstructionOnly": false
+      },
+      {
+        "source": "app-testPlayDebugUnitTest/typed-manifest/AndroidManifest.xml",
+        "manifestSha256": "1a90c615986c1ef24ef1fc312c35d1d266fc9b44a5363cc87b755d0de4410f4a",
+        "aapt2DumpSha256": "8742111de1189db66053722b80a0311927065f1c2267d47c94a5ef6c59a84359",
+        "nodes": 44,
+        "attributes": 69,
+        "explicitParentsVerified": true,
+        "extendedConstructionOnly": true
+      },
+      {
+        "source": "app-testPlayDebugUnitTest/typed-manifest/base-manifest.xml",
+        "manifestSha256": "55eb58a9c54946092e7eb589d15e0e99a4b02796092bc076cd335ddf9e64fac9",
+        "aapt2DumpSha256": "89b070556761fc0de75afd03f80a8c75d600842d255c32f299ea6b8195dcfe1e",
+        "nodes": 7,
+        "attributes": 23,
+        "explicitParentsVerified": true,
+        "extendedConstructionOnly": false
+      }
+    ],
+    "limits": "Non-installable manifest-only archives. Fixture component classes/resource references are not functional handlers or verified compiled bindings. No Android installation, grant or action."
+  },
+  "factory_artifacts": {
+    "hostOnly": true,
+    "fixtureCount": 6,
+    "apkCount": 12,
+    "passed": true,
+    "rows": [
+      {
+        "fixture": "app-testFullDebugUnitTest/0",
+        "appId": "org.example.first",
+        "versionCode": 1,
+        "certificateSha256": "c1811ef76bb5fe8405bf03829c56859cd8cbda1db6e29d6f8f7cf7289987b25f",
+        "unsignedSha256": "1cf1121961102656b2fc6cae20b8c949d083bb95819ed6b2d6aea07ca4bd0ed7",
+        "signedSha256": "a9535609bbfc719b2c255a2a9aad0c780a16e87c46f1767e6507b44beb8e35b3",
+        "manifestDumpSha256": "9db4edc737cf1c34453f1cd1874d25d1bdc53073804e450c76ac003350ee0163",
+        "dexSha256": {
+          "classes.dex": "f13944a3735ace2b5c08b24a1b3c3eeb5217b3d31899bdb9a313549ca924dc78"
+        }
+      },
+      {
+        "fixture": "app-testFullDebugUnitTest/1",
+        "appId": "org.example.second",
+        "versionCode": 1,
+        "certificateSha256": "f8f5d8791af4b62567466d285c3b000d8ff4b1f9fba912362b7e88a1f5748efa",
+        "unsignedSha256": "a1b5b452463b2e6b581cffeab54ce4653bf87f9064c10e565582089b508a0772",
+        "signedSha256": "cc57bad49b8a362720e6ad99debee9d6ed33adc7da6ecc8ecea45dca8112ecda",
+        "manifestDumpSha256": "54da9db76895934aa1eeae13a582e5e3ea83ad00130eb1a8c62f4294f6957a5b",
+        "dexSha256": {
+          "classes.dex": "f13944a3735ace2b5c08b24a1b3c3eeb5217b3d31899bdb9a313549ca924dc78"
+        }
+      },
+      {
+        "fixture": "app-testFullDebugUnitTest/2",
+        "appId": "org.example.first",
+        "versionCode": 2,
+        "certificateSha256": "c1811ef76bb5fe8405bf03829c56859cd8cbda1db6e29d6f8f7cf7289987b25f",
+        "unsignedSha256": "36bc5cc91a04be254ce291fed213ef6404f86cea9c0c16ebde68d2643b92f606",
+        "signedSha256": "57d738ac8f963cfe42ed740db62164b138747eff84672a71956d403a490d0e53",
+        "manifestDumpSha256": "da0a10533119ce4322925b5c19e9c61c086cae8d5f23fc0f8129ecde0b9f065f",
+        "dexSha256": {
+          "classes.dex": "f13944a3735ace2b5c08b24a1b3c3eeb5217b3d31899bdb9a313549ca924dc78"
+        }
+      },
+      {
+        "fixture": "app-testPlayDebugUnitTest/0",
+        "appId": "org.example.first",
+        "versionCode": 1,
+        "certificateSha256": "2cb2898080f59aab3d6108d28a1eb53235cad05be146879cfb4d564902f0f973",
+        "unsignedSha256": "1cf1121961102656b2fc6cae20b8c949d083bb95819ed6b2d6aea07ca4bd0ed7",
+        "signedSha256": "8b7f5f4ce43d6d76d974cf403c3fb82fe43d810c8641ef886632a34da57158fd",
+        "manifestDumpSha256": "9db4edc737cf1c34453f1cd1874d25d1bdc53073804e450c76ac003350ee0163",
+        "dexSha256": {
+          "classes.dex": "f13944a3735ace2b5c08b24a1b3c3eeb5217b3d31899bdb9a313549ca924dc78"
+        }
+      },
+      {
+        "fixture": "app-testPlayDebugUnitTest/1",
+        "appId": "org.example.second",
+        "versionCode": 1,
+        "certificateSha256": "8cfc1819267e7eefd84eafd1a7d4737ce0877e1311e93527482185054562793b",
+        "unsignedSha256": "a1b5b452463b2e6b581cffeab54ce4653bf87f9064c10e565582089b508a0772",
+        "signedSha256": "d5091ff96374290b88b69b39e7823dde9e11321b89466f135aad210bc7b2777c",
+        "manifestDumpSha256": "54da9db76895934aa1eeae13a582e5e3ea83ad00130eb1a8c62f4294f6957a5b",
+        "dexSha256": {
+          "classes.dex": "f13944a3735ace2b5c08b24a1b3c3eeb5217b3d31899bdb9a313549ca924dc78"
+        }
+      },
+      {
+        "fixture": "app-testPlayDebugUnitTest/2",
+        "appId": "org.example.first",
+        "versionCode": 2,
+        "certificateSha256": "2cb2898080f59aab3d6108d28a1eb53235cad05be146879cfb4d564902f0f973",
+        "unsignedSha256": "36bc5cc91a04be254ce291fed213ef6404f86cea9c0c16ebde68d2643b92f606",
+        "signedSha256": "35fe723536e4021cb67448506908825ecf8d09c44e2103801e0154e60b3c2ef0",
+        "manifestDumpSha256": "da0a10533119ce4322925b5c19e9c61c086cae8d5f23fc0f8129ecde0b9f065f",
+        "dexSha256": {
+          "classes.dex": "f13944a3735ace2b5c08b24a1b3c3eeb5217b3d31899bdb9a313549ca924dc78"
+        }
+      }
+    ],
+    "limits": "Ephemeral signing fixtures; no Android installation, key-provider or physical WebView/SAF acceptance."
+  },
+  "skill_bytes": 13569,
+  "independent_review": {
+    "source_passed": true,
+    "aggregate_recount_passed": true,
+    "lint_multisets_passed": true,
+    "actual_unsigned_artifacts_passed": true,
+    "frozen_source_hashes_passed": true,
+    "production_blockers": [],
+    "physical_device_acceptance": false
+  },
+  "limitations": [
+    "Construction fixtures are non-installable and their extra classes/resource bindings are not implemented handlers.",
+    "Production v1 still has zero Android permissions and only the existing launcher; no arbitrary XML/attribute input is accepted from factory.json or JavaScript.",
+    "Host/JVM/Robolectric/AXML/aapt2/signature evidence does not establish physical Android, Keystore, WebView, installation/update/data preservation or hardware behavior.",
+    "Full F0a and later Factory phases remain open; UX34 stays phase0 with separate gates and UX43 remains last.",
+    "D7 identity is for tests only; release build mode is not a production release."
+  ],
+  "lint": {
+    "fullDebug": {
+      "baseline_counts": {
+        "Error": 46,
+        "Warning": 264,
+        "Hint": 3
+      },
+      "current_counts": {
+        "Error": 46,
+        "Warning": 264,
+        "Hint": 3
+      },
+      "added": [],
+      "removed": [],
+      "passed": true,
+      "baseline_run": "ux42-lint-final-20261009T194215-b29d28a5",
+      "current_run": "ux42-f0a2-final-lint-20261009T202721-70035fb1"
+    },
+    "playDebug": {
+      "baseline_counts": {
+        "Error": 37,
+        "Warning": 260,
+        "Hint": 3
+      },
+      "current_counts": {
+        "Error": 37,
+        "Warning": 260,
+        "Hint": 3
+      },
+      "added": [],
+      "removed": [],
+      "passed": true,
+      "baseline_run": "ux42-lint-final-20261009T194215-b29d28a5",
+      "current_run": "ux42-f0a2-final-lint-20261009T202721-70035fb1"
+    },
+    "release": {
+      "baseline_counts": {
+        "Warning": 5
+      },
+      "current_counts": {
+        "Warning": 5
+      },
+      "added": [],
+      "removed": [],
+      "passed": true,
+      "baseline_run": "ux42-lint-final-20261009T194215-b29d28a5",
+      "current_run": "ux42-f0a2-final-lint-20261009T202721-70035fb1"
+    }
+  },
+  "build": {
+    "run": "ux42-f0a2-final-apks-20261009T203311-184e8b49",
+    "tasks": [
+      ":app:assembleFullDebug",
+      ":app:assemblePlayDebug",
+      ":app:assembleFullRelease"
+    ],
+    "exit_code": 0,
+    "unsigned_build": true,
+    "checks_skipped": false,
+    "release_lint_vital_executed": true,
+    "source_changes_after_freeze": false
+  },
+  "application_unsigned_artifacts": [
+    {
+      "flavor": "full",
+      "raw_path": "/workspace/scratch/2ac40fb4b2af/Jarvys-recovery/integration/app/app/build/outputs/apk/full/debug/app-full-debug-unsigned.apk",
+      "raw_sha256": "9055cf21aac888162731bc6192b0872ba6e35ee5d1496136fb188f0ed567a428",
+      "path": "/workspace/scratch/2ac40fb4b2af/Jarvys-recovery/artifacts/UX42-F0a2-v60/Jarvys-UX42-F0a2-full-v60-unsigned.apk",
+      "sha256": "faf3b877aba3bb95e1dae69e7864427d8d94507bfb7c54a5b86c025bc25d60a6",
+      "bytes": 31594146,
+      "entry_count": 260,
+      "entry_contents_identical_to_gradle": true,
+      "crc_verified": true,
+      "aligned_16k": true,
+      "zip_gaps": false,
+      "unsigned": true,
+      "package": "com.jarvys.agent",
+      "version_code": 60,
+      "version_name": "1.2.53-UX42-F0a2",
+      "label": "Jarvys",
+      "debuggable": true,
+      "class_definitions": 27377,
+      "host_guard_or_test_classes": false,
+      "factory_template_sha256": "e3ff4484ddeeebcb57a8cb503c6a495e1a7d0160789081941bf10ddc4c380d83",
+      "permissions": [
+        "package: com.jarvys.agent",
+        "uses-permission: name='android.permission.READ_SMS'",
+        "uses-permission: name='android.permission.SEND_SMS'",
+        "uses-permission: name='android.permission.READ_CALL_LOG'",
+        "uses-permission: name='android.permission.INTERNET'",
+        "uses-permission: name='android.permission.WRITE_EXTERNAL_STORAGE' maxSdkVersion='28'",
+        "uses-permission: name='android.permission.FOREGROUND_SERVICE'",
+        "uses-permission: name='android.permission.FOREGROUND_SERVICE_SPECIAL_USE'",
+        "uses-permission: name='android.permission.POST_NOTIFICATIONS'",
+        "uses-permission: name='android.permission.SYSTEM_ALERT_WINDOW'",
+        "uses-permission: name='android.permission.READ_CALENDAR'",
+        "uses-permission: name='android.permission.WRITE_CALENDAR'",
+        "uses-permission: name='android.permission.READ_CONTACTS'",
+        "uses-permission: name='android.permission.CALL_PHONE'",
+        "uses-permission: name='android.permission.ACCESS_COARSE_LOCATION'",
+        "uses-permission: name='android.permission.ACCESS_FINE_LOCATION'",
+        "uses-permission: name='android.permission.WAKE_LOCK'",
+        "uses-permission: name='android.permission.RECEIVE_BOOT_COMPLETED'",
+        "permission: com.jarvys.agent.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION",
+        "uses-permission: name='com.jarvys.agent.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION'"
+      ]
+    },
+    {
+      "flavor": "play",
+      "raw_path": "/workspace/scratch/2ac40fb4b2af/Jarvys-recovery/integration/app/app/build/outputs/apk/play/debug/app-play-debug-unsigned.apk",
+      "raw_sha256": "3b8908dbb91d51d9aad54ca08305d741d073ea6824e5648e56d83a8d337d29cb",
+      "path": "/workspace/scratch/2ac40fb4b2af/Jarvys-recovery/artifacts/UX42-F0a2-v60/Jarvys-UX42-F0a2-play-v60-unsigned.apk",
+      "sha256": "93481e1d4f16002ca7018137be6b5209101f9fc996fbf07d5b1525e00c4ea8fe",
+      "bytes": 30110240,
+      "entry_count": 191,
+      "entry_contents_identical_to_gradle": true,
+      "crc_verified": true,
+      "aligned_16k": true,
+      "zip_gaps": false,
+      "unsigned": true,
+      "package": "com.jarvys.agent",
+      "version_code": 60,
+      "version_name": "1.2.53-UX42-F0a2",
+      "label": "Jarvys",
+      "debuggable": true,
+      "class_definitions": 25015,
+      "host_guard_or_test_classes": false,
+      "factory_template_sha256": "e3ff4484ddeeebcb57a8cb503c6a495e1a7d0160789081941bf10ddc4c380d83",
+      "permissions": [
+        "package: com.jarvys.agent",
+        "uses-permission: name='android.permission.INTERNET'",
+        "uses-permission: name='android.permission.WRITE_EXTERNAL_STORAGE' maxSdkVersion='28'",
+        "uses-permission: name='android.permission.FOREGROUND_SERVICE'",
+        "uses-permission: name='android.permission.FOREGROUND_SERVICE_SPECIAL_USE'",
+        "uses-permission: name='android.permission.POST_NOTIFICATIONS'",
+        "uses-permission: name='android.permission.SYSTEM_ALERT_WINDOW'",
+        "uses-permission: name='android.permission.READ_CALENDAR'",
+        "uses-permission: name='android.permission.WRITE_CALENDAR'",
+        "uses-permission: name='android.permission.READ_CONTACTS'",
+        "uses-permission: name='android.permission.CALL_PHONE'",
+        "uses-permission: name='android.permission.ACCESS_COARSE_LOCATION'",
+        "uses-permission: name='android.permission.ACCESS_FINE_LOCATION'",
+        "uses-permission: name='android.permission.WAKE_LOCK'",
+        "uses-permission: name='android.permission.RECEIVE_BOOT_COMPLETED'",
+        "permission: com.jarvys.agent.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION",
+        "uses-permission: name='com.jarvys.agent.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION'"
+      ]
+    }
+  ],
+  "application_release_unsigned": {
+    "passed": true,
+    "package": "com.jarvys.agent",
+    "versionCode": 60,
+    "versionName": "1.2.53-UX42-F0a2",
+    "debuggable": false,
+    "unsignedPath": "/workspace/scratch/2ac40fb4b2af/Jarvys-recovery/integration/app/app/build/outputs/apk/full/release/app-full-release-unsigned.apk",
+    "unsignedSha256": "91c597802aef5e294a9bcd2cec0caf985ebd39e33beecb37f594e04fe4c83ee5",
+    "bytes": 26923640,
+    "baselineUnsignedSha256": "666b5b5a5f48e81e4d9bace6e55a35dcaacb2c8eb19147b186298bdaae188a4f",
+    "onlyManifestVersionChanged": true,
+    "permissionsUnchanged": true,
+    "nativeLibrariesPreserved": 16,
+    "unrelatedAssetsPreserved": true,
+    "factoryTemplateSha256": "e3ff4484ddeeebcb57a8cb503c6a495e1a7d0160789081941bf10ddc4c380d83",
+    "classes": 25970,
+    "addedClasses": [
+      "Lcom/jarvys/factory/contract/ManifestNodes$$ExternalSyntheticLambda0;",
+      "Lcom/jarvys/factory/contract/ManifestNodes$$ExternalSyntheticLambda1;",
+      "Lcom/jarvys/factory/contract/ManifestNodes$$ExternalSyntheticLambda2;",
+      "Lcom/jarvys/factory/contract/ManifestNodes$$ExternalSyntheticLambda3;",
+      "Lcom/jarvys/factory/contract/ManifestNodes$$ExternalSyntheticLambda4;",
+      "Lcom/jarvys/factory/contract/ManifestNodes$1;",
+      "Lcom/jarvys/factory/contract/ManifestNodes$ComponentKind;",
+      "Lcom/jarvys/factory/contract/ManifestNodes$Element$$ExternalSyntheticLambda0;",
+      "Lcom/jarvys/factory/contract/ManifestNodes$Element;",
+      "Lcom/jarvys/factory/contract/ManifestNodes$PermissionVariant;",
+      "Lcom/jarvys/factory/contract/ManifestNodes;",
+      "Lcom/jarvys/factory/contract/ManifestXml$Writer;",
+      "Lcom/jarvys/factory/contract/ManifestXml;"
+    ],
+    "removedClasses": [],
+    "noTestOrGuardClasses": true,
+    "changedEntryNames": [
+      "AndroidManifest.xml",
+      "assets/apk_factory/template.apk",
+      "assets/apk_factory/template.sha256",
+      "assets/dexopt/baseline.prof",
+      "assets/dexopt/baseline.profm",
+      "assets/skills/com.jarvys.apk-factory/SKILL.md",
+      "classes.dex",
+      "classes5.dex"
+    ],
+    "addedEntries": [],
+    "removedEntries": [],
+    "physicalAcceptance": false
+  },
+  "signed_test_delivery": {
+    "bytes": 18720174,
+    "sha256": "1568ca92ad17262fb03538013de111a91ff1028be37204eec94c3af9a55ae04c",
+    "source_unsigned_sha256": "91c597802aef5e294a9bcd2cec0caf985ebd39e33beecb37f594e04fe4c83ee5",
+    "retained_entries": 237,
+    "retained_entries_identical": true,
+    "removed_entries": [
+      "lib/armeabi-v7a/libandroidx.graphics.path.so",
+      "lib/armeabi-v7a/libc++_shared.so",
+      "lib/armeabi-v7a/librive-android.so",
+      "lib/x86/libandroidx.graphics.path.so",
+      "lib/x86/libc++_shared.so",
+      "lib/x86/librive-android.so",
+      "lib/x86_64/libandroidx.graphics.path.so",
+      "lib/x86_64/libc++_shared.so",
+      "lib/x86_64/librive-android.so"
+    ],
+    "additional_signature_entries": [
+      "META-INF/ANDROIDD.RSA",
+      "META-INF/ANDROIDD.SF",
+      "META-INF/MANIFEST.MF"
+    ],
+    "zip_crc": true,
+    "zipalign_16k": true,
+    "filename": "Jarvys-UX42-F0a2-full-v60-arm64-test.apk",
+    "abi": "arm64-v8a",
+    "debuggable": false,
+    "identity_purpose": "Existing D7 testing identity only, not production",
+    "certificate_sha1": "d7c01f597978323e32caaf22e9f6009ab72f32b8",
+    "certificate_sha256": "d2de47ccf48e02f58ecf4633392ff3f119e925aad1abaa7921c7ce163cfcec4e",
+    "signature_v2": true,
+    "signature_v3": true,
+    "native_send_accepted_utc": "2026-10-09T20:38:31.768562Z",
+    "device_installation_or_acceptance": false,
+    "zip_alignment_is_not_elf_compatibility": true
+  }
+}
