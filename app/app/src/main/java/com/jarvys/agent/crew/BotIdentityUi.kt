@@ -28,6 +28,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsPropertyKey
 import androidx.compose.ui.semantics.semantics
+import androidx.core.graphics.createBitmap
 import com.jarvys.agent.BotIconStore
 import com.jarvys.agent.LucideIcons
 import com.jarvys.agent.ui.motion.rememberMotionEnabled
@@ -78,7 +79,7 @@ internal fun BotIdentityIcon(identity: BotIconIdentity, modifier: Modifier = Mod
         val context = LocalContext.current
         val pixels = remember(context) {
             val drawable = requireNotNull(androidx.core.content.ContextCompat.getDrawable(context,com.jarvys.agent.R.mipmap.ic_launcher))
-            val bitmap = android.graphics.Bitmap.createBitmap(256,256,android.graphics.Bitmap.Config.ARGB_8888)
+            val bitmap = createBitmap(256, 256)
             drawable.setBounds(0,0,256,256); drawable.draw(android.graphics.Canvas(bitmap)); bitmap.asImageBitmap()
         }
         Image(pixels,contentDescription=null,
