@@ -503,7 +503,7 @@ Límites: la prueba con reloj virtual avanzado tres días, runner sintético y a
 
 ### 20. UX35: barras del sistema y área útil de las aplicaciones generadas
 
-Estado: implementación en curso para preparación v53 / 1.2.46-UX35, tras el cierre de UX38. La política común de ventana y el contenedor protegido ya están implementados; 47 regresiones nuevas sobre seis versiones de Android y la revisión de fuente aprueban; suites agregadas frescas y APK final todavía pendientes. No se afirma aceptación física.
+Estado: implementación en curso para preparación v53 / 1.2.46-UX35, tras el cierre de UX38. La política común de ventana y el contenedor protegido ya están implementados; 47 regresiones nuevas sobre seis versiones de Android y la revisión de fuente aprueban; suites agregadas frescas y APK final todavía pendientes. El contrato interno del módulo se sincroniza antes de la pasada final; cualquier pasada iniciada sobre la documentación anterior se conserva como preliminar. No se afirma aceptación física.
 
 - La plantilla ya usa un tema nativo sin ActionBar. La evidencia visual confirma contraste insuficiente entre iconos blancos y fondo claro de la barra del sistema; no demuestra por sí sola recorte de contenido ni la presencia de una barra de título de la aplicación. Evitar corregir un ActionBar inexistente.
 - Revisar el tratamiento de insets de FactoryActivity: actualmente aplica padding y devuelve los mismos insets a la WebView, lo que puede duplicar su efecto. Definir una única estrategia explícita de área útil y consumo/puesta a cero de los tipos ya aplicados, sin desplazar ni recortar el contenido dos veces.

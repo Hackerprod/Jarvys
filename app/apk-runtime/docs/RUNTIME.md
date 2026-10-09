@@ -9,7 +9,7 @@ This Android application is a **build-time template**, not a shared-identity pro
 - Launcher class **absolute** `com.jarvys.factory.runtime.FactoryActivity`.
 - Manifest label `FACTORY_APP_LABEL`, version name `FACTORY_VERSION`, version code 1.
 - Exactly one launcher PNG `res/drawable-nodpi/factory_icon.png`; no application `R` or `BuildConfig` references in runtime code.
-- Dependencies: `androidx.webkit:webkit:1.14.0` (Google Maven); test-only `junit:junit:4.13.2`, `org.json:json:20240303`.
+- Dependencies: `androidx.webkit:webkit:1.14.0` and `androidx.core:core:1.15.0` (Google Maven); test-only `junit:junit:4.13.2`, `org.json:json:20240303`, `org.robolectric:robolectric:4.16`. Optional profileinstaller is excluded on every dependency path. Core's unused dynamic-receiver permission declarations are removed during manifest merging; the final template must retain zero permissions and no providers/receivers.
 - No Android permissions, providers, services, receivers, network access, debug bridge, or production signing keys.
 - Actual identity always comes from `Context.getPackageName()`. Configuration `appId` must equal it or startup fails closed.
 
@@ -36,6 +36,12 @@ assets/www/style.css          # optional
 ```
 
 The default `src/main/assets/www` is a runnable offline-notes acceptance fixture. Replace those assets for other apps; the native runtime contains no notes-specific behavior. The fixture provides explicit save, reopen, delete, and export flows. It limits notes to 20, each 60 title characters and 600 body characters, to fit native storage quotas. It does not silently fall back to temporary browser memory if native storage fails.
+
+## Native window and safe area
+
+The runtime retains NoActionBar and visible system bars. FactoryWindowPolicy creates the native decor before applying explicit light/dark chrome and icon contrast, then reserves the union of system bars, cutouts and IME in one shared root for the WebView and errors. Handled types are zeroed before child dispatch, including native legacy stable/cutout metadata; updates continue after keyboard dismissal and unhandled gesture types remain intact. API 24/25 use a black navigation bar because dark navigation icons are unavailable. See [the factory contract](../../APK_FACTORY.md#window-and-safe-area-contract-ux35).
+
+Apps use a responsive mobile viewport and scrollable forms without hardcoded Android bar padding. The runtime does not infer colors from app HTML or grant JavaScript control over the native window. Previously generated APKs require a same-ID/same-key, increased-version rebuild to receive changes to this compiled template.
 
 ## JS SDK
 
@@ -83,4 +89,8 @@ Standalone SDK tests: `node --test apk-runtime/tests/sdk.test.cjs` from `app/`.
 
 JVM coverage: origin/subframe rejection, JSON/schema/method/argument validation, capability denial, config/package binding, hostile asset URLs, CSP constraints, storage entry/byte quotas, persistence across backend reconstruction, and backend isolation, and overlapping Activity-store concurrency. Storage tests use a durable filesystem fake, not an Android emulator; they do not prove Android platform sandbox behavior. Node coverage includes request correlation, native rejection, malformed replies, unavailable bridge, payload/pending limits, page teardown, and timeouts.
 
+UX35 adds 47 Robolectric cases across API 24, 26, 28, 29, 34 and 35 for light/dark contrast, one safe-area owner, keyboard union/dismissal, rotation, cutouts, native metadata/child dispatch, gesture preservation and protected errors. Four optional JARVYS_UX35_CAPTURE_DIR images draw the actual native root with labeled native content; they do not render Chromium, System UI or a real IME.
+
 Device acceptance still required: install two differently named/signed generated packages, save/relaunch notes, inspect package/data isolation, export with save/cancel, deny clipboard confirmation, share chooser/cancel, old WebView fallback, and adversarial same-origin iframe attempts. Do not call this end-to-end validated without those device checks.
+
+Also validate real WebView fields/scroll with repeated keyboard open/close, portrait/landscape cutouts, light/dark system theme, and gesture/three-button navigation on supported devices. Injected-inset host tests cannot certify those platform behaviors.
