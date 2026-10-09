@@ -11,9 +11,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.isRoot
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -30,11 +32,16 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.test.StandardTestDispatcher
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class ToolTimelineRecoveryTest {
-    @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
+    // Real Markdown/preview background work must resume composition through the test clock.
+    @OptIn(ExperimentalTestApi::class)
+    @get:Rule val compose = createAndroidComposeRule<ComponentActivity>(
+        effectContext = StandardTestDispatcher(),
+    )
 
     @Test fun realWorkspaceToolsRecreateActivityRestoreExpandAndOpenExistingPreviewWithoutReplay() {
         val app = ApplicationProvider.getApplicationContext<android.content.Context>()
@@ -112,6 +119,11 @@ class ToolTimelineRecoveryTest {
             }
         }
         compose.onNodeWithTag("tool-output-toggle-reopen-write").performScrollTo().performClick()
+        // Markdown parsing runs on Default; Compose idleness alone does not await publication.
+        compose.waitUntil(10_000) {
+            compose.onAllNodesWithText("Wrote index.html").fetchSemanticsNodes().size == 1
+        }
+        compose.waitForIdle()
         compose.onNodeWithText("Wrote index.html").performScrollTo().assertIsDisplayed()
         compose.onNodeWithTag("tool-preview-reopen-preview").performScrollTo().performClick()
         // Preview file verification runs on IO. Compose idleness alone does not await that work.
