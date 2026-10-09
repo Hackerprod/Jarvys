@@ -25,26 +25,31 @@ public final class ManifestAudit {
     }
     public static final class Node {
         public final String path;
+        public final int parentIndex;
         public final Map<String, Attribute> attributes;
-        private Node(String path, Map<String, Attribute> attributes) {
-            this.path = path; this.attributes = Collections.unmodifiableMap(new LinkedHashMap<>(attributes));
+        private Node(String path, int parentIndex, Map<String, Attribute> attributes) {
+            this.path = path; this.parentIndex = parentIndex; this.attributes = Collections.unmodifiableMap(new LinkedHashMap<>(attributes));
         }
     }
     public static final class Document {
         public final List<Node> nodes;
         private Document(List<Node> nodes) { this.nodes = Collections.unmodifiableList(new ArrayList<>(nodes)); }
         public Attribute attribute(String path, String namespace, String name) throws IOException {
+            Attribute found = null;
+            int matches = 0;
             for (Node node : nodes) if (node.path.equals(path)) {
+                require(++matches == 1, "Ambiguous audited manifest path " + path);
                 Attribute value = node.attributes.get(namespace + "|" + name);
-                if (value != null) return value;
+                if (value != null) found = value;
             }
+            if (found != null) return found;
             throw new IOException("Missing audited manifest attribute " + name);
         }
         public void verify(ManifestPlan plan) throws IOException {
             require(plan != null && nodes.size() == plan.nodes.size(), "Manifest node set differs from plan");
             for (int i = 0; i < nodes.size(); i++) {
                 Node actual = nodes.get(i); ManifestPlan.Node expected = plan.nodes.get(i);
-                require(actual.path.equals(expected.path) && actual.attributes.keySet().equals(expected.attributes.keySet()),
+                require(actual.path.equals(expected.path) && actual.parentIndex == expected.parentIndex && actual.attributes.keySet().equals(expected.attributes.keySet()),
                     "Manifest tree or attribute set differs from plan: " + actual.path);
                 for (Map.Entry<String, ManifestPlan.Attribute> entry : expected.attributes.entrySet()) {
                     Attribute value = actual.attributes.get(entry.getKey()); ManifestPlan.Attribute wanted = entry.getValue();
@@ -53,6 +58,23 @@ public final class ManifestAudit {
                 }
             }
         }
+    }
+    /** Construction evidence only. Production authorization requires verify(ManifestPlan). */
+    public static void verifyTree(byte[] bytes, ManifestNodes.Element expected) throws IOException {
+        Document document = read(bytes); int[] cursor = {0};
+        verifyTreeNode(document, expected, "", -1, cursor);
+        require(cursor[0] == document.nodes.size(), "Unexpected constructed manifest nodes");
+    }
+    private static void verifyTreeNode(Document doc, ManifestNodes.Element wanted, String parentPath, int parent, int[] cursor) throws IOException {
+        require(wanted != null && cursor[0] < doc.nodes.size(), "Missing constructed manifest node");
+        int index = cursor[0]++; Node actual = doc.nodes.get(index);
+        String path = parentPath.isEmpty() ? wanted.name : parentPath + "/" + wanted.name;
+        require(actual.parentIndex == parent && actual.path.equals(path) && actual.attributes.size() == wanted.attributes.size(), "Constructed manifest tree differs");
+        for (ManifestPlan.Attribute attr : wanted.attributes) {
+            Attribute value = actual.attributes.get(attr.key());
+            require(value != null && value.resourceId == attr.resourceId && value.type == attr.type && value.value.equals(attr.value), "Constructed manifest attribute differs");
+        }
+        for (ManifestNodes.Element child : wanted.children) verifyTreeNode(doc, child, path, index, cursor);
     }
     public static Document read(byte[] source) throws IOException { return new Reader(source,false).read(); }
     public static void verifyBackupRules(byte[] source) throws IOException {
@@ -83,8 +105,10 @@ public final class ManifestAudit {
         private String[] strings;
         private int[] resources;
         private final List<String> stack = new ArrayList<>();
+        private final List<Integer> parents = new ArrayList<>();
         private final List<Node> nodes = new ArrayList<>();
         private boolean namespace, endedNamespace, closed;
+        private int attributeCount;
         Reader(byte[] source, boolean backup) throws IOException {
             this.backup = backup;
             require(source != null && source.length >= 8 && source.length <= 1024 * 1024, "Invalid audited XML length");
@@ -120,17 +144,19 @@ public final class ManifestAudit {
                     } else {
                         require((backup || namespace) && !endedNamespace && i32(at + 16) == -1, "Unexpected element namespace");
                         String name = string(i32(at + 20));
-                        require(name.matches("[a-z][a-z-]*"), "Invalid audited element name");
+                        require(name.matches("[a-z][a-z0-9-]*"), "Invalid audited element name");
                         if (kind == 0x103) {
                             require(size == 24 && !stack.isEmpty() && name.equals(stack.get(stack.size() - 1)), "Audited end tag mismatch");
-                            stack.remove(stack.size() - 1); if (stack.isEmpty()) closed = true;
+                            stack.remove(stack.size() - 1); parents.remove(parents.size() - 1); if (stack.isEmpty()) closed = true;
                         } else {
-                            require(kind == 0x102 && !closed && size >= 36 && stack.size() < 8 && nodes.size() < 32, "Unexpected audited element");
+                            require(kind == 0x102 && !closed && size >= 36 && stack.size() < 8 && nodes.size() < 128, "Unexpected audited element");
                             require(u16(at + 24) == 20 && u16(at + 26) == 20 && size == 36 + 20 * u16(at + 28), "Invalid audited attribute layout");
+                            require(u16(at + 28) <= 32 && (attributeCount += u16(at + 28)) <= 512, "Audited attribute limit exceeded");
                             require(u16(at + 30) == 0 && u16(at + 32) == 0 && u16(at + 34) == 0, "Unexpected special attribute index");
                             stack.add(name); StringBuilder path = new StringBuilder();
                             for (String part : stack) { if (path.length() > 0) path.append('/'); path.append(part); }
-                            for (Node node : nodes) require(backup || !node.path.equals(path.toString()), "Duplicate audited element");
+                            int parentIndex = parents.isEmpty() ? -1 : parents.get(parents.size() - 1);
+                            parents.add(nodes.size());
                             Map<String, Attribute> attrs = new LinkedHashMap<>();
                             for (int pos = at + 36; pos < end; pos += 20) {
                                 int nsIndex = i32(pos), nameIndex = i32(pos + 4), raw = i32(pos + 8);
@@ -148,7 +174,7 @@ public final class ManifestAudit {
                                 Attribute valueObject = new Attribute(ns, attrName, id, type, value);
                                 require(attrs.put(ns + "|" + attrName, valueObject) == null, "Duplicate audited attribute");
                             }
-                            nodes.add(new Node(path.toString(), attrs));
+                            nodes.add(new Node(path.toString(), parentIndex, attrs));
                         }
                     }
                 }

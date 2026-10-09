@@ -31,6 +31,7 @@ public final class CapabilityCatalog {
         public final int minimumApi = MIN_APP_API;
         public final List<Method> methods;
         // v1 has no per-capability additions. The closed base launcher is in ManifestPlan.
+        public final List<ManifestNodes.Element> manifestNodes = Collections.emptyList();
         public final Set<String> permissions = Collections.emptySet();
         public final Set<String> features = Collections.emptySet();
         public final Set<String> components = Collections.emptySet();
@@ -62,6 +63,12 @@ public final class CapabilityCatalog {
             if (methods.put(method.wireName, method) != null) throw new AssertionError("Duplicate method");
         }
         METHODS = Collections.unmodifiableMap(methods);
+    }
+    /** Only compiled catalog entries contribute; project strings can never register declarations. */
+    public static List<ManifestNodes.Element> manifestContributions(Iterable<String> requested) {
+        List<ManifestNodes.Element> result = new ArrayList<>();
+        for (String name : select(requested)) result.addAll(CAPABILITIES.get(name).manifestNodes);
+        return ManifestNodes.ordered(result);
     }
     /** Defensive, deterministic selection; no implied or future capabilities. */
     public static List<String> select(Iterable<String> requested) {

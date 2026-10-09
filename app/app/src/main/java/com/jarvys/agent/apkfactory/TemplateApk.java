@@ -2,6 +2,7 @@ package com.jarvys.agent.apkfactory;
 
 import com.jarvys.factory.contract.ManifestPlan;
 import com.jarvys.factory.contract.ManifestAudit;
+import com.jarvys.factory.contract.ManifestXml;
 import com.jarvys.factory.contract.CapabilityCatalog;
 
 import java.io.ByteArrayOutputStream;
@@ -162,14 +163,15 @@ public final class TemplateApk {
                     "Template has signature entries");
         }
         Map<String,String> originalDex=dexInventory(files);
-        Xml xml=new Xml(required(files,"AndroidManifest.xml"));
         ManifestInfo old=inspectFiles(files,null,ManifestPlan.Profile.CURRENT);
         check(TEMPLATE_PACKAGE.equals(old.appId) && "FACTORY_APP_LABEL".equals(old.label) &&
                 "FACTORY_VERSION".equals(old.versionName) && old.versionCode==1,"Template markers differ");
         check(ACTIVITY.equals(old.activityClass) && old.permissions.isEmpty(),"Unexpected runtime or permissions");
         String iconPath=resolveIconPath(required(files,"resources.arsc"),old.iconResourceId);
         check(files.containsKey(iconPath),"Referenced factory icon is missing");
-        files.put("AndroidManifest.xml",xml.rewrite(spec));
+        ManifestPlan expectedPlan=new ManifestPlan(spec.appId,spec.label,spec.versionCode,spec.versionName,
+            old.plan.iconResourceId,old.plan.backupResourceId,spec.capabilities);
+        files.put("AndroidManifest.xml",ManifestXml.encode(expectedPlan));
         files.put("resources.arsc",renamePackage(required(files,"resources.arsc"),spec.appId,old.iconResourceId));
         files.put(iconPath,iconPng.clone());
         check(assetReplacements!=null && assetReplacements.containsKey("assets/factory-app.json") &&
@@ -183,8 +185,6 @@ public final class TemplateApk {
             files.put(e.getKey(),e.getValue().clone());
         }
         byte[] result=writeZip(files);
-        ManifestPlan expectedPlan=new ManifestPlan(spec.appId,spec.label,spec.versionCode,spec.versionName,
-            old.plan.iconResourceId,old.plan.backupResourceId,spec.capabilities);
         ManifestInfo actual=verifyAgainstPlan(result,expectedPlan);
         check(actual.appId.equals(spec.appId) && actual.label.equals(spec.label) &&
                 actual.versionCode==spec.versionCode && actual.versionName.equals(spec.versionName),"Output metadata differs");
@@ -336,26 +336,12 @@ public final class TemplateApk {
             }
         }
         String get(int id) throws IOException { check(id>=0 && id<strings.size(),"Invalid string reference"); return strings.get(id); }
-        int add(String s) { strings.add(s); return strings.size()-1; }
-        byte[] encode() throws IOException {
-            ByteArrayOutputStream data=new ByteArrayOutputStream(),offsets=new ByteArrayOutputStream();
-            for(String s:strings) {
-                le32(offsets,data.size()); byte[] b=s.getBytes(utf8?StandardCharsets.UTF_8:StandardCharsets.UTF_16LE);
-                emitLength(data,s.length(),utf8); if(utf8) emitLength(data,b.length,true); bytes(data,b); data.write(0); if(!utf8) data.write(0);
-            }
-            while(data.size()%4!=0) data.write(0); ByteArrayOutputStream out=new ByteArrayOutputStream();
-            le16(out,1); le16(out,28); le32(out,28+offsets.size()+data.size()); le32(out,strings.size()); le32(out,0);
-            le32(out,utf8?256:0); le32(out,28+offsets.size()); le32(out,0); bytes(out,offsets.toByteArray()); bytes(out,data.toByteArray()); return out.toByteArray();
-        }
         static int length(byte[] b,int[] p,boolean utf8) throws IOException {
             if(utf8) { bounds(b,p[0],1); int v=b[p[0]++]&255; if((v&128)!=0) { bounds(b,p[0],1); v=((v&127)<<8)|(b[p[0]++]&255); } return v; }
             int v=u16(b,p[0]); p[0]+=2; if((v&32768)!=0) { v=((v&32767)<<16)|u16(b,p[0]); p[0]+=2; } check(v>=0 && v<=65535,"Oversized string"); return v;
         }
-        static void emitLength(ByteArrayOutputStream b,int n,boolean utf8) throws IOException {
-            if(utf8) { check(n<=32767,"String too long"); if(n>=128) b.write((n>>>8)|128); b.write(n); }
-            else { check(n<=65535,"String too long"); if(n>=32768) le16(b,(n>>>16)|32768); le16(b,n); }
-        }
     }
+
     private static final class Attr {
         final byte[] node; final int pos,type,data,nameIndex; final String ns,name; final Pool pool;
         Attr(byte[] node,int pos,Pool pool) throws IOException {
@@ -367,11 +353,9 @@ public final class TemplateApk {
         }
         String text() throws IOException { check(type==3,"Expected string attribute "+name); return pool.get(data); }
         int number() throws IOException { check(type==16||type==17||type==18,"Expected integer attribute "+name); return data; }
-        void string(int index) { put32(node,pos+8,index); node[pos+15]=3; put32(node,pos+16,index); }
-        void number(int value) { put32(node,pos+8,NONE); node[pos+15]=16; put32(node,pos+16,value); }
     }
     private static final class Xml {
-        final List<byte[]> chunks=new ArrayList<>(); Pool pool; int poolIndex=-1;
+        Pool pool; int chunkCount;
         int[] resourceIds=null;
         Attr appId,label,versionCode,versionName,icon,activity;
         final List<String> permissions=new ArrayList<>();
@@ -380,8 +364,8 @@ public final class TemplateApk {
             check(outer.type==3 && outer.header==8 && outer.size==b.length,"Invalid binary XML");
             List<String> stack=new ArrayList<>(); Set<String> seen=new HashSet<>(); int namespaces=0; boolean rootClosed=false;
             for(int p=8;p<b.length;) {
-                Chunk c=new Chunk(b,p,b.length); byte[] n=Arrays.copyOfRange(b,p,p+c.size); chunks.add(n); p+=c.size;
-                if(c.type==1) { check(pool==null && chunks.size()==1,"Duplicate/misplaced pool"); pool=new Pool(n); poolIndex=chunks.size()-1; continue; }
+                Chunk c=new Chunk(b,p,b.length); byte[] n=Arrays.copyOfRange(b,p,p+c.size); chunkCount++; p+=c.size;
+                if(c.type==1) { check(pool==null && chunkCount==1,"Duplicate/misplaced pool"); pool=new Pool(n); continue; }
                 check(pool!=null,"Missing XML pool");
                 if(c.type==0x180) {
                     check(resourceIds==null && stack.isEmpty() && !rootClosed && c.header==8 && c.size<=8+4*pool.strings.size(),"Invalid resource map");
@@ -426,11 +410,6 @@ public final class TemplateApk {
                     seen.contains("manifest/application/activity/intent-filter/action"),"Incomplete factory manifest");
         }
         ManifestInfo info() throws IOException { return new ManifestInfo(appId.text(),label.text(),versionCode.number(),versionName.text(),icon.data,activity.text(),permissions); }
-        byte[] rewrite(Spec s) throws IOException {
-            appId.string(pool.add(s.appId)); label.string(pool.add(s.label)); versionName.string(pool.add(s.versionName)); versionCode.number(s.versionCode);
-            chunks.set(poolIndex,pool.encode()); ByteArrayOutputStream out=new ByteArrayOutputStream(); int len=8; for(byte[] b:chunks) len+=b.length;
-            le16(out,3); le16(out,8); le32(out,len); for(byte[] b:chunks) bytes(out,b); return out.toByteArray();
-        }
         Attr attr(Map<String,Attr> a,String ns,String name) throws IOException {
             Attr r=a.get(ns+"|"+name); check(r!=null,"Missing attribute "+name);
             if(ANDROID.equals(ns)) {

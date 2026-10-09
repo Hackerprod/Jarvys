@@ -74,7 +74,7 @@ Return a concise summary of what the app does, source and APK references, applic
 
 ## Closed v1 manifest verification (UX42 F0a-1)
 
-The six listed capabilities remain the entire implemented ceiling. A shared immutable catalog drives spec/config/bridge/introspection; schema and SDK are still v1. All 64 selections keep zero Android permissions and only the existing launcher. Do not claim Runtime2, additional native methods, new manifest-node construction or completion of F0a.
+The six listed capabilities remain the entire implemented ceiling. A shared immutable catalog drives spec/config/bridge/introspection; schema and SDK are still v1. All 64 selections keep zero Android permissions and only the existing launcher. F0a-2 supplies compiled typed node constructors and a deterministic AXML encoder, but additional nodes are construction fixtures only and production rejects nonempty catalog contributions. They are not selectable in factory.json or JavaScript. Do not claim Runtime2, additional native methods/permissions, selective extra manifest nodes, resource handlers or completion of F0a.
 
 Build/sign independently decode the actual AXML and compare every closed node/typed attribute/resource binding with the plan. Backup exclusions and every classes*.dex name/hash are checked; signing preserves all ZIP payload entries. Inspect and approval report the verified manifest and DEX inventory. Do not infer these values from desired JavaScript APIs.
 
