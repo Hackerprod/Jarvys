@@ -591,9 +591,22 @@ Fuente validada: 561d7421714ca425cc587e04bdb79a4dfeb136bb; árbol de app b9bcff8
 Límites: no hubo instalación/actualización física, TalkBack real, aceptación de WebView/Chromium real ni llamadas a proveedor externo. Las capturas y pruebas de host no sustituyen la aceptación de dispositivo. Las fixtures usan herramientas/modelos locales; el guard HTTP(S) de JVM no equivale a aislamiento de red de todo el sistema. Los eventos históricos sin identidad demostrable permanecen separados y no se inventan detalles que no fueron persistidos. «Skill cargada» certifica la carga aceptada, no el seguimiento posterior de las instrucciones.
 
 
+### 23. UX39: endurecimiento nativo y gradual de red del preview web
+
+Estado: implementación acotada en curso para v56 / 1.2.49-UX39; pruebas dirigidas y revisión independiente iniciadas. La validación agregada, lint fresco y APK aún no se dan por completados. El riesgo residual en proveedores antiguos y la aceptación real de Chromium/WebView siguen abiertos.
+
+- Política de respuesta compartida para preview interactivo y miniatura, tanto en recursos válidos como en denegaciones 403/404/405. Añade Connection-Allowlist con origen de respuesta, WebRTC bloqueado y redirecciones bloqueadas, DNS-prefetch desactivado y child-src none como complemento a las restricciones existentes. Cada respuesta recibe un mapa nuevo para evitar relajar respuestas posteriores.
+- Conserva JavaScript interactivo, módulos/estilos locales, imágenes, almacenamiento DOM, gestos y navegación legítima. La miniatura sigue sin ejecutar scripts. No modifica permisos, dependencias, puentes nativos, ajustes del proveedor, proxy/VPN ni política real de red. No amplía UX34 más allá de fase 0.
+- La restricción nativa depende del proveedor: Chromium/WebView 152 es el hito publicado; SDK Android, targetSdk y compileSdk no acreditan soporte. Los proveedores antiguos pueden ignorar el header, conservar su riesgo WebRTC/ICE y mantener la interacción. No se promete aislamiento absoluto ni se desactiva JavaScript silenciosamente.
+- Se mantienen el origen exacto y los miembros/hashes del manifiesto: admitir el origen de respuesta en el header no autoriza otros archivos, chats ni acceso privado. Se conservan las restricciones de frames, workers, ventanas y navegación externa para evitar contextos más permisivos.
+- El intento sintético de Chromium 154 del host no abrió ninguna página: el socket del proceso fue denegado en el arranque y también en el reintento permitido. No se ha medido bloqueo ICE, ausencia de paquetes ni ejecución de HTML real; no se busca una ruta para eludir esa restricción.
+
+Contrato y aceptación: app/FILE_DELIVERY.md y app/WEB_PREVIEW_ACCEPTANCE.md. La revisión usa documentación oficial de Chrome y el registro aprobado de WebView 152. Las pruebas host solo acreditarán configuración, headers, bytes y ciclo de vida. La firma posterior usará la identidad original existente; no se genera otra clave.
+
+
 ## Validaciones que siguen abiertas
 
-- Preview web: revisión de solo lectura en curso del posible egreso WebRTC/ICE heredado; todavía no hay corrección implementada ni comprobación en Chromium real. El endurecimiento y esa comprobación siguen pendientes. Las restricciones de URL/CSP no equivalen a aislamiento absoluto de red; conservar el contrato HTML/CSS/JavaScript interactivo sin puentes privados ni permisos nuevos.
+- Preview web: UX39 implementa endurecimiento nativo dependiente del proveedor; su validación host está en curso. La comprobación real de WebRTC/ICE en Android/Chromium y el riesgo residual de proveedores antiguos siguen pendientes. Las restricciones de URL/CSP no equivalen a aislamiento absoluto de red; conservar el contrato HTML/CSS/JavaScript interactivo sin puentes privados ni permisos nuevos.
 
 - Comprobar en dispositivo la recuperación de proyectos/archivos, imágenes y gestos, selección/copia, ejecución real y flujos de autenticación. Las pruebas del host no equivalen a una pasada completa en teléfono.
 - Gmail y Drive: conexión basal confirmada como funcional y gestión UX31 validada en código/host. Quedan consentimiento de los nuevos permisos opcionales y pruebas reales autorizadas de gestión, envío y borrado; las simulaciones no las sustituyen. El error DNS anterior se conserva como histórico, sin tratar la conexión actual como bloqueada.

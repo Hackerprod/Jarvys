@@ -217,10 +217,7 @@ internal class HtmlThumbnailClient(private val content: WorkspacePreviewContent,
             val input = content.open(path)
             if (request.method == "HEAD") input.close()
             WebResourceResponse(mime, if (mime.startsWith("text/") || mime.contains("svg")) "UTF-8" else null,
-                200, "OK", mapOf("Cache-Control" to "no-store", "X-Content-Type-Options" to "nosniff", "X-DNS-Prefetch-Control" to "off",
-                    "Content-Security-Policy" to "default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; " +
-                        "font-src 'self' data:; script-src 'none'; connect-src 'none'; object-src 'none'; " +
-                        "frame-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none'; media-src 'none'"),
+                200, "OK", PreviewResponsePolicy.thumbnailHeaders(),
                 if (request.method == "HEAD") ByteArrayInputStream(byteArrayOf()) else input)
         } catch (_: Exception) { denied(404) }
     }
@@ -245,7 +242,7 @@ internal class HtmlThumbnailClient(private val content: WorkspacePreviewContent,
     private fun fail() { if (!failed) { failed = true; onFailed() } }
     private fun denied(status: Int) = WebResourceResponse("text/plain", "UTF-8", status,
         when (status) { 405 -> "Method Not Allowed"; 404 -> "Not Found"; else -> "Forbidden" },
-        mapOf("Cache-Control" to "no-store"), ByteArrayInputStream(byteArrayOf()))
+        PreviewResponsePolicy.thumbnailHeaders(), ByteArrayInputStream(byteArrayOf()))
 }
 
 /** Blank output is an unavailable preview, never evidence of a successfully rendered application. */

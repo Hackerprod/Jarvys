@@ -196,7 +196,7 @@ private fun previewOriginKey(value: String): String = MessageDigest.getInstance(
     .digest(value.toByteArray(Charsets.UTF_8)).take(16).joinToString("") { "%02x".format(it) }
 
 @SuppressLint("SetJavaScriptEnabled")
-private fun createPreviewWebView(context: Context, content: WorkspacePreviewContent, state: PreviewPageState): WebView =
+internal fun createPreviewWebView(context: Context, content: WorkspacePreviewContent, state: PreviewPageState): WebView =
     WorkspacePreviewWebView(context).apply {
         tag = "workspace-preview-webview"
         setBackgroundColor(AndroidColor.TRANSPARENT)
@@ -226,14 +226,7 @@ private class WorkspacePreviewClient(private val content: WorkspacePreviewConten
         val path = content.localPath(request.url) ?: return response(403, "External preview resources are disabled")
         return try {
             val mime = WorkspaceStore.mimeType(path)
-            val headers = mapOf(
-                "Cache-Control" to "no-store",
-                "X-Content-Type-Options" to "nosniff",
-                "Content-Security-Policy" to "default-src 'self' data: blob:; "
-                    + "img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; "
-                    + "script-src 'self' 'unsafe-inline'; connect-src 'none'; "
-                    + "object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none'",
-            )
+            val headers = PreviewResponsePolicy.interactiveHeaders()
             val encoding = if (mime.startsWith("text/") || mime.contains("javascript") || mime.contains("json") || mime.contains("svg")) "UTF-8" else null
             val input = content.open(path)
             if (request.method == "HEAD") input.close()
@@ -255,7 +248,7 @@ private class WorkspacePreviewClient(private val content: WorkspacePreviewConten
     private fun response(status: Int, message: String) = WebResourceResponse(
         "text/plain", "UTF-8", status,
         when (status) { 403 -> "Forbidden"; 405 -> "Method Not Allowed"; else -> "Not Found" },
-        mapOf("Cache-Control" to "no-store", "X-Content-Type-Options" to "nosniff"),
+        PreviewResponsePolicy.interactiveHeaders(),
         ByteArrayInputStream(message.toByteArray(Charsets.UTF_8)),
     )
 }
