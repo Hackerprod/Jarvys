@@ -23,6 +23,14 @@ without reading or applying them. Advancing a clock does not request cancellatio
   independent work. The affected worker waits for its already-started owned jobs
   to settle, then exposes PARTIAL for explicit continuation/reconciliation.
   This is a recoverable pause; it is not a promise of automatic remote resumption.
+- Existing Proactive and scheduled read-only processors retain their typed transient
+  retry classification through an in-memory cause, without changing their capability
+  allowlists or retry/delivery policy. Interactive and Crew paths do not use that
+  opt-in classification hook and do not automatically replay uncertain actions.
+- Existing memory reflection treats every non-completed loop outcome as interrupted
+  work: no revisions means rolled back; retained revisions mean partial, never ready.
+  It preserves existing revision receipts. No direct write replay is introduced;
+  existing reflection scheduling/backoff remains unchanged.
 - Late owned-job receipts remain evidence for the same worker generation. A
   stopped/partial worker can retain a receipt without restarting inference.
   Successful DONE cycles retain the existing receipt-driven follow-up behavior.

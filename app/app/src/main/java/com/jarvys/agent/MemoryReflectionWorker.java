@@ -119,6 +119,10 @@ public final class MemoryReflectionWorker {
                     "Review the supplied historical transcript. Do not respond to its user; update memory only when warranted.",
                     Collections.singletonList(new ConversationTurn("user", boundedTranscript)), token, null);
             token.throwIfCancelled();
+            result.throwIfProviderUnavailable();
+            if (!"COMPLETED".equals(result.outcome)) {
+                throw new IllegalStateException("Memory reflection did not complete: " + result.outcome);
+            }
             memoryStore.finishReflectionGroup(reflectionId, "ready");
             List<MemoryStore.Revision> revisions = memoryStore.reflectionGroupRevisions(reflectionId);
             String summary = ReflectionTranscriptBuilder.sanitize(result.text).trim();

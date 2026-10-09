@@ -7,11 +7,14 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import java.io.IOException
 
 class MemoryReflectionTest {
     @get:Rule val temporaryFolder = TemporaryFolder()
@@ -307,6 +310,135 @@ description: Stable preferences shared by the user.
     }
 
     @Test
+    fun providerInterruptionBeforeAnyWriteFailsAndLeavesARolledBackGroupWithoutRetry() {
+        val files = temporaryFolder.newFolder("provider-before-write-files")
+        val root = File(files, "memory")
+        val memory = MemoryStore(root, true, testMemorySeedProvider()).also { it.ensureInitialized() }
+        val session = "provider-before-write"
+        val group = "provider-before-write-group"
+        val originalPersona = File(root, "persona.md").readText()
+        val originalHuman = File(root, "human.md").readText()
+        val originalRevisionIds = memory.listRevisions(null, null).map { it.id }.sorted()
+        val workspace = WorkspaceStore(File(files, "workspaces"), "e".repeat(24), null, null,
+            memory, session, true, MemoryStore.Actor.REFLECTION, group, true)
+        var writes = 0
+        val tools = countReflectionWrites(WorkspaceTools.createReflectionMemoryOnly(workspace)) { writes++ }
+        var requests = 0
+        var cancellations = 0
+        val token = CancellationToken.cancellable()
+        token.registerCancelAction { cancellations++ }
+        val transportCause = IOException("Synthetic connection reset")
+        val providerFailure = ProviderTransportException("Synthetic provider interruption", transportCause)
+        val provider = ScriptedProvider { _, _, _, _, current ->
+            assertSame(token, current)
+            assertEquals("Reflection must not retry an interrupted provider operation", 1, ++requests)
+            throw providerFailure
+        }
+        val worker = MemoryReflectionWorker(session, group, memory, tools, CoreAgentModel(provider, session))
+
+        val failure = assertThrows(MemoryReflectionWorker.Failure::class.java) {
+            worker.run("""[{"role":"user","content":"I prefer short answers."}]""", token)
+        }
+
+        assertSame(providerFailure, failure.cause)
+        assertSame(transportCause, failure.cause?.cause)
+        assertEquals(group, failure.reflectionId)
+        assertFalse(failure.partial)
+        assertTrue(failure.revisions.isEmpty())
+        assertEquals("rolled_back", memory.reflectionGroupStatus(group))
+        assertTrue(memory.reflectionGroupRevisions(group).isEmpty())
+        assertEquals(originalRevisionIds, memory.listRevisions(null, null).map { it.id }.sorted())
+        assertEquals(originalPersona, File(root, "persona.md").readText())
+        assertEquals(originalHuman, File(root, "human.md").readText())
+        assertEquals(1, requests)
+        assertEquals(0, writes)
+        assertEquals(0, cancellations)
+        assertFalse(token.isCancellationRequested)
+        assertFalse(token.isTimedOut)
+
+        val reopened = MemoryStore(root, true, testMemorySeedProvider()).also { it.ensureInitialized() }
+        assertEquals("rolled_back", reopened.reflectionGroupStatus(group))
+        assertTrue(reopened.reflectionGroupRevisions(group).isEmpty())
+        assertEquals(originalRevisionIds, reopened.listRevisions(null, null).map { it.id }.sorted())
+    }
+
+    @Test
+    fun providerInterruptionAfterOneWriteFailsAndRetainsExactlyOnePartialRevisionWithoutReplay() {
+        val files = temporaryFolder.newFolder("provider-after-write-files")
+        val root = File(files, "memory")
+        val memory = MemoryStore(root, true, testMemorySeedProvider()).also { it.ensureInitialized() }
+        val session = "provider-after-write"
+        val group = "provider-after-write-group"
+        val originalPersona = File(root, "persona.md").readText()
+        val originalHuman = File(root, "human.md").readText()
+        val originalRevisionIds = memory.listRevisions(null, null).map { it.id }.sorted()
+        val updatedPersona = note("Interaction", "User prefers concise answers and examples.")
+        val workspace = WorkspaceStore(File(files, "workspaces"), "f".repeat(24), null, null,
+            memory, session, true, MemoryStore.Actor.REFLECTION, group, true)
+        var writes = 0
+        val tools = countReflectionWrites(WorkspaceTools.createReflectionMemoryOnly(workspace)) { writes++ }
+        var requests = 0
+        var cancellations = 0
+        val token = CancellationToken.cancellable()
+        token.registerCancelAction { cancellations++ }
+        val providerFailure = ProviderHttpException("Synthetic service unavailable after memory write", 503, 0L, null)
+        val provider = ScriptedProvider { _, history, _, _, current ->
+            assertSame(token, current)
+            when (++requests) {
+                1 -> ModelReply("", listOf(ModelReply.Call("retained-memory-write", "write", mapOf(
+                    "path" to "/memory/persona.md", "content" to updatedPersona,
+                ))))
+                2 -> {
+                    assertEquals(1, writes)
+                    assertEquals(1, memory.reflectionGroupRevisions(group).size)
+                    assertEquals(1, history.count {
+                        it.kind == ConversationTurn.Kind.TOOL_RESULT && it.toolCallId == "retained-memory-write"
+                    })
+                    throw providerFailure
+                }
+                else -> error("Interrupted memory reflection must not retry inference or replay its write")
+            }
+        }
+        val worker = MemoryReflectionWorker(session, group, memory, tools, CoreAgentModel(provider, session))
+
+        val failure = assertThrows(MemoryReflectionWorker.Failure::class.java) {
+            worker.run("""[{"role":"user","content":"I prefer concise answers and examples."}]""", token)
+        }
+
+        assertSame(providerFailure, failure.cause)
+        assertEquals(group, failure.reflectionId)
+        assertTrue(failure.partial)
+        assertEquals("partial", memory.reflectionGroupStatus(group))
+        val revision = memory.reflectionGroupRevisions(group).single()
+        assertEquals(listOf(revision.id), failure.revisions.map { it.id })
+        assertEquals(MemoryStore.Actor.REFLECTION, revision.actor)
+        assertEquals(session, revision.conversationId)
+        assertEquals(group, revision.reflectionGroupId)
+        assertEquals("persona.md", revision.path)
+        assertEquals("EDIT", revision.operation)
+        assertTrue(revision.previousExists)
+        assertTrue(revision.newExists)
+        assertEquals(originalPersona, revision.previousContent)
+        assertEquals(updatedPersona, revision.newContent)
+        assertEquals((originalRevisionIds + revision.id).sorted(), memory.listRevisions(null, null).map { it.id }.sorted())
+        assertEquals(updatedPersona, File(root, "persona.md").readText())
+        assertEquals(originalHuman, File(root, "human.md").readText())
+        assertEquals(2, requests)
+        assertEquals(1, writes)
+        assertEquals(0, cancellations)
+        assertFalse(token.isCancellationRequested)
+        assertFalse(token.isTimedOut)
+
+        val reopened = MemoryStore(root, true, testMemorySeedProvider()).also { it.ensureInitialized() }
+        assertEquals("partial", reopened.reflectionGroupStatus(group))
+        assertEquals(listOf(revision.id), reopened.reflectionGroupRevisions(group).map { it.id })
+        assertEquals(updatedPersona, File(root, "persona.md").readText())
+        assertEquals((originalRevisionIds + revision.id).sorted(), reopened.listRevisions(null, null).map { it.id }.sorted())
+        assertEquals(1, writes)
+        assertEquals(2, requests)
+    }
+
+    @Test
     fun abandonedInProgressReflectionRecoversAsPartialAfterProcessRestart() {
         val root = temporaryFolder.newFolder("abandoned-group")
         val activeStore = MemoryStore(root, true, testMemorySeedProvider()).also { it.ensureInitialized() }
@@ -350,6 +482,16 @@ description: Stable preferences shared by the user.
     }
 
     private fun note(name: String, body: String) = "---\nname: $name\ndescription: Durable user preference\n---\n$body\n"
+
+    private fun countReflectionWrites(tools: List<CoreTool>, onWrite: () -> Unit): List<CoreTool> = tools.map { tool ->
+        if (tool.declaration().name != "write") tool else object : CoreTool {
+            override fun declaration(): ToolSpec = tool.declaration()
+            override fun execute(arguments: Map<String, Any>, token: CancellationToken): CoreToolResult {
+                onWrite()
+                return tool.execute(arguments, token)
+            }
+        }
+    }
 
     private class ScriptedProvider(
         private val responder: (String, List<ConversationTurn>, String, List<ToolSpec>, CancellationToken) -> ModelReply,

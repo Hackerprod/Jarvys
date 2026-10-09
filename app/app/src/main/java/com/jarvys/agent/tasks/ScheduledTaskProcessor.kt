@@ -140,6 +140,11 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
             return TaskExecutionResult(if (partial) "PARTIAL" else "INTERRUPTED", "NOT_APPLICABLE",
                 "interrupted", toolsCalled = toolCalls.toList(), errorCause = "interrupted", model = currentModel())
         } catch (failure: RuntimeException) {
+            if (token.isCancelled) {
+                val partial = toolCalls.any { it.write }
+                return TaskExecutionResult(if (partial) "PARTIAL" else "INTERRUPTED", "NOT_APPLICABLE",
+                    "interrupted", toolsCalled = toolCalls.toList(), errorCause = "interrupted", model = currentModel())
+            }
             if (isTransient(failure)) return TaskExecutionResult("RETRYABLE", "NOT_APPLICABLE",
                 transientCause(failure), toolsCalled = toolCalls.toList(), errorCause = transientCause(failure),
                 model = currentModel())
@@ -203,7 +208,11 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
 
     private fun runLoop(sessionId: String, tools: CoreToolRegistry, system: String, request: String,
                         history: List<com.jarvys.agent.ConversationTurn>, token: CancellationToken): CoreAgentLoop.Result {
-        return loopFactory.createLoop(localized, sessionId, tools, system).run(request, history, token, null)
+        val result = loopFactory.createLoop(localized, sessionId, tools, system).run(request, history, token, null)
+        token.throwIfCancelled()
+        // Scheduled capabilities are read-only; preserve their existing transient classification.
+        result.throwIfProviderUnavailable()
+        return result
     }
 
     private fun userRequest(task: ScheduledTask, scheduledFor: Long): String {

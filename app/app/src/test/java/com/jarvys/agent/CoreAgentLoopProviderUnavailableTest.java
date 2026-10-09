@@ -21,6 +21,10 @@ public class CoreAgentLoopProviderUnavailableTest {
         assertProviderPartial(new ProviderHttpException("Request timeout", 408, 0L, null));
     }
 
+    @Test public void http429WithoutAWaiterReturnsPartialWithoutCancellingOrRetrying() {
+        assertProviderPartial(new ProviderRateLimitException("429", 0L));
+    }
+
     @Test public void http503ReturnsPartialWithoutCancellingOrRetrying() {
         assertProviderPartial(new ProviderHttpException("Service unavailable", 503, 0L, null));
     }
@@ -82,6 +86,7 @@ public class CoreAgentLoopProviderUnavailableTest {
                 continuation.transcriptSnapshot(), token, null);
         assertEquals("COMPLETED", completed.outcome);
         assertEquals(CoreAgentLoop.InterruptionReason.NONE, completed.interruptionReason);
+        completed.throwIfProviderUnavailable();
         assertEquals(1, continuationRequests.get());
         assertEquals(1, effects.get());
         assertEquals("RESULT", continuation.checkpointSnapshot().toolLifecycle.get("effect-call-42"));
@@ -135,6 +140,9 @@ public class CoreAgentLoopProviderUnavailableTest {
         assertEquals("PARTIAL", result.outcome);
         assertEquals(CoreAgentLoop.InterruptionReason.PROVIDER_UNAVAILABLE, result.interruptionReason);
         assertFalse(result.text.trim().isEmpty());
+        assertSame(failure, assertThrows(RuntimeException.class, result::throwIfProviderUnavailable));
+        assertSame(failure, assertThrows(RuntimeException.class,
+                result.withText("Localized presentation")::throwIfProviderUnavailable));
         assertEquals(0, result.turns);
         assertEquals(1, requests.get());
         assertEquals(0, cancelled.get());

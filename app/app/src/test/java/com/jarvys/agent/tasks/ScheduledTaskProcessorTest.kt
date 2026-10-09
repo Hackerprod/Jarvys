@@ -203,6 +203,29 @@ class ScheduledTaskProcessorTest {
         assertEquals("network", transient.errorCause)
     }
 
+    @Test fun stopObservedAlongsideProviderSetupFailureIsInterruptedRatherThanRetried() {
+        val workerToken = CancellationToken.cancellable()
+        val calls = AtomicInteger()
+        val notifications = FakeNotifications()
+        val factory = object : ProactiveCoreLoopFactory {
+            override fun providerUnavailableReason(context: Context): String? = null
+            override fun createLoop(context: Context, sessionId: String, tools: CoreToolRegistry,
+                                    systemPrompt: String): CoreAgentLoop {
+                calls.incrementAndGet()
+                workerToken.cancel()
+                throw ProviderTransportException("synthetic setup failure after Stop", java.io.IOException("closed"))
+            }
+        }
+        val result = ScheduledTaskProcessor(context, factory, emptyRegistry(), clock = fixedClock(),
+            notifications = notifications).execute(task(), 210L, 211L, "run-stop-network", workerToken)
+        assertEquals("INTERRUPTED", result.status)
+        assertEquals("interrupted", result.errorCause)
+        assertEquals(1, calls.get())
+        assertEquals(0, notifications.resultCalls.get())
+        assertEquals(0, notifications.attentionCalls.get())
+        assertTrue(result.toolsCalled.isEmpty())
+    }
+
     @Test fun successfulTaskAfterAttentionSendsOneRecoveryNotice() {
         val notifications = FakeNotifications()
         val task = task(state = TaskState.NeedsAttention("connector_unavailable")).copy(

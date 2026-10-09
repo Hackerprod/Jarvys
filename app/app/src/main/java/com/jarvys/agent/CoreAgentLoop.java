@@ -66,6 +66,8 @@ public final class CoreAgentLoop {
         public final String outcome;
         public final long durationMs;
         public final InterruptionReason interruptionReason;
+        // In-memory classification only: never a transcript, persisted payload or model instruction.
+        private final transient RuntimeException providerInterruptionCause;
 
         Result(String runId, String text, int turns, String outcome) {
             this(runId, text, turns, outcome, 0L);
@@ -76,16 +78,27 @@ public final class CoreAgentLoop {
         }
 
         Result(String runId, String text, int turns, String outcome, long durationMs, InterruptionReason reason) {
+            this(runId, text, turns, outcome, durationMs, reason, null);
+        }
+
+        private Result(String runId, String text, int turns, String outcome, long durationMs,
+                       InterruptionReason reason, RuntimeException providerInterruptionCause) {
             this.runId = runId;
             this.text = text;
             this.turns = turns;
             this.outcome = outcome;
             this.durationMs = durationMs;
             this.interruptionReason = reason;
+            this.providerInterruptionCause = providerInterruptionCause;
         }
 
         public Result withText(String replacement) {
-            return new Result(runId, replacement, turns, outcome, durationMs, interruptionReason);
+            return new Result(runId, replacement, turns, outcome, durationMs, interruptionReason, providerInterruptionCause);
+        }
+
+        /** Existing caller failure policies can retain their typed provider classification. */
+        public void throwIfProviderUnavailable() {
+            if (providerInterruptionCause != null) throw providerInterruptionCause;
         }
     }
 
@@ -478,7 +491,7 @@ public final class CoreAgentLoop {
                         // Never replay an ambiguous request or cancel independent work merely because
                         // one bounded provider operation failed. Retain this turn for explicit recovery.
                         return new Result(runId, PROVIDER_MESSAGE, modelTurns, "PARTIAL",
-                                Math.max(0L, System.currentTimeMillis() - startedAtMs), InterruptionReason.PROVIDER_UNAVAILABLE);
+                                Math.max(0L, System.currentTimeMillis() - startedAtMs), InterruptionReason.PROVIDER_UNAVAILABLE, failure);
                     }
                     if (compactor == null || !ConversationCompactionPolicy.isContextOverflow(failure) || overflowCompactions >= 3) throw failure;
                     token.throwIfCancelled();
@@ -655,7 +668,7 @@ public final class CoreAgentLoop {
             }
             if (recoverableProviderFailure(failure)) {
                 return new Result(runId, PROVIDER_MESSAGE, modelTurns, "PARTIAL",
-                        Math.max(0L, System.currentTimeMillis() - startedAtMs), InterruptionReason.PROVIDER_UNAVAILABLE);
+                        Math.max(0L, System.currentTimeMillis() - startedAtMs), InterruptionReason.PROVIDER_UNAVAILABLE, failure);
             }
             throw failure;
         }

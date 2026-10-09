@@ -261,6 +261,8 @@ class ProactiveAgentProcessor(
             throw failure
         }
         token.throwIfCancelled()
+        // This allowlisted read-only review already has a typed transient retry policy.
+        result.throwIfProviderUnavailable()
         if (!"COMPLETED".equals(result.outcome, ignoreCase = true)) return null
         return captured.get()
     }
