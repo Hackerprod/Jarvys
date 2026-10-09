@@ -59,9 +59,9 @@ final class ProjectImageTool implements CoreTool {
                 + "Optional reference_images selects at most five existing project images by path and current sha256; their verified snapshots are sent to OpenAI to edit. "
                 + "Use only images and visual instructions authorized for this mission; never private history, secrets, URLs or guessed chat references. "
                 + "Consumes the existing signed-in ChatGPT image quota. Use when useful for the authorized implementation, not automatically for every project. "
-                + "Optional max_bytes (16384..33554432) preserves PNG transparency and may reduce dimensions; set 1048576 for local HTML preview asset limits. "
+                + "Optional max_bytes (16384..33554432) preserves PNG transparency and may reduce dimensions before the first save (full provider bytes are then not separately saved); set 1048576 for local HTML preview asset limits. "
                 + "The default preserves the generated PNG up to 32 MiB; size/preview warnings are returned. Output is saved in this project with a durable mutation receipt. "
-                + "A provider call, timeout or partial write must not be blindly repeated. Inspect saved paths and receipts first. No upload, public hosting, shell, or user attachment is implied.",
+                + "A provider call, timeout or partial write must not be blindly repeated. Inspect saved paths and receipts first. No public hosting, publication, shell, or user attachment is implied.",
                 "image", ToolSpec.Status.IMPLEMENTED, Collections.emptyMap(), Arrays.asList("action", "path"), schema);
     }
 
@@ -106,6 +106,7 @@ final class ProjectImageTool implements CoreTool {
             if (size != null && !CodexImageGenerationClient.supportedSizes().contains(size)) return CoreToolResult.failure("Unsupported image size");
             List<Map<String,Object>> references = references(arguments.get("reference_images"));
             final ProjectImageAssets.Image[] output = new ProjectImageAssets.Image[1];
+            final ProjectImageAssets.Image[] providerImage = new ProjectImageAssets.Image[1];
             ProjectMutationService mutations = new ProjectMutationService(ProjectImageAssets.MAX_BYTES, new ProjectMutationService.CommitObserver() {
                 @Override public void beforeCommit(int index, String target) { token.throwIfCancelled(); guard(); }
                 @Override public void beforePromotion(String target) { token.throwIfCancelled(); guard(); }
@@ -118,6 +119,7 @@ final class ProjectImageTool implements CoreTool {
                     java.util.Set<String> normalizedReferences = new java.util.HashSet<>();
                     for (Map<String,Object> reference : references) {
                         String referencePath = scope.normalizePath(text(reference, "path")), sha = text(reference, "sha256");
+                        if (path.equals(referencePath)) throw new IOException("Edit output must be a different path; preserve the reference original");
                         if (!normalizedReferences.add(referencePath)) throw new IOException("Each reference image must be unique");
                         if (!sha.matches("[0-9a-f]{64}")) throw new IOException("Reference needs its current SHA-256");
                         File file = ProjectImageAssets.snapshot(scope, referencePath, sha, context.getCacheDir(), token); snapshots.add(file);
@@ -129,12 +131,28 @@ final class ProjectImageTool implements CoreTool {
                             ? client.generate(scope.conversationId(), prompt, size, token)
                             : client.edit(scope.conversationId(), prompt, size, inputs, token);
                     token.throwIfCancelled(); guard();
+                    providerImage[0] = ProjectImageAssets.inspect(generated.bytes);
                     output[0] = ProjectImageAssets.generated(generated.bytes, maxBytes, token);
                     return output[0].bytes;
                 } finally { for (File snapshot : snapshots) snapshot.delete(); }
             }, token);
             JSONObject receipt = receipt(result, path);
-            if (output[0] != null) receipt.put("output", output[0].metadata());
+            boolean destinationVerified = false;
+            if (output[0] != null) {
+                receipt.put("produced_image", output[0].metadata());
+                if (result.isSuccess()) {
+                    try { destinationVerified = ProjectScope.sha256(output[0].bytes).equals(scope.revision(path, token)); }
+                    catch (IOException unavailable) { /* Preserve the completed receipt and report unverifiable current bytes. */ }
+                }
+                if (destinationVerified) receipt.put("output", output[0].metadata());
+            }
+            if (providerImage[0] != null) receipt.put("provider_image", providerImage[0].metadata());
+            receipt.put("requested_max_bytes", maxBytes)
+                    .put("original_provider_bytes_saved", destinationVerified && output[0] != null && !output[0].resized);
+            receipt.put("destination_verified", destinationVerified)
+                    .put("reference_images", new org.json.JSONArray(references))
+                    .put("operation", references.isEmpty() ? "generate" : "edit")
+                    .put("project_id", scope.id());
             receipt.put("provider_result_received", output[0] != null).put("user_attachment_delivered", false)
                     .put("retry_guidance", "Inspect the path and mutation journal after partial, interrupted or uncertain effects; do not repeat generation to recover a receipt.");
             if (output[0] != null && output[0].bytes.length > ProjectImageAssets.PREVIEW_BYTES)
@@ -144,11 +162,11 @@ final class ProjectImageTool implements CoreTool {
                 try { String ref = persistReceipt.apply(text); if (ref != null && !ref.isEmpty()) receipt.put("receipt_ref", ref); }
                 catch (RuntimeException failed) { receipt.put("receipt_warning", "Project journal remains authoritative; auxiliary receipt storage failed. Do not repeat generation."); }
             }
-            return result.isSuccess() ? CoreToolResult.success(receipt.toString()) : CoreToolResult.failure(receipt.toString());
+            return result.isSuccess() && destinationVerified ? CoreToolResult.success(receipt.toString()) : CoreToolResult.failure(receipt.toString());
         } catch (org.json.JSONException invalidReceipt) { return CoreToolResult.failure("Image receipt could not be serialized. Inspect project journal before any retry."); }
         catch (java.util.concurrent.CancellationException cancelled) { throw cancelled; }
         catch (CodexImageGenerationException failure) {
-            return CoreToolResult.failure("Project image provider request failed: " + failure.kind + " (" + failure.diagnosticCode() + "). No automatic retry was made; inspect existing evidence before retrying.");
+            return CoreToolResult.failure("Project image provider request failed: " + failure.kind + " (" + failure.diagnosticCode() + "). Inspect existing evidence before requesting another image.");
         } catch (IOException | IllegalArgumentException failure) {
             return CoreToolResult.failure("Project image was not completed: " + failure.getMessage() + ". Do not assume generation or persistence succeeded.");
         } catch (RuntimeException failure) {

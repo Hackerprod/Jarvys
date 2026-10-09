@@ -268,7 +268,16 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
       SecretStore.CodexCredentials credentials,
       String sessionId,
       CancellationToken token) {
-    return send(request, credentials, sessionId, token, false, true);
+    return sendImageRequest(request, credentials, sessionId, token, ProviderHttp.DEFAULT_CONNECTION_FACTORY);
+  }
+
+  static ProviderHttp.Response sendImageRequest(
+      JSONObject request,
+      SecretStore.CodexCredentials credentials,
+      String sessionId,
+      CancellationToken token,
+      ProviderHttp.ConnectionFactory connectionFactory) {
+    return send(request, credentials, sessionId, token, false, true, connectionFactory);
   }
 
   private static ProviderHttp.Response send(
@@ -294,6 +303,8 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
     Runnable unregister = () -> {};
     try {
       connection = connectionFactory.open(ENDPOINT);
+      // Image requests are dispatched only to this approved origin; redirects require a new decision.
+      if (captureRetryAfter) connection.setInstanceFollowRedirects(false);
       HttpURLConnection activeConnection = connection;
       unregister = token.registerCancelAction(activeConnection::disconnect);
       connection.setRequestMethod("POST");

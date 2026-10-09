@@ -169,10 +169,9 @@ public class ImageEditRecoveryTest {
     }
 
     private SecretStore.CodexCredentials credentials() throws Exception {
-        java.lang.reflect.Constructor<SecretStore.CodexCredentials> constructor = SecretStore.CodexCredentials.class
-                .getDeclaredConstructor(String.class, String.class, long.class, String.class);
-        constructor.setAccessible(true);
-        return constructor.newInstance("fixture-access", "fixture-refresh", Long.MAX_VALUE, "fixture-account");
+        SecretStore store = new SecretStore(context().getSharedPreferences("image-edit-credentials-" + UUID.randomUUID(), Context.MODE_PRIVATE));
+        store.saveCodexTokens("fixture-access", "fixture-refresh", Long.MAX_VALUE, "fixture-account");
+        return store.getCodexCredentials();
     }
 
     private static final class FakeConnection extends HttpURLConnection {

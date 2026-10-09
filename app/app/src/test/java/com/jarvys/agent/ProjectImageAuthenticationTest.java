@@ -37,4 +37,23 @@ public class ProjectImageAuthenticationTest {
         assertEquals(200,result.status);assertEquals(2,sends.get());assertEquals(authorization,secrets.getCodexCredentials().authorizationId);
         secrets.clearCodexTokens();secrets.saveCodexTokens("access","refresh",System.currentTimeMillis()+3600000,"account");assertNotEquals(authorization,secrets.getCodexCredentials().authorizationId);
     }
+    @Test public void generationPinsOriginAndRejectsRedirectWithoutSecondTransmission() throws Exception {
+        AtomicInteger opens=new AtomicInteger();
+        java.net.HttpURLConnection connection=new java.net.HttpURLConnection(new java.net.URL(OpenAICodexResponsesClient.ENDPOINT)) {
+            @Override public void disconnect() { }
+            @Override public boolean usingProxy() {return false;}
+            @Override public void connect() {throw new AssertionError("No actual network");}
+            @Override public int getResponseCode() {assertFalse(getInstanceFollowRedirects());return 307;}
+            @Override public String getHeaderField(String name) {return "Location".equals(name)?"https://untrusted.invalid/redirect":null;}
+            @Override public java.io.OutputStream getOutputStream() {assertFalse(getInstanceFollowRedirects());return new java.io.ByteArrayOutputStream();}
+            @Override public java.io.InputStream getInputStream() {return new java.io.ByteArrayInputStream(new byte[0]);}
+        };
+        ProviderSettings settings=new ProviderSettings(ApplicationProvider.getApplicationContext());
+        CodexImageGenerationClient client=new CodexImageGenerationClient(settings,(request,session,token)->
+                OpenAICodexResponsesClient.sendImageRequest(request,secrets().getCodexCredentials(),session,token,endpoint->{
+                    assertEquals(OpenAICodexResponsesClient.ENDPOINT,endpoint);opens.incrementAndGet();return connection;
+                }));
+        CodexImageGenerationException failure=assertThrows(CodexImageGenerationException.class,()->client.generate("fixture","A generic image",null,CancellationToken.uncancellable()));
+        assertEquals(Integer.valueOf(307),failure.httpStatus);assertEquals(1,opens.get());assertFalse(connection.getInstanceFollowRedirects());
+    }
 }

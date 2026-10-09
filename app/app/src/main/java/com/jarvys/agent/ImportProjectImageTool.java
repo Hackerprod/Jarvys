@@ -69,8 +69,11 @@ final class ImportProjectImageTool implements CoreTool {
                     }, token);
             JSONObject receipt = ProjectImageTool.receipt(result, path).put("source_image_ref", reference)
                     .put("original_preserved", true).put("provider_called", false);
-            if (image[0] != null) receipt.put("output", image[0].metadata());
-            return result.isSuccess() ? CoreToolResult.success(receipt.toString()) : CoreToolResult.failure(receipt.toString());
+            boolean verified = result.isSuccess() && image[0] != null && ProjectScope.sha256(image[0].bytes).equals(scope.revision(path, token));
+            if (image[0] != null) receipt.put("produced_image", image[0].metadata());
+            if (verified) receipt.put("output", image[0].metadata());
+            receipt.put("destination_verified", verified).put("project_id", scope.id());
+            return verified ? CoreToolResult.success(receipt.toString()) : CoreToolResult.failure(receipt.toString());
         } catch (java.util.concurrent.CancellationException cancelled) { throw cancelled; }
         catch (Exception failure) { return CoreToolResult.failure("Image import was not confirmed. Verify the selected reference, project hash/version and saved mutation evidence before retrying."); }
         catch (OutOfMemoryError failure) { return CoreToolResult.failure("Insufficient memory to import the selected image. No success is claimed."); }

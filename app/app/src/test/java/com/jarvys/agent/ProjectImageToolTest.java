@@ -118,6 +118,13 @@ public class ProjectImageToolTest {
         }
         assertFalse(generate(tool(), "../escaped.png").success); assertEquals(0, calls.get());
     }
+    @Test public void editsCannotOverwriteTheirReferenceOriginals() throws Exception {
+        Files.write(scope.resolve("source.png").toPath(), png);
+        Map<String,Object> args=generation("source.png");args.put("expected_sha256",ProjectScope.sha256(png));
+        args.put("reference_images",Collections.singletonList(args("path","./source.png","sha256",ProjectScope.sha256(png))));
+        assertFalse(tool().execute(args,CancellationToken.crewChild()).success);assertEquals(0,calls.get());
+        assertArrayEquals(png,Files.readAllBytes(scope.resolve("source.png").toPath()));
+    }
     @Test public void staleReferenceHashRejectsBeforeQuota() throws Exception {
         Files.write(scope.resolve("source.png").toPath(), png);
         Map<String,Object> args = generation("out.png"); args.put("reference_images", Collections.singletonList(args("path", "source.png", "sha256", String.join("", Collections.nCopies(64,"0")))));
@@ -169,6 +176,9 @@ public class ProjectImageToolTest {
         JSONObject receipt = success(tool().execute(args, CancellationToken.crewChild()));
         JSONObject output = receipt.getJSONObject("output"); assertTrue(output.getBoolean("resized"));
         assertTrue(output.getInt("size_bytes") <= 16384); assertTrue(output.getInt("width") < 512);
+        assertEquals(ProjectScope.sha256(png),receipt.getJSONObject("provider_image").getString("sha256"));
+        assertEquals(512,receipt.getJSONObject("provider_image").getInt("width"));
+        assertEquals(16384,receipt.getInt("requested_max_bytes"));assertFalse(receipt.getBoolean("original_provider_bytes_saved"));
         Bitmap decoded = android.graphics.BitmapFactory.decodeFile(scope.resolve("bounded.png").getPath());
         assertTrue(decoded.hasAlpha()); decoded.recycle();
     }
