@@ -96,8 +96,8 @@ public class ManifestNodesTest {
     }
     @Test public void duplicateAndConflictingDeclarationsAreRejected() {
         ManifestNodes.Element p = ManifestNodes.permission("android.permission.CAMERA",ManifestNodes.PermissionVariant.STANDARD,null);
-        assertThrows(IllegalArgumentException.class,()->ManifestNodes.base("manifest",list(p,p)));
-        assertThrows(IllegalArgumentException.class,()->ManifestNodes.base("manifest",list(p,ManifestNodes.permission("android.permission.CAMERA",ManifestNodes.PermissionVariant.SDK_23,35))));
+        assertThrows(IllegalArgumentException.class,()->ManifestNodes.ordered(list(p,p)));
+        assertThrows(IllegalArgumentException.class,()->ManifestNodes.ordered(list(p,ManifestNodes.permission("android.permission.CAMERA",ManifestNodes.PermissionVariant.SDK_23,35))));
         assertThrows(IllegalArgumentException.class,()->ManifestNodes.queries(list(ManifestNodes.queryPackage("org.example.a"),ManifestNodes.queryPackage("org.example.a"))));
         assertThrows(IllegalArgumentException.class,()->ManifestNodes.privateComponent(ManifestNodes.ComponentKind.SERVICE,"org.example.Service",list(ManifestNodes.metadataInt("org.example.key",1),ManifestNodes.metadataString("org.example.key","x"))));
         assertThrows(IllegalArgumentException.class,()->ManifestNodes.intentFilter(list(ManifestNodes.action("android.intent.action.SEND"),ManifestNodes.action("android.intent.action.SEND"))));
@@ -144,6 +144,42 @@ public class ManifestNodesTest {
             if(u16(good,p)==0x180) for(int a=p+8;a<p+i32(good,p+4);a+=4) { byte[] bad=good.clone();put(bad,a,i32(good,a)^1);assertThrows(IOException.class,()->ManifestAudit.verifyTree(bad,fixture())); }
         }
         assertTrue(tested>50);
+    }
+    @Test public void movingACompleteChildBetweenRepeatedPathsChangesItsParentAndFailsAudit() throws Exception {
+        byte[] good=ManifestXml.encodeTree(fixture()); ManifestAudit.Document original=ManifestAudit.read(good);
+        int source=-1,target=-1;
+        for(int i=0;i<original.nodes.size();i++) {
+            ManifestAudit.Node n=original.nodes.get(i);
+            ManifestAudit.Attribute name=n.attributes.get(ManifestPlan.ANDROID+"|name");
+            if(name!=null && name.value.equals("android.intent.category.LAUNCHER")) source=i;
+            if(n.path.endsWith("intent-filter") && n.parentIndex>=0) {
+                ManifestAudit.Attribute component=original.nodes.get(n.parentIndex).attributes.get(ManifestPlan.ANDROID+"|name");
+                if(target<0 && component!=null && component.value.equals("org.example.PrivateActivity")) target=i;
+            }
+        }
+        assertTrue(source>=0 && target>source);
+        int start=-1,end=-1,destination=-1,index=0;List<Integer> stack=new ArrayList<>();
+        for(int p=8;p<good.length;p+=i32(good,p+4)) {
+            if(u16(good,p)==0x102) {if(index==source)start=p;stack.add(index++);}
+            if(u16(good,p)==0x103) {
+                int closing=stack.remove(stack.size()-1);
+                if(closing==source)end=p+i32(good,p+4);
+                if(closing==target)destination=p;
+            }
+        }
+        assertTrue(start>=0 && end>start && destination>end);
+        java.io.ByteArrayOutputStream moved=new java.io.ByteArrayOutputStream();
+        moved.write(good,0,start);moved.write(good,end,destination-end);moved.write(good,start,end-start);moved.write(good,destination,good.length-destination);
+        byte[] changed=moved.toByteArray();assertEquals(good.length,changed.length);
+        ManifestAudit.Document actual=ManifestAudit.read(changed);boolean found=false;
+        for(ManifestAudit.Node n:actual.nodes) {
+            ManifestAudit.Attribute name=n.attributes.get(ManifestPlan.ANDROID+"|name");
+            if(name!=null && name.value.equals("android.intent.category.LAUNCHER")) {
+                assertEquals(original.nodes.get(source).path,n.path);
+                assertNotEquals(original.nodes.get(source).parentIndex,n.parentIndex);found=true;
+            }
+        }
+        assertTrue(found);assertThrows(IOException.class,()->ManifestAudit.verifyTree(changed,fixture()));
     }
     @Test public void truncationSpecialIndexesAndOversizedChunksAreRejected() throws Exception {
         byte[] good=ManifestXml.encodeTree(fixture());
