@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="gmail_draft_delete_title">Permanently delete Gmail draft</string>
+    <string name="gmail_draft_delete_description">Permanently delete one exact Gmail draft and its attachments after reviewing its account, ID, revision and content preview. Always requires explicit confirmation; no Allow mode. Changed content, account or authorization invalidates review. Empty drafts are supported. Gmail has no atomic revision precondition. An absent draft does not prove this request deleted it. Never retry an unknown outcome.</string>
+    <string name="gmail_draft_delete_compact">%1$s · %2$s · %3$s</string>
+    <string name="gmail_draft_delete_identity">Draft: %1$s · revision: %2$s</string>
+    <string name="gmail_draft_delete_empty">(empty)</string>
+    <string name="gmail_draft_delete_subject">Subject preview: %1$s</string>
+    <string name="gmail_draft_delete_to">To preview: %1$s</string>
+    <string name="gmail_draft_delete_cc">Cc preview: %1$s</string>
+    <string name="gmail_draft_delete_bcc">Bcc preview: %1$s</string>
+    <string name="gmail_draft_delete_body">Body preview: %1$s</string>
+    <string name="gmail_draft_delete_unknown_size">unknown</string>
+    <string name="gmail_draft_delete_attachment">Attachment: %1$s · %2$s · %3$s bytes</string>
+    <string name="gmail_draft_delete_truncated">Preview is truncated or simplified; it does not show all draft content or attachments. This approval permanently deletes the entire identified draft.</string>
+    <string name="gmail_draft_delete_irreversible">Permanent deletion. The entire draft and its attachments are removed and cannot be recovered from Trash. This one-time approval applies only to this account, draft and reviewed revision.</string>
+    <string name="gmail_draft_delete_race">Changes detected before deletion block the request. Gmail does not provide an atomic revision condition, so a change between the final check and deletion cannot be prevented.</string>
+</resources>

@@ -111,12 +111,12 @@ class GoogleOAuthManager internal constructor(
         return effectiveGrantedScope(scope) != null
     }
 
-    /** Least actual accepted grant whose account can be verified for a Gmail send. */
+    /** Least actual accepted grant whose account can be verified for sending or label metadata. */
     fun effectiveGrantedScope(scope: String): String? {
         validateScope(scope)
         val granted = grantedScopes()
         if (granted.isEmpty()) return null
-        if (isIdentityMode() || scope != GoogleOAuthProtocol.GMAIL_SEND) {
+        if (isIdentityMode() || scope !in GMAIL_UNVERIFIABLE_PROFILE_SCOPES) {
             return GoogleOAuthProtocol.effectiveGrantedScope(scope, granted)
         }
         val owner = currentOwnerId() ?: return null
@@ -144,7 +144,7 @@ class GoogleOAuthManager internal constructor(
         val grants = legacyGrants(owner)
         for (accepted in GoogleOAuthProtocol.acceptedScopes(capability)) {
             val grant = grants.filter { accepted in it.scopes }.sortedBy { if (it.storageScope == accepted) 0 else 1 }
-                .firstOrNull { capability != GoogleOAuthProtocol.GMAIL_SEND ||
+                .firstOrNull { capability !in GMAIL_UNVERIFIABLE_PROFILE_SCOPES ||
                     it.scopes.any(GMAIL_PROFILE_SCOPES::contains) }
             if (grant != null) return accepted to grant
         }
@@ -164,8 +164,9 @@ class GoogleOAuthManager internal constructor(
         }
         val owner = currentOwnerId() ?: error("Configure your Google OAuth client")
         val selected = selectLegacyGrant(capability, owner)
-            ?: if (capability == GoogleOAuthProtocol.GMAIL_SEND && GoogleOAuthProtocol.effectiveGrantedScope(capability, grantedScopes()) != null)
-                error(appContext.getString(R.string.full_google_legacy_send_unverified))
+            ?: if (capability in GMAIL_UNVERIFIABLE_PROFILE_SCOPES && GoogleOAuthProtocol.effectiveGrantedScope(capability, grantedScopes()) != null)
+                error(appContext.getString(if (capability == GoogleOAuthProtocol.GMAIL_LABELS)
+                    R.string.full_google_legacy_labels_unverified else R.string.full_google_legacy_send_unverified))
             else error(appContext.getString(R.string.full_google_scope_not_granted))
         val key = scopeKey(selected.second.storageScope)
         return AuthorizedAccess(selected.first, key, owner, selected.second.scopes,
@@ -219,10 +220,10 @@ class GoogleOAuthManager internal constructor(
         if (access.owner == null && access.nativeAccount != null) {
             return pinGmailAccount(requireNotNull(access.nativeAccount), expected, lease)
         }
-        if (access.owner == null && access.scope == GoogleOAuthProtocol.GMAIL_SEND &&
+        if (access.owner == null && access.scope in GMAIL_UNVERIFIABLE_PROFILE_SCOPES &&
             access.tokenScopes.none(GMAIL_PROFILE_SCOPES::contains) && isScopeGranted(GoogleOAuthProtocol.GMAIL_READ)) {
             // AuthorizationResult may omit email. Prove an already-granted read token, then obtain
-            // a fresh send token with that explicit Account; never reuse the unbound send token.
+            // a fresh feature token with that explicit Account; never reuse the unbound token.
             val baseline = authorizedAccess(GoogleOAuthProtocol.GMAIL_READ, lease)
             val account = proveGmailAccount(baseline, expected, lease)
             val pinned = authorizeIdentity(access.scope, lease, allowResolution = false)
@@ -231,7 +232,8 @@ class GoogleOAuthManager internal constructor(
             return pinGmailAccount(requireNotNull(access.nativeAccount), account, lease)
         }
         val profileScope = access.tokenScopes.firstOrNull(GMAIL_PROFILE_SCOPES::contains)
-            ?: error(appContext.getString(R.string.full_google_legacy_send_unverified))
+            ?: error(appContext.getString(if (access.scope == GoogleOAuthProtocol.GMAIL_LABELS)
+                R.string.full_google_legacy_labels_unverified else R.string.full_google_legacy_send_unverified))
         val response = GoogleRequestExecutor(transport).execute(profileScope, "GET", GMAIL_PROFILE_ENDPOINT,
             null, "application/json", lease.token, GoogleApiLimits.MAX_RESPONSE_BYTES, emptyMap(),
             accessToken = { session.withCurrent(lease) { access.token } },
@@ -624,6 +626,7 @@ class GoogleOAuthManager internal constructor(
         GoogleOAuthProtocol.GMAIL_SEND -> "gmail_send"
         GoogleOAuthProtocol.GMAIL_MODIFY -> "gmail_modify"
         GoogleOAuthProtocol.GMAIL_FULL -> "gmail_full"
+        GoogleOAuthProtocol.GMAIL_LABELS -> "gmail_labels"
         GoogleOAuthProtocol.DRIVE_READ -> "drive_read"
         GoogleOAuthProtocol.DRIVE_FILE -> "drive_file"
         else -> error("Unsupported Google feature scope")
@@ -631,8 +634,9 @@ class GoogleOAuthManager internal constructor(
     private fun validateScope(scope: String) { require(scope in GoogleOAuthProtocol.ALLOWED_SCOPES) { "Unsupported Google scope" } }
     companion object {
         private val GMAIL_CAPABILITIES = setOf(GoogleOAuthProtocol.GMAIL_READ, GoogleOAuthProtocol.GMAIL_COMPOSE,
-            GoogleOAuthProtocol.GMAIL_SEND, GoogleOAuthProtocol.GMAIL_MODIFY, GoogleOAuthProtocol.GMAIL_FULL)
-        private val GMAIL_PROFILE_SCOPES = GMAIL_CAPABILITIES - GoogleOAuthProtocol.GMAIL_SEND
+            GoogleOAuthProtocol.GMAIL_SEND, GoogleOAuthProtocol.GMAIL_LABELS, GoogleOAuthProtocol.GMAIL_MODIFY, GoogleOAuthProtocol.GMAIL_FULL)
+        private val GMAIL_UNVERIFIABLE_PROFILE_SCOPES = setOf(GoogleOAuthProtocol.GMAIL_SEND, GoogleOAuthProtocol.GMAIL_LABELS)
+        private val GMAIL_PROFILE_SCOPES = GMAIL_CAPABILITIES - GMAIL_UNVERIFIABLE_PROFILE_SCOPES
         private const val GMAIL_PROFILE_ENDPOINT = "https://gmail.googleapis.com/gmail/v1/users/me/profile"
         private const val PREFERENCES = "jarvys_full_oauth_config"
         private const val CLIENT_ID = "installed_client_id"
@@ -675,10 +679,11 @@ object GoogleOAuthProtocol {
     const val GMAIL_COMPOSE = "https://www.googleapis.com/auth/gmail.compose"
     const val GMAIL_SEND = "https://www.googleapis.com/auth/gmail.send"
     const val GMAIL_MODIFY = "https://www.googleapis.com/auth/gmail.modify"
+    const val GMAIL_LABELS = "https://www.googleapis.com/auth/gmail.labels"
     const val GMAIL_FULL = "https://mail.google.com/"
     const val DRIVE_READ = "https://www.googleapis.com/auth/drive.readonly"
     const val DRIVE_FILE = "https://www.googleapis.com/auth/drive.file"
-    val ALLOWED_SCOPES = setOf(GMAIL_READ, GMAIL_COMPOSE, GMAIL_SEND, GMAIL_MODIFY, GMAIL_FULL, DRIVE_READ, DRIVE_FILE)
+    val ALLOWED_SCOPES = setOf(GMAIL_READ, GMAIL_COMPOSE, GMAIL_SEND, GMAIL_LABELS, GMAIL_MODIFY, GMAIL_FULL, DRIVE_READ, DRIVE_FILE)
 
     /** Endpoint-accepted scopes ordered from least to most privilege. No grant is inferred. */
     fun acceptedScopes(capability: String): List<String> = when (capability) {
@@ -686,6 +691,7 @@ object GoogleOAuthProtocol {
         GMAIL_COMPOSE -> listOf(GMAIL_COMPOSE, GMAIL_MODIFY, GMAIL_FULL)
         GMAIL_SEND -> listOf(GMAIL_SEND, GMAIL_COMPOSE, GMAIL_MODIFY, GMAIL_FULL)
         GMAIL_MODIFY -> listOf(GMAIL_MODIFY, GMAIL_FULL)
+        GMAIL_LABELS -> listOf(GMAIL_LABELS, GMAIL_MODIFY, GMAIL_FULL)
         GMAIL_FULL -> listOf(GMAIL_FULL)
         DRIVE_READ, DRIVE_FILE -> listOf(capability)
         else -> emptyList()

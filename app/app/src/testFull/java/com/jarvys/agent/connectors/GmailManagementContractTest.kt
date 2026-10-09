@@ -11,7 +11,7 @@ import java.util.concurrent.CancellationException
 
 /** Hermetic stateful Gmail REST contract: no OAuth account, HTTP server, or real mailbox. */
 class GmailManagementContractTest {
-    private data class Request(val scope: String, val account: String, val method: String,
+    private data class Request(val scope: String, val tokenScope: String, val account: String, val method: String,
                                val url: String, val body: String?, val contentType: String) {
         val path: String get() = URI(url).path.removePrefix("/gmail/v1")
         fun query(key: String): List<String> = URI(url).rawQuery.orEmpty().split('&').filter { it.isNotEmpty() }
@@ -19,10 +19,12 @@ class GmailManagementContractTest {
         companion object { private fun decode(value: String) = URLDecoder.decode(value, "UTF-8") }
     }
     private data class Page(val ids: List<String>, val next: String = "", val estimate: Long = 9999)
+    private data class IdentityProof(val capability: String, val tokenScope: String, val account: String)
     private class Api : GoogleRestAuthorization {
         val calls = mutableListOf<Request>()
         val epochs = mutableListOf<Long?>()
-        val grants = mutableSetOf(GoogleOAuthProtocol.GMAIL_READ, GoogleOAuthProtocol.GMAIL_MODIFY, GoogleOAuthProtocol.GMAIL_FULL)
+        val identityProofs = mutableListOf<IdentityProof>()
+        val grants = mutableSetOf(GoogleOAuthProtocol.GMAIL_READ, GoogleOAuthProtocol.GMAIL_LABELS, GoogleOAuthProtocol.GMAIL_MODIFY, GoogleOAuthProtocol.GMAIL_FULL)
         val accounts = grants.associateWith { "owner@example.com" }.toMutableMap()
         val messages = linkedMapOf<String, JSONObject>()
         val labels = linkedMapOf<String, JSONObject>(
@@ -37,13 +39,34 @@ class GmailManagementContractTest {
         var applyMutations = true
         val writes: List<Request> get() = calls.filter { it.method != "GET" }
         override fun currentAuthorizationEpoch() = epoch
-        override fun isScopeGranted(scope: String) = scope in grants
+        private fun effectiveScope(capability: String): String? = when (capability) {
+            GoogleOAuthProtocol.GMAIL_READ -> listOf(GoogleOAuthProtocol.GMAIL_READ, GoogleOAuthProtocol.GMAIL_MODIFY, GoogleOAuthProtocol.GMAIL_FULL)
+            GoogleOAuthProtocol.GMAIL_LABELS -> listOf(GoogleOAuthProtocol.GMAIL_LABELS, GoogleOAuthProtocol.GMAIL_MODIFY, GoogleOAuthProtocol.GMAIL_FULL)
+            GoogleOAuthProtocol.GMAIL_MODIFY -> listOf(GoogleOAuthProtocol.GMAIL_MODIFY, GoogleOAuthProtocol.GMAIL_FULL)
+            GoogleOAuthProtocol.GMAIL_COMPOSE -> listOf(GoogleOAuthProtocol.GMAIL_COMPOSE, GoogleOAuthProtocol.GMAIL_MODIFY, GoogleOAuthProtocol.GMAIL_FULL)
+            GoogleOAuthProtocol.GMAIL_SEND -> listOf(GoogleOAuthProtocol.GMAIL_SEND, GoogleOAuthProtocol.GMAIL_COMPOSE, GoogleOAuthProtocol.GMAIL_MODIFY, GoogleOAuthProtocol.GMAIL_FULL)
+            else -> listOf(capability)
+        }.firstOrNull(grants::contains)
+        override fun isScopeGranted(scope: String) = effectiveScope(scope) != null
         override fun verifyGmailAccount(capability: String, expectedAccount: String?, token: CancellationToken,
                                         epoch: Long): String {
+            val tokenScope = effectiveScope(capability) ?: error("Fake rejected ungranted capability $capability")
+            // labels-only tokens cannot call getProfile. This models identity metadata provided by the
+            // authorization layer rather than silently borrowing another scope's mailbox account.
+            if (tokenScope == GoogleOAuthProtocol.GMAIL_LABELS) {
+                beforeLease?.also { beforeLease = null }?.invoke()
+                token.throwIfCancelled()
+                check(epoch == this.epoch) { "Google connection changed before account verification" }
+                val actual = accounts.getValue(tokenScope).lowercase()
+                identityProofs += IdentityProof(capability, tokenScope, actual)
+                check(expectedAccount == null || expectedAccount == actual) { "Google account changed after review" }
+                return actual
+            }
             val response = requestCancellable(capability, "GET", "${GoogleRestEndpoints.GMAIL}/users/me/profile",
                 token = token, expectedAuthorizationEpoch = epoch)
             GoogleRestEndpoints.requireSuccess(response)
             val actual = JSONObject(response.body).getString("emailAddress").lowercase()
+            identityProofs += IdentityProof(capability, tokenScope, actual)
             check(expectedAccount == null || expectedAccount == actual) { "Google account changed after review" }
             return actual
         }
@@ -74,9 +97,10 @@ class GmailManagementContractTest {
                 .put("historyId", (message.getString("historyId").toLong() + 1).toString())
         }
         override fun request(scope: String, method: String, url: String, body: String?, contentType: String): GoogleHttpResponse {
-            check(scope in grants) { "Fake rejected ungranted exact scope $scope" }
-            val call = Request(scope, accounts.getValue(scope), method, url, body, contentType)
+            val tokenScope = effectiveScope(scope) ?: error("Fake rejected ungranted capability $scope")
+            val call = Request(scope, tokenScope, accounts.getValue(tokenScope), method, url, body, contentType)
             calls += call
+            if (tokenScope == GoogleOAuthProtocol.GMAIL_LABELS && !call.path.startsWith("/users/me/labels")) return GoogleHttpResponse(403, "{}")
             beforeRequest?.invoke(call)?.let { return it }
             val path = call.path
             if (method == "GET") {
@@ -135,9 +159,17 @@ class GmailManagementContractTest {
     private class Journal : GoogleWorkspaceWriteJournal {
         val uncertain = linkedSetOf<String>()
         var beforeReserve: ((String) -> Unit)? = null
+        var beforeResolve: ((String) -> Unit)? = null
+        var resolveSucceeds = true
+        val resolutions = mutableListOf<String>()
         override fun isUncertain(intentHash: String) = intentHash in uncertain
         override fun reserve(intentHash: String) { beforeReserve?.invoke(intentHash); check(uncertain.add(intentHash)) }
-        override fun resolve(intentHash: String): Boolean { uncertain.remove(intentHash); return true }
+        override fun resolve(intentHash: String): Boolean {
+            resolutions += intentHash
+            beforeResolve?.invoke(intentHash)
+            if (!resolveSucceeds) return false
+            uncertain.remove(intentHash); return true
+        }
     }
     private val contacts = object : ContactsGateway {
         override fun search(query: String, limit: Int) = emptyList<ContactRecord>()
@@ -273,8 +305,8 @@ class GmailManagementContractTest {
         assertTrue(api.writes.isEmpty())
     }
 
-    @Test fun mutationScopeIsRequiredExactlyAndReadWriteAccountMismatchFailsBeforeAnyMutation() {
-        val api = Api().apply { add("m1"); grants.remove(GoogleOAuthProtocol.GMAIL_MODIFY) }; val connector = runtime(api)
+    @Test fun mutationNeedsAnAcceptedScopeAndReadWriteAccountMismatchFailsBeforeAnyMutation() {
+        val api = Api().apply { add("m1"); grants.removeAll(setOf(GoogleOAuthProtocol.GMAIL_MODIFY, GoogleOAuthProtocol.GMAIL_FULL)) }; val connector = runtime(api)
         fail("permission") { prepare(connector, GmailManagement.TRASH, ids("m1")) }
         assertTrue(api.calls.isEmpty())
         api.grants += GoogleOAuthProtocol.GMAIL_MODIFY
@@ -315,7 +347,7 @@ class GmailManagementContractTest {
             val reviewed = prepare(connector, GmailManagement.TRASH, ids("m1"))
             when (change) {
                 0 -> api.epoch++
-                1 -> api.grants.remove(GoogleOAuthProtocol.GMAIL_MODIFY)
+                1 -> api.grants.removeAll(setOf(GoogleOAuthProtocol.GMAIL_MODIFY, GoogleOAuthProtocol.GMAIL_FULL))
                 2 -> api.accounts[GoogleOAuthProtocol.GMAIL_MODIFY] = "other@example.com"
             }
             fail { execute(connector, GmailManagement.TRASH, reviewed) }
@@ -424,7 +456,7 @@ class GmailManagementContractTest {
         assertEquals(1, count(deleted, "verified")); assertTrue(api.messages.containsKey("m1")); assertFalse("Label_1" in api.messageLabels("m1"))
         assertEquals(listOf("POST", "PATCH", "DELETE"), api.writes.map { it.method })
         assertEquals(listOf("/users/me/labels", "/users/me/labels/Label_created", "/users/me/labels/Label_1"), api.writes.map { it.path })
-        assertTrue(api.writes.all { it.scope == GoogleOAuthProtocol.GMAIL_MODIFY })
+        assertTrue(api.writes.all { it.scope == GoogleOAuthProtocol.GMAIL_LABELS && it.tokenScope == GoogleOAuthProtocol.GMAIL_LABELS })
     }
 
     @Test fun changedLabelBaselineIsExcludedAndNestedColorKeyOrderIsNotAChange() {
@@ -572,6 +604,7 @@ class GmailManagementContractTest {
         journal.beforeReserve = { hash ->
             val target = store.records().single().getJSONArray("targets").getJSONObject(0)
             assertEquals("dispatched", target.getString("state")); assertEquals(hash, target.getString("intent_hash")); assertTrue(api.writes.isEmpty())
+            assertEquals(listOf(hash), strings(store.records().single().getJSONArray("journal_intents")))
         }
         api.beforeRequest = { call ->
             if (call.method == "POST") {
@@ -631,9 +664,10 @@ class GmailManagementContractTest {
         val rows = records.getJSONArray("items")
         assertTrue(records.getBoolean("untrusted_content")); assertEquals("owner@example.com", records.getString("account"))
         assertEquals(2, records.getInt("count")); assertFalse(records.getBoolean("has_more"))
-        val selection = (0 until rows.length()).map(rows::getJSONObject).single { it.has("selection_id") }
-        val discovered = (0 until rows.length()).map(rows::getJSONObject).single { it.has("receipt_id") }
+        val selection = (0 until rows.length()).map(rows::getJSONObject).single { it.getString("kind") == "selection" }
+        val discovered = (0 until rows.length()).map(rows::getJSONObject).single { it.getString("kind") == "receipt" }
         assertEquals(selected.getString("selection_id"), selection.getString("selection_id"))
+        assertEquals(selected.getString("selection_id"), discovered.getString("selection_id"))
         assertEquals(GmailManagement.TRASH, discovered.getString("operation"))
         assertEquals(1, count(discovered, "unknown")); assertEquals(1, count(discovered, "pending"))
         val detail = receipt(restarted, discovered.getString("receipt_id"))
@@ -742,8 +776,9 @@ class GmailManagementContractTest {
         assertTrue((GmailManagement.WRITES - GmailManagement.DELETE).all { access(it) }); assertFalse(access(GmailManagement.DELETE))
         api.grants += GoogleOAuthProtocol.GMAIL_FULL
         assertTrue(access(GmailManagement.DELETE)); assertTrue(access(GmailManagement.LIST_RECORDS))
-        api.grants.remove(GoogleOAuthProtocol.GMAIL_READ)
+        api.grants.clear(); api.grants += GoogleOAuthProtocol.GMAIL_LABELS
         assertFalse(definition.connectionAccessGranted!!.invoke()); assertTrue(reads.none { access(it) })
+        assertFalse(access(GmailManagement.GET_LABEL)); assertTrue(access(GmailManagement.CREATE_LABEL))
         assertTrue(api.calls.isEmpty())
     }
 
@@ -764,6 +799,169 @@ class GmailManagementContractTest {
         fail("different account or kind") { receipt(connector, selectionId) }
         fail("different account or kind") { prepare(connector, GmailManagement.TRASH, JSONObject().put("receipt_id", selectionId)) }
         assertTrue(api.writes.isEmpty())
+    }
+
+    @Test fun failedMarkerResolutionIsDurableAndDefinitiveMailAndLabelGroupsReconcileWithoutReplay() {
+        for (operation in listOf(GmailManagement.MODIFY, GmailManagement.UPDATE_LABEL)) for (rejected in listOf(false, true)) {
+            val api = Api().apply { add("m1") }; val store = GmailManagementStores.inMemory()
+            val journal = Journal().apply { resolveSucceeds = false }; val connector = runtime(api, store, journal)
+            if (rejected) api.beforeRequest = { call -> if (call.method != "GET") GoogleHttpResponse(400, "{}") else null }
+            val args = if (operation == GmailManagement.MODIFY) modify("m1") else JSONObject().put("id", "Label_1").put("name", "Renamed")
+            val result = perform(connector, operation, args)
+            val id = result.getString("receipt_id")
+            assertEquals(1, count(result, if (rejected) "rejected" else "verified"))
+            assertEquals("needs_marker_reconciliation", result.getString("status")); assertTrue(result.getBoolean("safety_marker_pending"))
+            assertEquals(journal.uncertain, strings(store.get(id)!!.getJSONArray("unresolved_intents")).toSet())
+            assertEquals(1, journal.uncertain.size)
+
+            val restarted = runtime(api, store, journal)
+            val resolutionCalls = journal.resolutions.size
+            assertTrue(receipt(restarted, id).getBoolean("safety_marker_pending"))
+            assertEquals(resolutionCalls, journal.resolutions.size)
+            journal.resolveSucceeds = true
+            val callsBefore = api.calls.size
+            val reconciled = receipt(restarted, id, true)
+            assertFalse(reconciled.getBoolean("safety_marker_pending"))
+            assertEquals(if (rejected) "completed_with_exclusions" else "verified", reconciled.getString("status"))
+            assertEquals(1, count(reconciled, if (rejected) "rejected" else "verified"))
+            assertTrue(journal.uncertain.isEmpty()); assertEquals(0, store.get(id)!!.getJSONArray("unresolved_intents").length())
+            assertEquals(1, api.writes.size)
+            assertTrue(api.calls.drop(callsBefore).all { it.method == "GET" && it.path == "/users/me/profile" })
+        }
+    }
+
+    @Test fun markerReconciliationClearsOnlyDefinitiveGroupsWhileUnknownEffectsRemainBlocked() {
+        val api = Api().apply { addMany(101) }; val store = GmailManagementStores.inMemory()
+        val journal = Journal().apply { resolveSucceeds = false }; val connector = runtime(api, store, journal)
+        api.beforeRequest = { call -> if (call.method == "POST" && api.writes.size == 2) GoogleHttpResponse(503, "") else null }
+        val result = perform(connector, GmailManagement.MODIFY, modify(*(1..101).map { "m$it" }.toTypedArray()))
+        assertEquals(100, count(result, "verified")); assertEquals(1, count(result, "unknown"))
+        assertEquals("needs_marker_reconciliation", result.getString("status")); assertEquals(2, journal.uncertain.size)
+        val definitive = strings(store.get(result.getString("receipt_id"))!!.getJSONArray("unresolved_intents")).single()
+        journal.resolveSucceeds = true
+        val reconciled = receipt(runtime(api, store, journal), result.getString("receipt_id"), true)
+        assertFalse(reconciled.getBoolean("safety_marker_pending")); assertEquals("needs_reconciliation", reconciled.getString("status"))
+        assertEquals(1, count(reconciled, "unknown")); assertEquals(1, journal.uncertain.size); assertFalse(definitive in journal.uncertain)
+        assertEquals(2, api.writes.size)
+        fail("unresolved") { perform(connector, GmailManagement.TRASH, ids("m101")) }
+        assertEquals(2, api.writes.size)
+    }
+
+    @Test fun largeCollectedSelectionRequiresExplicitSliceAndReceiptsExposeExactProgress() {
+        val api = Api().apply {
+            val all = addMany(1001)
+            all.chunked(100).forEachIndexed { index, chunk ->
+                pages[if (index == 0) "" else "p$index"] = Page(chunk, if (index == 10) "" else "p${index + 1}")
+            }
+        }
+        val connector = runtime(api)
+        val first = read(connector, GmailManagement.SELECT, JSONObject().put("query", "in:inbox").put("max_pages", 10))
+        val selectionId = first.getString("selection_id")
+        val selected = read(connector, GmailManagement.SELECT, JSONObject().put("selection_id", selectionId))
+        assertTrue(selected.getBoolean("complete")); assertEquals(1001, selected.getInt("count"))
+        val base = JSONObject().put("selection_id", selectionId).put("add_label_ids", JSONArray().put("STARRED"))
+        fail("explicit max_targets") { prepare(connector, GmailManagement.MODIFY, base) }
+        fail("explicit max_targets") { prepare(connector, GmailManagement.MODIFY, JSONObject(base.toString()).put("selection_offset", 1000)) }
+        assertFalse(api.calls.any { it.path.startsWith("/users/me/messages/") })
+        val sliced = perform(connector, GmailManagement.MODIFY, JSONObject(base.toString()).put("selection_offset", 997).put("max_targets", 3))
+        assertEquals(listOf("m998", "m999", "m1000"), targetIds(api.writes.single()))
+        for (view in listOf(sliced, receipt(connector, sliced.getString("receipt_id")))) {
+            assertEquals(selectionId, view.getString("selection_id")); assertEquals(1001, view.getInt("selection_count"))
+            assertEquals(997, view.getInt("selection_offset")); assertEquals(1000, view.getInt("selection_end")); assertEquals(1, view.getInt("selection_remaining"))
+            assertEquals(3, count(view, "verified"))
+        }
+        val last = perform(connector, GmailManagement.MODIFY, JSONObject(base.toString()).put("selection_offset", 1000).put("max_targets", 3))
+        assertEquals(listOf("m1001"), targetIds(api.writes.last()))
+        assertEquals(1001, last.getInt("selection_end")); assertEquals(0, last.getInt("selection_remaining")); assertEquals(1, count(last, "verified"))
+    }
+
+    @Test fun labelCapabilityUsesLeastGrantedLabelsModifyOrFullTokenWithoutUnsupportedProfileCalls() {
+        for (grant in listOf(GoogleOAuthProtocol.GMAIL_LABELS, GoogleOAuthProtocol.GMAIL_MODIFY, GoogleOAuthProtocol.GMAIL_FULL)) {
+            val api = Api().apply { grants.clear(); grants += setOf(GoogleOAuthProtocol.GMAIL_READ, grant) }; val connector = runtime(api)
+            assertEquals(GoogleOAuthProtocol.GMAIL_READ, GmailManagement.requiredScope(GmailManagement.GET_LABEL))
+            for (operation in listOf(GmailManagement.CREATE_LABEL, GmailManagement.UPDATE_LABEL, GmailManagement.DELETE_LABEL))
+                assertEquals(GoogleOAuthProtocol.GMAIL_LABELS, GmailManagement.requiredScope(operation))
+            assertEquals(1, count(perform(connector, GmailManagement.CREATE_LABEL, JSONObject().put("name", "New")), "verified"))
+            assertEquals(1, count(perform(connector, GmailManagement.UPDATE_LABEL, JSONObject().put("id", "Label_created").put("name", "Changed")), "verified"))
+            val observed = read(connector, GmailManagement.GET_LABEL, JSONObject().put("id", "Label_created"))
+            assertEquals("Changed", observed.getJSONArray("items").getJSONObject(0).getString("name"))
+            assertEquals(GoogleOAuthProtocol.GMAIL_READ, api.calls.last().scope)
+            assertEquals(GoogleOAuthProtocol.GMAIL_READ, api.calls.last().tokenScope)
+            assertEquals(1, count(perform(connector, GmailManagement.DELETE_LABEL, JSONObject().put("id", "Label_created")), "verified"))
+            val labelCalls = api.calls.filter { it.path.startsWith("/users/me/labels") && it.scope != GoogleOAuthProtocol.GMAIL_READ }
+            assertTrue(labelCalls.isNotEmpty()); assertTrue(labelCalls.all { it.scope == GoogleOAuthProtocol.GMAIL_LABELS && it.tokenScope == grant })
+            assertTrue(api.identityProofs.any { it.capability == GoogleOAuthProtocol.GMAIL_LABELS && it.tokenScope == grant && it.account == "owner@example.com" })
+            assertFalse(api.calls.any { it.path == "/users/me/profile" && it.tokenScope == GoogleOAuthProtocol.GMAIL_LABELS })
+            if (grant == GoogleOAuthProtocol.GMAIL_LABELS) {
+                assertFalse(api.isScopeGranted(GoogleOAuthProtocol.GMAIL_MODIFY))
+                assertEquals(403, api.request(GoogleOAuthProtocol.GMAIL_LABELS, "GET", "${GoogleRestEndpoints.GMAIL}/users/me/profile", null, "application/json").status)
+            }
+        }
+    }
+
+    @Test fun labelAccountProofCannotBorrowReadScopeIdentityDuringPrepareExecuteOrReconcile() {
+        for (phase in listOf("prepare", "execute", "reconcile")) {
+            val api = Api().apply { grants.clear(); grants += setOf(GoogleOAuthProtocol.GMAIL_READ, GoogleOAuthProtocol.GMAIL_LABELS) }
+            val connector = runtime(api); val args = JSONObject().put("id", "Label_1").put("name", "Reviewed")
+            val review = if (phase == "execute") prepare(connector, GmailManagement.UPDATE_LABEL, args) else null
+            val earlier = if (phase == "reconcile") {
+                api.beforeRequest = { call -> if (call.method == "PATCH") GoogleHttpResponse(503, "") else null }
+                perform(connector, GmailManagement.UPDATE_LABEL, args)
+            } else null
+            api.accounts[GoogleOAuthProtocol.GMAIL_LABELS] = "labels-other@example.com"
+            fail("account") {
+                when (phase) {
+                    "prepare" -> prepare(connector, GmailManagement.UPDATE_LABEL, args)
+                    "execute" -> execute(connector, GmailManagement.UPDATE_LABEL, review!!)
+                    else -> receipt(connector, earlier!!.getString("receipt_id"), true)
+                }
+            }
+            assertEquals(if (phase == "reconcile") 1 else 0, api.writes.size)
+            assertTrue(api.identityProofs.any { it.capability == GoogleOAuthProtocol.GMAIL_LABELS && it.account == "labels-other@example.com" })
+            assertFalse(api.calls.any { it.path == "/users/me/profile" && it.tokenScope == GoogleOAuthProtocol.GMAIL_LABELS })
+        }
+    }
+
+    @Test fun fullGrantProvidesReadAndModifyCapabilitiesWithoutInventingSeparateGrantedTokens() {
+        val api = Api().apply { grants.clear(); grants += GoogleOAuthProtocol.GMAIL_FULL; add("m1") }; val connector = runtime(api)
+        assertTrue(api.isScopeGranted(GoogleOAuthProtocol.GMAIL_READ)); assertTrue(api.isScopeGranted(GoogleOAuthProtocol.GMAIL_MODIFY))
+        val selected = read(connector, GmailManagement.SELECT, ids("m1"))
+        val result = perform(connector, GmailManagement.MODIFY, JSONObject().put("selection_id", selected.getString("selection_id"))
+            .put("remove_label_ids", JSONArray().put("UNREAD")))
+        assertEquals(1, count(result, "verified")); assertTrue(api.calls.all { it.tokenScope == GoogleOAuthProtocol.GMAIL_FULL })
+        assertEquals(GoogleOAuthProtocol.GMAIL_MODIFY, api.writes.single().scope)
+        assertEquals(setOf(GoogleOAuthProtocol.GMAIL_FULL), api.grants)
+    }
+
+    @Test fun crashAfterVerifiedCheckpointBeforeJournalCleanupCanReconcileOnRestartWithoutReplay() {
+        val api = Api().apply { add("m1") }; val store = GmailManagementStores.inMemory(); val journal = Journal()
+        val connector = runtime(api, store, journal)
+        val processDeath = AssertionError("Simulated process death after durable verification")
+        journal.beforeResolve = { hash ->
+            val persisted = store.records().single()
+            assertEquals("verified", persisted.getString("status"))
+            assertEquals("verified", persisted.getJSONArray("targets").getJSONObject(0).getString("state"))
+            assertEquals(listOf(hash), strings(persisted.getJSONArray("journal_intents")))
+            assertTrue(journal.isUncertain(hash))
+            throw processDeath
+        }
+        assertSame(processDeath, fail { perform(connector, GmailManagement.MODIFY, modify("m1")) })
+        val id = store.records().single().getString("record_id")
+        assertEquals(1, api.writes.size); assertEquals(1, journal.uncertain.size)
+
+        journal.beforeResolve = null
+        val restarted = runtime(api, store, journal)
+        val saved = receipt(restarted, id)
+        assertEquals(1, count(saved, "verified")); assertEquals("verified", saved.getString("status"))
+        assertTrue(saved.getBoolean("journal_marker_retained")); assertFalse(saved.getBoolean("safety_marker_pending"))
+        assertEquals(1, journal.uncertain.size)
+        val callsBefore = api.calls.size
+        val reconciled = receipt(restarted, id, true)
+        assertEquals(1, count(reconciled, "verified")); assertFalse(reconciled.getBoolean("journal_marker_retained"))
+        assertFalse(reconciled.getBoolean("safety_marker_pending")); assertTrue(journal.uncertain.isEmpty())
+        assertEquals(0, store.get(id)!!.getJSONArray("journal_intents").length())
+        assertEquals(1, api.writes.size)
+        assertTrue(api.calls.drop(callsBefore).all { it.method == "GET" && it.path == "/users/me/profile" })
     }
 
     @Test fun maliciousMailIsOnlyUntrustedDataAndCannotSupplyApprovalOrEnableIrreversibleAutonomy() {

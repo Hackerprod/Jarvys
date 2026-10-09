@@ -17,4 +17,8 @@
     <string name="full_google_account_mismatch">Google permissions belong to different accounts or the account changed. No action was sent. Reconnect the intended account and review the action again.</string>
     <string name="full_google_account_unverified">Google did not return a verifiable Gmail account. No action was sent.</string>
     <string name="full_google_account_pin_failed">The verified Google account could not be saved. No action was sent.</string>
+    <string name="full_google_scope_gmail_labels">Edit label definitions · Optional</string>
+    <string name="full_google_section_labels">Label definitions</string>
+    <string name="full_google_labels_explanation">gmail.labels permits creating, reading, renaming and deleting label definitions. It does not read mail or apply labels to messages; message organization needs Manage mail. Deleting a label permanently removes its assignments and requires review for every action.</string>
+    <string name="full_google_legacy_labels_unverified">This labels-only Google token cannot verify its account. Label edits are unavailable until you explicitly enable a profile-capable management permission or reconnect with Android authorization. No extra permission is requested automatically.</string>
 </resources>

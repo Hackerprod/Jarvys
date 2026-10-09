@@ -25,7 +25,11 @@ internal class GmailManagement(
             GET_LABEL -> {
                 checkArgs(args, setOf("id"), setOf("id"))
                 val epoch = oauth.currentAuthorizationEpoch()
-                envelope("label", labelRow(get("/users/me/labels/${path(id(args.getString("id")))}", token, epoch)))
+                account(token, epoch)
+                val requestedId = id(args.getString("id"))
+                val label = get("/users/me/labels/${path(requestedId)}", token, epoch)
+                check(label.optString("id") == requestedId) { "Gmail returned a different label" }
+                envelope("label", labelRow(label))
             }
             else -> error("Unknown Gmail management read")
         }
@@ -173,6 +177,7 @@ internal class GmailManagement(
                     args.has("selection_id") -> requireRecord(args.getString("selection_id"), "selection", owner).let {
                         check(it.optBoolean("complete")) { "Continue selecting all pages before changing mail" }
                         val all = strings(it.getJSONArray("ids"))
+                        require(all.size <= MAX_TARGETS || args.has("max_targets")) { "This selection has ${all.size} messages; choose an explicit max_targets slice before changing mail" }
                         val offset = integer(args, "selection_offset", 0, 0, MAX_SELECTION)
                         require(offset <= all.size) { "Selection offset is invalid" }
                         all.drop(offset).take(integer(args, "max_targets", MAX_TARGETS, 1, MAX_TARGETS))
@@ -205,7 +210,15 @@ internal class GmailManagement(
         require(objects(targets).any { it.optString("state") == "pending" }) { "No eligible existing non-draft messages remain; no write was sent" }
         return newRecord("receipt", owner).put("operation", operation).put("targets", targets)
             .put("add_label_ids", JSONArray(add)).put("remove_label_ids", JSONArray(remove))
-            .put("status", "prepared").apply { prior?.let { put("resumes_receipt", it.getString("record_id")) } }
+            .put("status", "prepared").apply {
+                prior?.let { put("resumes_receipt", it.getString("record_id")) }
+                if (args.has("selection_id")) {
+                    val selection = requireRecord(args.getString("selection_id"), "selection", owner)
+                    val total = selection.getJSONArray("ids").length(); val offset = args.optInt("selection_offset")
+                    put("selection_id", selection.getString("record_id")).put("selection_count", total)
+                        .put("selection_offset", offset).put("selection_end", offset + selected.size).put("selection_remaining", total - offset - selected.size)
+                }
+            }
     }
 
     private fun executeMail(record: JSONObject, epoch: Long, token: CancellationToken) {
@@ -242,6 +255,7 @@ internal class GmailManagement(
             val hash = intent(record.getString("account"), operation, ids, change.first, change.second)
             check(!journal.isUncertain(hash)) { "An equivalent Gmail batch has an unknown result. Reconcile its receipt; do not repeat it." }
             chunk.forEach { it.put("state", "dispatched").put("intent_hash", hash) }
+            retainIntent(record, hash)
             saveStatus(record) // Persist exact account, targets and action before dispatch, including process death.
             journal.reserve(hash)
             val response = try {
@@ -256,7 +270,7 @@ internal class GmailManagement(
             } catch (failure: Exception) {
                 val preDispatch = failure is GooglePreDispatchAuthorizationException
                 chunk.forEach { it.put("state", if (preDispatch) "rejected" else "unknown") }
-                if (preDispatch) journal.resolve(hash)
+                if (preDispatch) resolveIntent(record, hash)
                 saveStatus(record)
                 if (failure is java.util.concurrent.CancellationException) throw failure
                 break
@@ -264,7 +278,7 @@ internal class GmailManagement(
             if (response.status !in 200..299) {
                 val uncertain = response.status >= 500 || response.status in setOf(408, 429)
                 chunk.forEach { it.put("state", if (uncertain) "unknown" else "rejected").put("http_status", response.status) }
-                if (!uncertain) journal.resolve(hash)
+                if (!uncertain) resolveIntent(record, hash)
                 saveStatus(record)
                 break
             }
@@ -272,7 +286,7 @@ internal class GmailManagement(
             chunk.forEach { it.put("state", "accepted") }
             saveStatus(record)
             verifyTargets(record, chunk, epoch, token)
-            if (chunk.all { it.optString("state") == "verified" }) journal.resolve(hash)
+            if (chunk.all { it.optString("state") == "verified" }) resolveIntent(record, hash)
             saveStatus(record)
         }
     }
@@ -337,16 +351,16 @@ internal class GmailManagement(
         val body = canonical(record.getJSONObject("body"))
         val hash = GmailContent.digest((record.getString("account") + "\n" + operation + "\n" + targetId + "\n" + body).toByteArray())
         check(!journal.isUncertain(hash)) { "An equivalent label write is unresolved; inspect its receipt before retrying" }
-        target.put("state", "dispatched").put("intent_hash", hash); saveStatus(record); journal.reserve(hash)
+        target.put("state", "dispatched").put("intent_hash", hash); retainIntent(record, hash); saveStatus(record); journal.reserve(hash)
         val response = try {
-            oauth.requestCancellable(GoogleOAuthProtocol.GMAIL_MODIFY,
+            oauth.requestCancellable(GoogleOAuthProtocol.GMAIL_LABELS,
                 when(operation) { CREATE_LABEL -> "POST"; DELETE_LABEL -> "DELETE"; else -> "PATCH" },
                 GoogleRestEndpoints.GMAIL + "/users/me/labels" + if (operation == CREATE_LABEL) "" else "/${path(targetId)}",
                 if (operation == DELETE_LABEL) null else body, token = token, expectedAuthorizationEpoch = epoch)
         } catch (failure: Exception) {
             val preDispatch = failure is GooglePreDispatchAuthorizationException
             target.put("state", if (preDispatch) "rejected" else "unknown")
-            if (preDispatch) journal.resolve(hash)
+            if (preDispatch) resolveIntent(record, hash)
             saveStatus(record)
             if (failure is java.util.concurrent.CancellationException) throw failure
             return
@@ -354,7 +368,7 @@ internal class GmailManagement(
         if (response.status !in 200..299) {
             val uncertain = response.status >= 500 || response.status in setOf(408, 429)
             target.put("state", if (uncertain) "unknown" else "rejected").put("http_status", response.status)
-            if (!uncertain) journal.resolve(hash)
+            if (!uncertain) resolveIntent(record, hash)
         } else if (operation == DELETE_LABEL) target.put("state", "accepted")
         else {
             val result = runCatching { JSONObject(response.body) }.getOrNull()
@@ -365,7 +379,7 @@ internal class GmailManagement(
         saveStatus(record)
         if (target.optString("state") == "accepted") {
             verifyLabel(record, epoch, token)
-            if (target.optString("state") == "verified") journal.resolve(hash)
+            if (target.optString("state") == "verified") resolveIntent(record, hash)
             saveStatus(record)
         }
     }
@@ -396,8 +410,9 @@ internal class GmailManagement(
             val candidates = objects(record.getJSONArray("targets")).filter { it.optString("state") in setOf("accepted", "unknown", "dispatched") }
             if (record.getString("operation") in MAIL_WRITES) verifyTargets(record, candidates, epoch, token)
             else if (candidates.isNotEmpty()) verifyLabel(record, epoch, token)
-            candidates.map { it.optString("intent_hash") }.filter(String::isNotEmpty).distinct().forEach { hash ->
-                if (objects(record.getJSONArray("targets")).filter { it.optString("intent_hash") == hash }.all { it.optString("state") == "verified" }) journal.resolve(hash)
+            objects(record.getJSONArray("targets")).map { it.optString("intent_hash") }.filter(String::isNotEmpty).distinct().forEach { hash ->
+                if (objects(record.getJSONArray("targets")).filter { it.optString("intent_hash") == hash }
+                        .all { it.optString("state") in setOf("verified", "rejected") }) resolveIntent(record, hash)
             }
             saveStatus(record)
         }
@@ -453,11 +468,8 @@ internal class GmailManagement(
         GoogleRestEndpoints.requireSuccess(response)
         return JSONObject(response.body)
     }
-    private fun account(token: CancellationToken, epoch: Long, scope: String = GoogleOAuthProtocol.GMAIL_READ): String {
-        val email = get("/users/me/profile", token, epoch, scope).optString("emailAddress")
-        check(email.length in 3..320 && email.count { it == '@' } == 1 && email.none { it.isWhitespace() || it.isISOControl() }) { "Gmail account identity is missing" }
-        return email.lowercase()
-    }
+    private fun account(token: CancellationToken, epoch: Long, scope: String = GoogleOAuthProtocol.GMAIL_READ): String =
+        oauth.verifyGmailAccount(scope, null, token, epoch)
     private fun requireRecord(id: String, kind: String, account: String): JSONObject {
         val value = store.get(id) ?: error("Gmail checkpoint not found")
         check(value.optString("kind") == kind && value.optString("account") == account) { "Gmail checkpoint belongs to a different account or kind" }
@@ -478,9 +490,22 @@ internal class GmailManagement(
         UNTRASH, UNTRASH_THREADS -> emptyList<String>() to listOf("TRASH")
         else -> strings(record.optJSONArray("add_label_ids")) to strings(record.optJSONArray("remove_label_ids"))
     }
+    private fun retainIntent(record: JSONObject, hash: String) {
+        val retained = strings(record.optJSONArray("journal_intents")).toMutableSet()
+        retained.add(hash)
+        record.put("journal_intents", JSONArray(retained))
+    }
+    private fun resolveIntent(record: JSONObject, hash: String) {
+        val unresolved = strings(record.optJSONArray("unresolved_intents")).toMutableSet()
+        val retained = strings(record.optJSONArray("journal_intents")).toMutableSet()
+        if (journal.resolve(hash)) { unresolved.remove(hash); retained.remove(hash) }
+        else { unresolved.add(hash); retained.add(hash) }
+        record.put("unresolved_intents", JSONArray(unresolved)).put("journal_intents", JSONArray(retained))
+    }
     private fun saveStatus(record: JSONObject) {
         val states = objects(record.getJSONArray("targets")).map { it.optString("state") }
         record.put("status", when {
+            (record.optJSONArray("unresolved_intents")?.length() ?: 0) > 0 -> "needs_marker_reconciliation"
             states.isNotEmpty() && states.all { it == "verified" } -> "verified"
             states.any { it in setOf("unknown", "dispatched", "accepted") } -> "needs_reconciliation"
             states.any { it == "pending" } -> "partial"
@@ -488,7 +513,7 @@ internal class GmailManagement(
         })
         store.put(record)
     }
-    private fun selectionSummary(record: JSONObject) = JSONObject().put("untrusted_content", true).put("selection_id", record.getString("record_id"))
+    private fun selectionSummary(record: JSONObject) = JSONObject().put("untrusted_content", true).put("kind", "selection").put("selection_id", record.getString("record_id"))
         .put("account", record.getString("account")).put("count", record.getJSONArray("ids").length()).put("complete", record.optBoolean("complete"))
         .put("collection_started_at", record.optLong("created_at")).put("collected_through", record.optLong("collected_through", record.optLong("created_at")))
         .put("can_mutate", record.optBoolean("complete")).put("pages", record.optInt("pages"))
@@ -497,9 +522,12 @@ internal class GmailManagement(
     private fun receiptSummary(record: JSONObject): JSONObject {
         val targets = objects(record.getJSONArray("targets")); val counts = JSONObject()
         targets.groupingBy { it.optString("state") }.eachCount().forEach { (state, count) -> counts.put(state, count) }
-        return JSONObject().put("untrusted_content", true).put("receipt_id", record.getString("record_id")).put("account", record.getString("account"))
+        return JSONObject().put("untrusted_content", true).put("kind", "receipt").put("receipt_id", record.getString("record_id")).put("account", record.getString("account"))
             .put("operation", record.getString("operation")).put("status", record.optString("status")).put("count", targets.size).put("counts", counts)
             .put("resumes_receipt", record.optString("resumes_receipt"))
+            .put("safety_marker_pending", (record.optJSONArray("unresolved_intents")?.length() ?: 0) > 0)
+            .put("journal_marker_retained", (record.optJSONArray("journal_intents")?.length() ?: 0) > 0)
+            .apply { for (key in listOf("selection_id", "selection_count", "selection_offset", "selection_end", "selection_remaining")) if (record.has(key)) put(key, record.get(key)) }
             .put("note", "Verified means the desired state was observed, not that Gmail proves this request caused it. Read receipt with reconcile=true for uncertain targets; never replay them.")
     }
     private fun newRecord(kind: String, account: String) = JSONObject().put("record_id", "$kind:${UUID.randomUUID()}")
@@ -535,7 +563,7 @@ internal class GmailManagement(
             "#594c05 #fbe983 #684e07 #fdedc1 #0b4f30 #b3efd3 #04502e #a2dcc1 #c2c2c2 #4986e7 #2da2bb #b99aff #994a64 #f691b2 #ff7537 #ffad46 " +
             "#662e37 #ebdbde #cca6ac #094228 #42d692 #16a765").split(' ').toSet()
         private val SYSTEM_LABELS = setOf("INBOX", "SPAM", "TRASH", "UNREAD", "STARRED", "IMPORTANT", "SENT", "DRAFT", "CHAT", "ALL")
-        fun requiredScope(operation: String) = when(operation) { DELETE -> GoogleOAuthProtocol.GMAIL_FULL; in WRITES -> GoogleOAuthProtocol.GMAIL_MODIFY; else -> GoogleOAuthProtocol.GMAIL_READ }
+        fun requiredScope(operation: String) = when(operation) { DELETE -> GoogleOAuthProtocol.GMAIL_FULL; CREATE_LABEL, UPDATE_LABEL, DELETE_LABEL -> GoogleOAuthProtocol.GMAIL_LABELS; in WRITES -> GoogleOAuthProtocol.GMAIL_MODIFY; else -> GoogleOAuthProtocol.GMAIL_READ }
         private fun canonical(value: Any?): String = when(value) {
             is JSONObject -> value.keys().asSequence().sorted().joinToString(prefix = "{", postfix = "}") { JSONObject.quote(it) + ":" + canonical(value.get(it)) }
             is JSONArray -> (0 until value.length()).joinToString(prefix = "[", postfix = "]") { canonical(value.get(it)) }

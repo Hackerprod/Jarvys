@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="gmail_draft_delete_title">Eliminar borrador de Gmail definitivamente</string>
+    <string name="gmail_draft_delete_description">Eliminar definitivamente un borrador exacto de Gmail y sus adjuntos tras revisar su cuenta, ID, revisión y vista previa. Siempre requiere confirmación explícita; sin modo Allow. Los cambios de contenido, cuenta o autorización invalidan la revisión. Admite borradores vacíos. Gmail no ofrece una condición atómica de revisión. La ausencia del borrador no demuestra que esta solicitud lo eliminó. Nunca reintentes un resultado desconocido.</string>
+    <string name="gmail_draft_delete_compact">%1$s · %2$s · %3$s</string>
+    <string name="gmail_draft_delete_identity">Borrador: %1$s · revisión: %2$s</string>
+    <string name="gmail_draft_delete_empty">(vacío)</string>
+    <string name="gmail_draft_delete_subject">Vista previa del asunto: %1$s</string>
+    <string name="gmail_draft_delete_to">Vista previa de Para: %1$s</string>
+    <string name="gmail_draft_delete_cc">Vista previa de Cc: %1$s</string>
+    <string name="gmail_draft_delete_bcc">Vista previa de Cco: %1$s</string>
+    <string name="gmail_draft_delete_body">Vista previa del cuerpo: %1$s</string>
+    <string name="gmail_draft_delete_unknown_size">desconocido</string>
+    <string name="gmail_draft_delete_attachment">Adjunto: %1$s · %2$s · %3$s bytes</string>
+    <string name="gmail_draft_delete_truncated">La vista previa está truncada o simplificada; no muestra todo el contenido ni todos los adjuntos. Esta aprobación elimina definitivamente el borrador identificado completo.</string>
+    <string name="gmail_draft_delete_irreversible">Eliminación definitiva. El borrador completo y sus adjuntos se eliminan y no se pueden recuperar desde la Papelera. Esta aprobación única solo se aplica a esta cuenta, borrador y revisión.</string>
+    <string name="gmail_draft_delete_race">Los cambios detectados antes de eliminar bloquean la solicitud. Gmail no ofrece una condición atómica de revisión, por lo que no es posible impedir un cambio entre la última comprobación y la eliminación.</string>
+</resources>

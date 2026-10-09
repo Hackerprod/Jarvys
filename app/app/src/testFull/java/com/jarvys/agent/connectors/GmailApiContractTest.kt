@@ -560,13 +560,13 @@ class GmailApiContractTest {
             val api = Api().apply {
                 when (operation) {
                     GmailConnector.SEARCH_MESSAGES -> { respond(JSONObject().put("messages", JSONArray().put(JSONObject().put("id", "m1")))); respond(parent) }
-                    GmailConnector.GET_THREAD -> respond(JSONObject().put("messages", JSONArray().put(parent)))
+                    GmailConnector.GET_THREAD -> respond(JSONObject().put("id", "thread1").put("messages", JSONArray().put(parent)))
                     else -> respond(parent)
                 }
             }
             val connector = runtime(api)
             connector.beginAgentRun(0, "Read my mail")
-            val readArgs = if (operation == GmailConnector.SEARCH_MESSAGES) JSONObject().put("query", "") else JSONObject().put("id", "m1")
+            val readArgs = if (operation == GmailConnector.SEARCH_MESSAGES) JSONObject().put("query", "") else JSONObject().put("id", if (operation == GmailConnector.GET_THREAD) "thread1" else "m1")
             connector.invoke(operation, readArgs, CancellationToken.uncancellable())
             connector.validateAutonomousWrite(GmailConnector.SEND_MESSAGE, args().put("to", "actual@example.com"), 0)
             assertTrue(operation, runCatching { connector.validateAutonomousWrite(GmailConnector.SEND_MESSAGE,

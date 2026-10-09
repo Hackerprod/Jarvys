@@ -9,12 +9,14 @@ class GmailScopeCapabilitiesTest {
     private val compose = GoogleOAuthProtocol.GMAIL_COMPOSE
     private val send = GoogleOAuthProtocol.GMAIL_SEND
     private val modify = GoogleOAuthProtocol.GMAIL_MODIFY
+    private val labels = GoogleOAuthProtocol.GMAIL_LABELS
     private val full = GoogleOAuthProtocol.GMAIL_FULL
     private val accepted = linkedMapOf(
         read to listOf(read, modify, full),
         compose to listOf(compose, modify, full),
         send to listOf(send, compose, modify, full),
         modify to listOf(modify, full),
+        labels to listOf(labels, modify, full),
         full to listOf(full),
     )
 
@@ -36,7 +38,9 @@ class GmailScopeCapabilitiesTest {
         assertEquals(setOf(full, modify), GoogleIdentityPolicy.normalizeScopes(setOf(full, modify,
             "https://mail.google.com", "https://www.googleapis.com/auth/drive", "unknown")))
         assertNull(GoogleOAuthProtocol.effectiveGrantedScope(full, setOf(read, compose, send, modify)))
-        assertNull(GoogleOAuthProtocol.effectiveGrantedScope(read, setOf(compose, send)))
+        assertNull(GoogleOAuthProtocol.effectiveGrantedScope(read, setOf(compose, send, labels)))
+        assertNull(GoogleOAuthProtocol.effectiveGrantedScope(modify, setOf(labels)))
+        assertNull(GoogleOAuthProtocol.effectiveGrantedScope(send, setOf(labels)))
         assertNull(GoogleOAuthProtocol.effectiveGrantedScope("unknown", setOf(full)))
     }
 

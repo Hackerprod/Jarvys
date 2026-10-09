@@ -379,7 +379,7 @@ class GoogleAuthorizationManagerTest {
             seedScopes(actual)
             assertEquals(setOf(actual), manager.grantedScopes())
             for (capability in listOf(scope, GoogleOAuthProtocol.GMAIL_COMPOSE, GoogleOAuthProtocol.GMAIL_SEND,
-                GoogleOAuthProtocol.GMAIL_MODIFY)) assertTrue(manager.isScopeGranted(capability))
+                GoogleOAuthProtocol.GMAIL_LABELS, GoogleOAuthProtocol.GMAIL_MODIFY)) assertTrue(manager.isScopeGranted(capability))
             assertEquals(actual == GoogleOAuthProtocol.GMAIL_FULL, manager.isScopeGranted(GoogleOAuthProtocol.GMAIL_FULL))
         }
         manager.disableScope(scope)
@@ -792,5 +792,98 @@ class GoogleAuthorizationManagerTest {
             "https://gmail.googleapis.com/gmail/v1/users/me/drafts", "{}") }.exceptionOrNull()
         assertTrue(error is GooglePreDispatchAuthorizationException)
         assertEquals(0, effects)
+    }
+
+    @Test fun labelsGrantDoesNotGrantMailReadOrganizationCompositionOrSending() {
+        val manager = manager(Identity())
+        seedScopes(GoogleOAuthProtocol.GMAIL_LABELS)
+        assertEquals(setOf(GoogleOAuthProtocol.GMAIL_LABELS), manager.grantedScopes())
+        assertTrue(manager.isScopeGranted(GoogleOAuthProtocol.GMAIL_LABELS))
+        for (capability in listOf(scope, GoogleOAuthProtocol.GMAIL_MODIFY, GoogleOAuthProtocol.GMAIL_FULL,
+            GoogleOAuthProtocol.GMAIL_COMPOSE, GoogleOAuthProtocol.GMAIL_SEND)) assertFalse(manager.isScopeGranted(capability))
+    }
+
+    @Test fun nativePinnedLabelsRequestsOnlyLabelsAndDoesNotRequestModifyOrFull() {
+        val identity = Identity()
+        var writes = 0
+        val manager = GoogleOAuthManager(app, GoogleHttpTransport { method, url, _, _ ->
+            assertEquals("POST", method); assertTrue(url.endsWith("/labels")); writes++; GoogleHttpResponse(200, "{}")
+        }, identity)
+        seedScopes(scope, GoogleOAuthProtocol.GMAIL_LABELS)
+        val epoch = manager.currentAuthorizationEpoch()
+        assertEquals("owner@example.test", manager.verifyGmailAccount(GoogleOAuthProtocol.GMAIL_LABELS,
+            "owner@example.test", CancellationToken.uncancellable(), epoch))
+        manager.request(GoogleOAuthProtocol.GMAIL_LABELS, "POST", "https://gmail.googleapis.com/gmail/v1/users/me/labels", "{}")
+        assertEquals(1, writes)
+        assertTrue(identity.requestedScopes.all { it == setOf(GoogleOAuthProtocol.GMAIL_LABELS) })
+        assertEquals(setOf(scope, GoogleOAuthProtocol.GMAIL_LABELS), manager.grantedScopes())
+    }
+
+    @Test fun nativeUnknownLabelsAccountIsPinnedUsingExistingReadBeforeReacquiringLabels() {
+        val identity = Identity().apply { email = null }
+        var profileReads = 0
+        var writes = 0
+        val manager = GoogleOAuthManager(app, GoogleHttpTransport { _, url, _, _ ->
+            if (url.endsWith("/profile")) { profileReads++; GoogleHttpResponse(200, """{"emailAddress":"labels-owner@example.test"}""") }
+            else { writes++; GoogleHttpResponse(200, "{}") }
+        }, identity)
+        seedScopes(scope, GoogleOAuthProtocol.GMAIL_LABELS)
+        app.getSharedPreferences("jarvys_full_oauth_config", Context.MODE_PRIVATE).edit().remove("google_identity_account_email").commit()
+        val epoch = manager.currentAuthorizationEpoch()
+        assertEquals("labels-owner@example.test", manager.verifyGmailAccount(GoogleOAuthProtocol.GMAIL_LABELS,
+            null, CancellationToken.uncancellable(), epoch))
+        assertEquals(listOf(setOf(GoogleOAuthProtocol.GMAIL_LABELS), setOf(scope), setOf(GoogleOAuthProtocol.GMAIL_LABELS)), identity.requestedScopes)
+        assertEquals(listOf(null, null, "labels-owner@example.test"), identity.requestedAccounts)
+        manager.request(GoogleOAuthProtocol.GMAIL_LABELS, "POST", "https://gmail.googleapis.com/gmail/v1/users/me/labels", "{}")
+        assertEquals(1, profileReads); assertEquals(1, writes)
+        assertFalse(manager.isScopeGranted(GoogleOAuthProtocol.GMAIL_MODIFY))
+    }
+
+    @Test fun legacyLabelsOnlyCannotUseAnUnrelatedReadonlyTokenAsIdentityProof() {
+        var calls = 0
+        val manager = GoogleOAuthManager(app, GoogleHttpTransport { _, _, _, _ -> calls++; GoogleHttpResponse(200, "{}") }, Identity())
+        val owner = seedLegacy(manager, "gmail_labels", setOf(GoogleOAuthProtocol.GMAIL_LABELS))
+        extraLegacy(owner, "gmail_read", setOf(scope), "fake-read-other-token")
+        assertTrue(manager.isScopeGranted(scope))
+        assertFalse(manager.isScopeGranted(GoogleOAuthProtocol.GMAIL_LABELS))
+        assertEquals(setOf(scope, GoogleOAuthProtocol.GMAIL_LABELS), manager.grantedScopes())
+        val failure = runCatching { manager.verifyGmailAccount(GoogleOAuthProtocol.GMAIL_LABELS,
+            "owner@example.test", CancellationToken.uncancellable(), manager.currentAuthorizationEpoch()) }.exceptionOrNull()
+        assertNotNull(failure)
+        assertEquals(app.getString(R.string.full_google_legacy_labels_unverified), failure!!.message)
+        assertEquals(0, calls)
+    }
+
+    @Test fun legacyLabelsUsesExistingModifyAlternativeAndShowsActualSelectedScope() {
+        val seenTokens = mutableListOf<String?>()
+        val identity = Identity()
+        val manager = GoogleOAuthManager(app, GoogleHttpTransport { _, url, headers, _ ->
+            seenTokens += headers["Authorization"]
+            GoogleHttpResponse(200, if (url.endsWith("/profile")) """{"emailAddress":"owner@example.test"}""" else "{}")
+        }, identity)
+        val owner = seedLegacy(manager, "gmail_labels", setOf(GoogleOAuthProtocol.GMAIL_LABELS))
+        extraLegacy(owner, "gmail_modify", setOf(GoogleOAuthProtocol.GMAIL_MODIFY), "fake-modify-access")
+        assertEquals(GoogleOAuthProtocol.GMAIL_MODIFY, manager.effectiveGrantedScope(GoogleOAuthProtocol.GMAIL_LABELS))
+        val epoch = manager.currentAuthorizationEpoch()
+        manager.verifyGmailAccount(GoogleOAuthProtocol.GMAIL_LABELS, "owner@example.test", CancellationToken.uncancellable(), epoch)
+        manager.request(GoogleOAuthProtocol.GMAIL_LABELS, "POST", "https://gmail.googleapis.com/gmail/v1/users/me/labels", "{}")
+        assertTrue(seenTokens.isNotEmpty()); assertTrue(seenTokens.all { it == "Bearer fake-modify-access" })
+        assertEquals(0, identity.authorizeCalls)
+        manager.disconnectLocal()
+        assertFalse(manager.isScopeGranted(GoogleOAuthProtocol.GMAIL_LABELS))
+    }
+
+    @Test fun deniedOptionalLabelsExpansionPreservesExistingReadGrant() {
+        val identity = Identity().apply { grantedOverride = setOf(scope) }
+        val manager = manager(identity)
+        seedGrant()
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        var result: Result<Unit>? = null
+        manager.authorize(activity, GoogleOAuthProtocol.GMAIL_LABELS) { result = it }
+        waitUntil { result != null && !manager.isAuthorizationInProgress() }
+        assertTrue(result!!.isFailure)
+        assertEquals(setOf(scope), manager.grantedScopes())
+        assertEquals(listOf(setOf(scope, GoogleOAuthProtocol.GMAIL_LABELS)), identity.requestedScopes)
+        assertFalse(manager.isScopeGranted(GoogleOAuthProtocol.GMAIL_LABELS))
     }
 }

@@ -312,4 +312,106 @@ class GmailManagementStoreTest {
             assertEquals(before, backing.durable)
         }
     }
+
+    @Test fun terminalReceiptsRemainProtectedUntilEveryUnresolvedIntentMarkerIsCleared() {
+        for (terminalState in listOf("verified", "rejected")) {
+            val firstHash = "1".repeat(64)
+            val secondHash = "2".repeat(64)
+            val terminal = receipt(64, createdAt = -1, states = listOf(terminalState))
+                .put("unresolved_intents", JSONArray().put(firstHash).put(secondHash))
+            val protectedRecords = (1..63).map { receipt(it, states = listOf("unknown")) }
+            val backing = Backing(encoded(protectedRecords + terminal))
+            val store = backing.store()
+            val before = backing.durable
+
+            assertThrows(IllegalStateException::class.java) { store.put(receipt(100)) }
+            assertEquals(0, backing.writes)
+            assertEquals(before, backing.durable)
+            assertEquals(terminalState, target(store.get(id(64))!!).getString("state"))
+            assertEquals(2, store.get(id(64))!!.getJSONArray("unresolved_intents").length())
+
+            val partlyReconciled = store.get(id(64))!!
+            partlyReconciled.put("unresolved_intents", JSONArray().put(secondHash))
+            store.put(partlyReconciled)
+            val afterPartialReconciliation = backing.durable
+            assertThrows(IllegalStateException::class.java) { backing.store().put(receipt(100)) }
+            assertEquals(1, backing.writes)
+            assertEquals(afterPartialReconciliation, backing.durable)
+            assertEquals(secondHash, store.get(id(64))!!.getJSONArray("unresolved_intents").getString(0))
+
+            val reconciled = store.get(id(64))!!
+            reconciled.put("unresolved_intents", JSONArray())
+            store.put(reconciled)
+            store.put(receipt(100))
+            assertEquals(3, backing.writes)
+            assertEquals(64, store.records().size)
+            assertNull(store.get(id(64)))
+            assertEquals((1..63).map { id(it) }.toSet() + id(100), ids(store))
+        }
+    }
+
+    @Test fun resumeChildCannotEvictItsPendingParentWhenEveryOtherReceiptIsUncertain() {
+        val parent = receipt(1, createdAt = -100, states = listOf("pending"))
+        val uncertainStates = listOf("unknown", "dispatched", "accepted")
+        val protectedRecords = (2..64).map { receipt(it, states = listOf(uncertainStates[it % 3])) }
+        val backing = Backing(encoded(listOf(parent) + protectedRecords))
+        val store = backing.store()
+        val before = backing.durable
+        val child = receipt(100).put("resumes_receipt", id(1))
+
+        val blocked = assertThrows(IllegalStateException::class.java) { store.put(child) }
+        assertTrue(blocked.message.orEmpty().contains("full"))
+        assertEquals(0, backing.writes)
+        assertEquals(before, backing.durable)
+        assertEquals((1..64).map { id(it) }.toSet(), ids(store))
+        assertEquals("pending", target(store.get(id(1))!!).getString("state"))
+        assertNull(store.get(id(100)))
+    }
+
+    @Test fun resumeChildEvictsAnotherSafeRecordInsteadOfItsOlderPendingParent() {
+        val parent = receipt(1, createdAt = -100, states = listOf("pending"))
+        val protectedRecords = (2..63).map { receipt(it, states = listOf("unknown")) }
+        val otherSafe = receipt(64, createdAt = 100, states = listOf("verified"))
+        val backing = Backing(encoded(listOf(parent, otherSafe) + protectedRecords))
+        val store = backing.store()
+        val child = receipt(100, createdAt = 200).put("resumes_receipt", id(1))
+
+        store.put(child)
+
+        assertEquals(1, backing.writes)
+        assertEquals(64, store.records().size)
+        assertEquals((1..63).map { id(it) }.toSet() + id(100), ids(store))
+        assertNull(store.get(id(64)))
+        assertEquals("pending", target(store.get(id(1))!!).getString("state"))
+        assertEquals(-100L, store.get(id(1))!!.getLong("created_at"))
+        assertEquals(id(1), store.get(id(100))!!.getString("resumes_receipt"))
+        assertEquals("pending", target(store.get(id(100))!!).getString("state"))
+        assertEquals(ids(store), ids(Backing(backing.durable).store()))
+    }
+
+    @Test fun verifiedReceiptsWithRetainedJournalOrLegacyUntrackedIntentCannotBeEvicted() {
+        val hash = "a".repeat(64)
+        for (hasLedger in listOf(true, false)) {
+            val verified = receipt(64, createdAt = -100, states = listOf("verified"))
+            target(verified).put("intent_hash", hash)
+            if (hasLedger) verified.put("journal_intents", JSONArray().put(hash))
+            // No failed-cleanup flag exists: a crash can occur before resolve returns at all.
+            assertFalse(verified.has("unresolved_intents"))
+            val protectedRecords = (1..63).map { receipt(it, states = listOf("unknown")) }
+            val backing = Backing(encoded(protectedRecords + verified))
+            val store = backing.store(); val durableBefore = backing.durable
+
+            assertThrows(IllegalStateException::class.java) { store.put(receipt(100)) }
+            assertEquals(durableBefore, backing.durable); assertEquals(0, backing.writes)
+            assertEquals("verified", target(store.get(id(64))!!).getString("state"))
+            assertEquals(hash, target(Backing(backing.durable).store().get(id(64))!!).getString("intent_hash"))
+
+            // Explicit empty ledger is proof cleanup was durably acknowledged, unlike an absent ledger.
+            val reconciled = store.get(id(64))!!.put("journal_intents", JSONArray())
+            store.put(reconciled)
+            store.put(receipt(100))
+            assertEquals(2, backing.writes); assertNull(store.get(id(64)))
+            assertEquals((1..63).map { id(it) }.toSet() + id(100), ids(store))
+        }
+    }
 }

@@ -6,6 +6,8 @@ import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -36,6 +38,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -78,6 +83,29 @@ import com.jarvys.agent.connectors.ConnectorPermissionRow
 /** Display/test identifier for an actual scope, including the trailing-slash full-mail scope. */
 internal fun googleScopeName(scope: String): String = scope.removeSuffix("/").substringAfterLast('/')
 
+/** Google-only large-text adaptation; other connectors retain their existing row layout. */
+@Composable
+private fun GooglePermissionRow(
+    tagPrefix: String,
+    content: @Composable ColumnScope.() -> Unit,
+    permission: @Composable () -> Unit,
+) {
+    if (LocalDensity.current.fontScale >= 1.6f) {
+        Column(Modifier.fillMaxWidth().testTag("$tagPrefix-row").padding(vertical = 4.dp)) {
+            Column(Modifier.fillMaxWidth().testTag("$tagPrefix-label"), content = content)
+            Box(Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("$tagPrefix-selector-row"),
+                contentAlignment = Alignment.CenterEnd) {
+                // Wider controls fit whole localized policy words at 200% without shrinking text.
+                Box(Modifier.fillMaxWidth(0.8f), contentAlignment = Alignment.CenterEnd) { permission() }
+            }
+        }
+    } else {
+        ConnectorPermissionRow(modifier = Modifier.testTag("$tagPrefix-row"), content = {
+            Column(Modifier.testTag("$tagPrefix-label"), content = content)
+        }, permission = permission)
+    }
+}
+
 /** Reflected only by the Full variant; no Google API identifiers or resources enter Play sources. */
 class FullRemoteServicesPanel : FlavorRemoteServicesPanel {
     override fun supportsService(serviceId: String): Boolean =
@@ -103,6 +131,7 @@ class FullRemoteServicesPanel : FlavorRemoteServicesPanel {
                 registry = registry,
                 scopes = listOf(
                     GoogleOAuthProtocol.GMAIL_READ to R.string.full_google_scope_gmail_read,
+                    GoogleOAuthProtocol.GMAIL_LABELS to R.string.full_google_scope_gmail_labels,
                     GoogleOAuthProtocol.GMAIL_MODIFY to R.string.full_google_scope_gmail_modify,
                     GoogleOAuthProtocol.GMAIL_COMPOSE to R.string.full_google_scope_gmail_compose,
                     GoogleOAuthProtocol.GMAIL_SEND to R.string.full_google_scope_gmail_send,
@@ -138,6 +167,7 @@ class FullRemoteServicesPanel : FlavorRemoteServicesPanel {
                 registry = registry,
                 scopes = if (gmail) listOf(
                     GoogleOAuthProtocol.GMAIL_READ to R.string.full_google_scope_gmail_read,
+                    GoogleOAuthProtocol.GMAIL_LABELS to R.string.full_google_scope_gmail_labels,
                     GoogleOAuthProtocol.GMAIL_MODIFY to R.string.full_google_scope_gmail_modify,
                     GoogleOAuthProtocol.GMAIL_COMPOSE to R.string.full_google_scope_gmail_compose,
                     GoogleOAuthProtocol.GMAIL_SEND to R.string.full_google_scope_gmail_send,
@@ -292,7 +322,7 @@ internal fun GoogleServiceCard(
             val writeScopes = scopes.filterNot { it.first.endsWith("readonly") }
             val actualGrants = manager.grantedScopes().filter { granted ->
                 if (connectorId == GmailConnector.ID) granted in GoogleOAuthProtocol.acceptedScopes(GoogleOAuthProtocol.GMAIL_SEND) ||
-                    granted == GoogleOAuthProtocol.GMAIL_READ else granted.startsWith("https://www.googleapis.com/auth/drive.")
+                    granted in setOf(GoogleOAuthProtocol.GMAIL_READ, GoogleOAuthProtocol.GMAIL_LABELS) else granted.startsWith("https://www.googleapis.com/auth/drive.")
             }
             Text(stringResource(R.string.full_google_capability_explanation), fontSize = 12.sp)
             if (actualGrants.isNotEmpty()) Text(stringResource(R.string.full_google_actual_grants,
@@ -304,12 +334,18 @@ internal fun GoogleServiceCard(
                 Text(stringResource(R.string.full_google_legacy_send_unverified), fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.error)
             }
+            if (connectorId == GmailConnector.ID && !identityMode && GoogleOAuthProtocol.GMAIL_LABELS in manager.grantedScopes() &&
+                !manager.isScopeGranted(GoogleOAuthProtocol.GMAIL_LABELS)) {
+                Text(stringResource(R.string.full_google_legacy_labels_unverified), fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.error)
+            }
             @Composable fun ScopeRows(rows: List<Pair<String, Int>>) {
                 rows.forEach { (scope, labelId) ->
                     val effective = manager.effectiveGrantedScope(scope)
                     val granted = effective != null
-                    ConnectorPermissionRow(modifier = Modifier.testTag("google-scope-${googleScopeName(scope)}-row"), content = {
-                        Text(stringResource(labelId), fontSize = 14.sp)
+                    val fullLabel = stringResource(labelId)
+                    GooglePermissionRow(tagPrefix = "google-scope-${googleScopeName(scope)}", content = {
+                        Text(fullLabel, fontSize = 14.sp)
                         if (effective != null) Text(stringResource(R.string.full_google_granted_through, googleScopeName(effective)),
                             fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }, permission = {
@@ -318,7 +354,8 @@ internal fun GoogleServiceCard(
                             ConnectorPolicyChoice(R.string.connector_policy_deny) { disconnectScopes(scope) },
                         ) else listOf(ConnectorPolicyChoice(R.string.connector_add_permission) { authorizeScope(scope) })
                         ConnectorPolicySelector(
-                            modifier = Modifier.testTag("google-scope-${googleScopeName(scope)}-control"),
+                            modifier = Modifier.testTag("google-scope-${googleScopeName(scope)}-control")
+                                .semantics { contentDescription = fullLabel },
                             selectedLabelResource = if (granted) R.string.connector_policy_allow else R.string.connector_add_permission,
                             choices = choices, enabled = isConfigured && !inProgress && revocation != GoogleRevocationState.PENDING && !pendingLegacy,
                         )
@@ -327,6 +364,10 @@ internal fun GoogleServiceCard(
             }
             ConnectorDetailSection(stringResource(R.string.remote_service_read_tool)) { ScopeRows(readScopes) }
             if (connectorId == GmailConnector.ID) {
+                ConnectorDetailSection(stringResource(R.string.full_google_section_labels)) {
+                    ScopeRows(writeScopes.filter { it.first == GoogleOAuthProtocol.GMAIL_LABELS })
+                    Text(stringResource(R.string.full_google_labels_explanation), fontSize = 12.sp)
+                }
                 ConnectorDetailSection(stringResource(R.string.full_google_section_manage)) {
                     ScopeRows(writeScopes.filter { it.first == GoogleOAuthProtocol.GMAIL_MODIFY })
                     Text(stringResource(R.string.full_google_modify_explanation), fontSize = 12.sp)
@@ -358,15 +399,17 @@ internal fun GoogleServiceCard(
                         })
                         add(ConnectorPolicyChoice(R.string.connector_policy_deny) { registry.setAutonomyPolicy(definition, operation, AutonomyPolicy.DENY) })
                     }
-                    ConnectorPermissionRow(modifier = Modifier.testTag("google-policy-${operation.name}-row"), content = {
-                        Text(if (operation.displayLabelResourceId != 0) context.getString(operation.displayLabelResourceId)
-                            else operation.displayLabel, fontWeight = FontWeight.Medium)
+                    val fullLabel = if (operation.displayLabelResourceId != 0) context.getString(operation.displayLabelResourceId)
+                        else operation.displayLabel
+                    GooglePermissionRow(tagPrefix = "google-policy-${operation.name}", content = {
+                        Text(fullLabel, fontWeight = FontWeight.Medium)
                     }, permission = {
                         ConnectorPolicySelector(when (configured) {
                             AutonomyPolicy.ASK -> R.string.connector_policy_ask
                             AutonomyPolicy.ALLOW -> R.string.connector_policy_allow
                             AutonomyPolicy.DENY -> R.string.connector_policy_deny
-                        }, choices, modifier = Modifier.testTag("google-policy-${operation.name}-control"))
+                        }, choices, modifier = Modifier.testTag("google-policy-${operation.name}-control")
+                            .semantics { contentDescription = fullLabel })
                     })
                     // Keep explanatory text full-width. In the narrow label column it can make a
                     // single 2x-text row taller than the viewport and clip the centered selector.

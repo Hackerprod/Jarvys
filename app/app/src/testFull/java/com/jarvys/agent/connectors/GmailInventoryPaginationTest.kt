@@ -85,4 +85,47 @@ class GmailInventoryPaginationTest {
             assertTrue(runCatching { invoke(runtime(api), GmailConnector.LIST_LABELS, args) }.isFailure)
         }
     }
+    @Test fun localInventoryCursorCannotCrossAnAuthorizationEpochEvenWithIdenticalData() {
+        for (operation in listOf(GmailConnector.LIST_LABELS, GmailConnector.GET_THREAD)) {
+            val api = Api().apply { repeat(2) { responses += if (operation == GmailConnector.LIST_LABELS) labels() else thread(message("m1"), message("m2")) } }
+            val connector = runtime(api); val args = JSONObject().put("max_results", 1)
+            if (operation == GmailConnector.GET_THREAD) args.put("id", "t1")
+            val first = invoke(connector, operation, args); api.epoch++
+            args.put("page_token", first.getString("next_page_token"))
+            assertTrue(runCatching { invoke(connector, operation, args) }.isFailure)
+        }
+    }
+    @Test fun multibyteThreadBudgetNeverSkipsIdsEvenWhenRowsAreRemovedForBytes() {
+        val messages = (0 until 25).map { i -> message("m$i").apply {
+            put("snippet", "界".repeat(256))
+            getJSONObject("payload").put("headers", JSONArray(listOf("From", "To", "Subject").map { name -> JSONObject().put("name", name).put("value", "界".repeat(512)) }))
+                .getJSONObject("body").put("data", GoogleOAuthProtocol.base64Url("界".repeat(491).toByteArray()))
+        } }
+        val api = Api().apply { repeat(30) { responses += thread(*messages.toTypedArray()) } }; val connector = runtime(api)
+        val seen = mutableListOf<String>(); var cursor = ""; var complete = false
+        repeat(30) {
+            if (!complete) {
+                val result = invoke(connector, GmailConnector.GET_THREAD, JSONObject().put("id", "t1").put("max_results", 25).put("page_token", cursor))
+                val items = result.getJSONArray("items"); assertTrue(items.length() > 0)
+                repeat(items.length()) { seen += items.getJSONObject(it).getString("id") }
+                complete = !result.getBoolean("has_more"); cursor = result.optString("next_page_token")
+            }
+        }
+        assertTrue(complete); assertEquals((0 until 25).map { "m$it" }, seen); assertTrue(api.urls.size > 1)
+    }
+    @Test fun oversizedSingleThreadRowStillReturnsItsIdWithHonestPreviewTruncation() {
+        val oversized = message("m1").apply {
+            val parts = JSONArray().put(JSONObject().put("mimeType", "text/plain").put("body", JSONObject()
+                .put("data", GoogleOAuthProtocol.base64Url("界".repeat(12288).toByteArray()))))
+            repeat(10) { parts.put(JSONObject().put("mimeType", "application/octet-stream").put("filename", "界".repeat(256))
+                .put("partId", "p$it").put("body", JSONObject().put("attachmentId", "A".repeat(2048)).put("size", 1))) }
+            put("payload", JSONObject().put("mimeType", "multipart/mixed").put("parts", parts))
+        }
+        val api = Api().apply { responses += thread(oversized) }
+        val result = invoke(runtime(api), GmailConnector.GET_THREAD, JSONObject().put("id", "t1"))
+        val row = result.getJSONArray("items").getJSONObject(0)
+        assertEquals("m1", row.getString("id")); assertTrue(result.getBoolean("truncated")); assertFalse(result.getBoolean("has_more"))
+        assertTrue(row.getBoolean("attachments_truncated"))
+    }
+
 }

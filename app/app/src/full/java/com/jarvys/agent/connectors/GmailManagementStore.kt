@@ -59,7 +59,9 @@ internal class JsonGmailManagementStore(private val persistence: GmailManagement
         if (!all.has(id) && all.length() >= MAX_RECORDS) {
             // Retire old read-only selections, unattempted plans and terminal receipts; never uncertain effects.
             val oldest = all.keys().asSequence().map { all.getJSONObject(it) }
-                .filter { item -> item.optString("record_id") != record.optString("resumes_receipt") && (item.optString("kind") == "selection" ||
+                .filter { item -> item.optString("record_id") != record.optString("resumes_receipt") && (item.optJSONArray("unresolved_intents")?.length() ?: 0) == 0 && (item.optJSONArray("journal_intents")?.length() ?: 0) == 0 &&
+                    (item.has("journal_intents") || item.optJSONArray("targets")?.let { targets -> (0 until targets.length()).none { targets.getJSONObject(it).has("intent_hash") } } != false) &&
+                    (item.optString("kind") == "selection" ||
                     item.optJSONArray("targets")?.let { targets -> (0 until targets.length()).all {
                         targets.getJSONObject(it).optString("state") in setOf("pending", "verified", "rejected", "skipped_changed", "skipped_missing", "skipped_unsupported", "resumed")
                     } } == true) }

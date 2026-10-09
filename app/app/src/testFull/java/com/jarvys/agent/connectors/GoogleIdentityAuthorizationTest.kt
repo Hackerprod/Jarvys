@@ -15,6 +15,7 @@ class GoogleIdentityAuthorizationTest {
         assertEquals(GoogleOAuthProtocol.GMAIL_COMPOSE, GoogleIdentityPolicy.scopeForFeature(GmailConnector.ID, "compose"))
         assertEquals(GoogleOAuthProtocol.GMAIL_SEND, GoogleIdentityPolicy.scopeForFeature(GmailConnector.ID, "send"))
         assertEquals(GoogleOAuthProtocol.DRIVE_FILE, GoogleIdentityPolicy.scopeForFeature(DriveConnector.ID, "file"))
+        assertEquals(GoogleOAuthProtocol.GMAIL_LABELS, GoogleIdentityPolicy.scopeForFeature(GmailConnector.ID, "labels"))
         assertEquals(GoogleOAuthProtocol.GMAIL_MODIFY, GoogleIdentityPolicy.scopeForFeature(GmailConnector.ID, "modify"))
         assertEquals(GoogleOAuthProtocol.GMAIL_FULL, GoogleIdentityPolicy.scopeForFeature(GmailConnector.ID, "full"))
         assertFalse(GoogleIdentityPolicy.normalizeScopes(listOf("mail.google.com", "https://www.googleapis.com/auth/drive")).isNotEmpty())

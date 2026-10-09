@@ -77,6 +77,7 @@ object GoogleIdentityPolicy {
         GmailConnector.ID to "compose" -> GoogleOAuthProtocol.GMAIL_COMPOSE
         GmailConnector.ID to "send" -> GoogleOAuthProtocol.GMAIL_SEND
         GmailConnector.ID to "modify" -> GoogleOAuthProtocol.GMAIL_MODIFY
+        GmailConnector.ID to "labels" -> GoogleOAuthProtocol.GMAIL_LABELS
         GmailConnector.ID to "full" -> GoogleOAuthProtocol.GMAIL_FULL
         DriveConnector.ID to "read" -> GoogleOAuthProtocol.DRIVE_READ
         DriveConnector.ID to "file" -> GoogleOAuthProtocol.DRIVE_FILE

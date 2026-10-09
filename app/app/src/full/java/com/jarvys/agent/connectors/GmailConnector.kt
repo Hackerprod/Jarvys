@@ -33,6 +33,7 @@ class GmailConnector(
         this({ oauth }, contacts, contactsPermission, contactsConnected, artifactSink, writeJournal, managementStore)
 
     private val oauth by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { oauthProvider() }
+    private val draftDeletion by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { GmailDraftDeletion(oauth, writeJournal) }
     private val management by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { GmailManagement(oauth, managementStore, writeJournal) }
     private data class RunTrust(val userEmails: Set<String>, val observedSenders: MutableSet<String>)
     private val runTrust = ConcurrentHashMap<Long, RunTrust>()
@@ -88,6 +89,7 @@ class GmailConnector(
     }
 
     override fun prepareWrite(operation: String, arguments: JSONObject, token: CancellationToken): ConnectorWritePreparation {
+        if (operation == DELETE_DRAFT) return draftDeletion.prepare(arguments, token)
         if (operation in GmailManagement.WRITES) return management.prepare(operation, arguments, token)
         require(operation in WRITES) { "Unknown Gmail write operation" }
         validateArguments(operation, arguments)
@@ -200,6 +202,7 @@ class GmailConnector(
     override fun invokePrepared(operation: String, arguments: JSONObject, preparation: ConnectorWritePreparation,
                                 token: CancellationToken): JSONObject {
         token.throwIfCancelled()
+        if (operation == DELETE_DRAFT) return draftDeletion.execute(preparation, token)
         if (operation in GmailManagement.WRITES) return management.execute(operation, preparation, token)
         val reviewed = preparation.attachment as? ReviewedWrite ?: error("Reviewed Gmail content is missing")
         require(reviewed.owner === this && reviewed.operation == operation) { "Gmail approval does not match this action" }
@@ -430,10 +433,11 @@ class GmailConnector(
         val id = validateId(args.optString("id"))
         val limit = args.optInt("max_results", DEFAULT_RESULTS)
         require(limit in 1..GoogleApiLimits.MAX_RESULTS) { "Invalid max_results" }
-        val thread = readJson(GoogleOAuthProtocol.GMAIL_READ, "/users/me/threads/${GoogleRestEndpoints.path(id)}?format=full", token)
+        val epoch = oauth.currentAuthorizationEpoch()
+        val thread = readJson(GoogleOAuthProtocol.GMAIL_READ, "/users/me/threads/${GoogleRestEndpoints.path(id)}?format=full", token, epoch)
         check(thread.optString("id") == id) { "Gmail returned a different thread" }
         val messages = thread.optJSONArray("messages") ?: JSONArray()
-        val fingerprint = GmailContent.digest((id + ":" + (0 until messages.length()).joinToString("|") {
+        val fingerprint = GmailContent.digest((CURSOR_PROCESS + ":" + epoch + ":" + id + ":" + (0 until messages.length()).joinToString("|") {
             messages.getJSONObject(it).optString("id") + ":" + messages.getJSONObject(it).optString("historyId")
         }).toByteArray())
         val offset = collectionOffset(args, fingerprint, messages.length())
@@ -450,9 +454,11 @@ class GmailConnector(
             recordObservedSenders(message, token.generation())
             rows.put(row)
         }
-        return messageEnvelope("gmail.thread", rows, limit, truncated).put("status", "thread_read")
-            .put("threadId", id).put("message_count", messages.length())
-            .put("has_more", end < messages.length()).apply { if (end < messages.length()) put("next_page_token", "$end:$fingerprint") }
+        val result = messageEnvelope("gmail.thread", rows, limit, truncated)
+        val deliveredEnd = offset + result.getJSONArray("items").length()
+        return result.put("status", "thread_read").put("threadId", id).put("message_count", messages.length())
+            .put("has_more", deliveredEnd < messages.length())
+            .apply { if (deliveredEnd < messages.length()) put("next_page_token", "$deliveredEnd:$fingerprint") }
     }
     private fun listDrafts(args: JSONObject, token: CancellationToken): JSONObject {
         val (query, limit) = pageArguments(args)
@@ -505,12 +511,27 @@ class GmailConnector(
             mapOf("name" to 256, "mime" to 128, "mimeType" to 128, "artifact_id" to 256), maxBytes = 4 * 1024)
             .put("status", "attachment_ready")
     }
-    private fun messageEnvelope(source: String, rows: JSONArray, limit: Int, truncated: Boolean) =
-        ConnectorResultEnvelope.bounded(source, rows, limit, SUMMARY_LIMITS + mapOf("text" to GoogleApiLimits.MAX_TEXT_CHARS,
-            "cc" to 1000, "bcc" to 1000, "attachmentId" to 2048, "partId" to 256, "messageId" to 256, "name" to 256),
+    private fun messageEnvelope(source: String, rows: JSONArray, limit: Int, truncated: Boolean): JSONObject {
+        val limits = SUMMARY_LIMITS + mapOf("text" to GoogleApiLimits.MAX_TEXT_CHARS,
+            "cc" to 1000, "bcc" to 1000, "attachmentId" to 2048, "partId" to 256, "messageId" to 256, "name" to 256)
+        val result = ConnectorResultEnvelope.bounded(source, rows, limit, limits,
             initiallyTruncated = truncated, maxBytes = 48 * 1024)
+        if (rows.length() > 0 && result.getJSONArray("items").length() == 0) {
+            // Byte budgeting must never drop an ID and advance past it, even with multibyte attachments.
+            val first = rows.getJSONObject(0)
+            val summary = JSONObject()
+            for (key in listOf("id", "threadId", "messageId", "revision", "history_id", "label_count", "from", "to", "subject", "date", "snippet")) {
+                if (first.has(key)) summary.put(key, first.get(key))
+            }
+            summary.put("text", first.optString("text").take(1024)).put("truncated", true).put("attachments_truncated", true)
+            return ConnectorResultEnvelope.bounded(source, JSONArray().put(summary), 1, limits,
+                initiallyTruncated = true, maxBytes = 48 * 1024)
+        }
+        return result
+    }
     private fun collectionOffset(args: JSONObject, fingerprint: String, size: Int): Int {
         if (!args.has("page_token") || args.getString("page_token").isEmpty()) return 0
+        require(args.getString("page_token").length <= MAX_PAGE_TOKEN) { "Gmail collection cursor is too long" }
         val parts = args.getString("page_token").split(':')
         require(parts.size == 2 && parts[1] == fingerprint) { "Gmail collection changed; restart enumeration before mutating" }
         val offset = parts[0].toIntOrNull() ?: error("Invalid Gmail collection cursor")
@@ -518,9 +539,11 @@ class GmailConnector(
         return offset
     }
     private fun listLabels(args: JSONObject, token: CancellationToken): JSONObject {
-        val labels = readJson(GoogleOAuthProtocol.GMAIL_READ, "/users/me/labels", token).optJSONArray("labels") ?: JSONArray()
+        val epoch = oauth.currentAuthorizationEpoch()
+        val labels = readJson(GoogleOAuthProtocol.GMAIL_READ, "/users/me/labels", token, epoch).optJSONArray("labels") ?: JSONArray()
         val sorted = (0 until labels.length()).map { labels.getJSONObject(it) }.sortedBy { it.getString("id") }
-        val fingerprint = GmailContent.digest(sorted.joinToString("|") { it.optString("id") + ":" + it.optString("name") + ":" + it.optString("type") }.toByteArray())
+        val fingerprint = GmailContent.digest((CURSOR_PROCESS + ":" + epoch + ":" +
+            sorted.joinToString("|") { it.optString("id") + ":" + it.optString("name") + ":" + it.optString("type") }).toByteArray())
         val offset = collectionOffset(args, fingerprint, sorted.size)
         val limit = args.optInt("max_results", 50)
         require(limit in 1..50) { "max_results must be 1..50" }
@@ -577,7 +600,8 @@ class GmailConnector(
         const val UPDATE_DRAFT = "update_draft"
         const val SEND_DRAFT = "send_draft"
         const val GET_ATTACHMENT = "get_attachment"
-        private val WRITES = setOf(CREATE_DRAFT, SEND_MESSAGE, REPLY_MESSAGE, UPDATE_DRAFT, SEND_DRAFT)
+        const val DELETE_DRAFT = GmailDraftDeletion.OPERATION
+        private val WRITES = setOf(CREATE_DRAFT, SEND_MESSAGE, REPLY_MESSAGE, UPDATE_DRAFT, SEND_DRAFT, DELETE_DRAFT)
         internal const val MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024
         internal const val MAX_OUTGOING_ATTACHMENT_BYTES = 4 * 1024 * 1024
         private const val MAX_ATTACHMENT_JSON_BYTES = 7 * 1024 * 1024
@@ -588,6 +612,7 @@ class GmailConnector(
         private const val AMBIGUOUS_WRITE = "Gmail write outcome is unknown or this reviewed action was already attempted. Check Gmail Sent/Drafts before any new action; do not automatically retry."
         private val SUMMARY_LIMITS = mapOf("id" to 256, "threadId" to 256, "messageId" to 256,
             "revision" to 256, "from" to 256, "to" to 256, "subject" to 256, "date" to 128, "snippet" to 256)
+        private val CURSOR_PROCESS = java.util.UUID.randomUUID().toString()
         private const val DEFAULT_RESULTS = 10
         private const val CONTACT_LIMIT = 50
         private const val MAX_TRACKED_RUNS = 32
@@ -646,7 +671,7 @@ class GmailConnector(
                     inputSchema = JSONObject().put("type", "object").put("properties", JSONObject().put("message_id", stringSchema(256))
                         .put("attachment_id", stringSchema(2048)).put("part_id", stringSchema(256)))
                         .put("required", JSONArray(listOf("message_id"))).put("additionalProperties", false)),
-            ).map { operation -> operation.copy(displayLabelResourceId = operationLabelResource(operation.name)) } + GmailManagementCatalog.operations(),
+            ).map { operation -> operation.copy(displayLabelResourceId = operationLabelResource(operation.name)) } + GmailManagementCatalog.operations() + GmailDraftDeletion.operation(),
             runtime = runtime,
             connectionAccessGranted = { runtime.hasReadAccess() },
             operationAccessGranted = { operation -> requiredScope(operation)?.let(runtime.oauth::isScopeGranted) != false },
@@ -668,13 +693,14 @@ class GmailConnector(
             GET_DRAFT -> R.string.full_google_op_gmail_read_draft
             UPDATE_DRAFT -> R.string.full_google_op_gmail_update_draft
             SEND_DRAFT -> R.string.full_google_op_gmail_send_draft
+            DELETE_DRAFT -> R.string.gmail_draft_delete_title
             GET_ATTACHMENT -> R.string.full_google_op_gmail_attachment
             else -> 0
         }
 
         fun requiredScope(operation: String): String? = when(operation) {
             in GmailManagement.READS, in GmailManagement.WRITES -> GmailManagement.requiredScope(operation)
-            CREATE_DRAFT, UPDATE_DRAFT, SEND_DRAFT, LIST_DRAFTS, GET_DRAFT -> GoogleOAuthProtocol.GMAIL_COMPOSE
+            CREATE_DRAFT, UPDATE_DRAFT, SEND_DRAFT, DELETE_DRAFT, LIST_DRAFTS, GET_DRAFT -> GoogleOAuthProtocol.GMAIL_COMPOSE
             SEND_MESSAGE, REPLY_MESSAGE -> GoogleOAuthProtocol.GMAIL_SEND
             SEARCH_MESSAGES, GET_MESSAGE, LIST_LABELS, GET_THREAD, GET_ATTACHMENT -> GoogleOAuthProtocol.GMAIL_READ
             else -> null

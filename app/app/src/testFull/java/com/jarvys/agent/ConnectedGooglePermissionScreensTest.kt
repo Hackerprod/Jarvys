@@ -10,6 +10,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.unit.Density
@@ -44,11 +46,13 @@ class ConnectedGooglePermissionScreensTest {
     private val requests = AtomicInteger()
     private val revocations = AtomicInteger()
     private lateinit var manager: GoogleOAuthManager
+    private var currentScale = 1f
     private lateinit var registry: ConnectorRegistry
     private lateinit var gmail: ConnectorDefinition
     private lateinit var drive: ConnectorDefinition
     private val gmailScopes = listOf(
         GoogleOAuthProtocol.GMAIL_READ to R.string.full_google_scope_gmail_read,
+        GoogleOAuthProtocol.GMAIL_LABELS to R.string.full_google_scope_gmail_labels,
         GoogleOAuthProtocol.GMAIL_MODIFY to R.string.full_google_scope_gmail_modify,
         GoogleOAuthProtocol.GMAIL_COMPOSE to R.string.full_google_scope_gmail_compose,
         GoogleOAuthProtocol.GMAIL_SEND to R.string.full_google_scope_gmail_send,
@@ -97,6 +101,7 @@ class ConnectedGooglePermissionScreensTest {
         if (GoogleOAuthProtocol.DRIVE_READ in scopes) registry.connect(drive.id)
     }
     private fun show(gmailSelected: Boolean, scale: Float = 1f, dark: Boolean = false) {
+        currentScale = scale
         val definition = if (gmailSelected) gmail else drive
         compose.setContent {
             JarvysOwnTheme(if (dark) JarvysThemeMode.DARK else JarvysThemeMode.LIGHT) {
@@ -125,7 +130,18 @@ class ConnectedGooglePermissionScreensTest {
         val row = compose.onNodeWithTag("$prefix-row", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
         val control = compose.onNodeWithTag("$prefix-control").fetchSemanticsNode().boundsInRoot
         assertEquals("$prefix right edge", row.right, control.right, 1f)
-        assertEquals("$prefix vertical center", row.center.y, control.center.y, 1f)
+        if (currentScale >= 1.6f) {
+            val label = compose.onNodeWithTag("$prefix-label", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+            val selectorRow = compose.onNodeWithTag("$prefix-selector-row", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+            assertEquals("$prefix full-width label left", row.left, label.left, 1f)
+            assertEquals("$prefix full-width label right", row.right, label.right, 1f)
+            assertTrue("$prefix selector must be below its complete label", control.top >= label.bottom - 1f)
+            assertEquals("$prefix selector row vertical center", selectorRow.center.y, control.center.y, 1f)
+            assertEquals("$prefix selector row right edge", selectorRow.right, control.right, 1f)
+            assertTrue("$prefix wider large-text selector", control.width >= row.width * 0.8f - 1f)
+        } else {
+            assertEquals("$prefix vertical center", row.center.y, control.center.y, 1f)
+        }
         assertTrue("$prefix 48 dp touch target", control.height >= 48f)
     }
     private fun policy(prefix: String, resource: Int) =
@@ -251,7 +267,7 @@ class ConnectedGooglePermissionScreensTest {
         show(true, scale, dark)
         val suffix = if (dark) "es-dark-large" else "en-light"
         compose.onNodeWithTag("google-actual-grants").performScrollTo()
-            .assertTextContains("gmail.modify")
+            .assertTextContains("gmail.modify", substring = true)
         capture("gmail-ux31-actual-grants-$suffix")
         gmailScopes.forEach { (scope, _) ->
             geometry(scopeTag(scope))
@@ -301,5 +317,68 @@ class ConnectedGooglePermissionScreensTest {
         assertEquals(ConnectorState.DISCONNECTED, registry.state(drive))
         assertTrue(authorizations.isEmpty()); assertTrue(policies.changes.isEmpty())
         assertEquals(0, requests.get()); assertEquals(0, revocations.get())
+    }
+
+    @Test fun explicitLabelsClickGrantsOnlyMetadataScopeWithoutMailboxManagementOrSending() {
+        seed(setOf(GoogleOAuthProtocol.GMAIL_READ))
+        show(true)
+        pick(scopeTag(GoogleOAuthProtocol.GMAIL_LABELS), R.string.connector_add_permission)
+        compose.waitUntil(5_000) {
+            compose.onAllNodes(isPopup()).fetchSemanticsNodes().isEmpty() &&
+                authorizations.size == 1 && !manager.isAuthorizationInProgress()
+        }
+        assertEquals(listOf(setOf(GoogleOAuthProtocol.GMAIL_READ, GoogleOAuthProtocol.GMAIL_LABELS)), authorizations.toList())
+        policy(scopeTag(GoogleOAuthProtocol.GMAIL_LABELS), R.string.connector_policy_allow)
+        policy(scopeTag(GoogleOAuthProtocol.GMAIL_MODIFY), R.string.connector_add_permission)
+        assertFalse(manager.isScopeGranted(GoogleOAuthProtocol.GMAIL_COMPOSE))
+        assertFalse(manager.isScopeGranted(GoogleOAuthProtocol.GMAIL_SEND))
+        assertFalse(manager.isScopeGranted(GoogleOAuthProtocol.GMAIL_MODIFY))
+        assertFalse(manager.isScopeGranted(GoogleOAuthProtocol.GMAIL_FULL))
+        assertTrue(policies.changes.isEmpty()); assertEquals(0, requests.get()); assertEquals(0, revocations.get())
+    }
+
+    @Test fun labelsOnlyGrantCannotMakeMailboxAppearConnected() {
+        seed(setOf(GoogleOAuthProtocol.GMAIL_LABELS))
+        show(true)
+        assertEquals(ConnectorState.DISCONNECTED, registry.state(gmail))
+        assertFalse(manager.isScopeGranted(GoogleOAuthProtocol.GMAIL_READ))
+        assertEquals(setOf(GoogleOAuthProtocol.GMAIL_LABELS), manager.grantedScopes())
+        assertTrue(authorizations.isEmpty()); assertEquals(0, requests.get()); assertEquals(0, revocations.get())
+    }
+
+    @Test @Config(qualifiers = "es-rES-w320dp-h800dp-port-mdpi")
+    fun irreversibleAskDenyPopupsAndLabelScopeUseFullLabelsAtTwoTimesText() {
+        seed(setOf(GoogleOAuthProtocol.GMAIL_READ, GoogleOAuthProtocol.GMAIL_LABELS, GoogleOAuthProtocol.GMAIL_FULL))
+        show(true, 2f, true)
+        val labelPrefix = scopeTag(GoogleOAuthProtocol.GMAIL_LABELS)
+        geometry(labelPrefix)
+        compose.onNodeWithTag("$labelPrefix-control").assertContentDescriptionEquals(
+            compose.activity.getString(R.string.full_google_scope_gmail_labels))
+        capture("gmail-ux31-label-metadata-scope-es-dark-large")
+        for (name in listOf("delete_messages", "delete_label")) {
+            val operation = gmail.operations.first { it.name == name }
+            val prefix = policyTag(operation)
+            geometry(prefix)
+            compose.onNodeWithTag("$prefix-control").assertContentDescriptionEquals(
+                compose.activity.getString(operation.displayLabelResourceId))
+            val layouts = mutableListOf<TextLayoutResult>()
+            compose.onNode(hasText(compose.activity.getString(R.string.connector_policy_ask)) and
+                hasAnyAncestor(hasTestTag("$prefix-control")), useUnmergedTree = true)
+                .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+            assertEquals("Ask must remain a whole word at 2x", 1, layouts.single().lineCount)
+            assertFalse(layouts.single().hasVisualOverflow)
+            compose.onNodeWithTag("$prefix-control").performClick()
+            compose.onNode(hasText(compose.activity.getString(R.string.connector_policy_ask)) and hasAnyAncestor(isPopup())).assertExists()
+            compose.onNode(hasText(compose.activity.getString(R.string.connector_policy_deny)) and hasAnyAncestor(isPopup())).assertExists()
+            compose.onNode(hasText(compose.activity.getString(R.string.connector_policy_allow)) and hasAnyAncestor(isPopup())).assertDoesNotExist()
+            capture("gmail-ux31-$name-ask-deny-popup-es-dark-large")
+            compose.onNode(hasText(compose.activity.getString(R.string.connector_policy_deny)) and hasAnyAncestor(isPopup())).performClick()
+            policy(prefix, R.string.connector_policy_deny)
+            geometry(prefix)
+            capture("gmail-ux31-$name-denied-es-dark-large")
+        }
+        assertEquals(listOf("delete_messages", "delete_label"), policies.changes.map { it.second })
+        assertTrue(policies.changes.all { it.third == AutonomyPolicy.DENY })
+        assertTrue(authorizations.isEmpty()); assertEquals(0, requests.get()); assertEquals(0, revocations.get())
     }
 }
