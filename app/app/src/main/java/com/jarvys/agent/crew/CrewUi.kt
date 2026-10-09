@@ -623,11 +623,6 @@ fun CrewMissionScreen(
             else -> {
                 if (snapshot.bots.isEmpty()) CrewEmptyTab(Modifier.weight(1f), R.string.crew_bots_empty)
                 else LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("crew-bot-list")) {
-                    item(key = "principal-jarvys") {
-                        JarvysListRow(stringResource(R.string.crew_captain_name),stringResource(R.string.activity_principal),
-                            leadingContent={ CrewBotAvatar(stringResource(R.string.crew_captain_name),"chief","periwinkle",snapshot.status) },
-                            modifier=Modifier.testTag("crew-bot-principal"))
-                    }
                     items(snapshot.bots, key = { it.id }) { bot ->
                         JarvysListRow(bot.name, CrewRoleLabel(bot.roleId, bot.roleName),
                             leadingContent = { CrewBotAvatar(bot.name, bot.roleId, bot.colorKey, bot.status,

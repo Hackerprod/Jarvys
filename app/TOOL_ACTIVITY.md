@@ -21,7 +21,7 @@ Successful ordinary tools show Used; failed tools show Failed. A real `LoadSkill
 
 The main chat retains its existing connector localization, web-result links, Markdown/skill-file links, preview actions, and result selection. Crew uses the same lifecycle language and expandable result pattern. Local execution rows do not display a recipient; actual inter-agent communications still do.
 
-Jarvys's principal identity uses the existing launcher through Android's Drawable renderer, which supports adaptive launchers. It is shared by captain/chief avatars and presentation-only entries in the Bots catalog and mission list. No principal worker profile, spawn route, capability, approval, or editable bot definition is created. Existing custom and built-in bot identities remain unchanged.
+Jarvys's principal identity uses the existing launcher through Android's Drawable renderer, which supports adaptive launchers. It is shared by captain/chief avatars in existing mission headers, cards, messages, and empty states. The original two-column worker catalog remains unchanged; no principal catalog entry or extra bot row is added. No principal worker profile, spawn route, capability, approval, or editable bot definition is created. Existing custom and built-in bot identities remain unchanged.
 
 All new labels have English and Spanish resources. Expand controls have 48 dp targets, state descriptions remain available, large labels wrap, and the new lifecycle rows introduce no animation. Existing avatar motion still follows reduced-motion and visibility policy.
 

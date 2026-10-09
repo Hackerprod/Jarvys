@@ -568,6 +568,8 @@ Estado: implementación y validación de host en curso para v55 / 1.2.48-UX37. E
 - Validar carga de skills correcta/fallida/cancelada, herramientas repetidas con el mismo nombre, concurrencia, respuesta tardía, reintento, reinicio y datos legacy con identidad insuficiente. Si no puede demostrarse que dos eventos son la misma invocación, no fusionarlos mediante una heurística que oculte trabajo.
 - Revisar iconos, animaciones existentes, accesibilidad, temas claro/oscuro, texto grande y localización. Publicar código y Pending.md tras validación y entregar la APK funcional correspondiente con la identidad de firma existente.
 
+Se conserva la cuadrícula original de dos bots por fila. Jarvys usa su icono en las superficies donde el principal ya aparece, sin añadir entradas, tarjetas ni perfiles nuevos.
+
 Contrato de UX37: `app/TOOL_ACTIVITY.md`. Los eventos originales se conservan; la agrupación es visual, con identidad real de ejecución. La carga de una skill no certifica que sus instrucciones se hayan seguido.
 
 ## Validaciones que siguen abiertas

@@ -1363,5 +1363,4 @@ Their exit results are unknown. Do not repeat them automatically. Review project
     <string name="activity_skill_loaded">Loaded skill · %1$s</string>
     <string name="activity_skill_failed">Failed to load skill · %1$s</string>
     <string name="activity_unconfirmed_detail">No final result was confirmed. Effects may have occurred; inspect the details before retrying.</string>
-    <string name="activity_principal">Principal assistant</string>
 </resources>

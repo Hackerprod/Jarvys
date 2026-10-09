@@ -66,19 +66,26 @@ class ToolActivityComposeTest {
         compose.onAllNodesWithText("Using Read").assertCountEquals(0)
         compose.onNodeWithText(compose.activity.getString(R.string.connector_tool_unconfirmed,"Read")).assertExists()
     }
-    @Test fun principalUsesSupportedCurrentLauncherOnApi34AndCatalogIsPresentationOnly() {
-        compose.setContent { MaterialTheme { BotsCatalogGrid(emptyList(),emptyMap(),{fail("Principal must not dispatch a bot")},{},{}) } }
-        compose.onNodeWithTag("bot-principal").assertIsDisplayed()
+    @Test fun principalUsesSupportedCurrentLauncherOnApi34WithoutClickAuthority() {
+        var role by mutableStateOf("chief")
+        compose.setContent { MaterialTheme { CrewBotAvatar("Jarvys",role,"periwinkle","IDLE",modifier=Modifier.size(72.dp),testTag="principal-identity") } }
+        fun sources(node:androidx.compose.ui.semantics.SemanticsNode):List<String> =
+            (if(node.config.contains(BotIconSourceKey)) listOf(node.config[BotIconSourceKey]) else emptyList())+node.children.flatMap(::sources)
+        for(id in listOf("chief","captain")) {
+            compose.runOnIdle { role=id }
+            compose.onNodeWithTag("principal-identity").assertIsDisplayed()
+            assertTrue(sources(compose.onRoot(useUnmergedTree=true).fetchSemanticsNode()).contains("principal:launcher"))
+            compose.onNodeWithTag("principal-identity").assertHasNoClickAction()
+        }
+    }
+    @Test fun principalMissionHeaderUsesLauncherWithoutAddingNewBotEntries() {
+        compose.setContent { MaterialTheme { CrewMissionScreen(snapshot(messages=emptyList()),board(),true,{},{_,_->},{}) } }
         fun sources(node:androidx.compose.ui.semantics.SemanticsNode):List<String> =
             (if(node.config.contains(BotIconSourceKey)) listOf(node.config[BotIconSourceKey]) else emptyList())+node.children.flatMap(::sources)
         assertTrue(sources(compose.onRoot(useUnmergedTree=true).fetchSemanticsNode()).contains("principal:launcher"))
-        compose.onNodeWithTag("bot-principal").assertHasNoClickAction()
-    }
-    @Test fun principalMissionTabKeepsWorkerIdentityAndNoSpawnAction() {
-        compose.setContent { MaterialTheme { CrewMissionScreen(snapshot(messages=emptyList()),board(),true,{fail("No principal spawn")},{_,_->},{}) } }
         compose.onNodeWithTag("crew-tab-bots").performClick()
-        compose.onNodeWithTag("crew-bot-principal").assertIsDisplayed()
         compose.onNodeWithTag("crew-bot-row-bot").assertIsDisplayed()
+        compose.onNodeWithTag("crew-bot-principal").assertDoesNotExist()
     }
     @Test fun mainChatPartialEvidenceRemainsReachableAfterInterruption() {
         val projected=ToolActivity.project(listOf(activity(),activity("tool_progress","Partial evidence"),activity("tool_interrupted")),false)

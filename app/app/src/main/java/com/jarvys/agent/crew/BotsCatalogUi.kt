@@ -100,13 +100,6 @@ internal fun BotsCatalogGrid(
             error?.let { message ->
                 item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) { BotsError(message) }
             }
-            item(key = "principal-jarvys") {
-                Column(Modifier.fillMaxWidth().padding(vertical=16.dp).testTag("bot-principal"), horizontalAlignment=Alignment.CenterHorizontally) {
-                    CrewBotAvatar(stringResource(R.string.crew_captain_name),"chief","periwinkle","IDLE",modifier=Modifier.size(72.dp))
-                    Text(stringResource(R.string.crew_captain_name),style=MaterialTheme.typography.titleMedium)
-                    Text(stringResource(R.string.activity_principal),style=MaterialTheme.typography.bodySmall)
-                }
-            }
             items(bots, key = { it.id }) { bot ->
                 BotCatalogTile(bot, working[bot.id]?.coerceAtLeast(0) ?: 0) { onOpen(bot) }
             }
