@@ -804,7 +804,9 @@ class McpTransportClientStreamingTest {
             if (!stopped.compareAndSet(false, true)) return
             legacyDone.countDown()
             runCatching { listener.close() }
-            activeSockets.toList().forEach { runCatching { it.close() } }
+            // Iterate the concurrent set directly. Kotlin toList() optimizes size == 1
+            // with an unchecked next(), racing the handler removing that final socket.
+            activeSockets.forEach { runCatching { it.close() } }
             executor.shutdownNow()
             runCatching { acceptThread.join(1_000) }
         }
