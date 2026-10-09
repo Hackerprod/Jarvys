@@ -48,14 +48,8 @@
     <string name="proactive_suggested_reply_unavailable">This reply was already used or is no longer available.</string>
     <string name="proactive_tool_status_description">Read-only proactive status with enabled state, review cadence, last and next review times, and pending/discarded counts. It never reads event text.</string>
     <string name="proactive_tool_status_model_description">Read-only proactive status: enabled state, pending/discarded counts, notification permission, and last failure reason. It returns no timestamps or event content.</string>
-    <string name="settings_agent_behavior">Agent behavior</string>
-    <string name="settings_task_timeout">Task timeout</string>
-    <string name="settings_timeout_description">Maximum duration for one agent task. Enter whole minutes; 0 means no timeout. STOP can still end a running task.</string>
-    <string name="settings_timeout_minutes_label">Minutes</string>
     <string name="settings_save">Save</string>
     <string name="settings_cancel">Cancel</string>
-    <string name="settings_timeout_unlimited">Unlimited</string>
-    <plurals name="settings_timeout_minutes"><item quantity="one">%1$d min</item><item quantity="other">%1$d min</item></plurals>
     <string name="settings_providers">Providers</string>
     <string name="provider_openai_name">OpenAI</string>
     <string name="providers_services_heading">Services</string>
@@ -990,7 +984,7 @@ description: Explicit preferences about language, tone, style, and how to help t
     <string name="agent_failure_http">Could not complete the task: the provider rejected the request (HTTP %1$s). Check the selected model and try again.</string>
     <string name="agent_failure_network">Could not connect to the provider. Check your internet connection and try again.</string>
     <string name="agent_failure_generic">Could not complete the task. Check your connection and provider settings, then try again.</string>
-    <string name="agent_timeout_result">The task exceeded its time limit. Some work may be partially complete; review the workspace or ask Jarvys to continue.</string>
+    <string name="agent_timeout_result">The requested deadline was reached. Progress may be partial; review existing results before continuing.</string>
     <string name="agent_loop_result">Jarvys stopped the task after detecting repeated calls without progress. Some work may be partially complete; review it or ask Jarvys to continue.</string>
     <string name="agent_start_accessibility_required">Not started: enable Jarvys in Settings → Accessibility.</string>
     <string name="agent_start_failed_accessibility">Could not start the task. Enable Jarvys in Settings → Accessibility and try again.</string>
@@ -1361,4 +1355,8 @@ Their exit results are unknown. Do not repeat them automatically. Review project
     <string name="chat_file_action_named">%1$s: %2$s</string>
     <string name="chat_html_thumbnail_unavailable">Thumbnail unavailable. Tap to open the page.</string>
     <string name="chat_html_thumbnail_loading">Preparing page thumbnail…</string>
+
+    <string name="agent_provider_partial">The provider request ended without a complete response. Progress is retained. Review existing results before continuing; the request was not repeated automatically.</string>
+    <string name="crew_status_partial">Partial</string>
+    <string name="crew_status_timed_out">Deadline reached</string>
 </resources>

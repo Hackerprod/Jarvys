@@ -210,10 +210,10 @@ class Th1VisualCaptureTest {
                             Scene.SETTINGS -> JarvysSettingsScreen(
                                 page = JarvysSettingsPage.HOME, themeMode = mode, showAgentEvents = true,
                                 proactiveEnabled = false, proactiveStatus = ProactiveStatus(enabled = false),
-                                agentTimeoutSeconds = 0, memoryEnabled = true, memoryUsedCharacters = 2_400,
+                                memoryEnabled = true, memoryUsedCharacters = 2_400,
                                 languageChoice = AppLanguageChoice.SPANISH, onLanguageChange = {}, onThemeChange = {},
                                 onShowAgentEventsChange = {}, onProactiveEnabledChange = {}, onRefreshProactiveStatus = {},
-                                onAgentTimeoutChange = {}, onNavigateRoute = {}, onMcp = {}, onSkills = {},
+                                onNavigateRoute = {}, onMcp = {}, onSkills = {},
                                 onConnectors = {}, onMemory = {}, onAccessibilitySettings = {}, onNavigate = {},
                             )
                             Scene.CREW -> CrewGallery()

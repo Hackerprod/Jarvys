@@ -331,8 +331,8 @@ fun CrewMissionCard(
     var now by remember(snapshot.missionId, snapshot.finishedAtMillis) {
         mutableLongStateOf(snapshot.finishedAtMillis.takeIf { it > 0 } ?: System.currentTimeMillis())
     }
-    LaunchedEffect(snapshot.missionId, snapshot.status, elapsedUpdatesAllowed) {
-        if (snapshot.status == "RUNNING" && elapsedUpdatesAllowed) while (true) {
+    LaunchedEffect(snapshot.missionId, snapshot.active(), elapsedUpdatesAllowed) {
+        if (snapshot.active() && elapsedUpdatesAllowed) while (true) {
             now = System.currentTimeMillis()
             delay(1000)
         }
@@ -408,6 +408,7 @@ fun CrewMissionCard(
             snapshot.bots.forEach { bot ->
                 val activity = snapshot.messages.lastOrNull { it.from == bot.id && it.type == CrewMessage.Type.STATUS }?.text
                 val status = when {
+                    !bot.active() -> crewBotStatus(bot.status)
                     bot.waitingReason == "limite del proveedor" -> stringResource(R.string.crew_waiting_provider)
                     bot.waitingReason.isNotBlank() -> stringResource(R.string.crew_waiting_captain)
                     activity != null -> localizeCrewActivity(activity)
@@ -928,6 +929,8 @@ private fun crewBotStatus(status: String): String = stringResource(when (status)
     "RUNNING" -> R.string.crew_status_working
     "WAITING" -> R.string.crew_status_waiting
     "DONE" -> R.string.crew_status_done
+    "PARTIAL" -> R.string.crew_status_partial
+    "TIMED_OUT" -> R.string.crew_status_timed_out
     "FAILED" -> R.string.crew_status_failed
     "STOPPED" -> R.string.crew_status_stopped
     "INTERRUPTED" -> R.string.crew_status_interrupted
@@ -945,6 +948,8 @@ private fun crewMissionStatus(status: String): String = stringResource(when (sta
     "RUNNING" -> R.string.crew_status_working
     "SYNTHESIZED" -> R.string.crew_status_synthesized
     "STOPPED" -> R.string.crew_status_stopped
+    "PARTIAL" -> R.string.crew_status_partial
+    "TIMED_OUT" -> R.string.crew_status_timed_out
     "FAILED" -> R.string.crew_status_failed
     "INTERRUPTED" -> R.string.crew_status_interrupted
     else -> R.string.crew_status_working

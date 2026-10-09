@@ -3,7 +3,6 @@ package com.jarvys.agent.ui.settings
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -12,15 +11,12 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -33,20 +29,16 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.jarvys.agent.AppLanguageChoice
 import com.jarvys.agent.AppNavigationBackPolicy
 import com.jarvys.agent.JarvysThemeMode
 import com.jarvys.agent.LucideIcons
 import com.jarvys.agent.MemoryConstants
 import com.jarvys.agent.R
-import com.jarvys.agent.ScrollableDialogContent
 import com.jarvys.agent.JarvysSectionLabel
 import com.jarvys.agent.JarvysChoiceOption
 import com.jarvys.agent.JarvysChoiceSheet
-import com.jarvys.agent.JarvysTextField
 import com.jarvys.agent.proactive.ProactiveStatus
 import com.jarvys.agent.tasks.ui.TaskSettingsEntry
 import java.util.Date
@@ -60,7 +52,6 @@ fun SettingsWorkspace(
     showAgentEvents: Boolean,
     proactiveEnabled: Boolean,
     proactiveStatus: ProactiveStatus,
-    agentTimeoutSeconds: Int,
     memoryEnabled: Boolean,
     memoryUsedCharacters: Int,
     languageChoice: AppLanguageChoice,
@@ -69,7 +60,6 @@ fun SettingsWorkspace(
     onShowAgentEventsChange: (Boolean) -> Unit,
     onProactiveEnabledChange: (Boolean) -> Unit,
     onRefreshProactiveStatus: () -> Unit,
-    onAgentTimeoutChange: (Int) -> Unit,
     onNavigateRoute: (String) -> Unit,
     onMcp: () -> Unit,
     onSkills: () -> Unit,
@@ -115,8 +105,6 @@ fun SettingsWorkspace(
                 proactiveEnabled = proactiveEnabled,
                 onProactiveEnabledChange = onProactiveEnabledChange,
                 proactiveStatus = proactiveStatus,
-                agentTimeoutSeconds = agentTimeoutSeconds,
-                onAgentTimeoutChange = onAgentTimeoutChange,
             )
         }
     }
@@ -239,13 +227,7 @@ private fun PreferencesWorkspace(
     proactiveEnabled: Boolean,
     onProactiveEnabledChange: (Boolean) -> Unit,
     proactiveStatus: ProactiveStatus,
-    agentTimeoutSeconds: Int,
-    onAgentTimeoutChange: (Int) -> Unit,
 ) {
-    var timeoutOpen by remember { mutableStateOf(false) }
-    var timeoutMinutes by remember(agentTimeoutSeconds) {
-        mutableStateOf(if (agentTimeoutSeconds == 0) "0" else (agentTimeoutSeconds / 60).toString())
-    }
     SettingsSection(stringResource(R.string.settings_agent_activity)) {
         PreferenceToggle(stringResource(R.string.settings_show_agent_activity),
             stringResource(R.string.settings_agent_activity_description), showAgentEvents, onShowAgentEventsChange)
@@ -264,38 +246,7 @@ private fun PreferencesWorkspace(
             stringResource(R.string.settings_proactive_description), proactiveEnabled, onProactiveEnabledChange,
             icon = LucideIcons.Bell, supportingStatus = helper)
     }
-    Spacer(Modifier.height(22.dp))
-    SettingsSection(stringResource(R.string.settings_agent_behavior)) {
-        SettingsIndexRow(LucideIcons.Clock, stringResource(R.string.settings_task_timeout),
-            timeoutLabel(agentTimeoutSeconds), onClick = { timeoutMinutes = if (agentTimeoutSeconds == 0) "0"
-                else (agentTimeoutSeconds / 60).toString(); timeoutOpen = true },
-            testTag = "settings-timeout-row")
-        Text(stringResource(R.string.settings_timeout_description),
-            Modifier.padding(start = 4.dp, top = 2.dp, end = 4.dp),
-            color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
-    }
-    if (timeoutOpen) {
-        val minutes = timeoutMinutes.toLongOrNull()
-        val valid = minutes != null && minutes >= 0 && minutes <= Int.MAX_VALUE / 60L
-        AlertDialog(
-            onDismissRequest = { timeoutOpen = false },
-            title = { Text(stringResource(R.string.settings_task_timeout)) },
-            text = { ScrollableDialogContent {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(stringResource(R.string.settings_timeout_description))
-                    JarvysTextField(value = timeoutMinutes,
-                        onValueChange = { if (it.all(Char::isDigit)) timeoutMinutes = it },
-                        label = { Text(stringResource(R.string.settings_timeout_minutes_label)) },
-                        singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
-                }
-            } },
-            confirmButton = { TextButton(enabled = valid, onClick = {
-                onAgentTimeoutChange((minutes ?: 0L).toInt() * 60)
-                timeoutOpen = false
-            }) { Text(stringResource(R.string.settings_save)) } },
-            dismissButton = { TextButton(onClick = { timeoutOpen = false }) { Text(stringResource(R.string.settings_cancel)) } },
-        )
-    }
+
 }
 
 @Composable
@@ -316,10 +267,6 @@ private fun PreferenceToggle(title: String, description: String, checked: Boolea
         Switch(checked, onCheckedChange)
     }
 }
-
-@Composable
-private fun timeoutLabel(seconds: Int): String = if (seconds == 0) stringResource(R.string.settings_timeout_unlimited)
-    else androidx.compose.ui.res.pluralStringResource(R.plurals.settings_timeout_minutes, seconds / 60, seconds / 60)
 
 private fun themeResource(mode: JarvysThemeMode) = when (mode) {
     JarvysThemeMode.SYSTEM -> R.string.settings_system

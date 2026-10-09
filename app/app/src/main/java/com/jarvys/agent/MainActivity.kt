@@ -305,7 +305,6 @@ class MainActivity : ComponentActivity() {
     private var translationErrorMessageId by mutableStateOf<String?>(null)
     private var translationError by mutableStateOf<String?>(null)
     private var translationFuture: Future<*>? = null
-    private var agentTimeoutSeconds by mutableStateOf(JarvysUiPreferences.DEFAULT_AGENT_TIMEOUT_SECONDS)
     private var runHistory by mutableStateOf<List<RunHistoryItem>>(emptyList())
     private var selectedHistoryRunId by mutableStateOf<String?>(null)
     private var proactiveTargetMessageId by mutableStateOf<String?>(null)
@@ -420,7 +419,6 @@ class MainActivity : ComponentActivity() {
         showAgentEvents = uiPreferences.showAgentEvents()
         proactiveEnabled = proactivePreferences.enabled
         refreshProactiveStatus()
-        agentTimeoutSeconds = uiPreferences.agentTimeoutSeconds()
         goalInput = savedInstanceState?.getString(STATE_GOAL).orEmpty()
         selectedHistoryRunId = savedInstanceState?.getString(STATE_HISTORY_RUN)
         proactiveTargetMessageId = intent?.getStringExtra(EXTRA_OPEN_PROACTIVE_MESSAGE_ID)
@@ -543,7 +541,6 @@ class MainActivity : ComponentActivity() {
                     activeTranslationMessageId = activeTranslationMessageId,
                     translationErrorMessageId = translationErrorMessageId,
                     translationError = translationError,
-                    agentTimeoutSeconds = agentTimeoutSeconds,
                     captureContextRequested = captureContextRequested,
                     skillEnabledCount = skillEntries.count { it.enabled && it.validationError == null },
                     skillTotalCount = skillEntries.size,
@@ -592,7 +589,6 @@ class MainActivity : ComponentActivity() {
                     proactiveStatus = proactiveStatus,
                     onProactiveEnabledChange = ::persistProactiveEnabled,
                     onRefreshProactiveStatus = ::refreshProactiveStatus,
-                    onAgentTimeoutChange = ::persistAgentTimeout,
                     onSelectHistory = ::selectHistoryRun,
                     onNewChat = ::newChat,
                     onCaptureContext = ::markCaptureContext,
@@ -823,11 +819,6 @@ class MainActivity : ComponentActivity() {
             .observe(this) { refreshProactiveStatus() }
         workManager.getWorkInfosForUniqueWorkLiveData(ProactiveWorkNames.RUN_NOW)
             .observe(this) { refreshProactiveStatus() }
-    }
-
-    private fun persistAgentTimeout(seconds: Int) {
-        uiPreferences.setAgentTimeoutSeconds(seconds)
-        agentTimeoutSeconds = seconds
     }
 
     private fun getChatPreferences() = getSharedPreferences("jarvys_chat", MODE_PRIVATE)
@@ -1492,7 +1483,6 @@ private fun JarvysApp(
     activeTranslationMessageId: String?,
     translationErrorMessageId: String?,
     translationError: String?,
-    agentTimeoutSeconds: Int,
     captureContextRequested: Boolean,
     skillEnabledCount: Int,
     skillTotalCount: Int,
@@ -1532,7 +1522,6 @@ private fun JarvysApp(
     onShowAgentEventsChange: (Boolean) -> Unit,
     onProactiveEnabledChange: (Boolean) -> Unit,
     onRefreshProactiveStatus: () -> Unit,
-    onAgentTimeoutChange: (Int) -> Unit,
     onSelectHistory: (String?) -> Unit,
     onNewChat: () -> Unit,
     onCaptureContext: () -> Unit,
@@ -1765,7 +1754,6 @@ private fun JarvysApp(
                     page = settingsPage,
                     themeMode = themeMode,
                     showAgentEvents = showAgentEvents,
-                    agentTimeoutSeconds = agentTimeoutSeconds,
                     memoryEnabled = memoryEnabled,
                     memoryUsedCharacters = memoryCoreCharacters,
                     languageChoice = languageChoice,
@@ -1776,7 +1764,6 @@ private fun JarvysApp(
                     proactiveStatus = proactiveStatus,
                     onProactiveEnabledChange = onProactiveEnabledChange,
                     onRefreshProactiveStatus = onRefreshProactiveStatus,
-                    onAgentTimeoutChange = onAgentTimeoutChange,
                     onNavigateRoute = { navController.navigate(it) { launchSingleTop = true } },
                     onMcp = { navController.navigate(Routes.MCP) { launchSingleTop = true } },
                     onSkills = { navController.navigate(Routes.SKILLS) { launchSingleTop = true } },

@@ -20,7 +20,7 @@ data class BotVisualState(val mode: Mode, val waitingReason: String = "") {
                     || normalizedReason.contains("limite")) Mode.WAITING_PROVIDER else Mode.WAITING_USER
                 "DONE", "COMPLETED", "SYNTHESIZED" -> Mode.DONE
                 "FAILED", "ERROR" -> Mode.ERROR
-                "STOPPED", "INTERRUPTED" -> Mode.INTERRUPTED
+                "STOPPED", "INTERRUPTED", "PARTIAL", "TIMED_OUT" -> Mode.INTERRUPTED
                 "IDLE" -> Mode.IDLE
                 else -> Mode.IDLE
             }

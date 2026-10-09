@@ -335,9 +335,9 @@ public final class CoreAgentRuntime {
           new CoreAgentLoop(
               scopedModel, toolRegistry, runInstructions, sessionId, budget, compactor);
       if (transcriptStore != null) transcriptStore.attach(loop, history);
-      CoreAgentLoop.Result result = loop.run(request, history, attachments, token, listener);
+      CoreAgentLoop.Result result = AgentResultPresentation.localize(context, loop.run(request, history, attachments, token, listener));
       if (crewManager != null) {
-        crewManager.finishMission(crewMissionId, result.text, result.outcome);
+        crewManager.finishMission(crewMissionId, result.text, result.interruptionReason == CoreAgentLoop.InterruptionReason.DEADLINE ? "TIMED_OUT" : result.outcome);
         if ("COMPLETED".equals(result.outcome))
           for (CrewMissionSnapshot snapshot : crewManager.missionSnapshots()) {
             if (crewMissionId.equals(snapshot.missionId))
@@ -383,6 +383,7 @@ public final class CoreAgentRuntime {
                     crewCapabilities, (String) obj);
               }
             });
+    manager.configureResultPresentation(result -> AgentResultPresentation.localize(this.context, result));
     final LocalRunStore crewStore = new LocalRunStore(this.context);
     manager.configure(
         crewCapabilities,

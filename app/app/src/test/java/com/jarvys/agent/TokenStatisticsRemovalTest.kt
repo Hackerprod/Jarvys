@@ -65,7 +65,6 @@ class TokenStatisticsRemovalTest {
                     showAgentEvents = true,
                     proactiveEnabled = false,
                     proactiveStatus = ProactiveStatus(enabled = false),
-                    agentTimeoutSeconds = 0,
                     memoryEnabled = false,
                     memoryUsedCharacters = 0,
                     languageChoice = AppLanguageChoice.ENGLISH,
@@ -74,7 +73,6 @@ class TokenStatisticsRemovalTest {
                     onShowAgentEventsChange = {},
                     onProactiveEnabledChange = {},
                     onRefreshProactiveStatus = {},
-                    onAgentTimeoutChange = {},
                     onNavigateRoute = {}, onMcp = {}, onSkills = {}, onConnectors = {},
                     onMemory = {}, onAccessibilitySettings = {}, onNavigate = {},
                 )

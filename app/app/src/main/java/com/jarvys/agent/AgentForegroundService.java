@@ -24,9 +24,6 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /** Foreground owner of the Etapa A cancellable test loop and future agent runs. */
@@ -44,13 +41,6 @@ public final class AgentForegroundService extends Service {
   private static final int TEST_STEPS = 120;
   private static volatile String lastRunReport = "Etapa B: sin ejecuciones todavía.";
   private static volatile AgentForegroundService currentInstance;
-  private static final ScheduledExecutorService runTimeouts =
-      Executors.newSingleThreadScheduledExecutor(
-          r -> {
-            Thread thread = new Thread(r, "JarvysRunTimeouts");
-            thread.setDaemon(true);
-            return thread;
-          });
 
   private final ExecutorService worker =
       Executors.newSingleThreadExecutor(
@@ -72,6 +62,19 @@ public final class AgentForegroundService extends Service {
   }
   ReplacementRunner replacementRunner = (token, session, requestId, text, skills, memoryDisabled) ->
       runRealAgent(token, text, skills, session, text, true, memoryDisabled, false, requestId);
+
+  /** Instance seam for testing the real service lifecycle without external provider calls. */
+  interface MainChatRunner {
+    CoreAgentLoop.Result run(CoreAgentRuntime runtime, String goal, List<ConversationTurn> history,
+        List<ChatAttachment> attachments, CancellationToken token, CoreAgentLoop.ProgressListener progress);
+  }
+  MainChatRunner mainChatRunner = (runtime, goal, history, attachments, token, progress) ->
+      runtime.runMainChat(goal, history, attachments, token, progress);
+  interface RuntimeFactory {
+    CoreAgentRuntime create(Context context, String sessionId, List<SkillEntry> skills, boolean memoryDisabled);
+  }
+  RuntimeFactory runtimeFactory = (context, session, skills, memoryDisabled) ->
+      new CoreAgentRuntime(context, session, skills, CorePromptBudget.standard(), memoryDisabled);
 
   private final AtomicInteger activeReflectionTasks = new AtomicInteger();
   private final AtomicInteger replacementTransitions = new AtomicInteger();
@@ -684,20 +687,10 @@ public final class AgentForegroundService extends Service {
       boolean memoryDisabledForConversation,
       boolean regeneration,
       String existingUserMessageId) {
-    int timeoutSeconds = new JarvysUiPreferences(this).agentTimeoutSeconds();
-    Thread runThread = Thread.currentThread();
-    ScheduledFuture<?> timeoutTask =
-        timeoutSeconds == 0
-            ? null
-            : runTimeouts.schedule(
-                () -> {
-                  if (token.cancelForTimeout()) runThread.interrupt();
-                },
-                timeoutSeconds,
-                TimeUnit.SECONDS);
+    // Mission lifetime is independent of elapsed wall time. STOP still owns cancellation.
+    new JarvysUiPreferences(this); // Retire restored legacy deadline settings before starting.
     LocalRunStore conversationStore = new LocalRunStore(this);
-    String chatMessage =
-        "No pude completar la tarea. Verifica la conexión del proveedor y vuelve a intentarlo.";
+    String chatMessage = userFacingFailure("");
     boolean userMessageRecorded = userMessageAlreadyRecorded;
     boolean diagnosticReported = false;
     String userMessageId = existingUserMessageId;
@@ -712,7 +705,7 @@ public final class AgentForegroundService extends Service {
               ? java.util.Collections.emptyList()
               : conversationStore.readConversationAttachments(sessionId, userMessageId);
       if ((goal == null || goal.trim().isEmpty()) && attachments.isEmpty()) {
-        throw new IllegalArgumentException("Escribe el objetivo antes de iniciar el agente.");
+        throw new IllegalArgumentException(AppLanguageRuntime.localizedContext(this).getString(R.string.agent_goal_required));
       }
       goal = goal == null ? "" : goal;
       displayGoal = displayGoal == null ? "" : displayGoal;
@@ -744,13 +737,7 @@ public final class AgentForegroundService extends Service {
               : skills.selectedForRun(selectedSkillIds);
       List<String> usedSkillIds = new ArrayList<>();
       for (SkillEntry skill : enabledSkills) usedSkillIds.add(skill.getMetadata().getId());
-      CoreAgentRuntime runtime =
-          new CoreAgentRuntime(
-              this,
-              sessionId,
-              enabledSkills,
-              CorePromptBudget.standard(),
-              memoryDisabledForConversation);
+      CoreAgentRuntime runtime = runtimeFactory.create(this, sessionId, enabledSkills, memoryDisabledForConversation);
       skills.markUsed(usedSkillIds);
       final String reflectionUserMessageId = userMessageId == null ? "" : userMessageId;
       CoreAgentLoop.ProgressListener progress =
@@ -812,12 +799,11 @@ public final class AgentForegroundService extends Service {
             }
           };
       CoreAgentLoop.Result result =
-          runtime.runMainChat(goal.trim(), conversationHistory, attachments, token, progress);
+          mainChatRunner.run(runtime, goal.trim(), conversationHistory, attachments, token, progress);
       boolean timedOut = token.isTimedOut() && !token.isStoppedByUser();
-      if (timedOut) chatMessage = CoreAgentLoop.TIMEOUT_MESSAGE;
+      if (timedOut) chatMessage = AgentResultPresentation.timeout(this);
       else {
-        if (timeoutTask != null) timeoutTask.cancel(false);
-        chatMessage = result.text;
+        chatMessage = AgentResultPresentation.localize(this, result).text;
       }
       if (!timedOut) token.throwIfCancelled();
       String proactiveThreadKey =
@@ -860,8 +846,8 @@ public final class AgentForegroundService extends Service {
       boolean timedOut = token.isTimedOut() && !stopped;
       chatMessage =
           stopped
-              ? "Tarea detenida."
-              : timedOut ? CoreAgentLoop.TIMEOUT_MESSAGE : userFacingFailure(message);
+              ? AppLanguageRuntime.localizedContext(this).getString(R.string.agent_run_stopped)
+              : timedOut ? AgentResultPresentation.timeout(this) : userFacingFailure(message);
       if (userMessageRecorded) {
         try {
           conversationStore.appendConversationMessage(
@@ -890,7 +876,6 @@ public final class AgentForegroundService extends Service {
       }
     } finally {
       if (privateContentScope != null) privateContentScope.close();
-      if (timeoutTask != null) timeoutTask.cancel(false);
       if (token.isTimedOut()) Thread.interrupted();
       com.jarvys.agent.proactive.BackgroundRunController.INSTANCE.interactiveFinished(token.generation());
       try {
@@ -982,20 +967,8 @@ public final class AgentForegroundService extends Service {
     return answer;
   }
 
-  static String userFacingFailure(String details) {
-    String value = details == null ? "" : details;
-    java.util.regex.Matcher http =
-        java.util.regex.Pattern.compile("HTTP (4\\d\\d|5\\d\\d)").matcher(value);
-    if (http.find())
-      return "No pude completar la tarea: el proveedor rechazó la solicitud (HTTP "
-          + http.group(1)
-          + "). Revisa el modelo seleccionado y vuelve a intentarlo.";
-    if (value.toLowerCase(java.util.Locale.ROOT).contains("network")
-        || value.toLowerCase(java.util.Locale.ROOT).contains("connect")) {
-      return "No pude conectar con el proveedor. Comprueba internet y vuelve a intentarlo.";
-    }
-    return "No pude completar la tarea. Verifica la conexión y la configuración del proveedor, y"
-               + " vuelve a intentarlo.";
+  private String userFacingFailure(String details) {
+    return AgentResultPresentation.failure(this, details);
   }
 
   private void stopRunAndServices() {

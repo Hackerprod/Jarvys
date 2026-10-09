@@ -340,14 +340,8 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
               ? ProviderHttp.parseRetryAfterMillis(connection.getHeaderField("Retry-After"))
               : 0L;
       return new ProviderHttp.Response(status, responseBody, rawResponseBody, retryAfter);
-    } catch (java.io.InterruptedIOException e) {
-      Thread.currentThread().interrupt();
-      throw new java.util.concurrent.CancellationException(
-          "OpenAI Codex request interrupted by STOP");
     } catch (java.io.IOException e) {
-      if (token.isCancelled())
-        throw new java.util.concurrent.CancellationException(
-            "OpenAI Codex request cancelled by STOP");
+      token.throwIfCancelled(); // Preserve genuine STOP; a socket timeout never manufactures it.
       String detail =
           e.getClass().getSimpleName() + (e.getMessage() == null ? "" : ": " + e.getMessage());
       if (logErrors)

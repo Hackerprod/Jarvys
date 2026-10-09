@@ -8,9 +8,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.isToggleable
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.Density
@@ -55,7 +59,6 @@ class ProactiveSettingsComposeTest {
                         showAgentEvents = false,
                         proactiveEnabled = true,
                         proactiveStatus = status.value,
-                        agentTimeoutSeconds = 900,
                         memoryEnabled = false,
                         memoryUsedCharacters = 0,
                         languageChoice = if (language.value == "es") AppLanguageChoice.SPANISH else AppLanguageChoice.ENGLISH,
@@ -64,7 +67,6 @@ class ProactiveSettingsComposeTest {
                         onShowAgentEventsChange = {},
                         onProactiveEnabledChange = {},
                         onRefreshProactiveStatus = {},
-                        onAgentTimeoutChange = {},
                         onNavigateRoute = {},
                         onMcp = {},
                         onSkills = {},
@@ -95,6 +97,15 @@ class ProactiveSettingsComposeTest {
                         notificationPermissionGranted = permissionGranted,
                     )
                     compose.waitForIdle()
+                    // Keep the retired whole-task deadline out of both localized settings
+                    // trees, including large-font layouts and repeated status recompositions.
+                    compose.onAllNodesWithTag("settings-timeout-row", useUnmergedTree = true)
+                        .assertCountEquals(0)
+                    listOf("Task timeout", "Tiempo máximo de tarea").forEach { retiredTitle ->
+                        compose.onAllNodesWithText(retiredTitle, useUnmergedTree = true)
+                            .assertCountEquals(0)
+                    }
+                    compose.onAllNodes(isDialog(), useUnmergedTree = true).assertCountEquals(0)
                     compose.onNodeWithText(description).performScrollTo().assertIsDisplayed()
                     val reviewText = if (lastCheck == 0L) configured.getString(R.string.settings_proactive_status_never)
                     else configured.getString(

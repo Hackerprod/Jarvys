@@ -183,11 +183,11 @@ class ArchivedChatsSettingsComposeTest {
         theme: JarvysThemeMode = JarvysThemeMode.LIGHT, onArchivedChats: () -> Unit = {}) {
         JarvysSettingsScreen(
             page = page, themeMode = theme, showAgentEvents = true, proactiveEnabled = false,
-            proactiveStatus = ProactiveStatus(enabled = false), agentTimeoutSeconds = 0,
+            proactiveStatus = ProactiveStatus(enabled = false),
             memoryEnabled = false, memoryUsedCharacters = 0, languageChoice = if (context.resources.configuration.locales[0].language == "es")
                 AppLanguageChoice.SPANISH else AppLanguageChoice.ENGLISH,
             onLanguageChange = {}, onThemeChange = {}, onShowAgentEventsChange = {},
-            onProactiveEnabledChange = {}, onRefreshProactiveStatus = {}, onAgentTimeoutChange = {},
+            onProactiveEnabledChange = {}, onRefreshProactiveStatus = {},
             onNavigateRoute = {}, onMcp = {}, onSkills = {}, onConnectors = {}, onMemory = {},
             onAccessibilitySettings = {}, onNavigate = {}, archivedChatsAvailable = history.any { it.archived },
             onArchivedChats = onArchivedChats,

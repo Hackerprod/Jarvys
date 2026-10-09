@@ -76,11 +76,8 @@ final class ProviderHttp {
             String responseBody = input == null ? "" : readBounded(input);
             token.throwIfCancelled();
             return new Response(status, responseBody, responseBody, parseRetryAfterMillis(connection.getHeaderField("Retry-After")));
-        } catch (java.io.InterruptedIOException e) {
-            Thread.currentThread().interrupt();
-            throw new java.util.concurrent.CancellationException("Provider request interrupted by STOP");
         } catch (java.io.IOException e) {
-            if (token.isCancelled()) throw new java.util.concurrent.CancellationException("Provider request cancelled by STOP");
+            token.throwIfCancelled(); // Socket/IO timeout is not a user STOP and must not set interrupt.
             throw new ProviderTransportException("Provider request failed: " + e.getClass().getSimpleName(), e);
         } finally {
             unregister.run();

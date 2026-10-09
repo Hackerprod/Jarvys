@@ -254,12 +254,11 @@ class ProvidersNavigationTest {
                         showAgentEvents = true,
                         proactiveEnabled = false,
                         proactiveStatus = com.jarvys.agent.proactive.ProactiveStatus(enabled = false),
-                        agentTimeoutSeconds = 0,
                         memoryEnabled = false,
                         memoryUsedCharacters = 0,
                         languageChoice = AppLanguageChoice.ENGLISH,
                         onLanguageChange = {}, onThemeChange = {}, onShowAgentEventsChange = {},
-                        onProactiveEnabledChange = {}, onRefreshProactiveStatus = {}, onAgentTimeoutChange = {},
+                        onProactiveEnabledChange = {}, onRefreshProactiveStatus = {},
                         onNavigateRoute = { destination.set(it) }, onMcp = {}, onSkills = {}, onConnectors = {},
                         onMemory = {}, onAccessibilitySettings = {}, onNavigate = {},
                     )

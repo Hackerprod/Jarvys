@@ -8,6 +8,11 @@ class JarvysUiPreferences(context: Context) {
     private val preferences = context.applicationContext.getSharedPreferences("jarvys_ui_preferences", Context.MODE_PRIVATE)
 
     init {
+        // Retire the whole-task deadline, including restored/custom or wrongly typed values.
+        // Check each construction so a restore in this process cannot revive the setting.
+        if (preferences.contains(LEGACY_AGENT_TIMEOUT_SECONDS_KEY)) {
+            preferences.edit().remove(LEGACY_AGENT_TIMEOUT_SECONDS_KEY).apply()
+        }
         if (legacyTokenPreferenceRemoved.compareAndSet(false, true)) {
             preferences.edit().remove(LEGACY_TOKEN_STATS_KEY).apply()
         }
@@ -27,19 +32,11 @@ class JarvysUiPreferences(context: Context) {
         preferences.edit().putBoolean(KEY_SHOW_EVENTS, value).apply()
     }
 
-    fun agentTimeoutSeconds(): Int = preferences.getInt(KEY_AGENT_TIMEOUT_SECONDS, DEFAULT_AGENT_TIMEOUT_SECONDS)
-
-    fun setAgentTimeoutSeconds(value: Int) {
-        require(value >= 0) { "Agent timeout must be zero (unlimited) or positive" }
-        preferences.edit().putInt(KEY_AGENT_TIMEOUT_SECONDS, value).apply()
-    }
-
     companion object {
         private const val LEGACY_TOKEN_STATS_KEY = "show_token_stats"
         private val legacyTokenPreferenceRemoved = java.util.concurrent.atomic.AtomicBoolean(false)
-        const val DEFAULT_AGENT_TIMEOUT_SECONDS = 15 * 60
         const val KEY_THEME = "theme_mode"
         const val KEY_SHOW_EVENTS = "show_agent_events"
-        private const val KEY_AGENT_TIMEOUT_SECONDS = "agent_timeout_seconds"
+        private const val LEGACY_AGENT_TIMEOUT_SECONDS_KEY = "agent_timeout_seconds"
     }
 }

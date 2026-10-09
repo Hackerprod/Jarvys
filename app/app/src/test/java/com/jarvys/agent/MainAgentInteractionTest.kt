@@ -375,8 +375,9 @@ class MainAgentInteractionTest {
         val session = "early-setup-${System.nanoTime()}"
         val store = LocalRunStore(context)
         val id = store.appendConversationMessage(session, "user", "read only")
-        val prefs = context.getSharedPreferences("jarvys_ui_preferences", Context.MODE_PRIVATE)
-        prefs.edit().putString("agent_timeout_seconds", "invalid fixture type").commit()
+        service.runtimeFactory = AgentForegroundService.RuntimeFactory { _, _, _, _ ->
+            throw IllegalStateException("synthetic runtime initialization failure")
+        }
         AgentRunUiState.beginRun(session, "read only")
         try {
             service.onStartCommand(AgentForegroundService.storedChatMessageIntent(context, session, id), 0, 1)
@@ -388,7 +389,6 @@ class MainAgentInteractionTest {
             assertTrue(store.readConversationMessages(session).any { it.optString("status") == "FAILED" })
             assertTrue(store.readModelTranscriptRows(session).isEmpty())
         } finally {
-            prefs.edit().remove("agent_timeout_seconds").commit()
             StopController.getInstance().stopRun(); serviceController.destroy()
         }
     }

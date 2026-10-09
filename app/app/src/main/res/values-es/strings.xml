@@ -48,14 +48,8 @@
     <string name="proactive_suggested_reply_unavailable">Esta respuesta ya se usó o no está disponible.</string>
     <string name="proactive_tool_status_description">Estado proactivo de solo lectura: activación, frecuencia, última y próxima revisión y cantidad de pendientes/descartados. No lee texto de eventos.</string>
     <string name="proactive_tool_status_model_description">Estado proactivo de solo lectura: activación, pendientes/descartados, permiso de notificaciones y último motivo de error. No devuelve marcas de tiempo ni contenido de eventos.</string>
-    <string name="settings_agent_behavior">Comportamiento del agente</string>
-    <string name="settings_task_timeout">Tiempo máximo de tarea</string>
-    <string name="settings_timeout_description">Duración máxima de una tarea. Introduce minutos enteros; 0 significa sin límite. STOP puede finalizar una tarea en curso.</string>
-    <string name="settings_timeout_minutes_label">Minutos</string>
     <string name="settings_save">Guardar</string>
     <string name="settings_cancel">Cancelar</string>
-    <string name="settings_timeout_unlimited">Sin límite</string>
-    <plurals name="settings_timeout_minutes"><item quantity="one">%1$d min</item><item quantity="other">%1$d min</item></plurals>
     <string name="settings_providers">Proveedores</string>
     <string name="provider_openai_name">OpenAI</string>
     <string name="providers_services_heading">Servicios</string>
@@ -990,7 +984,7 @@ description: Preferencias explícitas sobre idioma, tono, estilo y forma de ayud
     <string name="agent_failure_http">No se pudo completar la tarea: el proveedor rechazó la solicitud (HTTP %1$s). Revisa el modelo e inténtalo de nuevo.</string>
     <string name="agent_failure_network">No se pudo conectar con el proveedor. Comprueba internet e inténtalo de nuevo.</string>
     <string name="agent_failure_generic">No se pudo completar la tarea. Verifica la conexión y la configuración del proveedor, e inténtalo de nuevo.</string>
-    <string name="agent_timeout_result">La tarea superó el límite de tiempo. Puede haber trabajo parcial; revisa el espacio de trabajo o pide a Jarvys que continúe.</string>
+    <string name="agent_timeout_result">Se alcanzó el plazo solicitado. Puede haber trabajo parcial; revisa los resultados existentes antes de continuar.</string>
     <string name="agent_loop_result">Jarvys detuvo la tarea al detectar llamadas repetidas sin avance. Puede haber trabajo parcial; revísalo o pide que continúe.</string>
     <string name="agent_start_accessibility_required">No se inició: activa Jarvys en Ajustes → Accesibilidad.</string>
     <string name="agent_start_failed_accessibility">No se pudo iniciar la tarea. Activa Jarvys en Ajustes → Accesibilidad e inténtalo de nuevo.</string>
@@ -1361,4 +1355,8 @@ Se desconoce cómo terminaron. No se repiten automáticamente. Revisa los cambio
     <string name="chat_file_action_named">%1$s: %2$s</string>
     <string name="chat_html_thumbnail_unavailable">Miniatura no disponible. Toca para abrir la página.</string>
     <string name="chat_html_thumbnail_loading">Preparando miniatura de la página…</string>
+
+    <string name="agent_provider_partial">La petición al proveedor terminó sin una respuesta completa. Se conserva el progreso. Revisa los resultados antes de continuar; la petición no se repitió automáticamente.</string>
+    <string name="crew_status_partial">Parcial</string>
+    <string name="crew_status_timed_out">Plazo alcanzado</string>
 </resources>

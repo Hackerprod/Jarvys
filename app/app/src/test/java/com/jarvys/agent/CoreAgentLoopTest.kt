@@ -133,7 +133,7 @@ class CoreAgentLoopTest {
         val result = loop.run("Do work", emptyList(), CancellationToken.uncancellable(), null)
 
         assertEquals("PARTIAL", result.outcome)
-        assertTrue(result.text.contains("detectó llamadas repetidas sin avance"))
+        assertEquals(CoreAgentLoop.InterruptionReason.NO_PROGRESS, result.interruptionReason)
         assertEquals(20, executed)
         assertTrue(transcripts.any { turns -> turns.any { it.content.contains("Loop warning:") } })
     }
@@ -157,8 +157,8 @@ class CoreAgentLoopTest {
         val result = loop.run("Do work", emptyList(), CancellationToken.uncancellable(), null)
 
         assertEquals("PARTIAL", result.outcome)
-        assertTrue(result.text.contains("superó el tiempo máximo"))
-        assertTrue(result.text.contains("revisa el workspace"))
+        assertEquals(CoreAgentLoop.InterruptionReason.DEADLINE, result.interruptionReason)
+        assertTrue(result.text.contains("requested deadline"))
     }
 
     @Test

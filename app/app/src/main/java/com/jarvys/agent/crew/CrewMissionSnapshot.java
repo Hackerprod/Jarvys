@@ -52,7 +52,7 @@ public final class CrewMissionSnapshot {
     }
 
     public boolean active() {
-        return "RUNNING".equals(status);
+        return "RUNNING".equals(status) || bots.stream().anyMatch(CrewBotSnapshot::active);
     }
 
     public CrewMissionSnapshot interrupted() {
@@ -63,7 +63,7 @@ public final class CrewMissionSnapshot {
             recovered.add(value);
             changed |= value != bot;
         }
-        String recoveredStatus = "RUNNING".equals(status) ? "INTERRUPTED" : status;
+        String recoveredStatus = active() ? "INTERRUPTED" : status;
         changed |= !recoveredStatus.equals(status);
         return changed ? new CrewMissionSnapshot(missionId, conversationId, CrewProcessIdentity.ID, title,
                 originalInstructions, titleSource, recoveredStatus, synthesis, startedAtMillis,

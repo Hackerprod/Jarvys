@@ -39,6 +39,7 @@ public final class CrewManager implements AutoCloseable {
         /*public static final*/ RUNNING /* = new Status() */ /*enum*/ ,
         /*public static final*/ WAITING /* = new Status() */ /*enum*/ ,
         /*public static final*/ DONE /* = new Status() */ /*enum*/ ,
+        PARTIAL,
         /*public static final*/ FAILED /* = new Status() */ /*enum*/ ,
         /*public static final*/ STOPPED /* = new Status() */ /*enum*/ ,
         /*public static final*/ INTERRUPTED /* = new Status() */ /*enum*/ ;
@@ -256,7 +257,7 @@ public final class CrewManager implements AutoCloseable {
         }
 
         public boolean canResume() {
-            return checkpointAvailable && !definitionDisabled && requiresExplicitResume && !cycleScheduled && (status == Status.INTERRUPTED || status == Status.STOPPED || status == Status.FAILED);
+            return checkpointAvailable && !definitionDisabled && requiresExplicitResume && !cycleScheduled && (status == Status.INTERRUPTED || status == Status.STOPPED || status == Status.FAILED || status == Status.PARTIAL);
         }
 
         public String recoveryNote() {
@@ -305,6 +306,7 @@ public final class CrewManager implements AutoCloseable {
     };
     private volatile ProgressFactory progressFactory;
     private volatile SnapshotListener snapshotListener;
+    private volatile Function<CoreAgentLoop.Result, CoreAgentLoop.Result> resultPresentation = result -> result;
     private volatile CheckpointSupport checkpointSupport;
     private volatile Function<String, CrewRole> profileResolver = (id)->null;
     private volatile List<String> profileCapabilityCeiling = Collections.emptyList();
@@ -349,6 +351,10 @@ public final class CrewManager implements AutoCloseable {
         return rateLimitWaiter;
     }
 
+    public void configureResultPresentation(Function<CoreAgentLoop.Result, CoreAgentLoop.Result> presentation) {
+        resultPresentation = presentation == null ? result -> result : presentation;
+    }
+
     public void configure(CoreToolRegistry captainTools, ToolFactory toolFactory, LoopFactory loopFactory, WorkerLifecycle lifecycle) {
         configure(captainTools, toolFactory, loopFactory, lifecycle, null);
     }
@@ -377,7 +383,7 @@ public final class CrewManager implements AutoCloseable {
             MissionState mission = new MissionState(id, missionSnapshot.originalInstructions);
             mission.startedAtMillis = missionSnapshot.startedAtMillis;
             mission.finishedAtMillis = missionSnapshot.finishedAtMillis;
-            mission.status = "RUNNING".equals(missionSnapshot.status) ? "INTERRUPTED" : missionSnapshot.status;
+            mission.status = missionSnapshot.active() ? "INTERRUPTED" : missionSnapshot.status;
             mission.synthesis = missionSnapshot.synthesis;
             return mission;
         });
@@ -463,8 +469,12 @@ public final class CrewManager implements AutoCloseable {
                 bus.send("recovery", bot.id, CrewMessage.Type.FINDING, plan.observation, Collections.emptyList());
                 persistCheckpoint(bot);
                 MissionState mission = missions.get(bot.missionId);
-                mission.status = "RUNNING";
-                mission.finishedAtMillis = 0;
+                // Recovering one worker does not supply a new captain synthesis. The snapshot
+                // derives live activity from its children while retaining the partial outcome.
+                if (!"PARTIAL".equals(mission.status)) {
+                    mission.status = "RUNNING";
+                    mission.finishedAtMillis = 0;
+                }
                 bot.terminated = new java.util.concurrent.CountDownLatch(1);
                 bot.cycleScheduled = true;
                 publishPresentation(bot.missionId);
@@ -509,7 +519,11 @@ public final class CrewManager implements AutoCloseable {
             return;
         }
         mission.synthesis = synthesis == null ? "" : synthesis;
-        mission.status = "COMPLETED".equals(outcome) ? "SYNTHESIZED" : "STOPPED".equals(outcome) ? "STOPPED" : "FAILED";
+        mission.status = "COMPLETED".equals(outcome) ? "SYNTHESIZED"
+                : "STOPPED".equals(outcome) ? "STOPPED"
+                : "PARTIAL".equals(outcome) ? "PARTIAL"
+                : "TIMED_OUT".equals(outcome) ? "TIMED_OUT"
+                : "FAILED".equals(outcome) ? "FAILED" : "INTERRUPTED";
         mission.finishedAtMillis = System.currentTimeMillis();
         publishMission(missionId);
     }
@@ -755,9 +769,29 @@ public final class CrewManager implements AutoCloseable {
                     bot.reported = false;
                 }
                 String request = bot.completedCycles == 0 ? bot.mission : REANIMATION_PROMPT;
-                CoreAgentLoop.Result result = loop.run(request, bot.transcript, token, progress);
+                CoreAgentLoop.Result result = resultPresentation.apply(loop.run(request, bot.transcript, token, progress));
                 bot.transcript = loop.transcriptSnapshot();
                 bot.completedCycles++;
+                if (!"COMPLETED".equals(result.outcome)) {
+                    // A bounded provider failure or partial loop result is not task completion.
+                    // Already-started jobs keep ownership and finish normally; explicit STOP
+                    // still cancels them. Never launch another inference or replay an effect here.
+                    awaitOwnedWorkTerminal(bot, token);
+                    token.throwIfCancelled();
+                    synchronized (bot.cycleLock) {
+                        bot.result = result.text;
+                        bot.reported = true;
+                        bot.status = "STOPPED".equals(result.outcome) ? Status.STOPPED
+                                : "FAILED".equals(result.outcome) ? Status.FAILED : Status.PARTIAL;
+                        bot.waitingReason = "";
+                        bot.finishedAtMillis = System.currentTimeMillis();
+                        if (checkpointSupport != null && bot.role.profileVersion > 0) bot.requiresExplicitResume = true;
+                    }
+                    bus.send(bot.id, "chief", CrewMessage.Type.RESULT, bot.result, Collections.emptyList());
+                    bus.signalWaiters();
+                    publishMission(bot.missionId);
+                    return;
+                }
                 awaitOwnedWork(bot, token);
                 token.throwIfCancelled();
                 boolean complete;
@@ -846,13 +880,30 @@ public final class CrewManager implements AutoCloseable {
     public void observeOwnedWork(Bot bot, long tokenGeneration, String eventId, String summary) {
         if (bot == null || bots.get(bot.id) != bot || eventId == null || eventId.trim().isEmpty() || summary == null || summary.trim().isEmpty()) return;
         synchronized (bot.cycleLock) {
-            if (bot.token.generation() != tokenGeneration || bot.token.isCancellationRequested() || bot.stopping || bot.status == Status.STOPPED || bot.status == Status.FAILED || bot.status == Status.INTERRUPTED) return;
-            if (!bot.observedWork.add(tokenGeneration + ":" + eventId)) return;
-            dispatch(bot, "owned-work", bot.id, CrewMessage.Type.FINDING, "Owned job observation [" + eventId + "]: " + summary, Collections.emptyList(), false);
-            bot.reported = false;
-            bot.cycleLock.notifyAll();
-            bus.signalWaiters();
+            if (bot.token.generation() != tokenGeneration) return;
+            try {
+            String observationKey = tokenGeneration + ":" + eventId;
+            if (bot.observedWork.contains(observationKey)) return;
+            String text = "Owned job observation [" + eventId + "]: " + summary;
+            String id = "owned-job-" + UUID.nameUUIDFromBytes((bot.id + ":" + observationKey)
+                    .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            CrewMessage receipt = new CrewMessage(id, conversationId, "owned-work", bot.id,
+                    CrewMessage.Type.FINDING, text, Collections.emptyList(), System.currentTimeMillis());
+            if ((terminal(bot.status) && bot.status != Status.DONE) || bot.requiresExplicitResume || bot.token.isCancellationRequested() || bot.stopping) {
+                // Cleanup can become terminal before its callback arrives. Preserve that receipt
+                // for explicit reconciliation, without waking a stopped/partial inference cycle.
+                bus.restore(Collections.singletonList(receipt), Collections.singletonList(receipt));
+                persistCheckpoint(bot);
+            } else {
+                dispatch(bot, "owned-work", bot.id, CrewMessage.Type.FINDING, text, Collections.emptyList(), false, receipt);
+                bot.reported = false;
+            }
+            bot.observedWork.add(observationKey);
             publishMission(bot.missionId);
+            } finally {
+                bot.cycleLock.notifyAll();
+                bus.signalWaiters();
+            }
         }
     }
 
@@ -882,6 +933,24 @@ public final class CrewManager implements AutoCloseable {
         } finally {
             unregister.run();
         }
+    }
+
+    private void awaitOwnedWorkTerminal(Bot bot, CancellationToken token) {
+        Runnable wake = () -> { synchronized (bot.cycleLock) { bot.cycleLock.notifyAll(); } };
+        Runnable unregister = token.registerCancelAction(wake);
+        try {
+            synchronized (bot.cycleLock) {
+                while (hasPendingOwnedWork(bot)) {
+                    token.throwIfCancelled();
+                    bot.status = Status.WAITING;
+                    bot.waitingReason = "trabajo del proyecto";
+                    publishMission(bot.missionId);
+                    try { bot.cycleLock.wait(); }
+                    catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); token.throwIfCancelled(); }
+                }
+            }
+            token.throwIfCancelled();
+        } finally { unregister.run(); }
     }
 
     private void cancelOwnedWork(Bot bot) {
@@ -938,6 +1007,10 @@ public final class CrewManager implements AutoCloseable {
     }
 
     private CrewMessage dispatch(Bot recipient, String from, String to, CrewMessage.Type type, String text, List<String> refs, boolean explicitUser) {
+        return dispatch(recipient, from, to, type, text, refs, explicitUser, null);
+    }
+
+    private CrewMessage dispatch(Bot recipient, String from, String to, CrewMessage.Type type, String text, List<String> refs, boolean explicitUser, CrewMessage receipt) {
         if (recipient == null) return bus.send(from, to, type, text, refs);
         validateCurrentProfile(recipient.role);
         boolean launchWorker = false;
@@ -947,10 +1020,10 @@ public final class CrewManager implements AutoCloseable {
             synchronized (recipient.cycleLock) {
                 Status status = recipient.status;
                 if (recipient.requiresExplicitResume || status == Status.INTERRUPTED) throw new IllegalArgumentException("Interrupted bots cannot be reanimated");
-                if ((status == Status.STOPPED || status == Status.FAILED || recipient.stopping) && !explicitUser) throw new IllegalArgumentException("Only an explicit user message can reanimate a stopped or failed bot");
-                if (status == Status.DONE || status == Status.STOPPED || status == Status.FAILED || recipient.stopping) {
+                if ((status == Status.STOPPED || status == Status.FAILED || status == Status.PARTIAL || recipient.stopping) && !explicitUser) throw new IllegalArgumentException("Only an explicit user message can reanimate a stopped or failed bot");
+                if (status == Status.DONE || status == Status.STOPPED || status == Status.FAILED || status == Status.PARTIAL || recipient.stopping) {
                     MissionState mission = missions.get(recipient.missionId);
-                    if (mission != null && !"RUNNING".equals(mission.status)) {
+                    if (mission != null && !"RUNNING".equals(mission.status) && !"PARTIAL".equals(mission.status)) {
                         mission.status = "RUNNING";
                         mission.synthesis = "";
                         mission.finishedAtMillis = 0;
@@ -972,8 +1045,10 @@ public final class CrewManager implements AutoCloseable {
                         launchWorker = true;
                     }
                 }
-                CrewMessage message = bus.send(from, to, type, text, refs);
-                if (recipient.status == Status.DONE || recipient.status == Status.STOPPED || recipient.status == Status.FAILED) recipient.status = Status.QUEUED;
+                CrewMessage message = receipt;
+                if (message == null) message = bus.send(from, to, type, text, refs);
+                else bus.restore(Collections.singletonList(message), Collections.singletonList(message));
+                if (recipient.status == Status.DONE || recipient.status == Status.STOPPED || recipient.status == Status.FAILED || recipient.status == Status.PARTIAL) recipient.status = Status.QUEUED;
                 persistCheckpoint(recipient);
                 dispatchPersisted = true;
                 return message;
@@ -1051,7 +1126,7 @@ public final class CrewManager implements AutoCloseable {
     }
 
     private static boolean terminal(Status status) {
-        return status == Status.DONE || status == Status.FAILED || status == Status.STOPPED || status == Status.INTERRUPTED;
+        return status == Status.DONE || status == Status.FAILED || status == Status.STOPPED || status == Status.INTERRUPTED || status == Status.PARTIAL;
     }
 
     public Bot bot(String id) {
@@ -1084,15 +1159,16 @@ public final class CrewManager implements AutoCloseable {
     }
 
     public void stopAll() {
+        Set<String> stoppedMissions = new java.util.HashSet<>();
         for (Bot bot : bots.values()) {
             try {
-                stop(bot.id);
+                if (stop(bot.id)) stoppedMissions.add(bot.missionId);
             } catch (RuntimeException failure) {
                 bot.recoveryNote = "Stopped, but the final checkpoint could not be saved; retained evidence may be incomplete";
                 publishPresentation(bot.missionId);
             }
         }
-        for (MissionState mission : missions.values()) if ("RUNNING".equals(mission.status)) {
+        for (MissionState mission : missions.values()) if ("RUNNING".equals(mission.status) || ("PARTIAL".equals(mission.status) && stoppedMissions.contains(mission.id))) {
             mission.status = "STOPPED";
             mission.finishedAtMillis = System.currentTimeMillis();
             try {
@@ -1173,9 +1249,12 @@ public final class CrewManager implements AutoCloseable {
         List<CrewMessage> missionMessages = new ArrayList<>();
         for (CrewMessage message : bus.snapshot()) if (ids.contains(message.from) || ids.contains(message.to)) missionMessages.add(message);
         CrewMissionTitle title = mission.title.get();
+        boolean workersActive = botSnapshots.stream().anyMatch(CrewBotSnapshot::active);
+        long finishedAt = workersActive ? 0L : mission.finishedAtMillis;
+        if (!workersActive && finishedAt > 0L) for (CrewBotSnapshot bot : botSnapshots) finishedAt = Math.max(finishedAt, bot.finishedAtMillis);
         return new CrewMissionSnapshot(mission.id, conversationId, CrewProcessIdentity.ID, title.title,
                 mission.originalInstructions, title.source, mission.status, mission.synthesis,
-                mission.startedAtMillis, mission.finishedAtMillis, botSnapshots, missionMessages);
+                mission.startedAtMillis, finishedAt, botSnapshots, missionMessages);
     }
 
     public static String formatMessages(List<CrewMessage> messages) {

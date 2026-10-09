@@ -94,11 +94,11 @@ class Ux2SettingsChoiceCaptureTest {
                         SettingsWorkspace(
                             page = SettingsWorkspacePage.HOME,
                             themeMode = mode, showAgentEvents = true, proactiveEnabled = false,
-                            proactiveStatus = ProactiveStatus(enabled = false), agentTimeoutSeconds = 0,
+                            proactiveStatus = ProactiveStatus(enabled = false),
                             memoryEnabled = false, memoryUsedCharacters = 0,
                             languageChoice = AppLanguagePolicy.fromStoredValue("es"),
                             onLanguageChange = {}, onThemeChange = {}, onShowAgentEventsChange = {},
-                            onProactiveEnabledChange = {}, onRefreshProactiveStatus = {}, onAgentTimeoutChange = {},
+                            onProactiveEnabledChange = {}, onRefreshProactiveStatus = {},
                             onNavigateRoute = {}, onMcp = {}, onSkills = {}, onConnectors = {}, onMemory = {},
                             scheduledTasksAvailable = false, onScheduledTasks = {}, onAccessibilitySettings = {}, onNavigate = {},
                         )

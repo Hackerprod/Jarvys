@@ -63,7 +63,6 @@ class JarvysSettingsChoiceDialogTest {
                         showAgentEvents = true,
                         proactiveEnabled = false,
                         proactiveStatus = com.jarvys.agent.proactive.ProactiveStatus(enabled = false),
-                        agentTimeoutSeconds = 0,
                         memoryEnabled = false,
                         memoryUsedCharacters = 0,
                         languageChoice = language.value,
@@ -76,7 +75,7 @@ class JarvysSettingsChoiceDialogTest {
                             theme.value = uiPreferences.themeMode()
                         },
                         onShowAgentEventsChange = {}, onProactiveEnabledChange = {},
-                        onRefreshProactiveStatus = {}, onAgentTimeoutChange = {}, onNavigateRoute = {},
+                        onRefreshProactiveStatus = {}, onNavigateRoute = {},
                         onMcp = {}, onSkills = {}, onConnectors = {}, onMemory = {},
                         onAccessibilitySettings = {}, onNavigate = {},
                     )

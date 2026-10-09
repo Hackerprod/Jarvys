@@ -57,27 +57,35 @@ public final class CoreAgentLoop {
         }
     }
 
+    public enum InterruptionReason { NONE, DEADLINE, NO_PROGRESS, PROVIDER_UNAVAILABLE }
+
     public static final class Result {
         public final String runId;
         public final String text;
         public final int turns;
         public final String outcome;
         public final long durationMs;
+        public final InterruptionReason interruptionReason;
 
         Result(String runId, String text, int turns, String outcome) {
             this(runId, text, turns, outcome, 0L);
         }
 
         Result(String runId, String text, int turns, String outcome, long durationMs) {
+            this(runId, text, turns, outcome, durationMs, InterruptionReason.NONE);
+        }
+
+        Result(String runId, String text, int turns, String outcome, long durationMs, InterruptionReason reason) {
             this.runId = runId;
             this.text = text;
             this.turns = turns;
             this.outcome = outcome;
             this.durationMs = durationMs;
+            this.interruptionReason = reason;
         }
 
         public Result withText(String replacement) {
-            return new Result(runId, replacement, turns, outcome, durationMs);
+            return new Result(runId, replacement, turns, outcome, durationMs, interruptionReason);
         }
     }
 
@@ -156,8 +164,9 @@ public final class CoreAgentLoop {
             return maxModelTurns == 0 && maxToolCallsPerTurn == 0;
         }
     }
-    static final String TIMEOUT_MESSAGE = "La tarea superó el tiempo máximo de ejecución. El trabajo puede estar parcialmente hecho; revisa el workspace o pídele a Jarvys que continúe.";
-    static final String LOOP_MESSAGE = "Jarvys detuvo la tarea porque detectó llamadas repetidas sin avance. El trabajo puede estar parcialmente hecho; revisa el workspace o pídele que continúe.";
+    static final String TIMEOUT_MESSAGE = "The requested deadline was reached. Progress may be partial; inspect existing results before continuing.";
+    static final String LOOP_MESSAGE = "Jarvys paused after repeated calls without progress. Inspect existing results before continuing.";
+    static final String PROVIDER_MESSAGE = "The provider request ended without a complete response. Progress is retained. Inspect existing results before continuing; the request was not repeated automatically.";
     private static final int MAX_TOOL_CALLS_PER_TURN = 4;
     private static final int MAX_TRANSCRIPT_MESSAGES = 40;
     private final Model model;
@@ -434,7 +443,7 @@ public final class CoreAgentLoop {
                             }
                         }
                     } catch (RuntimeException failure) {
-                        if (failure instanceof CheckpointFailure || token.isCancelled()) throw failure;
+                        if (failure instanceof CheckpointFailure || token.isCancelled() || recoverableProviderFailure(failure)) throw failure;
                         if (compactor.isCrew()) throw new IllegalStateException("Crew context could not be compacted; its retained transcript has not been discarded", failure);
                         safetyBounded = true;
                         compactionFailed(listener, "No se pudo compactar el contexto; se usará un recorte de seguridad para continuar.");
@@ -464,6 +473,13 @@ public final class CoreAgentLoop {
                     }
                 } catch (RuntimeException failure) {
                     if (failure instanceof CheckpointFailure) throw failure;
+                    token.throwIfCancelled();
+                    if (recoverableProviderFailure(failure)) {
+                        // Never replay an ambiguous request or cancel independent work merely because
+                        // one bounded provider operation failed. Retain this turn for explicit recovery.
+                        return new Result(runId, PROVIDER_MESSAGE, modelTurns, "PARTIAL",
+                                Math.max(0L, System.currentTimeMillis() - startedAtMs), InterruptionReason.PROVIDER_UNAVAILABLE);
+                    }
                     if (compactor == null || !ConversationCompactionPolicy.isContextOverflow(failure) || overflowCompactions >= 3) throw failure;
                     token.throwIfCancelled();
                     int window = model.contextWindow(token);
@@ -473,7 +489,7 @@ public final class CoreAgentLoop {
                         transcript = new ArrayList<>(outcome.context);
                         updateTranscriptSnapshot(transcript);
                     } catch (RuntimeException compactionFailure) {
-                        if (compactionFailure instanceof CheckpointFailure || token.isCancelled()) throw compactionFailure;
+                        if (compactionFailure instanceof CheckpointFailure || token.isCancelled() || recoverableProviderFailure(compactionFailure)) throw compactionFailure;
                         if (compactor.isCrew()) throw new IllegalStateException("Crew context overflow could not be compacted; its retained transcript has not been discarded", compactionFailure);
                         compactionFailed(listener, "No se pudo resumir el historial tras el límite del proveedor; reintentaré con un recorte de seguridad.");
                         transcript = bounded(transcript, budget.transcriptChars);
@@ -508,7 +524,7 @@ public final class CoreAgentLoop {
                                 replyTextAlreadyRecorded = reply.calls.isEmpty();
                             }
                         } catch (RuntimeException failure) {
-                            if (failure instanceof CheckpointFailure || token.isCancelled()) throw failure;
+                            if (failure instanceof CheckpointFailure || token.isCancelled() || recoverableProviderFailure(failure)) throw failure;
                             compactionFailed(listener, "No se pudo resumir este turno; continuaré con el historial disponible.");
                         }
                     }
@@ -623,7 +639,7 @@ public final class CoreAgentLoop {
                     return new Result(runId, terminalText, modelTurns, "COMPLETED", Math.max(0L, System.currentTimeMillis() - startedAtMs));
                 }
                 if (blockedRepeatedCall && !madeProgress) {
-                    if (loopRecoveryUsed) return new Result(runId, LOOP_MESSAGE, modelTurns, "PARTIAL", Math.max(0L, System.currentTimeMillis() - startedAtMs));
+                    if (loopRecoveryUsed) return new Result(runId, LOOP_MESSAGE, modelTurns, "PARTIAL", Math.max(0L, System.currentTimeMillis() - startedAtMs), InterruptionReason.NO_PROGRESS);
                     loopRecoveryUsed = true;
                 } else if (madeProgress) {
                     loopRecoveryUsed = false;
@@ -635,10 +651,26 @@ public final class CoreAgentLoop {
             if (token.isStoppedByUser()) throw failure;
             if (token.isTimedOut()) {
                 Thread.interrupted();
-                return new Result(runId, TIMEOUT_MESSAGE, modelTurns, "PARTIAL");
+                return new Result(runId, TIMEOUT_MESSAGE, modelTurns, "PARTIAL", Math.max(0L, System.currentTimeMillis() - startedAtMs), InterruptionReason.DEADLINE);
+            }
+            if (recoverableProviderFailure(failure)) {
+                return new Result(runId, PROVIDER_MESSAGE, modelTurns, "PARTIAL",
+                        Math.max(0L, System.currentTimeMillis() - startedAtMs), InterruptionReason.PROVIDER_UNAVAILABLE);
             }
             throw failure;
         }
+    }
+
+    private static boolean recoverableProviderFailure(Throwable failure) {
+        Set<Throwable> seen = Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        for (Throwable cause = failure; cause != null && seen.add(cause); cause = cause.getCause()) {
+            if (cause instanceof ProviderTransportException) return true;
+            if (cause instanceof ProviderHttpException) {
+                int status = ((ProviderHttpException) cause).httpStatus;
+                return status == 408 || status == 429 || status >= 500;
+            }
+        }
+        return false;
     }
 
     private static void appendIncoming(List<ConversationTurn> transcript, IncomingMessage message) {
