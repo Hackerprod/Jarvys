@@ -43,6 +43,16 @@ public final class CrewMessageBus {
         return message;
     }
 
+    public CrewMessage recordActivity(String from, com.jarvys.agent.ToolActivity activity) {
+        synchronized(monitor) {
+            for(CrewMessage existing:log) if(existing.from.equals(from) && existing.activity!=null
+                    && existing.activity.eventId.equals(activity.eventId)) return existing;
+            CrewMessage message=new CrewMessage(activity.eventId,conversationId,from,from,CrewMessage.Type.STATUS,
+                    activity.displayName,Collections.emptyList(),activity.timestampMillis,activity);
+            log.add(message); return message;
+        }
+    }
+
     public List<CrewMessage> pending(String recipient) {
         synchronized (monitor) {
             return Collections.unmodifiableList(new ArrayList<>(mailboxes.getOrDefault(recipient, Collections.emptyList())));

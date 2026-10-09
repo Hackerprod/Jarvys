@@ -729,6 +729,31 @@ public final class LocalRunStore {
         } catch (Exception failure) { throw new IllegalStateException("Could not persist tool details and preview", failure); }
     }
 
+    public synchronized void appendToolActivity(String sessionId, String userMessageId, ToolActivity activity) {
+        try {
+            JSONObject value = activity.toJson();
+            value.put("detail", new MainChatTranscriptStore(filesDirectory(),sessionId,this).retain(activity.detail));
+            value.put("auditDetail", MainChatTranscriptStore.shortText(CrewCheckpointStore.sanitizeText(activity.auditDetail),4000));
+            String sourceBatch="";
+            List<JSONObject> retainedRows=readConversationRows(sessionId);
+            for(JSONObject prior:retainedRows) {
+                if("tool_activity".equals(prior.optString("type")) && userMessageId.equals(prior.optString("userMessageId"))) {
+                    JSONObject priorActivity=prior.optJSONObject("activity");
+                    if(priorActivity!=null && activity.executionId.equals(priorActivity.optString("executionId"))) {
+                        sourceBatch=prior.optString("batchId");break;
+                    }
+                }
+                if("model_tool_calls".equals(prior.optString("type")) && userMessageId.equals(prior.optString("userMessageId"))) {
+                    JSONArray calls=prior.optJSONArray("calls");
+                    if(calls!=null) for(int i=0;i<calls.length();i++) if(activity.callId.equals(calls.getJSONObject(i).optString("id"))) sourceBatch=prior.optString("batchId");
+                }
+            }
+            JSONObject row = new JSONObject().put("type","tool_activity").put("schemaVersion",1)
+                    .put("userMessageId",userMessageId).put("batchId",sourceBatch).put("activity",value).put("timestamp",activity.timestampMillis/1000.0);
+            synchronized(SESSION_TITLE_LOCK) { appendSessionRowLocked(conversationFile(sessionId),row); }
+        } catch(Exception failure) { throw new IllegalStateException("Could not persist tool activity",failure); }
+    }
+
     /** Only reconnect a preview to this chat's canonical existing workspace. Never create a file. */
     private String verifiedPreview(String sessionId, String recordedId) {
         return verifiedPreview(sessionId, recordedId, null);
@@ -1359,6 +1384,25 @@ public final class LocalRunStore {
         return value.isEmpty() ? "legacy-" + row.optString("timestamp", "") + "-" + index : value;
     }
 
+    private static String toolRowKey(JSONObject row, Map<String,JSONObject> batches) {
+        String batchId=row.optString("batchId"),owner=row.optString("userMessageId"),call=row.optString("callId");
+        if(!batchId.isEmpty() && !call.isEmpty()) return batchId+"/"+call;
+        if(owner.isEmpty() || call.isEmpty()) return "legacy-row:"+System.identityHashCode(row);
+        String candidate=null;
+        for(Map.Entry<String,JSONObject> batch:batches.entrySet()) {
+            if(!owner.equals(batch.getValue().optString("userMessageId"))) continue;
+            JSONArray calls=batch.getValue().optJSONArray("calls");
+            if(calls!=null) for(int i=0;i<calls.length();i++) {
+                JSONObject value=calls.optJSONObject(i);
+                if(value!=null && call.equals(value.optString("id"))) {
+                    if(candidate!=null) return "legacy-row:"+System.identityHashCode(row);
+                    candidate=batch.getKey()+"/"+call;
+                }
+            }
+        }
+        return candidate==null ? owner+"/"+call : candidate;
+    }
+
     /** UI timeline preserves every original user/assistant row and inserts read-only compaction notices. */
     public synchronized List<AgentRunUiEvent> readConversationTimeline(String sessionId) {
         List<AgentRunUiEvent> events = new ArrayList<>();
@@ -1415,6 +1459,25 @@ public final class LocalRunStore {
                 latestTranslation.put(row.optString("messageId", ""), rowIndex);
             }
         }
+        Map<String, List<ToolActivity>> activityGroups = new LinkedHashMap<>();
+        Map<String, Integer> activityFirst = new LinkedHashMap<>();
+        Set<String> typedCalls = new HashSet<>();
+        Map<String,String> activitySources = new LinkedHashMap<>();
+        Set<String> typedReflectionCalls = new HashSet<>();
+        Map<String, JSONObject> modelBatches = new LinkedHashMap<>();
+        for (JSONObject row : rows) if ("model_tool_calls".equals(row.optString("type"))) modelBatches.put(row.optString("batchId"),row);
+        for (int i=0;i<rows.size();i++) {
+            JSONObject row=rows.get(i); if(!"tool_activity".equals(row.optString("type"))) continue;
+            String owner=row.optString("userMessageId");
+            if(owner.isEmpty() || i<latestInvalidatedToolTurnRow.getOrDefault(owner,-1)) continue;
+            ToolActivity activity=ToolActivity.fromJson(row.optJSONObject("activity")); if(activity==null) continue;
+            String key=owner+"/"+activity.executionId;
+            activityGroups.computeIfAbsent(key,ignored->new ArrayList<>()).add(activity);
+            activityFirst.putIfAbsent(key,i);
+            String batch=row.optString("batchId");
+            String source=batch.isEmpty()?owner+"/"+activity.callId:batch+"/"+activity.callId;
+            typedCalls.add(source);activitySources.putIfAbsent(key,source);typedReflectionCalls.add(owner+"/"+activity.callId);
+        }
         Map<String, JSONObject> presentations = new LinkedHashMap<>();
         Map<String, JSONObject> reflectionTools = new LinkedHashMap<>();
         Map<String, JSONObject> modelCalls = new LinkedHashMap<>();
@@ -1422,16 +1485,30 @@ public final class LocalRunStore {
         Set<String> startedModelCalls = new HashSet<>();
         for (JSONObject row : rows) {
             String type = row.optString("type");
-            if ("tool_presentation".equals(type)) presentations.put(row.optString("callId"), row);
-            else if ("reflection_tool".equals(type)) reflectionTools.put(row.optString("callId"), row);
+            if ("tool_presentation".equals(type)) presentations.put(toolRowKey(row,modelBatches), row);
+            else if ("reflection_tool".equals(type)) reflectionTools.put(toolRowKey(row,modelBatches), row);
             else if ("model_tool_calls".equals(type)) {
                 JSONArray calls = row.optJSONArray("calls");
                 if (calls != null) for (int i = 0; i < calls.length(); i++) {
                     JSONObject call = calls.optJSONObject(i);
-                    if (call != null) modelCalls.put(call.optString("id"), row);
+                    if (call != null) modelCalls.put(row.optString("batchId")+"/"+call.optString("id"), row);
                 }
-            } else if ("model_tool_result".equals(type)) modelResults.add(row.optString("callId"));
-            else if ("model_tool_started".equals(type)) startedModelCalls.add(row.optString("callId"));
+            } else if ("model_tool_result".equals(type)) modelResults.add(toolRowKey(row,modelBatches));
+            else if ("model_tool_started".equals(type)) startedModelCalls.add(toolRowKey(row,modelBatches));
+        }
+        for(Map.Entry<String,List<ToolActivity>> group:activityGroups.entrySet()) {
+            ToolActivity projected=ToolActivity.project(group.getValue(),true);
+            if(ToolActivity.definitive(projected.stage)) continue;
+            String source=activitySources.get(group.getKey());
+            for(JSONObject candidate:rows) if("model_tool_result".equals(candidate.optString("type"))
+                    && source.equals(toolRowKey(candidate,modelBatches))) {
+                String output=candidate.optString("output");
+                String stage=output.startsWith("Tool error:")?"tool_error":projected.skill()?"tool_interrupted":"tool_result";
+                group.getValue().add(new ToolActivity(projected.executionId+"/durable-result",projected.executionId,projected.callId,
+                    projected.toolName,projected.displayName,projected.skillId,projected.skillName,stage,output,
+                    modelPreviewToken(projected.toolName,output),projected.auditDetail,projected.reflectionSource,projected.timestampMillis));
+                break;
+            }
         }
         Set<String> dispatchedInterrupts = new HashSet<>();
         for (JSONObject row : rows) if (row.has("interruptRequestId"))
@@ -1495,6 +1572,15 @@ public final class LocalRunStore {
                         row.optString("mimeType", "image/png"), row.optString("size", ""),
                         row.optString("status", "FAILED"), row.optString("error", ""),
                         (long) (row.optDouble("timestamp", 0) * 1000)));
+            } else if ("tool_activity".equals(type)) {
+                ToolActivity activity=ToolActivity.fromJson(row.optJSONObject("activity")); if(activity==null) continue;
+                String key=row.optString("userMessageId")+"/"+activity.executionId;
+                if(activityFirst.getOrDefault(key,-1)!=rowIndex) continue;
+                ToolActivity projected=ToolActivity.project(activityGroups.get(key),false);
+                if(!projected.previewId.isEmpty() && verifiedPreview(sessionId,projected.previewId,ownedDeliveredFiles)==null) {
+                    projected=projected.unavailablePreview();
+                }
+                events.add(AgentRunUiEvent.activityEvent(id++,projected));
             } else if ("model_tool_calls".equals(type)) {
                 String userMessageId = row.optString("userMessageId", "");
                 if (userMessageId.isEmpty() || rowIndex < latestInvalidatedToolTurnRow.getOrDefault(userMessageId, -1)) continue;
@@ -1505,8 +1591,10 @@ public final class LocalRunStore {
                     JSONObject call = calls.optJSONObject(callIndex);
                     if (call == null) continue;
                     String callId = call.optString("id");
-                    if (modelResults.contains(callId) || presentations.containsKey(callId) || reflectionTools.containsKey(callId)) continue;
-                    boolean started = startedModelCalls.contains(callId);
+                    String callKey=row.optString("batchId")+"/"+callId;
+                    if (typedCalls.contains(callKey)) continue;
+                    if (modelResults.contains(callKey) || presentations.containsKey(callKey) || reflectionTools.containsKey(callKey)) continue;
+                    boolean started = startedModelCalls.contains(callKey);
                     String detail = started
                             ? "Execution started, but no final result was durably recorded. The run may have been interrupted; effects may have occurred. Inspect current evidence before retrying."
                             : "This tool intent was recorded but was never launched. It was not automatically replayed.";
@@ -1518,17 +1606,19 @@ public final class LocalRunStore {
                 String callId = row.optString("callId", "");
                 boolean presentation = "tool_presentation".equals(type);
                 boolean modelResult = "model_tool_result".equals(type);
-                if (presentation ? presentations.get(callId) != row
-                        : presentations.containsKey(callId) || (!modelResult && modelResults.contains(callId))) continue;
-                JSONObject sourceCall = modelCalls.get(callId);
+                String callKey=toolRowKey(row,modelBatches);
+                if (presentation ? presentations.get(callKey) != row
+                        : presentations.containsKey(callKey) || (!modelResult && modelResults.contains(callKey))) continue;
+                JSONObject sourceCall = modelResult ? modelBatches.get(row.optString("batchId")) : modelCalls.get(callKey);
                 String userMessageId = modelResult && sourceCall != null ? sourceCall.optString("userMessageId") : row.optString("userMessageId", "");
                 if (userMessageId.isEmpty() || rowIndex < latestInvalidatedToolTurnRow.getOrDefault(userMessageId, -1)) continue;
+                if (typedCalls.contains(callKey) || "reflection_tool".equals(type) && typedReflectionCalls.contains(userMessageId+"/"+callId)) continue;
                 String detail = presentation ? row.optString("detail", "") : modelResult ? row.optString("output", "") : "";
                 String stage = modelResult ? (detail.startsWith("Tool error:") ? "tool_error" : "tool_result") : row.optString("stage", "tool_result");
                 if (!"tool_result".equals(stage) && !"tool_error".equals(stage)) continue;
                 String toolName = row.optString("toolName", "tool");
-                if (modelResult) toolName = reflectionTools.containsKey(callId)
-                        ? reflectionTools.get(callId).optString("toolName", toolName) : CoreToolRegistry.humanizeToolName(toolName);
+                if (modelResult) toolName = reflectionTools.containsKey(callKey)
+                        ? reflectionTools.get(callKey).optString("toolName", toolName) : CoreToolRegistry.humanizeToolName(toolName);
                 String recordedPreview = presentation ? row.optString("previewId", "")
                         : modelResult ? modelPreviewToken(toolName, detail) : "";
                 boolean previewExpected = row.optBoolean("previewExpected", false)

@@ -1068,30 +1068,22 @@ public final class CoreAgentRuntime {
 
   public static CoreAgentLoop.ProgressListener crewProgress(
       CoreAgentLoop.ProgressListener parent, final CrewManager.Bot bot, final CrewManager manager) {
+    final String legacyEpoch = java.util.UUID.randomUUID().toString();
     return new CoreAgentLoop.ProgressListener() {
       @Override // com.jarvys.agent.CoreAgentLoop.ProgressListener
       public void onProgress(String stage, String message) {}
 
-      @Override // com.jarvys.agent.CoreAgentLoop.ProgressListener
-      public void onToolProgress(
-          String stage,
-          String callId,
-          String displayName,
-          String detail,
-          String previewId,
-          String reflectionSource) {
-        if (!"tool_call".equals(stage)) {
-          if (!"tool_result".equals(stage)) {
-            if ("tool_error".equals(stage)) {
-              manager.recordActivity(bot, "Failed " + displayName);
-              return;
-            }
-            return;
-          }
-          manager.recordActivity(bot, "Completed " + displayName);
-          return;
-        }
-        manager.recordActivity(bot, "Using " + displayName);
+      @Override
+      public void onToolActivity(ToolActivity activity) { manager.recordToolActivity(bot, activity); }
+
+      @Override
+      public void onToolProgress(String stage, String callId, String displayName, String detail,
+          String previewId, String reflectionSource) {
+        // Compatibility for legacy callbacks: never infer identity from the tool's display name.
+        String identity = bot.missionId + ":" + bot.id + ":" + legacyEpoch + ":" + bot.completedCycles() + ":" + (callId == null || callId.isEmpty()
+            ? java.util.UUID.randomUUID().toString() : callId);
+        manager.recordToolActivity(bot, new ToolActivity(java.util.UUID.randomUUID().toString(),identity,callId,
+            displayName,displayName,"","",stage,detail,previewId,null,reflectionSource,System.currentTimeMillis()));
       }
 
       @Override // com.jarvys.agent.CoreAgentLoop.ProgressListener

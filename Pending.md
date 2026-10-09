@@ -557,7 +557,7 @@ Límites: no hubo llamadas a proveedor real, consumo de cuota, evaluación visua
 
 ### 22. UX37: actividad de skills y herramientas sin filas duplicadas
 
-Estado: en cola después de UX36 y antes de fases posteriores de memoria. Auditoría de solo lectura solicitada; no ampliar la implementación diagnóstica de UX34 fase 0.
+Estado: implementación y validación de host en curso para v55 / 1.2.48-UX37. El modelo de actividad, los codecs de recuperación, la proyección de una fila y la identidad visual del principal ya están implementados; se ejecutan pruebas de casos límite y revisión independiente antes de los gates completos. No se amplía la implementación diagnóstica de UX34 fase 0.
 
 - Mostrar la carga o uso verificable de skills en las superficies de actividad pertinentes, con el mismo lenguaje visual de herramientas. La señal debe provenir de la operación real o del contenido efectivamente cargado; no afirmar que un skill se ejecutó porque solo fue mencionado, listado o solicitado sin éxito.
 - El agente principal debe usar el icono propio actual de Jarvys en las secciones de Bots/actividad que lo representen. Mantener una identidad coherente con las tarjetas y el detalle, conservando los iconos propios de los bots y los assets existentes.
@@ -567,6 +567,8 @@ Estado: en cola después de UX36 y antes de fases posteriores de memoria. Audito
 - Mantener progreso, errores, cancelaciones, resultados parciales y evidencia de la misma invocación accesibles desde su fila. Al reabrir la app o cambiar de conversación, reconstruir la misma presentación sin duplicar filas ni perder los detalles de herramientas/preview.
 - Validar carga de skills correcta/fallida/cancelada, herramientas repetidas con el mismo nombre, concurrencia, respuesta tardía, reintento, reinicio y datos legacy con identidad insuficiente. Si no puede demostrarse que dos eventos son la misma invocación, no fusionarlos mediante una heurística que oculte trabajo.
 - Revisar iconos, animaciones existentes, accesibilidad, temas claro/oscuro, texto grande y localización. Publicar código y Pending.md tras validación y entregar la APK funcional correspondiente con la identidad de firma existente.
+
+Contrato de UX37: `app/TOOL_ACTIVITY.md`. Los eventos originales se conservan; la agrupación es visual, con identidad real de ejecución. La carga de una skill no certifica que sus instrucciones se hayan seguido.
 
 ## Validaciones que siguen abiertas
 

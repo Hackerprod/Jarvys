@@ -10,7 +10,7 @@ import java.util.List;
  * Versioned, immutable projection used by the live UI and the per-chat append-only ledger.
  */
 public final class CrewMissionSnapshot {
-    public static final int SCHEMA_VERSION = 2;
+    public static final int SCHEMA_VERSION = 3;
     public final String missionId;
     public final String conversationId;
     public final String processId;
@@ -48,7 +48,7 @@ public final class CrewMissionSnapshot {
     }
 
     public int messageCount() {
-        return messages.size();
+        return CrewActivityTimeline.project(messages,bots).size();
     }
 
     public boolean active() {
@@ -109,16 +109,7 @@ public final class CrewMissionSnapshot {
             row.put("bots", botRows);
             JSONArray messageRows = new JSONArray();
             for (CrewMessage message : messages) {
-                JSONObject value = new JSONObject();
-                value.put("id", message.id);
-                value.put("conversationId", message.conversationId);
-                value.put("from", message.from);
-                value.put("to", message.to);
-                value.put("type", message.type.name());
-                value.put("text", message.text);
-                value.put("refs", new JSONArray(message.refs));
-                value.put("timestampMillis", message.timestampMillis);
-                messageRows.put(value);
+                messageRows.put(message.toJson());
             }
             row.put("messages", messageRows);
             return row;
@@ -129,7 +120,7 @@ public final class CrewMissionSnapshot {
 
     public static CrewMissionSnapshot fromJson(JSONObject row) {
         int version = row.optInt("crewSchemaVersion", 0);
-        if (version != 1 && version != SCHEMA_VERSION) return null;
+        if (version != 1 && version != 2 && version != SCHEMA_VERSION) return null;
         try {
             List<CrewBotSnapshot> bots = new ArrayList<>();
             JSONArray botRows = row.optJSONArray("bots");
@@ -146,10 +137,7 @@ public final class CrewMissionSnapshot {
             if (messageRows != null) for (int index = 0; index < messageRows.length(); index++) {
                 JSONObject value = messageRows.optJSONObject(index);
                 if (value == null) continue;
-                List<String> refs = new ArrayList<>();
-                JSONArray refRows = value.optJSONArray("refs");
-                if (refRows != null) for (int ref = 0; ref < refRows.length(); ref++) refs.add(refRows.optString(ref));
-                messages.add(new CrewMessage(value.optString("id"), value.optString("conversationId"), value.optString("from"), value.optString("to"), CrewMessage.Type.valueOf(value.optString("type")), value.optString("text"), refs, value.optLong("timestampMillis")));
+                messages.add(CrewMessage.fromJson(value));
             }
             String rawTitle = row.opt("title") instanceof String ? row.optString("title") : "";
             String instructions = version == 1 ? rawTitle

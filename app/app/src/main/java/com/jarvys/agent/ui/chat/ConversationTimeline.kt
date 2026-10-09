@@ -541,6 +541,8 @@ private fun ConnectorActivityLine(
         if (operation.displayLabelResourceId != 0) context.getString(operation.displayLabelResourceId) else operation.displayLabel
     }
     val localizedToolStatus = when {
+        event.toolActivity?.skill() == true -> com.jarvys.agent.toolActivityLabel(event.toolActivity)
+        event.stage == "tool_progress" && event.toolActivity != null -> context.getString(R.string.connector_tool_using,localizedToolName ?: event.toolDisplayName ?: event.text)
         event.stage == "tool_progress" -> event.toolDisplayName ?: event.text
         event.stage == "tool_interrupted" -> context.getString(R.string.connector_tool_unconfirmed,
             localizedToolName ?: event.toolDisplayName ?: event.text)
@@ -572,9 +574,9 @@ private fun ConnectorActivityLine(
                 Icon(LucideIcons.Sparkles, contentDescription = null, tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(17.dp))
                 Text(localizedToolStatus, Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurface,
-                    style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                if (inlineLinuxFailureDetail == null && !event.detail.isNullOrBlank()) IconButton(onClick = { expanded = !expanded },
-                    modifier = Modifier.size(44.dp).testTag("tool-output-toggle-${event.toolCallId ?: event.id}")) {
+                    style = MaterialTheme.typography.bodySmall, maxLines = if (event.toolActivity == null) 2 else Int.MAX_VALUE, overflow = TextOverflow.Ellipsis)
+                if (inlineLinuxFailureDetail == null && (!event.detail.isNullOrBlank() || event.toolActivity?.historyDetail?.isNotBlank() == true)) IconButton(onClick = { expanded = !expanded },
+                    modifier = Modifier.size(48.dp).testTag("tool-output-toggle-${event.toolCallId ?: event.id}")) {
                     Icon(if (expanded) LucideIcons.ChevronUp else LucideIcons.ChevronDown,
                         contentDescription = stringResource(if (expanded) R.string.tool_output_collapse else R.string.tool_output_expand),
                         modifier = Modifier.size(17.dp))
@@ -602,6 +604,14 @@ private fun ConnectorActivityLine(
                 if (WebSearchTools.isSearchLabel(event.toolDisplayName)) WebSearchResultsContent(event.detail.orEmpty(), context)
                 else AssistantMarkdown(event.detail.orEmpty(), Modifier.fillMaxWidth().padding(start = 26.dp, top = 8.dp),
                     onOpenSkillFile)
+            }
+            if (expanded && event.toolActivity?.historyDetail?.isNotBlank() == true && event.toolActivity.historyDetail != event.detail) {
+                SelectionContainer { Text(event.toolActivity.historyDetail, Modifier.fillMaxWidth().padding(start=26.dp,top=8.dp),
+                    style=MaterialTheme.typography.bodySmall) }
+            }
+            if (!expanded && event.toolActivity != null && event.stage == "tool_error" && !event.detail.isNullOrBlank()) {
+                SelectionContainer { Text(event.detail.lineSequence().firstOrNull().orEmpty().take(240),
+                    color=MaterialTheme.colorScheme.error, style=MaterialTheme.typography.bodySmall) }
             }
             event.previewId?.let { preview ->
                 TextButton(onClick = { onOpenPreview(preview) }, modifier = Modifier.align(Alignment.End)

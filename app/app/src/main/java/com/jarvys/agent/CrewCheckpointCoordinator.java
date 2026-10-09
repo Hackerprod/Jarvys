@@ -199,7 +199,7 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
         JSONArray rows = new JSONArray();
         for (CrewMessage value : values) {
             if (botId.equals(value.from) || botId.equals(value.to)) {
-                rows.put(new JSONObject().put("id", value.id).put("conversationId", value.conversationId).put("from", value.from).put("to", value.to).put("type", value.type.name()).put("text", value.text).put("refs", new JSONArray((Collection)value.refs)).put("timestampMillis", value.timestampMillis));
+                rows.put(value.toJson());
             }
         }
         return rows;
@@ -216,7 +216,9 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
             if (type == CrewMessage.Type.USER && !"user".equals(value.getString("from"))) {
                 throw new IllegalStateException("Checkpoint USER provenance is invalid");
             }
-            result.add(new CrewMessage(value.getString("id"), this.conversation, value.getString("from"), value.getString("to"), type, value.getString("text"), strings(value.getJSONArray("refs")), value.getLong("timestampMillis")));
+            CrewMessage message = CrewMessage.fromJson(value);
+            if (pending && message.activity != null) throw new IllegalStateException("Local activity cannot be mailbox work");
+            result.add(message);
         }
         return result;
     }

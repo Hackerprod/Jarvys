@@ -45,6 +45,12 @@ public final class CoreAgentLoop {
             onToolProgress(stage, callId, displayName, detail, previewId, reflectionSource);
         }
 
+        default void onToolActivity(ToolActivity activity) {
+            onToolProgress("tool_not_started".equals(activity.stage) ? "tool_error" : activity.stage, activity.callId,
+                    "tool_progress".equals(activity.stage) ? activity.detail : activity.displayName, activity.detail,
+                    activity.previewId.isEmpty() ? null : activity.previewId, activity.reflectionSource, activity.auditDetail);
+        }
+
         default void onCompactionStarted(String trigger) {
             onProgress("compacting", "Compactando conversación…");
         }
@@ -401,6 +407,7 @@ public final class CoreAgentLoop {
         }
         request = request == null ? "" : request;
         String runId = UUID.randomUUID().toString();
+        ToolActivity activeActivity = null;
         List<ConversationTurn> transcript = new ArrayList<>(previousTranscript == null ? Collections.emptyList() : previousTranscript);
         boolean requestInTranscript = !currentAttachments.isEmpty() || turnContextProvider != null;
         if (requestInTranscript) transcript.add(ConversationTurn.messageWithAttachments("user", request, compactor == null ? -1 : compactor.currentUserMessageIndex(), currentAttachments));
@@ -580,6 +587,12 @@ public final class CoreAgentLoop {
                     int recentCalls = loopDetector.recentCallCount(call.name, argumentsKey);
                     String reflectionSource = tools.reflectionSource(call.name);
                     String auditDetail = tools.auditDetail(call.name, call.arguments);
+                    String skillId = tools.get(call.name) instanceof LoadSkillTool && call.arguments.get("skill_id") instanceof String
+                            ? (String) call.arguments.get("skill_id") : "";
+                    String skillName = tools.get(call.name) instanceof LoadSkillTool
+                            ? ((LoadSkillTool)tools.get(call.name)).displaySkillName(skillId) : skillId;
+                    ToolActivity activity = new ToolActivity(UUID.randomUUID().toString(),runId+":"+modelTurns+":"+index,
+                            call.id,call.name,displayName,skillId,skillName,"tool_call","",null,auditDetail,reflectionSource,System.currentTimeMillis());
                     int failedCalls = loopDetector.consecutiveFailureCount(call.name, argumentsKey);
                     String blockMessage = null;
                     if (failedCalls >= ToolLoopDetector.FAILURE_THRESHOLD) {
@@ -594,18 +607,20 @@ public final class CoreAgentLoop {
                         String content = "Tool error: " + blockMessage;
                         transcript.add(ConversationTurn.toolResult(call.id, call.name, content));
                         updateTranscriptSnapshot(transcript);
-                        if (listener != null) listener.onToolProgress("tool_error", call.id, displayName, content, null, reflectionSource, auditDetail);
+                        if (listener != null) listener.onToolActivity(activity.event("tool_not_started",content,null));
                         continue;
                     }
-                    if (listener != null && !quietReaction) listener.onToolProgress("tool_call", call.id, displayName, null, null, reflectionSource, auditDetail);
+                    activeActivity = quietReaction ? null : activity;
+                    if (listener != null && !quietReaction) listener.onToolActivity(activity);
                     toolLifecycle.put(call.id, "STARTED");
                     updateTranscriptSnapshot(transcript);
                     CoreToolResult result = tools.invoke(call.name, call.arguments, token, (message)->{
                         if (listener != null && !quietReaction && message != null && !message.isEmpty()) {
-                            listener.onToolProgress("tool_progress", call.id, message, null, null, reflectionSource, auditDetail);
+                            listener.onToolActivity(activity.event("tool_progress",message,null));
                         }
                     });
                     String rawContent = result.content;
+                    if (!quietReaction) activeActivity = activity.event("tool_progress",rawContent,result.previewId);
                     madeProgress |= loopDetector.record(call.name, argumentsKey, result.success, rawContent);
                     transcript.add(ConversationTurn.toolResult(call.id, call.name, result.success ? rawContent : "Tool error: " + rawContent));
                     if (turnContextProvider != null && result.success) {
@@ -640,7 +655,8 @@ public final class CoreAgentLoop {
                     transcript.add(ConversationTurn.toolResult(call.id, call.name, content));
                     updateTranscriptSnapshot(transcript);
                     if (result.finishRun && result.success) terminalText = rawContent;
-                    if (listener != null && (!quietReaction || !result.success)) listener.onToolProgress(result.success ? "tool_result" : "tool_error", call.id, displayName, content, result.previewId, reflectionSource, auditDetail);
+                    if (listener != null && (!quietReaction || !result.success)) listener.onToolActivity(activity.event(result.success ? "tool_result" : "tool_error",content,result.previewId));
+                    activeActivity = null;
                 }
                 for (int index = callCount; index < reply.calls.size(); index++) {
                     ModelReply.Call call = reply.calls.get(index);
@@ -660,6 +676,10 @@ public final class CoreAgentLoop {
                 prompt = "Continue.";
             }
         } catch (RuntimeException failure) {
+            if (activeActivity != null && listener != null) {
+                try { listener.onToolActivity(activeActivity.event("tool_interrupted", activeActivity.detail, activeActivity.previewId)); }
+                catch (RuntimeException presentationFailure) { failure.addSuppressed(presentationFailure); }
+            }
             if (failure instanceof CheckpointFailure) throw failure;
             if (token.isStoppedByUser()) throw failure;
             if (token.isTimedOut()) {

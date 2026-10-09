@@ -1359,4 +1359,9 @@ Their exit results are unknown. Do not repeat them automatically. Review project
     <string name="agent_provider_partial">The provider request ended without a complete response. Progress is retained. Review existing results before continuing; the request was not repeated automatically.</string>
     <string name="crew_status_partial">Partial</string>
     <string name="crew_status_timed_out">Deadline reached</string>
+    <string name="activity_skill_loading">Loading skill · %1$s</string>
+    <string name="activity_skill_loaded">Loaded skill · %1$s</string>
+    <string name="activity_skill_failed">Failed to load skill · %1$s</string>
+    <string name="activity_unconfirmed_detail">No final result was confirmed. Effects may have occurred; inspect the details before retrying.</string>
+    <string name="activity_principal">Principal assistant</string>
 </resources>

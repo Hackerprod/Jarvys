@@ -1934,6 +1934,12 @@ private fun JarvysApp(
                     initialBoardReference = crewBoardReference,
                     onBoardReferenceConsumed = { crewBoardReference = null },
                     onBoardReference = { _, reference -> crewBoardReference = reference; navController.popBackStack() },
+                    onOpenPreview = { projectId ->
+                        val destination = if (HtmlPreviewDescriptor.isSnapshotToken(projectId))
+                            "artifact-preview/${Uri.encode(conversationSessionId)}/${Uri.encode(projectId.removePrefix(HtmlPreviewDescriptor.TOKEN_PREFIX))}"
+                        else "workspace-preview/${Uri.encode(projectId)}"
+                        navController.navigate(destination) { launchSingleTop = true }
+                    },
                 )
                 composable(
                     route = Routes.WORKSPACE_PREVIEW,

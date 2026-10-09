@@ -31,9 +31,10 @@ fun NavGraphBuilder.crewDestinations(
     onResumeBot: (String) -> Unit = {},
     crewMode: () -> CrewMode = { CrewMode.AUTO },
     onCrewModeChange: (CrewMode) -> Unit = {},
+    onOpenPreview: ((String) -> Unit)? = null,
 ) {
     composable(CrewNavigationRoutes.EMPTY) {
-        CrewMissionScreen(null, board, readOnly(null), onOpenBot = {}, onAskBot = { _, _ -> }, onStopAll = onStopAll, crewMode = crewMode(), onCrewModeChange = onCrewModeChange)
+        CrewMissionScreen(null, board, readOnly(null), onOpenBot = {}, onAskBot = { _, _ -> }, onStopAll = onStopAll, crewMode = crewMode(), onCrewModeChange = onCrewModeChange, onOpenPreview = onOpenPreview)
     }
     composable(route = CrewNavigationRoutes.MISSION,
         arguments = listOf(navArgument("missionId") { type = NavType.StringType })) { entry ->
@@ -49,7 +50,7 @@ fun NavGraphBuilder.crewDestinations(
                 }
                 else navController.navigate(CrewNavigationRoutes.bot(missionId, botId))
             }, onStopAll = onStopAll, initialBoardReference = initialBoardReference,
-            onBoardReferenceConsumed = onBoardReferenceConsumed, crewMode = crewMode(), onCrewModeChange = onCrewModeChange)
+            onBoardReferenceConsumed = onBoardReferenceConsumed, crewMode = crewMode(), onCrewModeChange = onCrewModeChange, onOpenPreview = onOpenPreview)
     }
     composable(route = CrewNavigationRoutes.BOT,
         arguments = listOf(navArgument("missionId") { type = NavType.StringType },
@@ -62,6 +63,6 @@ fun NavGraphBuilder.crewDestinations(
             onSendMessage = { id, text -> AgentForegroundService.ensureCrewKeepalive(context); manager?.sendUserMessage(id, text) },
             onRedirect = { id, text -> AgentForegroundService.ensureCrewKeepalive(context); manager?.sendUserMessage(id, text) },
             onStopBot = { id -> manager?.stop(id) },
-            onBoardReference = { reference -> onBoardReference(missionId, reference) }, onResume = onResumeBot)
+            onBoardReference = { reference -> onBoardReference(missionId, reference) }, onResume = onResumeBot, onOpenPreview = onOpenPreview)
     }
 }

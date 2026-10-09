@@ -46,7 +46,7 @@ public class CrewMissionTitleTest {
                 "RUNNING", "", "", "", Collections.emptyList(), 1L, 0L);
         CrewMissionSnapshot snapshot = new CrewMissionSnapshot("mission", "chat", "process", " Revisar\n arquitectura ",
                 original, CrewMissionTitle.AGENT, "RUNNING", "", 1L, 0L, Collections.singletonList(bot), Collections.emptyList());
-        assertEquals(2, snapshot.toJson().optInt("crewSchemaVersion"));
+        assertEquals(3, snapshot.toJson().optInt("crewSchemaVersion"));
         CrewMissionSnapshot restored = CrewMissionSnapshot.fromJson(snapshot.toJson()).interrupted();
         assertEquals("Revisar arquitectura", restored.title);
         assertEquals(CrewMissionTitle.AGENT, restored.titleSource);
@@ -65,7 +65,7 @@ public class CrewMissionTitleTest {
         assertEquals(original, restored.originalInstructions);
         assertEquals("", restored.title);
         assertEquals(CrewMissionTitle.FALLBACK, restored.titleSource);
-        assertEquals(2, restored.toJson().getInt("crewSchemaVersion"));
+        assertEquals(3, restored.toJson().getInt("crewSchemaVersion"));
         assertEquals(original, CrewMissionSnapshot.fromJson(restored.toJson()).originalInstructions);
 
         CrewMissionSnapshot shortLegacy = CrewMissionSnapshot.fromJson(legacyRow("  Revisar\n arquitectura  "));
@@ -83,7 +83,7 @@ public class CrewMissionTitleTest {
         JSONObject invalid = compatible.toJson().put("title", longValue).put("titleSource", CrewMissionTitle.AGENT);
         assertEquals("", CrewMissionSnapshot.fromJson(invalid).title);
         assertEquals(longValue, CrewMissionSnapshot.fromJson(invalid).originalInstructions);
-        assertNull(CrewMissionSnapshot.fromJson(invalid.put("crewSchemaVersion", 3)));
+        assertNull(CrewMissionSnapshot.fromJson(invalid.put("crewSchemaVersion", 4)));
     }
 
     private static JSONObject legacyRow(String title) throws Exception {

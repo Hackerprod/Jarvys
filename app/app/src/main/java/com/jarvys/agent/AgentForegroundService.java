@@ -781,6 +781,18 @@ public final class AgentForegroundService extends Service {
             }
 
             @Override
+            public void onToolActivity(ToolActivity activity) {
+              conversationStore.appendToolActivity(sessionId,reflectionUserMessageId,activity);
+              if (ToolActivity.definitive(activity.stage)) {
+                try { conversationStore.appendReflectionToolEvent(sessionId,reflectionUserMessageId,
+                    "web".equals(activity.reflectionSource)?"web_search":activity.displayName,
+                    activity.reflectionSource,"tool_result".equals(activity.stage)?"tool_result":"tool_error",activity.callId); }
+                catch(RuntimeException ignored) { }
+              }
+              AgentRunUiState.withGeneration(sessionId,token.generation(),()->AgentRunUiState.onToolActivity(activity));
+            }
+
+            @Override
             public void onCompactionStarted(String trigger) {
               AgentRunUiState.withGeneration(sessionId, token.generation(),
                   () -> AgentRunUiState.compactionStarted(sessionId, getString(R.string.compaction_running)));

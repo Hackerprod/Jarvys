@@ -1359,4 +1359,9 @@ Se desconoce cómo terminaron. No se repiten automáticamente. Revisa los cambio
     <string name="agent_provider_partial">La petición al proveedor terminó sin una respuesta completa. Se conserva el progreso. Revisa los resultados antes de continuar; la petición no se repitió automáticamente.</string>
     <string name="crew_status_partial">Parcial</string>
     <string name="crew_status_timed_out">Plazo alcanzado</string>
+    <string name="activity_skill_loading">Cargando skill · %1$s</string>
+    <string name="activity_skill_loaded">Skill cargada · %1$s</string>
+    <string name="activity_skill_failed">No se pudo cargar la skill · %1$s</string>
+    <string name="activity_unconfirmed_detail">No se confirmó un resultado final. Puede haber efectos; revisa los detalles antes de reintentar.</string>
+    <string name="activity_principal">Asistente principal</string>
 </resources>

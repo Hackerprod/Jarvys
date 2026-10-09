@@ -67,6 +67,8 @@ data class AgentRunUiEvent(
     val toolAuditDetail: String? = null,
     val reactionEmoji: String = "",
     val previewIsCurrent: Boolean = false,
+    val toolActivity: ToolActivity? = null,
+    val toolActivityEvents: List<ToolActivity> = emptyList(),
  ) {
     fun copyMetadata(messageId: String, durationMs: Long): AgentRunUiEvent =
         copy(messageId = messageId, durationMs = durationMs)
@@ -79,6 +81,12 @@ data class AgentRunUiEvent(
         copy(attachments = if (kind == "user" && proactiveThreadKey.isNullOrEmpty()) attachments.toList() else emptyList())
 
     companion object {
+        @JvmStatic
+        fun activityEvent(id: Long, activity: ToolActivity): AgentRunUiEvent = toolEvent(id, activity.stage,
+            activity.displayName, activity.detail.takeIf { it.isNotBlank() }, activity.executionId,
+            activity.previewId.takeIf { it.isNotBlank() }, activity.timestampMillis).copy(toolActivity = activity,
+            toolActivityEvents = listOf(activity), toolAuditDetail = activity.auditDetail.takeIf { it.isNotBlank() })
+
         @JvmStatic
         fun messageEvent(id: Long, role: String, text: String, timestampMillis: Long): AgentRunUiEvent =
             AgentRunUiEvent(id, role, null, text, null, timestampMillis)
@@ -161,7 +169,8 @@ data class AgentRunUiEvent(
                 "tool_progress" -> "tool_progress"
                 "tool_interrupted" -> "tool_interrupted"
                 "tool_not_started" -> "tool_not_started"
-                else -> "tool_result"
+                "tool_result" -> "tool_result"
+                else -> "tool_interrupted"
             }
             val statusResource: Int? = when (normalizedStage) {
                 "tool_call" -> R.string.connector_tool_using
@@ -544,7 +553,7 @@ object AgentRunUiState {
             ownedRunActive = false
             ownedLiveSnapshot = null
             _state.value = _state.value.copy(interactiveOwnerSessionId = null)
-            if (_state.value.sessionId == sessionId) _state.value = _state.value.copy(running = false, outcome = "STOPPED")
+            if (_state.value.sessionId == sessionId) _state.value = _state.value.copy(running = false, outcome = "STOPPED", events = interruptActivities(_state.value.events))
         }
     }
 
@@ -610,15 +619,43 @@ object AgentRunUiState {
         if (!current.running) return@synchronized
         val events = pendingProgress.fold(current.events) { accumulated, buffered -> append(accumulated, buffered) }.toMutableList()
         pendingProgress.clear()
-        val existingIndex = events.indexOfLast { it.kind == "tool" && it.toolCallId == callId }
+        val turnStart = events.indexOfLast { it.kind == "user" }
+        val existingIndex = if (callId.isBlank()) -1 else events.indexOfLast { it.kind == "tool" && it.toolCallId == callId }
+            .takeIf { it > turnStart } ?: -1
         val updated = AgentRunUiEvent.toolEvent(nextEventId++, stage, displayName, detail, callId, previewId,
             System.currentTimeMillis()).copy(toolAuditDetail = auditDetail ?: events.getOrNull(existingIndex)?.toolAuditDetail)
-        if (stage != "tool_call" && existingIndex >= 0) {
+        if (existingIndex >= 0 && ToolActivity.definitive(events[existingIndex].stage)
+            && !ToolActivity.definitive(stage)) return@synchronized
+        if (existingIndex >= 0) {
             events[existingIndex] = updated.copy(id = events[existingIndex].id)
         } else {
             events.add(updated)
         }
         _state.value = current.copy(events = events.takeLast(MAX_EVENTS))
+    }
+
+    @JvmStatic
+    fun onToolActivity(activity: ToolActivity) = synchronized(lock) {
+        val current = _state.value
+        if (!current.running) return@synchronized
+        val events = pendingProgress.fold(current.events) { accumulated, buffered -> append(accumulated, buffered) }.toMutableList()
+        pendingProgress.clear()
+        val index = events.indexOfLast { it.toolActivity?.executionId == activity.executionId }
+        val old = events.getOrNull(index)
+        val history = old?.toolActivityEvents.orEmpty().let { prior ->
+            if (prior.any { it.eventId == activity.eventId }) prior else prior + activity
+        }
+        val projected = ToolActivity.project(history, true)
+        val updated = AgentRunUiEvent.activityEvent(old?.id ?: nextEventId++, projected).copy(toolActivityEvents = history)
+        if (index < 0) events.add(updated) else events[index] = updated
+        _state.value = current.copy(events = events.takeLast(MAX_EVENTS))
+    }
+
+    private fun interruptActivities(events: List<AgentRunUiEvent>): List<AgentRunUiEvent> = events.map { event ->
+        if (event.kind == "tool" && event.stage in setOf("tool_call", "tool_progress")) {
+            event.toolActivity?.let { AgentRunUiEvent.activityEvent(event.id,it.interrupted()).copy(toolActivityEvents = event.toolActivityEvents) }
+                ?: event.copy(stage = "tool_interrupted", toolStatusResourceId = R.string.connector_tool_unconfirmed)
+        } else event
     }
 
     @JvmStatic
@@ -777,7 +814,7 @@ object AgentRunUiState {
             outcome = outcome,
             compacting = false,
             compactionStatus = null,
-            events = append(current.events, assistant),
+            events = append(interruptActivities(current.events), assistant),
         )
     }
 
@@ -791,7 +828,7 @@ object AgentRunUiState {
             outcome = "COMPLETED",
             compacting = false,
             compactionStatus = null,
-            events = append(current.events, event("assistant", answer)),
+            events = append(interruptActivities(current.events), event("assistant", answer)),
         )
     }
 
@@ -804,7 +841,7 @@ object AgentRunUiState {
             outcome = "FAILED",
             compacting = false,
             compactionStatus = null,
-            events = append(current.events, event("result", message, "FAILED")),
+            events = append(interruptActivities(current.events), event("result", message, "FAILED")),
         )
     }
 
@@ -818,7 +855,7 @@ object AgentRunUiState {
             outcome = "FAILED",
             compacting = false,
             compactionStatus = null,
-            events = append(current.events, event("result", message, "FAILED")),
+            events = append(interruptActivities(current.events), event("result", message, "FAILED")),
         )
     }
 
@@ -832,7 +869,7 @@ object AgentRunUiState {
             outcome = "FAILED",
             compacting = false,
             compactionStatus = null,
-            events = append(current.events, event("assistant", message, "FAILED")),
+            events = append(interruptActivities(current.events), event("assistant", message, "FAILED")),
         )
     }
 

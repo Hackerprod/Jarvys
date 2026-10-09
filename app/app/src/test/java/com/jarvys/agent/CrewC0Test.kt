@@ -70,11 +70,13 @@ class CrewC0Test {
             worker.onCompactionFailed("private compaction error")
             assertEquals(0, leakedCallbacks.get())
             val snapshot = manager.missionSnapshots().single()
-            val activity = snapshot.messages.map { it.text }
-            assertTrue(activity.contains("Using read_file"))
-            assertTrue(activity.contains("Completed read_file"))
-            assertTrue(activity.contains("Failed search"))
-            assertFalse(activity.any { it.contains("private") })
+            val activity = snapshot.messages.mapNotNull { it.activity }
+            assertEquals(listOf("tool_call", "tool_result", "tool_error"), activity.map { it.stage })
+            val rows = com.jarvys.agent.crew.CrewActivityTimeline.project(snapshot.messages, snapshot.bots)
+            assertEquals(2, rows.count { it.activity != null })
+            assertTrue(rows.any { it.activity?.detail == "private result" })
+            assertFalse(manager.messageBus().pending("chief").any { it.activity != null })
+            assertFalse(CrewManager.formatMessages(snapshot.messages).contains("private"))
         } finally {
             release.countDown()
             manager.close()

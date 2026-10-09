@@ -48,6 +48,7 @@ internal val BotIconSourceKey = SemanticsPropertyKey<String>("BotIconSource")
 /** Read the current icon by stable role/profile ID, including while a historical mission is open. */
 @Composable
 internal fun rememberCatalogBotIcon(roleId: String?): BotIconIdentity? {
+    if (roleId == "chief" || roleId == "captain") return remember { BotIconIdentity("chief") }
     if (roleId == null || (!CrewProfileRepository.isBuiltInId(roleId) && !roleId.startsWith("custom-"))) return null
     if (CrewProfileRepository.isBuiltInId(roleId)) return remember(roleId) { BotIconIdentity(roleId) }
     val context = LocalContext.current.applicationContext
@@ -73,6 +74,18 @@ internal fun rememberCatalogBotIcon(roleId: String?): BotIconIdentity? {
 /** One renderer and bounded private decoder are shared by catalog, cards, details and debate. */
 @Composable
 internal fun BotIdentityIcon(identity: BotIconIdentity, modifier: Modifier = Modifier) {
+    if (identity.id == "chief" || identity.id == "captain") {
+        val context = LocalContext.current
+        val pixels = remember(context) {
+            val drawable = requireNotNull(androidx.core.content.ContextCompat.getDrawable(context,com.jarvys.agent.R.mipmap.ic_launcher))
+            val bitmap = android.graphics.Bitmap.createBitmap(256,256,android.graphics.Bitmap.Config.ARGB_8888)
+            drawable.setBounds(0,0,256,256); drawable.draw(android.graphics.Canvas(bitmap)); bitmap.asImageBitmap()
+        }
+        Image(pixels,contentDescription=null,
+            modifier=modifier.clip(RoundedCornerShape(percent=30)).semantics { this[BotIconSourceKey]="principal:launcher" },
+            contentScale=ContentScale.Fit)
+        return
+    }
     val context = LocalContext.current.applicationContext
     val iconRef = identity.iconRef.takeUnless { CrewProfileRepository.isBuiltInId(identity.id) }.orEmpty()
     // A new identity gets a fresh state immediately, never one frame of the previous bot's bitmap.

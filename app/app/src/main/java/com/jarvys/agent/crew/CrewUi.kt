@@ -407,12 +407,13 @@ fun CrewMissionCard(
                 }
             }
             snapshot.bots.forEach { bot ->
-                val activity = snapshot.messages.lastOrNull { it.from == bot.id && it.type == CrewMessage.Type.STATUS }?.text
+                val activity = CrewActivityTimeline.project(snapshot.messages,snapshot.bots).lastOrNull { it.from == bot.id && it.type == CrewMessage.Type.STATUS }
                 val status = when {
                     !bot.active() -> crewBotStatus(bot.status)
                     bot.waitingReason == "limite del proveedor" -> stringResource(R.string.crew_waiting_provider)
                     bot.waitingReason.isNotBlank() -> stringResource(R.string.crew_waiting_captain)
-                    activity != null -> localizeCrewActivity(activity)
+                    activity?.activity != null -> com.jarvys.agent.toolActivityLabel(activity.activity)
+                    activity != null -> localizeCrewActivity(activity.text)
                     else -> crewBotStatus(bot.status)
                 }
                 Row(Modifier.fillMaxWidth().testTag("crew-status-${bot.id}"), verticalAlignment = Alignment.CenterVertically,
@@ -457,6 +458,7 @@ fun CrewMissionScreen(
     onBoardReferenceConsumed: () -> Unit = {},
     crewMode: CrewMode = CrewMode.AUTO,
     onCrewModeChange: (CrewMode) -> Unit = {},
+    onOpenPreview: ((String) -> Unit)? = null,
 ) {
     var configuringCoding by remember { mutableStateOf(false) }
     var showSettings by remember(snapshot?.missionId) { mutableStateOf(false) }
@@ -577,13 +579,13 @@ fun CrewMissionScreen(
                 if (snapshot.messages.isEmpty()) CrewEmptyTab(Modifier.weight(1f), R.string.crew_debate_empty)
                 else ChatMessageList(
                     conversationKey = snapshot.missionId,
-                    messages = snapshot.messages,
+                    messages = CrewActivityTimeline.project(snapshot.messages, snapshot.bots),
                     isRunning = snapshot.active(),
                     messageKey = { it.id },
                     isUserMessage = { it.from == "user" },
                     composerInset = 0.dp, headerInset = 0.dp,
                     modifier = Modifier.weight(1f).fillMaxWidth().testTag("crew-debate-list"),
-                    itemContent = { message -> CrewMessageRow(message, snapshot.bots, onBoardReference = { ref ->
+                    itemContent = { message -> CrewMessageRow(message, snapshot.bots, onOpenPreview = onOpenPreview, onBoardReference = { ref ->
                         selectedBoardFile = ref
                         tab = CrewScreenTab.BOARD
                     }) },
@@ -621,6 +623,11 @@ fun CrewMissionScreen(
             else -> {
                 if (snapshot.bots.isEmpty()) CrewEmptyTab(Modifier.weight(1f), R.string.crew_bots_empty)
                 else LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("crew-bot-list")) {
+                    item(key = "principal-jarvys") {
+                        JarvysListRow(stringResource(R.string.crew_captain_name),stringResource(R.string.activity_principal),
+                            leadingContent={ CrewBotAvatar(stringResource(R.string.crew_captain_name),"chief","periwinkle",snapshot.status) },
+                            modifier=Modifier.testTag("crew-bot-principal"))
+                    }
                     items(snapshot.bots, key = { it.id }) { bot ->
                         JarvysListRow(bot.name, CrewRoleLabel(bot.roleId, bot.roleName),
                             leadingContent = { CrewBotAvatar(bot.name, bot.roleId, bot.colorKey, bot.status,
@@ -664,12 +671,13 @@ fun CrewBotDetailScreen(
     onStopBot: (String) -> Unit,
     onBoardReference: (String) -> Unit,
     onResume: (String) -> Unit = {},
+    onOpenPreview: ((String) -> Unit)? = null,
 ) {
     val bot = snapshot?.bots?.firstOrNull { it.id == botId }
     var message by remember(botId) { mutableStateOf("") }
     var showBotInstructions by remember(botId) { mutableStateOf(false) }
-    val conversation = remember(snapshot?.missionId, botId, snapshot?.messages) {
-        snapshot?.messages.orEmpty().filter { it.from == botId || it.to == botId }
+    val conversation = remember(snapshot?.missionId, botId, snapshot?.messages, snapshot?.bots) {
+        CrewActivityTimeline.project(snapshot?.messages.orEmpty(), snapshot?.bots.orEmpty()).filter { it.from == botId || it.to == botId }
     }
     if (showBotInstructions && bot != null) CrewInstructionsDialog(bot.mission) { showBotInstructions = false }
     Column(Modifier.fillMaxSize().testTag("crew-bot-detail")) {
@@ -727,7 +735,7 @@ fun CrewBotDetailScreen(
             messageKey = { it.id },
             isUserMessage = { it.from == "user" || it.from == "chief" },
             modifier = Modifier.weight(1f).fillMaxWidth().testTag("crew-bot-thread"),
-            itemContent = { CrewMessageRow(it, snapshot.bots, onBoardReference) },
+            itemContent = { CrewMessageRow(it, snapshot.bots, onBoardReference, onOpenPreview) },
         )
         if (bot.resumeRequired || bot.status == "INTERRUPTED") CrewResumePanel(
             canResume = !readOnly && bot.canResume, note = bot.recoveryNote, onResume = { onResume(botId) })
@@ -795,7 +803,7 @@ fun CrewModePicker(mode: CrewMode, onChange: (CrewMode) -> Unit, onOpenCrew: (()
 }
 
 @Composable
-private fun CrewMessageRow(message: CrewMessage, bots: List<CrewBotSnapshot>, onBoardReference: (String) -> Unit) {
+private fun CrewMessageRow(message: CrewMessage, bots: List<CrewBotSnapshot>, onBoardReference: (String) -> Unit, onOpenPreview: ((String) -> Unit)? = null) {
     val sender = bots.firstOrNull { it.id == message.from }
     val senderName = when {
         "chief" == message.from -> stringResource(R.string.crew_captain_name)
@@ -819,6 +827,17 @@ private fun CrewMessageRow(message: CrewMessage, bots: List<CrewBotSnapshot>, on
     val color = readableThemeInk(identity,
         MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.52f).compositeOver(MaterialTheme.colorScheme.background),
         MaterialTheme.colorScheme.onSurface)
+    if (message.activity != null) {
+        Row(Modifier.fillMaxWidth().testTag("crew-message-${message.id}"), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            CrewBotAvatar(senderName, sender?.roleId ?: message.from, sender?.colorKey, sender?.status ?: "DONE",
+                sender?.waitingReason, modifier = Modifier.size(22.dp), testTag = "crew-message-orb-${message.id}")
+            Column(Modifier.weight(1f)) {
+                Text(senderName, color=color, style=MaterialTheme.typography.labelMedium)
+                com.jarvys.agent.ToolActivityLine(message.activity, onOpenPreview = onOpenPreview)
+            }
+        }
+        return
+    }
     if (message.type == CrewMessage.Type.STATUS) {
         Row(Modifier.fillMaxWidth().testTag("crew-message-${message.id}")
             .padding(vertical = 2.dp), horizontalArrangement = Arrangement.spacedBy(10.dp),
