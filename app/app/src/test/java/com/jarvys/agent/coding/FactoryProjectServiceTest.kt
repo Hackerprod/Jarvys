@@ -68,8 +68,13 @@ class FactoryProjectServiceTest {
             gate=ApprovalGate(presenter=object:ApprovalPresenter {
                 override fun show(id:String,summary:ApprovalSummary) {
                     lastSummary=summary;requested++;assertFalse(summary.allowAlwaysAvailable)
-                    assertTrue(summary.lines.any{it.contains("non-exportable")})
-                    assertTrue(summary.lines.any{it.contains("uninstalling Jarvys")})
+                    if (identityState.mode == FactorySigningIdentity.RECOVERABLE) {
+                        assertTrue(summary.lines.any{it.contains("recoverable signing identity")})
+                        assertTrue(summary.lines.any{it.contains("not independent proof")})
+                    } else {
+                        assertTrue(summary.lines.any{it.contains("non-exportable")})
+                        assertTrue(summary.lines.any{it.contains("uninstalling Jarvys")})
+                    }
                     duringApproval();gate.resolve(id,decision)
                 }
                 override fun update(id:String,decision:ApprovalDecision)=Unit
@@ -179,6 +184,24 @@ class FactoryProjectServiceTest {
         assertTrue(f.lastSummary!!.lines.any{it.contains("Effective scope unchanged")})
         assertEquals(firstFingerprint,f.identityState.fingerprint)
         assertEquals(4,f.identityState.lastVersion)
+    }
+    @Test fun unresolvedRestoredHistoryBlocksBeforeApprovalAndKeyAccess() {
+        val f=Fixture(); f.identityState=FactorySigningIdentity.State(true,"a".repeat(64),1,
+            mode=FactorySigningIdentity.RECOVERABLE,continuityKnown=false,continuityResolution="restored_unknown")
+        f.spec("org.example.notebook",2); val build=f.build(); val before=f.identityState
+        val error=assertThrows(Exception::class.java){f.service.sign("notes.apk",build.getString("sha256"),"signed.apk",f.scope.version(),CancellationToken.cancellable())}
+        assertTrue(error.message!!.contains("history is unresolved")); assertEquals(0,f.requested); assertEquals(0,f.obtained)
+        assertEquals(before,f.identityState); assertFalse(File(f.root,"signed.apk").exists())
+    }
+    @Test fun recoverableApprovalDisclosesUserDeclaredFloorAndDenialPreservesIdentity() {
+        val f=Fixture(); f.identityState=FactorySigningIdentity.State(true,"a".repeat(64),5,
+            mode=FactorySigningIdentity.RECOVERABLE,continuityKnown=true,continuityResolution="user_declared_floor")
+        f.spec("org.example.notebook",6); val build=f.build(); val before=f.identityState
+        assertThrows(Exception::class.java){f.service.sign("notes.apk",build.getString("sha256"),"signed.apk",f.scope.version(),CancellationToken.cancellable())}
+        assertEquals(1,f.requested);assertEquals(0,f.obtained);assertEquals(before,f.identityState)
+        assertTrue(f.lastSummary!!.lines.any{it.contains("user_declared_floor; floor 5")})
+        assertFalse(f.lastSummary!!.lines.any{it.contains("Create a new")})
+        assertTrue(f.lastSummary!!.lines.any{it.contains("not proof of restoration")})
     }
     @Test fun missingLegacyBaselineDisclosesUnknownAndDenialPreservesState() {
         val f=Fixture(); f.identityState=FactorySigningIdentity.State(true,"a".repeat(64),1)

@@ -1,5 +1,6 @@
 package com.jarvys.agent.ui.settings
 
+import android.content.Intent
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -41,6 +42,7 @@ import com.jarvys.agent.JarvysChoiceOption
 import com.jarvys.agent.JarvysChoiceSheet
 import com.jarvys.agent.proactive.ProactiveStatus
 import com.jarvys.agent.tasks.ui.TaskSettingsEntry
+import com.jarvys.agent.apkfactory.FactoryIdentityActivity
 import java.util.Date
 
 enum class SettingsWorkspacePage { HOME, PREFERENCES }
@@ -188,6 +190,12 @@ private fun SettingsIndex(
     Spacer(Modifier.height(22.dp))
     SettingsSection(stringResource(R.string.settings_device)) {
         SettingsIndexRow(LucideIcons.Accessibility, stringResource(R.string.settings_accessibility), null, onAccessibility)
+        SettingsRule()
+        val context = LocalContext.current
+        SettingsIndexRow(LucideIcons.Boxes, stringResource(R.string.factory_identity_title),
+            stringResource(R.string.factory_identity_settings_summary),
+            { context.startActivity(Intent(context, FactoryIdentityActivity::class.java)) },
+            testTag = "settings-factory-identities-row")
     }
 }
 

@@ -351,7 +351,7 @@ def main():
     args = parser.parse_args()
     template, dex = inspect(args.template)
     rows = []
-    metadata_files = sorted(args.fixtures.rglob('[012].json'))
+    metadata_files = sorted(list(args.fixtures.rglob('[012].json')) + list(args.fixtures.rglob('recovery-v[12].json')))
     require(metadata_files, 'No fixture metadata found')
     covered = set()
     for metadata in metadata_files:

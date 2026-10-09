@@ -50,6 +50,11 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name="com.jarvys.agent.apkfactory.FactoryIdentityActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+
         <service
             android:name="com.artemis.helper.ArtemisAccessibilityService"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"

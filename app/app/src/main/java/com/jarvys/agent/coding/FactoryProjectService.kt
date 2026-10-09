@@ -63,7 +63,7 @@ internal class FactoryProjectService(
             .put("specFields", JSONArray(listOf("schemaVersion", "appId", "name", "versionCode", "versionName", "capabilities", "webDir", "icon")))
             .put("limits", JSONObject().put("websiteFiles", FactorySpec.MAX_WEB_FILES).put("websiteBytes", FactorySpec.MAX_WEB_BYTES)
                 .put("fileBytes", FactorySpec.MAX_FILE_BYTES).put("icon", "PNG, 48–1024 pixels per side, at most 1 MiB; or 192px geometric vector JSON"))
-            .put("signing", "Explicit approval per sign. Unique non-exportable AndroidKeyStore key per app. Clearing/uninstalling Jarvys or losing this device may permanently prevent updates; no key export, silent rotation or shared debug key.")
+            .put("signing", "Explicit approval per sign. Existing non-exportable AndroidKeyStore identities stay unchanged. For a NEW recoverable identity or encrypted backup/import, open Settings > Factory identities yourself; never send passphrases or private keys to a tool or conversation. No silent rotation or shared key.")
             .put("unsupported", "Native APIs outside the listed template capabilities require a reviewed template update; no network, camera, microphone, arbitrary shell or automatic installation.")
     }
     fun build(specPath: String, outputPath: String, expectedVersion: Long, token: CancellationToken): JSONObject {
@@ -141,6 +141,7 @@ internal class FactoryProjectService(
                     manifest.dexSha256.all { (name, sha) -> saved.getString(name) == sha }) { "DEX inventory differs from build receipt" }
             }
             val approvedState = synchronized(SIGN_LOCK) { identities.state(spec.appId) }
+            check(approvedState.continuityKnown) { "Restored identity history is unresolved. Open Settings > Factory identities and explicitly reconcile the latest version floor before signing." }
             check(spec.versionCode > approvedState.lastVersion) { "Use a higher versionCode than the last signed release (${approvedState.lastVersion})" }
             val signingScope = FactorySigningScope.fromPlan(manifest.plan)
             val lines = mutableListOf("App: ${spec.name} (${spec.appId}), version ${spec.versionName} / ${spec.versionCode}",
@@ -161,9 +162,14 @@ internal class FactoryProjectService(
             }
             if (manifest.plan.profile != com.jarvys.factory.contract.ManifestPlan.Profile.CURRENT)
                 lines += "Previously built v1 runtime: this artifact keeps its older window behavior. Rebuild from the project to receive the current runtime."
-            if (approvedState.existing) lines += "Reuse this app's existing non-exportable signing identity: ${approvedState.fingerprint}"
-            else lines += "Create a new, persistent, non-exportable signing key for this app only in this device's AndroidKeyStore."
-            lines += "Clearing or uninstalling Jarvys, losing this device, or losing its Keystore key can permanently prevent updates to apps signed here. Keys cannot currently be backed up or transferred. No replacement key will be generated silently."
+            if (approvedState.mode == FactorySigningIdentity.RECOVERABLE) {
+                lines += "Reuse this app's recoverable signing identity: ${approvedState.fingerprint}. Its local copy is protected by AndroidKeyStore; recovery requires your encrypted backup and passphrase."
+                lines += "Backup export is not proof of restoration. A backup knows only its recorded releases. Version history resolution: ${approvedState.continuityResolution}; floor ${approvedState.lastVersion}. A user-declared floor is not independent proof of the latest release."
+            } else {
+                if (approvedState.existing) lines += "Reuse this app's existing non-exportable signing identity: ${approvedState.fingerprint}"
+                else lines += "Create a new, persistent, non-exportable signing key for this app only in this device's AndroidKeyStore. To choose a recoverable identity instead, cancel and create it yourself in Settings > Factory identities first."
+                lines += "Clearing or uninstalling Jarvys, losing this device, or losing its Keystore key can permanently prevent updates to apps signed here. These non-exportable keys cannot be backed up or converted. No replacement key will be generated silently."
+            }
             lines += "This signs a local APK only. It does not install, publish, upload or grant permissions to an app."
             checkActive(token)
             val decision = gate.request(ApprovalSummary("Sign generated APK", lines, allowAlwaysAvailable = false, requester = "Coding"), token)
@@ -179,43 +185,47 @@ internal class FactoryProjectService(
                     lease.validate()
                     identities.obtainAfterApproval(spec.appId, approvedState)
                 }, null) ?: throw java.util.concurrent.CancellationException("Signing cancelled before identity creation")
-                checkActive(token)
-                val id = UUID.randomUUID().toString()
-                val job = newJob(id)
-                val input = File(job, "unsigned.apk").apply { writeBytes(bytes) }
-                val output = File(job, "signed.apk")
-                var preserveStaging = false
                 try {
-                    val certificate = FactoryApkSigner.sign(input, output, identity.key, identity.certificate)
                     checkActive(token)
-                    val outputBytes = output.readBytes()
-                    val signedInfo = TemplateApk.verifyAgainstPlan(outputBytes, manifest.plan)
-                    TemplateApk.verifyUnchangedPayload(bytes, outputBytes)
-                    check(signedInfo.dexSha256 == manifest.dexSha256) { "Signed APK DEX inventory changed" }
-                    val signedSha = ProjectScope.sha256(outputBytes)
-                    val signed = JSONObject(receipt.toString()).put("buildId", id).put("state", "signed_staged")
-                        .put("outputPath", outputPath).put("apkSha256", signedSha).put("apkBytes", outputBytes.size)
-                        .put("unsignedSha256", expectedSha).put("certificateSha256", certificate).put("signed", true)
-                    saveReceipt(signedSha, signed)
-                    preserveStaging = true
-                    // Reserve this version before publication. An interrupted publish must not silently sign another build.
-                    checkActive(token)
-                    lease.validate()
-                    identities.recordSigned(spec.appId, certificate, spec.versionCode, signedSha, signingScope)
+                    val id = UUID.randomUUID().toString()
+                    val job = newJob(id)
+                    val input = File(job, "unsigned.apk").apply { writeBytes(bytes) }
+                    val output = File(job, "signed.apk")
+                    var preserveStaging = false
                     try {
-                        FactoryProjectFiles.publish(scope, outputPath, output, lease, token) { checkActive(token) }
-                        signed.put("state", "published")
+                        val certificate = FactoryApkSigner.sign(input, output, identity.key, identity.certificate)
+                        checkActive(token)
+                        val outputBytes = output.readBytes()
+                        val signedInfo = TemplateApk.verifyAgainstPlan(outputBytes, manifest.plan)
+                        TemplateApk.verifyUnchangedPayload(bytes, outputBytes)
+                        check(signedInfo.dexSha256 == manifest.dexSha256) { "Signed APK DEX inventory changed" }
+                        val signedSha = ProjectScope.sha256(outputBytes)
+                        val signed = JSONObject(receipt.toString()).put("buildId", id).put("state", "signed_staged")
+                            .put("outputPath", outputPath).put("apkSha256", signedSha).put("apkBytes", outputBytes.size)
+                            .put("unsignedSha256", expectedSha).put("certificateSha256", certificate).put("signed", true)
                         saveReceipt(signedSha, signed)
+                        preserveStaging = true
+                        // Reserve this version before publication. An interrupted publish must not silently sign another build.
+                        checkActive(token)
+                        lease.validate()
+                        identities.recordSigned(spec.appId, certificate, spec.versionCode, signedSha, signingScope)
+                        try {
+                            FactoryProjectFiles.publish(scope, outputPath, output, lease, token) { checkActive(token) }
+                            signed.put("state", "published")
+                            saveReceipt(signedSha, signed)
+                        } catch (failure: Exception) {
+                            signed.put("state", "publication_unconfirmed"); saveReceipt(signedSha, signed)
+                            throw IOException("Signature verified but output publication was not confirmed. Preserve and inspect $outputPath; do not sign the same version again.", failure)
+                        }
+                        job.deleteRecursively()
+                        return publicReceipt(signed).put("scope_version", scope.version()).put("notice", "Signed APK verified with APK Signature Scheme v2. No installation or device compatibility test was performed.")
                     } catch (failure: Exception) {
-                        signed.put("state", "publication_unconfirmed"); saveReceipt(signedSha, signed)
-                        throw IOException("Signature verified but output publication was not confirmed. Preserve and inspect $outputPath; do not sign the same version again.", failure)
+                        // Only ambiguous publication needs recovery bytes; failed signing attempts do not accumulate files.
+                        if (!preserveStaging) job.deleteRecursively()
+                        throw failure
                     }
-                    job.deleteRecursively()
-                    return publicReceipt(signed).put("scope_version", scope.version()).put("notice", "Signed APK verified with APK Signature Scheme v2. No installation or device compatibility test was performed.")
-                } catch (failure: Exception) {
-                    // Only ambiguous publication needs recovery bytes; failed signing attempts do not accumulate files.
-                    if (!preserveStaging) job.deleteRecursively()
-                    throw failure
+                } finally {
+                    if (approvedState.mode == FactorySigningIdentity.RECOVERABLE) com.jarvys.agent.apkfactory.FactoryIdentityBackup.destroyBestEffort(identity.key)
                 }
             }
         }
@@ -245,7 +255,7 @@ internal class FactoryProjectService(
     private fun loadReceipt(sha: String, outputPath: String): JSONObject = try { JSONObject(String(receiptFile(sha, outputPath).readFully(), Charsets.UTF_8)) }
         catch (failure: Exception) { throw IOException("No verified factory receipt for this APK", failure) }
     companion object {
-        private val SIGN_LOCK = Any()
+        private val SIGN_LOCK = FactorySigningIdentity.LOCK
         const val MAX_APK_BYTES = 32 * 1024 * 1024
         private fun readBounded(input: java.io.InputStream, max: Int): ByteArray {
             val out = java.io.ByteArrayOutputStream()
