@@ -26,7 +26,7 @@ Modo de ejecución: continuar la cola completa. Al cerrar cada pendiente o corre
 - **UX28 / preparación v46 completada en host:** tarjetas HTML con miniatura local estática y acciones por iconos; 1911 Full, 1678 Play, 17 runtime y nueve JavaScript aprobadas, sin nuevos diagnósticos de lint. Ambos APK unsigned verificados para firma original; Chromium y aceptación física pendientes.
 - **UX29 / preparación v47 completada en host:** indicador nativo de puntos; 1930 Full, 1697 Play, 17 runtime y nueve JavaScript aprobadas, sin nuevos diagnósticos de lint. Ambos APK unsigned verificados para firma original; aceptación física pendiente.
 - **UX30 / preparación v48 completada en host:** menú lateral compacto, etiquetas redundantes retiradas y secciones vacías ocultas. 1948 Full, 1715 Play, 17 runtime y nueve JavaScript aprobadas; 80 capturas y revisión independiente, sin nuevos diagnósticos de lint. Ambos APK unsigned verificados para firma original; aceptación física pendiente.
-- **Siguiente etapa:** UX32, sustituir el icono de la aplicación por el PNG aportado el 9 de octubre para las futuras compilaciones; después cobertura general de Gmail en UX31. v48 ya estaba compilada al llegar esta nueva solicitud y no se reconstruye para incluirla.
+- **Etapa actual:** UX32, nuevo icono de la aplicación en preparación v49 / 1.2.42-UX32; recursos implementados y validación en curso. Después se continúa con la cobertura general de Gmail en UX31 y la tarjeta de preview de borde a borde en UX33. v48 ya estaba compilada al llegar esta solicitud y permanece inmutable.
 - La paridad completa con el comportamiento de v28 en un teléfono sigue pendiente de validación; la fiabilidad del agente es prioritaria antes de añadir funciones.
 
 ## Entregas previas
@@ -377,12 +377,14 @@ Contrato y límites: app/DRAWER_NAVIGATION.md. Fuente validada: 6b7add00a7deb987
 
 ### 15. UX32: icono de aplicación para futuras compilaciones
 
-Estado: pendiente; solicitud del 9 de octubre de 2026. Prioridad antes de UX31. La preparación v48 de UX30 ya estaba compilada y verificada cuando llegó esta solicitud, por lo que se mantiene inmutable.
+Estado: implementado en preparación v49 / 1.2.42-UX32, con validación de host en curso. Solicitud del 9 de octubre de 2026; prioridad antes de UX31. La preparación v48 de UX30 ya estaba compilada y verificada cuando llegó esta solicitud, por lo que se mantiene inmutable.
 
 - Usar el PNG nuevo aportado por el usuario como icono de Jarvys a partir de la siguiente compilación; inspeccionar el archivo original antes de generar las variantes.
 - Adaptar el recurso a los formatos y densidades de icono que utilice la aplicación, conservando proporciones, transparencia y legibilidad. Comprobar el recorte de iconos adaptativos y las variantes existentes que resulten aplicables.
 - Mantener paquete, nombre, permisos e identidad de firma; no reutilizar ni generar una clave nueva. No cambiar otras imágenes de la interfaz sin una necesidad comprobada del icono.
 - Validar recursos, manifiestos, ambas variantes, capturas o previsualizaciones pertinentes y los APK resultantes. Publicar código y Pending.md en master y entregar el APK actualizado antes de continuar con UX31.
+
+Implementación: original PNG preservado byte a byte, recursos propios de launcher y round para cinco densidades, iconos adaptativos desde API 26, fondo #111827 y escalado proporcional sin recortar ni repintar el robot. Se conserva el recurso anterior de notificaciones y el icono/plantilla de la fábrica APK. Se omite una silueta monocroma inventada; los launchers recientes pueden aplicar su propio tema. Android 12+ utiliza el nuevo launcher como splash predeterminado. Contrato y regeneración: app/APP_ICON.md. Suites completas, lint y APK final todavía pendientes; no se presenta esta preparación como entrega validada.
 
 ### 16. UX31: cobertura general de gestión de Gmail
 
@@ -395,6 +397,19 @@ Estado: pendiente, después de UX32. Gmail y Drive ya conectan; ampliar Gmail co
 - **Ámbito y lotes:** distinguir operación sobre mensaje, hilo y selección; conservar IDs de cuenta, mensaje e hilo y una instantánea verificable de los objetivos. Usar operaciones por lote si aportan valor, con límites, paginación, cancelación, progreso, recibos por resultado y reanudación segura; no repetir escrituras ambiguas ni ampliar silenciosamente una selección mientras cambia el buzón.
 - **Permisos y autonomía:** normalizar la equivalencia real entre scopes de lectura, modificación y acceso completo, además de los específicos de composición, envío o etiquetas. Construir capacidades a partir de concesiones efectivas, no del nombre de un scope aislado ni de la mera conexión. Usar mínimo privilegio, solicitar consentimiento para cualquier ampliación persistente y mantener las confirmaciones exigidas por el tipo de acción. Evitar preguntas duplicadas cuando la acción concreta ya esté autorizada; eso no elimina la confirmación del borrado irreversible ni autoriza acciones externas no solicitadas.
 - **Verificación:** cubrir cuentas distintas, permisos parciales/supersets, denegaciones, búsquedas multipágina, etiquetas y estados, papelera/restauración, composición/envío, adjuntos, operaciones sobre hilos, lotes, cambios concurrentes, cancelación, recibos y recuperación. Revisar paridad de catálogo, UI, plan de aprobación y ejecución. No actuar sobre correo real ni cambiar concesiones OAuth durante esta planificación.
+
+### 17. UX33: miniatura de preview de borde a borde y acciones superpuestas
+
+Estado: pendiente, después de UX31; solicitud y captura de referencia aportadas el 9 de octubre de 2026. Registrar este cambio sin ampliar la implementación actual de UX32.
+
+- La miniatura debe cubrir toda la superficie de la tarjeta, respetando únicamente el borde exterior y sus esquinas. Retirar rellenos, marcos interiores y bordes anidados que reduzcan el área de imagen.
+- Retirar de esta tarjeta la fila del nombre de archivo (por ejemplo, index.html), el icono de archivo, su tamaño y la sección o etiqueta visible «Vista previa estática». La tarjeta normal muestra la miniatura completa como fondo; conservar los metadatos necesarios para accesibilidad y acciones aunque ya no aparezcan como filas visuales.
+- Los dos botones de acción existentes permanecen en las mismas posiciones inferiores, pero superpuestos sobre la miniatura en lugar de ocupar una fila separada. Mantener el tamaño exacto en dp/píxeles de sus glifos y sus funciones actuales.
+- Reducir ligeramente el círculo o contenedor visual de cada botón sin reducir el objetivo táctil accesible de al menos 48 dp. Comprobar que sus áreas táctiles no se solapen ni intercepten indebidamente el toque de la miniatura.
+- Añadir detrás de ambos botones un degradado inferior que se desvanezca hacia arriba sobre la imagen, con suficiente legibilidad en fondos claros, oscuros y de alto contraste. No aplicar una banda sólida separada ni ocultar innecesariamente el contenido de la miniatura.
+- Conservar el toque de la miniatura para abrir el preview interno y las acciones existentes, incluyendo estados ocupados, deshabilitados, error, descarga/apertura y cancelación. No cambiar ámbitos, permisos, seguridad del preview ni comportamiento del archivo.
+- Cuando no exista una miniatura válida o falle su carga, mostrar un estado alternativo honesto y accionable; no dejar una tarjeta vacía ni simular una imagen disponible. La retirada de la etiqueta «Vista previa estática» no autoriza presentarla como una página interactiva en vivo.
+- Validar la imagen de referencia antes de implementar; revisar recorte, proporciones, esquinas, único borde exterior, botones y degradado. Cubrir temas claro/oscuro, distintos tamaños de tarjeta, fuente grande, semántica accesible, toques y pulsaciones repetidas, estados sin miniatura y errores. Actualizar pruebas y capturas; después de la validación completa, respaldar código y Pending.md en master y entregar el APK actualizado antes de continuar.
 
 ## Validaciones que siguen abiertas
 

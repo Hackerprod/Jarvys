@@ -35,8 +35,8 @@
         android:allowBackup="false"
         android:usesCleartextTraffic="true"
         android:label="${jarvysApplicationLabel}"
-        android:icon="@drawable/ic_jarvys"
-        android:roundIcon="@drawable/ic_jarvys"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:theme="@android:style/Theme.Material.Light.NoActionBar"
         android:supportsRtl="true">
 
