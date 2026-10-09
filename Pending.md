@@ -24,7 +24,7 @@ Modo de ejecución: continuar la cola completa. Al cerrar cada pendiente o corre
 - **UX26 / preparación v44 completada en host:** contrato original del agente principal; 1784 Full, 1551 Play, 17 runtime y nueve JavaScript aprobadas, sin nuevas incidencias de lint.
 - **UX27 / preparación v45 completada en host:** títulos de misión y detalle compacto; 1846 Full, 1613 Play, 17 runtime y nueve JavaScript aprobadas, con revisión independiente.
 - **UX28 / preparación v46 completada en host:** tarjetas HTML con miniatura local estática y acciones por iconos; 1911 Full, 1678 Play, 17 runtime y nueve JavaScript aprobadas, sin nuevos diagnósticos de lint. Ambos APK unsigned verificados para firma original; Chromium y aceptación física pendientes.
-- **UX29 / preparación v47 en curso:** indicador nativo de puntos implementado; pruebas dirigidas, revisión independiente y validación agregada pendientes de terminar. Después se continúa con UX30 y cobertura general de Gmail en UX31.
+- **UX29 / preparación v47 en curso:** indicador nativo de puntos implementado; 25 pruebas dirigidas aprobadas (19 nuevas), revisión de fuente sin bloqueos y diez capturas nativas inspeccionables. Validación agregada pendiente de terminar. Después se continúa con UX30 y cobertura general de Gmail en UX31.
 - La paridad completa con el comportamiento de v28 en un teléfono sigue pendiente de validación; la fiabilidad del agente es prioritaria antes de añadir funciones.
 
 ## Entregas previas
@@ -337,7 +337,7 @@ Contrato y aceptación física: app/FILE_DELIVERY.md y app/WEB_PREVIEW_ACCEPTANC
 
 ### 13. UX29: indicador nativo de puntos iluminados
 
-Estado: implementación nativa inicial en curso para v47 / 1.2.40-UX29. Se están ejecutando las pruebas dirigidas y la revisión; aún no se ha validado ni entregado el APK.
+Estado: código y 25 pruebas dirigidas aprobados para preparación v47 / 1.2.40-UX29. Revisión de fuente sin bloqueos; suites completas, lint y APK pendientes de terminar. No se declara validación física.
 
 - Sustituir únicamente el glifo de AgentPresenceIndicator por una implementación original en Canvas de Compose inspirada en la referencia visual https://reactbits.dev/c/micro/lattice-loader.
 - Usar una cuadrícula fija de 3 × 3 puntos: ocho puntos exteriores se iluminan en secuencia y el punto central permanece tenue. Tomar como orientación visual puntos de unos 6 dp, separación de 2 dp, opacidad tenue cercana a 0,15 y ciclo de unos 864 ms, ajustándolo al componente nativo existente.
@@ -345,7 +345,9 @@ Estado: implementación nativa inicial en curso para v47 / 1.2.40-UX29. Se está
 - Respetar movimiento reducido con una representación estática y pausar la animación cuando no sea visible o su ciclo de vida no esté activo.
 - Crear el dibujo y la animación de forma independiente; no copiar código de la referencia sujeto a MIT más Commons Clause.
 - Primera implementación: una fase compartida controla solo la opacidad de nueve puntos fijos, sin recomponer el texto en cada fotograma. El glifo observa su propio rectángulo visible y desmonta ciclos y transiciones cuando está oculto, con movimiento reducido o con el lifecycle detenido. Las etiquetas, colores, estados terminales y cursor de streaming se conservan.
-- Se añaden pruebas de geometría, periodicidad, píxeles, clipping real por scroll, ciclo de vida, accesibilidad, idiomas, temas y fuente al 200%. Sus resultados todavía no se presentan como aprobados ni como validación física.
+- Diecinueve regresiones nuevas y seis existentes aprueban: geometría, periodicidad, píxeles, clipping real por scroll, ciclo de vida, accesibilidad, idiomas, temas y fuente al 200%. Diez capturas nativas muestran dos fases de movimiento, estados y modo estático. Se comprueban píxeles de los colores de estado, sin exigir contraste de texto a los puntos tenues decorativos.
+- El test de scroll se corrigió para dejar avanzar el reloj durante su desplazamiento semántico animado; se conservan el recorrido y las aserciones. La pasada final enfocada termina sin fallos, errores ni omitidas. Las etiquetas largas mantienen su elipsis anterior y la descripción accesible completa; Thinking/Pensando cabe completo al 200%.
+- El cursor de streaming y las funciones de texto/color son idénticos a v46. No cambia el runtime del agente, los permisos ni la implementación de UX26–UX28. Las pruebas de host no certifican fluidez, consumo de batería, TalkBack o instalación física.
 
 ### 14. UX30: densidad y claridad del menú lateral
 

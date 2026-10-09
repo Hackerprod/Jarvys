@@ -131,9 +131,14 @@ class LatticePresenceUiTest {
             }
         } }
         settle(); active(true)
+        // Scroll semantics completes an animated scroll; let its clock advance for this action.
+        compose.mainClock.autoAdvance = true
         compose.onNodeWithTag("bottom").performScrollTo()
+        compose.mainClock.autoAdvance = false
         settle(); active(false)
+        compose.mainClock.autoAdvance = true
         compose.onNodeWithTag("agent-presence-thinking").performScrollTo()
+        compose.mainClock.autoAdvance = false
         settle(); active(true)
     }
 
