@@ -35,6 +35,7 @@ import androidx.webkit.JavaScriptReplyProxy;
 import androidx.webkit.WebMessageCompat;
 import androidx.webkit.WebViewCompat;
 import androidx.webkit.WebViewFeature;
+import androidx.core.view.ViewCompat;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -62,6 +63,7 @@ public final class FactoryActivity extends Activity {
             new ArrayBlockingQueue<>(MAX_PENDING), new ThreadPoolExecutor.AbortPolicy());
     private final Map<String, Reply> pending = new HashMap<>();
     private WebView webView;
+    private FrameLayout root;
     private FactoryConfig config;
     private BoundedStore store;
     private int generation;
@@ -73,6 +75,9 @@ public final class FactoryActivity extends Activity {
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        root = FactoryWindowPolicy.createRoot(this);
+        setContentView(root);
+        ViewCompat.requestApplyInsets(root);
         try {
             config = FactoryConfig.parse(readConfig(), getPackageName());
             if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
@@ -163,14 +168,7 @@ public final class FactoryActivity extends Activity {
                     }
                     receive(message.getData(), replyProxy);
                 });
-        FrameLayout root = new FrameLayout(this);
-        root.setOnApplyWindowInsetsListener((view, insets) -> {
-            view.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(),
-                    insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom());
-            return insets;
-        });
         root.addView(webView, new FrameLayout.LayoutParams(-1, -1));
-        setContentView(root);
         webView.loadUrl(BridgeProtocol.ORIGIN + "/" + config.entryPoint);
     }
 
@@ -350,8 +348,11 @@ public final class FactoryActivity extends Activity {
     private void showError(String message) {
         if (webView != null) { webView.stopLoading(); webView.setVisibility(android.view.View.GONE); }
         TextView text = new TextView(this); text.setText(message); text.setTextSize(18);
+        text.setTextColor(FactoryWindowPolicy.isDark(this) ? FactoryWindowPolicy.DARK_TEXT : FactoryWindowPolicy.LIGHT_TEXT);
         int padding = (int) (24 * getResources().getDisplayMetrics().density);
-        text.setPadding(padding, padding * 2, padding, padding); setContentView(text);
+        text.setPadding(padding, padding * 2, padding, padding);
+        root.removeAllViews();
+        root.addView(text, new FrameLayout.LayoutParams(-1, -1));
     }
     @Override protected void onDestroy() {
         destroyed = true; generation++; pending.clear(); export = null; uiOwner = null; io.shutdownNow();

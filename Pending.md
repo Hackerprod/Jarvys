@@ -29,7 +29,7 @@ Modo de ejecución: continuar la cola completa. Al cerrar cada pendiente o corre
 - **UX32 / preparación v49 completada en host:** nuevo icono de la aplicación con el PNG original preservado, launcher y round para cinco densidades e iconos adaptativos. 1963 Full, 1730 Play, 17 runtime y nueve JavaScript aprobadas; doce capturas nativas y revisión independiente, sin nuevos diagnósticos de lint. Ambos APK verificados para firma original; aceptación física pendiente. v48 permanece inmutable.
 - **UX31 / preparación v50 completada en host:** gestión general de Gmail, permisos efectivos, etiquetas, mensajes/hilos, borradores y lotes reanudables. 2115 Full, 1733 Play, 17 runtime y nueve JavaScript aprobadas; 50 capturas de Google, revisión independiente y cero nuevos diagnósticos de lint. Ambos APK originales verificados para firma externa. No se actuó sobre cuentas reales ni se ampliaron concesiones OAuth.
 - **UX33 / preparación v51 completada en host:** miniatura HTML de borde a borde, un borde exterior y acciones superpuestas sobre degradado. 2132 Full, 1750 Play, 17 runtime y nueve JavaScript aprobadas; 40 capturas y revisión independiente, sin nuevos diagnósticos de lint. Ambos APK originales verificados para firma externa; aceptación física pendiente.
-- **Etapa activa:** UX38 / preparación v52 completada en código y validación de host, lista para firma con la identidad original. Sigue UX35, después UX36 y UX37. UX34 fase 0 diagnóstica permanece cerrada; fases 1–4 siguen sujetas a sus gates, sin activar mantenimiento de contexto.
+- **Etapa activa:** UX35 / preparación v53 en implementación y validación: política genérica de barras del sistema, área útil y teclado para las APK generadas. UX38 / v52 queda cerrada en host y en su flujo de firma original; siguen UX36 y UX37. UX34 fase 0 diagnóstica permanece cerrada; fases 1–4 siguen sujetas a sus gates, sin activar mantenimiento de contexto.
 - La paridad completa con el comportamiento de v28 en un teléfono sigue pendiente de validación; la fiabilidad del agente es prioritaria antes de añadir funciones.
 
 ## Entregas previas
@@ -503,7 +503,7 @@ Límites: la prueba con reloj virtual avanzado tres días, runner sintético y a
 
 ### 20. UX35: barras del sistema y área útil de las aplicaciones generadas
 
-Estado: siguiente en cola tras el cierre de UX38, antes de fases posteriores de memoria. Auditoría de solo lectura realizada; corrección del runtime de fábrica aún no implementada.
+Estado: implementación en curso para preparación v53 / 1.2.46-UX35, tras el cierre de UX38. La política común de ventana y el contenedor protegido ya están implementados; pruebas dirigidas, revisión independiente, suites frescas y APK final todavía pendientes. No se afirma aceptación física.
 
 - La plantilla ya usa un tema nativo sin ActionBar. La evidencia visual confirma contraste insuficiente entre iconos blancos y fondo claro de la barra del sistema; no demuestra por sí sola recorte de contenido ni la presencia de una barra de título de la aplicación. Evitar corregir un ActionBar inexistente.
 - Revisar el tratamiento de insets de FactoryActivity: actualmente aplica padding y devuelve los mismos insets a la WebView, lo que puede duplicar su efecto. Definir una única estrategia explícita de área útil y consumo/puesta a cero de los tipos ya aplicados, sin desplazar ni recortar el contenido dos veces.
@@ -512,6 +512,8 @@ Estado: siguiente en cola tras el cierre de UX38, antes de fases posteriores de 
 - Regenerar la plantilla/runtime de la fábrica y sus hashes/manifiestos mediante el flujo existente. Verificar que el generador empaqueta esa nueva plantilla y mantiene permisos, bridge, recursos, identidad y aislamiento existentes.
 - Validar con fixtures sintéticos claros/oscuros, teclado abierto/cerrado, rotación, cutout, navegación gestual y por botones; distinguir capturas de host de comprobación física. Actualizar pruebas y contrato correspondiente antes de entregar la corrección.
 - Las APK ya generadas contienen la plantilla anterior: necesitan reconstruirse para recibir el arreglo, conservando package ID y clave de firma de cada aplicación y aumentando su versionCode cuando se actualice una instalación. Actualizar Jarvys por sí solo no modifica esas APK existentes.
+
+Primer checkpoint de código: FactoryWindowPolicy hace explícitos el contraste y la superficie nativa clara/oscura, mantiene visibles las barras y conserva NoActionBar. Un único contenedor para contenido y errores aplica la unión de barras, cutout e IME, sin sumar dos veces navegación y teclado; reenvía ceros de los tipos tratados y conserva los demás. Se incorpora ajuste de tamaño para teclado y compatibilidad de metadatos antiguos. El runtime declara AndroidX Core para estas APIs; todavía se están validando sus dependencias y los recorridos API 24–35. El cambio no amplía permisos, bridge, firma ni capacidad de red de las aplicaciones generadas.
 
 ### 21. UX36: generación de imágenes en Coding y descripción fiel de sus capacidades
 
