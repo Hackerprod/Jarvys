@@ -80,7 +80,7 @@ public class CrewProfileRecoveryTest {
     }
 
     @Test
-    public void savingCustomChecksRevisionAndWritesSchemaThreeWithoutResettingCorruptEvidence() throws Exception {
+    public void savingCustomChecksRevisionAndWritesSchemaFourWithoutResettingCorruptEvidence() throws Exception {
         File root = temporary.newFolder();
         CrewProfileRepository repository = new CrewProfileRepository(root);
         CrewProfile initial = CrewProfile.codingDefault().withIdentity(CrewProfileRepository.newCustomId()).withVersion(1);
@@ -91,7 +91,7 @@ public class CrewProfileRecoveryTest {
         assertEquals(3, repository.codingProfile().version);
         assertThrows(IllegalArgumentException.class, ()->repository.save(initial, initial.capabilities, initial.skillIds));
         File file = new File(root, "crew_profiles/profiles.json");
-        assertEquals(3, new JSONObject(new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8)).getInt("schemaVersion"));
+        assertEquals(4, new JSONObject(new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8)).getInt("schemaVersion"));
         Files.write(file.toPath(), "broken evidence".getBytes(StandardCharsets.UTF_8));
         assertThrows(IllegalArgumentException.class, repository::codingProfile);
         assertEquals("broken evidence", new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8));
