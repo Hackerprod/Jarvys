@@ -1363,4 +1363,14 @@ Se desconoce cómo terminaron. No se repiten automáticamente. Revisa los cambio
     <string name="activity_skill_loaded">Skill cargada · %1$s</string>
     <string name="activity_skill_failed">No se pudo cargar la skill · %1$s</string>
     <string name="activity_unconfirmed_detail">No se confirmó un resultado final. Puede haber efectos; revisa los detalles antes de reintentar.</string>
+    <string name="crew_phase_model_wait">Esperando respuesta del modelo</string>
+    <string name="crew_phase_compacting">Compactando</string>
+    <string name="crew_phase_tool">Ejecutando herramienta</string>
+    <string name="crew_phase_processing">Procesando respuesta</string>
+    <string name="crew_progress_model_response">Respuesta del modelo recibida</string>
+    <string name="crew_progress_compacted">Contexto compactado</string>
+    <string name="crew_progress_compaction_error">Falló la compactación</string>
+    <string name="crew_progress_tool_result">Herramienta finalizada</string>
+    <string name="crew_progress_tool_error">Herramienta con error</string>
+    <string name="crew_last_progress">%1$s · Última actividad: %2$s · hace %3$d:%4$02d</string>
 </resources>

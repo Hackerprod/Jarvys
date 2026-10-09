@@ -105,7 +105,7 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
                         for (String owner : owners) validateOwner(visible.id, owner);
                         String state = data.getString("status");
                         CrewManager.Status.valueOf(state);
-                        CrewBotSnapshot precise = new CrewBotSnapshot(visible.id, role.id, role.name, data.getString("name"), role.colorKey, data.getString("mission"), state, data.optString("error"), data.optString("result"), "", role.tools, data.getLong("startedAtMillis"), data.getLong("finishedAtMillis"));
+                        CrewBotSnapshot precise = new CrewBotSnapshot(visible.id, role.id, role.name, data.getString("name"), role.colorKey, data.getString("mission"), state, data.optString("error"), data.optString("result"), "", role.tools, data.getLong("startedAtMillis"), data.getLong("finishedAtMillis"), false, "", false, "", visible.lastProgress, visible.lastProgressAtMillis);
                         CrewMissionSnapshot presentation = withCheckpointPresentation(mission, recoveredMission(data, precise, saved.savedAtMs));
                         manager.restoreBot(presentation, precise, role, saved.loop, saved.artifactOwnership, saved.scopeIdentity, owners, data.getLong("completedCycles"), decodeMessages(data.getJSONArray("messages"), visible.id, false), decodeMessages(data.getJSONArray("pending"), visible.id, true), "");
                         continue;

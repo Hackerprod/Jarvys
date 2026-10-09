@@ -1363,4 +1363,14 @@ Their exit results are unknown. Do not repeat them automatically. Review project
     <string name="activity_skill_loaded">Loaded skill · %1$s</string>
     <string name="activity_skill_failed">Failed to load skill · %1$s</string>
     <string name="activity_unconfirmed_detail">No final result was confirmed. Effects may have occurred; inspect the details before retrying.</string>
+    <string name="crew_phase_model_wait">Waiting for model response</string>
+    <string name="crew_phase_compacting">Compacting</string>
+    <string name="crew_phase_tool">Running a tool</string>
+    <string name="crew_phase_processing">Processing response</string>
+    <string name="crew_progress_model_response">Model response received</string>
+    <string name="crew_progress_compacted">Context compacted</string>
+    <string name="crew_progress_compaction_error">Compaction failed</string>
+    <string name="crew_progress_tool_result">Tool finished</string>
+    <string name="crew_progress_tool_error">Tool reported an error</string>
+    <string name="crew_last_progress">%1$s · Last activity: %2$s · %3$d:%4$02d ago</string>
 </resources>

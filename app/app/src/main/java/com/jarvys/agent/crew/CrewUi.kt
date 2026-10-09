@@ -412,6 +412,7 @@ fun CrewMissionCard(
                     !bot.active() -> crewBotStatus(bot.status)
                     bot.waitingReason == "limite del proveedor" -> stringResource(R.string.crew_waiting_provider)
                     bot.waitingReason.isNotBlank() -> stringResource(R.string.crew_waiting_captain)
+                    bot.phase.isNotBlank() -> crewPhaseLabel(bot.phase)
                     activity?.activity != null -> com.jarvys.agent.toolActivityLabel(activity.activity)
                     activity != null -> localizeCrewActivity(activity.text)
                     else -> crewBotStatus(bot.status)
@@ -427,6 +428,9 @@ fun CrewMissionCard(
                     Text(status, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall,
                         maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(2f))
                 }
+            }
+            snapshot.bots.filter { it.active() && it.lastProgressAtMillis > 0L }.forEach { bot ->
+                CrewBotProgress(bot, showPhase = false)
             }
             if (snapshot.bots.isEmpty()) LinearProgressIndicator(Modifier.fillMaxWidth().testTag("crew-progress"))
             else {
@@ -546,6 +550,10 @@ fun CrewMissionScreen(
                             fontWeight = FontWeight.SemiBold, maxLines = if (compactHeight) 1 else 2, overflow = TextOverflow.Ellipsis)
                         Text(crewMissionStatus(snapshot.status), modifier = Modifier.testTag("crew-mission-status"),
                             color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
+                        // Keep the debate header useful during a provider wait without growing with crew size.
+                        snapshot.bots.firstOrNull { it.active() && it.phase.isNotBlank() }?.let { bot ->
+                            CrewBotProgress(bot, compact = true)
+                        }
                         if (readOnly) Text(stringResource(R.string.crew_read_only),
                             color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
                     }
@@ -624,7 +632,7 @@ fun CrewMissionScreen(
                 if (snapshot.bots.isEmpty()) CrewEmptyTab(Modifier.weight(1f), R.string.crew_bots_empty)
                 else LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("crew-bot-list")) {
                     items(snapshot.bots, key = { it.id }) { bot ->
-                        JarvysListRow(bot.name, CrewRoleLabel(bot.roleId, bot.roleName),
+                        JarvysListRow(bot.name, if (bot.phase.isNotBlank()) crewPhaseLabel(bot.phase) else CrewRoleLabel(bot.roleId, bot.roleName),
                             leadingContent = { CrewBotAvatar(bot.name, bot.roleId, bot.colorKey, bot.status,
                                 bot.waitingReason) },
                             trailing = { JarvysTag(crewBotStatus(bot.status)) },
@@ -721,6 +729,7 @@ fun CrewBotDetailScreen(
             Text(crewWaitingReason(bot.waitingReason), modifier = Modifier.padding(horizontal = JarvysUiTokens.ScreenPadding),
                 color = MaterialTheme.colorScheme.tertiary, style = MaterialTheme.typography.bodySmall)
         }
+        CrewBotProgress(bot, Modifier.padding(horizontal = JarvysUiTokens.ScreenPadding))
         HorizontalDivider(Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
         if (conversation.isEmpty()) CrewEmptyTab(Modifier.weight(1f), R.string.crew_bot_thread_empty)
         else ChatMessageList(
@@ -756,6 +765,53 @@ fun CrewBotDetailScreen(
         }
     }
 }
+
+/** Observed events only. The clock pauses off-screen and never controls worker lifetime. */
+@Composable
+internal fun CrewBotProgress(bot: CrewBotSnapshot, modifier: Modifier = Modifier, showPhase: Boolean = true, compact: Boolean = false,
+                             nowMillis: () -> Long = System::currentTimeMillis) {
+    if (!bot.active() || bot.lastProgressAtMillis <= 0L) return
+    val viewport = rememberMotionViewport()
+    val visible = rememberLifecycleVisible(viewport.visible)
+    var now by remember(bot.id, bot.lastProgressAtMillis) { mutableLongStateOf(nowMillis()) }
+    LaunchedEffect(bot.id, bot.lastProgressAtMillis, visible) {
+        if (visible) while (true) {
+            now = nowMillis()
+            delay(1000)
+        }
+    }
+    val elapsed = (now - bot.lastProgressAtMillis).coerceAtLeast(0L) / 1000L
+    Column(modifier.then(viewport.modifier).testTag("crew-phase-${bot.id}")) {
+        if (showPhase && bot.phase.isNotBlank()) Text(
+            if (compact) "${bot.name} · ${crewPhaseLabel(bot.phase)}" else crewPhaseLabel(bot.phase),
+            maxLines = if (compact) 1 else Int.MAX_VALUE, overflow = TextOverflow.Ellipsis,
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(stringResource(R.string.crew_last_progress, bot.name, crewProgressLabel(bot.lastProgress),
+            elapsed / 60L, elapsed % 60L), style = MaterialTheme.typography.labelSmall,
+            maxLines = if (compact) 1 else Int.MAX_VALUE, overflow = TextOverflow.Ellipsis,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun crewPhaseLabel(phase: String): String = stringResource(when (phase) {
+    "model_wait" -> R.string.crew_phase_model_wait
+    "compacting" -> R.string.crew_phase_compacting
+    "tool_call" -> R.string.crew_phase_tool
+    else -> R.string.crew_phase_processing
+})
+
+@Composable
+private fun crewProgressLabel(progress: String): String = stringResource(when (progress) {
+    "model_response" -> R.string.crew_progress_model_response
+    "compacted" -> R.string.crew_progress_compacted
+    "compaction_error" -> R.string.crew_progress_compaction_error
+    "tool_result" -> R.string.crew_progress_tool_result
+    "tool_error" -> R.string.crew_progress_tool_error
+    "tool_call" -> R.string.crew_phase_tool
+    "compacting" -> R.string.crew_phase_compacting
+    else -> R.string.crew_phase_model_wait
+})
 
 @Composable
 fun CrewResumePanel(canResume: Boolean, note: String, onResume: () -> Unit) {

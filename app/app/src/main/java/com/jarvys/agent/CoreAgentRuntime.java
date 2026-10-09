@@ -1069,32 +1069,37 @@ public final class CoreAgentRuntime {
 
   public static CoreAgentLoop.ProgressListener crewProgress(
       CoreAgentLoop.ProgressListener parent, final CrewManager.Bot bot, final CrewManager manager) {
+    final CancellationToken cycleToken = bot.token;
+    final long cycle = bot.completedCycles();
     final String legacyEpoch = java.util.UUID.randomUUID().toString();
     return new CoreAgentLoop.ProgressListener() {
       @Override // com.jarvys.agent.CoreAgentLoop.ProgressListener
-      public void onProgress(String stage, String message) {}
+      public void onProgress(String stage, String message) {
+        // Only fixed public phase keys are retained; never reasoning or provider text.
+        manager.recordPhase(bot, stage, cycleToken, cycle);
+      }
 
       @Override
-      public void onToolActivity(ToolActivity activity) { manager.recordToolActivity(bot, activity); }
+      public void onToolActivity(ToolActivity activity) { manager.recordToolActivity(bot, activity, cycleToken, cycle); }
 
       @Override
       public void onToolProgress(String stage, String callId, String displayName, String detail,
           String previewId, String reflectionSource) {
         // Compatibility for legacy callbacks: never infer identity from the tool's display name.
-        String identity = bot.missionId + ":" + bot.id + ":" + legacyEpoch + ":" + bot.completedCycles() + ":" + (callId == null || callId.isEmpty()
+        String identity = bot.missionId + ":" + bot.id + ":" + legacyEpoch + ":" + cycle + ":" + (callId == null || callId.isEmpty()
             ? java.util.UUID.randomUUID().toString() : callId);
         manager.recordToolActivity(bot, new ToolActivity(java.util.UUID.randomUUID().toString(),identity,callId,
-            displayName,displayName,"","",stage,detail,previewId,null,reflectionSource,System.currentTimeMillis()));
+            displayName,displayName,"","",stage,detail,previewId,null,reflectionSource,System.currentTimeMillis()), cycleToken, cycle);
       }
 
       @Override // com.jarvys.agent.CoreAgentLoop.ProgressListener
-      public void onCompactionStarted(String trigger) {}
+      public void onCompactionStarted(String trigger) { manager.recordPhase(bot, "compacting", cycleToken, cycle); }
 
       @Override // com.jarvys.agent.CoreAgentLoop.ProgressListener
-      public void onCompactionCompleted(String summary, int summarizedMessages, String mode) {}
+      public void onCompactionCompleted(String summary, int summarizedMessages, String mode) { manager.recordPhase(bot, "compacted", cycleToken, cycle); }
 
       @Override // com.jarvys.agent.CoreAgentLoop.ProgressListener
-      public void onCompactionFailed(String message) {}
+      public void onCompactionFailed(String message) { manager.recordPhase(bot, "compaction_error", cycleToken, cycle); }
     };
   }
 

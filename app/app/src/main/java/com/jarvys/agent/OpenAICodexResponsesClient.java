@@ -3,7 +3,6 @@ package com.jarvys.agent;
 import android.os.Build;
 import android.util.Log;
 import com.jarvys.agent.device.ScreenData;
-import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
@@ -124,7 +123,7 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
     try {
       parsed = parseResponse(response.body);
     } catch (RuntimeException failure) {
-      if (logEmptyReply)
+      if (logEmptyReply && !(failure instanceof CodexResponseException))
         logEmptyReply(response.status, sessionId, settings.getModel(), response.rawBody);
       throw failure;
     }
@@ -300,6 +299,7 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
       boolean captureRetryAfter,
       ProviderHttp.ConnectionFactory connectionFactory) {
     HttpURLConnection connection = null;
+    InputStream responseStream = null;
     Runnable unregister = () -> {};
     try {
       connection = connectionFactory.open(ENDPOINT);
@@ -339,9 +339,9 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
       token.throwIfCancelled();
       int status = connection.getResponseCode();
       boolean successful = status >= 200 && status < 300;
-      InputStream responseStream =
+      responseStream =
           successful ? connection.getInputStream() : connection.getErrorStream();
-      String rawResponseBody = responseStream == null ? "" : readFullBody(responseStream, token, captureRetryAfter ? CodexImageGenerationClient.MAX_RESPONSE_BYTES : Integer.MAX_VALUE);
+      String rawResponseBody = responseStream == null ? "" : CodexResponseStream.read(responseStream, token, captureRetryAfter ? CodexImageGenerationClient.MAX_RESPONSE_BYTES : Integer.MAX_VALUE, successful);
       String responseBody = successful ? normalizeSseBody(rawResponseBody) : rawResponseBody;
       if (!successful && logErrors) {
         logHttpError(status, sessionId, rawResponseBody);
@@ -367,6 +367,9 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
     } finally {
       unregister.run();
       if (connection != null) connection.disconnect();
+      if (responseStream != null) {
+        try { responseStream.close(); } catch (java.io.IOException ignored) { }
+      }
     }
   }
 
@@ -448,22 +451,8 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
     }
   }
 
-  private static String readFullBody(InputStream input, CancellationToken token, int limit)
-      throws java.io.IOException {
-    try (InputStream in = input;
-        ByteArrayOutputStream output = new ByteArrayOutputStream()) {
-      byte[] buffer = new byte[8192];
-      int read;
-      while ((read = in.read(buffer)) != -1) {
-        token.throwIfCancelled();
-        if (read > limit - output.size()) throw new java.io.IOException("Provider response exceeds its bounded image limit");
-        output.write(buffer, 0, read);
-      }
-      return output.toString(StandardCharsets.UTF_8.name());
-    }
-  }
-
   private static String normalizeSseBody(String rawBody) {
+    if (rawBody != null) rawBody = CodexResponseStream.stripBom(rawBody);
     if (rawBody == null || rawBody.trim().startsWith("{")) return rawBody == null ? "" : rawBody;
     StringBuilder normalized = new StringBuilder();
     StringBuilder eventData = new StringBuilder();
@@ -485,25 +474,46 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
     if (eventData.length() == 0) return;
     String payload = eventData.toString().trim();
     eventData.setLength(0);
-    if (!"[DONE]".equals(payload)) normalized.append(payload).append('\n');
+    if (!"[DONE]".equals(payload)) normalized.append(CodexResponseStream.parseObject(payload).toString()).append('\n');
   }
 
   private static ModelReply parseResponse(String body) {
     if (body == null || body.trim().isEmpty())
-      throw new IllegalStateException("OpenAI Codex returned an empty response");
+      throw new CodexResponseException(CodexResponseException.Kind.INCOMPLETE);
     LinkedHashMap<String, ModelReply.Call> calls = new LinkedHashMap<>();
     Map<String, String> fallbackIds = new LinkedHashMap<>();
     StringBuilder text = new StringBuilder();
     try {
-      String[] events = body.split("\\n");
-      for (String event : events) {
-        String payload = event.trim();
-        if (payload.isEmpty() || !payload.startsWith("{")) continue;
-        consumeResponse(new JSONObject(payload), calls, text, fallbackIds);
+      JSONObject completed = null;
+      // A full non-SSE response can be pretty printed. Normalized SSE is one JSON per line.
+      try {
+        JSONObject single = CodexResponseStream.parseObject(body.trim());
+        CodexResponseStream.terminal(single, true);
+        JSONObject candidate = single.optJSONObject("response");
+        if (candidate == null && single.optJSONArray("output") != null) candidate = single;
+        if (candidate != null && candidate.optJSONArray("output") != null
+            && (single.optString("type", "").isEmpty() || "response.completed".equals(single.optString("type")))) {
+          String status = candidate.optString("status", "");
+          if (!status.isEmpty() && !"completed".equals(status))
+            throw new CodexResponseException(CodexResponseException.Kind.INCOMPLETE);
+          completed = candidate;
+        }
+      } catch (CodexResponseException failure) {
+        if (failure.kind != CodexResponseException.Kind.MALFORMED || !body.contains("\n")) throw failure;
       }
+      if (completed == null) {
+        for (String event : body.split("\n")) {
+          if (event.trim().isEmpty()) continue;
+          JSONObject value = CodexResponseStream.parseObject(event);
+          if (CodexResponseStream.terminal(value, true)) completed = value.getJSONObject("response");
+        }
+      }
+      if (completed == null) throw new CodexResponseException(CodexResponseException.Kind.INCOMPLETE);
+      // Only authoritative final output may create tool calls; intermediate fragments are never executable.
+      consumeOutput(completed.getJSONArray("output"), calls, text, fallbackIds);
     } catch (Exception e) {
-      if (e instanceof IllegalStateException) throw (IllegalStateException) e;
-      throw new IllegalStateException("Could not parse OpenAI Codex Responses stream", e);
+      if (e instanceof CodexResponseException) throw (CodexResponseException) e;
+      throw new CodexResponseException(CodexResponseException.Kind.MALFORMED);
     }
     return new ModelReply(
         text.toString(),
@@ -517,6 +527,9 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
   private static Integer contextTokensFromUsage(String body) {
     if (body == null) return null;
     Integer result = null;
+    try {
+      body = CodexResponseStream.parseObject(body).toString();
+    } catch (CodexResponseException ignored) { /* Normalized stream contains multiple objects. */ }
     for (String event : body.split("\\n")) {
       String payload = event.trim();
       if (!payload.startsWith("{")) continue;
@@ -536,23 +549,13 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
     return result;
   }
 
-  private static void consumeResponse(
-      JSONObject event, Map<String, ModelReply.Call> calls, StringBuilder text, Map<String, String> fallbackIds) throws Exception {
-    JSONObject response = event.optJSONObject("response");
-    JSONObject item = event.optJSONObject("item");
-    if (response != null) consumeOutput(response.optJSONArray("output"), calls, text, fallbackIds);
-    consumeItem(item, calls, text, fallbackIds, "output:" + event.optInt("output_index", 0));
-    String eventType = event.optString("type", "");
-    if ("response.output_text.delta".equals(eventType)) text.append(event.optString("delta", ""));
-    if ("response.output_text.done".equals(eventType) && text.length() == 0) {
-      text.append(event.optString("text", ""));
-    }
-  }
-
   private static void consumeOutput(
       JSONArray output, Map<String, ModelReply.Call> calls, StringBuilder text, Map<String, String> fallbackIds) throws Exception {
     if (output == null) return;
-    for (int i = 0; i < output.length(); i++) consumeItem(output.optJSONObject(i), calls, text, fallbackIds, "output:" + i);
+    for (int i = 0; i < output.length(); i++) {
+      if (output.optJSONObject(i) == null) throw new CodexResponseException(CodexResponseException.Kind.MALFORMED);
+      consumeItem(output.getJSONObject(i), calls, text, fallbackIds, "output:" + i);
+    }
   }
 
   private static void consumeItem(
@@ -561,6 +564,9 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
     if (item == null) return;
     String type = item.optString("type", "");
     if ("function_call".equals(type)) {
+      String status = item.optString("status", "");
+      if (!status.isEmpty() && !"completed".equals(status))
+        throw new CodexResponseException(CodexResponseException.Kind.INCOMPLETE);
       String id = item.optString("call_id", "");
       if (id.isEmpty()) id = item.optString("id", "");
       if (id.isEmpty()) id = fallbackIds.computeIfAbsent(fallbackKey,
@@ -570,8 +576,11 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
         if (previousId != null && !previousId.equals(id)) calls.remove(previousId);
       }
       String name = item.optString("name", "");
-      String argsRaw = item.optString("arguments", "{}");
-      JSONObject args = new JSONObject(argsRaw.trim().isEmpty() ? "{}" : argsRaw);
+      if (!(item.opt("arguments") instanceof String) || name.isEmpty())
+        throw new CodexResponseException(CodexResponseException.Kind.MALFORMED);
+      String argsRaw = item.getString("arguments");
+      if (argsRaw.trim().isEmpty()) throw new CodexResponseException(CodexResponseException.Kind.MALFORMED);
+      JSONObject args = CodexResponseStream.parseObject(argsRaw);
       if (!name.isEmpty())
         calls.put(
             id, new ModelReply.Call(id, name, toMap(args)));

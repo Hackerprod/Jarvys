@@ -121,6 +121,9 @@ public final class CrewManager implements AutoCloseable {
         private volatile String result = "";
         private volatile String error = "";
         private volatile String waitingReason = "";
+        private volatile String phase = "";
+        private volatile String lastProgress = "";
+        private volatile long lastProgressAtMillis;
         private volatile Thread thread;
         private volatile boolean reported;
         private volatile long startedAtMillis;
@@ -396,6 +399,8 @@ public final class CrewManager implements AutoCloseable {
         if (checkpoint != null && bot.status == Status.DONE && pending.stream().anyMatch((message)->!checkpoint.appliedIncomingIds.contains(message.id))) {
             bot.status = Status.INTERRUPTED;
         }
+        bot.lastProgress = snapshot.lastProgress;
+        bot.lastProgressAtMillis = snapshot.lastProgressAtMillis;
         bot.result = snapshot.result;
         bot.error = snapshot.error;
         bot.startedAtMillis = snapshot.startedAtMillis;
@@ -713,6 +718,7 @@ public final class CrewManager implements AutoCloseable {
             validateCurrentProfile(bot.role);
             synchronized (bot.cycleLock) {
                 bot.status = Status.RUNNING;
+                bot.phase = "";
                 bot.waitingReason = "";
                 if (bot.startedAtMillis == 0) bot.startedAtMillis = System.currentTimeMillis();
             }
@@ -759,7 +765,6 @@ public final class CrewManager implements AutoCloseable {
                 bot.transcript = loop.transcriptSnapshot();
                 loop.setCheckpointListener((saved)->retainCheckpoint(bot, saved, bot.artifactOwnership()));
             }
-            CoreAgentLoop.ProgressListener progress = progressFactory == null ? null : progressFactory.create(bot);
             while (true) {
                 awaitIncomingDispatches(bot, token);
                 token.throwIfCancelled();
@@ -770,6 +775,7 @@ public final class CrewManager implements AutoCloseable {
                     bot.reported = false;
                 }
                 String request = bot.completedCycles == 0 ? bot.mission : REANIMATION_PROMPT;
+                CoreAgentLoop.ProgressListener progress = progressFactory == null ? null : progressFactory.create(bot);
                 CoreAgentLoop.Result result = resultPresentation.apply(loop.run(request, bot.transcript, token, progress));
                 bot.transcript = loop.transcriptSnapshot();
                 bot.completedCycles++;
@@ -1072,9 +1078,39 @@ public final class CrewManager implements AutoCloseable {
         }
     }
 
+    /** Presentation only: no messages to the model, deadlines, retries or worker state changes. */
+    public void recordPhase(Bot bot, String stage) {
+        recordPhase(bot, stage, bot.token, bot.completedCycles);
+    }
+
+    public void recordPhase(Bot bot, String stage, CancellationToken cycleToken, long cycle) {
+        if (stage == null) return;
+        switch (stage) {
+            case "model_wait": case "model_response": case "compacting": case "compacted":
+            case "compaction_error": case "tool_call": case "tool_result": case "tool_error": break;
+            default: return;
+        }
+        synchronized (bot.cycleLock) {
+            if (bots.get(bot.id) != bot || bot.token != cycleToken || bot.completedCycles != cycle
+                    || terminal(bot.status) || bot.stopping || bot.token.isCancelled()) return;
+            bot.phase = stage;
+            // Starting a wait is not new model output. Preserve the last observable event.
+            if (!"model_wait".equals(stage) || bot.lastProgressAtMillis == 0L) {
+                bot.lastProgress = stage;
+                bot.lastProgressAtMillis = System.currentTimeMillis();
+            }
+        }
+        publishPresentation(bot.missionId);
+    }
+
     public void recordToolActivity(Bot bot, com.jarvys.agent.ToolActivity activity) {
+        recordToolActivity(bot, activity, bot.token, bot.completedCycles);
+    }
+
+    public void recordToolActivity(Bot bot, com.jarvys.agent.ToolActivity activity, CancellationToken cycleToken, long cycle) {
         if (bots.get(bot.id) != bot) return;
         // A terminal observation may arrive after Stop. It resolves this invocation only and never resumes work.
+        recordPhase(bot, activity.stage, cycleToken, cycle);
         bus.recordActivity(bot.id, activity);
         publishMission(bot.missionId);
     }
@@ -1252,7 +1288,7 @@ public final class CrewManager implements AutoCloseable {
         List<CrewBotSnapshot> botSnapshots = new ArrayList<>();
         for (Bot bot : missionBots) {
             ids.add(bot.id);
-            botSnapshots.add(new CrewBotSnapshot(bot.id, bot.role.id, bot.role.name, bot.name, bot.role.colorKey, bot.mission, bot.status.name(), bot.error, bot.result, bot.waitingReason, bot.role.tools, bot.startedAtMillis, bot.finishedAtMillis, bot.canResume(), bot.recoveryNote, bot.requiresExplicitResume));
+            botSnapshots.add(new CrewBotSnapshot(bot.id, bot.role.id, bot.role.name, bot.name, bot.role.colorKey, bot.mission, bot.status.name(), bot.error, bot.result, bot.waitingReason, bot.role.tools, bot.startedAtMillis, bot.finishedAtMillis, bot.canResume(), bot.recoveryNote, bot.requiresExplicitResume, bot.phase, bot.lastProgress, bot.lastProgressAtMillis));
         }
         List<CrewMessage> missionMessages = new ArrayList<>();
         for (CrewMessage message : bus.snapshot()) if (ids.contains(message.from) || ids.contains(message.to)) missionMessages.add(message);

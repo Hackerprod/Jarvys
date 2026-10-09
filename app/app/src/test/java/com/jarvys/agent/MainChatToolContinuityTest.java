@@ -13,6 +13,8 @@ import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
 /** Real loop/workspace/store/provider-request boundary; no provider or authentication requests. */
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner.class)
+@org.robolectric.annotation.Config(sdk = 34)
 public class MainChatToolContinuityTest {
   @Rule public TemporaryFolder temporary = new TemporaryFolder();
 
@@ -134,7 +136,7 @@ public class MainChatToolContinuityTest {
 
     Method codexParser = OpenAICodexResponsesClient.class.getDeclaredMethod("parseResponse", String.class);
     codexParser.setAccessible(true);
-    String codex = "{\"response\":{\"output\":[{\"type\":\"function_call\",\"name\":\"write\",\"arguments\":\"{}\"}]}}";
+    String codex = "{\"response\":{\"status\":\"completed\",\"output\":[{\"type\":\"function_call\",\"name\":\"write\",\"arguments\":\"{}\"}]}}";
     ModelReply first = (ModelReply) codexParser.invoke(null, codex);
     ModelReply next = (ModelReply) codexParser.invoke(null, codex);
     assertNotEquals(first.calls.get(0).id, next.calls.get(0).id);
@@ -148,7 +150,7 @@ public class MainChatToolContinuityTest {
     String item = "{\"type\":\"function_call\",\"name\":\"write\",\"arguments\":\"{}\"}";
     String stream = "{\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":" + item + "}\n"
         + "{\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":" + item + "}\n"
-        + "{\"type\":\"response.completed\",\"response\":{\"output\":[" + item + "]}}";
+        + "{\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[" + item + "]}}";
     ModelReply result = (ModelReply) parser.invoke(null, stream);
     assertEquals(1, result.calls.size());
   }

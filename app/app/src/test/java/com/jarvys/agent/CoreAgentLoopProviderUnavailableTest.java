@@ -13,6 +13,11 @@ import org.junit.Test;
 
 /** UX38: a bounded provider operation failure is resumable, not a run-wide STOP. */
 public class CoreAgentLoopProviderUnavailableTest {
+    @Test public void codexTerminalAndMalformedResponsesAreRecoverableWithoutAutomaticReplay() {
+        for (CodexResponseException.Kind kind : CodexResponseException.Kind.values())
+            assertProviderPartial(new CodexResponseException(kind));
+    }
+
     @Test public void transportFailureReturnsPartialWithoutCancellingOrRetrying() {
         assertProviderPartial(new ProviderTransportException("Read timed out", new IOException("socket timeout")));
     }
@@ -35,6 +40,14 @@ public class CoreAgentLoopProviderUnavailableTest {
     }
 
     @Test public void toolEvidenceSurvivesProviderFailureAndExplicitCheckpointContinuationNeverReplaysIt() {
+        assertCheckpointContinuation(new ProviderTransportException("Provider disconnected after tool completion", new IOException("reset")));
+    }
+
+    @Test public void completedToolEvidenceSurvivesMalformedCodexResponseWithoutReplay() {
+        assertCheckpointContinuation(new CodexResponseException(CodexResponseException.Kind.MALFORMED));
+    }
+
+    private static void assertCheckpointContinuation(RuntimeException providerFailure) {
         AtomicInteger effects = new AtomicInteger();
         AtomicInteger requests = new AtomicInteger();
         AtomicReference<CoreAgentLoop.Checkpoint> durable = new AtomicReference<>();
@@ -54,7 +67,7 @@ public class CoreAgentLoopProviderUnavailableTest {
                     new ModelReply.Call("effect-call-42", "project_effect", Collections.emptyMap())));
             assertEquals("Provider failures must not trigger an automatic model retry", 2, requests.get());
             assertRetainedEffect(transcript);
-            throw new ProviderTransportException("Provider disconnected after tool completion", new IOException("reset"));
+            throw providerFailure;
         }, tools, "", "provider-recovery");
         interrupted.setCheckpointListener(durable::set);
         CancellationToken token = CancellationToken.cancellable();

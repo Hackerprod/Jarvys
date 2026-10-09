@@ -303,6 +303,12 @@ public final class CodexImageGenerationClient {
             throw failure(CodexImageGenerationException.Kind.API, authenticationFailure.statusCode,
                     "http_" + authenticationFailure.statusCode, text, authenticationFailure.retryAfterMillis,
                     "authentication", authenticationFailure);
+        } catch (CodexResponseException responseFailure) {
+            boolean incomplete = responseFailure.kind == CodexResponseException.Kind.INCOMPLETE
+                    || responseFailure.kind == CodexResponseException.Kind.MALFORMED;
+            throw failure(incomplete ? CodexImageGenerationException.Kind.INCOMPLETE : CodexImageGenerationException.Kind.API,
+                    null, "response_" + responseFailure.kind.name().toLowerCase(java.util.Locale.ROOT),
+                    responseFailure.getMessage(), 0L, "responses.stream", responseFailure);
         } catch (RuntimeException transportFailure) {
             String text = transportFailure.getMessage() == null
                     ? transportFailure.getClass().getSimpleName() : transportFailure.getMessage();

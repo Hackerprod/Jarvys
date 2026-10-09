@@ -247,18 +247,17 @@ public class ProviderDiagnosticsTransportTest {
         assertEquals(1, user.images.size());
     }
 
-    @Test public void codexTransportEofAndIncompleteRemainDiagnosticNotLegacyPolicyChanges() throws Exception {
+    @Test public void codexTransportEofAndIncompleteNeverReturnPartialExecutableReplies() throws Exception {
         settings.setProvider(ProviderSettings.Provider.OPENAI_CODEX);
-        FakeConnection eof = new FakeConnection(200, "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"m-fixture\",\"output_index\":0,\"content_index\":0,\"delta\":\"partial\"}\n\n");
-        ModelReply partial = codex(new FakeFactory(eof), new ArrayList<>()).completeConversation("sys", Collections.emptyList(), "user", Collections.emptyList(), SESSION, CancellationToken.uncancellable());
-        assertEquals("partial", partial.text); // Existing parser result remains usable.
-        assertEquals(ResponseDiagnostics.Completion.UNKNOWN, partial.diagnostics.completion);
-        assertFalse(partial.diagnostics.isSuccessfulFinalAnswer());
+        FakeConnection eof = new FakeConnection(200, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n");
+        CodexResponseException partial = assertThrows(CodexResponseException.class, () ->
+                codex(new FakeFactory(eof), new ArrayList<>()).completeConversation("sys", Collections.emptyList(), "user", Collections.emptyList(), SESSION, CancellationToken.uncancellable()));
+        assertEquals(CodexResponseException.Kind.INCOMPLETE, partial.kind);
         FakeConnection incomplete = new FakeConnection(200, codexText("partial", "incomplete"));
-        ModelReply limited = codex(new FakeFactory(incomplete), new ArrayList<>()).completeConversation("sys", Collections.emptyList(), "user", Collections.emptyList(), SESSION, CancellationToken.uncancellable());
-        assertEquals("partial", limited.text);
-        assertEquals(ResponseDiagnostics.Completion.INCOMPLETE, limited.diagnostics.completion);
-        assertFalse(limited.diagnostics.isSuccessfulFinalAnswer());
+        CodexResponseException limited = assertThrows(CodexResponseException.class, () ->
+                codex(new FakeFactory(incomplete), new ArrayList<>()).completeConversation("sys", Collections.emptyList(), "user", Collections.emptyList(), SESSION, CancellationToken.uncancellable()));
+        assertEquals(CodexResponseException.Kind.INCOMPLETE, limited.kind);
+        assertTrue(eof.disconnected && incomplete.disconnected);
     }
 
     @Test public void chatLengthAndMissingFinishReasonKeepLegacyBodyAndUsage() throws Exception {

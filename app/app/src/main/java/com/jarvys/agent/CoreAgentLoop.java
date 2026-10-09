@@ -476,7 +476,9 @@ public final class CoreAgentLoop {
                     long retryNumber = 0;
                     while (true) {
                         try {
+                            emit(listener, "model_wait", "Esperando respuesta del modelo");
                             reply = model.complete(requestTranscript, turnPrompt, declarations, token);
+                            emit(listener, "model_response", "Respuesta del modelo recibida");
                             break;
                         } catch (ProviderHttpException limited) {
                             if (!limited.isRateLimit()) throw limited;
@@ -697,7 +699,7 @@ public final class CoreAgentLoop {
     private static boolean recoverableProviderFailure(Throwable failure) {
         Set<Throwable> seen = Collections.newSetFromMap(new java.util.IdentityHashMap<>());
         for (Throwable cause = failure; cause != null && seen.add(cause); cause = cause.getCause()) {
-            if (cause instanceof ProviderTransportException) return true;
+            if (cause instanceof ProviderTransportException || cause instanceof CodexResponseException) return true;
             if (cause instanceof ProviderHttpException) {
                 int status = ((ProviderHttpException) cause).httpStatus;
                 return status == 408 || status == 429 || status >= 500;

@@ -98,6 +98,9 @@ public final class CrewMissionSnapshot {
                 value.put("error", bot.error);
                 value.put("result", bot.result);
                 value.put("waitingReason", bot.waitingReason);
+                value.put("phase", bot.phase);
+                value.put("lastProgress", bot.lastProgress);
+                value.put("lastProgressAtMillis", bot.lastProgressAtMillis);
                 value.put("tools", new JSONArray(bot.tools));
                 value.put("resumeRequired", bot.resumeRequired);
                 value.put("canResume", bot.canResume);
@@ -130,7 +133,7 @@ public final class CrewMissionSnapshot {
                 JSONArray toolRows = value.optJSONArray("tools");
                 List<String> tools = new ArrayList<>();
                 if (toolRows != null) for (int tool = 0; tool < toolRows.length(); tool++) tools.add(toolRows.optString(tool));
-                bots.add(new CrewBotSnapshot(value.optString("id"), value.optString("roleId"), value.optString("roleName"), value.optString("name"), value.optString("colorKey"), value.optString("mission"), value.optString("status"), value.optString("error"), value.optString("result"), value.optString("waitingReason"), tools, value.optLong("startedAtMillis"), value.optLong("finishedAtMillis"), value.optBoolean("canResume"), value.optString("recoveryNote"), value.optBoolean("resumeRequired")));
+                bots.add(new CrewBotSnapshot(value.optString("id"), value.optString("roleId"), value.optString("roleName"), value.optString("name"), value.optString("colorKey"), value.optString("mission"), value.optString("status"), value.optString("error"), value.optString("result"), value.optString("waitingReason"), tools, value.optLong("startedAtMillis"), value.optLong("finishedAtMillis"), value.optBoolean("canResume"), value.optString("recoveryNote"), value.optBoolean("resumeRequired"), value.optString("phase"), value.optString("lastProgress"), value.optLong("lastProgressAtMillis")));
             }
             List<CrewMessage> messages = new ArrayList<>();
             JSONArray messageRows = row.optJSONArray("messages");
