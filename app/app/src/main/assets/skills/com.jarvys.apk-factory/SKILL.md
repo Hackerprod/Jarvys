@@ -24,6 +24,8 @@ Create the application the user described. This is a reusable development workfl
 
 The current runtime is offline. Do not depend on remote fonts, scripts, CDNs, API calls or network login. Keep all resources local, provide accessible text and touch targets, and design loading, empty, error and recovery states for the actual app. Use standard WebView HTML/CSS/JavaScript for its unique UI and business logic.
 
+Use a mobile viewport (`<meta name="viewport" content="width=device-width, initial-scale=1">`), responsive layouts and scrollable forms. The native runtime owns the safe area around system bars, cutouts and the keyboard; use the available WebView viewport without hardcoded Android bar heights or a second safe-area subtraction. Keep focused inputs reachable as the viewport changes. Do not remove focus on resize or promise immersive fullscreen: the system bars remain visible with native light/dark contrast.
+
 Select only capabilities required by the brief and confirmed by inspect: storage, export, share, clipboard, haptics and device. They do not mean arbitrary filesystem access, clipboard reading, unrestricted hardware control or installed-app automation. Do not invent camera, microphone, location, Bluetooth, notifications, background execution, network or billing support. A capability in a JSON file cannot grant an Android permission or add native code.
 
 Use the factory's supplied JavaScript SDK instead of exposing a generic native interface. Await native results and handle rejection, cancellation and unavailable bridge states. Browser-only previews cannot prove that native storage, export or sharing works. Keep developer diagnostics free of user content and credentials.

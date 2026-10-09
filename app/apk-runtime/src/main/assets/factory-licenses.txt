@@ -1,6 +1,12 @@
-This application includes AndroidX WebKit 1.14.0 and AndroidX dependencies.
+This application includes AndroidX WebKit 1.14.0, AndroidX Core 1.15.0 and AndroidX dependencies.
 Copyright The Android Open Source Project.
 https://android.googlesource.com/platform/frameworks/support/
+Distributed under Apache License 2.0.
+
+This application also includes Kotlin standard-library and kotlinx.coroutines dependencies.
+Copyright JetBrains s.r.o. and contributors.
+https://github.com/JetBrains/kotlin
+https://github.com/Kotlin/kotlinx.coroutines
 Distributed under Apache License 2.0.
 
                                  Apache License

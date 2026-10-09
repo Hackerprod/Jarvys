@@ -22,6 +22,12 @@ android {
     }
 }
 
+// Apply to both the direct Core dependency and WebKit's transitive path. Optional profile
+// installation must not add a provider/receiver or template-specific authority to generated apps.
+configurations.configureEach {
+    exclude(group = "androidx.profileinstaller", module = "profileinstaller")
+}
+
 dependencies {
     implementation("androidx.core:core:1.15.0")
     implementation("androidx.webkit:webkit:1.14.0")

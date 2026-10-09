@@ -503,7 +503,7 @@ Límites: la prueba con reloj virtual avanzado tres días, runner sintético y a
 
 ### 20. UX35: barras del sistema y área útil de las aplicaciones generadas
 
-Estado: implementación en curso para preparación v53 / 1.2.46-UX35, tras el cierre de UX38. La política común de ventana y el contenedor protegido ya están implementados; pruebas dirigidas, revisión independiente, suites frescas y APK final todavía pendientes. No se afirma aceptación física.
+Estado: implementación en curso para preparación v53 / 1.2.46-UX35, tras el cierre de UX38. La política común de ventana y el contenedor protegido ya están implementados; 47 regresiones nuevas sobre seis versiones de Android y la revisión de fuente aprueban; suites agregadas frescas y APK final todavía pendientes. No se afirma aceptación física.
 
 - La plantilla ya usa un tema nativo sin ActionBar. La evidencia visual confirma contraste insuficiente entre iconos blancos y fondo claro de la barra del sistema; no demuestra por sí sola recorte de contenido ni la presencia de una barra de título de la aplicación. Evitar corregir un ActionBar inexistente.
 - Revisar el tratamiento de insets de FactoryActivity: actualmente aplica padding y devuelve los mismos insets a la WebView, lo que puede duplicar su efecto. Definir una única estrategia explícita de área útil y consumo/puesta a cero de los tipos ya aplicados, sin desplazar ni recortar el contenido dos veces.
@@ -514,6 +514,10 @@ Estado: implementación en curso para preparación v53 / 1.2.46-UX35, tras el ci
 - Las APK ya generadas contienen la plantilla anterior: necesitan reconstruirse para recibir el arreglo, conservando package ID y clave de firma de cada aplicación y aumentando su versionCode cuando se actualice una instalación. Actualizar Jarvys por sí solo no modifica esas APK existentes.
 
 Primer checkpoint de código: FactoryWindowPolicy hace explícitos el contraste y la superficie nativa clara/oscura, mantiene visibles las barras y conserva NoActionBar. Un único contenedor para contenido y errores aplica la unión de barras, cutout e IME, sin sumar dos veces navegación y teclado; reenvía ceros de los tipos tratados y conserva los demás. Se incorpora ajuste de tamaño para teclado y compatibilidad de metadatos antiguos. El runtime declara AndroidX Core para estas APIs; todavía se están validando sus dependencias y los recorridos API 24–35. El cambio no amplía permisos, bridge, firma ni capacidad de red de las aplicaciones generadas.
+
+- Pruebas dirigidas: API 24, 26, 28, 29, 34 y 35; contraste claro/oscuro, fallback de navegación antigua, unión de insets, rotación, teclado abierto/cerrado/repetido, metadatos nativos y reenvío real al hijo. Una regresión detectó que Android 15 podía sobrescribir el contraste al crear el decor; se corrige la inicialización sin relajar la comprobación. Cuatro capturas nativas de contenedor claro/oscuro acreditan geometría y lectura, no Chromium ni System UI reales.
+- Evidencia del usuario (2026-10-09): la app de prueba aparece abierta en el teléfono; la captura acredita visualización del contenido y contraste deficiente en la barra de estado. No se atribuye a esa imagen una prueba de almacenamiento, exportación, firma física ni actualización con datos conservados.
+- La revisión de dependencias detectó componentes opcionales que no pertenecen al runtime acotado: permiso dinámico de Core y proveedor/receptor de profileinstaller. Se eliminan del manifest final o se excluye el artefacto opcional por todas sus rutas; la aceptación exige otra vez cero permisos, cero proveedores/receptores y ninguna autoridad compartida. La compilación Java dirigida aprueba. Tras completar dependencias oficiales faltantes, 32 pruebas dirigidas de empaquetado/firma/servicio y 64 del runtime aprueban sin fallos. Se mantienen pendientes las suites agregadas frescas y los APK finales.
 
 ### 21. UX36: generación de imágenes en Coding y descripción fiel de sus capacidades
 

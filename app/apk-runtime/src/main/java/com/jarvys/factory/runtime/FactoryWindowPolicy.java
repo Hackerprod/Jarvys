@@ -33,6 +33,9 @@ final class FactoryWindowPolicy {
         boolean dark = isDark(activity);
         int surface = dark ? DARK_SURFACE : LIGHT_SURFACE;
         Window window = activity.getWindow();
+        // Materialize the theme/decor first: API 35's edge-to-edge setter no longer does this,
+        // and later decor creation would otherwise overwrite our navigation-contrast setting.
+        View decor = window.getDecorView();
         WindowCompat.setDecorFitsSystemWindows(window, false);
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         if (Build.VERSION.SDK_INT >= 28) {
@@ -51,7 +54,7 @@ final class FactoryWindowPolicy {
             window.setStatusBarContrastEnforced(false);
             window.setNavigationBarContrastEnforced(false);
         }
-        WindowInsetsControllerCompat controller = WindowCompat.getInsetsController(window, window.getDecorView());
+        WindowInsetsControllerCompat controller = WindowCompat.getInsetsController(window, decor);
         controller.setAppearanceLightStatusBars(!dark);
         controller.setAppearanceLightNavigationBars(Build.VERSION.SDK_INT >= 26 && !dark);
         FrameLayout root = new FrameLayout(activity);
