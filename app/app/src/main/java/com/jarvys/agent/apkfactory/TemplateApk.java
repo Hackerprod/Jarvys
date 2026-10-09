@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -50,20 +51,33 @@ public final class TemplateApk {
             this.capabilities=CapabilityCatalog.select(capabilities);
         }
     }
+    /** Derived only from the actual compiled resource table, never a project declaration. */
+    public static final class ResourceBinding {
+        public final int id;
+        public final String type, name, path;
+        private ResourceBinding(int id, String type, String name, String path) {
+            this.id=id; this.type=type; this.name=name; this.path=path;
+        }
+    }
     public static final class ManifestInfo {
         public final String appId, label, versionName, activityClass;
         public final int versionCode, iconResourceId;
         public final List<String> permissions;
         public final ManifestPlan plan;
         public final Map<String,String> dexSha256;
+        public final Map<String,ResourceBinding> resourceBindings;
+        public final Map<String,String> componentDex;
         private ManifestInfo(String id, String label, int code, String version, int icon,
                              String activity, List<String> permissions) {
-            this(id, label, code, version, icon, activity, permissions, null, Collections.<String,String>emptyMap());
+            this(id, label, code, version, icon, activity, permissions, null, Collections.<String,String>emptyMap(), Collections.<String,ResourceBinding>emptyMap(), Collections.<String,String>emptyMap());
         }
         private ManifestInfo(String id, String label, int code, String version, int icon, String activity,
-                             List<String> permissions, ManifestPlan plan, Map<String,String> dexSha256) {
+                             List<String> permissions, ManifestPlan plan, Map<String,String> dexSha256,
+                             Map<String,ResourceBinding> resourceBindings, Map<String,String> componentDex) {
             this.appId=id; this.label=label; this.versionCode=code; this.versionName=version;
             this.plan=plan; this.dexSha256=Collections.unmodifiableMap(new TreeMap<>(dexSha256));
+            this.resourceBindings=Collections.unmodifiableMap(new TreeMap<>(resourceBindings));
+            this.componentDex=Collections.unmodifiableMap(new TreeMap<>(componentDex));
             this.iconResourceId=icon; this.activityClass=activity;
             this.permissions=Collections.unmodifiableList(new ArrayList<>(permissions));
         }
@@ -102,6 +116,7 @@ public final class TemplateApk {
         ManifestInfo info=new Xml(manifest).info();
         ManifestAudit.Document decoded=ManifestAudit.read(manifest);
         byte[] resources=required(zip,"resources.arsc");
+        verifyResourceTable(resources);
         String iconPath=resolveIconPath(resources,info.iconResourceId);
         check(zip.containsKey(iconPath),"Referenced launcher icon is missing");
         ManifestAudit.Attribute backup=decoded.attribute("manifest/application",ManifestPlan.ANDROID,"dataExtractionRules");
@@ -120,8 +135,15 @@ public final class TemplateApk {
                 info.iconResourceId,backupId,expected==null?Collections.<String>emptyList():expected.capabilities,profile);
         } catch(IllegalArgumentException error) { throw new IOException("Invalid manifest plan identity",error); }
         decoded.verify(plan);
+        Map<String,ResourceBinding> bindings=new TreeMap<>();
+        bindings.put("icon",new ResourceBinding(info.iconResourceId,"drawable","factory_icon",iconPath));
+        bindings.put("backup",new ResourceBinding(backupId,"xml","factory_backup_rules",backupPath));
+        Map<String,String> inventory=dexInventory(zip);
+        Map<String,byte[]> dexFiles=new TreeMap<>();
+        for(String name:inventory.keySet()) dexFiles.put(name,zip.get(name));
+        Map<String,String> components=DexBindings.verify(dexFiles);
         return new ManifestInfo(info.appId,info.label,info.versionCode,info.versionName,info.iconResourceId,
-            info.activityClass,plan.permissions,plan,dexInventory(zip));
+            info.activityClass,plan.permissions,plan,inventory,bindings,components);
     }
     private static Map<String,String> dexInventory(Map<String,byte[]> files) throws IOException {
         Map<String,String> result=new TreeMap<>();
@@ -431,6 +453,91 @@ public final class TemplateApk {
             } else check(resourceIds==null || r.nameIndex>=resourceIds.length || resourceIds[r.nameIndex]==0,"Unexpected non-Android attribute ID");
             return r;
         }
+    }
+    /** Validate the complete table envelope and symbol identities, including dependency resources.
+     * This is a bounded table/index validator, not a replacement for Android resource loading. */
+    private static void verifyResourceTable(byte[] b) throws IOException {
+        check(b.length<=8*1024*1024,"Resource table too large");
+        Chunk root=new Chunk(b,0,b.length);
+        check(root.type==2 && root.header==12 && root.size==b.length && u32(b,8)==1,"Expected one resource package");
+        int pools=0,packages=0; long mapItems=0;
+        for(int p=12;p<b.length;) {
+            Chunk c=new Chunk(b,p,b.length);
+            if(c.type==1) {
+                check(++pools==1 && packages==0,"Resource value pool order differs");
+                new Pool(Arrays.copyOfRange(b,p,p+c.size));
+            } else {
+                check(c.type==0x200 && pools==1 && ++packages==1 && (c.header==284 || c.header==288),"Unexpected resource root chunk");
+                check(u32(b,p+8)==0x7f && (c.header==284 || u32(b,p+284)==0),"Unsupported resource package ID");
+                int typeOffset=small(b,p+268),keyOffset=small(b,p+276);
+                check(typeOffset>=c.header && keyOffset>=c.header && typeOffset!=keyOffset && typeOffset<c.size && keyOffset<c.size,"Invalid package pools");
+                Chunk tc=new Chunk(b,p+typeOffset,p+c.size),kc=new Chunk(b,p+keyOffset,p+c.size);
+                Pool types=new Pool(Arrays.copyOfRange(b,tc.offset,tc.offset+tc.size));
+                Pool keys=new Pool(Arrays.copyOfRange(b,kc.offset,kc.offset+kc.size));
+                check(new HashSet<>(types.strings).size()==types.strings.size(),"Duplicate resource type name");
+                Set<Integer> actualPools=new HashSet<>();
+                Map<Integer,Integer> specs=new HashMap<>(),declaredChunks=new HashMap<>(),actualChunks=new HashMap<>();
+                Map<String,Integer> symbols=new HashMap<>();
+                Map<Integer,String> names=new HashMap<>();
+                Set<String> configurations=new HashSet<>();
+                for(int q=p+c.header;q<p+c.size;) {
+                    Chunk child=new Chunk(b,q,p+c.size);
+                    if(child.type==1) {
+                        check(q==tc.offset || q==kc.offset,"Unexpected package string pool");
+                        actualPools.add(q);
+                    } else if(child.type==0x202) {
+                        check(child.header==16 && b[q+9]==0,"Invalid resource type specification");
+                        int type=b[q+8]&255,count=small(b,q+12);
+                        check(type>0 && type<=types.strings.size() && count<=65536 && child.size==16L+4L*count && !specs.containsKey(type),"Duplicate or invalid resource type specification");
+                        specs.put(type,count); declaredChunks.put(type,u16(b,q+10));
+                    } else if(child.type==0x201) {
+                        check(child.header>=48 && b[q+9]==0 && u16(b,q+10)==0,"Unsupported resource type layout");
+                        int type=b[q+8]&255,count=small(b,q+12),start=small(b,q+16),config=small(b,q+20);
+                        check(specs.containsKey(type) && specs.get(type)==count,"Resource type/specification mismatch");
+                        actualChunks.put(type,actualChunks.containsKey(type)?actualChunks.get(type)+1:1);
+                        check(config>=28 && config<=64 && config%4==0 && start%4==0 && child.header==20+config && start>=child.header+4L*count && start<=child.size,"Invalid resource type bounds");
+                        check(configurations.add(type+":"+Arrays.toString(Arrays.copyOfRange(b,q+20,q+20+config))),"Duplicate resource configuration");
+                        List<int[]> spans=new ArrayList<>();
+                        for(int i=0;i<count;i++) {
+                            long relative=u32(b,q+child.header+4*i);
+                            if(relative==0xffffffffL) continue;
+                            check(relative%4==0 && relative<=child.size-start-8,"Invalid resource entry bounds");
+                            int e=q+start+(int)relative,size=u16(b,e),flags=u16(b,e+2),id=(0x7f<<24)|(type<<16)|i;
+                            check((flags&~7)==0,"Unsupported resource entry flags");
+                            String name=keys.get(small(b,e+4)),symbol=types.get(type-1)+"/"+name;
+                            check(!symbols.containsKey(symbol) || symbols.get(symbol)==id,"Ambiguous compiled resource name");
+                            check(!names.containsKey(id) || names.get(id).equals(symbol),"Inconsistent resource ID/name");
+                            symbols.put(symbol,id); names.put(id,symbol);
+                            long length;
+                            if((flags&1)!=0) {
+                                check(size==16 && e<=q+child.size-16,"Invalid complex resource entry");
+                                int maps=small(b,e+12); mapItems+=maps;
+                                check(mapItems<=262144,"Resource map work budget exceeded");
+                                length=16L+12L*maps;
+                            } else {
+                                check(size==8 && e<=q+child.size-16 && u16(b,e+8)==8 && b[e+10]==0,"Invalid simple resource entry");
+                                length=16;
+                            }
+                            check(length<=q+child.size-e,"Resource entry exceeds its type");
+                            if((flags&1)!=0) for(int m=e+16;m<e+length;m+=12)
+                                check(u16(b,m+4)==8 && b[m+6]==0,"Invalid resource map value");
+                            spans.add(new int[]{e,e+(int)length});
+                        }
+                        spans.sort((a,d)->Integer.compare(a[0],d[0]));
+                        for(int i=1;i<spans.size();i++) check(spans.get(i)[0]>=spans.get(i-1)[1],"Overlapping resource entries");
+                    } else throw new IOException("Unexpected resource package chunk");
+                    q+=child.size;
+                }
+                for(Integer type:specs.keySet()) {
+                    check(actualChunks.containsKey(type),"Resource specification has no type chunks");
+                    int declared=declaredChunks.get(type);
+                    check(declared==0 || declared==actualChunks.get(type),"Resource type chunk count differs");
+                }
+                check(actualPools.size()==2 && actualPools.contains(tc.offset) && actualPools.contains(kc.offset),"Resource pools are not package children");
+            }
+            p+=c.size;
+        }
+        check(pools==1 && packages==1,"Missing resource package");
     }
     /** Resolve the template's single drawable/factory_icon through ARSC, even after AAPT path shortening. */
     private static String resolveIconPath(byte[] b,int iconId) throws IOException {

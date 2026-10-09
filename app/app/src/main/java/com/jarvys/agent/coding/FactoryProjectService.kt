@@ -7,6 +7,7 @@ import com.jarvys.agent.CancellationToken
 import com.jarvys.agent.apkfactory.FactoryJson
 import com.jarvys.agent.apkfactory.FactoryIcon
 import com.jarvys.agent.apkfactory.FactoryApkSigner
+import com.jarvys.agent.apkfactory.FactorySigningScope
 import com.jarvys.agent.apkfactory.FactorySigningIdentity
 import com.jarvys.agent.apkfactory.FactorySpec
 import com.jarvys.agent.apkfactory.TemplateApk
@@ -51,6 +52,10 @@ internal class FactoryProjectService(
             .put("manifestPermissions", JSONArray(manifest.permissions))
             .put("manifestFeatures", JSONArray(manifest.plan.features)).put("manifestQueries", JSONArray(manifest.plan.queries))
             .put("exportedComponents", JSONArray(manifest.plan.exportedComponents)).put("allowedHosts", JSONArray(manifest.plan.hosts))
+            .put("resourceBindings", JSONObject().apply {
+                manifest.resourceBindings.forEach { (role, binding) -> put(role, JSONObject()
+                    .put("id", binding.id).put("type", binding.type).put("name", binding.name).put("path", binding.path)) }
+            }).put("componentDex", JSONObject(manifest.componentDex))
             .put("dexSha256", JSONObject(manifest.dexSha256)).put("perAppGradleRequired", false).put("nativeToolchainRequired", false)
             .put("factoryMinimumApi", 26).put("factoryAvailable", Build.VERSION.SDK_INT >= 26).put("generatedAppMinimumApi", 24)
             .put("supportedAbis", "Architecture-neutral JVM/Android code; physical device validation is still required")
@@ -137,12 +142,23 @@ internal class FactoryProjectService(
             }
             val approvedState = synchronized(SIGN_LOCK) { identities.state(spec.appId) }
             check(spec.versionCode > approvedState.lastVersion) { "Use a higher versionCode than the last signed release (${approvedState.lastVersion})" }
+            val signingScope = FactorySigningScope.fromPlan(manifest.plan)
             val lines = mutableListOf("App: ${spec.name} (${spec.appId}), version ${spec.versionName} / ${spec.versionCode}",
                 "Unsigned SHA-256: $expectedSha", "Output in this Coding project: $outputPath", "Declared capabilities: ${spec.capabilities.joinToString().ifEmpty { "none" }}",
                 "Decoded Android permissions: ${manifest.permissions.joinToString().ifEmpty { "none" }}",
                 "Decoded exported components: ${manifest.plan.exportedComponents.joinToString()}",
                 "Decoded features/queries/allowed hosts: ${manifest.plan.features.joinToString().ifEmpty { "none" }} / ${manifest.plan.queries.joinToString().ifEmpty { "none" }} / ${manifest.plan.hosts.joinToString().ifEmpty { "none" }}",
                 "Runtime DEX inventory: ${manifest.dexSha256.size} exact files, verified against the build.")
+            lines += "Verified resource bindings: " + manifest.resourceBindings.entries.joinToString { (role, binding) ->
+                "$role=${binding.type}/${binding.name} (${binding.id}) -> ${binding.path}"
+            }
+            lines += "Verified component DEX bindings: " + manifest.componentDex.entries.joinToString { (name, dex) -> "$name -> $dex" }
+            if (!approvedState.existing || approvedState.lastVersion == 0)
+                lines += "First signing for this app: no previously signed APK scope to compare. Review the full effective scope above."
+            else {
+                lines += "Compare with last signed version ${approvedState.lastVersion}, APK SHA-256: ${approvedState.lastApkSha256 ?: "unavailable"}"
+                lines += signingScope.disclosure(approvedState.lastScope)
+            }
             if (manifest.plan.profile != com.jarvys.factory.contract.ManifestPlan.Profile.CURRENT)
                 lines += "Previously built v1 runtime: this artifact keeps its older window behavior. Rebuild from the project to receive the current runtime."
             if (approvedState.existing) lines += "Reuse this app's existing signing identity: ${approvedState.fingerprint}"
@@ -185,7 +201,7 @@ internal class FactoryProjectService(
                     // Reserve this version before publication. An interrupted publish must not silently sign another build.
                     checkActive(token)
                     lease.validate()
-                    identities.recordSigned(spec.appId, certificate, spec.versionCode, signedSha)
+                    identities.recordSigned(spec.appId, certificate, spec.versionCode, signedSha, signingScope)
                     try {
                         FactoryProjectFiles.publish(scope, outputPath, output, lease, token) { checkActive(token) }
                         signed.put("state", "published")

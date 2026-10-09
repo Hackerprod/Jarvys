@@ -171,7 +171,7 @@ public class TemplateApkTest {
     @Test public void secondaryDexInventoryIsCompleteImmutableAndExactlyPreserved() throws Exception {
         Map<String,byte[]> files=unzip(template);
         // Synthetic packaging fixture only; not an installable multidex compatibility claim.
-        files.put("classes2.dex",files.get("classes.dex").clone());
+        files.put("classes2.dex",DexBindingsTest.secondaryFixture());
         byte[] apk=TemplateApk.build(zip(files,false),spec,icon,assets);
         TemplateApk.ManifestInfo info=TemplateApk.inspect(apk);
         assertEquals(2,info.dexSha256.size());assertArrayEquals(files.get("classes2.dex"),unzip(apk).get("classes2.dex"));
@@ -184,6 +184,76 @@ public class TemplateApkTest {
             Map<String,byte[]> invalid=unzip(template);byte[] corrupt=files.get("classes.dex").clone();corrupt[offset]^=1;invalid.put("classes2.dex",corrupt);
             rejects(()->TemplateApk.build(zip(invalid,false),spec,icon,assets));
         }
+    }
+    @Test public void compiledBindingEvidenceIsDerivedImmutableAndStableAcrossPackages() throws Exception {
+        TemplateApk.ManifestInfo original=TemplateApk.inspect(template),generated=TemplateApk.inspect(build());
+        assertEquals(2,generated.resourceBindings.size());
+        assertEquals("drawable",generated.resourceBindings.get("icon").type);
+        assertEquals("factory_icon",generated.resourceBindings.get("icon").name);
+        assertEquals(generated.iconResourceId,generated.resourceBindings.get("icon").id);
+        assertEquals("xml",generated.resourceBindings.get("backup").type);
+        assertEquals("factory_backup_rules",generated.resourceBindings.get("backup").name);
+        assertEquals(generated.plan.backupResourceId,generated.resourceBindings.get("backup").id);
+        assertEquals(original.resourceBindings.get("backup").path,generated.resourceBindings.get("backup").path);
+        assertEquals(original.componentDex,generated.componentDex);
+        assertEquals(2,generated.componentDex.size());
+        assertEquals("classes.dex",generated.componentDex.get("com.jarvys.factory.runtime.FactoryActivity"));
+        assertEquals("classes.dex",generated.componentDex.get("androidx.core.app.CoreComponentFactory"));
+        assertThrows(UnsupportedOperationException.class,()->generated.resourceBindings.clear());
+        assertThrows(UnsupportedOperationException.class,()->generated.componentDex.clear());
+    }
+    @Test public void duplicateDexDefinitionsAndMissingCompiledPayloadAreRejected() throws Exception {
+        Map<String,byte[]> files=unzip(template);files.put("classes2.dex",files.get("classes.dex").clone());
+        rejects(()->TemplateApk.build(zip(files,false),spec,icon,assets));
+        TemplateApk.ManifestInfo info=TemplateApk.inspect(template);
+        for(TemplateApk.ResourceBinding binding:info.resourceBindings.values()) {
+            Map<String,byte[]> missing=unzip(template);missing.remove(binding.path);
+            rejects(()->TemplateApk.build(zip(missing,false),spec,icon,assets));
+        }
+    }
+    @Test public void completeResourceTableRejectsMalformedSpecificationsAndUnknownChildren() throws Exception {
+        for(String mutation:new String[]{"chunkCount","startAlignment","specCount","specType","specReserved","unknownChild","duplicateSpec","missingSpec","poolPayload","poolAlias","entryAlias","duplicateSymbol"}) {
+            Map<String,byte[]> files=unzip(template);
+            files.put("resources.arsc",hostileResourceTable(files.get("resources.arsc"),mutation));
+            rejects(()->TemplateApk.build(zip(files,false),spec,icon,assets));
+        }
+    }
+    private static byte[] hostileResourceTable(byte[] source,String mutation) {
+        byte[] b=source.clone();int pkg=-1;
+        for(int p=12;p<b.length;p+=int32(b,p+4))if(u16(b,p)==0x200){pkg=p;break;}
+        assertTrue(pkg>=0);
+        if(mutation.equals("poolPayload")){set32(b,pkg+268,int32(b,pkg+268)+4);return b;}
+        if(mutation.equals("poolAlias")){set32(b,pkg+276,int32(b,pkg+268));return b;}
+        for(int q=pkg+u16(b,pkg+2);q<pkg+int32(b,pkg+4);q+=int32(b,q+4)) {
+            if(u16(b,q)==0x202) {
+                if(mutation.equals("chunkCount")){set16(b,q+10,0xffff);return b;}
+                if(mutation.equals("specCount")){set32(b,q+12,int32(b,q+12)+1);return b;}
+                if(mutation.equals("specType")){b[q+8]=0;return b;}
+                if(mutation.equals("specReserved")){b[q+9]=1;return b;}
+                if(mutation.equals("unknownChild")){set16(b,q,0x203);return b;}
+                if(mutation.equals("duplicateSpec")){
+                    byte[] result=insert(b,q,Arrays.copyOfRange(b,q,q+int32(b,q+4)));
+                    set32(result,pkg+4,int32(b,pkg+4)+int32(b,q+4));return result;
+                }
+                if(mutation.equals("missingSpec")) {
+                    int n=int32(b,q+4);byte[] result=new byte[b.length-n];
+                    System.arraycopy(b,0,result,0,q);System.arraycopy(b,q+n,result,q,b.length-q-n);
+                    set32(result,4,result.length);set32(result,pkg+4,int32(b,pkg+4)-n);return result;
+                }
+            }
+            if(u16(b,q)==0x201 && mutation.equals("startAlignment")){set32(b,q+16,int32(b,q+16)+1);return b;}
+            if(u16(b,q)==0x201 && (mutation.equals("entryAlias") || mutation.equals("duplicateSymbol"))) {
+                int first=-1,count=int32(b,q+12),start=int32(b,q+16),offsets=q+u16(b,q+2);
+                for(int i=0;i<count;i++) {
+                    int relative=int32(b,offsets+4*i);if(relative==-1)continue;
+                    if(first<0){first=i;continue;}
+                    if(mutation.equals("entryAlias")) set32(b,offsets+4*i,int32(b,offsets+4*first));
+                    else set32(b,q+start+relative+4,int32(b,q+start+int32(b,offsets+4*first)+4));
+                    return b;
+                }
+            }
+        }
+        throw new AssertionError(mutation);
     }
     @Test public void missingOrWrongBackupResourceCannotMatchTheClosedPlan() throws Exception {
         byte[] apk=build();int backupId=TemplateApk.inspect(apk).plan.backupResourceId;

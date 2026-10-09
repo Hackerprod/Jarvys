@@ -17,7 +17,9 @@ import javax.security.auth.x500.X500Principal
 /** Per-application, non-exportable identity. No default key, import, rotation or recovery-by-replacement. */
 internal open class FactorySigningIdentity(private val context: Context) {
     data class Identity(val key: PrivateKey, val certificate: X509Certificate, val fingerprint: String)
-    data class State(val existing: Boolean, val fingerprint: String?, val lastVersion: Int)
+    data class State(val existing: Boolean, val fingerprint: String?, val lastVersion: Int,
+        val lastScope: FactorySigningScope? = null, val lastApkSha256: String? = null,
+        val recordSha256: String? = null)
     private val directory = File(context.noBackupFilesDir, "apk-factory/identities")
     private fun file(appId: String) = AtomicFile(File(directory, "$appId.json"))
     private fun alias(appId: String) = "jarvys.apk-factory.$appId"
@@ -25,7 +27,11 @@ internal open class FactorySigningIdentity(private val context: Context) {
     private fun hash(bytes: ByteArray) = com.jarvys.agent.coding.ProjectScope.sha256(bytes)
     private fun record(appId: String): JSONObject? {
         val file = file(appId)
-        return if (file.baseFile.exists() || File(file.baseFile.path + ".bak").exists()) JSONObject(String(file.readFully(), Charsets.UTF_8)) else null
+        if (!file.baseFile.exists() && !File(file.baseFile.path + ".bak").exists()) return null
+        return file.openRead().use { input ->
+            val bytes = input.readBytesBounded(64 * 1024)
+            JSONObject(String(bytes, Charsets.UTF_8))
+        }
     }
     open fun state(appId: String): State {
         val saved = record(appId)
@@ -41,7 +47,12 @@ internal open class FactorySigningIdentity(private val context: Context) {
         check(present) { "This app's signing key is missing. Existing apps cannot be updated with a replacement identity." }
         val fingerprint = hash(keystore.getCertificate(alias(appId)).encoded)
         check(fingerprint == saved.getString("certificateSha256")) { "Signing identity mismatch. Nothing was signed." }
-        return State(true, fingerprint, saved.getInt("lastVersion"))
+        val version = saved.getInt("lastVersion")
+        check(version >= 0) { "Invalid signing identity version" }
+        return State(true, fingerprint, version,
+            FactorySigningScope.readBaseline(saved, appId, fingerprint, version),
+            saved.optString("lastApkSha256").takeIf { it.isNotEmpty() },
+            hash(saved.toString().toByteArray(Charsets.UTF_8)))
     }
     open fun obtainAfterApproval(appId: String, approvedState: State): Identity {
         check(state(appId) == approvedState) { "Signing identity changed while awaiting approval" }
@@ -65,11 +76,26 @@ internal open class FactorySigningIdentity(private val context: Context) {
         val certificate = entry.certificate as X509Certificate
         return Identity(entry.privateKey, certificate, hash(certificate.encoded))
     }
-    open fun recordSigned(appId: String, fingerprint: String, versionCode: Int, apkSha: String) {
+    // Additive v1 evidence, atomically reserved with version/APK before publication. Legacy callers
+    // without scope remain readable but deliberately have an unavailable comparison baseline.
+    // This is disclosure history, never authorization to add arbitrary manifest permissions.
+    open fun recordSigned(appId: String, fingerprint: String, versionCode: Int, apkSha: String, scope: FactorySigningScope? = null) {
+        require(apkSha.matches(Regex("[a-f0-9]{64}"))) { "Invalid signed APK hash" }
         val current = state(appId)
         check(current.existing && current.fingerprint == fingerprint && versionCode > current.lastVersion) { "Signing identity/version changed" }
         save(appId, JSONObject().put("schemaVersion", 1).put("appId", appId).put("state", "ready")
-            .put("certificateSha256", fingerprint).put("lastVersion", versionCode).put("lastApkSha256", apkSha))
+            .put("certificateSha256", fingerprint).put("lastVersion", versionCode).put("lastApkSha256", apkSha)
+            .apply { if (scope != null) put("lastSignedScope", scope.anchored(appId, fingerprint, versionCode, apkSha)) })
+    }
+    private fun java.io.InputStream.readBytesBounded(limit: Int): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        val buffer = ByteArray(4096)
+        while (true) {
+            val count = read(buffer)
+            if (count < 0) return out.toByteArray()
+            check(out.size() + count <= limit) { "Signing identity record exceeds its size limit" }
+            out.write(buffer, 0, count)
+        }
     }
     private fun save(appId: String, value: JSONObject) {
         check(directory.isDirectory || directory.mkdirs()) { "Cannot prepare identity storage" }

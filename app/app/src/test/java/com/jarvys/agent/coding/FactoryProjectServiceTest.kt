@@ -3,6 +3,7 @@ package com.jarvys.agent.coding
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.jarvys.agent.CancellationToken
+import com.jarvys.agent.apkfactory.FactorySigningScope
 import com.jarvys.agent.apkfactory.FactorySigningIdentity
 import com.jarvys.agent.apkfactory.TemplateApk
 import com.jarvys.agent.connectors.*
@@ -36,23 +37,29 @@ class FactoryProjectServiceTest {
         var obtained=0
         var signedRecord:JSONObject?=null
         var ephemeralIdentity:FactorySigningIdentity.Identity?=null
+        var identityState=FactorySigningIdentity.State(false,null,0)
         var decision=ApprovalDecision.DENIED
         var duringApproval:()->Unit={}
+        var afterRecord:()->Unit={}
         val identities=object:FactorySigningIdentity(context) {
-            override fun state(appId:String)=State(false,null,0)
+            override fun state(appId:String)=identityState
             override fun obtainAfterApproval(appId:String,approvedState:State):Identity {
-                obtained++;check(enableEphemeralSigning) { "No real keys are generated in this test" }
                 check(approvedState==state(appId))
+                obtained++;check(enableEphemeralSigning) { "No real keys are generated in this test" }
+                ephemeralIdentity?.let { return it }
                 val pair=java.security.KeyPairGenerator.getInstance("RSA").apply{initialize(2048)}.generateKeyPair()
                 val certificate=com.jarvys.agent.apkfactory.EphemeralFactoryCertificate.create(pair.public.encoded){data ->
                     java.security.Signature.getInstance("SHA256withRSA").run{initSign(pair.private);update(data);sign()}
                 }
                 return Identity(pair.private,certificate,ProjectScope.sha256(certificate.encoded)).also{ephemeralIdentity=it}
             }
-            override fun recordSigned(appId:String,fingerprint:String,versionCode:Int,apkSha:String) {
+            override fun recordSigned(appId:String,fingerprint:String,versionCode:Int,apkSha:String,scope:FactorySigningScope?) {
                 check(enableEphemeralSigning);check(fingerprint==ephemeralIdentity!!.fingerprint)
-                check(signedRecord==null)
+                check(versionCode>identityState.lastVersion)
+                assertNotNull(scope)
+                identityState=State(true,fingerprint,versionCode,scope,apkSha)
                 signedRecord=JSONObject().put("appId",appId).put("fingerprint",fingerprint).put("versionCode",versionCode).put("sha256",apkSha)
+                afterRecord()
             }
         }
         lateinit var gate:ApprovalGate
@@ -74,8 +81,8 @@ class FactoryProjectServiceTest {
             File(root,"icon.json").writeText("""{"schemaVersion":1,"background":"#223344","shapes":[{"type":"circle","cx":96,"cy":96,"r":64,"fill":"#FFFFFF"}]}""")
             spec("org.example.notebook",1)
         }
-        fun spec(id:String,version:Int){File(root,"factory.json").writeText(JSONObject().put("schemaVersion",1).put("appId",id).put("name","Mi cuaderno")
-            .put("versionCode",version).put("versionName","$version.0").put("capabilities",JSONArray(listOf("storage","export")))
+        fun spec(id:String,version:Int,capabilities:List<String> = listOf("storage","export")){File(root,"factory.json").writeText(JSONObject().put("schemaVersion",1).put("appId",id).put("name","Mi cuaderno")
+            .put("versionCode",version).put("versionName","$version.0").put("capabilities",JSONArray(capabilities))
             .put("webDir","web").put("icon","icon.json").toString())}
         fun build(path:String="notes.apk")=service.build("factory.json",path,scope.version(),CancellationToken.cancellable())
     }
@@ -153,6 +160,63 @@ class FactoryProjectServiceTest {
         val receipt=File(f.context.noBackupFilesDir,"apk-factory/builds/${f.scope.id()}/$signedSha-${ProjectScope.sha256("signed.apk".toByteArray())}.json")
         assertEquals("published",JSONObject(receipt.readText()).getString("state"))
         assertEquals(legacy,f.lastSummary!!.lines.any{it.contains("older window behavior")})
+    }
+    @Test fun signedUpdatesDiscloseExpansionReductionAndUnchangedScope() {
+        val f=Fixture(enableEphemeralSigning=true); f.decision=ApprovalDecision.APPROVED
+        fun signVersion(version:Int,capabilities:List<String>) {
+            f.spec("org.example.notebook",version,capabilities)
+            val path="v$version.apk";val build=f.build(path)
+            f.service.sign(path,build.getString("sha256"),"signed-v$version.apk",f.scope.version(),CancellationToken.cancellable())
+        }
+        signVersion(1,listOf("storage"))
+        assertTrue(f.lastSummary!!.lines.any{it.contains("First signing")})
+        val firstFingerprint=f.identityState.fingerprint
+        signVersion(2,listOf("storage","export"))
+        assertTrue(f.lastSummary!!.lines.any{it=="Scope additions (capabilities): export"})
+        signVersion(3,listOf("storage"))
+        assertTrue(f.lastSummary!!.lines.any{it=="Scope removals (capabilities): export"})
+        signVersion(4,listOf("storage"))
+        assertTrue(f.lastSummary!!.lines.any{it.contains("Effective scope unchanged")})
+        assertEquals(firstFingerprint,f.identityState.fingerprint)
+        assertEquals(4,f.identityState.lastVersion)
+    }
+    @Test fun missingLegacyBaselineDisclosesUnknownAndDenialPreservesState() {
+        val f=Fixture(); f.identityState=FactorySigningIdentity.State(true,"a".repeat(64),1)
+        f.spec("org.example.notebook",2);val build=f.build();val before=f.identityState
+        assertThrows(Exception::class.java){f.service.sign("notes.apk",build.getString("sha256"),"signed.apk",f.scope.version(),CancellationToken.cancellable())}
+        assertTrue(f.lastSummary!!.lines.any{it.contains("Scope expansion cannot be determined")})
+        assertFalse(f.lastSummary!!.lines.any{it.contains("Effective scope unchanged") || it.contains("First signing")})
+        assertEquals(before,f.identityState);assertNull(f.signedRecord);assertEquals(0,f.obtained)
+    }
+    @Test fun concurrentScopeRecordChangeCannotReuseApproval() {
+        val f=Fixture(enableEphemeralSigning=true);val build=f.build();f.decision=ApprovalDecision.APPROVED
+        f.duringApproval={f.identityState=f.identityState.copy(recordSha256="changed")}
+        assertThrows(Exception::class.java){f.service.sign("notes.apk",build.getString("sha256"),"signed.apk",f.scope.version(),CancellationToken.cancellable())}
+        assertEquals(1,f.requested);assertEquals(0,f.obtained);assertNull(f.signedRecord)
+        assertFalse(File(f.root,"signed.apk").exists())
+    }
+    @Test fun interruptedPublicationKeepsReservedVersionAndScope() {
+        val f=Fixture(enableEphemeralSigning=true);val build=f.build();f.decision=ApprovalDecision.APPROVED
+        f.afterRecord={File(f.root,"signed.apk").writeText("collision after signature")}
+        assertThrows(Exception::class.java){f.service.sign("notes.apk",build.getString("sha256"),"signed.apk",f.scope.version(),CancellationToken.cancellable())}
+        assertNotNull(f.identityState.lastScope);assertEquals(1,f.identityState.lastVersion)
+        assertNotNull(f.identityState.lastApkSha256)
+        assertThrows(Exception::class.java){f.service.sign("notes.apk",build.getString("sha256"),"retry.apk",f.scope.version(),CancellationToken.cancellable())}
+        assertEquals(1,f.requested);assertEquals(1,f.obtained)
+        val sha=f.identityState.lastApkSha256!!
+        val receipt=File(f.context.noBackupFilesDir,"apk-factory/builds/${f.scope.id()}/$sha-${ProjectScope.sha256("signed.apk".toByteArray())}.json")
+        assertEquals("publication_unconfirmed",JSONObject(receipt.readText()).getString("state"))
+    }
+    @Test fun inspectExposesVerifiedResourceAndComponentBindings() {
+        val f=Fixture();val inspected=f.service.inspect(CancellationToken.cancellable())
+        val bindings=inspected.getJSONObject("resourceBindings")
+        assertTrue(bindings.has("icon"));assertTrue(bindings.has("backup"))
+        for(role in listOf("icon","backup")) {
+            val binding=bindings.getJSONObject(role)
+            assertTrue(binding.getInt("id") != 0);assertTrue(binding.getString("path").startsWith("res/"))
+            assertTrue(binding.getString("type").isNotEmpty());assertTrue(binding.getString("name").isNotEmpty())
+        }
+        assertTrue(inspected.getJSONObject("componentDex").has("com.jarvys.factory.runtime.FactoryActivity"))
     }
     @Test fun newlyRecordedContractCannotFallBackToTheLegacyLayout() {
         val f=Fixture();val sha=legacyReceipt(f,true)
