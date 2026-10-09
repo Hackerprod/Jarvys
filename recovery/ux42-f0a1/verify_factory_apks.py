@@ -51,6 +51,8 @@ for metadata in sorted(a.fixtures.glob('*/[012].json')):
  verify=command('apksigner','verify','--verbose','--print-certs',str(signed))
  assert 'Verified using v2 scheme (APK Signature Scheme v2): true' in verify
  assert 'Verified using v3 scheme (APK Signature Scheme v3): true' in verify
+ actual_certificate=re.findall(r'^Signer #1 certificate SHA-256 digest: ([0-9a-fA-F]+)$',verify,re.M)
+ assert actual_certificate==[record['certificateSha256']],(actual_certificate,record['certificateSha256'])
  rows.append({'fixture':metadata.parent.name+'/'+metadata.stem,'appId':record['appId'],'versionCode':record['versionCode'],'certificateSha256':record['certificateSha256'],'unsignedSha256':hashlib.sha256(unsigned.read_bytes()).hexdigest(),'signedSha256':record['signedSha256'],'manifestDumpSha256':manifest,'dexSha256':original})
 assert len(rows)>=3 and len(rows)%3==0,len(rows)
 for offset in range(0,len(rows),3):

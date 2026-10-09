@@ -26,7 +26,7 @@ import java.util.zip.ZipFile
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class FactoryProjectServiceTest {
     @get:Rule val folder=TemporaryFolder()
-    private inner class Fixture {
+    private inner class Fixture(val enableEphemeralSigning:Boolean=false) {
         val context=ApplicationProvider.getApplicationContext<Context>()
         val scope=ProjectScopeStore(folder.newFolder()).open("factory-${UUID.randomUUID()}")
         val root=scope.rootDirectory()
@@ -34,11 +34,26 @@ class FactoryProjectServiceTest {
         var requested=0
         var lastSummary:ApprovalSummary?=null
         var obtained=0
+        var signedRecord:JSONObject?=null
+        var ephemeralIdentity:FactorySigningIdentity.Identity?=null
         var decision=ApprovalDecision.DENIED
         var duringApproval:()->Unit={}
         val identities=object:FactorySigningIdentity(context) {
             override fun state(appId:String)=State(false,null,0)
-            override fun obtainAfterApproval(appId:String,approvedState:State):Identity { obtained++;error("No real keys are generated in this test") }
+            override fun obtainAfterApproval(appId:String,approvedState:State):Identity {
+                obtained++;check(enableEphemeralSigning) { "No real keys are generated in this test" }
+                check(approvedState==state(appId))
+                val pair=java.security.KeyPairGenerator.getInstance("RSA").apply{initialize(2048)}.generateKeyPair()
+                val certificate=com.jarvys.agent.apkfactory.EphemeralFactoryCertificate.create(pair.public.encoded){data ->
+                    java.security.Signature.getInstance("SHA256withRSA").run{initSign(pair.private);update(data);sign()}
+                }
+                return Identity(pair.private,certificate,ProjectScope.sha256(certificate.encoded)).also{ephemeralIdentity=it}
+            }
+            override fun recordSigned(appId:String,fingerprint:String,versionCode:Int,apkSha:String) {
+                check(enableEphemeralSigning);check(fingerprint==ephemeralIdentity!!.fingerprint)
+                check(signedRecord==null)
+                signedRecord=JSONObject().put("appId",appId).put("fingerprint",fingerprint).put("versionCode",versionCode).put("sha256",apkSha)
+            }
         }
         lateinit var gate:ApprovalGate
         val service:FactoryProjectService
@@ -106,6 +121,38 @@ class FactoryProjectServiceTest {
         assertTrue(f.lastSummary!!.lines.any{it=="Decoded Android permissions: none"})
         assertTrue(f.lastSummary!!.lines.any{it.contains("com.jarvys.factory.runtime.FactoryActivity")})
         assertEquals(sha,ProjectScope.sha256(File(f.root,"notes.apk").readBytes()))
+    }
+    @Test fun approvedCurrentArtifactSignsVerifiesAndPublishesWithEphemeralIdentity() {
+        successfulSigningPreservesContract(false)
+    }
+    @Test fun approvedLegacyReceiptSignsItsExactHistoricalPlanWithEphemeralIdentity() {
+        successfulSigningPreservesContract(true)
+    }
+    private fun successfulSigningPreservesContract(legacy:Boolean) {
+        val f=Fixture(enableEphemeralSigning=true)
+        val sha=if(legacy) legacyReceipt(f,false) else f.build().getString("sha256")
+        val unsigned=File(f.root,"notes.apk").readBytes();val version=f.scope.version()
+        f.decision=ApprovalDecision.APPROVED
+        val result=f.service.sign("notes.apk",sha,"signed.apk",version,CancellationToken.cancellable())
+        val output=File(f.root,"signed.apk");val signed=output.readBytes()
+        assertTrue(result.getBoolean("signed"));assertEquals(1,f.requested);assertEquals(1,f.obtained)
+        assertEquals(version+1,f.scope.version());assertEquals(f.scope.version(),result.getLong("scope_version"))
+        assertArrayEquals(unsigned,File(f.root,"notes.apk").readBytes())
+        TemplateApk.verifyUnchangedPayload(unsigned,signed)
+        val expected=TemplateApk.Spec("org.example.notebook","Mi cuaderno",1,"1.0",listOf("storage","export"))
+        val info=if(legacy) TemplateApk.verifyExistingV1(signed,expected) else TemplateApk.verify(signed,expected)
+        assertEquals(if(legacy) com.jarvys.factory.contract.ManifestPlan.Profile.V1_BEFORE_SAFE_AREA
+            else com.jarvys.factory.contract.ManifestPlan.Profile.CURRENT,info.plan.profile)
+        val verified=com.android.apksig.ApkVerifier.Builder(output).setMinCheckedPlatformVersion(24).build().verify()
+        assertTrue(verified.isVerified);assertTrue(verified.isVerifiedUsingV2Scheme);assertTrue(verified.isVerifiedUsingV3Scheme)
+        val fingerprint=ProjectScope.sha256(verified.signerCertificates.single().encoded)
+        assertEquals(fingerprint,result.getString("certificate_sha256"));assertEquals(fingerprint,f.signedRecord!!.getString("fingerprint"))
+        assertEquals("org.example.notebook",f.signedRecord!!.getString("appId"));assertEquals(1,f.signedRecord!!.getInt("versionCode"))
+        val signedSha=ProjectScope.sha256(signed)
+        assertEquals(signedSha,result.getString("sha256"));assertEquals(signedSha,f.signedRecord!!.getString("sha256"))
+        val receipt=File(f.context.noBackupFilesDir,"apk-factory/builds/${f.scope.id()}/$signedSha-${ProjectScope.sha256("signed.apk".toByteArray())}.json")
+        assertEquals("published",JSONObject(receipt.readText()).getString("state"))
+        assertEquals(legacy,f.lastSummary!!.lines.any{it.contains("older window behavior")})
     }
     @Test fun newlyRecordedContractCannotFallBackToTheLegacyLayout() {
         val f=Fixture();val sha=legacyReceipt(f,true)
