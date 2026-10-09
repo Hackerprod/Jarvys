@@ -42,7 +42,6 @@ import com.jarvys.agent.crew.CrewMissionSnapshot
 import com.jarvys.agent.ui.chat.awaitReactionDrawIdle
 import com.jarvys.agent.ui.motion.LocalReducedMotion
 import java.io.File
-import java.time.Duration
 import java.util.Locale
 import org.junit.Assert.*
 import org.junit.Rule
@@ -54,7 +53,6 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
-import org.robolectric.shadows.ShadowSystemClock
 
 /**
  * UX38 native Compose coverage using only local mission fixtures. These host-rendered Android
@@ -118,8 +116,19 @@ class CrewPartialPresentationUx38Test {
 
             node("crew-mission-card").performClick()
             node("crew-bot-detail").assertIsDisplayed()
+            awaitReactionDrawIdle(compose)
             compose.onNodeWithText(statusText, useUnmergedTree = true).assertIsDisplayed()
             assertReadable(compose.onNodeWithText(statusText, useUnmergedTree = true), fontScale)
+            // Long localized terminal labels must not squeeze a short identity into fragments.
+            // Exclude the conversation so this checks the real header, not repeated sender names.
+            val headerName = compose.onNode(hasText("Mara") and
+                !hasAnyAncestor(hasTestTag("crew-bot-thread")), useUnmergedTree = true).assertIsDisplayed()
+            val headerRole = compose.onNodeWithText(context.getString(R.string.crew_role_analyst),
+                useUnmergedTree = true).assertIsDisplayed()
+            assertEquals("The short bot name must remain on one line beside any localized status", 1,
+                assertReadable(headerName, fontScale).lineCount)
+            assertEquals("The short localized role must remain on one line beside any localized status", 1,
+                assertReadable(headerRole, fontScale).lineCount)
             assertNoSuccessOrFailureLabels(context)
             val result = compose.onNodeWithText(expectedBody, useUnmergedTree = true)
             result.performScrollTo().assertIsDisplayed()
@@ -144,7 +153,15 @@ class CrewPartialPresentationUx38Test {
             override val lifecycle: Lifecycle get() = registry
         }
         compose.runOnIdle { owner.registry.currentState = Lifecycle.State.RESUMED }
-        val startedAt = System.currentTimeMillis() - 93_000L
+        // Keep the injected wall clock independent of Compose state: only the production
+        // timer/lifecycle effect may read it and publish a new elapsed value.
+        var nowMillis = 100_000L
+        val startedAt = nowMillis - 93_000L
+        fun advance(millis: Long) {
+            nowMillis += millis
+            compose.mainClock.advanceTimeBy(millis)
+            settle()
+        }
         var running by mutableStateOf(true)
         var finishedAt by mutableStateOf(0L)
         fun snapshot() = mission("PARTIAL", listOf(
@@ -158,7 +175,7 @@ class CrewPartialPresentationUx38Test {
         compose.mainClock.autoAdvance = false
         install(context, 2f) {
             CompositionLocalProvider(LocalLifecycleOwner provides owner) {
-                CrewMissionCard(snapshot(), {}, reducedMotionOverride = true)
+                CrewMissionCard(snapshot(), {}, reducedMotionOverride = true, nowMillis = { nowMillis })
             }
         }
         settle()
@@ -172,7 +189,7 @@ class CrewPartialPresentationUx38Test {
             node("crew-progress").fetchSemanticsNode().config[SemanticsProperties.ProgressBarRangeInfo])
         val before = elapsedSeconds()
         advance(5_000L)
-        assertTrue("Partial mission timer must advance while its sibling is RUNNING", elapsedSeconds() > before)
+        assertEquals("Partial mission timer must advance while its sibling is RUNNING", before + 5L, elapsedSeconds())
         capture("es-font2-partial-running-sibling", 2f)
 
         compose.runOnIdle { owner.registry.currentState = Lifecycle.State.CREATED }
@@ -184,7 +201,7 @@ class CrewPartialPresentationUx38Test {
         settle()
         assertTrue("Foregrounding must refresh the still-active timer", elapsedSeconds() > background)
 
-        compose.runOnIdle { running = false; finishedAt = System.currentTimeMillis() }
+        compose.runOnIdle { running = false; finishedAt = nowMillis }
         settle()
         assertFalse(snapshot().active())
         val terminal = elapsedSeconds()
@@ -274,8 +291,23 @@ class CrewPartialPresentationUx38Test {
         node.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
         return layouts.single().also { layout ->
             assertEquals("The actual text must use the requested font scale", fontScale, layout.layoutInput.density.fontScale, 0.01f)
-            assertFalse("Localized text must not overflow its layout", layout.hasVisualOverflow)
-            for (line in 0 until layout.lineCount) assertFalse("Localized text must not be ellipsized", layout.isLineEllipsized(line))
+            val diagnostic = "text=${layout.layoutInput.text.text}, size=${layout.size}, " +
+                "paragraph=${layout.multiParagraph.width}x${layout.multiParagraph.height}, " +
+                "overflowWidth=${layout.didOverflowWidth}, overflowHeight=${layout.didOverflowHeight}, " +
+                "lines=${layout.lineCount}, constraints=${layout.layoutInput.constraints}"
+            // A wrap-content Text inside Surface may retain the max-width MultiParagraph
+            // (250 px) while its measured size shrinks to its actual text (e.g. 38 px).
+            // didOverflowWidth then counts unused paragraph space as overflow. Check every
+            // rendered line against the measured text box instead; actual clipping still fails.
+            assertFalse("Localized text must not overflow vertically: $diagnostic", layout.didOverflowHeight)
+            for (line in 0 until layout.lineCount) {
+                assertFalse("Localized text must not be ellipsized: $diagnostic", layout.isLineEllipsized(line))
+                assertTrue("Line $line must fit horizontally in the measured text box: $diagnostic, " +
+                    "lineBounds=${layout.getLineLeft(line)}..${layout.getLineRight(line)}",
+                    layout.getLineLeft(line) >= -0.5f && layout.getLineRight(line) <= layout.size.width + 0.5f)
+                assertTrue("Line $line must fit vertically in the measured text box: $diagnostic",
+                    layout.getLineTop(line) >= -0.5f && layout.getLineBottom(line) <= layout.size.height + 0.5f)
+            }
         }
     }
 
@@ -286,13 +318,6 @@ class CrewPartialPresentationUx38Test {
         return parts[0].toLong() * 60L + parts[1].toLong()
     }
     private fun settle() { compose.mainClock.advanceTimeBy(64L); compose.waitForIdle() }
-    private fun advance(millis: Long) {
-        // Advance Robolectric's wall clock and Compose's coroutine clock explicitly; no sleeps
-        // or real provider waits are needed to exercise lifecycle and elapsed-time behavior.
-        compose.runOnIdle { ShadowSystemClock.advanceBy(Duration.ofMillis(millis)) }
-        compose.mainClock.advanceTimeBy(millis)
-        settle()
-    }
 
     private fun capture(name: String, fontScale: Float) {
         awaitReactionDrawIdle(compose)

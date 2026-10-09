@@ -3,12 +3,17 @@ package com.jarvys.agent
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.jarvys.agent.crew.CrewManager
+import org.junit.After
 import org.junit.Assert.*
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.Implementation
+import org.robolectric.annotation.Implements
+import org.robolectric.annotation.Resetter
 import org.robolectric.shadows.ShadowSystemClock
 import java.time.Duration
 import java.util.concurrent.CountDownLatch
@@ -18,8 +23,52 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
+@Config(sdk = [34], shadows = [ContinuousMissionServiceTest.LocalErrorReporter::class])
 class ContinuousMissionServiceTest {
+    /** Capture synthetic failures locally instead of invoking the diagnostic HTTP endpoint. */
+    @Implements(value = AgentErrorReporter::class, isInAndroidSdk = false)
+    class LocalErrorReporter {
+        companion object {
+            val failures = java.util.concurrent.CopyOnWriteArrayList<String>()
+
+            @JvmStatic @Resetter fun reset() { failures.clear() }
+
+            @JvmStatic @Implementation
+            @Suppress("UNUSED_PARAMETER")
+            fun report(context: Context?, provider: String?, model: String?, httpStatus: Int?,
+                       responseBody: String?, exceptionMessage: String?, exceptionType: String?,
+                       stackTrace: String?) {
+                failures.add("$exceptionType: $exceptionMessage\n$stackTrace")
+            }
+        }
+    }
+
+    private val serviceFields = arrayOf(
+        SecretStore::class.java.getDeclaredField("singleton"),
+        com.jarvys.agent.mcp.McpServerRepository::class.java.getDeclaredField("instance"),
+        com.jarvys.agent.skills.SkillRepository::class.java.getDeclaredField("instance"),
+    ).onEach { it.isAccessible = true }
+    private val previousServices = arrayOfNulls<Any>(serviceFields.size)
+
+    @Before fun installTestSecretStorage() {
+        LocalErrorReporter.reset()
+        // Real service setup initializes skills/MCP before the injected runtime. Robolectric
+        // has no AndroidKeyStore, so isolate those services with the existing storage seam.
+        serviceFields.forEachIndexed { index, field -> previousServices[index] = field.get(null) }
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        serviceFields[0].set(null, SecretStore(context.getSharedPreferences(
+            "continuous-mission-test-secrets-${java.util.UUID.randomUUID()}", Context.MODE_PRIVATE)))
+        serviceFields[1].set(null, null)
+        serviceFields[2].set(null, null)
+    }
+
+    @After fun restoreServices() {
+        serviceFields.indices.reversed().forEach { index ->
+            serviceFields[index].set(null, previousServices[index])
+        }
+        LocalErrorReporter.reset()
+    }
+
     @Test fun realServiceRetiresLegacyDeadlineAndKeepsWorkAcrossThreeVirtualDays() {
         exercise(stop = false)
     }
@@ -74,10 +123,7 @@ class ContinuousMissionServiceTest {
             service.onStartCommand(AgentForegroundService.storedChatMessageIntent(context, session, id), 0, 1)
             org.robolectric.shadows.ShadowLooper.idleMainLooper()
             val didEnter = entered.await(5, TimeUnit.SECONDS)
-            val stacks = if (didEnter) "" else Thread.getAllStackTraces().entries
-                .filter { it.key.name.contains("Jarvys") || it.key.name.contains("jarvys-crew") }
-                .joinToString("\n") { "${it.key.name}: ${it.value.joinToString("; ")}" }
-            assertTrue("Real service entered the worker; captain=${captain.get()} messages=${store.readConversationMessages(session)} state=${AgentRunUiState.state.value.outcome} $stacks", didEnter)
+            assertTrue("Real service entered the worker; local failures=${LocalErrorReporter.failures}", didEnter)
             assertFalse(prefs.contains("agent_timeout_seconds"))
             assertTrue("No hidden elapsed-time scheduler survives", AgentForegroundService::class.java.declaredFields
                 .none { ScheduledExecutorService::class.java.isAssignableFrom(it.type) })
@@ -93,6 +139,8 @@ class ContinuousMissionServiceTest {
             assertEquals(if (stop) CrewManager.Status.STOPPED else CrewManager.Status.DONE, botRef.get().status())
             assertEquals(if (stop) "STOPPED" else "PARTIAL", AgentRunUiState.state.value.outcome)
             assertTrue(store.readConversationMessages(session).any { it.optString("status") == if (stop) "STOPPED" else "PARTIAL" })
+            assertTrue("Synthetic run had no setup failures: ${LocalErrorReporter.failures}",
+                LocalErrorReporter.failures.isEmpty())
         } finally {
             StopController.getInstance().stopRun(); release.countDown(); crew.close(); controller.destroy()
         }

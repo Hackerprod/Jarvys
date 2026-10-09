@@ -241,6 +241,11 @@ public class CrewProviderUnavailableRecoveryTest {
             assertTrue(bot.canResume());
             assertEquals(1L, receiptCount(manager.messageBus().pending(bot.id), "job-66 completed with a retained receipt"));
             assertEquals(1L, receiptCount(durablePending.get(), "job-66 completed with a retained receipt"));
+            manager.observeOwnedWork(bot, bot.token.generation(), "job-66-done", "job-66 completed with a retained receipt");
+            assertEquals("An active-to-partial persistence retry must reuse the original receipt identity", 1L,
+                    receiptCount(manager.messageBus().pending(bot.id), "job-66 completed with a retained receipt"));
+            assertEquals(1L, receiptCount(durablePending.get(), "job-66 completed with a retained receipt"));
+            assertEquals(1, requests.get());
         }
     }
 

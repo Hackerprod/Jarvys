@@ -323,17 +323,18 @@ fun CrewMissionCard(
     snapshot: CrewMissionSnapshot,
     onOpen: () -> Unit,
     reducedMotionOverride: Boolean? = null,
+    nowMillis: () -> Long = System::currentTimeMillis,
 ) {
     val reducedMotion = reducedMotionOverride ?: LocalReducedMotion.current
     val complete = snapshot.status == "SYNTHESIZED"
     val viewport = rememberMotionViewport()
     val elapsedUpdatesAllowed = rememberLifecycleVisible(viewport.visible)
     var now by remember(snapshot.missionId, snapshot.finishedAtMillis) {
-        mutableLongStateOf(snapshot.finishedAtMillis.takeIf { it > 0 } ?: System.currentTimeMillis())
+        mutableLongStateOf(snapshot.finishedAtMillis.takeIf { it > 0 } ?: nowMillis())
     }
     LaunchedEffect(snapshot.missionId, snapshot.active(), elapsedUpdatesAllowed) {
         if (snapshot.active() && elapsedUpdatesAllowed) while (true) {
-            now = System.currentTimeMillis()
+            now = nowMillis()
             delay(1000)
         }
     }
@@ -687,8 +688,9 @@ fun CrewBotDetailScreen(
                     fontWeight = FontWeight.Bold)
                 Text(CrewRoleLabel(bot.roleId, bot.roleName), color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall)
+                Spacer(Modifier.height(6.dp))
+                JarvysTag(crewBotStatus(bot.status))
             }
-            JarvysTag(crewBotStatus(bot.status))
         }
         LazyRow(Modifier.fillMaxWidth().padding(horizontal = JarvysUiTokens.ScreenPadding),
             horizontalArrangement = Arrangement.spacedBy(6.dp)) {
