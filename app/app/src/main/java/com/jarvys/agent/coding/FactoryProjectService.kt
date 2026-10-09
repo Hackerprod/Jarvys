@@ -161,7 +161,7 @@ internal class FactoryProjectService(
             }
             if (manifest.plan.profile != com.jarvys.factory.contract.ManifestPlan.Profile.CURRENT)
                 lines += "Previously built v1 runtime: this artifact keeps its older window behavior. Rebuild from the project to receive the current runtime."
-            if (approvedState.existing) lines += "Reuse this app's existing signing identity: ${approvedState.fingerprint}"
+            if (approvedState.existing) lines += "Reuse this app's existing non-exportable signing identity: ${approvedState.fingerprint}"
             else lines += "Create a new, persistent, non-exportable signing key for this app only in this device's AndroidKeyStore."
             lines += "Clearing or uninstalling Jarvys, losing this device, or losing its Keystore key can permanently prevent updates to apps signed here. Keys cannot currently be backed up or transferred. No replacement key will be generated silently."
             lines += "This signs a local APK only. It does not install, publish, upload or grant permissions to an app."
