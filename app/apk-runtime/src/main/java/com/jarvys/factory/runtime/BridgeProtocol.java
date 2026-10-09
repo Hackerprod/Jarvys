@@ -1,5 +1,6 @@
 package com.jarvys.factory.runtime;
 
+import com.jarvys.factory.contract.CapabilityCatalog;
 import org.json.JSONException;
 import org.json.JSONObject;
 import java.nio.charset.StandardCharsets;
@@ -14,7 +15,8 @@ public final class BridgeProtocol {
     public static final class Request {
         public final String id, method;
         public final JSONObject args;
-        Request(String id, String method, JSONObject args) { this.id = id; this.method = method; this.args = args; }
+        public final CapabilityCatalog.Method operation;
+        Request(String id, String method, JSONObject args) { this.id = id; this.method = method; this.args = args; this.operation = CapabilityCatalog.METHODS.get(method); }
     }
 
     public static boolean trustedSender(String origin, boolean mainFrame) {
@@ -31,17 +33,19 @@ public final class BridgeProtocol {
             if (!id.matches("[a-zA-Z0-9_-]{1,64}")) throw new FactoryException("INVALID_REQUEST", "Invalid request identifier.");
             String method = FactoryConfig.string(request, "method");
             JSONObject args = request.getJSONObject("args");
-            String capability;
-            switch (method) {
-                case "runtime.info": capability = null; FactoryConfig.exactKeys(args); break;
-                case "storage.get": case "storage.remove":
-                    capability = "storage"; FactoryConfig.exactKeys(args, "key"); key(args); break;
-                case "storage.set":
-                    capability = "storage"; FactoryConfig.exactKeys(args, "key", "value"); key(args);
+            CapabilityCatalog.Method operation = CapabilityCatalog.METHODS.get(method);
+            if (operation == null) throw new FactoryException("UNKNOWN_METHOD", "Native method is not implemented.");
+            String capability = operation.capability;
+            switch (operation) {
+                case RUNTIME_INFO: FactoryConfig.exactKeys(args); break;
+                case STORAGE_GET: case STORAGE_REMOVE:
+                    FactoryConfig.exactKeys(args, "key"); key(args); break;
+                case STORAGE_SET:
+                    FactoryConfig.exactKeys(args, "key", "value"); key(args);
                     text(args, "value", MAX_VALUE_BYTES, true); break;
-                case "storage.list": capability = "storage"; FactoryConfig.exactKeys(args); break;
-                case "export.text":
-                    capability = "export"; FactoryConfig.exactKeys(args, "filename", "text", "mimeType");
+                case STORAGE_LIST: FactoryConfig.exactKeys(args); break;
+                case EXPORT_TEXT:
+                    FactoryConfig.exactKeys(args, "filename", "text", "mimeType");
                     String filename = text(args, "filename", 120, false);
                     if (!filename.matches("[a-zA-Z0-9][a-zA-Z0-9 _.-]{0,119}") || filename.endsWith(".") || filename.contains(".."))
                         throw new FactoryException("INVALID_ARGUMENT", "Use a simple document filename without paths.");
@@ -50,21 +54,21 @@ public final class BridgeProtocol {
                     if (!mime.equals("text/plain") && !mime.equals("text/markdown") && !mime.equals("application/json") && !mime.equals("text/csv"))
                         throw new FactoryException("INVALID_ARGUMENT", "Unsupported text export format.");
                     break;
-                case "share.text":
-                    capability = "share"; FactoryConfig.exactKeys(args, "text", "title");
+                case SHARE_TEXT:
+                    FactoryConfig.exactKeys(args, "text", "title");
                     text(args, "text", MAX_TEXT_BYTES, false);
                     if (args.has("title")) text(args, "title", 160, false);
                     break;
-                case "clipboard.write":
-                    capability = "clipboard"; FactoryConfig.exactKeys(args, "text"); text(args, "text", MAX_TEXT_BYTES, true); break;
-                case "haptics.perform":
-                    capability = "haptics"; FactoryConfig.exactKeys(args, "kind");
+                case CLIPBOARD_WRITE:
+                    FactoryConfig.exactKeys(args, "text"); text(args, "text", MAX_TEXT_BYTES, true); break;
+                case HAPTICS_PERFORM:
+                    FactoryConfig.exactKeys(args, "kind");
                     if (args.has("kind")) {
                         String kind = FactoryConfig.string(args, "kind");
                         if (!kind.equals("tap") && !kind.equals("longPress")) throw new FactoryException("INVALID_ARGUMENT", "Unsupported haptic feedback kind.");
                     }
                     break;
-                case "device.info": capability = "device"; FactoryConfig.exactKeys(args); break;
+                case DEVICE_INFO: FactoryConfig.exactKeys(args); break;
                 default: throw new FactoryException("UNKNOWN_METHOD", "Native method is not implemented.");
             }
             if (capability != null && !config.capabilities.contains(capability))

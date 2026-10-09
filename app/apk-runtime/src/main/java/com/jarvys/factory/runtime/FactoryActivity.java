@@ -200,13 +200,13 @@ public final class FactoryActivity extends Activity {
         }
         Reply reply = new Reply(request.id, proxy, generation);
         pending.put(request.id, reply);
-        if (request.method.startsWith("storage.")) {
+        if ("storage".equals(request.operation.capability)) {
             background(reply, () -> {
-                switch (request.method) {
-                    case "storage.get": return store.get(request.args.getString("key"));
-                    case "storage.set": store.set(request.args.getString("key"), request.args.getString("value")); return null;
-                    case "storage.remove": store.remove(request.args.getString("key")); return null;
-                    case "storage.list": return new JSONArray(store.list());
+                switch (request.operation) {
+                    case STORAGE_GET: return store.get(request.args.getString("key"));
+                    case STORAGE_SET: store.set(request.args.getString("key"), request.args.getString("value")); return null;
+                    case STORAGE_REMOVE: store.remove(request.args.getString("key")); return null;
+                    case STORAGE_LIST: return new JSONArray(store.list());
                     default: throw new FactoryException("UNKNOWN_METHOD", "Unknown storage operation.");
                 }
             });
@@ -223,24 +223,24 @@ public final class FactoryActivity extends Activity {
     }
 
     private void dispatch(BridgeProtocol.Request request, Reply reply) throws JSONException {
-        switch (request.method) {
-            case "runtime.info":
-                reply.ok(new JSONObject().put("sdkVersion", 1).put("offline", true)
+        switch (request.operation) {
+            case RUNTIME_INFO:
+                reply.ok(new JSONObject().put("sdkVersion", com.jarvys.factory.contract.CapabilityCatalog.SDK_VERSION).put("offline", true)
                         .put("implementedCapabilities", new JSONArray(FactoryConfig.SUPPORTED))
                         .put("declaredCapabilities", new JSONArray(config.capabilities))
                         .put("limits", new JSONObject().put("messageBytes", BridgeProtocol.MAX_MESSAGE_BYTES)
                                 .put("textBytes", BridgeProtocol.MAX_TEXT_BYTES).put("storageValueBytes", BridgeProtocol.MAX_VALUE_BYTES)
                                 .put("storageBytes", BoundedStore.MAX_TOTAL_BYTES).put("storageEntries", BoundedStore.MAX_ENTRIES)));
                 break;
-            case "device.info":
+            case DEVICE_INFO:
                 reply.ok(new JSONObject().put("platform", "android").put("apiLevel", Build.VERSION.SDK_INT)
                         .put("appId", getPackageName()).put("targetSdk", getApplicationInfo().targetSdkVersion));
                 break;
-            case "haptics.perform":
+            case HAPTICS_PERFORM:
                 int kind = request.args.optString("kind", "tap").equals("longPress") ? HapticFeedbackConstants.LONG_PRESS : HapticFeedbackConstants.KEYBOARD_TAP;
                 reply.ok(webView.performHapticFeedback(kind)); // Respects the user's system haptic setting.
                 break;
-            case "share.text":
+            case SHARE_TEXT:
                 if (!claimUi(reply)) break;
                 try {
                     Intent share = new Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, request.args.getString("text"));
@@ -250,7 +250,7 @@ public final class FactoryActivity extends Activity {
                 } catch (ActivityNotFoundException e) { reply.fail("UNAVAILABLE", "No text sharing application is available."); }
                 finally { if (uiOwner == reply) uiOwner = null; }
                 break;
-            case "clipboard.write":
+            case CLIPBOARD_WRITE:
                 if (!claimUi(reply)) break;
                 String text = request.args.getString("text");
                 String preview = text.length() > 160 ? text.substring(0, 160) + "…" : text;
@@ -273,7 +273,7 @@ public final class FactoryActivity extends Activity {
                         }).setNegativeButton("Cancel", (dialog, which) -> { if (uiOwner == reply) uiOwner = null; reply.fail("CANCELLED", "Copy cancelled."); })
                         .setOnCancelListener(dialog -> { if (uiOwner == reply) uiOwner = null; reply.fail("CANCELLED", "Copy cancelled."); }).show();
                 break;
-            case "export.text":
+            case EXPORT_TEXT:
                 if (!claimUi(reply)) break;
                 export = new Export(reply, request.args.getString("text"));
                 try {

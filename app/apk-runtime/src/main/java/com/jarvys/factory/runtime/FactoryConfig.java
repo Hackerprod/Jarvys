@@ -1,5 +1,6 @@
 package com.jarvys.factory.runtime;
 
+import com.jarvys.factory.contract.CapabilityCatalog;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -10,8 +11,7 @@ import java.util.LinkedHashSet;
 import java.util.Set;
 
 public final class FactoryConfig {
-    public static final Set<String> SUPPORTED = Collections.unmodifiableSet(new LinkedHashSet<>(
-            Arrays.asList("storage", "export", "share", "clipboard", "haptics", "device")));
+    public static final Set<String> SUPPORTED = CapabilityCatalog.SUPPORTED;
     public final String appId;
     public final String name;
     public final String entryPoint;

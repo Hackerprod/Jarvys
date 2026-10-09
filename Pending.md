@@ -770,6 +770,12 @@ Objetivo: permitir aplicaciones Android independientes, útiles y completas a pa
 - Mantener autorización efectiva de Coding, selección/revocación del skill, ámbito durable del proyecto, READ/WRITE, snapshots y hashes, leases, recibos, cancelación y recuperación de publicación incierta. Las capacidades del proyecto, las declaradas por la aplicación, los permisos Android y el consentimiento para una operación son niveles distintos; ninguno concede implícitamente los demás.
 - Cada release reutilizable debe preservar exactamente el conjunto y los bytes de todos los `classes*.dex` entre sus aplicaciones generadas. Una nueva versión del runtime puede cambiar el template, pero no se modifica DEX por aplicación ni se admite código nativo arbitrario desde `factory.json`. Las APK anteriores requieren reconstrucción, misma identidad de firma y versión superior para incorporar mejoras.
 
+#### F0a-1. Primer corte en curso: catálogo y auditoría cerrada
+
+Checkpoint de catálogo (9 de octubre de 2026): módulo Java puro `:factory-contract` con las seis capacidades y diez métodos actuales, compartido por spec, configuración, bridge e introspección. Los validadores y dispatch permanecen explícitos, sin reflexión ni métodos nuevos. Pruebas focalizadas frescas: 11 Full y 7 del bridge, incluidos los 64 subconjuntos y denegación/validación de cada método; cero fallos, errores u omisiones, dos forks con guard. No son una agregada ni el cierre de F0a-1. Schema y SDK siguen en v1; versión de Jarvys sin incrementar en este checkpoint.
+
+En progreso: plan efectivo inmutable, lector AXML independiente del mutador, igualdad antes/después y al firmar, inventario de todos los DEX, manifiestos hostiles, comprobación host aapt2, gates agregados/lint y revisión final. No hay APK nuevo listo ni firma/entrega de este corte. No se añaden permisos, componentes, red, claves ni instalaciones. Los constructores de nuevos nodos quedan para F0a-2; F0a completo y Runtime2 continúan abiertos.
+
 #### F0a. Contrato versionado y manifiesto selectivo
 
 - Diseñar un catálogo único y probado de capability → métodos realmente implementados, requisitos por API, permisos, features, componentes, intent-filters, queries, metadata y recursos compilados. Compartirlo entre spec, configuración runtime, validación del bridge, generador, inspección y presentación de aprobación. Resolver dependencias/conflictos y ordenar la salida de forma determinista; no añadir capacidades por reflexión, por strings de JavaScript ni por instrucciones del proyecto.

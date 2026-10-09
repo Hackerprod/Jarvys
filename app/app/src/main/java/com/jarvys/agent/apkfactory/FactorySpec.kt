@@ -1,5 +1,6 @@
 package com.jarvys.agent.apkfactory
 
+import com.jarvys.factory.contract.CapabilityCatalog
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -22,7 +23,7 @@ data class FactorySpec(
         .put("capabilities", JSONArray(capabilities)).put("webDir", webDir).put("icon", icon)
 
     companion object {
-        val CAPABILITIES = listOf("storage", "export", "share", "clipboard", "haptics", "device")
+        val CAPABILITIES: List<String> = CapabilityCatalog.NAMES
         const val MAX_SPEC_BYTES = 16 * 1024
         const val MAX_WEB_BYTES = 8 * 1024 * 1024
         const val MAX_FILE_BYTES = 1024 * 1024
@@ -52,7 +53,7 @@ data class FactorySpec(
             val webDir = relativePath(string(json, "webDir"))
             val icon = relativePath(string(json, "icon"))
             require(icon.endsWith(".png", true) || icon.endsWith(".json", true)) { "Icon must be PNG or vector JSON" }
-            return FactorySpec(appId, name, version, versionName, caps.sorted(), webDir, icon)
+            return FactorySpec(appId, name, version, versionName, CapabilityCatalog.select(caps), webDir, icon)
         }
         fun relativePath(value: String): String {
             require(value.isNotBlank() && value.length <= 240 && !value.startsWith('/') && '\\' !in value &&

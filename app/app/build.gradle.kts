@@ -77,6 +77,7 @@ android {
 }
 
 dependencies {
+    implementation(project(":factory-contract"))
     // Pinned to the APK factory signing/verification contract; upgrade only with its dedicated compatibility validation.
     //noinspection GradleDependency
     implementation("com.android.tools.build:apksig:8.13.2")

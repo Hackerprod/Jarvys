@@ -61,4 +61,25 @@ class FactorySpecTest {
         val value=FactorySpec.parse(spec().put("capabilities",JSONArray()))
         assertTrue(value.capabilities.isEmpty())
     }
+    @Test fun all64SelectionsUseImmutableCatalogWithoutImpliedCapabilities() {
+        assertEquals(6, FactorySpec.CAPABILITIES.size)
+        for (mask in 0 until 64) {
+            val selected = FactorySpec.CAPABILITIES.filterIndexed { bit, _ -> mask and (1 shl bit) != 0 }
+            val value = FactorySpec.parse(spec().put("capabilities", JSONArray(selected.reversed())))
+            assertEquals(selected.sorted(), value.capabilities)
+            assertEquals(1, JSONObject(String(value.runtimeConfig())).getInt("schemaVersion"))
+            for (name in selected) {
+                val capability = com.jarvys.factory.contract.CapabilityCatalog.CAPABILITIES[name]!!
+                assertTrue(capability.permissions.isEmpty())
+                assertTrue(capability.components.isEmpty())
+                assertTrue(capability.dependencies.isEmpty())
+                assertTrue(capability.conflicts.isEmpty())
+                assertFalse(capability.methods.isEmpty())
+            }
+            assertThrows(UnsupportedOperationException::class.java) {
+                (value.capabilities as MutableList<String>).add("camera")
+            }
+        }
+    }
+
 }

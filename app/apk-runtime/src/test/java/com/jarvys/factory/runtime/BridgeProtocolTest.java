@@ -64,4 +64,32 @@ public class BridgeProtocolTest {
         JSONObject failure = new JSONObject(BridgeProtocol.failure("r_1", "CANCELLED", "Cancelled"));
         assertFalse(failure.getBoolean("ok")); assertEquals("CANCELLED", failure.getJSONObject("error").getString("code"));
     }
+    @Test public void all64CapabilitySelectionsMatchCatalogAndTypedValidators() throws Exception {
+        String[][] calls = {{"runtime.info", "{}"}, {"storage.get", "{\"key\":\"x\"}"},
+            {"storage.set", "{\"key\":\"x\",\"value\":\"v\"}"}, {"storage.remove", "{\"key\":\"x\"}"},
+            {"storage.list", "{}"}, {"export.text", "{\"filename\":\"x.txt\",\"text\":\"x\"}"},
+            {"share.text", "{\"text\":\"x\"}"}, {"clipboard.write", "{\"text\":\"x\"}"},
+            {"haptics.perform", "{}"}, {"device.info", "{}"}};
+        assertEquals(com.jarvys.factory.contract.CapabilityCatalog.METHODS.size(), calls.length);
+        for (int mask = 0; mask < 64; mask++) {
+            org.json.JSONArray declared = new org.json.JSONArray();
+            for (int bit = 0; bit < 6; bit++) if ((mask & (1 << bit)) != 0)
+                declared.put(com.jarvys.factory.contract.CapabilityCatalog.NAMES.get(bit));
+            FactoryConfig selected = config(declared.toString());
+            for (String[] call : calls) {
+                com.jarvys.factory.contract.CapabilityCatalog.Method method =
+                    com.jarvys.factory.contract.CapabilityCatalog.METHODS.get(call[0]);
+                assertNotNull(method);
+                if (method.capability == null || selected.capabilities.contains(method.capability)) {
+                    assertSame(method, BridgeProtocol.validate(BridgeProtocol.ORIGIN, true,
+                        request(call[0], call[1]), selected).operation);
+                } else rejected("CAPABILITY_DENIED", BridgeProtocol.ORIGIN, true,
+                    request(call[0], call[1]), selected);
+                org.json.JSONObject invalid = new org.json.JSONObject(call[1]).put("undeclared", true);
+                rejected("INVALID_ARGUMENT", BridgeProtocol.ORIGIN, true,
+                    request(call[0], invalid.toString()), selected);
+            }
+        }
+    }
+
 }
