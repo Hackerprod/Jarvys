@@ -25,7 +25,8 @@ Modo de ejecución: continuar la cola completa. Al cerrar cada pendiente o corre
 - **UX27 / preparación v45 completada en host:** títulos de misión y detalle compacto; 1846 Full, 1613 Play, 17 runtime y nueve JavaScript aprobadas, con revisión independiente.
 - **UX28 / preparación v46 completada en host:** tarjetas HTML con miniatura local estática y acciones por iconos; 1911 Full, 1678 Play, 17 runtime y nueve JavaScript aprobadas, sin nuevos diagnósticos de lint. Ambos APK unsigned verificados para firma original; Chromium y aceptación física pendientes.
 - **UX29 / preparación v47 completada en host:** indicador nativo de puntos; 1930 Full, 1697 Play, 17 runtime y nueve JavaScript aprobadas, sin nuevos diagnósticos de lint. Ambos APK unsigned verificados para firma original; aceptación física pendiente.
-- **Siguiente etapa:** UX30, densidad del menú lateral; después cobertura general de Gmail en UX31.
+- **UX30 / preparación v48 en curso:** densidad del menú lateral, títulos sin etiqueta repetida y secciones vacías ocultas. Código local en validación; todavía no se declara listo el APK.
+- **Siguiente etapa:** cobertura general de Gmail en UX31, tras cerrar UX30.
 - La paridad completa con el comportamiento de v28 en un teléfono sigue pendiente de validación; la fiabilidad del agente es prioritaria antes de añadir funciones.
 
 ## Entregas previas
@@ -359,7 +360,7 @@ Estado: completado en código, revisión independiente y validación de host par
 
 ### 14. UX30: densidad y claridad del menú lateral
 
-Estado: pendiente; solicitud del 8 de octubre de 2026, añadida a la cola después de UX29.
+Estado: en implementación y validación de host para preparación v48 / 1.2.41-UX30. Captura original revisada: se conserva el encabezado Pinned y se retira únicamente la etiqueta repetida de cada fila. No se declara aceptación física ni APK listo.
 
 - Reducir el espaciado vertical entre Nuevo chat, Bots y Tareas programadas, manteniendo objetivos táctiles accesibles y la jerarquía del menú lateral.
 - Quitar el texto «Pinned» redundante dentro de las filas de chats anclados; conservar el encabezado de sección salvo que la revisión de la captura confirme otra necesidad.

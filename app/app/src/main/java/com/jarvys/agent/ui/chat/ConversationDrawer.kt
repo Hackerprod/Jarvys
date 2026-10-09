@@ -173,17 +173,15 @@ fun ConversationDrawer(
                 LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth().testTag("conversation-drawer-scroll"),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
-                    item(key = "menu-new-chat") {
-                        DrawerMenuRow(stringResource(R.string.drawer_new_chat), LucideIcons.MessageCirclePlus,
-                            Modifier.testTag("drawer-new-chat"), onNewConversation)
-                    }
-                    item(key = "menu-bots") {
-                        DrawerMenuRow(stringResource(R.string.drawer_bots), LucideIcons.Bot,
-                            Modifier.testTag("drawer-open-bots"), onOpenBots)
-                    }
-                    item(key = "menu-scheduled-tasks") {
-                        DrawerMenuRow(stringResource(R.string.drawer_scheduled_tasks), LucideIcons.Calendar,
-                            Modifier.testTag("drawer-open-scheduled-tasks"), onOpenScheduledTasks)
+                    item(key = "primary-navigation") {
+                        Column {
+                            DrawerMenuRow(stringResource(R.string.drawer_new_chat), LucideIcons.MessageCirclePlus,
+                                Modifier.testTag("drawer-new-chat"), onNewConversation)
+                            DrawerMenuRow(stringResource(R.string.drawer_bots), LucideIcons.Bot,
+                                Modifier.testTag("drawer-open-bots"), onOpenBots)
+                            DrawerMenuRow(stringResource(R.string.drawer_scheduled_tasks), LucideIcons.Calendar,
+                                Modifier.testTag("drawer-open-scheduled-tasks"), onOpenScheduledTasks)
+                        }
                     }
                     if (pinnedRows.isNotEmpty()) {
                         item(key = "pinned-heading") {
@@ -196,15 +194,18 @@ fun ConversationDrawer(
                                 selected = isChatRoute && if (active) selectedHistoryId == null else selectedHistoryId == record.id,
                                 active = active, onClick = { if (active) onResumeActive() else onOpenHistory(record.id) },
                                 pinned = record.pinned, archived = false, actionsEnabled = actionsEnabled,
+                                showPinnedMarker = false, verticalOverflow = true,
                                 managed = isManagedSystemConversation(record.sessionId), onAction = { action(record, it) })
                         }
                     }
-                    item(key = "current-heading") {
+                    if (currentRows.isNotEmpty()) item(key = "current-heading") {
                         DrawerGroupHeading(stringResource(R.string.drawer_current_chats), "drawer-current-heading")
                     }
-                    if (currentRows.isEmpty()) item(key = "history-empty") {
-                        Text(stringResource(if (filter.isNotBlank()) R.string.drawer_search_no_results else R.string.drawer_no_chats),
-                            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 14.dp),
+                    // A pinned search match is still a result, even with no current chats.
+                    if (filter.isNotBlank() && rows.isEmpty()) item(key = "search-empty") {
+                        Text(stringResource(R.string.drawer_search_no_results),
+                            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 14.dp)
+                                .testTag("drawer-search-empty"),
                             color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
                     }
                     items(currentRows, key = { "current-" + it.sessionId }) { record ->
@@ -214,6 +215,7 @@ fun ConversationDrawer(
                             selected = isChatRoute && if (active) selectedHistoryId == null else selectedHistoryId == record.id,
                             active = active, onClick = { if (active) onResumeActive() else onOpenHistory(record.id) },
                             pinned = record.pinned, archived = false, actionsEnabled = actionsEnabled,
+                            showPinnedMarker = false, verticalOverflow = true,
                             managed = isManagedSystemConversation(record.sessionId), onAction = { action(record, it) })
                     }
                 }
@@ -249,8 +251,8 @@ private fun DrawerGroupHeading(title: String, tag: String) {
 @Composable
 private fun DrawerMenuRow(title: String, icon: androidx.compose.ui.graphics.vector.ImageVector,
     modifier: Modifier = Modifier, onClick: () -> Unit) {
-    Row(modifier.fillMaxWidth().heightIn(min = 52.dp).clickable(role = Role.Button, onClick = onClick)
-        .padding(horizontal = 12.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically,
+    Row(modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(role = Role.Button, onClick = onClick)
+        .padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp)) {
         Icon(icon, contentDescription = null, modifier = Modifier.size(23.dp), tint = MaterialTheme.colorScheme.primary)
         Text(title, style = MaterialTheme.typography.titleMedium)

@@ -71,7 +71,8 @@ class DrawerTitleOnlyRecoveryComposeTest {
         } }
         menuAction(R.string.drawer_pin)
         showText("Saved chat")
-        compose.onNodeWithTag("drawer-pinned-marker", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithTag("drawer-pinned-heading").assertIsDisplayed()
+        compose.onNodeWithTag("drawer-pinned-marker", useUnmergedTree = true).assertDoesNotExist()
         menuAction(R.string.drawer_unpin)
         compose.onNodeWithTag("drawer-pinned-marker", useUnmergedTree = true).assertDoesNotExist()
         menuAction(R.string.drawer_archive)

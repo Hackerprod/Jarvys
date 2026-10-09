@@ -28,6 +28,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -90,7 +91,8 @@ internal fun ChatConversationActions(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun ConversationSessionRow(title: String, selected: Boolean, active: Boolean, onClick: () -> Unit,
-    pinned: Boolean, archived: Boolean, actionsEnabled: Boolean, managed: Boolean, onAction: (ConversationAction) -> Unit) {
+    pinned: Boolean, archived: Boolean, actionsEnabled: Boolean, managed: Boolean,
+    showPinnedMarker: Boolean = true, verticalOverflow: Boolean = false, onAction: (ConversationAction) -> Unit) {
     var menuOpen by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().heightIn(min = 62.dp).combinedClickable(onClick = onClick,
         onLongClick = { if (actionsEnabled) menuOpen = true })
@@ -103,11 +105,13 @@ internal fun ConversationSessionRow(title: String, selected: Boolean, active: Bo
         Text(title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium,
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
             maxLines = 2, overflow = TextOverflow.Ellipsis)
-        if (pinned) Text(stringResource(R.string.drawer_pinned), Modifier.testTag("drawer-pinned-marker"), style = MaterialTheme.typography.labelSmall,
+        if (pinned && showPinnedMarker) Text(stringResource(R.string.drawer_pinned), Modifier.testTag("drawer-pinned-marker"), style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.primary)
         Box {
             IconButton(enabled = actionsEnabled, onClick = { menuOpen = true }, modifier = Modifier.size(48.dp)) {
-                Icon(LucideIcons.Ellipsis, contentDescription = stringResource(R.string.drawer_chat_actions, title), modifier = Modifier.size(18.dp))
+                Icon(LucideIcons.Ellipsis, contentDescription = stringResource(R.string.drawer_chat_actions, title),
+                    modifier = Modifier.size(18.dp).rotate(if (verticalOverflow) 90f else 0f)
+                        .testTag(if (verticalOverflow) "conversation-overflow-vertical" else "conversation-overflow-horizontal"))
             }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                 listOf(

@@ -15,4 +15,14 @@ Compose/Robolectric tests exercise English/Spanish, both themes, 320–360dp wid
 
 The native host navigation test preserves the same reading region and message anchors. It observes a one-time 42px shift on the first return to the transcript, followed by exact stability on a second round trip. Saved index/offset normalization while the unchanged asynchronous Markdown body is re-created is the likely explanation, inferred from measured row sizes rather than directly proven. Exact pixel-scroll preservation is not claimed. The final test requires the identical set of fully unobscured message anchors, center-message visibility, unchanged draft/session/data, and no cumulative drift. Physical-device behavior remains to be checked; no separate scroll framework was added.
 
-The app package and permissions remain unchanged from UX16. Development APKs remain unsigned; signing and delivery occur only after the full queue using the existing approved identity.
+The app package and permissions remain unchanged. Each completed stage produces verified unsigned development APKs for signing with the existing approved identity and delivery before moving to the next stage; signing is not part of the source build.
+
+## UX30: drawer density and empty sections (v48)
+
+The three primary navigation rows share a zero-gap group with a minimum 48dp click target and 8dp vertical content padding; labels can wrap and grow at large font scales. Chat group spacing, fixed header/search and profile/settings footer remain unchanged.
+
+Pinned keeps its section heading and full pin/unpin state, but drawer rows omit the repeated Pinned marker. Only drawer overflow icons rotate the existing Lucide glyph vertically. Shared archived rows retain their existing marker and horizontal icon by default. Rename validation, long-press menus, archive/restore, managed-chat protection and explicit delete confirmation are unchanged.
+
+Current chats, like Pinned, renders its heading only while it has visible rows. Normal empty sections have no placeholder. An explicit nonblank search with zero total matches still shows the localized no-results feedback; matches among pinned or active chats prevent false empty feedback. Blank searches, clearing, cancellation, Back and saved-state restoration retain their previous behavior.
+
+The UX30 native capture matrix uses 320dp, English/Spanish, light/dark themes and 100/200% fonts, with navigation, three pinned rows matching the supplied layout, popup actions, empty drawer and empty search states. Tests verify actual minimum targets, wrapping, section semantics, exact action targets and shared archive defaults. Host validation is not physical-device or TalkBack acceptance.
