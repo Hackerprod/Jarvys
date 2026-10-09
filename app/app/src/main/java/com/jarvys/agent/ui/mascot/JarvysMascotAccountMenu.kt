@@ -1,11 +1,8 @@
 package com.jarvys.agent.ui.mascot
 
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -27,6 +24,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.jarvys.agent.JarvysMascotAssets
 import com.jarvys.agent.LucideIcons
 import com.jarvys.agent.R
+import com.jarvys.agent.ScrollableDialogContent
 import com.jarvys.agent.crew.MascotPilotScreen
 import com.jarvys.agent.crew.MascotPilotSession
 import com.jarvys.agent.crew.rememberMascotResumed
@@ -136,7 +134,7 @@ private fun JarvysMascotAccountMenuSession(
     if (warningOpen) AlertDialog(
         onDismissRequest = { warningOpen = false },
         title = { Text(stringResource(R.string.jarvys_mascot_warning_title)) },
-        text = { Column(Modifier.verticalScroll(rememberScrollState())) {
+        text = { ScrollableDialogContent {
             Text(stringResource(R.string.jarvys_mascot_warning))
             Text(stringResource(R.string.jarvys_mascot_activity_notice))
         } },
