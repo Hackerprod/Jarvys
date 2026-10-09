@@ -1,0 +1,17 @@
+// Resolve existing runtime configurations without starting Test JVMs.
+// No repository or dependency is added, and no app/provider endpoint is contacted.
+gradle.projectsEvaluated {
+    rootProject.tasks.register('restoreHostTestRuntimeCache') {
+        doLast {
+            [':app': ['fullDebugUnitTestRuntimeClasspath', 'playDebugUnitTestRuntimeClasspath'],
+             ':apk-runtime': ['releaseUnitTestRuntimeClasspath']].each { projectPath, names ->
+                def target = rootProject.project(projectPath)
+                names.each { name ->
+                    def config = target.configurations.getByName(name)
+                    if (!config.canBeResolved) throw new GradleException('Expected resolvable test runtime configuration')
+                    logger.lifecycle("PREWARMED_EXISTING_RUNTIME ${projectPath}:${name} files=${config.files.size()}")
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,22 @@
+{
+  "kind": "New ephemeral standalone reimplementation, not recovered original guard bytes",
+  "date": "2026-10-09",
+  "scope": "Host JDK URL/HttpURLConnection HTTP(S) tests only",
+  "jdk": "Eclipse Temurin 21.0.12.1+1",
+  "jdk_path": "/workspace/shared/Jarvys-recovery/toolchain/jdk-21.0.12.1+1",
+  "jdk_distribution_source": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12.1%2B1/OpenJDK21U-jdk_x64_linux_hotspot_21.0.12.1_1.tar.gz",
+  "jdk_tar_sha256": "ce79869e1307ed8ee1e2baa86a412b1eb5b75d10a01006d788a6f968bcfaee94",
+  "jdk_src_zip_sha256": "2fb0fb7eef6330656944cdd42a3ba36ea819deab00acf958468feb002bdf11e2",
+  "dependencies": "Only JDK bundled APIs and internal ASM; no app dependencies",
+  "artifacts": [
+    {
+      "filename": "jarvys-offline-guard.jar",
+      "sha256": "f5de36aaabb1c607e97953c0acbe3c0ff454ffe463080eff2e1224d10172e243"
+    },
+    {
+      "filename": "guard-bootstrap.jar",
+      "sha256": "8123b2c64bd57b83d3e437b26862e2c19e58e1e162bfd5b3dc2296fb05dfa9ed"
+    }
+  ],
+  "reporting": "Optional existing absolute reportDir; numeric PID/start/install/shutdown times and blocked count only; CREATE_NEW records; requested write failure aborts premain"
+}

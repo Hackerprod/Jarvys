@@ -1,0 +1,56 @@
+[
+  {
+    "file": "OpenJDK21U-jdk_x64_linux_hotspot_21.0.12.1_1.tar.gz",
+    "verified_algorithm": "sha256",
+    "verified_digest": "ce79869e1307ed8ee1e2baa86a412b1eb5b75d10a01006d788a6f968bcfaee94",
+    "sha256": "ce79869e1307ed8ee1e2baa86a412b1eb5b75d10a01006d788a6f968bcfaee94",
+    "size_bytes": 207473347,
+    "source_url": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12.1%2B1/OpenJDK21U-jdk_x64_linux_hotspot_21.0.12.1_1.tar.gz",
+    "checksum_source": "https://api.adoptium.net/v3/assets/latest/21/hotspot?architecture=x64&image_type=jdk&os=linux&vendor=eclipse"
+  },
+  {
+    "file": "gradle-8.13-bin.zip",
+    "verified_algorithm": "sha256",
+    "verified_digest": "20f1b1176237254a6fc204d8434196fa11a4cfb387567519c61556e8710aed78",
+    "sha256": "20f1b1176237254a6fc204d8434196fa11a4cfb387567519c61556e8710aed78",
+    "size_bytes": 136983045,
+    "source_url": "https://services.gradle.org/distributions/gradle-8.13-bin.zip",
+    "checksum_source": "https://services.gradle.org/distributions/gradle-8.13-bin.zip.sha256"
+  },
+  {
+    "file": "platform-36_r02.zip",
+    "verified_algorithm": "sha1",
+    "verified_digest": "2c1a80dd4d9f7d0e6dd336ec603d9b5c55a6f576",
+    "sha256": "37607369a28c5b640b3a7998868d45898ebcb777565a0e85f9acf36f29631d2e",
+    "size_bytes": 65878410,
+    "source_url": "https://dl.google.com/android/repository/platform-36_r02.zip",
+    "checksum_source": "https://dl.google.com/android/repository/repository2-3.xml"
+  },
+  {
+    "file": "build-tools_r35_linux.zip",
+    "verified_algorithm": "sha1",
+    "verified_digest": "2cfaa0bbb2336e9ec18ed3ecea84fa2e2af607bc",
+    "sha256": "bd3a4966912eb8b30ed0d00b0cda6b6543b949d5ffe00bea54c04c81e1561d88",
+    "size_bytes": 61958799,
+    "source_url": "https://dl.google.com/android/repository/build-tools_r35_linux.zip",
+    "checksum_source": "https://dl.google.com/android/repository/repository2-3.xml"
+  },
+  {
+    "file": "commandlinetools-linux-16111833_latest.zip",
+    "verified_algorithm": "sha1",
+    "verified_digest": "e025545c62a8e64c7559119566a569fb1dec5f60",
+    "sha256": "0877a1d048fe4a24efe2eff536ca4223f7adeb58648bb81909d33c446918cfa8",
+    "size_bytes": 181052239,
+    "source_url": "https://dl.google.com/android/repository/commandlinetools-linux-16111833_latest.zip",
+    "checksum_source": "https://dl.google.com/android/repository/repository2-3.xml"
+  },
+  {
+    "file": "commandlinetools-linux-13114758_latest.zip",
+    "verified_algorithm": "sha1",
+    "verified_digest": "5fdcc763663eefb86a5b8879697aa6088b041e70",
+    "sha256": "7ec965280a073311c339e571cd5de778b9975026cfcbe79f2b1cdcb1e15317ee",
+    "size_bytes": 164760899,
+    "source_url": "https://dl.google.com/android/repository/commandlinetools-linux-13114758_latest.zip",
+    "checksum_source": "https://dl.google.com/android/repository/repository2-3.xml"
+  }
+]

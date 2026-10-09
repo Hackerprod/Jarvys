@@ -1,0 +1,36 @@
+// Recovery-only host harness. Not an app/repository dependency.
+def evidenceRoot = new File('/workspace/shared/Jarvys-recovery/UX39-recovered-validation')
+def guardJar = new File(evidenceRoot, 'offline-guard/jarvys-offline-guard.jar')
+def runLabel = System.getenv('JARVYS_RUN_LABEL') ?: 'unset'
+allprojects {
+    tasks.withType(Test).configureEach { t ->
+        if (runLabel == 'unset') throw new GradleException('JARVYS_RUN_LABEL is required for fresh test evidence')
+        outputs.upToDateWhen { false }
+        maxHeapSize = '1280m'
+        maxParallelForks = 1
+        forkEvery = 60
+        def taskRoot = new File(evidenceRoot, "runs/${runLabel}/${project.name}-${name}")
+        systemProperty 'java.io.tmpdir', new File(taskRoot, 'tmp').absolutePath
+        systemProperty 'user.home', new File(taskRoot, 'home').absolutePath
+        systemProperty 'jarvys.offlineGuard.reportDir', new File(taskRoot, 'guard').absolutePath
+        systemProperty 'robolectric.offline', 'true'
+        systemProperty 'robolectric.dependency.dir', new File(evidenceRoot, 'robolectric-sdks').absolutePath
+        systemProperty 'javax.net.ssl.trustStore', '/etc/ssl/certs/java/cacerts'
+        jvmArgs "-javaagent:${guardJar.absolutePath}", '-XX:-CreateCoredumpOnCrash'
+        doFirst {
+            def expectedGuardHashes = [
+                'jarvys-offline-guard.jar': 'f5de36aaabb1c607e97953c0acbe3c0ff454ffe463080eff2e1224d10172e243',
+                'guard-bootstrap.jar': '8123b2c64bd57b83d3e437b26862e2c19e58e1e162bfd5b3dc2296fb05dfa9ed'
+            ]
+            expectedGuardHashes.each { filename, expected ->
+                def artifact = new File(guardJar.parentFile, filename)
+                if (!artifact.isFile()) throw new GradleException('Reviewed host guard artifact is missing')
+                def digest = java.security.MessageDigest.getInstance('SHA-256').digest(artifact.bytes).encodeHex().toString()
+                if (digest != expected) throw new GradleException('Reviewed host guard artifact hash mismatch')
+            }
+            if (taskRoot.exists()) throw new GradleException('Refusing reused test evidence directory: ' + taskRoot)
+            ['tmp','home','guard'].each { new File(taskRoot,it).mkdirs() }
+            logger.lifecycle("FRESH_GUARDED_TEST_TASK ${path} run=${runLabel}")
+        }
+    }
+}

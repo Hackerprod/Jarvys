@@ -1,0 +1,10 @@
+// Force fresh lint evidence while retaining ordinary compilation caches.
+allprojects {
+    plugins.withId('com.android.application') {
+        // Generate complete diagnostic reports despite known legacy errors; comparison is the gate.
+        android.lint.abortOnError = false
+    }
+    tasks.configureEach {
+        if (name.startsWith('lint')) outputs.upToDateWhen { false }
+    }
+}

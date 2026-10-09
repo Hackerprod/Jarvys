@@ -1,0 +1,74 @@
+[
+  {
+    "sdk": 24,
+    "url": "https://repo.maven.apache.org/maven2/org/robolectric/android-all-instrumented/7.0.0_r1-robolectric-r1-i7/android-all-instrumented-7.0.0_r1-robolectric-r1-i7.jar",
+    "name": "android-all-instrumented-7.0.0_r1-robolectric-r1-i7.jar",
+    "bytes": 88212080,
+    "sha256": "57dc8d57a5d69adacf3aa4306aefbf147bd1621da347e20f3cf1f41c88a5dd49",
+    "sha512_verified": "0776aacfdcc10a0f11485b22016c04162697506b4c5b30678ca224cafc2550c1f4c0ab36a57f1ed899b1df02d5d8ee7d9130608dcf52173becd879a5689ad9a9"
+  },
+  {
+    "sdk": 25,
+    "url": "https://repo.maven.apache.org/maven2/org/robolectric/android-all-instrumented/7.1.0_r7-robolectric-r1-i7/android-all-instrumented-7.1.0_r7-robolectric-r1-i7.jar",
+    "name": "android-all-instrumented-7.1.0_r7-robolectric-r1-i7.jar",
+    "bytes": 88877687,
+    "sha256": "435b1e65810c49198f2456afcb4709b16f98c43ab36f0a2957dfb0fbec7df7ec",
+    "sha512_verified": "3abd7f424180c3881b6c909582a8db52999d320e55bda767f5b0f08b7617ed038084d61a77a012285357920e21a47859e93f7158485a8fc812165b670a24fa29"
+  },
+  {
+    "sdk": 26,
+    "url": "https://repo.maven.apache.org/maven2/org/robolectric/android-all-instrumented/8.0.0_r4-robolectric-r1-i7/android-all-instrumented-8.0.0_r4-robolectric-r1-i7.jar",
+    "name": "android-all-instrumented-8.0.0_r4-robolectric-r1-i7.jar",
+    "bytes": 94512384,
+    "sha256": "712196356bf61fbcb186f41135c33e6d3416be31543d7be120a33bc898cc1208",
+    "sha512_verified": "c55e2053f3ae35d617ce02b0ecd311c1f72fcd671eaff873fb203e106b2dc444b870677b71be546a062045fc0a473926bb1668bd43f9051176826aab3f732aab"
+  },
+  {
+    "sdk": 28,
+    "url": "https://repo.maven.apache.org/maven2/org/robolectric/android-all-instrumented/9-robolectric-4913185-2-i7/android-all-instrumented-9-robolectric-4913185-2-i7.jar",
+    "name": "android-all-instrumented-9-robolectric-4913185-2-i7.jar",
+    "bytes": 106130412,
+    "sha256": "dbb1c88987b54cef3132695a1b4d2f4851ba06286a6fa7d15772f98fd1f0cdf7",
+    "sha512_verified": "24687b9ea919eb20f5e27e47274f2aa711e98eb332d4769d34044a3b4952a71393831d0a3f61ba726dc8fe220673a76138c11a0716f304999e5b029146fe88eb"
+  },
+  {
+    "sdk": 29,
+    "url": "https://repo.maven.apache.org/maven2/org/robolectric/android-all-instrumented/10-robolectric-5803371-i7/android-all-instrumented-10-robolectric-5803371-i7.jar",
+    "name": "android-all-instrumented-10-robolectric-5803371-i7.jar",
+    "bytes": 116486192,
+    "sha256": "700fb3bb88ff346969b955241b86d2f55d395488bf5df1e8eddfbd003980c78a",
+    "sha512_verified": "d8907eec0646ae1b71ec306cc61449c76c61a7a08eaca44eb4aa30937cfcf5dcaf7d0938cbea76b3bd85a83646b012ff499faa11cea45e32df7aff62e791951f"
+  },
+  {
+    "sdk": 32,
+    "url": "https://repo.maven.apache.org/maven2/org/robolectric/android-all-instrumented/12.1-robolectric-8229987-i7/android-all-instrumented-12.1-robolectric-8229987-i7.jar",
+    "name": "android-all-instrumented-12.1-robolectric-8229987-i7.jar",
+    "bytes": 154759126,
+    "sha256": "4bcf8fde62de31d0c6d6b98bd667abc9da526d46848d31284b5238ca6192c3ca",
+    "sha512_verified": "747d403cd1e80a898a9ffb917920ce094216312b3dabaa312410e100647102b4141d2fbd1efca32251308e713fd69dca72c0971f93f7d6f1247d19a13cbac4ef"
+  },
+  {
+    "sdk": 34,
+    "url": "https://repo.maven.apache.org/maven2/org/robolectric/android-all-instrumented/14-robolectric-10818077-i7/android-all-instrumented-14-robolectric-10818077-i7.jar",
+    "name": "android-all-instrumented-14-robolectric-10818077-i7.jar",
+    "bytes": 151142227,
+    "sha256": "3fdac2d463f431c6b8d83b9d0ca739e795de75fffedee648c6761bd4bd864701",
+    "sha512_verified": "7cdc0b1306e7865f1acd25a363073149654caee5b8e278c5ae37ff4724185724eff39f0b0111800b521e640bb28698d9d2e655134a801569a0f07470e7b5f455"
+  },
+  {
+    "sdk": 35,
+    "url": "https://repo.maven.apache.org/maven2/org/robolectric/android-all-instrumented/15-robolectric-13954326-i7/android-all-instrumented-15-robolectric-13954326-i7.jar",
+    "name": "android-all-instrumented-15-robolectric-13954326-i7.jar",
+    "bytes": 200643142,
+    "sha256": "06c4c8602d6db7486266a982bc55834ed6dfebd62a0b88daca204139ecf142cb",
+    "sha512_verified": "5fc64ffccf4788154162686b3966ddd63abea8326542c465e2a7f0129fc92770d0e1e8ddcfabd7f1500e491ec02e3b4104b9e51b61fccd9cf08006c9dc02987c"
+  },
+  {
+    "sdk": 36,
+    "url": "https://repo.maven.apache.org/maven2/org/robolectric/android-all-instrumented/16-robolectric-13921718-i7/android-all-instrumented-16-robolectric-13921718-i7.jar",
+    "name": "android-all-instrumented-16-robolectric-13921718-i7.jar",
+    "bytes": 213431622,
+    "sha256": "16f1f751643d1d3d5592008846bbdfc1e57cff15e6ec303d26584de3b6ac25ec",
+    "sha512_verified": "0576318b89abb0a1c9a760a61bb68ccd2d509b33164b8265d6b1fb587a4b7629e1e805b6c7f8fbefab94fc03c8db8100b1d4856a32728803c242d2677aa7ec76"
+  }
+]

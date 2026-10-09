@@ -1,0 +1,95 @@
+{
+  "recorded_at_utc": "2026-10-09T10:57:16.727557+00:00",
+  "app_source_commit": "1a4e55f0b8513d20b39f884923a22ccba7b18b39",
+  "documentation_checkpoint": "b80c61f2060294215e2462253fa4227dd03d5b63",
+  "app_tree": "a04694cc0706547111d368d9169c140c48249ac9",
+  "tracked_app_files_unchanged": 878,
+  "toolchain": {
+    "jdk": "Eclipse Temurin 21.0.12.1+1",
+    "gradle": "8.13",
+    "agp": "8.13.2",
+    "kotlin": "2.2.20",
+    "platform": "Android 36 revision 2",
+    "build_tools": "35.0.0",
+    "sdkmanager": "19.0",
+    "node": "24.19.0",
+    "robolectric": "4.16"
+  },
+  "sdk_license": {
+    "url": "https://developer.android.com/studio/terms",
+    "current_web_terms_date": "2026-04-28",
+    "approved_and_recorded_on": "2026-10-09",
+    "package_metadata_terms_date": "2019-01-16",
+    "note": "Approval and acceptance were verified in the restored environment; do not manufacture prior acceptance in another environment."
+  },
+  "fresh_verified": {
+    "javascript": {
+      "tests": 9,
+      "failures": 0,
+      "skipped": 0
+    },
+    "guard_smoke": {
+      "checks": 52,
+      "blocked_attempts": 100,
+      "nonlocal_dns_calls": 0,
+      "invalid_startup_controls": 5,
+      "concurrent_jvm_counts": [
+        100,
+        0
+      ]
+    },
+    "sdk_tools": [
+      "Android API compile",
+      "D8 dex generation",
+      "zipalign verification"
+    ],
+    "independent_reviews": [
+      "source recovery",
+      "Pending-only checkpoint",
+      "guard and sidecars",
+      "host validation harness"
+    ]
+  },
+  "interrupted_runs": [
+    {
+      "label": "warm-compile-20261009T104516-6083b3ac",
+      "last_stage": "dependency resolution",
+      "completion_record": false
+    },
+    {
+      "label": "warm-compile-20261009T104754-7f88effe",
+      "last_stage": "runtime compilation after Full/Play compilation progress",
+      "completion_record": false
+    }
+  ],
+  "interruption_observation": "Output continuation calls were cancelled by automatic approval review. Each single authorized retry returned Unknown process id; no build remained running. No build success is claimed. Further build restarts are on hold.",
+  "required_fresh_gates": {
+    "focused_policy_full": 16,
+    "aggregate_full": 2355,
+    "aggregate_play": 1973,
+    "runtime": 64,
+    "javascript": 9,
+    "lint": "Fresh baseline at 33e64f and current reports; compare diagnostics, not only totals",
+    "unsigned_apks": "Full and Play v56; metadata, permissions, ZIP/CRC/alignment, source-to-artifact, forbidden test/guard contents, identity checks",
+    "signing": "Separate parent-coordinated handoff only after unsigned gates; no compatibility claim with unavailable original A6 identity",
+    "real_provider": "Chromium/WebView acceptance and older-provider risk remain open"
+  },
+  "historical_only_pre_replacement": {
+    "full": 2355,
+    "play": 1973,
+    "runtime": 64,
+    "javascript": 9,
+    "focused": 60,
+    "original_xml_available": false,
+    "lint_completed": false,
+    "v56_apk_verified": false
+  },
+  "delivered_v55_bytes": "Library metadata and historical SHA exist, but official download returned 403 twice; no readable local copy and no new byte comparison",
+  "private_legacy_files": "19 previous private files are absent from the reconstructed workspace; not guessed, recreated or published",
+  "limits": [
+    "Host guard covers documented JDK URL/HttpURLConnection paths; not OS, raw sockets, arbitrary clients or other processes",
+    "Real Chromium 154 launch was denied before any page; no alternate route attempted",
+    "SDK/compile/target versions do not prove WebView header support",
+    "No new app dependencies, permissions, bridges or system network settings"
+  ]
+}
