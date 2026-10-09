@@ -1,0 +1,1046 @@
+{
+  "scope": "Actual compiled .riv bytes imported independently by official @rive-app/canvas-advanced 2.44.1 WASM in Node; no rendering, Android device execution, or performance claim.",
+  "utc": "2026-10-09T12:45:40.592Z",
+  "mascots": [
+    {
+      "id": "lumen",
+      "rivBytes": 8020,
+      "sha256": "842d944493b9bc4b812c9e982b9980310028b373214a8498583013d526acaa7d",
+      "artboards": 1,
+      "viewModels": 1,
+      "stateMachines": 1,
+      "timelines": 18,
+      "transitions": [
+        {
+          "from": 0,
+          "to": 1,
+          "entered": "Thinking",
+          "passed": true
+        },
+        {
+          "from": 0,
+          "to": 2,
+          "entered": "Working",
+          "passed": true
+        },
+        {
+          "from": 0,
+          "to": 3,
+          "entered": "WaitingUser",
+          "passed": true
+        },
+        {
+          "from": 0,
+          "to": 4,
+          "entered": "Done",
+          "passed": true
+        },
+        {
+          "from": 0,
+          "to": 5,
+          "entered": "Error",
+          "passed": true
+        },
+        {
+          "from": 0,
+          "to": 6,
+          "entered": "Interrupted",
+          "passed": true
+        },
+        {
+          "from": 0,
+          "to": 7,
+          "entered": "Queued",
+          "passed": true
+        },
+        {
+          "from": 0,
+          "to": 8,
+          "entered": "WaitingProvider",
+          "passed": true
+        },
+        {
+          "from": 1,
+          "to": 0,
+          "entered": "Idle",
+          "passed": true
+        },
+        {
+          "from": 1,
+          "to": 2,
+          "entered": "Working",
+          "passed": true
+        },
+        {
+          "from": 1,
+          "to": 3,
+          "entered": "WaitingUser",
+          "passed": true
+        },
+        {
+          "from": 1,
+          "to": 4,
+          "entered": "Done",
+          "passed": true
+        },
+        {
+          "from": 1,
+          "to": 5,
+          "entered": "Error",
+          "passed": true
+        },
+        {
+          "from": 1,
+          "to": 6,
+          "entered": "Interrupted",
+          "passed": true
+        },
+        {
+          "from": 1,
+          "to": 7,
+          "entered": "Queued",
+          "passed": true
+        },
+        {
+          "from": 1,
+          "to": 8,
+          "entered": "WaitingProvider",
+          "passed": true
+        },
+        {
+          "from": 2,
+          "to": 0,
+          "entered": "Idle",
+          "passed": true
+        },
+        {
+          "from": 2,
+          "to": 1,
+          "entered": "Thinking",
+          "passed": true
+        },
+        {
+          "from": 2,
+          "to": 3,
+          "entered": "WaitingUser",
+          "passed": true
+        },
+        {
+          "from": 2,
+          "to": 4,
+          "entered": "Done",
+          "passed": true
+        },
+        {
+          "from": 2,
+          "to": 5,
+          "entered": "Error",
+          "passed": true
+        },
+        {
+          "from": 2,
+          "to": 6,
+          "entered": "Interrupted",
+          "passed": true
+        },
+        {
+          "from": 2,
+          "to": 7,
+          "entered": "Queued",
+          "passed": true
+        },
+        {
+          "from": 2,
+          "to": 8,
+          "entered": "WaitingProvider",
+          "passed": true
+        },
+        {
+          "from": 3,
+          "to": 0,
+          "entered": "Idle",
+          "passed": true
+        },
+        {
+          "from": 3,
+          "to": 1,
+          "entered": "Thinking",
+          "passed": true
+        },
+        {
+          "from": 3,
+          "to": 2,
+          "entered": "Working",
+          "passed": true
+        },
+        {
+          "from": 3,
+          "to": 4,
+          "entered": "Done",
+          "passed": true
+        },
+        {
+          "from": 3,
+          "to": 5,
+          "entered": "Error",
+          "passed": true
+        },
+        {
+          "from": 3,
+          "to": 6,
+          "entered": "Interrupted",
+          "passed": true
+        },
+        {
+          "from": 3,
+          "to": 7,
+          "entered": "Queued",
+          "passed": true
+        },
+        {
+          "from": 3,
+          "to": 8,
+          "entered": "WaitingProvider",
+          "passed": true
+        },
+        {
+          "from": 4,
+          "to": 0,
+          "entered": "Idle",
+          "passed": true
+        },
+        {
+          "from": 4,
+          "to": 1,
+          "entered": "Thinking",
+          "passed": true
+        },
+        {
+          "from": 4,
+          "to": 2,
+          "entered": "Working",
+          "passed": true
+        },
+        {
+          "from": 4,
+          "to": 3,
+          "entered": "WaitingUser",
+          "passed": true
+        },
+        {
+          "from": 4,
+          "to": 5,
+          "entered": "Error",
+          "passed": true
+        },
+        {
+          "from": 4,
+          "to": 6,
+          "entered": "Interrupted",
+          "passed": true
+        },
+        {
+          "from": 4,
+          "to": 7,
+          "entered": "Queued",
+          "passed": true
+        },
+        {
+          "from": 4,
+          "to": 8,
+          "entered": "WaitingProvider",
+          "passed": true
+        },
+        {
+          "from": 5,
+          "to": 0,
+          "entered": "Idle",
+          "passed": true
+        },
+        {
+          "from": 5,
+          "to": 1,
+          "entered": "Thinking",
+          "passed": true
+        },
+        {
+          "from": 5,
+          "to": 2,
+          "entered": "Working",
+          "passed": true
+        },
+        {
+          "from": 5,
+          "to": 3,
+          "entered": "WaitingUser",
+          "passed": true
+        },
+        {
+          "from": 5,
+          "to": 4,
+          "entered": "Done",
+          "passed": true
+        },
+        {
+          "from": 5,
+          "to": 6,
+          "entered": "Interrupted",
+          "passed": true
+        },
+        {
+          "from": 5,
+          "to": 7,
+          "entered": "Queued",
+          "passed": true
+        },
+        {
+          "from": 5,
+          "to": 8,
+          "entered": "WaitingProvider",
+          "passed": true
+        },
+        {
+          "from": 6,
+          "to": 0,
+          "entered": "Idle",
+          "passed": true
+        },
+        {
+          "from": 6,
+          "to": 1,
+          "entered": "Thinking",
+          "passed": true
+        },
+        {
+          "from": 6,
+          "to": 2,
+          "entered": "Working",
+          "passed": true
+        },
+        {
+          "from": 6,
+          "to": 3,
+          "entered": "WaitingUser",
+          "passed": true
+        },
+        {
+          "from": 6,
+          "to": 4,
+          "entered": "Done",
+          "passed": true
+        },
+        {
+          "from": 6,
+          "to": 5,
+          "entered": "Error",
+          "passed": true
+        },
+        {
+          "from": 6,
+          "to": 7,
+          "entered": "Queued",
+          "passed": true
+        },
+        {
+          "from": 6,
+          "to": 8,
+          "entered": "WaitingProvider",
+          "passed": true
+        },
+        {
+          "from": 7,
+          "to": 0,
+          "entered": "Idle",
+          "passed": true
+        },
+        {
+          "from": 7,
+          "to": 1,
+          "entered": "Thinking",
+          "passed": true
+        },
+        {
+          "from": 7,
+          "to": 2,
+          "entered": "Working",
+          "passed": true
+        },
+        {
+          "from": 7,
+          "to": 3,
+          "entered": "WaitingUser",
+          "passed": true
+        },
+        {
+          "from": 7,
+          "to": 4,
+          "entered": "Done",
+          "passed": true
+        },
+        {
+          "from": 7,
+          "to": 5,
+          "entered": "Error",
+          "passed": true
+        },
+        {
+          "from": 7,
+          "to": 6,
+          "entered": "Interrupted",
+          "passed": true
+        },
+        {
+          "from": 7,
+          "to": 8,
+          "entered": "WaitingProvider",
+          "passed": true
+        },
+        {
+          "from": 8,
+          "to": 0,
+          "entered": "Idle",
+          "passed": true
+        },
+        {
+          "from": 8,
+          "to": 1,
+          "entered": "Thinking",
+          "passed": true
+        },
+        {
+          "from": 8,
+          "to": 2,
+          "entered": "Working",
+          "passed": true
+        },
+        {
+          "from": 8,
+          "to": 3,
+          "entered": "WaitingUser",
+          "passed": true
+        },
+        {
+          "from": 8,
+          "to": 4,
+          "entered": "Done",
+          "passed": true
+        },
+        {
+          "from": 8,
+          "to": 5,
+          "entered": "Error",
+          "passed": true
+        },
+        {
+          "from": 8,
+          "to": 6,
+          "entered": "Interrupted",
+          "passed": true
+        },
+        {
+          "from": 8,
+          "to": 7,
+          "entered": "Queued",
+          "passed": true
+        }
+      ],
+      "toggles": [
+        {
+          "mode": 0,
+          "entered": "IdleReduced",
+          "staticFrames": 180,
+          "returned": "Idle",
+          "passed": true
+        },
+        {
+          "mode": 1,
+          "entered": "ThinkingReduced",
+          "staticFrames": 180,
+          "returned": "Thinking",
+          "passed": true
+        },
+        {
+          "mode": 2,
+          "entered": "WorkingReduced",
+          "staticFrames": 180,
+          "returned": "Working",
+          "passed": true
+        },
+        {
+          "mode": 3,
+          "entered": "WaitingUserReduced",
+          "staticFrames": 180,
+          "returned": "WaitingUser",
+          "passed": true
+        },
+        {
+          "mode": 4,
+          "entered": "DoneReduced",
+          "staticFrames": 180,
+          "returned": "Done",
+          "passed": true
+        },
+        {
+          "mode": 5,
+          "entered": "ErrorReduced",
+          "staticFrames": 180,
+          "returned": "Error",
+          "passed": true
+        },
+        {
+          "mode": 6,
+          "entered": "InterruptedReduced",
+          "staticFrames": 180,
+          "returned": "Interrupted",
+          "passed": true
+        },
+        {
+          "mode": 7,
+          "entered": "QueuedReduced",
+          "staticFrames": 180,
+          "returned": "Queued",
+          "passed": true
+        },
+        {
+          "mode": 8,
+          "entered": "WaitingProviderReduced",
+          "staticFrames": 180,
+          "returned": "WaitingProvider",
+          "passed": true
+        }
+      ],
+      "independentInstances": true,
+      "passed": true
+    },
+    {
+      "id": "brisa",
+      "rivBytes": 16621,
+      "sha256": "a8b22753386c791f7b62c39624f405bee9c23a8d670053d16655b578d292041a",
+      "artboards": 1,
+      "viewModels": 1,
+      "stateMachines": 1,
+      "timelines": 18,
+      "transitions": [
+        {
+          "from": 0,
+          "to": 1,
+          "entered": "thinking",
+          "passed": true
+        },
+        {
+          "from": 0,
+          "to": 2,
+          "entered": "working",
+          "passed": true
+        },
+        {
+          "from": 0,
+          "to": 3,
+          "entered": "waitingUser",
+          "passed": true
+        },
+        {
+          "from": 0,
+          "to": 4,
+          "entered": "done",
+          "passed": true
+        },
+        {
+          "from": 0,
+          "to": 5,
+          "entered": "error",
+          "passed": true
+        },
+        {
+          "from": 0,
+          "to": 6,
+          "entered": "interrupted",
+          "passed": true
+        },
+        {
+          "from": 0,
+          "to": 7,
+          "entered": "queued",
+          "passed": true
+        },
+        {
+          "from": 0,
+          "to": 8,
+          "entered": "waitingProvider",
+          "passed": true
+        },
+        {
+          "from": 1,
+          "to": 0,
+          "entered": "idle",
+          "passed": true
+        },
+        {
+          "from": 1,
+          "to": 2,
+          "entered": "working",
+          "passed": true
+        },
+        {
+          "from": 1,
+          "to": 3,
+          "entered": "waitingUser",
+          "passed": true
+        },
+        {
+          "from": 1,
+          "to": 4,
+          "entered": "done",
+          "passed": true
+        },
+        {
+          "from": 1,
+          "to": 5,
+          "entered": "error",
+          "passed": true
+        },
+        {
+          "from": 1,
+          "to": 6,
+          "entered": "interrupted",
+          "passed": true
+        },
+        {
+          "from": 1,
+          "to": 7,
+          "entered": "queued",
+          "passed": true
+        },
+        {
+          "from": 1,
+          "to": 8,
+          "entered": "waitingProvider",
+          "passed": true
+        },
+        {
+          "from": 2,
+          "to": 0,
+          "entered": "idle",
+          "passed": true
+        },
+        {
+          "from": 2,
+          "to": 1,
+          "entered": "thinking",
+          "passed": true
+        },
+        {
+          "from": 2,
+          "to": 3,
+          "entered": "waitingUser",
+          "passed": true
+        },
+        {
+          "from": 2,
+          "to": 4,
+          "entered": "done",
+          "passed": true
+        },
+        {
+          "from": 2,
+          "to": 5,
+          "entered": "error",
+          "passed": true
+        },
+        {
+          "from": 2,
+          "to": 6,
+          "entered": "interrupted",
+          "passed": true
+        },
+        {
+          "from": 2,
+          "to": 7,
+          "entered": "queued",
+          "passed": true
+        },
+        {
+          "from": 2,
+          "to": 8,
+          "entered": "waitingProvider",
+          "passed": true
+        },
+        {
+          "from": 3,
+          "to": 0,
+          "entered": "idle",
+          "passed": true
+        },
+        {
+          "from": 3,
+          "to": 1,
+          "entered": "thinking",
+          "passed": true
+        },
+        {
+          "from": 3,
+          "to": 2,
+          "entered": "working",
+          "passed": true
+        },
+        {
+          "from": 3,
+          "to": 4,
+          "entered": "done",
+          "passed": true
+        },
+        {
+          "from": 3,
+          "to": 5,
+          "entered": "error",
+          "passed": true
+        },
+        {
+          "from": 3,
+          "to": 6,
+          "entered": "interrupted",
+          "passed": true
+        },
+        {
+          "from": 3,
+          "to": 7,
+          "entered": "queued",
+          "passed": true
+        },
+        {
+          "from": 3,
+          "to": 8,
+          "entered": "waitingProvider",
+          "passed": true
+        },
+        {
+          "from": 4,
+          "to": 0,
+          "entered": "idle",
+          "passed": true
+        },
+        {
+          "from": 4,
+          "to": 1,
+          "entered": "thinking",
+          "passed": true
+        },
+        {
+          "from": 4,
+          "to": 2,
+          "entered": "working",
+          "passed": true
+        },
+        {
+          "from": 4,
+          "to": 3,
+          "entered": "waitingUser",
+          "passed": true
+        },
+        {
+          "from": 4,
+          "to": 5,
+          "entered": "error",
+          "passed": true
+        },
+        {
+          "from": 4,
+          "to": 6,
+          "entered": "interrupted",
+          "passed": true
+        },
+        {
+          "from": 4,
+          "to": 7,
+          "entered": "queued",
+          "passed": true
+        },
+        {
+          "from": 4,
+          "to": 8,
+          "entered": "waitingProvider",
+          "passed": true
+        },
+        {
+          "from": 5,
+          "to": 0,
+          "entered": "idle",
+          "passed": true
+        },
+        {
+          "from": 5,
+          "to": 1,
+          "entered": "thinking",
+          "passed": true
+        },
+        {
+          "from": 5,
+          "to": 2,
+          "entered": "working",
+          "passed": true
+        },
+        {
+          "from": 5,
+          "to": 3,
+          "entered": "waitingUser",
+          "passed": true
+        },
+        {
+          "from": 5,
+          "to": 4,
+          "entered": "done",
+          "passed": true
+        },
+        {
+          "from": 5,
+          "to": 6,
+          "entered": "interrupted",
+          "passed": true
+        },
+        {
+          "from": 5,
+          "to": 7,
+          "entered": "queued",
+          "passed": true
+        },
+        {
+          "from": 5,
+          "to": 8,
+          "entered": "waitingProvider",
+          "passed": true
+        },
+        {
+          "from": 6,
+          "to": 0,
+          "entered": "idle",
+          "passed": true
+        },
+        {
+          "from": 6,
+          "to": 1,
+          "entered": "thinking",
+          "passed": true
+        },
+        {
+          "from": 6,
+          "to": 2,
+          "entered": "working",
+          "passed": true
+        },
+        {
+          "from": 6,
+          "to": 3,
+          "entered": "waitingUser",
+          "passed": true
+        },
+        {
+          "from": 6,
+          "to": 4,
+          "entered": "done",
+          "passed": true
+        },
+        {
+          "from": 6,
+          "to": 5,
+          "entered": "error",
+          "passed": true
+        },
+        {
+          "from": 6,
+          "to": 7,
+          "entered": "queued",
+          "passed": true
+        },
+        {
+          "from": 6,
+          "to": 8,
+          "entered": "waitingProvider",
+          "passed": true
+        },
+        {
+          "from": 7,
+          "to": 0,
+          "entered": "idle",
+          "passed": true
+        },
+        {
+          "from": 7,
+          "to": 1,
+          "entered": "thinking",
+          "passed": true
+        },
+        {
+          "from": 7,
+          "to": 2,
+          "entered": "working",
+          "passed": true
+        },
+        {
+          "from": 7,
+          "to": 3,
+          "entered": "waitingUser",
+          "passed": true
+        },
+        {
+          "from": 7,
+          "to": 4,
+          "entered": "done",
+          "passed": true
+        },
+        {
+          "from": 7,
+          "to": 5,
+          "entered": "error",
+          "passed": true
+        },
+        {
+          "from": 7,
+          "to": 6,
+          "entered": "interrupted",
+          "passed": true
+        },
+        {
+          "from": 7,
+          "to": 8,
+          "entered": "waitingProvider",
+          "passed": true
+        },
+        {
+          "from": 8,
+          "to": 0,
+          "entered": "idle",
+          "passed": true
+        },
+        {
+          "from": 8,
+          "to": 1,
+          "entered": "thinking",
+          "passed": true
+        },
+        {
+          "from": 8,
+          "to": 2,
+          "entered": "working",
+          "passed": true
+        },
+        {
+          "from": 8,
+          "to": 3,
+          "entered": "waitingUser",
+          "passed": true
+        },
+        {
+          "from": 8,
+          "to": 4,
+          "entered": "done",
+          "passed": true
+        },
+        {
+          "from": 8,
+          "to": 5,
+          "entered": "error",
+          "passed": true
+        },
+        {
+          "from": 8,
+          "to": 6,
+          "entered": "interrupted",
+          "passed": true
+        },
+        {
+          "from": 8,
+          "to": 7,
+          "entered": "queued",
+          "passed": true
+        }
+      ],
+      "toggles": [
+        {
+          "mode": 0,
+          "entered": "idle_static",
+          "staticFrames": 180,
+          "returned": "idle",
+          "passed": true
+        },
+        {
+          "mode": 1,
+          "entered": "thinking_static",
+          "staticFrames": 180,
+          "returned": "thinking",
+          "passed": true
+        },
+        {
+          "mode": 2,
+          "entered": "working_static",
+          "staticFrames": 180,
+          "returned": "working",
+          "passed": true
+        },
+        {
+          "mode": 3,
+          "entered": "waitingUser_static",
+          "staticFrames": 180,
+          "returned": "waitingUser",
+          "passed": true
+        },
+        {
+          "mode": 4,
+          "entered": "done_static",
+          "staticFrames": 180,
+          "returned": "done",
+          "passed": true
+        },
+        {
+          "mode": 5,
+          "entered": "error_static",
+          "staticFrames": 180,
+          "returned": "error",
+          "passed": true
+        },
+        {
+          "mode": 6,
+          "entered": "interrupted_static",
+          "staticFrames": 180,
+          "returned": "interrupted",
+          "passed": true
+        },
+        {
+          "mode": 7,
+          "entered": "queued_static",
+          "staticFrames": 180,
+          "returned": "queued",
+          "passed": true
+        },
+        {
+          "mode": 8,
+          "entered": "waitingProvider_static",
+          "staticFrames": 180,
+          "returned": "waitingProvider",
+          "passed": true
+        }
+      ],
+      "independentInstances": true,
+      "passed": true
+    }
+  ],
+  "invalidBinaryRejected": true,
+  "passed": true,
+  "captureSummary": {
+    "lumen": {
+      "captures": 36,
+      "temporalComparisons": 18,
+      "distinctReducedPoses": 9
+    },
+    "brisa": {
+      "modes": 9,
+      "reducedPixelComparisons": 9,
+      "postEntryLoopComparisons": 6
+    }
+  },
+  "limitations": [
+    "No Android runtime/device execution or performance test.",
+    "Selected transform endpoint comparison is not every-frame/every-property equality.",
+    "Transition names verify routing, not exhaustive fresh-pose reset equivalence.",
+    "Host/CLI licensing and published-file distribution conditions require verification before production."
+  ]
+}

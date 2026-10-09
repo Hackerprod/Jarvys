@@ -1,0 +1,24 @@
+{
+  "name": "Brisa",
+  "artboard": "Mascot",
+  "viewModel": "MascotState",
+  "stateMachine": "MascotController",
+  "mode": {
+    "0": "idle",
+    "1": "thinking",
+    "2": "working",
+    "3": "waitingUser",
+    "4": "done",
+    "5": "error",
+    "6": "interrupted",
+    "7": "queued",
+    "8": "waitingProvider"
+  },
+  "reducedMotion": "true selects one-frame static version of each mode",
+  "assets": "none",
+  "runtimeScripts": "none",
+  "dimensions": [
+    400,
+    400
+  ]
+}
