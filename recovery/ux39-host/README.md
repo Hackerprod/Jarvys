@@ -1,13 +1,13 @@
 # UX39: recoverable host validation checkpoint
 
-Status on 2026-10-09: **build execution is on hold after two interrupted continuation sessions.** This directory records reproducible inputs and remaining gates; it is not a passing build or release certificate. Do not automatically restart builds from this document.
+Status on 2026-10-09 at 12:27 UTC: **fresh host gates passed and both unsigned v56 APKs independently approved for separate D7 debug signing.** Full 2,355, Play 1,973, runtime 64 and JavaScript 9 tests passed with no failures/errors/skips. Fresh baseline/current lint issue multisets are identical. This is not signed delivery or real-device/WebRTC acceptance. The two earlier interrupted attempts remain historical incomplete runs, not passing evidence.
 
 ## Source and scope
 
 - UX39 code checkpoint: `1a4e55f0b8513d20b39f884923a22ccba7b18b39`.
 - App tree: `a04694cc0706547111d368d9169c140c48249ac9`; all 878 tracked app files remain unchanged.
 - Pre-UX39 lint baseline: `33e64f8fa76a163c7dea128501c624535688a419`.
-- Last previously verified documentation checkpoint: `b80c61f2060294215e2462253fa4227dd03d5b63`.
+- Documentation checkpoint before final evidence: `6fdcaa5c1463314f66191772543ee4597140e49a`.
 - This directory is outside `app/`. Its JVM agent is a host testing tool, never an APK dependency or native bridge.
 
 `recovery-manifest.json` records completed, interrupted, historical and still-required checks separately. No signing key/password, private legacy contents, conversation quotes, raw application logs, APK, SDK/JDK archive or compiled guard JAR is included.
@@ -29,7 +29,7 @@ The shell-only `toolchain/env.sh` sets `JAVA_HOME`, `GRADLE_HOME`, `GRADLE_USER_
 
 ## Rebuild the guard outside the repository
 
-Copy this directory's host scripts and `offline-guard/` sources to the external validation directory. Build/run only after execution is permitted again. The nested guard README explains its JDK-internal interception and limits. Its referenced raw reports are local evidence, not part of this source-only archive; the consolidated verified results are in `recovery-manifest.json`.
+Copy this directory's host scripts and `offline-guard/` sources to the external validation directory. A future rebuild must have current execution authority; the completed runs below used the authorized restored environment. The nested guard README explains its JDK-internal interception and limits. Its referenced raw reports are local evidence, not part of this source-only archive; the consolidated verified results are in `recovery-manifest.json`.
 
 The reviewed guard passed 52 smoke checks, blocked 100 synthetic external attempts before non-localhost DNS, preserved real loopback HTTP, and passed five fail-before-main controls. Concurrent JVM attribution matched counts 100 and 0. HTTPS reached a loopback TLS ClientHello; a full successful HTTPS redirect was not executed.
 
@@ -46,9 +46,9 @@ Rebuild ZIP timestamps can change the JAR hashes. `fresh-tests.init.gradle` inte
 
 Scope: JDK URL/HttpURLConnection HTTP(S) paths under the documented trusted-fixture assumptions. It is not raw-socket, alternate-client, subprocess, Android-provider or OS network isolation. Exact localhost assumes its startup-verified mapping remains loopback. Use numeric loopback fixtures where possible.
 
-## Resume only after the execution hold is resolved
+## Reproduce the completed fresh host gates
 
-All commands below are plans, **not claims that these gates have run successfully**. Run sequentially from the indicated worktree's `app/` directory. `run_gradle_gate.py` creates a unique evidence directory and records actual exit/times/log. No completed record means incomplete. Test runs require `--info` and fresh directories. Never recover a pass from interrupted output.
+The steps below describe the completed fresh workflow; exact successful run IDs and results are recorded in `recovery-manifest.json`. A rerun must produce its own evidence and does not inherit these passes. Run sequentially from the indicated worktree's `app/` directory. `run_gradle_gate.py` creates a unique evidence directory and records actual exit/times/log. No completed record means incomplete. Test runs require `--info` and fresh directories. Never recover a pass from interrupted output.
 
 1. Complete official dependency warming without starting test JVMs:
 
@@ -61,11 +61,11 @@ python3 /workspace/shared/Jarvys-recovery/UX39-recovered-validation/run_gradle_g
 2. Run a focused Full policy test with the reviewed guard and `--offline`, using `fresh-tests.init.gradle`, `:app:testFullDebugUnitTest --tests com.jarvys.agent.PreviewResponsePolicyTest`. Expect 16 cases, no failures/errors/skips. Copy verified focused XML into its run evidence before the aggregate overwrites reports.
 3. Run fresh guarded aggregates, one task per run: `:app:testFullDebugUnitTest` (2,355), `:app:testPlayDebugUnitTest` (1,973), `:apk-runtime:testReleaseUnitTest` (64). Use `--offline --info -I <external>/fresh-tests.init.gradle`. Run `node --test --test-reporter=tap apk-runtime/tests/sdk.test.cjs` (9) again before final closure.
 4. `verify_gates.py tests <XML-directory> <run.json> <task> <expected-count> --policy 16` verifies a main-app aggregate. Omit `--policy` for runtime. Missing/stale XML, failed/skipped task, missing agent injection, reused/mismatched sidecars or nonzero failures are not passes. Preserve per-run XML and logs before later tasks overwrite outputs.
-5. Regenerate lint in both the detached baseline and current worktree with `--info -I <external>/fresh-lint.init.gradle`, requesting `:app:lintReportFullDebug :app:lintReportPlayDebug :apk-runtime:lintReportRelease`. Warm missing official lint dependencies separately if required. The external init disables only abort-on-existing-errors so full reports can be produced; it does not suppress diagnostics. Use `verify_gates.py lint <baseline.xml> <current.xml> <baseline-run.json> <current-run.json> <report-task>` for each variant. Historical reference counts were Full 46 errors/263 warnings/3 hints, Play 37/259/3, runtime 4 warnings. Fresh issue multisets, not old totals alone, are the gate.
+5. Regenerate lint in both the detached baseline and current worktree with `--info -I <external>/fresh-lint.init.gradle`, requesting `:app:lintReportFullDebug :app:lintReportPlayDebug :apk-runtime:lintReportRelease` with `-x :apk-runtime:lintVitalRelease`. The existing factory graph disables the vital report but leaves its dependent task; only that duplicate vital task is excluded. The complete runtime analyze/report tasks executed freshly in both runs, alongside Full/Play, so no diagnostics are omitted. Warm missing official lint dependencies separately if required. The external init disables only abort-on-existing-errors so full reports can be produced; it does not suppress diagnostics. Use `verify_gates.py lint <baseline.xml> <current.xml> <baseline-run.json> <current-run.json> <report-task>` for each variant. Historical reference counts were Full 46 errors/263 warnings/3 hints, Play 37/259/3, runtime 4 warnings. Fresh issue multisets, not old totals alone, are the gate.
 6. Recheck `verify_gates.py source`. Build `:app:assembleFullDebug :app:assemblePlayDebug` with `-PunsignedBuild=true` (already set by `gradle-run.sh`). No signing key is required or read by this harness.
-7. Before signing handoff, independently verify package `com.jarvys.agent`, label Jarvys, v56/1.2.49-UX39, unchanged permissions, ZIP/CRC, official 16 KiB alignment, unsigned state, exact per-entry content equivalence to Gradle outputs, launcher/factory resources, Play exclusions, absence of host guard/tests and immutable APK hashes. Comparison against a reconstructed baseline must be labelled as such: the delivered v55 bytes remain unavailable after the supported Library route returned 403 twice.
+7. `prepare_unsigned_artifacts.py` makes separate compact/aligned copies, refuses to overwrite prior handoff copies and verifies their contents against raw Gradle outputs. It reads no key. Before signing handoff, independently verify package `com.jarvys.agent`, label Jarvys, v56/1.2.49-UX39, unchanged permissions, ZIP/CRC, official 16 KiB alignment, unsigned state, exact per-entry content equivalence to Gradle outputs, launcher/factory resources, Play exclusions, absence of host guard/tests and immutable APK hashes. ZIP alignment does not establish native-library ELF 16 KiB compatibility. Comparison against a reconstructed baseline must be labelled as such: the delivered v55 bytes remain unavailable after the supported Library route returned 403 twice.
 
-The original A6 signing material and 19 private legacy files are not in this recovery bundle. Signing identity and secure backup are handled separately; do not generate/read keys from these scripts or claim compatibility with the old signer. No v56 unsigned/signed APK has passed this recovery's gates.
+The original A6 signing material and 19 private legacy files are not in this recovery bundle. Signing identity and secure backup are handled separately; do not generate/read keys from these scripts or claim compatibility with the old signer. Both unsigned APKs passed the fresh gates and independent review. The separately supplied D7 certificate is authorized for DEBUG ONLY: SHA-1 `D7:C0:1F:59:79:78:32:3E:32:CA:AF:22:E9:F6:00:9A:B7:2F:32:B8`. It is not compatible with an in-place A6 update; production needs a different identity. Signed verification and user delivery are separate remaining steps at this checkpoint.
 
 ## Residual product acceptance
 

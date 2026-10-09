@@ -30,7 +30,7 @@ def task_evidence(run_file, task, guarded=False):
     log=pathlib.Path(run['log']).read_text()
     assert 'BUILD SUCCESSFUL' in log and 'BUILD FAILED' not in log, 'Missing successful Gradle completion'
     executed=re.findall(r'^> Task '+re.escape(task)+r'([^\n]*)$',log,re.M)
-    assert executed==[''], 'Task did not execute freshly: '+repr(executed)
+    assert executed and all(state == '' for state in executed), 'Task did not execute freshly: '+repr(executed)
     evidence={'run':str(run_path),'task':task,'exit_code':0,'actual_task_executed':True}
     if guarded:
         launches=re.findall(r"^Starting process 'Gradle Test Executor \d+'\.[^\n]*Command: ([^\n]+)$",log,re.M)

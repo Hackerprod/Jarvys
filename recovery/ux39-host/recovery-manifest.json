@@ -47,8 +47,61 @@
       "source recovery",
       "Pending-only checkpoint",
       "guard and sidecars",
-      "host validation harness"
-    ]
+      "host validation harness",
+      "fresh complete test XML and guard worker evidence",
+      "complete fresh baseline/current lint diagnostic multiset comparison",
+      "both unsigned APK hashes, metadata, entry bytes, permissions and reconstructed-baseline resources"
+    ],
+    "tests": {
+      "full": 2355,
+      "play": 1973,
+      "runtime": 64,
+      "javascript": 9,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "focused_policy": 16
+    },
+    "lint": {
+      "full": {
+        "counts": {
+          "Error": 46,
+          "Warning": 263,
+          "Hint": 3
+        },
+        "added": 0,
+        "removed": 0,
+        "passed": true
+      },
+      "play": {
+        "counts": {
+          "Error": 37,
+          "Warning": 259,
+          "Hint": 3
+        },
+        "added": 0,
+        "removed": 0,
+        "passed": true
+      },
+      "runtime": {
+        "counts": {
+          "Warning": 4
+        },
+        "added": 0,
+        "removed": 0,
+        "passed": true
+      }
+    },
+    "test_worker_guard": {
+      "full_forks": 6,
+      "play_forks": 5,
+      "runtime_forks": 1,
+      "full_blocked_attempts": 8,
+      "play_blocked_attempts": 8,
+      "runtime_blocked_attempts": 0,
+      "all_install_shutdown_sidecars_matched": true,
+      "scope": "JDK URL/HttpURLConnection tested paths; counters are not packet capture"
+    }
   },
   "interrupted_runs": [
     {
@@ -62,18 +115,7 @@
       "completion_record": false
     }
   ],
-  "interruption_observation": "Output continuation calls were cancelled by automatic approval review. Each single authorized retry returned Unknown process id; no build remained running. No build success is claimed. Further build restarts are on hold.",
-  "required_fresh_gates": {
-    "focused_policy_full": 16,
-    "aggregate_full": 2355,
-    "aggregate_play": 1973,
-    "runtime": 64,
-    "javascript": 9,
-    "lint": "Fresh baseline at 33e64f and current reports; compare diagnostics, not only totals",
-    "unsigned_apks": "Full and Play v56; metadata, permissions, ZIP/CRC/alignment, source-to-artifact, forbidden test/guard contents, identity checks",
-    "signing": "Separate parent-coordinated handoff only after unsigned gates; no compatibility claim with unavailable original A6 identity",
-    "real_provider": "Chromium/WebView acceptance and older-provider risk remain open"
-  },
+  "interruption_observation": "Output continuation calls were cancelled by automatic approval review. Each single authorized retry returned Unknown process id; no build remained running. These attempts remain incomplete. The later authorized fresh runs below completed successfully; the earlier hold is resolved.",
   "historical_only_pre_replacement": {
     "full": 2355,
     "play": 1973,
@@ -90,6 +132,175 @@
     "Host guard covers documented JDK URL/HttpURLConnection paths; not OS, raw sockets, arbitrary clients or other processes",
     "Real Chromium 154 launch was denied before any page; no alternate route attempted",
     "SDK/compile/target versions do not prove WebView header support",
-    "No new app dependencies, permissions, bridges or system network settings"
-  ]
+    "No new app dependencies, permissions, bridges or system network settings",
+    "ZIP 16 KiB alignment does not establish native-library ELF 16 KiB compatibility"
+  ],
+  "updated_at_utc": "2026-10-09T12:29:54.037353+00:00",
+  "status": "HOST_GATES_PASSED_READY_FOR_D7_DEBUG_SIGNING",
+  "documentation_checkpoint_before_final_evidence": "6fdcaa5c1463314f66191772543ee4597140e49a",
+  "successful_runs": {
+    "focused_policy": {
+      "label": "focused-policy-20261009T114801-b16e07da",
+      "args": [
+        "--offline",
+        "--info",
+        "-I",
+        "<external-validation>/fresh-tests.init.gradle",
+        ":app:testFullDebugUnitTest",
+        "--tests",
+        "com.jarvys.agent.PreviewResponsePolicyTest"
+      ],
+      "start_epoch": 1791546481.585213,
+      "exit_code": 0,
+      "finish_epoch": 1791546520.6433086
+    },
+    "full": {
+      "label": "aggregate-full-20261009T114941-10038289",
+      "args": [
+        "--offline",
+        "--info",
+        "-I",
+        "<external-validation>/fresh-tests.init.gradle",
+        ":app:testFullDebugUnitTest"
+      ],
+      "start_epoch": 1791546581.534994,
+      "exit_code": 0,
+      "finish_epoch": 1791546869.7801092
+    },
+    "play": {
+      "label": "aggregate-play-20261009T115455-3827fded",
+      "args": [
+        "--offline",
+        "--info",
+        "-I",
+        "<external-validation>/fresh-tests.init.gradle",
+        ":app:testPlayDebugUnitTest"
+      ],
+      "start_epoch": 1791546895.2595804,
+      "exit_code": 0,
+      "finish_epoch": 1791547170.0500035
+    },
+    "runtime": {
+      "label": "aggregate-runtime-20261009T115935-a54a0ee3",
+      "args": [
+        "--offline",
+        "--info",
+        "-I",
+        "<external-validation>/fresh-tests.init.gradle",
+        ":apk-runtime:testReleaseUnitTest"
+      ],
+      "start_epoch": 1791547175.4387124,
+      "exit_code": 0,
+      "finish_epoch": 1791547202.1418438
+    },
+    "assemble": {
+      "label": "assemble-v56-complete-cache-20261009T120150-502239d1",
+      "args": [
+        "--info",
+        ":app:assembleFullDebug",
+        ":app:assemblePlayDebug"
+      ],
+      "start_epoch": 1791547310.2499118,
+      "exit_code": 0,
+      "finish_epoch": 1791547439.8804057
+    },
+    "lint_baseline": {
+      "label": "lint-baseline-final-20261009T121250-1ca6f676",
+      "args": [
+        "--offline",
+        "--info",
+        "-I",
+        "<external-validation>/fresh-lint.init.gradle",
+        "-x",
+        ":apk-runtime:lintVitalRelease",
+        ":app:lintReportFullDebug",
+        ":app:lintReportPlayDebug",
+        ":apk-runtime:lintReportRelease"
+      ],
+      "start_epoch": 1791547970.52082,
+      "exit_code": 0,
+      "finish_epoch": 1791548324.6089337
+    },
+    "lint_current": {
+      "label": "lint-current-final-20261009T121313-2acbd3ee",
+      "args": [
+        "--offline",
+        "--info",
+        "-I",
+        "<external-validation>/fresh-lint.init.gradle",
+        "-x",
+        ":apk-runtime:lintVitalRelease",
+        ":app:lintReportFullDebug",
+        ":app:lintReportPlayDebug",
+        ":apk-runtime:lintReportRelease"
+      ],
+      "start_epoch": 1791547993.1996307,
+      "exit_code": 0,
+      "finish_epoch": 1791548687.0526803
+    }
+  },
+  "recovered_validation_preparation_failures": [
+    {
+      "run": "assemble-v56-20261009T120029-0579dbeb",
+      "reason": "Missing cached official desugaring prerequisites; warmed in the later successful assembly."
+    },
+    {
+      "run": "lint-baseline-20261009T120520-8e7dbb9a",
+      "reason": "Existing graph disables vital report but leaves dependent vital task; later complete runtime lint executed with only duplicate vital task excluded."
+    },
+    {
+      "run": "lint-baseline-fullreports-20261009T120745-e321be96",
+      "reason": "Missing cached AndroidTest lint-model prerequisites; actual lint-model tasks later warmed successfully."
+    },
+    {
+      "run": "warm-lint-inputs-20261009T120859-37dc7132",
+      "reason": "Generic self-project configuration ambiguity; actual AGP lint-model tasks used instead."
+    }
+  ],
+  "required_fresh_gates_at_initial_hold": {
+    "focused_policy_full": 16,
+    "aggregate_full": 2355,
+    "aggregate_play": 1973,
+    "runtime": 64,
+    "javascript": 9,
+    "lint": "Fresh baseline at 33e64f and current reports; compare diagnostics, not only totals",
+    "unsigned_apks": "Full and Play v56; metadata, permissions, ZIP/CRC/alignment, source-to-artifact, forbidden test/guard contents, identity checks",
+    "signing": "Separate parent-coordinated handoff only after unsigned gates; no compatibility claim with unavailable original A6 identity",
+    "real_provider": "Chromium/WebView acceptance and older-provider risk remain open"
+  },
+  "remaining_gates": [
+    "D7 debug signing and signed-APK verification",
+    "User delivery acceptance record",
+    "Real Chromium/WebView native acceptance; older-provider residual risk remains open"
+  ],
+  "unsigned_apks": [
+    {
+      "flavor": "full",
+      "sha256": "1dbc39ca97ed10341efee9c5dbacc29ae1ebce2be21654cc1439f640f916b513",
+      "bytes": 20065977,
+      "entry_count": 246,
+      "package": "com.jarvys.agent",
+      "version_code": 56,
+      "version_name": "1.2.49-UX39",
+      "debuggable": true,
+      "factory_template_sha256": "a8812359aec3ce70457c6ac52fb0f869096c7d4552343167bd044d1e4adb7cba"
+    },
+    {
+      "flavor": "play",
+      "sha256": "00fb36d118062424b8b22b9efd4839af4cacb6d8b2f0ca5a63fd9a0276afe054",
+      "bytes": 18574458,
+      "entry_count": 176,
+      "package": "com.jarvys.agent",
+      "version_code": 56,
+      "version_name": "1.2.49-UX39",
+      "debuggable": true,
+      "factory_template_sha256": "a8812359aec3ce70457c6ac52fb0f869096c7d4552343167bd044d1e4adb7cba"
+    }
+  ],
+  "signing_scope": {
+    "certificate_sha1": "D7:C0:1F:59:79:78:32:3E:32:CA:AF:22:E9:F6:00:9A:B7:2F:32:B8",
+    "scope": "DEBUG ONLY, user-supplied existing D7 key, separate signer. Production uses another identity. No A6 in-place compatibility. Temporary 54 identity unused.",
+    "signed_or_delivered_at_this_checkpoint": false
+  },
+  "lint_task_note": "Complete Full/Play/runtime analyze and report tasks executed. Only duplicate :apk-runtime:lintVitalRelease excluded due to existing disabled-vital-report graph; no diagnostics suppressed."
 }
