@@ -557,7 +557,7 @@ Límites: no hubo llamadas a proveedor real, consumo de cuota, evaluación visua
 
 ### 22. UX37: actividad de skills y herramientas sin filas duplicadas
 
-Estado: implementación y validación de host en curso para v55 / 1.2.48-UX37. El modelo de actividad, los codecs de recuperación, la proyección de una fila y la identidad visual del principal ya están implementados; se ejecutan pruebas de casos límite y revisión independiente antes de los gates completos. No se amplía la implementación diagnóstica de UX34 fase 0.
+Estado: implementación, revisión independiente y validación completa de host terminadas para v55 / 1.2.48-UX37. APK Full y Play sin firma verificadas y congeladas para firma con la identidad aprobada existente. La firma, entrega e instalación física se verifican por separado. No se amplía la implementación diagnóstica de UX34 fase 0.
 
 - Mostrar la carga o uso verificable de skills en las superficies de actividad pertinentes, con el mismo lenguaje visual de herramientas. La señal debe provenir de la operación real o del contenido efectivamente cargado; no afirmar que un skill se ejecutó porque solo fue mencionado, listado o solicitado sin éxito.
 - El agente principal debe usar el icono propio actual de Jarvys en las secciones de Bots/actividad que lo representen. Mantener una identidad coherente con las tarjetas y el detalle, conservando los iconos propios de los bots y los assets existentes.
@@ -570,9 +570,20 @@ Estado: implementación y validación de host en curso para v55 / 1.2.48-UX37. E
 
 Se conserva la cuadrícula original de dos bots por fila. Jarvys usa su icono en las superficies donde el principal ya aparece, sin añadir entradas, tarjetas ni perfiles nuevos.
 
-Las suites completas Full, Play, runtime y JavaScript pasaron; se repiten los gates sobre la corrección final del helper de bitmap exigida por lint. No se acepta deuda de lint nueva ni se entrega un artefacto anterior a esa validación.
-
 Contrato de UX37: `app/TOOL_ACTIVITY.md`. Los eventos originales se conservan; la agrupación es visual, con identidad real de ejecución. La carga de una skill no certifica que sus instrucciones se hayan seguido.
+
+Validación final de host: 2339 pruebas Full, 1957 Play, 64 runtime y 9 JavaScript; cero fallos, errores u omisiones. Se añaden 50 pruebas por variante sobre la base de UX36. Gates ejecutados de nuevo sobre la fuente final congelada; el pase focalizado de actividad, skills, catálogo e identidad pasó 92 pruebas. La revisión independiente y las capturas EN/ES, claro/oscuro y escala 1x/2x verifican el icono actual y la cuadrícula original de dos bots por fila. La comparación exacta de los informes frescos de lint no añade diagnósticos; continúa la deuda heredada.
+
+Cobertura de recuperación: identidad de ejecución distinta de nombres e IDs de proveedor reutilizados, eventos duplicados/tardíos, terminal dominante, reintentos distintos, cancelación con detalle conservado, reinicio y reanudación sin revivir llamadas previas. Los mensajes reales mantienen su dirección; las actividades locales no alimentan el buzón ni la descripción de mensajes del principal. Cargas de skills no aceptadas no se presentan como completas. La selección, resultados web, Markdown y previews existentes se conservan.
+
+Artefactos de desarrollo sin firma: paquete com.jarvys.agent, nombre Jarvys, versionCode 55, versionName 1.2.48-UX37. ZIP/CRC, alineación 16 KB, ausencia de firma y equivalencia de contenido con las salidas Gradle verificadas; sin cambios de permisos, assets del factory, skill del factory ni recursos del launcher frente a v54. Play excluye los componentes Full/Google y Linux; no se incluye el guard de pruebas.
+- SHA-256 Full: 07e1e23ef854aba4c4ba07f24a92b647280f2eb5ff33fe12491abe6be528d941.
+- SHA-256 Play: ecd66f91029e0cb493d615059bfdb0af2c197e093c8370d636413acfcc19ea84.
+
+Fuente validada: 561d7421714ca425cc587e04bdb79a4dfeb136bb; árbol de app b9bcff8ef1c6608f208bfbdb6b29d97afa38eb86. El checkpoint de cierre modifica únicamente Pending.md, sin reconstruir APK ni alterar ese árbol. Los 19 archivos legacy privados permanecen intactos y excluidos. Se preservan UX35, UX36, UX38 y UX34 fase 0; no se activa mantenimiento de contexto posterior.
+
+Límites: no hubo instalación/actualización física, TalkBack real, aceptación de WebView/Chromium real ni llamadas a proveedor externo. Las capturas y pruebas de host no sustituyen la aceptación de dispositivo. Las fixtures usan herramientas/modelos locales; el guard HTTP(S) de JVM no equivale a aislamiento de red de todo el sistema. Los eventos históricos sin identidad demostrable permanecen separados y no se inventan detalles que no fueron persistidos. «Skill cargada» certifica la carga aceptada, no el seguimiento posterior de las instrucciones.
+
 
 ## Validaciones que siguen abiertas
 
