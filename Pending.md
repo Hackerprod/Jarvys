@@ -437,7 +437,7 @@ Contrato y límites: app/GMAIL_MANAGEMENT.md. Fuente validada: 5437c6de0e96d3e1b
 
 ### 17. UX33: miniatura de preview de borde a borde y acciones superpuestas
 
-Estado: implementación en curso para preparación v51 / 1.2.44-UX33, después de UX31. Captura de referencia inspeccionada; se conserva el alcance de presentación y las etapas ya validadas. Pruebas completas, revisión independiente y APK todavía pendientes.
+Estado: implementación terminada para preparación v51 / 1.2.44-UX33, con validación en curso. Captura de referencia inspeccionada; se conserva el alcance de presentación y las etapas ya validadas. La primera compilación y las pruebas de geometría/toques aprueban; se ajusta un fixture de exportación antes de las suites completas. Revisión final y APK todavía pendientes.
 
 - La miniatura debe cubrir toda la superficie de la tarjeta, respetando únicamente el borde exterior y sus esquinas. Retirar rellenos, marcos interiores y bordes anidados que reduzcan el área de imagen.
 - Retirar de esta tarjeta la fila del nombre de archivo (por ejemplo, index.html), el icono de archivo, su tamaño y la sección o etiqueta visible «Vista previa estática». La tarjeta normal muestra la miniatura completa como fondo; conservar los metadatos necesarios para accesibilidad y acciones aunque ya no aparezcan como filas visuales.

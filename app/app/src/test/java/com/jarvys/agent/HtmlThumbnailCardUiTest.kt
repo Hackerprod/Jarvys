@@ -15,11 +15,9 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
-import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import com.jarvys.agent.ui.JarvysOwnTheme
@@ -41,7 +39,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * UX28 Compose contract tests. Transfer results are presentation-state fixtures, not proof of a
+ * UX33 Compose contract tests. Transfer results are presentation-state fixtures, not proof of a
  * download. Native captures verify card geometry and fallback UI, never Chromium-rendered pixels.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -173,12 +171,12 @@ class HtmlThumbnailCardUiTest {
         assertEquals(listOf(request), downloads)
     }
 
-    @Test fun longFilenameEnglishLightKeepsThreeLineHeaderAndCompactMetadataAtFont200() =
+    @Test fun longFilenameEnglishLightKeepsOnlyTheEdgeToEdgeThumbnailAtFont200() =
         longFilenameCard(false, "en-light-long-filename-320dp-font200")
 
     @Test
     @Config(qualifiers = "es-rES-w320dp-h900dp-port-mdpi")
-    fun longFilenameSpanishDarkKeepsThreeLineHeaderAndCompactMetadataAtFont200() =
+    fun longFilenameSpanishDarkKeepsOnlyTheEdgeToEdgeThumbnailAtFont200() =
         longFilenameCard(true, "es-dark-long-filename-320dp-font200")
 
     private fun longFilenameCard(dark: Boolean, captureName: String) {
@@ -189,27 +187,15 @@ class HtmlThumbnailCardUiTest {
         awaitTag("delivered-file-preview-${attachment.id}")
         capture(captureName)
         val card = compose.onNodeWithTag("chat-attachment-file-${attachment.id}").fetchSemanticsNode().boundsInRoot
-        val filename = compose.onNodeWithText(attachment.name, useUnmergedTree = true).assertIsDisplayed()
-        val layouts = mutableListOf<TextLayoutResult>()
-        filename.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
-        assertEquals("A long filename is capped at three lines", 3, layouts.single().layoutInput.maxLines)
-        assertTrue(layouts.single().lineCount <= 3)
-        // More than three lines may intentionally ellipsize; the rendered three-line node must fit.
-        val filenameBounds = filename.fetchSemanticsNode().boundsInRoot
-        assertEquals("The visible filename height is not clipped", layouts.single().size.height.toFloat(),
-            filenameBounds.height, 1f)
-        val metadata = compose.onNodeWithText("text/html", substring = true, useUnmergedTree = true).assertIsDisplayed()
-        val metadataText = metadata.fetchSemanticsNode().config[SemanticsProperties.Text].joinToString(" ") { it.text }
-        assertTrue("Size and MIME share one compact metadata text", metadataText.contains("•"))
-        val metadataBounds = metadata.fetchSemanticsNode().boundsInRoot
-        assertTrue("Metadata stays inside the card", metadataBounds.left >= card.left && metadataBounds.right <= card.right)
-        compose.onNodeWithTag("html-thumbnail-static-${attachment.id}")
-            .assertIsDisplayed().assertTextEquals(compose.activity.getString(R.string.chat_html_thumbnail_static))
+        compose.onAllNodesWithText(attachment.name, useUnmergedTree = true).assertCountEquals(0)
+        compose.onAllNodesWithText("text/html", substring = true, useUnmergedTree = true).assertCountEquals(0)
+        compose.onNodeWithTag("html-thumbnail-static-${attachment.id}").assertDoesNotExist()
         val preview = compose.onNodeWithTag("delivered-file-preview-${attachment.id}")
             .assertIsDisplayed().assertHasClickAction()
             .assertContentDescriptionEquals(compose.activity.getString(R.string.chat_html_thumbnail_open, attachment.name))
         val bounds = preview.fetchSemanticsNode().boundsInRoot
-        assertEquals("Large text never changes the thumbnail aspect ratio", bounds.width / 1.5f, bounds.height, 1f)
+        assertEquals("The thumbnail fills the card without a header, footer or inset", card, bounds)
+        assertEquals("The entire card stays at 3:2 even at 200% font", card.width / 1.5f, card.height, 1f)
         assertTrue("The card remains completely visible at 320dp and 200% font",
             card.bottom <= compose.activity.window.decorView.height.toFloat())
         val request = ChatFileRequest.attachment(session, attachment, delivered = true)
@@ -283,7 +269,7 @@ class HtmlThumbnailCardUiTest {
             .newInstance(status, Uri.parse("content://downloads/test-fixture"), request.displayName, request.mimeType, 128L, null)
 
     private fun delivered(name: String): Pair<String, ChatAttachment> {
-        val session = "ux28-thumbnail-card-${UUID.randomUUID()}"
+        val session = "ux33-thumbnail-card-${UUID.randomUUID()}"
         val workspace = WorkspaceStore(File(compose.activity.filesDir, "jarvys/workspaces"),
             WorkspaceStore.projectIdForSession(session), null, null, null, session, false)
         workspace.write(name, "<!doctype html><html><body><h1>Immutable garden report</h1></body></html>")
@@ -321,11 +307,11 @@ class HtmlThumbnailCardUiTest {
             val bitmap = Bitmap.createBitmap(root.width, root.height, Bitmap.Config.ARGB_8888)
             try {
                 root.draw(Canvas(bitmap))
-                val directory = TestCaptureDirectories.named("ux28-html-thumbnail-${BuildConfig.FLAVOR}")
+                val directory = TestCaptureDirectories.named("ux33-html-thumbnail-${BuildConfig.FLAVOR}")
                 val file = File(directory, "$name.png")
                 TestCaptureDirectories.assertOwned(directory, file)
                 file.outputStream().use { check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) }
-                println("UX28_CAPTURE=${file.absolutePath}")
+                println("UX33_CAPTURE=${file.absolutePath}")
             } finally { bitmap.recycle() }
         }
     }

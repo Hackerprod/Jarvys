@@ -1,8 +1,10 @@
 package com.jarvys.agent
 
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.net.Uri
+import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebResourceRequest
@@ -15,19 +17,25 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.ViewModelProvider
 import com.jarvys.agent.ui.JarvysOwnTheme
 import com.jarvys.agent.ui.chat.ChatFileActions
 import com.jarvys.agent.ui.chat.ChatFileRequest
+import com.jarvys.agent.ui.chat.ChatFileTransfers
 import com.jarvys.agent.ui.chat.DeliveredArtifactEventCard
 import com.jarvys.agent.ui.chat.LocalChatFileActions
 import java.io.File
+import java.time.Duration
 import java.util.UUID
 import org.junit.Assert.*
 import org.junit.Rule
@@ -39,7 +47,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * UX28: persisted HTML thumbnails, icon-only actions and their actual AndroidView request boundary.
+ * UX33: edge-to-edge persisted HTML thumbnails, icon-only actions and their actual AndroidView request boundary.
  * PNG captures contain native Compose UI, including honest thumbnail fallback states. Robolectric
  * does not render or validate Chromium DOM content; these are not browser-rendering screenshots.
  */
@@ -107,8 +115,8 @@ class ArtifactHtmlPreviewUiTest {
         }
         awaitTag("delivered-file-preview-${fixture.attachment.id}")
         settleNativeFrame()
-        compose.onNodeWithText(fixture.attachment.name).assertIsDisplayed()
-        compose.onNodeWithText("text/html", substring = true).assertIsDisplayed()
+        compose.onAllNodesWithText(fixture.attachment.name, useUnmergedTree = true).assertCountEquals(0)
+        compose.onAllNodesWithText("text/html", substring = true, useUnmergedTree = true).assertCountEquals(0)
         val card = compose.onNodeWithTag("chat-attachment-file-${fixture.attachment.id}").fetchSemanticsNode().boundsInRoot
         // Capture native UI even if a subsequent accessibility or geometry assertion fails.
         capture(captureName)
@@ -122,13 +130,12 @@ class ArtifactHtmlPreviewUiTest {
             assertTrue("$action needs at least a 48dp-wide touch target", button.width >= minimumTarget - 1f)
             assertTrue("$action needs at least a 48dp-high touch target", button.height >= minimumTarget - 1f)
         }
-        compose.onNodeWithTag("html-thumbnail-static-${fixture.attachment.id}")
-            .assertIsDisplayed().assertTextEquals(compose.activity.getString(R.string.chat_html_thumbnail_static))
+        compose.onNodeWithTag("html-thumbnail-static-${fixture.attachment.id}").assertDoesNotExist()
         val thumbnail = compose.onNodeWithTag("delivered-file-preview-${fixture.attachment.id}")
             .assertContentDescriptionEquals(compose.activity.getString(R.string.chat_html_thumbnail_open, fixture.attachment.name))
             .fetchSemanticsNode().boundsInRoot
-        assertEquals("The preview region is fixed at 3:2, independent of font size", thumbnail.width / 1.5f,
-            thumbnail.height, 1f)
+        assertEquals("Preview pixels occupy the whole card with no header, footer or nested inset", card, thumbnail)
+        assertEquals("The entire card is fixed at 3:2, independent of font size", card.width / 1.5f, card.height, 1f)
         for ((action, label) in listOf("download" to R.string.chat_download_action, "share" to R.string.image_action_share)) {
             val text = compose.activity.getString(label)
             val description = compose.activity.getString(R.string.chat_file_action_named, text, fixture.attachment.name)
@@ -150,6 +157,133 @@ class ArtifactHtmlPreviewUiTest {
         val response = request(web, shadowOf(web).lastLoadedUrl)
         assertEquals(200, response.statusCode)
         assertEquals(fixture.html, response.data.bufferedReader().use { it.readText() })
+    }
+
+    @Test fun thumbnailPointersExportRealImmutableBytesThenOpenAndShareThroughTheTransferViewModel() {
+        val provider = FakeDownloadsProvider.install()
+        val fixture = snapshot()
+        val event = LocalRunStore(compose.activity).readConversationTimeline(fixture.session)
+            .single { it.kind == "delivered_file" }
+        val request = ChatFileRequest.attachment(fixture.session, fixture.attachment, delivered = true)
+        lateinit var transfers: ChatFileTransfers
+        compose.runOnUiThread {
+            // Avoid AndroidViewModelFactory's process singleton retaining another Robolectric
+            // Activity test's Application and therefore a different private file directory.
+            transfers = ViewModelProvider(compose.activity,
+                ViewModelProvider.AndroidViewModelFactory(compose.activity.application))[ChatFileTransfers::class.java]
+        }
+        assertSame(compose.activity.application, transfers.getApplication<android.app.Application>())
+        assertEquals(compose.activity.filesDir, transfers.getApplication<android.app.Application>().filesDir)
+        val downloads = mutableListOf<ChatFileRequest>()
+        val previews = mutableListOf<String>()
+        fixture.workspace.write(fixture.attachment.name, "<!doctype html><h1>Changed workspace bytes</h1>")
+        compose.setContent {
+            JarvysOwnTheme(JarvysThemeMode.LIGHT) {
+                val states by transfers.transfers.collectAsState()
+                CompositionLocalProvider(LocalChatFileActions provides ChatFileActions(transfers = states,
+                    download = { downloads += it; transfers.download(it) }, share = transfers::share, open = transfers::open,
+                    cancel = transfers::cancel)) {
+                    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(12.dp)) {
+                        DeliveredArtifactEventCard(event, fixture.session, previews::add)
+                    }
+                }
+            }
+        }
+        val downloadTag = "delivered-file-download-${fixture.attachment.id}"
+        awaitTag(downloadTag)
+        settleNativeFrame()
+        compose.onNodeWithTag(downloadTag).performTouchInput { click() }
+        assertEquals("The pointer reaches the production download callback exactly once", listOf(request), downloads)
+        awaitTransfer(transfers, request) { transfers.transfers.value[request.key]?.saved == true }
+        val first = requireNotNull(transfers.transfers.value[request.key]?.result)
+        assertEquals(DownloadStore.Status.SAVED, first.status)
+        assertEquals(1, provider.inserts)
+        assertEquals(1, provider.publishes)
+        assertArrayEquals("Download receives the immutable delivered bytes", fixture.html.toByteArray(),
+            provider.file(provider.rows.keys.single()).readBytes())
+        assertNull("Downloading never automatically launches a viewer", transfers.launch.value)
+        assertTrue("Download cannot also open preview", previews.isEmpty())
+
+        compose.onNodeWithTag(downloadTag).performTouchInput { click() }
+        awaitTransfer(transfers, request) { transfers.transfers.value[request.key]?.result?.status == DownloadStore.Status.ALREADY_SAVED }
+        assertEquals("Retrying an already-saved download creates no duplicate", 1, provider.inserts)
+        assertEquals(first.uri, transfers.transfers.value[request.key]?.result?.uri)
+        awaitTag("delivered-file-open-${fixture.attachment.id}")
+        compose.onNodeWithTag("delivered-file-open-${fixture.attachment.id}").performTouchInput { click() }
+        awaitTransfer(transfers, request) { transfers.launch.value != null }
+        val opened = requireNotNull(transfers.launch.value)
+        assertEquals(Intent.ACTION_VIEW, opened.action)
+        assertEquals(first.uri, opened.data)
+        assertEquals("text/html", opened.type)
+        assertTrue(opened.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION != 0)
+        assertEquals(0, opened.flags and Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        compose.runOnIdle { transfers.consumeLaunch() }
+        compose.onNodeWithTag("delivered-file-share-${fixture.attachment.id}").performTouchInput { click() }
+        awaitTransfer(transfers, request) { transfers.launch.value != null }
+        val chooser = requireNotNull(transfers.launch.value)
+        assertEquals(Intent.ACTION_CHOOSER, chooser.action)
+        val send = requireNotNull(chooser.getParcelableExtra<Intent>(Intent.EXTRA_INTENT))
+        assertEquals(Intent.ACTION_SEND, send.action)
+        assertEquals("text/html", send.type)
+        val sharedUri = requireNotNull(send.getParcelableExtra<Uri>(Intent.EXTRA_STREAM))
+        assertEquals("${compose.activity.packageName}.chat-files", sharedUri.authority)
+        assertTrue(send.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION != 0)
+        assertEquals(0, send.flags and Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        assertArrayEquals("Share receives the same immutable source", fixture.html.toByteArray(),
+            compose.activity.contentResolver.openInputStream(sharedUri)!!.use { it.readBytes() })
+        assertEquals(1, provider.inserts)
+        assertTrue("Saved Open and Share must not bubble to the card preview", previews.isEmpty())
+        compose.onNodeWithTag("delivered-file-preview-${fixture.attachment.id}")
+            .performTouchInput { click(Offset(center.x, height * .25f)) }
+        assertEquals(listOf(fixture.descriptor.token), previews)
+    }
+
+    @Test fun missingDeliveredSourceHasNoPreviewOrExportControls() {
+        val fixture = snapshot()
+        val event = LocalRunStore(compose.activity).readConversationTimeline(fixture.session)
+            .single { it.kind == "delivered_file" }
+        assertTrue(DeliveredArtifactStore(compose.activity).resolve(fixture.session, fixture.attachment).delete())
+        val callbacks = mutableListOf<String>()
+        compose.setContent {
+            JarvysOwnTheme(JarvysThemeMode.LIGHT) {
+                CompositionLocalProvider(LocalChatFileActions provides ChatFileActions(
+                    download = { callbacks += "download" }, share = { callbacks += "share" })) {
+                    DeliveredArtifactEventCard(event, fixture.session) { callbacks += "preview" }
+                }
+            }
+        }
+        awaitTag("attachment-unavailable-${fixture.attachment.id}")
+        compose.onNodeWithTag("attachment-unavailable-${fixture.attachment.id}").assertIsDisplayed()
+        for (name in listOf("preview", "download", "share", "open", "cancel")) {
+            compose.onNodeWithTag("delivered-file-$name-${fixture.attachment.id}").assertDoesNotExist()
+        }
+        assertTrue(callbacks.isEmpty())
+    }
+
+    @Test fun resolvingHtmlCardNeverFlashesFilenameMimeOrStaticCaptionInObservedFrames() {
+        val fixture = snapshot()
+        val event = LocalRunStore(compose.activity).readConversationTimeline(fixture.session)
+            .single { it.kind == "delivered_file" }
+        compose.mainClock.autoAdvance = false
+        compose.setContent {
+            JarvysOwnTheme(JarvysThemeMode.LIGHT) { DeliveredArtifactEventCard(event, fixture.session) }
+        }
+        fun assertNoMetadata() {
+            compose.onAllNodesWithText(fixture.attachment.name, useUnmergedTree = true).assertCountEquals(0)
+            compose.onAllNodesWithText("text/html", substring = true, useUnmergedTree = true).assertCountEquals(0)
+            compose.onNodeWithTag("html-thumbnail-static-${fixture.attachment.id}").assertDoesNotExist()
+        }
+        try {
+            assertNoMetadata()
+            compose.waitUntil(10_000) {
+                compose.mainClock.advanceTimeByFrame()
+                shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(16))
+                assertNoMetadata()
+                compose.onAllNodesWithTag("delivered-file-preview-${fixture.attachment.id}")
+                    .fetchSemanticsNodes().size == 1
+            }
+            assertNoMetadata()
+        } finally { compose.mainClock.autoAdvance = true }
     }
 
     @Test fun deliveredHtmlAndLinkedCssJavascriptAndImageStayImmutableThroughActualPreviewClient() {
@@ -229,6 +363,7 @@ class ArtifactHtmlPreviewUiTest {
         }
         for (attachment in attachments) {
             awaitTag("delivered-file-download-${attachment.id}")
+            compose.onNodeWithText(attachment.name, useUnmergedTree = true).assertIsDisplayed()
             for ((action, label) in listOf("download" to R.string.chat_download_action,
                 "share" to R.string.image_action_share)) {
                 compose.onNodeWithTag("delivered-file-$action-${attachment.id}").assertIsDisplayed()
@@ -309,6 +444,21 @@ class ArtifactHtmlPreviewUiTest {
         return requireNotNull(response)
     }
 
+    private fun awaitTransfer(transfers: ChatFileTransfers, request: ChatFileRequest, condition: () -> Boolean) {
+        try {
+            compose.waitUntil(10_000) {
+                shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(32))
+                val state = transfers.transfers.value[request.key]
+                assertNull("The real transfer failed: $state; notice=${transfers.notice.value}", state?.failure)
+                condition()
+            }
+        } catch (failure: ComposeTimeoutException) {
+            throw AssertionError("The real transfer did not finish: ${transfers.transfers.value[request.key]}; " +
+                "notice=${transfers.notice.value}; launch=${transfers.launch.value}", failure)
+        }
+        compose.waitForIdle()
+    }
+
     private fun awaitTag(tag: String) {
         compose.waitUntil(10_000) { compose.onAllNodesWithTag(tag).fetchSemanticsNodes().size == 1 }
         compose.waitForIdle()
@@ -360,11 +510,11 @@ class ArtifactHtmlPreviewUiTest {
             val bitmap = Bitmap.createBitmap(root.width, root.height, Bitmap.Config.ARGB_8888)
             try {
                 root.draw(Canvas(bitmap))
-                val directory = TestCaptureDirectories.named("ux28-html-thumbnail-${BuildConfig.FLAVOR}")
+                val directory = TestCaptureDirectories.named("ux33-html-thumbnail-${BuildConfig.FLAVOR}")
                 val file = File(directory, "$name.png")
                 TestCaptureDirectories.assertOwned(directory, file)
                 file.outputStream().use { check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) }
-                println("UX28_CAPTURE=${file.absolutePath}")
+                println("UX33_CAPTURE=${file.absolutePath}")
             } finally { bitmap.recycle() }
         }
     }
