@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="mascot_pilot_open">Mascot visual test (experimental)</string>
+    <string name="mascot_pilot_unavailable">The local mascot package could not be verified. The static image is kept.</string>
+    <string name="mascot_pilot_title">VISUAL TEST</string>
+    <string name="mascot_pilot_close">Close</string>
+    <string name="mascot_pilot_manual_notice">These states are manual controls. They do not show real agent activity.</string>
+    <string name="mascot_pilot_risk">Experimental: native code could close the app. The test will be disabled when you return. UX40 remains incomplete.</string>
+    <string name="mascot_pilot_phase">Test status: %1$s</string>
+    <string name="mascot_pilot_start">Start test</string>
+    <string name="mascot_pilot_stop">Stop</string>
+    <string name="mascot_pilot_reduce">Reduce motion</string>
+    <string name="mascot_pilot_reduce_accessibility">Reduce motion in this visual test</string>
+    <string name="mascot_pilot_reduced_effective">Effective reducedMotion: %1$s. The system preference always takes priority.</string>
+    <string name="mascot_pilot_evidence_notice">VMI readback means native property values. Pixels means the first available surface in this session; it does not confirm the drawn state. The active state is not observable with this API.</string>
+    <string name="mascot_pilot_copy">Copy safe diagnostics</string>
+    <string name="mascot_pilot_copied">Diagnostics copied. Names, conversations, sources and paths are excluded.</string>
+    <string name="mascot_pilot_lifecycle_notice">Backgrounding or loss of visibility stops the test. Resources are released when their composition is removed. Press Start again to resume the test.</string>
+    <string name="mascot_pilot_static_description">View %1$s: static image</string>
+    <string name="mascot_pilot_native_description">Visual test %1$s; requested mode %2$s</string>
+    <string name="mascot_pilot_instance">Instance %1$s</string>
+    <string name="mascot_pilot_readback">Requested: %1$s (%2$d). VMI readback: %3$s; reducedMotion=%4$s.</string>
+    <string name="mascot_pilot_pending">pending</string>
+    <string name="mascot_pilot_pixels_checks">Pixels available on this surface: %1$s. Manual visual checks: %2$d/18.</string>
+    <string name="mascot_pilot_checked">Marked by me: appearance correct</string>
+    <string name="mascot_pilot_mark_check">I have checked this appearance</string>
+</resources>

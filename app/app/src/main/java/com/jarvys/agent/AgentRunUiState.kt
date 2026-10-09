@@ -196,6 +196,12 @@ data class AgentRunUiEvent(
     }
 }
 
+/** Transient current-run presentation evidence; never reconstructed from persisted rows. */
+data class LiveMascotTool(
+    val executionId: String,
+    val eligibleToAnimate: Boolean,
+)
+
 data class AgentRunUiSnapshot(
     val runId: String? = null,
     val sessionId: String? = null,
@@ -210,6 +216,7 @@ data class AgentRunUiSnapshot(
     val reflectionSessionId: String? = null,
     val reflectionStatus: String? = null,
     val reflectionLastSuccessMillis: Long = 0L,
+    val liveMascotTool: LiveMascotTool? = null,
 )
 
 
@@ -266,6 +273,7 @@ object AgentRunUiState {
             goal = goal,
             running = true,
             outcome = null,
+            liveMascotTool = null,
             events = events,
             compacting = false,
             compactionStatus = null,
@@ -307,6 +315,7 @@ object AgentRunUiState {
             goal = goal,
             running = true,
             outcome = null,
+            liveMascotTool = null,
             compacting = false,
             compactionStatus = null,
         )
@@ -377,6 +386,12 @@ object AgentRunUiState {
         _state.value = current.copy(
             goal = persistedEvents.lastOrNull { it.kind == "user" }?.text ?: current.goal,
             events = durableEvents + uniqueTransient,
+            liveMascotTool = current.liveMascotTool?.takeUnless { live ->
+                authoritativePersisted.any { event ->
+                    event.kind == "tool" && event.toolCallId == live.executionId
+                        && event.stage in setOf("tool_result", "tool_error", "tool_not_started", "tool_interrupted")
+                }
+            },
         )
     }
 
@@ -431,7 +446,9 @@ object AgentRunUiState {
     @JvmStatic
     fun compactionStarted(sessionId: String, message: String) = synchronized(lock) {
         val current = _state.value
-        _state.value = current.copy(sessionId = sessionId, compacting = true, compactionStatus = message)
+        _state.value = current.copy(sessionId = sessionId, compacting = true, compactionStatus = message,
+            liveMascotTool = if (current.sessionId == sessionId)
+                current.liveMascotTool?.copy(eligibleToAnimate = false) else null)
     }
 
     @JvmStatic
@@ -501,11 +518,13 @@ object AgentRunUiState {
 
     @JvmStatic
     fun bindGeneration(sessionId: String, generation: Long) = synchronized(lock) {
-        if (ownedSessionId != sessionId || activeGeneration != generation) ownedLiveSnapshot = null
+        val generationChanged = ownedSessionId != sessionId || activeGeneration != generation
+        if (generationChanged) ownedLiveSnapshot = null
         ownedSessionId = sessionId
         activeGeneration = generation
         ownedRunActive = true
-        _state.value = _state.value.copy(interactiveOwnerSessionId = sessionId)
+        _state.value = _state.value.copy(interactiveOwnerSessionId = sessionId,
+            liveMascotTool = if (generationChanged) null else _state.value.liveMascotTool)
         if (_state.value.sessionId == sessionId) _state.value = _state.value.copy(running = true, outcome = null)
     }
 
@@ -538,7 +557,8 @@ object AgentRunUiState {
         if (_state.value.sessionId != sessionId) return@synchronized
         val stillOwnsRun = ownedRunActive && ownedSessionId == sessionId
         _state.value = _state.value.copy(running = stillOwnsRun,
-            outcome = if (stillOwnsRun) _state.value.outcome else "FAILED")
+            outcome = if (stillOwnsRun) _state.value.outcome else "FAILED",
+            liveMascotTool = if (stillOwnsRun) _state.value.liveMascotTool else null)
         refreshPersistedSession(sessionId, events)
     }
 
@@ -552,7 +572,7 @@ object AgentRunUiState {
         if (ownedRunActive && ownedSessionId == sessionId && activeGeneration == generation) {
             ownedRunActive = false
             ownedLiveSnapshot = null
-            _state.value = _state.value.copy(interactiveOwnerSessionId = null)
+            _state.value = _state.value.copy(interactiveOwnerSessionId = null, liveMascotTool = null)
             if (_state.value.sessionId == sessionId) _state.value = _state.value.copy(running = false, outcome = "STOPPED", events = interruptActivities(_state.value.events))
         }
     }
@@ -563,7 +583,7 @@ object AgentRunUiState {
         if (ownedRunActive && ownedSessionId == sessionId && activeGeneration == generation) {
             ownedRunActive = false
             ownedLiveSnapshot = null
-            _state.value = _state.value.copy(interactiveOwnerSessionId = null)
+            _state.value = _state.value.copy(interactiveOwnerSessionId = null, liveMascotTool = null)
             if (_state.value.sessionId == sessionId) complete(runId, outcome, text, messageId, durationMs)
         }
     }
@@ -646,9 +666,21 @@ object AgentRunUiState {
             if (prior.any { it.eventId == activity.eventId }) prior else prior + activity
         }
         val projected = ToolActivity.project(history, true)
+        // The service supplies these typed callbacks through withGeneration. Existing ownership
+        // is still required; optimistic rows, restored calls and orphan progress cannot start it.
+        val liveMascotTool = when {
+            !ownedRunActive || ownedSessionId != current.sessionId
+                || current.interactiveOwnerSessionId != current.sessionId -> null
+            current.liveMascotTool?.executionId == activity.executionId
+                && projected.stage !in setOf("tool_call", "tool_progress") -> null
+            activity.stage == "tool_call" && projected.stage == "tool_call" && old == null
+                && current.liveMascotTool?.executionId != activity.executionId ->
+                LiveMascotTool(activity.executionId, eligibleToAnimate = !current.compacting)
+            else -> current.liveMascotTool
+        }
         val updated = AgentRunUiEvent.activityEvent(old?.id ?: nextEventId++, projected).copy(toolActivityEvents = history)
         if (index < 0) events.add(updated) else events[index] = updated
-        _state.value = current.copy(events = events.takeLast(MAX_EVENTS))
+        _state.value = current.copy(events = events.takeLast(MAX_EVENTS), liveMascotTool = liveMascotTool)
     }
 
     private fun interruptActivities(events: List<AgentRunUiEvent>): List<AgentRunUiEvent> = events.map { event ->
@@ -721,7 +753,8 @@ object AgentRunUiState {
             approvalRequester = requester,
             approvalRequesterColorKey = requesterColorKey,
         )
-        publishOwnedSnapshot(current.copy(events = append(events, card)))
+        publishOwnedSnapshot(current.copy(events = append(events, card),
+            liveMascotTool = current.liveMascotTool?.copy(eligibleToAnimate = false)))
     }
 
     @JvmStatic
@@ -780,7 +813,8 @@ object AgentRunUiState {
             decisionId = id, decisionBody = body, decisionOptions = options.toList(),
             decisionAllowDismiss = allowDismiss, decisionStatus = "PENDING",
         ))
-        _state.value = current.copy(events = append(events.dropLast(1), events.last()))
+        _state.value = current.copy(events = append(events.dropLast(1), events.last()),
+            liveMascotTool = current.liveMascotTool?.copy(eligibleToAnimate = false))
     }
 
     @JvmStatic
@@ -812,6 +846,7 @@ object AgentRunUiState {
             runId = runId,
             running = false,
             outcome = outcome,
+            liveMascotTool = null,
             compacting = false,
             compactionStatus = null,
             events = append(interruptActivities(current.events), assistant),
@@ -826,6 +861,7 @@ object AgentRunUiState {
             sessionId = sessionId,
             running = false,
             outcome = "COMPLETED",
+            liveMascotTool = null,
             compacting = false,
             compactionStatus = null,
             events = append(interruptActivities(current.events), event("assistant", answer)),
@@ -839,6 +875,7 @@ object AgentRunUiState {
         _state.value = current.copy(
             running = false,
             outcome = "FAILED",
+            liveMascotTool = null,
             compacting = false,
             compactionStatus = null,
             events = append(interruptActivities(current.events), event("result", message, "FAILED")),
@@ -853,6 +890,7 @@ object AgentRunUiState {
             sessionId = sessionId,
             running = false,
             outcome = "FAILED",
+            liveMascotTool = null,
             compacting = false,
             compactionStatus = null,
             events = append(interruptActivities(current.events), event("result", message, "FAILED")),
@@ -867,6 +905,7 @@ object AgentRunUiState {
             sessionId = sessionId,
             running = false,
             outcome = "FAILED",
+            liveMascotTool = null,
             compacting = false,
             compactionStatus = null,
             events = append(interruptActivities(current.events), event("assistant", message, "FAILED")),

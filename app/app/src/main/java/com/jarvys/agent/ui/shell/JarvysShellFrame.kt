@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.DrawerState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalNavigationDrawer
@@ -54,6 +55,9 @@ fun JarvysShellFrame(
     onReflect: () -> Unit,
     bottomBar: @Composable () -> Unit,
     drawerGesturesEnabled: Boolean = true,
+    mainMascotMode: Int? = null,
+    mascotVisibleSessionId: String? = null,
+    mascotLiveConversationVisible: Boolean = false,
     content: @Composable (PaddingValues) -> Unit,
 ) {
     val chatRoute = route.action == AppRouteAction.CHAT
@@ -98,6 +102,11 @@ fun JarvysShellFrame(
                     onToggleMemory = onToggleMemory,
                     onCompact = onCompact,
                     onReflect = onReflect,
+                    mainMascotMode = mainMascotMode,
+                    mascotVisibleSessionId = mascotVisibleSessionId,
+                    mascotLiveConversationVisible = mascotLiveConversationVisible,
+                    mascotSurfaceVisible = drawerState.isClosed && drawerState.targetValue == DrawerValue.Closed
+                        && !drawerState.isAnimationRunning,
                 )
                 }
             },

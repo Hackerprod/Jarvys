@@ -86,7 +86,7 @@ public final class BotCatalogTool implements CoreTool {
                         .put("mascot_contract", bot.mascot == null ? JSONObject.NULL : bot.mascot.contract)
                         .put("mascot_asset_hash", bot.mascot == null ? JSONObject.NULL : bot.mascot.assetHash)
                         .put("mascot_source_hash", bot.mascot == null ? JSONObject.NULL : bot.mascot.sourceHash)
-                        .put("mascot_playback", "unavailable_static_fallback"));
+                        .put("mascot_playback", "static_default_manual_visual_test"));
             }
             return CoreToolResult.success(new JSONObject().put("bots", rows)
                     .put("next_offset", end < definitions.size() ? end : JSONObject.NULL).toString());

@@ -230,6 +230,7 @@ internal fun BotDefinitionEditor(
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 18.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) { BotCatalogIcon(bot, Modifier.size(88.dp)) }
+            BotMascotPilotEntry(bot = bot, isNew = isNew, enabled = !blocked && !dirty)
             if (immutable) {
                 Text(stringResource(R.string.bots_read_only), Modifier.testTag("bot-read-only"), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 BotReadOnlyConfiguration(bot.profile)

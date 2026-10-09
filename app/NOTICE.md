@@ -63,3 +63,23 @@ https://github.com/rive-app/rive-runtime/tree/6f3510dcc545bc8b2a78f1004a06929d17
 This serializer is not Rive CLI, an RML compiler or the Rive editor. No CLI/editor
 binary or private source is included. Its staged native-core validation does not
 establish Android rendering or enable animated mascots by itself.
+
+## Rive Android playback (UX40 experimental integration)
+
+`app.rive:rive-android:11.14.1` is distributed under MIT, copyright (c) 2020–2024 Rive.
+Its modern runtime is used only with locally generated, canonical bounded scenes;
+Jarvys does not package Rive CLI/editor or accept arbitrary animated files. The
+AAR also contains native dependencies, so its top-level MIT label is not treated
+as a complete inventory. Full upstream texts and identified supplemental notices
+are packaged in `app/src/main/assets/licenses/rive-android-11.14.1-notices.txt`,
+including Volley/ReLinker Apache-2.0 and native text/layout/audio/scripting/Vulkan
+and matched Android NDK r27c runtime notices.
+
+The [official tagged build](https://github.com/rive-app/rive-android/blob/11.14.1/kotlin/src/main/cpp/CMakeLists.txt)
+uses mutable branch references for HarfBuzz, miniaudio, Luau and libhydrogen. The
+notice bundle records observed source hashes without claiming exact equivalence
+to every released AAR build input. Stronger provenance would require an official
+release SBOM or authoritative dependency lock. This technical review is not legal
+clearance. [Rive Android MIT](https://github.com/rive-app/rive-android/blob/11.14.1/LICENSE),
+[Volley](https://github.com/google/volley/blob/1.2.1/LICENSE),
+[ReLinker](https://github.com/KeepSafe/ReLinker/blob/1.4.5/LICENSE).

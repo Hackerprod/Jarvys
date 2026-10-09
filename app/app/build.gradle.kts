@@ -31,8 +31,8 @@ android {
         applicationId = if (recoveryTestBuild) "com.jarvys.agent.recoverytest" else "com.jarvys.agent"
         minSdk = 24
         targetSdk = 35
-        versionCode = 56
-        versionName = "1.2.49-UX39" + if (recoveryTestBuild) "-test" else ""
+        versionCode = 57
+        versionName = "1.2.50-UX40-pilot" + if (recoveryTestBuild) "-test" else ""
         manifestPlaceholders["jarvysApplicationLabel"] = if (recoveryTestBuild) "Jarvys Prueba" else "@string/app_name"
         manifestPlaceholders["jarvysNotificationListenerLabel"] =
             if (recoveryTestBuild) "Jarvys Prueba: notificaciones" else "@string/notification_listener_label"
@@ -85,6 +85,10 @@ dependencies {
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("androidx.browser:browser:1.8.0")
     implementation(platform("androidx.compose:compose-bom:2025.08.00"))
+    // UX40 manual pilot: retain the reviewed app Compose stack; Rive must not replace its BOM.
+    implementation("app.rive:rive-android:11.14.1") {
+        exclude(group = "androidx.compose", module = "compose-bom")
+    }
     implementation("androidx.activity:activity-compose:1.10.1")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")

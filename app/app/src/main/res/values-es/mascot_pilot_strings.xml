@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="mascot_pilot_open">Prueba visual de mascota (experimental)</string>
+    <string name="mascot_pilot_unavailable">No se pudo verificar el paquete local de la mascota. Se conserva la imagen estática.</string>
+    <string name="mascot_pilot_title">PRUEBA VISUAL</string>
+    <string name="mascot_pilot_close">Cerrar</string>
+    <string name="mascot_pilot_manual_notice">Los estados son controles manuales. No muestran actividad real del agente.</string>
+    <string name="mascot_pilot_risk">Experimental: el código nativo podría cerrar la app. Al volver, la prueba estará desactivada. UX40 sigue pendiente.</string>
+    <string name="mascot_pilot_phase">Estado de la prueba: %1$s</string>
+    <string name="mascot_pilot_start">Iniciar prueba</string>
+    <string name="mascot_pilot_stop">Detener</string>
+    <string name="mascot_pilot_reduce">Reducir movimiento</string>
+    <string name="mascot_pilot_reduce_accessibility">Reducir movimiento en la prueba visual</string>
+    <string name="mascot_pilot_reduced_effective">reducedMotion efectivo: %1$s. La preferencia del sistema siempre tiene prioridad.</string>
+    <string name="mascot_pilot_evidence_notice">Lectura VMI = valores nativos. Píxeles = primera superficie disponible en esta sesión; no confirma el estado dibujado. El estado activo no es observable con esta API.</string>
+    <string name="mascot_pilot_copy">Copiar diagnóstico seguro</string>
+    <string name="mascot_pilot_copied">Diagnóstico copiado. No incluye nombres, conversaciones, fuentes ni rutas.</string>
+    <string name="mascot_pilot_lifecycle_notice">Al ir al fondo o perder visibilidad se detiene la prueba. Los recursos se liberan al retirar su composición. Hace falta volver a pulsar Iniciar.</string>
+    <string name="mascot_pilot_static_description">Vista %1$s: imagen estática</string>
+    <string name="mascot_pilot_native_description">Prueba visual %1$s; modo solicitado %2$s</string>
+    <string name="mascot_pilot_instance">Instancia %1$s</string>
+    <string name="mascot_pilot_readback">Solicitado: %1$s (%2$d). Lectura VMI: %3$s; reducedMotion=%4$s.</string>
+    <string name="mascot_pilot_pending">pendiente</string>
+    <string name="mascot_pilot_pixels_checks">Píxeles disponibles en esta superficie: %1$s. Comprobaciones visuales manuales: %2$d/18.</string>
+    <string name="mascot_pilot_checked">Marcado por mí: aspecto correcto</string>
+    <string name="mascot_pilot_mark_check">He comprobado este aspecto</string>
+</resources>

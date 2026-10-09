@@ -1721,7 +1721,7 @@ public final class CoreAgentRuntime {
           + "Keep the same request_id on retries and check list_bots afterward. Never claim a generated icon unless icon_complete is true. "
           + "If icon generation is unavailable or fails, explain that the definition is saved and the icon remains incomplete; "
           + "use generate_bot_icon for that exact existing bot after resolving access, never recreate it. "
-          + "Mascot compilation is local and does not depend on the image backend. Check mascot_compiled separately from icon_complete. LOCAL_COMPILED is not verified Android playback; the current visual remains static fallback and Android playback is not available yet. "
+          + "Mascot compilation is local and does not depend on the image backend. Check mascot_compiled separately from icon_complete. LOCAL_COMPILED is not verified Android playback; normal avatars remain static fallback and the saved custom bot editor offers only an explicit temporary visual test. "
           + "If a mascot is incomplete, use compile_bot_mascot with the same existing bot identity and current revision, never recreate the profile. "
           + "Catalog management is main-chat-only and must be performed directly even when Crew is enabled. "
           + "Do not send the user to the UI or merely output a draft when the declared creation tool can complete the request.");

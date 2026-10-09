@@ -28,9 +28,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsPropertyKey
 import androidx.compose.ui.semantics.semantics
-import androidx.core.graphics.createBitmap
 import com.jarvys.agent.BotIconStore
 import com.jarvys.agent.LucideIcons
+import com.jarvys.agent.ui.mascot.JarvysMascotIcon
 import com.jarvys.agent.ui.motion.rememberMotionEnabled
 import com.jarvys.agent.ui.motion.rememberMotionViewport
 import com.jarvys.agent.ui.shell.drawEffortLightRay
@@ -76,15 +76,8 @@ internal fun rememberCatalogBotIcon(roleId: String?): BotIconIdentity? {
 @Composable
 internal fun BotIdentityIcon(identity: BotIconIdentity, modifier: Modifier = Modifier) {
     if (identity.id == "chief" || identity.id == "captain") {
-        val context = LocalContext.current
-        val pixels = remember(context) {
-            val drawable = requireNotNull(androidx.core.content.ContextCompat.getDrawable(context,com.jarvys.agent.R.mipmap.ic_launcher))
-            val bitmap = createBitmap(256, 256)
-            drawable.setBounds(0,0,256,256); drawable.draw(android.graphics.Canvas(bitmap)); bitmap.asImageBitmap()
-        }
-        Image(pixels,contentDescription=null,
-            modifier=modifier.clip(RoundedCornerShape(percent=30)).semantics { this[BotIconSourceKey]="principal:launcher" },
-            contentScale=ContentScale.Fit)
+        // Captain/chief identity is shared artwork only; mission status is not main-agent authority.
+        JarvysMascotIcon(modifier.semantics { this[BotIconSourceKey] = "principal:jarvys-mascot" })
         return
     }
     val context = LocalContext.current.applicationContext

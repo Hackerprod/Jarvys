@@ -43,7 +43,7 @@ class BotMascotTool internal constructor(private val service: BotMascotService) 
         const val SCENE_GUIDE = "Author original geometry and choreography, not a recolored fixed character. scene_json is an object with contract=bot-mascot-v1, name, nodes, animations. " +
             "nodes is an ordered array: each node has kind group/ellipse/rectangle, unique name, optional parent (earlier node; default Artboard), optional x/y/rotation/scaleX/scaleY; shapes require width,height (1..256) and unsigned ARGB integer color; rectangle optionally radius. " +
             "animations must contain Idle,Thinking,Working,Queued,WaitingProvider,WaitingUser,Done,Error,Interrupted and each name plus Reduced (18 total). Each has duration (1..600 frames at 60 fps), loop boolean, tracks array. A track is {node,property,keys:[[frame,value],...]}; property is x/y/rotation/scaleX/scaleY, frames increase starting at0. " +
-            "All 18 animations must reset the same node/property target set. Each Reduced variant has loop=false and one constant key per track; retain a readable state-specific pose. Names are opaque labels. Maximum 128 KiB UTF-8 source, 96 nodes, depth 8, 64 tracks/state, 64 keys/track and 64 KiB compiled. No URLs,paths,images,fonts,scripts,audio,code or external resources."
+            "All 18 animations must reset the same node/property target set. Each normal mode must contain at least one genuinely moving Float32 track. Each Reduced variant has loop=false and one constant key per track; retain a readable state-specific pose. Names are opaque labels. Maximum 128 KiB UTF-8 source, 96 nodes, depth 8, 64 tracks/state, 64 keys/track and 64 KiB compiled. No URLs,paths,images,fonts,scripts,audio,code or external resources."
         private val SPEC by lazy {
             fun text(description: String, max: Int) = mapOf("type" to "string", "description" to description, "minLength" to 1, "maxLength" to max)
             val p = linkedMapOf<String, Any>(
@@ -55,7 +55,7 @@ class BotMascotTool internal constructor(private val service: BotMascotService) 
             )
             ToolSpec(NAME,"jarvys/bots","Compile and save an original animated mascot for an existing custom bot, locally on the phone, only when requested by the user. " +
                 "Review is required; original editable scene and immutable versioned bytes are saved with an idempotent receipt. No image service, CLI or new network service is used. " +
-                "LOCAL_COMPILED proves local compilation, not Android rendering acceptance. Android playback is not available yet; the current visual remains the static PNG/glyph fallback. Never claim playback is verified from compilation alone. " +
+                "LOCAL_COMPILED proves local compilation, not Android rendering acceptance. A temporary visual test is available in the saved custom bot editor; normal avatars remain the static PNG/glyph fallback. Never claim playback is verified from compilation alone. " +
                 "Read list_bots first; never guess IDs. Built-ins are immutable. This changes presentation only, not prompts, tools, permissions or running tasks. Main chat only.",
                 "bots",ToolSpec.Status.IMPLEMENTED,emptyMap(),FIELDS.toList(),mapOf("type" to "object","properties" to p,"required" to FIELDS.toList(),"additionalProperties" to false))
         }
@@ -100,7 +100,7 @@ internal class BotMascotService(
             val summary = ApprovalSummary(title="Create mascot: ${compiled.validation.name}", lines=listOf(
                 "Design and movement: $description", "Contract: bot-mascot-v1; nine states and nine static reduced-motion poses.",
                 "Local scene: ${compiled.validation.complexity.nodeCount} nodes, ${compiled.validation.complexity.keyframeCount} keyframes; source SHA-256: ${digest(source)}",
-                "Compiled locally without a CLI, image service or new network service. Existing PNG/glyph remains the current visual; Android playback is not available yet.",
+                "Compiled locally without a CLI, image service or new network service. Normal avatars remain PNG/glyph; the saved custom bot editor offers a temporary, unverified Android visual test.",
                 "Presentation only. Instructions, capabilities, skills and connector approvals remain unchanged."),allowAlwaysAvailable=false)
             require(approve(summary,token)==ApprovalDecision.APPROVED) { "Mascot authoring was not approved. The existing visual was kept." }
         }
@@ -137,7 +137,7 @@ internal class BotMascotService(
         .put("mascot_status","LOCAL_COMPILED").put("mascot_compiled",true)
         .put("asset_current",result.definition.mascot==result.receipt.mascot).put("source_hash",result.receipt.mascot.sourceHash)
         .put("asset_hash",result.receipt.mascot.assetHash).put("contract",result.receipt.mascot.contract)
-        .put("android_playback_verified",false).put("playback","unavailable_static_fallback")
+        .put("android_playback_verified",false).put("playback","static_default_manual_visual_test")
         .put("next_step","Inspect list_bots. The scene is compiled and saved; this does not establish Android playback acceptance. Do not recreate the bot.")
     companion object {
         internal fun digest(value: String) = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(StandardCharsets.UTF_8))

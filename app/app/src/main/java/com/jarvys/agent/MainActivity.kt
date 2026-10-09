@@ -1643,8 +1643,13 @@ private fun JarvysApp(
     val routeMeta = AppNavigationBackPolicy.metadata(context, route, chatTitle, routeBotName,
         routeDetailTitle)
 
+    val mascotLiveConversationVisible = route == Routes.CHAT && selectedHistoryRunId == null && !showingNewChat
+    val mainMascotMode = mainJarvysMascotMode(agentState, conversationSessionId, mascotLiveConversationVisible)
     JarvysShellFrame(
         drawerState = drawerState,
+        mainMascotMode = mainMascotMode,
+        mascotVisibleSessionId = conversationSessionId,
+        mascotLiveConversationVisible = mascotLiveConversationVisible,
         drawerGesturesEnabled = !drawerNavigationPending && route != Routes.WORKSPACE_PREVIEW && route != Routes.ARTIFACT_PREVIEW,
         drawerContent = {
             ConversationDrawer(

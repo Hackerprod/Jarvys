@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="jarvys_account_menu">Open Jarvys account menu</string>
+    <string name="jarvys_mascot_enable">Experimental Jarvys animation</string>
+    <string name="jarvys_mascot_disable">Stop Jarvys animation</string>
+    <string name="jarvys_mascot_visual_test">Jarvys visual test</string>
+    <string name="jarvys_mascot_warning_title">Try Jarvys animation?</string>
+    <string name="jarvys_mascot_warning">Experimental native playback has not passed the physical Android device checks. It may crash the app. Enable it only for this visible chat session. Leaving the chat, opening the drawer, going offscreen or putting the app in the background turns it off. Restarting never enables it automatically.</string>
+    <string name="jarvys_mascot_activity_notice">The robot animates only for verified tool activity and explicit final outcomes. Unknown activity stays static. Android reduced-motion settings still apply.</string>
+    <string name="jarvys_mascot_enable_once">Enable for this session</string>
+    <string name="jarvys_mascot_keep_static">Keep static</string>
+    <string name="jarvys_mascot_unavailable">Playback stopped; static Jarvys is shown</string>
+</resources>

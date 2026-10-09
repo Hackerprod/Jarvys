@@ -6,27 +6,14 @@ import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -39,6 +26,7 @@ import com.jarvys.agent.JarvysMotion
 import com.jarvys.agent.JarvysUiTokens
 import com.jarvys.agent.LucideIcons
 import com.jarvys.agent.R
+import com.jarvys.agent.ui.mascot.JarvysMascotAccountMenu
 import com.jarvys.agent.ui.motion.LocalReducedMotion
 
 @Composable
@@ -58,8 +46,11 @@ fun JarvysRouteTopBar(
     onToggleMemory: () -> Unit,
     onCompact: () -> Unit,
     onReflect: () -> Unit,
+    mainMascotMode: Int? = null,
+    mascotVisibleSessionId: String? = null,
+    mascotLiveConversationVisible: Boolean = false,
+    mascotSurfaceVisible: Boolean = true,
 ) {
-    var accountMenuOpen by remember { mutableStateOf(false) }
     val reducedMotion = LocalReducedMotion.current
     if (!route.showTopBar) return
     JarvysTopAppBar(
@@ -80,34 +71,30 @@ fun JarvysRouteTopBar(
         actions = {
             when (route.action) {
                 AppRouteAction.CHAT -> {
-                    Box {
-                        IconButton(onClick = { accountMenuOpen = true }, modifier = Modifier.size(48.dp)) {
-                            Box(Modifier.size(30.dp).clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.primaryContainer), contentAlignment = Alignment.Center) {
-                                Text("J", color = MaterialTheme.colorScheme.primary,
-                                    fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
-                            }
-                        }
-                        DropdownMenu(expanded = accountMenuOpen, onDismissRequest = { accountMenuOpen = false }) {
-                            DropdownMenuItem(text = { Text(stringResource(R.string.drawer_settings)) },
-                                leadingIcon = { Icon(LucideIcons.Settings, contentDescription = null) },
-                                onClick = { accountMenuOpen = false; onOpenSettings() })
-                            DropdownMenuItem(
-                                text = { Text(stringResource(if (chatWithoutMemory) R.string.memory_chat_without_off else R.string.memory_chat_without)) },
-                                leadingIcon = { Icon(LucideIcons.Eye, contentDescription = null) },
-                                onClick = { accountMenuOpen = false; onToggleMemory() },
-                            )
-                            DropdownMenuItem(
-                                text = { Text(stringResource(if (compacting) R.string.compaction_running else R.string.compaction_menu)) },
-                                leadingIcon = { Icon(LucideIcons.Layers2, contentDescription = null) },
-                                enabled = canCompact,
-                                onClick = { accountMenuOpen = false; onCompact() },
-                            )
-                            DropdownMenuItem(text = { Text(stringResource(R.string.reflection_menu)) },
-                                leadingIcon = { Icon(LucideIcons.Brain, contentDescription = null) },
-                                enabled = canReflect,
-                                onClick = { accountMenuOpen = false; onReflect() })
-                        }
+                    JarvysMascotAccountMenu(
+                        mode = mainMascotMode,
+                        visibleSessionId = mascotVisibleSessionId,
+                        liveConversationVisible = mascotLiveConversationVisible,
+                        surfaceVisible = mascotSurfaceVisible,
+                    ) { closeMenu ->
+                        DropdownMenuItem(text = { Text(stringResource(R.string.drawer_settings)) },
+                            leadingIcon = { Icon(LucideIcons.Settings, contentDescription = null) },
+                            onClick = { closeMenu(); onOpenSettings() })
+                        DropdownMenuItem(
+                            text = { Text(stringResource(if (chatWithoutMemory) R.string.memory_chat_without_off else R.string.memory_chat_without)) },
+                            leadingIcon = { Icon(LucideIcons.Eye, contentDescription = null) },
+                            onClick = { closeMenu(); onToggleMemory() },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(if (compacting) R.string.compaction_running else R.string.compaction_menu)) },
+                            leadingIcon = { Icon(LucideIcons.Layers2, contentDescription = null) },
+                            enabled = canCompact,
+                            onClick = { closeMenu(); onCompact() },
+                        )
+                        DropdownMenuItem(text = { Text(stringResource(R.string.reflection_menu)) },
+                            leadingIcon = { Icon(LucideIcons.Brain, contentDescription = null) },
+                            enabled = canReflect,
+                            onClick = { closeMenu(); onReflect() })
                     }
                     IconButton(onClick = onNewChat, modifier = Modifier.size(48.dp)) {
                         Icon(LucideIcons.MessageCirclePlus, contentDescription = stringResource(R.string.drawer_new_chat),

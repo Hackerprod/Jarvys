@@ -42,7 +42,7 @@ class BotCreationTool internal constructor(private val service: BotCreationServi
         return ToolSpec(NAME, "jarvys/bots", "Create and persist a custom bot from the user's request, including its simple name, English instructions, original locally compiled mascot and generated static fallback icon. " +
             "The user reviews this exact definition, visual description, scene hash, icon prompt and minimum capability/skill scope before saving. This never changes connector permissions or starts a task. " +
             "Image generation uses existing signed-in Codex image access only; unavailable or failed generation returns a saved bot with an explicitly incomplete icon. " +
-            "Never claim the icon is finished unless icon_status is generated. Mascot compilation is local and independent of image access; LOCAL_COMPILED does not prove Android playback. The current visual stays static; Android playback is not available yet. Retry only with the same request_id, then inspect list_bots; never recreate to fix a visual. Main chat only.",
+            "Never claim the icon is finished unless icon_status is generated. Mascot compilation is local and independent of image access; LOCAL_COMPILED does not prove Android playback. Normal avatars remain static; only an explicit temporary visual test is available in the saved custom bot editor. Retry only with the same request_id, then inspect list_bots; never recreate to fix a visual. Main chat only.",
             "bots", ToolSpec.Status.IMPLEMENTED, emptyMap(), properties.keys.toList(),
             mapOf("type" to "object", "properties" to properties, "required" to properties.keys.toList(), "additionalProperties" to false))
     }
@@ -132,7 +132,7 @@ internal class BotCreationService(
                 lines = listOf("Purpose: ${draft.description}", "Instructions (English):\n$instructions",
                     "Tools: ${draft.capabilities.joinToString().ifEmpty { "None" }}", "Skills: ${draft.skillIds.joinToString().ifEmpty { "None" }}",
                     "Workspace: $workspace", "Icon prompt: $iconPrompt",
-                    if (hasMascot) "Mascot design and motion: $visualDescription\nScene SHA-256: ${digest(checkNotNull(mascotScene))}\nNine states plus nine reduced poses; compiled locally. Android playback is not available yet; the current visual remains static."
+                    if (hasMascot) "Mascot design and motion: $visualDescription\nScene SHA-256: ${digest(checkNotNull(mascotScene))}\nNine states plus nine reduced poses; compiled locally. A temporary visual test is available in the saved custom bot editor; normal avatars remain static."
                     else "Legacy request: no animated mascot source was supplied.",
                     if (iconAvailable()) "Generate the icon with existing Codex image access and quota." else "Image access is unavailable. Save the bot now with its default icon; generation remains incomplete.",
                     "Saves this definition only. Existing connector approvals remain in force; no task starts."),
@@ -193,7 +193,7 @@ internal class BotCreationService(
             .put("icon_complete", bot.iconRef.isNotEmpty()).put("enabled", bot.enabled)
             .put("mascot_status", if (bot.mascot != null) "LOCAL_COMPILED" else mascotStatus)
             .put("mascot_compiled", bot.mascot != null).put("android_playback_verified", false)
-            .put("mascot_next_step", if (bot.mascot != null) "Scene saved locally. Android playback is not available yet; the current visual remains static."
+            .put("mascot_next_step", if (bot.mascot != null) "Scene saved locally. A temporary visual test is available in the saved custom bot editor; normal avatars remain static."
                 else "Mascot is incomplete. Use compile_bot_mascot for this exact existing bot; do not recreate it.")
             .put("next_step", if (bot.iconRef.isNotEmpty()) "Verify with list_bots. No task was started."
                 else "The bot is saved, but its generated icon is incomplete. Do not recreate it. Generate an icon for this exact bot after resolving image access or cancellation.")
