@@ -55,6 +55,11 @@
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />
 
+        <activity
+            android:name="com.jarvys.agent.apkfactory.FactoryPreviewActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+
         <service
             android:name="com.artemis.helper.ArtemisAccessibilityService"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"

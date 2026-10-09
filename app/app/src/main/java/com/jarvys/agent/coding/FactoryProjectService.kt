@@ -230,6 +230,82 @@ internal class FactoryProjectService(
             }
         }
     }
+    /** Read-only evidence actions: no signing identities, permission changes, install or project mutation. */
+    fun harness(action: String, inputPath: String, expectedSha: String, expectedVersion: Long, token: CancellationToken): JSONObject {
+        require(action in setOf("preview", "preview_status", "test"))
+        require(expectedSha.matches(Regex("[a-f0-9]{64}"))) { "expected_sha256 is required" }
+        FactorySpec.relativePath(inputPath)
+        val identity = scope.durableIdentity()
+        fun validate() {
+            checkActive(token)
+            scope.require(ProjectScope.Capability.READ)
+            check(scope.version() == expectedVersion && scope.durableIdentity() == identity) { "Factory project scope changed" }
+        }
+        validate()
+        val receipt = loadReceipt(expectedSha, inputPath)
+        check(receipt.getString("state") == "published" && receipt.getString("projectIdentity") == identity &&
+            receipt.getString("projectId") == scope.id() && receipt.getString("outputPath") == inputPath &&
+            receipt.getString("apkSha256") == expectedSha) { "This exact APK has no completed build receipt in this project" }
+        val bytes = FactoryProjectFiles.read(scope, inputPath, MAX_APK_BYTES, token)
+        check(ProjectScope.sha256(bytes) == expectedSha && bytes.size.toLong() == receipt.getLong("apkBytes")) { "Factory APK changed" }
+        val spec = FactorySpec.parse(receipt.getJSONObject("spec"))
+        check(receipt.optString("manifestContract") == "closed-v1-current") { "Rebuild this app with the current factory before preview or test" }
+        check(receipt.getString("templateSha256") == ProjectScope.sha256(template())) { "Runtime template changed; rebuild this app before preview or test" }
+        val manifest = TemplateApk.verify(bytes, TemplateApk.Spec(spec.appId, spec.name, spec.versionCode, spec.versionName, spec.capabilities))
+        val savedDex = receipt.getJSONObject("dexSha256")
+        check(savedDex.keys().asSequence().toSet() == manifest.dexSha256.keys && manifest.dexSha256.all { (name, hash) -> savedDex.getString(name) == hash }) { "Runtime inventory differs from receipt" }
+        val assets = sortedMapOf<String, ByteArray>()
+        var config: ByteArray? = null
+        var total = 0L
+        java.util.zip.ZipInputStream(bytes.inputStream()).use { zip ->
+            while (true) {
+                token.throwIfCancelled()
+                val entry = zip.nextEntry ?: break
+                if (entry.name == "assets/factory-app.json") config = readBounded(zip, FactorySpec.MAX_SPEC_BYTES)
+                else if (entry.name.startsWith("assets/www/") || entry.name == "assets/factory-sdk.js") {
+                    check(assets.size < FactorySpec.MAX_WEB_FILES + 1) { "Preview asset count exceeds build limit" }
+                    val data = readBounded(zip, FactorySpec.MAX_FILE_BYTES)
+                    total += data.size
+                    check(total <= FactorySpec.MAX_WEB_BYTES.toLong() + FactorySpec.MAX_FILE_BYTES) { "Preview assets exceed build limit" }
+                    check(assets.put(entry.name.removePrefix("assets/"), data) == null) { "Duplicate preview asset" }
+                }
+                zip.closeEntry()
+            }
+        }
+        val runtimeConfig = config ?: error("Missing factory configuration")
+        check(JSONObject(String(runtimeConfig, Charsets.UTF_8)).toString() == JSONObject(String(spec.runtimeConfig(), Charsets.UTF_8)).toString()) { "Runtime configuration differs from build receipt" }
+        val sources = receipt.getJSONObject("sources")
+        val canonicalSources = JSONObject().apply { sources.keys().asSequence().sorted().forEach { put(it, sources.getString(it)) } }
+        assets.filterKeys { it.startsWith("www/") }.forEach { (path, data) ->
+            check(sources.getString(spec.webDir + "/" + path.removePrefix("www/")) == ProjectScope.sha256(data)) { "Preview asset differs from build receipt" }
+        }
+        val metadata = JSONObject().put("schema_version", 1).put("project_id", scope.id()).put("scope_version", expectedVersion)
+            .put("project_sha256", ProjectScope.sha256(canonicalSources.toString().toByteArray(Charsets.UTF_8)))
+            .put("template_sha256", receipt.getString("templateSha256")).put("apk_sha256", expectedSha)
+            .put("app_id", spec.appId).put("version_code", spec.versionCode).put("version_name", spec.versionName)
+            .put("android_api", Build.VERSION.SDK_INT).put("webview_version", JSONObject.NULL)
+        validate()
+        if (action == "preview_status") return FactoryPreviewRegistry.status(scope.id(), expectedSha, expectedVersion)
+        val snapshot = FactoryPreviewRegistry.Snapshot(metadata, runtimeConfig, assets)
+        if (action == "test") {
+            val result = FactoryRuntimeContractTests.run(snapshot, context.packageName, Build.VERSION.SDK_INT, context.applicationInfo.targetSdkVersion, ::validate)
+            validate()
+            return result
+        }
+        val key = FactoryPreviewRegistry.issue(snapshot, ::validate, token)
+        try {
+            check(token.runIfActive {
+                validate()
+                context.startActivity(android.content.Intent().setClassName(context, "com.jarvys.agent.apkfactory.FactoryPreviewActivity")
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK).putExtra("factory_preview_token", key))
+            }) { "Preview cancelled before launch" }
+        } catch (failure: Exception) {
+            FactoryPreviewRegistry.consume(key)?.revoke()
+            throw failure
+        }
+        return metadata.put("mode", "functional_preview").put("state", "launch_requested")
+            .put("notice", "One isolated RAM preview replaces the previous preview. Native effects are simulated. Launch request is not proof of WebView rendering or installed-app behavior; use preview_status for bounded observed events.")
+    }
     private fun publicReceipt(receipt: JSONObject): JSONObject = JSONObject().put("build_id", receipt.getString("buildId"))
         .put("output_path", receipt.getString("outputPath")).put("sha256", receipt.getString("apkSha256"))
         .put("bytes", receipt.getLong("apkBytes")).put("signed", receipt.getBoolean("signed"))

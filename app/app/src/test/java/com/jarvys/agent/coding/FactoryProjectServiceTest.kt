@@ -91,6 +91,30 @@ class FactoryProjectServiceTest {
             .put("webDir","web").put("icon","icon.json").toString())}
         fun build(path:String="notes.apk")=service.build("factory.json",path,scope.version(),CancellationToken.cancellable())
     }
+    @Test fun factoryTestBindsActualBuildWithoutKeysWritesOrInstalledClaims() {
+        val f=Fixture(); val built=f.build(); val version=f.scope.version()
+        val result=f.service.harness("test","notes.apk",built.getString("sha256"),version,CancellationToken.cancellable())
+        assertEquals("passed",result.getString("state")); assertEquals("shared_core_test",result.getString("mode"))
+        assertEquals(built.getString("sha256"),result.getString("apk_sha256"))
+        assertEquals(version,f.scope.version()); assertEquals(0,f.requested); assertEquals(0,f.obtained)
+        assertFalse(result.toString().contains(f.root.absolutePath))
+    }
+    @Test fun factoryHarnessRejectsHashScopeAndAvailabilityChanges() {
+        val f=Fixture(); val built=f.build(); val sha=built.getString("sha256")
+        assertThrows(Exception::class.java) { f.service.harness("test","notes.apk",sha,0,CancellationToken.cancellable()) }
+        f.active=false
+        assertThrows(Exception::class.java) { f.service.harness("test","notes.apk",sha,f.scope.version(),CancellationToken.cancellable()) }
+        f.active=true; File(f.root,"notes.apk").appendText("changed")
+        assertThrows(Exception::class.java) { f.service.harness("test","notes.apk",sha,f.scope.version(),CancellationToken.cancellable()) }
+        assertEquals(0,f.obtained)
+    }
+    @Test fun factoryHarnessRejectsCopiedArtifactWithoutMatchingReceiptAndCancelledRun() {
+        val f=Fixture(); val built=f.build(); val sha=built.getString("sha256")
+        File(f.root,"notes.apk").copyTo(File(f.root,"copy.apk"))
+        assertThrows(Exception::class.java) { f.service.harness("test","copy.apk",sha,f.scope.version(),CancellationToken.cancellable()) }
+        val token=CancellationToken.cancellable().apply { cancel() }
+        assertThrows(java.util.concurrent.CancellationException::class.java) { f.service.harness("preview","notes.apk",sha,f.scope.version(),token) }
+    }
     @Test fun completeOfflineBuildPreservesDexAndProvenanceWithNoAndroidPermissions() {
         val f=Fixture();val result=f.build();assertFalse(result.getBoolean("signed"));assertEquals(0,f.obtained)
         val apk=File(f.root,"notes.apk");assertEquals(result.getString("sha256"),ProjectScope.sha256(apk.readBytes()))

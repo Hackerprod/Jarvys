@@ -16,20 +16,20 @@ import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 
 /** One native safe-area owner for every generated app, independent of its HTML and identity. */
-final class FactoryWindowPolicy {
-    static final int LIGHT_SURFACE = 0xfffafafa;
-    static final int DARK_SURFACE = 0xff121212;
-    static final int LIGHT_TEXT = 0xff202124;
-    static final int DARK_TEXT = 0xfff5f5f5;
+public final class FactoryWindowPolicy {
+    public static final int LIGHT_SURFACE = 0xfffafafa;
+    public static final int DARK_SURFACE = 0xff121212;
+    public static final int LIGHT_TEXT = 0xff202124;
+    public static final int DARK_TEXT = 0xfff5f5f5;
     private FactoryWindowPolicy() {}
 
-    static boolean isDark(Activity activity) {
+    public static boolean isDark(Activity activity) {
         return (activity.getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK)
                 == Configuration.UI_MODE_NIGHT_YES;
     }
 
     @SuppressWarnings("deprecation") // Colors are the compatibility path before target-35 edge-to-edge.
-    static FrameLayout createRoot(Activity activity) {
+    public static FrameLayout createRoot(Activity activity) {
         boolean dark = isDark(activity);
         int surface = dark ? DARK_SURFACE : LIGHT_SURFACE;
         Window window = activity.getWindow();

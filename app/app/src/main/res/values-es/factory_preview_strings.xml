@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="factory_preview_reset">Reiniciar datos de prueba</string>
+    <string name="factory_preview_close">Cerrar vista previa</string>
+    <string name="factory_preview_disclosure">Vista previa funcional de Factory · %1$s · v%2$d\nAlmacenamiento temporal aislado. Compartir, exportar, portapapeles y vibración son simulados. Se ejecuta dentro de Jarvys, no como app instalada.\nSHA-256 del APK: %3$s</string>
+    <string name="factory_preview_expired">Vista previa de Factory cerrada o no disponible. Ábrela desde Coding con la compilación verificada vigente. Los datos temporales se descartan; no se instaló ninguna app.</string>
+</resources>
