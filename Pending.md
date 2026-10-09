@@ -28,7 +28,7 @@ Modo de ejecución: continuar la cola completa. Al cerrar cada pendiente o corre
 - **UX30 / preparación v48 completada en host:** menú lateral compacto, etiquetas redundantes retiradas y secciones vacías ocultas. 1948 Full, 1715 Play, 17 runtime y nueve JavaScript aprobadas; 80 capturas y revisión independiente, sin nuevos diagnósticos de lint. Ambos APK unsigned verificados para firma original; aceptación física pendiente.
 - **UX32 / preparación v49 completada en host:** nuevo icono de la aplicación con el PNG original preservado, launcher y round para cinco densidades e iconos adaptativos. 1963 Full, 1730 Play, 17 runtime y nueve JavaScript aprobadas; doce capturas nativas y revisión independiente, sin nuevos diagnósticos de lint. Ambos APK verificados para firma original; aceptación física pendiente. v48 permanece inmutable.
 - **UX31 / preparación v50 completada en host:** gestión general de Gmail, permisos efectivos, etiquetas, mensajes/hilos, borradores y lotes reanudables. 2115 Full, 1733 Play, 17 runtime y nueve JavaScript aprobadas; 50 capturas de Google, revisión independiente y cero nuevos diagnósticos de lint. Ambos APK originales verificados para firma externa. No se actuó sobre cuentas reales ni se ampliaron concesiones OAuth.
-- **Siguiente etapa:** UX33, tarjeta de preview de borde a borde y acciones superpuestas.
+- **Etapa actual:** UX33, tarjeta de preview de borde a borde y acciones superpuestas en preparación v51 / 1.2.44-UX33; implementación y validación en curso.
 - La paridad completa con el comportamiento de v28 en un teléfono sigue pendiente de validación; la fiabilidad del agente es prioritaria antes de añadir funciones.
 
 ## Entregas previas
@@ -437,7 +437,7 @@ Contrato y límites: app/GMAIL_MANAGEMENT.md. Fuente validada: 5437c6de0e96d3e1b
 
 ### 17. UX33: miniatura de preview de borde a borde y acciones superpuestas
 
-Estado: siguiente etapa, después de UX31; solicitud y captura de referencia aportadas el 9 de octubre de 2026. Se conserva su alcance separado de las etapas ya validadas.
+Estado: implementación en curso para preparación v51 / 1.2.44-UX33, después de UX31. Captura de referencia inspeccionada; se conserva el alcance de presentación y las etapas ya validadas. Pruebas completas, revisión independiente y APK todavía pendientes.
 
 - La miniatura debe cubrir toda la superficie de la tarjeta, respetando únicamente el borde exterior y sus esquinas. Retirar rellenos, marcos interiores y bordes anidados que reduzcan el área de imagen.
 - Retirar de esta tarjeta la fila del nombre de archivo (por ejemplo, index.html), el icono de archivo, su tamaño y la sección o etiqueta visible «Vista previa estática». La tarjeta normal muestra la miniatura completa como fondo; conservar los metadatos necesarios para accesibilidad y acciones aunque ya no aparezcan como filas visuales.

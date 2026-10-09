@@ -1359,7 +1359,6 @@ Se desconoce cómo terminaron. No se repiten automáticamente. Revisa los cambio
     <string name="crew_message_short">Mensaje</string>
     <string name="chat_html_thumbnail_open">Abrir vista previa de %1$s</string>
     <string name="chat_file_action_named">%1$s: %2$s</string>
-    <string name="chat_html_thumbnail_static">Vista estática · scripts desactivados</string>
     <string name="chat_html_thumbnail_unavailable">Miniatura no disponible. Toca para abrir la página.</string>
     <string name="chat_html_thumbnail_loading">Preparando miniatura de la página…</string>
 </resources>

@@ -136,14 +136,26 @@ private fun ScopedAttachmentFileCard(attachment: ChatAttachment, sessionId: Stri
         value = null
         value = withContext(Dispatchers.IO) { runCatching { request.requireOwnership(context); request.resolve(context).isFile }.getOrDefault(false) }
     }
-    val preview by produceState<HtmlPreviewDescriptor?>(null, request) {
-        value = null
-        if (delivered && attachment.mimeType == "text/html") value = withContext(Dispatchers.IO) {
+    val htmlCandidate = delivered && attachment.mimeType == "text/html"
+    val preview by produceState<Pair<Boolean, HtmlPreviewDescriptor?>>(false to null, request) {
+        value = false to null
+        val descriptor = if (htmlCandidate) withContext(Dispatchers.IO) {
             runCatching {
                 request.requireOwnership(context)
                 DeliveredArtifactStore(context).previewMetadataForAttachment(sessionId, attachment)
             }.getOrNull()
+        } else null
+        value = true to descriptor
+    }
+    val descriptor = preview.second
+    if (htmlCandidate && (!preview.first || descriptor != null) && available != false) {
+        if (descriptor != null && available == true) {
+            HtmlArtifactThumbnail(request, descriptor) { onOpenPreview(descriptor.token) }
+        } else {
+            // Reserve the same full-card geometry while ownership and preview metadata resolve.
+            HtmlThumbnailCardSurface(request, image = null, loading = true, showActions = false, onOpen = null)
         }
+        return
     }
     Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceVariant,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
@@ -159,9 +171,6 @@ private fun ScopedAttachmentFileCard(attachment: ChatAttachment, sessionId: Stri
             }
             if (available == false) UnavailableAttachment(attachment.id)
             if (available == true) {
-                preview?.let { descriptor ->
-                    HtmlArtifactThumbnail(request, descriptor) { onOpenPreview(descriptor.token) }
-                }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 ChatFileIconButtons(request, Modifier.align(Alignment.CenterHorizontally),
                     tagPrefix = if (delivered) "delivered-file" else "chat-file")

@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.view.ViewGroup
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -13,10 +14,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInWindow
@@ -69,32 +72,49 @@ internal fun HtmlArtifactThumbnail(request: ChatFileRequest, descriptor: HtmlPre
             } else image?.close()
         }
     }
-    val label = stringResource(R.string.chat_html_thumbnail_open, request.displayName)
-    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-        Box(Modifier.fillMaxWidth().aspectRatio(1.5f).clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surface)
-            .onGloballyPositioned { coordinates ->
+    HtmlThumbnailCardSurface(request, pixels.image?.bitmap, pixels.loading,
+        modifier = Modifier.onGloballyPositioned { coordinates ->
                 width = coordinates.size.width
                 val bounds = coordinates.boundsInWindow()
                 visible = bounds.width > 0 && bounds.height > 0 && bounds.bottom > 0 &&
                     bounds.top < localView.rootView.height && bounds.right > 0 && bounds.left < localView.rootView.width
-            }
-            .testTag("delivered-file-preview-${request.artifactId}")
-            .semantics { contentDescription = label }
-            .clickable(role = Role.Button, onClickLabel = label, onClick = onOpen),
-            contentAlignment = Alignment.Center) {
-            val image = pixels.image?.bitmap
+            }, onOpen = onOpen)
+}
+
+/** Presentation only: pixels still come from the bounded, scripts-disabled local renderer. */
+@Composable
+internal fun HtmlThumbnailCardSurface(request: ChatFileRequest, image: Bitmap?, loading: Boolean,
+    modifier: Modifier = Modifier, showActions: Boolean = true, onOpen: (() -> Unit)?) {
+    val label = stringResource(R.string.chat_html_thumbnail_open, request.displayName)
+    Surface(modifier.fillMaxWidth().aspectRatio(1.5f).testTag("chat-attachment-file-${request.artifactId}"),
+        shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+        Box(Modifier.fillMaxSize()) {
+            // The preview and actions are siblings: actions never become children of its click target.
+            Box(Modifier.fillMaxSize().then(if (onOpen != null) Modifier
+                .testTag("delivered-file-preview-${request.artifactId}")
+                .semantics { contentDescription = label }
+                .clickable(role = Role.Button, onClickLabel = label, onClick = onOpen) else Modifier),
+                contentAlignment = Alignment.Center) {
             if (image != null) Image(image.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
-            else Column(Modifier.padding(16.dp).testTag("html-thumbnail-status-${request.artifactId}"),
-                horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (pixels.loading) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
-                Text(stringResource(if (pixels.loading) R.string.chat_html_thumbnail_loading else R.string.chat_html_thumbnail_unavailable),
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            else Box(Modifier.fillMaxSize().padding(start = 16.dp, end = 16.dp, top = 12.dp,
+                bottom = if (showActions) 72.dp else 12.dp), contentAlignment = Alignment.Center) {
+                Column(Modifier.testTag("html-thumbnail-status-${request.artifactId}"),
+                    horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (loading) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                    Text(stringResource(if (loading) R.string.chat_html_thumbnail_loading else R.string.chat_html_thumbnail_unavailable),
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            }
+            if (showActions) {
+                Box(Modifier.fillMaxWidth().height(88.dp).align(Alignment.BottomCenter)
+                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.62f))))
+                    .testTag("html-thumbnail-gradient-${request.artifactId}"))
+                ChatFileIconButtons(request, Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp),
+                    tagPrefix = "delivered-file", overlay = true)
             }
         }
-        Text(stringResource(R.string.chat_html_thumbnail_static),
-            Modifier.testTag("html-thumbnail-static-${request.artifactId}"),
-            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
