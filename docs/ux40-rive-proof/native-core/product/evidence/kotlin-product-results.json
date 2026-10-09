@@ -1,0 +1,28 @@
+{
+  "scope": "Deterministic Kotlin serialization and structure only; independent runtime and Android-device validation are separate",
+  "format": "7.4",
+  "mascots": [
+    {
+      "trackCount": 576,
+      "sha256": "83473fed7db18da9a3ad4302b403a29b5a9e2396f4b49801a5499cf5e57e8b77",
+      "bytes": 15471,
+      "contract": "bot-mascot-v1",
+      "keyframeCount": 621,
+      "binaryObjectCount": 1978,
+      "name": "nimbo",
+      "nodeCount": 59,
+      "sourceBytes": 115962
+    },
+    {
+      "trackCount": 558,
+      "sha256": "1d3b4f3443084472677c51f38e41f743018fa206358c9cb1890a5456df6dda0b",
+      "bytes": 15264,
+      "contract": "bot-mascot-v1",
+      "keyframeCount": 589,
+      "binaryObjectCount": 1932,
+      "name": "folio",
+      "nodeCount": 60,
+      "sourceBytes": 113153
+    }
+  ]
+}

@@ -1,0 +1,254 @@
+[
+  {
+    "id": "folio",
+    "state": "Idle",
+    "visiblePixels": 15847,
+    "changedPixels": 565,
+    "passed": true
+  },
+  {
+    "id": "folio",
+    "state": "IdleReduced",
+    "visiblePixels": 15847,
+    "changedPixels": 0,
+    "passed": true
+  },
+  {
+    "id": "folio",
+    "state": "Thinking",
+    "visiblePixels": 15295,
+    "changedPixels": 314,
+    "passed": true
+  },
+  {
+    "id": "folio",
+    "state": "ThinkingReduced",
+    "visiblePixels": 15295,
+    "changedPixels": 0,
+    "passed": true
+  },
+  {
+    "id": "folio",
+    "state": "Working",
+    "visiblePixels": 15850,
+    "changedPixels": 1822,
+    "passed": true
+  },
+  {
+    "id": "folio",
+    "state": "WorkingReduced",
+    "visiblePixels": 15850,
+    "changedPixels": 0,
+    "passed": true
+  },
+  {
+    "id": "folio",
+    "state": "Queued",
+    "visiblePixels": 13787,
+    "changedPixels": 236,
+    "passed": true
+  },
+  {
+    "id": "folio",
+    "state": "QueuedReduced",
+    "visiblePixels": 13787,
+    "changedPixels": 0,
+    "passed": true
+  },
+  {
+    "id": "folio",
+    "state": "WaitingProvider",
+    "visiblePixels": 15810,
+    "changedPixels": 411,
+    "passed": true
+  },
+  {
+    "id": "folio",
+    "state": "WaitingProviderReduced",
+    "visiblePixels": 15810,
+    "changedPixels": 0,
+    "passed": true
+  },
+  {
+    "id": "folio",
+    "state": "WaitingUser",
+    "visiblePixels": 15964,
+    "changedPixels": 353,
+    "passed": true
+  },
+  {
+    "id": "folio",
+    "state": "WaitingUserReduced",
+    "visiblePixels": 15964,
+    "changedPixels": 0,
+    "passed": true
+  },
+  {
+    "id": "folio",
+    "state": "Done",
+    "visiblePixels": 15880,
+    "changedPixels": 4671,
+    "passed": true
+  },
+  {
+    "id": "folio",
+    "state": "DoneReduced",
+    "visiblePixels": 15880,
+    "changedPixels": 0,
+    "passed": true
+  },
+  {
+    "id": "folio",
+    "state": "Error",
+    "visiblePixels": 14356,
+    "changedPixels": 315,
+    "passed": true
+  },
+  {
+    "id": "folio",
+    "state": "ErrorReduced",
+    "visiblePixels": 14370,
+    "changedPixels": 0,
+    "passed": true
+  },
+  {
+    "id": "folio",
+    "state": "Interrupted",
+    "visiblePixels": 15102,
+    "changedPixels": 524,
+    "passed": true
+  },
+  {
+    "id": "folio",
+    "state": "InterruptedReduced",
+    "visiblePixels": 14823,
+    "changedPixels": 0,
+    "passed": true
+  },
+  {
+    "id": "nimbo",
+    "state": "Idle",
+    "visiblePixels": 12447,
+    "changedPixels": 1482,
+    "passed": true
+  },
+  {
+    "id": "nimbo",
+    "state": "IdleReduced",
+    "visiblePixels": 12447,
+    "changedPixels": 0,
+    "passed": true
+  },
+  {
+    "id": "nimbo",
+    "state": "Thinking",
+    "visiblePixels": 12425,
+    "changedPixels": 1199,
+    "passed": true
+  },
+  {
+    "id": "nimbo",
+    "state": "ThinkingReduced",
+    "visiblePixels": 12425,
+    "changedPixels": 0,
+    "passed": true
+  },
+  {
+    "id": "nimbo",
+    "state": "Working",
+    "visiblePixels": 12494,
+    "changedPixels": 371,
+    "passed": true
+  },
+  {
+    "id": "nimbo",
+    "state": "WorkingReduced",
+    "visiblePixels": 12494,
+    "changedPixels": 0,
+    "passed": true
+  },
+  {
+    "id": "nimbo",
+    "state": "Queued",
+    "visiblePixels": 11952,
+    "changedPixels": 1164,
+    "passed": true
+  },
+  {
+    "id": "nimbo",
+    "state": "QueuedReduced",
+    "visiblePixels": 11952,
+    "changedPixels": 0,
+    "passed": true
+  },
+  {
+    "id": "nimbo",
+    "state": "WaitingProvider",
+    "visiblePixels": 12443,
+    "changedPixels": 172,
+    "passed": true
+  },
+  {
+    "id": "nimbo",
+    "state": "WaitingProviderReduced",
+    "visiblePixels": 12443,
+    "changedPixels": 0,
+    "passed": true
+  },
+  {
+    "id": "nimbo",
+    "state": "WaitingUser",
+    "visiblePixels": 12795,
+    "changedPixels": 73,
+    "passed": true
+  },
+  {
+    "id": "nimbo",
+    "state": "WaitingUserReduced",
+    "visiblePixels": 12795,
+    "changedPixels": 0,
+    "passed": true
+  },
+  {
+    "id": "nimbo",
+    "state": "Done",
+    "visiblePixels": 12835,
+    "changedPixels": 3371,
+    "passed": true
+  },
+  {
+    "id": "nimbo",
+    "state": "DoneReduced",
+    "visiblePixels": 12835,
+    "changedPixels": 0,
+    "passed": true
+  },
+  {
+    "id": "nimbo",
+    "state": "Error",
+    "visiblePixels": 11843,
+    "changedPixels": 2540,
+    "passed": true
+  },
+  {
+    "id": "nimbo",
+    "state": "ErrorReduced",
+    "visiblePixels": 11840,
+    "changedPixels": 0,
+    "passed": true
+  },
+  {
+    "id": "nimbo",
+    "state": "Interrupted",
+    "visiblePixels": 11740,
+    "changedPixels": 2646,
+    "passed": true
+  },
+  {
+    "id": "nimbo",
+    "state": "InterruptedReduced",
+    "visiblePixels": 11740,
+    "changedPixels": 0,
+    "passed": true
+  }
+]

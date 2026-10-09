@@ -1,0 +1,6411 @@
+{
+  "contract": "bot-mascot-v1",
+  "name": "Folio",
+  "nodes": [
+    {
+      "kind": "group",
+      "name": "Book",
+      "parent": "Artboard",
+      "x": 120,
+      "y": 145,
+      "rotation": -0.035
+    },
+    {
+      "kind": "group",
+      "name": "Gaze",
+      "parent": "Book",
+      "x": 0,
+      "y": -8
+    },
+    {
+      "kind": "ellipse",
+      "name": "EyeL",
+      "parent": "Gaze",
+      "x": -12,
+      "y": 0,
+      "width": 6,
+      "height": 10,
+      "color": 4282725712
+    },
+    {
+      "kind": "ellipse",
+      "name": "EyeR",
+      "parent": "Gaze",
+      "x": 14,
+      "y": 0,
+      "width": 6,
+      "height": 10,
+      "color": 4282725712
+    },
+    {
+      "kind": "rectangle",
+      "name": "Mouth",
+      "parent": "Book",
+      "x": 2,
+      "y": 9,
+      "width": 13,
+      "height": 4,
+      "color": 4282725712,
+      "radius": 2
+    },
+    {
+      "kind": "rectangle",
+      "name": "CoverRuleTop",
+      "parent": "Book",
+      "x": 2,
+      "y": -31,
+      "width": 39,
+      "height": 3,
+      "color": 4292722584,
+      "radius": 1.5
+    },
+    {
+      "kind": "rectangle",
+      "name": "CoverRuleBottom",
+      "parent": "Book",
+      "x": 2,
+      "y": 28,
+      "width": 32,
+      "height": 3,
+      "color": 4292722584,
+      "radius": 1.5
+    },
+    {
+      "kind": "rectangle",
+      "name": "CoverInset",
+      "parent": "Book",
+      "x": 2,
+      "y": -2,
+      "width": 66,
+      "height": 83,
+      "color": 4294963405,
+      "radius": 11
+    },
+    {
+      "kind": "rectangle",
+      "name": "SpineStripe",
+      "parent": "Book",
+      "x": -39,
+      "y": 0,
+      "width": 12,
+      "height": 107,
+      "color": 4285350760,
+      "radius": 5
+    },
+    {
+      "kind": "rectangle",
+      "name": "FrontCover",
+      "parent": "Book",
+      "x": 0,
+      "y": 0,
+      "width": 90,
+      "height": 111,
+      "color": 4288177282,
+      "radius": 12
+    },
+    {
+      "kind": "rectangle",
+      "name": "PageEdgeRuleA",
+      "parent": "Book",
+      "x": 48,
+      "y": 5,
+      "width": 3,
+      "height": 88,
+      "color": 4292329376,
+      "radius": 1.5
+    },
+    {
+      "kind": "rectangle",
+      "name": "PageEdgeRuleB",
+      "parent": "Book",
+      "x": 53,
+      "y": 5,
+      "width": 3,
+      "height": 85,
+      "color": 4292329376,
+      "radius": 1.5
+    },
+    {
+      "kind": "rectangle",
+      "name": "PageEdge",
+      "parent": "Book",
+      "x": 49,
+      "y": 4,
+      "width": 15,
+      "height": 101,
+      "color": 4294501309,
+      "radius": 5
+    },
+    {
+      "kind": "rectangle",
+      "name": "BackCover",
+      "parent": "Book",
+      "x": 7,
+      "y": 5,
+      "width": 101,
+      "height": 114,
+      "color": 4285350760,
+      "radius": 12
+    },
+    {
+      "kind": "group",
+      "name": "PageWing",
+      "parent": "Book",
+      "x": 48,
+      "y": -16,
+      "rotation": 0.12
+    },
+    {
+      "kind": "rectangle",
+      "name": "WingRuleA",
+      "parent": "PageWing",
+      "x": 18,
+      "y": -9,
+      "width": 18,
+      "height": 2,
+      "color": 4291012989,
+      "radius": 1
+    },
+    {
+      "kind": "rectangle",
+      "name": "WingRuleB",
+      "parent": "PageWing",
+      "x": 18,
+      "y": -2,
+      "width": 16,
+      "height": 2,
+      "color": 4291012989,
+      "radius": 1
+    },
+    {
+      "kind": "rectangle",
+      "name": "WingRuleC",
+      "parent": "PageWing",
+      "x": 16,
+      "y": 5,
+      "width": 12,
+      "height": 2,
+      "color": 4291012989,
+      "radius": 1
+    },
+    {
+      "kind": "rectangle",
+      "name": "WingPageFront",
+      "parent": "PageWing",
+      "x": 17,
+      "y": 0,
+      "width": 36,
+      "height": 45,
+      "color": 4294963405,
+      "radius": 7
+    },
+    {
+      "kind": "rectangle",
+      "name": "WingPageBack",
+      "parent": "PageWing",
+      "x": 19,
+      "y": 2,
+      "width": 38,
+      "height": 48,
+      "color": 4292722584,
+      "radius": 7,
+      "rotation": 0.12
+    },
+    {
+      "kind": "group",
+      "name": "Bookmark",
+      "parent": "Book",
+      "x": -9,
+      "y": -72,
+      "rotation": -0.08
+    },
+    {
+      "kind": "group",
+      "name": "SignalIdle",
+      "parent": "Bookmark",
+      "scaleX": 1
+    },
+    {
+      "kind": "ellipse",
+      "name": "SignalRest",
+      "parent": "SignalIdle",
+      "x": 0,
+      "y": 0,
+      "width": 5,
+      "height": 5,
+      "color": 4282725712
+    },
+    {
+      "kind": "group",
+      "name": "SignalThinking",
+      "parent": "Bookmark",
+      "scaleX": 0
+    },
+    {
+      "kind": "ellipse",
+      "name": "Thought0",
+      "parent": "SignalThinking",
+      "x": -7,
+      "y": 3,
+      "width": 4,
+      "height": 4,
+      "color": 4282725712
+    },
+    {
+      "kind": "ellipse",
+      "name": "Thought1",
+      "parent": "SignalThinking",
+      "x": 0,
+      "y": 0,
+      "width": 4,
+      "height": 4,
+      "color": 4282725712
+    },
+    {
+      "kind": "ellipse",
+      "name": "Thought2",
+      "parent": "SignalThinking",
+      "x": 7,
+      "y": -3,
+      "width": 4,
+      "height": 4,
+      "color": 4282725712
+    },
+    {
+      "kind": "group",
+      "name": "SignalWorking",
+      "parent": "Bookmark",
+      "scaleX": 0
+    },
+    {
+      "kind": "rectangle",
+      "name": "WorkBar0",
+      "parent": "SignalWorking",
+      "x": -6,
+      "y": 3.5,
+      "width": 3,
+      "height": 7,
+      "color": 4282725712,
+      "radius": 1.5
+    },
+    {
+      "kind": "rectangle",
+      "name": "WorkBar1",
+      "parent": "SignalWorking",
+      "x": 0,
+      "y": -0.5,
+      "width": 3,
+      "height": 15,
+      "color": 4282725712,
+      "radius": 1.5
+    },
+    {
+      "kind": "rectangle",
+      "name": "WorkBar2",
+      "parent": "SignalWorking",
+      "x": 6,
+      "y": 1.5,
+      "width": 3,
+      "height": 11,
+      "color": 4282725712,
+      "radius": 1.5
+    },
+    {
+      "kind": "group",
+      "name": "SignalQueued",
+      "parent": "Bookmark",
+      "scaleX": 0
+    },
+    {
+      "kind": "rectangle",
+      "name": "QueueRow0",
+      "parent": "SignalQueued",
+      "x": 0,
+      "y": -6,
+      "width": 10,
+      "height": 3,
+      "color": 4282725712,
+      "radius": 1.5
+    },
+    {
+      "kind": "rectangle",
+      "name": "QueueRow1",
+      "parent": "SignalQueued",
+      "x": 0,
+      "y": 0,
+      "width": 15,
+      "height": 3,
+      "color": 4282725712,
+      "radius": 1.5
+    },
+    {
+      "kind": "rectangle",
+      "name": "QueueRow2",
+      "parent": "SignalQueued",
+      "x": 0,
+      "y": 6,
+      "width": 20,
+      "height": 3,
+      "color": 4282725712,
+      "radius": 1.5
+    },
+    {
+      "kind": "group",
+      "name": "SignalWaitingProvider",
+      "parent": "Bookmark",
+      "scaleX": 0
+    },
+    {
+      "kind": "rectangle",
+      "name": "LinkBridge",
+      "parent": "SignalWaitingProvider",
+      "x": 0,
+      "y": 0,
+      "width": 12,
+      "height": 3,
+      "color": 4282725712,
+      "radius": 1.5
+    },
+    {
+      "kind": "rectangle",
+      "name": "LinkNodeL",
+      "parent": "SignalWaitingProvider",
+      "x": -8,
+      "y": 0,
+      "width": 6,
+      "height": 10,
+      "color": 4282725712,
+      "radius": 2
+    },
+    {
+      "kind": "rectangle",
+      "name": "LinkNodeR",
+      "parent": "SignalWaitingProvider",
+      "x": 8,
+      "y": 0,
+      "width": 6,
+      "height": 10,
+      "color": 4282725712,
+      "radius": 2
+    },
+    {
+      "kind": "group",
+      "name": "SignalWaitingUser",
+      "parent": "Bookmark",
+      "scaleX": 0
+    },
+    {
+      "kind": "ellipse",
+      "name": "PromptDot",
+      "parent": "SignalWaitingUser",
+      "x": 1,
+      "y": -1,
+      "width": 4,
+      "height": 4,
+      "color": 4294966000
+    },
+    {
+      "kind": "rectangle",
+      "name": "PromptTail",
+      "parent": "SignalWaitingUser",
+      "x": -5,
+      "y": 7,
+      "width": 5,
+      "height": 8,
+      "color": 4282725712,
+      "radius": 1.5,
+      "rotation": 0.4
+    },
+    {
+      "kind": "rectangle",
+      "name": "PromptBubble",
+      "parent": "SignalWaitingUser",
+      "x": 0,
+      "y": -1,
+      "width": 20,
+      "height": 14,
+      "color": 4282725712,
+      "radius": 5
+    },
+    {
+      "kind": "group",
+      "name": "SignalDone",
+      "parent": "Bookmark",
+      "scaleX": 0
+    },
+    {
+      "kind": "rectangle",
+      "name": "CheckShort",
+      "parent": "SignalDone",
+      "x": -5,
+      "y": 3,
+      "width": 10,
+      "height": 4,
+      "color": 4282725712,
+      "radius": 2,
+      "rotation": 0.72
+    },
+    {
+      "kind": "rectangle",
+      "name": "CheckLong",
+      "parent": "SignalDone",
+      "x": 3,
+      "y": 0,
+      "width": 17,
+      "height": 4,
+      "color": 4282725712,
+      "radius": 2,
+      "rotation": -0.8
+    },
+    {
+      "kind": "group",
+      "name": "SignalError",
+      "parent": "Bookmark",
+      "scaleX": 0
+    },
+    {
+      "kind": "ellipse",
+      "name": "ErrorDot",
+      "parent": "SignalError",
+      "x": 0,
+      "y": 8,
+      "width": 4,
+      "height": 4,
+      "color": 4282725712
+    },
+    {
+      "kind": "rectangle",
+      "name": "ErrorStem",
+      "parent": "SignalError",
+      "x": 0,
+      "y": -3,
+      "width": 4,
+      "height": 13,
+      "color": 4282725712,
+      "radius": 2
+    },
+    {
+      "kind": "group",
+      "name": "SignalInterrupted",
+      "parent": "Bookmark",
+      "scaleX": 0
+    },
+    {
+      "kind": "rectangle",
+      "name": "PauseL",
+      "parent": "SignalInterrupted",
+      "x": -5,
+      "y": 0,
+      "width": 4,
+      "height": 16,
+      "color": 4282725712,
+      "radius": 2
+    },
+    {
+      "kind": "rectangle",
+      "name": "PauseR",
+      "parent": "SignalInterrupted",
+      "x": 5,
+      "y": 0,
+      "width": 4,
+      "height": 16,
+      "color": 4282725712,
+      "radius": 2
+    },
+    {
+      "kind": "rectangle",
+      "name": "BookmarkFace",
+      "parent": "Bookmark",
+      "x": 0,
+      "y": 0,
+      "width": 31,
+      "height": 30,
+      "color": 4294966000,
+      "radius": 7
+    },
+    {
+      "kind": "rectangle",
+      "name": "BookmarkBacking",
+      "parent": "Bookmark",
+      "x": 0,
+      "y": 0,
+      "width": 36,
+      "height": 35,
+      "color": 4292579450,
+      "radius": 9
+    },
+    {
+      "kind": "rectangle",
+      "name": "BookmarkRibbon",
+      "parent": "Bookmark",
+      "x": 0,
+      "y": 18,
+      "width": 12,
+      "height": 24,
+      "color": 4292579450,
+      "radius": 3
+    },
+    {
+      "kind": "group",
+      "name": "FootL",
+      "parent": "Artboard",
+      "x": 102,
+      "y": 207,
+      "rotation": -0.12
+    },
+    {
+      "kind": "rectangle",
+      "name": "ShoeL",
+      "parent": "FootL",
+      "x": 0,
+      "y": 0,
+      "width": 26,
+      "height": 12,
+      "color": 4285350760,
+      "radius": 5
+    },
+    {
+      "kind": "group",
+      "name": "FootR",
+      "parent": "Artboard",
+      "x": 147,
+      "y": 207,
+      "rotation": 0.12
+    },
+    {
+      "kind": "rectangle",
+      "name": "ShoeR",
+      "parent": "FootR",
+      "x": 0,
+      "y": 0,
+      "width": 26,
+      "height": 12,
+      "color": 4285350760,
+      "radius": 5
+    },
+    {
+      "kind": "ellipse",
+      "name": "Shadow",
+      "parent": "Artboard",
+      "x": 128,
+      "y": 222,
+      "width": 111,
+      "height": 9,
+      "color": 4293451237
+    }
+  ],
+  "animations": {
+    "Idle": {
+      "duration": 192,
+      "loop": true,
+      "tracks": [
+        {
+          "node": "SignalIdle",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "SignalThinking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWorking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalQueued",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingProvider",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingUser",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalDone",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalError",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalInterrupted",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              120
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              145
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.035
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.12
+            ],
+            [
+              96,
+              0.16
+            ],
+            [
+              192,
+              0.12
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -16
+            ]
+          ]
+        },
+        {
+          "node": "Bookmark",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.08
+            ],
+            [
+              96,
+              0.015
+            ],
+            [
+              192,
+              -0.08
+            ]
+          ]
+        },
+        {
+          "node": "Bookmark",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -72
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -8
+            ]
+          ]
+        },
+        {
+          "node": "EyeL",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "EyeR",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              102
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              207
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.12
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              147
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              207
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.12
+            ]
+          ]
+        },
+        {
+          "node": "Shadow",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    "Thinking": {
+      "duration": 168,
+      "loop": true,
+      "tracks": [
+        {
+          "node": "SignalIdle",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalThinking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "SignalWorking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalQueued",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingProvider",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingUser",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalDone",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalError",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalInterrupted",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              120
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              145
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.09
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.38
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0.7
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -16
+            ]
+          ]
+        },
+        {
+          "node": "Bookmark",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.26
+            ],
+            [
+              84,
+              -0.18
+            ],
+            [
+              168,
+              -0.26
+            ]
+          ]
+        },
+        {
+          "node": "Bookmark",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -72
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              -3
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -2
+            ]
+          ]
+        },
+        {
+          "node": "EyeL",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "EyeR",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0.5
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              102
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              207
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.12
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              147
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              207
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.12
+            ]
+          ]
+        },
+        {
+          "node": "Shadow",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    "Working": {
+      "duration": 120,
+      "loop": true,
+      "tracks": [
+        {
+          "node": "SignalIdle",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalThinking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWorking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "SignalQueued",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingProvider",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingUser",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalDone",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalError",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalInterrupted",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              120
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              145
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.015
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.12
+            ],
+            [
+              30,
+              -0.28
+            ],
+            [
+              60,
+              -0.12
+            ],
+            [
+              90,
+              -0.28
+            ],
+            [
+              120,
+              -0.12
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ],
+            [
+              30,
+              0.38
+            ],
+            [
+              60,
+              1
+            ],
+            [
+              90,
+              0.38
+            ],
+            [
+              120,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -16
+            ]
+          ]
+        },
+        {
+          "node": "Bookmark",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.12
+            ]
+          ]
+        },
+        {
+          "node": "Bookmark",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -72
+            ],
+            [
+              60,
+              -75
+            ],
+            [
+              120,
+              -72
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              3
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "EyeL",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "EyeR",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              102
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              207
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.18
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              147
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              207
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.18
+            ]
+          ]
+        },
+        {
+          "node": "Shadow",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    "Queued": {
+      "duration": 216,
+      "loop": true,
+      "tracks": [
+        {
+          "node": "SignalIdle",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalThinking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWorking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalQueued",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingProvider",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingUser",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalDone",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalError",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalInterrupted",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              120
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              148
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              0.97
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.02
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0.24
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -16
+            ]
+          ]
+        },
+        {
+          "node": "Bookmark",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Bookmark",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -68
+            ],
+            [
+              108,
+              -69.5
+            ],
+            [
+              216,
+              -68
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -8
+            ]
+          ]
+        },
+        {
+          "node": "EyeL",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              0.75
+            ]
+          ]
+        },
+        {
+          "node": "EyeR",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              0.75
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              109
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              207
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              138
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              207
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Shadow",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    "WaitingProvider": {
+      "duration": 180,
+      "loop": true,
+      "tracks": [
+        {
+          "node": "SignalIdle",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalThinking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWorking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalQueued",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingProvider",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingUser",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalDone",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalError",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalInterrupted",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              120
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              145
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.045
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.5
+            ],
+            [
+              90,
+              -0.4
+            ],
+            [
+              180,
+              -0.5
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -16
+            ]
+          ]
+        },
+        {
+          "node": "Bookmark",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.18
+            ]
+          ]
+        },
+        {
+          "node": "Bookmark",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -72
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              4
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -8
+            ]
+          ]
+        },
+        {
+          "node": "EyeL",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "EyeR",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0.65
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              102
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              207
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.12
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              147
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              207
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.12
+            ]
+          ]
+        },
+        {
+          "node": "Shadow",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    "WaitingUser": {
+      "duration": 180,
+      "loop": true,
+      "tracks": [
+        {
+          "node": "SignalIdle",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalThinking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWorking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalQueued",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingProvider",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingUser",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "SignalDone",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalError",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalInterrupted",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              120
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              143
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.015
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.7
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -16
+            ]
+          ]
+        },
+        {
+          "node": "Bookmark",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ],
+            [
+              90,
+              0.08
+            ],
+            [
+              180,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Bookmark",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -78
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -8
+            ]
+          ]
+        },
+        {
+          "node": "EyeL",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "EyeR",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1.2
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              102
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              207
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.12
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              147
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              207
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.12
+            ]
+          ]
+        },
+        {
+          "node": "Shadow",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    "Done": {
+      "duration": 84,
+      "loop": false,
+      "tracks": [
+        {
+          "node": "SignalIdle",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalThinking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWorking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalQueued",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingProvider",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingUser",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalDone",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "SignalError",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalInterrupted",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              120
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              142
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ],
+            [
+              28,
+              0.075
+            ],
+            [
+              56,
+              -0.02
+            ],
+            [
+              84,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.8
+            ],
+            [
+              28,
+              -0.96
+            ],
+            [
+              84,
+              -0.8
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -16
+            ]
+          ]
+        },
+        {
+          "node": "Bookmark",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.08
+            ]
+          ]
+        },
+        {
+          "node": "Bookmark",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -75
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -8
+            ]
+          ]
+        },
+        {
+          "node": "EyeL",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              0.4
+            ]
+          ]
+        },
+        {
+          "node": "EyeR",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              0.4
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1.25
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              99
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              207
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.12
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              150
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              207
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.12
+            ]
+          ]
+        },
+        {
+          "node": "Shadow",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    "Error": {
+      "duration": 90,
+      "loop": false,
+      "tracks": [
+        {
+          "node": "SignalIdle",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalThinking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWorking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalQueued",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingProvider",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingUser",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalDone",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalError",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "SignalInterrupted",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              120
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              149
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.09
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.48
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0.45
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -16
+            ]
+          ]
+        },
+        {
+          "node": "Bookmark",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.22
+            ],
+            [
+              45,
+              -0.38
+            ],
+            [
+              90,
+              -0.35
+            ]
+          ]
+        },
+        {
+          "node": "Bookmark",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -65
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              3
+            ]
+          ]
+        },
+        {
+          "node": "EyeL",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "EyeR",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0.55
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.18
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              102
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              207
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.03
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              147
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              207
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.03
+            ]
+          ]
+        },
+        {
+          "node": "Shadow",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    "Interrupted": {
+      "duration": 48,
+      "loop": false,
+      "tracks": [
+        {
+          "node": "SignalIdle",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalThinking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWorking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalQueued",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingProvider",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingUser",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalDone",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalError",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalInterrupted",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              120
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              147
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.12
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0.7
+            ],
+            [
+              24,
+              0.53
+            ],
+            [
+              48,
+              0.55
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -16
+            ]
+          ]
+        },
+        {
+          "node": "Bookmark",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Bookmark",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -72
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -8
+            ]
+          ]
+        },
+        {
+          "node": "EyeL",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              0.65
+            ]
+          ]
+        },
+        {
+          "node": "EyeR",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              0.65
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0.8
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              102
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              207
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              147
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              207
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Shadow",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    "IdleReduced": {
+      "duration": 1,
+      "loop": false,
+      "tracks": [
+        {
+          "node": "SignalIdle",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "SignalThinking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWorking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalQueued",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingProvider",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingUser",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalDone",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalError",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalInterrupted",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              120
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              145
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.035
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.12
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -16
+            ]
+          ]
+        },
+        {
+          "node": "Bookmark",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.08
+            ]
+          ]
+        },
+        {
+          "node": "Bookmark",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -72
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -8
+            ]
+          ]
+        },
+        {
+          "node": "EyeL",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "EyeR",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              102
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              207
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.12
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              147
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              207
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.12
+            ]
+          ]
+        },
+        {
+          "node": "Shadow",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    "ThinkingReduced": {
+      "duration": 1,
+      "loop": false,
+      "tracks": [
+        {
+          "node": "SignalIdle",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalThinking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "SignalWorking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalQueued",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingProvider",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingUser",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalDone",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalError",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalInterrupted",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              120
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              145
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.09
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.38
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0.7
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -16
+            ]
+          ]
+        },
+        {
+          "node": "Bookmark",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.26
+            ]
+          ]
+        },
+        {
+          "node": "Bookmark",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -72
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              -3
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -2
+            ]
+          ]
+        },
+        {
+          "node": "EyeL",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "EyeR",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0.5
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              102
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              207
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.12
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              147
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              207
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.12
+            ]
+          ]
+        },
+        {
+          "node": "Shadow",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    "WorkingReduced": {
+      "duration": 1,
+      "loop": false,
+      "tracks": [
+        {
+          "node": "SignalIdle",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalThinking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWorking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "SignalQueued",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingProvider",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingUser",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalDone",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalError",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalInterrupted",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              120
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              145
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.015
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.12
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -16
+            ]
+          ]
+        },
+        {
+          "node": "Bookmark",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.12
+            ]
+          ]
+        },
+        {
+          "node": "Bookmark",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -72
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              3
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "EyeL",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "EyeR",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              102
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              207
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.18
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              147
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              207
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.18
+            ]
+          ]
+        },
+        {
+          "node": "Shadow",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    "QueuedReduced": {
+      "duration": 1,
+      "loop": false,
+      "tracks": [
+        {
+          "node": "SignalIdle",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalThinking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWorking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalQueued",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingProvider",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingUser",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalDone",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalError",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalInterrupted",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              120
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              148
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              0.97
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.02
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0.24
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -16
+            ]
+          ]
+        },
+        {
+          "node": "Bookmark",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Bookmark",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -68
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -8
+            ]
+          ]
+        },
+        {
+          "node": "EyeL",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              0.75
+            ]
+          ]
+        },
+        {
+          "node": "EyeR",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              0.75
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              109
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              207
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              138
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              207
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Shadow",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    "WaitingProviderReduced": {
+      "duration": 1,
+      "loop": false,
+      "tracks": [
+        {
+          "node": "SignalIdle",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalThinking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWorking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalQueued",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingProvider",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingUser",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalDone",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalError",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalInterrupted",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              120
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              145
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.045
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.5
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -16
+            ]
+          ]
+        },
+        {
+          "node": "Bookmark",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.18
+            ]
+          ]
+        },
+        {
+          "node": "Bookmark",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -72
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              4
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -8
+            ]
+          ]
+        },
+        {
+          "node": "EyeL",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "EyeR",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0.65
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              102
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              207
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.12
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              147
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              207
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.12
+            ]
+          ]
+        },
+        {
+          "node": "Shadow",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    "WaitingUserReduced": {
+      "duration": 1,
+      "loop": false,
+      "tracks": [
+        {
+          "node": "SignalIdle",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalThinking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWorking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalQueued",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingProvider",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingUser",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "SignalDone",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalError",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalInterrupted",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              120
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              143
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.015
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.7
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -16
+            ]
+          ]
+        },
+        {
+          "node": "Bookmark",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Bookmark",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -78
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -8
+            ]
+          ]
+        },
+        {
+          "node": "EyeL",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "EyeR",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1.2
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              102
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              207
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.12
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              147
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              207
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.12
+            ]
+          ]
+        },
+        {
+          "node": "Shadow",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    "DoneReduced": {
+      "duration": 1,
+      "loop": false,
+      "tracks": [
+        {
+          "node": "SignalIdle",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalThinking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWorking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalQueued",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingProvider",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingUser",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalDone",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "SignalError",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalInterrupted",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              120
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              142
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.8
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -16
+            ]
+          ]
+        },
+        {
+          "node": "Bookmark",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.08
+            ]
+          ]
+        },
+        {
+          "node": "Bookmark",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -75
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -8
+            ]
+          ]
+        },
+        {
+          "node": "EyeL",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              0.4
+            ]
+          ]
+        },
+        {
+          "node": "EyeR",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              0.4
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1.25
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              99
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              207
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.12
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              150
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              207
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.12
+            ]
+          ]
+        },
+        {
+          "node": "Shadow",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    "ErrorReduced": {
+      "duration": 1,
+      "loop": false,
+      "tracks": [
+        {
+          "node": "SignalIdle",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalThinking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWorking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalQueued",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingProvider",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingUser",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalDone",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalError",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "SignalInterrupted",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              120
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              149
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.09
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.48
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0.45
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -16
+            ]
+          ]
+        },
+        {
+          "node": "Bookmark",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.35
+            ]
+          ]
+        },
+        {
+          "node": "Bookmark",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -65
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              3
+            ]
+          ]
+        },
+        {
+          "node": "EyeL",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "EyeR",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0.55
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.18
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              102
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              207
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.03
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              147
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              207
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.03
+            ]
+          ]
+        },
+        {
+          "node": "Shadow",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    "InterruptedReduced": {
+      "duration": 1,
+      "loop": false,
+      "tracks": [
+        {
+          "node": "SignalIdle",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalThinking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWorking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalQueued",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingProvider",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingUser",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalDone",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalError",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalInterrupted",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              120
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              147
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Book",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.12
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0.55
+            ]
+          ]
+        },
+        {
+          "node": "PageWing",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -16
+            ]
+          ]
+        },
+        {
+          "node": "Bookmark",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Bookmark",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -72
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -8
+            ]
+          ]
+        },
+        {
+          "node": "EyeL",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              0.65
+            ]
+          ]
+        },
+        {
+          "node": "EyeR",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              0.65
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0.8
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              102
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              207
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              147
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              207
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Shadow",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -318,4 +318,346 @@ class BotMascotSceneCompilerTest {
         assertArrayEquals(BotMascotSceneCompiler.compile(fixture()).bytes, BotMascotSceneCompiler.compile(changed).bytes)
         assertTrue(BotMascotSceneCompiler.compile(fixture().replaceFirst("\"x\": 0", "\"x\": -0.0")).bytes.isNotEmpty())
     }
+
+    // Synthetic contract probe, not a shipped design or a production appearance template.
+    private fun productScene(trackCount: Int = 1): JSONObject {
+        val nodes = JSONArray()
+        repeat(trackCount) { nodes.put(JSONObject().put("kind", "group").put("name", "Probe$it")) }
+        val animations = JSONObject()
+        BotMascotSceneCompiler.productModeNames.forEachIndexed { mode, name ->
+            for (reduced in listOf(false, true)) {
+                val tracks = JSONArray()
+                repeat(trackCount) { target ->
+                    tracks.put(JSONObject().put("node", "Probe$target").put("property", "x")
+                        .put("keys", if (reduced) keys(0 to mode) else keys(0 to mode, 1 to mode + 1, 2 to mode)))
+                }
+                animations.put(name + if (reduced) "Reduced" else "", JSONObject().put("duration", 2)
+                    .put("loop", !reduced).put("tracks", tracks))
+            }
+        }
+        return JSONObject().put("contract", "bot-mascot-v1").put("name", "Synthetic contract probe")
+            .put("nodes", nodes).put("animations", animations)
+    }
+
+    private fun rejectsProduct(label: String, change: (JSONObject) -> Unit) {
+        val failure = runCatching { BotMascotSceneCompiler.compileProduct(productScene().also(change).toString()) }.exceptionOrNull()
+        assertTrue("$label: expected IllegalArgumentException, got $failure", failure is IllegalArgumentException)
+    }
+
+    private fun exportDirectory(): File = File(System.getProperty("jarvys.mascot.outputDir")
+        ?: System.getenv("JARVYS_MASCOT_OUTPUT_DIR") ?: "build/test-results/bot-mascot-scene-compiler")
+        .apply { assertTrue(isDirectory || mkdirs()) }
+
+    @Test fun authoredProductFixturesExportDeterministicBytesForIndependentRuntime() {
+        val expected = linkedMapOf(
+            "nimbo" to BotMascotSceneCompiler.Complexity(59, 44, 3, 576, 621, 1978),
+            "folio" to BotMascotSceneCompiler.Complexity(60, 45, 4, 558, 589, 1932),
+        )
+        val results = JSONArray()
+        val output = exportDirectory()
+        expected.forEach { (name, counts) ->
+            val source = fixture(name)
+            val compiled = BotMascotSceneCompiler.compileProduct(source)
+            assertEquals("bot-mascot-v1", compiled.validation.contract)
+            assertEquals(counts, compiled.validation.complexity)
+            assertEquals(source.toByteArray(StandardCharsets.UTF_8).size, compiled.validation.sourceBytes)
+            assertArrayEquals(compiled.bytes, BotMascotSceneCompiler.compileProduct(source).bytes)
+            assertArrayEquals(compiled.bytes, BotMascotSceneCompiler.compileProduct(source.toByteArray(StandardCharsets.UTF_8)).bytes)
+            assertEquals(compiled.validation, BotMascotSceneCompiler.validateProduct(source))
+            assertTrue(compiled.bytes.size <= BotMascotSceneCompiler.MAX_OUTPUT_BYTES)
+            val decoded = decodeBinary(compiled.bytes)
+            assertEquals(counts.binaryObjectCount, decoded.records.size)
+            val modes = BotMascotSceneCompiler.productModeNames
+            assertEquals(modes + modes.map { it + "Reduced" }, decoded.records.filter { it.type == 31 }.map { it.text(55) })
+            assertEquals(18, decoded.records.count { it.type == 61 })
+            assertEquals(1, decoded.records.count { it.type == 53 })
+            assertEquals(1, decoded.records.count { it.type == 435 })
+            File(output, "$name.riv").writeBytes(compiled.bytes)
+            results.put(JSONObject().put("name", name).put("contract", compiled.validation.contract)
+                .put("sourceBytes", compiled.validation.sourceBytes).put("bytes", compiled.bytes.size)
+                .put("sha256", compiled.sha256).put("nodeCount", counts.nodeCount)
+                .put("trackCount", counts.trackCount).put("keyframeCount", counts.keyframeCount)
+                .put("binaryObjectCount", counts.binaryObjectCount))
+        }
+        assertFalse(File(output, "nimbo.riv").readBytes().contentEquals(File(output, "folio.riv").readBytes()))
+        File(output, "kotlin-product-results.json").writeText(JSONObject()
+            .put("scope", "Deterministic Kotlin serialization and structure only; independent runtime and Android-device validation are separate")
+            .put("format", "7.4").put("mascots", results).toString(2) + "\n")
+    }
+
+    @Test fun metadataStringLimitIsExplicitBoundedAndDoesNotWidenSceneDefaults() {
+        fun source(length: Int) = JSONObject().put("visualDescription", "é".repeat(length)).toString().toByteArray(StandardCharsets.UTF_8)
+        assertEquals(1200, BotMascotSceneCompiler.parseBoundedJsonObject(source(1200), 1200).getString("visualDescription").length)
+        assertEquals(256, BotMascotSceneCompiler.parseBoundedJsonObject(source(256)).getString("visualDescription").length)
+        assertTrue(runCatching { BotMascotSceneCompiler.parseBoundedJsonObject(source(257)) }.exceptionOrNull() is IllegalArgumentException)
+        assertTrue(runCatching { BotMascotSceneCompiler.parseBoundedJsonObject(source(1201), 1200) }.exceptionOrNull() is IllegalArgumentException)
+        for (limit in listOf(-1, 0, 1201, Int.MAX_VALUE)) {
+            assertTrue(runCatching { BotMascotSceneCompiler.parseBoundedJsonObject(source(1), limit) }.exceptionOrNull() is IllegalArgumentException)
+        }
+        rejectsProduct("metadata override never widens product scenes") { it.put("visualDescription", "x".repeat(1200)) }
+    }
+
+    @Test fun sharedStrictObjectParserAllowsStoreSchemasWithoutRelaxingSyntax() {
+        val source = "{\"schema\":1,\"hash\":\"abcd\",\"label\":\"A 'quoted' [label]\",\"details\":{\"enabled\":true}}"
+        val parsed = BotMascotSceneCompiler.parseBoundedJsonObject(source.toByteArray(StandardCharsets.UTF_8))
+        assertEquals(1L, parsed.getLong("schema"))
+        assertEquals("A 'quoted' [label]", parsed.getString("label"))
+        assertTrue(parsed.getJSONObject("details").getBoolean("enabled"))
+        assertEquals(18, BotMascotSceneCompiler.parseBoundedJsonObject(fixture("nimbo").toByteArray()).getJSONObject("animations").length())
+        fun reject(input: String) {
+            assertTrue(runCatching { BotMascotSceneCompiler.parseBoundedJsonObject(input.toByteArray(StandardCharsets.UTF_8)) }
+                .exceptionOrNull() is IllegalArgumentException)
+        }
+        reject("{'schema':1}")
+        reject("{\"schema\":/* comment */1}")
+        reject("{\"schema\":1,// comment\n\"hash\":\"abcd\"}")
+        reject("{\"schema\":1,\"schema\":2}")
+        reject("{\"schema\":1} trailing")
+        reject("[]")
+        reject("{\"label\":\"'\",\"payload\":" + "[".repeat(100) + "0" + "]".repeat(100) + "}")
+        reject("{\"label\":\"escaped \\\" [\",\"payload\":" + "[".repeat(100) + "0" + "]".repeat(100) + "}")
+        reject("""{"label":'double quote "',"payload":""" + "[".repeat(100) + "0" + "]".repeat(100) + "}")
+        reject("{" + (0 until 19).joinToString(",") { "\"k$it\":0" } + "}")
+        assertTrue(runCatching { BotMascotSceneCompiler.parseBoundedJsonObject(byteArrayOf(0xff.toByte())) }.exceptionOrNull() is IllegalArgumentException)
+        assertTrue(runCatching { BotMascotSceneCompiler.parseBoundedJsonObject(ByteArray(BotMascotSceneCompiler.MAX_SOURCE_BYTES + 1)) }
+            .exceptionOrNull() is IllegalArgumentException)
+    }
+
+    @Test fun modernThreeStateBytesMatchIndependentPublicFormatProbe() {
+        val expected = mapOf(
+            "miga" to (1489 to "c2d95a65a9cb92d5334d91b4892826949da48e3138c28d9d3074733692e15a90"),
+            "tallo" to (1344 to "fb0307dfa2da512ee4400ce034fe7828c27246acf0667322b8a07bb073cf5aca"),
+        )
+        expected.forEach { (name, golden) ->
+            val result = BotMascotSceneCompiler.compileViewModelProof(fixture(name))
+            assertEquals(golden.first, result.bytes.size)
+            assertEquals(golden.second, result.sha256)
+            assertNull(result.validation.contract)
+            assertArrayEquals(result.bytes, BotMascotSceneCompiler.compileViewModelProof(fixture(name).toByteArray()).bytes)
+            assertEquals(if (name == "miga") 146 else 126, result.validation.complexity.binaryObjectCount)
+            File(exportDirectory(), "$name-viewmodel.riv").writeBytes(result.bytes)
+        }
+    }
+
+    @Test fun productRequiresExplicitExactVersionAndIsSeparateFromProof() {
+        rejectsProduct("missing contract") { it.remove("contract") }
+        rejectsProduct("unknown contract") { it.put("contract", "bot-mascot-v2") }
+        rejectsProduct("contract type") { it.put("contract", 1) }
+        rejectsProduct("extra root version") { it.put("version", 1) }
+        rejects(productScene().toString(), "proof rejects product source")
+        assertTrue(runCatching { BotMascotSceneCompiler.compileProduct(fixture()) }.exceptionOrNull() is IllegalArgumentException)
+        val source = productScene().toString()
+        val result = BotMascotSceneCompiler.compileProduct(source)
+        assertEquals("bot-mascot-v1", result.validation.contract)
+        assertEquals(7, result.validation.formatMajor)
+        assertEquals(4, result.validation.formatMinor)
+        assertEquals(result.validation, BotMascotSceneCompiler.validateProduct(source))
+        assertEquals(result.validation, BotMascotSceneCompiler.validateProduct(source.toByteArray()))
+        assertArrayEquals(result.bytes, BotMascotSceneCompiler.compileProduct(source.toByteArray()).bytes)
+        assertArrayEquals(result.bytes, BotMascotSceneCompiler.compileProduct(source).bytes)
+        assertEquals(321, result.validation.complexity.binaryObjectCount)
+        File(exportDirectory(), "contract-probe.riv").writeBytes(result.bytes)
+        File(exportDirectory(), "contract-probe.json").writeText(source)
+    }
+
+    @Test fun productRequiresExactlyAllEighteenTimelinesAndCompleteResets() {
+        for (name in BotMascotSceneCompiler.productModeNames) {
+            rejectsProduct("missing normal state") { it.getJSONObject("animations").remove(name) }
+            rejectsProduct("missing Reduced variant") { it.getJSONObject("animations").remove(name + "Reduced") }
+        }
+        rejectsProduct("unknown state") { it.getJSONObject("animations").put("Active", animation(it)) }
+        rejectsProduct("case-sensitive state") { it.getJSONObject("animations").put("thinking", it.getJSONObject("animations").remove("Thinking")) }
+        rejectsProduct("incomplete reset") { track(it, "Thinking").put("property", "y") }
+        rejectsProduct("no frame zero") { track(it, "Done").put("keys", keys(1 to 1)) }
+        for (name in BotMascotSceneCompiler.productModeNames) {
+            rejectsProduct("Reduced must not loop") { animation(it, name + "Reduced").put("loop", true) }
+            rejectsProduct("Reduced must have one key") { track(it, name + "Reduced").put("keys", keys(0 to 1, 1 to 1)) }
+            rejectsProduct("Reduced requires frame zero") { track(it, name + "Reduced").put("keys", keys(1 to 1)) }
+        }
+    }
+
+    @Test fun eachNormalProductStateRequiresMotionAfterFloat32Serialization() {
+        for (name in BotMascotSceneCompiler.productModeNames) {
+            rejectsProduct("all-static normal state") { track(it, name).put("keys", keys(0 to 1, 1 to 1, 2 to 1)) }
+            rejectsProduct("motion lost in float32 rounding") { track(it, name).put("keys", keys(0 to 1.0, 1 to 1.00000001, 2 to 1.0)) }
+            rejectsProduct("signed zero is not motion") { track(it, name).put("keys", keys(0 to 0.0, 1 to -0.0, 2 to 0.0)) }
+        }
+        // A state may retain explicit static reset tracks as long as one track moves.
+        val mixed = productScene(2).apply {
+            BotMascotSceneCompiler.productModeNames.forEach { name ->
+                track(this, name, 1).put("keys", keys(0 to 0))
+            }
+        }
+        assertTrue(BotMascotSceneCompiler.compileProduct(mixed.toString()).bytes.isNotEmpty())
+        // The historical proof remains permissive; only the versioned product contract changes.
+        val legacyStatic = scene().apply {
+            for (name in listOf("Idle", "Active")) {
+                val tracks = animation(this, name).getJSONArray("tracks")
+                repeat(tracks.length()) { index ->
+                    val value = tracks.getJSONObject(index)
+                    value.put("keys", JSONArray().put(value.getJSONArray("keys").getJSONArray(0)))
+                }
+            }
+        }.toString()
+        assertTrue(BotMascotSceneCompiler.compile(legacyStatic).bytes.isNotEmpty())
+        assertTrue(BotMascotSceneCompiler.compileViewModelProof(legacyStatic).bytes.isNotEmpty())
+    }
+
+    @Test fun productAggregateBudgetsRetainSixtyFourTracksPerState() {
+        assertEquals(192, BotMascotSceneCompiler.MAX_TOTAL_TRACKS)
+        assertEquals(12288, BotMascotSceneCompiler.MAX_TOTAL_KEYFRAMES)
+        assertEquals(1152, BotMascotSceneCompiler.MAX_PRODUCT_TOTAL_TRACKS)
+        assertEquals(73728, BotMascotSceneCompiler.MAX_PRODUCT_TOTAL_KEYFRAMES)
+        val source = productScene(64).toString()
+        assertTrue(source.toByteArray().size <= BotMascotSceneCompiler.MAX_SOURCE_BYTES)
+        val result = BotMascotSceneCompiler.compileProduct(source)
+        assertEquals(1152, result.validation.complexity.trackCount)
+        assertEquals(2304, result.validation.complexity.keyframeCount)
+        assertTrue(result.bytes.size <= BotMascotSceneCompiler.MAX_OUTPUT_BYTES)
+        assertTrue(runCatching { BotMascotSceneCompiler.compileProduct(productScene(65).toString()) }.exceptionOrNull() is IllegalArgumentException)
+        assertTrue(runCatching { BotMascotSceneCompiler.compileProduct(" ".repeat(BotMascotSceneCompiler.MAX_SOURCE_BYTES + 1)) }.exceptionOrNull() is IllegalArgumentException)
+        rejectsProduct("preserved node bound") { it.put("nodes", JSONArray().apply {
+            repeat(97) { put(JSONObject().put("kind", "group").put("name", "N$it")) }
+        }) }
+        rejectsProduct("preserved per-track key bound") { track(it).put("keys", JSONArray().apply {
+            repeat(65) { put(JSONArray().put(it).put(0)) }
+        }) }
+    }
+
+    @Test fun productHasFixedFileViewModelDefaultAssociationAndNoLegacyInputs() {
+        val result = BotMascotSceneCompiler.compileProduct(productScene().toString())
+        val decoded = decodeBinary(result.bytes)
+        val records = decoded.records
+        assertEquals(listOf(23, 435, 431, 448, 437, 442, 449, 1), records.take(8).map { it.type })
+        assertEquals("MascotState", records[1].text(557))
+        assertEquals("mode", records[2].text(557))
+        assertEquals("reducedMotion", records[3].text(557))
+        assertEquals("Default", records[4].text(4))
+        assertEquals(0L, records[4].fields[566])
+        assertEquals(0L, records[5].fields[554]); assertEquals(0f, records[5].fields[575])
+        assertEquals(1L, records[6].fields[554]); assertEquals(0L, records[6].fields[593])
+        assertEquals("Mascot", records[7].text(4))
+        assertEquals(0L, records[7].fields[583]); assertEquals(0L, records[7].fields[236])
+        assertEquals(256f, records[7].fields[7]); assertEquals(256f, records[7].fields[8])
+        assertTrue(records.subList(1, 7).all { 5 !in it.fields })
+        assertEquals("MascotController", records.single { it.type == 53 }.text(55))
+        assertTrue(records.none { it.type in setOf(56, 59, 70, 71) })
+        assertEquals(result.validation.complexity.binaryObjectCount, records.size)
+        assertEquals(1, decoded.types[588])
+        assertEquals(1, decoded.types[557]); assertEquals(2, decoded.types[575])
+        assertEquals(0, decoded.types[593]); assertEquals(0, decoded.types[647]); assertEquals(2, decoded.types[652])
+    }
+
+    @Test fun productControllerBindsFixedOrderedConditionsToEveryModeAndReducedVariant() {
+        val records = decodeBinary(BotMascotSceneCompiler.compileProduct(productScene().toString()).bytes).records
+        val modes = listOf("Idle", "Thinking", "Working", "Queued", "WaitingProvider", "WaitingUser", "Done", "Error", "Interrupted")
+        assertEquals(modes, BotMascotSceneCompiler.productModeNames)
+        assertEquals(modes + modes.map { it + "Reduced" }, records.filter { it.type == 31 }.map { it.text(55) })
+        assertEquals((0L..17L).toList(), records.filter { it.type == 61 }.map { it.fields[149] })
+        assertEquals(19, records.count { it.type == 65 }) // One entry plus 18 branches.
+        val any = records.indexOfFirst { it.type == 62 }
+        var cursor = any + 1
+        for (reduced in listOf(true, false)) repeat(9) { mode ->
+            assertEquals(65, records[cursor].type)
+            assertEquals((3 + mode + if (reduced) 9 else 0).toLong(), records[cursor++].fields[151])
+            val number = records.subList(cursor, cursor + 5); cursor += 5
+            assertEquals(listOf(482, 473, 447, 479, 484), number.map { it.type })
+            assertEquals(0L, number[0].fields[650]); assertEquals(mode.toFloat(), number[4].fields[652])
+            assertEquals(636L, number[2].fields[586]); assertEquals(0L, number[2].fields[587])
+            assertArrayEquals(byteArrayOf(0, 0), number[2].fields[588] as ByteArray)
+            val boolean = records.subList(cursor, cursor + 5); cursor += 5
+            assertEquals(listOf(482, 472, 447, 479, 481), boolean.map { it.type })
+            assertEquals(0L, boolean[0].fields[650]); assertEquals(if (reduced) 1L else 0L, boolean[4].fields[647])
+            assertEquals(634L, boolean[2].fields[586]); assertEquals(0L, boolean[2].fields[587])
+            assertArrayEquals(byteArrayOf(0, 1), boolean[2].fields[588] as ByteArray)
+        }
+        assertEquals(64, records[cursor].type)
+        assertEquals(36, records.count { it.type == 482 })
+        assertTrue(records.filter { it.type == 447 }.all { it.fields.keys == setOf(586, 587, 588) })
+    }
+
+    @Test fun explicitBytesPrimitiveKeepsArbitraryBytesAndUsesTocKindOne() {
+        val payload = byteArrayOf(0, 0xff.toByte(), 0x80.toByte(), 1)
+        val binary = BotMascotSceneCompiler.Binary()
+        binary.obj(447, BotMascotSceneCompiler.Property(588, BotMascotSceneCompiler.Primitive.BYTES, payload))
+        val result = decodeBinary(binary.finish())
+        assertEquals(1, result.types[588])
+        assertArrayEquals(payload, result.records.single().fields[588] as ByteArray)
+        for (size in listOf(0, BotMascotSceneCompiler.MAX_RAW_PROPERTY_BYTES)) {
+            val bounded = BotMascotSceneCompiler.Binary()
+            bounded.obj(447, BotMascotSceneCompiler.Property(588, BotMascotSceneCompiler.Primitive.BYTES, ByteArray(size)))
+            assertEquals(size, (decodeBinary(bounded.finish()).records.single().fields[588] as ByteArray).size)
+        }
+        for (value in listOf("00 01", ByteArray(BotMascotSceneCompiler.MAX_RAW_PROPERTY_BYTES + 1))) {
+            assertTrue(runCatching {
+                BotMascotSceneCompiler.Binary().obj(447, BotMascotSceneCompiler.Property(588, BotMascotSceneCompiler.Primitive.BYTES, value))
+            }.exceptionOrNull() is IllegalArgumentException)
+        }
+    }
+
+    @Test fun propertyKindsCannotConflictEvenWhenSharingWireKind() {
+        for (kind in listOf(BotMascotSceneCompiler.Primitive.UINT, BotMascotSceneCompiler.Primitive.STRING)) {
+            val binary = BotMascotSceneCompiler.Binary()
+            binary.obj(447, BotMascotSceneCompiler.Property(588, BotMascotSceneCompiler.Primitive.BYTES, byteArrayOf(0, 1)))
+            assertTrue(runCatching {
+                binary.obj(447, BotMascotSceneCompiler.Property(588, kind, if (kind == BotMascotSceneCompiler.Primitive.UINT) 0L else "path"))
+            }.exceptionOrNull() is IllegalArgumentException)
+        }
+        assertTrue(runCatching {
+            BotMascotSceneCompiler.Binary().obj(449, BotMascotSceneCompiler.Property(593, BotMascotSceneCompiler.Primitive.BOOLEAN, 1L))
+        }.exceptionOrNull() is IllegalArgumentException)
+    }
+
+    private data class DecodedRecord(val type: Int, val fields: Map<Int, Any>) {
+        fun text(key: Int) = String(fields.getValue(key) as ByteArray, StandardCharsets.UTF_8)
+    }
+    private data class DecodedBinary(val types: Map<Int, Int>, val records: List<DecodedRecord>)
+
+    /** Independent test decoder for the writer's four public wire types, not an app input API. */
+    private fun decodeBinary(bytes: ByteArray): DecodedBinary {
+        var cursor = 0
+        fun byte(): Int { check(cursor < bytes.size); return bytes[cursor++].toInt() and 255 }
+        fun uint(): Long {
+            var result = 0L
+            var shift = 0
+            while (true) {
+                val value = byte()
+                result = result or ((value and 127).toLong() shl shift)
+                if (value < 128) return result
+                shift += 7; check(shift <= 28)
+            }
+        }
+        fun word(): Long = (0 until 4).fold(0L) { result, index -> result or (byte().toLong() shl (8 * index)) }
+        assertEquals("RIVE", String(bytes.copyOfRange(0, 4), StandardCharsets.US_ASCII)); cursor = 4
+        assertEquals(7L, uint()); assertEquals(4L, uint()); assertEquals(0L, uint())
+        val keys = mutableListOf<Int>()
+        while (true) { val key = uint().toInt(); if (key == 0) break; keys.add(key) }
+        assertEquals(keys.sorted(), keys)
+        val types = linkedMapOf<Int, Int>()
+        keys.chunked(4).forEach { group ->
+            val packed = word()
+            assertEquals(0L, packed ushr 8)
+            group.forEachIndexed { index, key -> types[key] = ((packed ushr (2 * index)) and 3).toInt() }
+        }
+        val records = mutableListOf<DecodedRecord>()
+        while (cursor < bytes.size) {
+            val type = uint().toInt()
+            val fields = linkedMapOf<Int, Any>()
+            while (true) {
+                val key = uint().toInt()
+                if (key == 0) break
+                check(key !in fields)
+                fields[key] = when (types.getValue(key)) {
+                    0 -> uint()
+                    1 -> { val size = uint().toInt(); check(size >= 0 && size <= bytes.size - cursor)
+                        bytes.copyOfRange(cursor, cursor + size).also { cursor += size } }
+                    2 -> java.lang.Float.intBitsToFloat(word().toInt())
+                    3 -> word()
+                    else -> error("Unknown wire type")
+                }
+            }
+            records.add(DecodedRecord(type, fields))
+        }
+        return DecodedBinary(types, records)
+    }
 }

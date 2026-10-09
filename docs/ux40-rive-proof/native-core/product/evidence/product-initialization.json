@@ -1,0 +1,110 @@
+{
+  "scope": "Host-only first applied frame; not Android",
+  "results": [
+    {
+      "id": "nimbo",
+      "freshDefaultIdle": true,
+      "reducedInitialization": [
+        {
+          "state": "IdleReduced",
+          "firstFrameApplied": true,
+          "staticFrames": 180
+        },
+        {
+          "state": "ThinkingReduced",
+          "firstFrameApplied": true,
+          "staticFrames": 180
+        },
+        {
+          "state": "WorkingReduced",
+          "firstFrameApplied": true,
+          "staticFrames": 180
+        },
+        {
+          "state": "QueuedReduced",
+          "firstFrameApplied": true,
+          "staticFrames": 180
+        },
+        {
+          "state": "WaitingProviderReduced",
+          "firstFrameApplied": true,
+          "staticFrames": 180
+        },
+        {
+          "state": "WaitingUserReduced",
+          "firstFrameApplied": true,
+          "staticFrames": 180
+        },
+        {
+          "state": "DoneReduced",
+          "firstFrameApplied": true,
+          "staticFrames": 180
+        },
+        {
+          "state": "ErrorReduced",
+          "firstFrameApplied": true,
+          "staticFrames": 180
+        },
+        {
+          "state": "InterruptedReduced",
+          "firstFrameApplied": true,
+          "staticFrames": 180
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "folio",
+      "freshDefaultIdle": true,
+      "reducedInitialization": [
+        {
+          "state": "IdleReduced",
+          "firstFrameApplied": true,
+          "staticFrames": 180
+        },
+        {
+          "state": "ThinkingReduced",
+          "firstFrameApplied": true,
+          "staticFrames": 180
+        },
+        {
+          "state": "WorkingReduced",
+          "firstFrameApplied": true,
+          "staticFrames": 180
+        },
+        {
+          "state": "QueuedReduced",
+          "firstFrameApplied": true,
+          "staticFrames": 180
+        },
+        {
+          "state": "WaitingProviderReduced",
+          "firstFrameApplied": true,
+          "staticFrames": 180
+        },
+        {
+          "state": "WaitingUserReduced",
+          "firstFrameApplied": true,
+          "staticFrames": 180
+        },
+        {
+          "state": "DoneReduced",
+          "firstFrameApplied": true,
+          "staticFrames": 180
+        },
+        {
+          "state": "ErrorReduced",
+          "firstFrameApplied": true,
+          "staticFrames": 180
+        },
+        {
+          "state": "InterruptedReduced",
+          "firstFrameApplied": true,
+          "staticFrames": 180
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "passed": true
+}

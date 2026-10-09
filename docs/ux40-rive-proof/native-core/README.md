@@ -1,5 +1,7 @@
 # UX40: núcleo de escritura local en Kotlin
 
+Nota de evolución: este documento conserva la evidencia del primer checkpoint de tres estados. La ampliación posterior de nueve modos, ViewModels y herramientas locales se documenta en [product/README.md](product/README.md) y `app/BOT_MASCOTS.md`; Android sigue pendiente.
+
 Checkpoint del 9 de octubre de 2026. El serializador ya existe en el código Android como Kotlin puro, pero **todavía no está conectado a herramientas, almacenamiento ni UI**. No se añade una dependencia Rive ni se activa una mascota. Este resultado no cierra UX40 ni acredita ejecución en Android.
 
 ## Qué se ha comprobado

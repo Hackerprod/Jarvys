@@ -1,0 +1,6615 @@
+{
+  "contract": "bot-mascot-v1",
+  "name": "Nimbo",
+  "nodes": [
+    {
+      "kind": "group",
+      "name": "Cloud",
+      "parent": "Artboard",
+      "x": 126,
+      "y": 119
+    },
+    {
+      "kind": "group",
+      "name": "Gaze",
+      "parent": "Cloud",
+      "x": 0,
+      "y": 3
+    },
+    {
+      "kind": "ellipse",
+      "name": "EyeL",
+      "parent": "Gaze",
+      "x": -16,
+      "y": 0,
+      "width": 7,
+      "height": 12,
+      "color": 4280499299
+    },
+    {
+      "kind": "ellipse",
+      "name": "EyeR",
+      "parent": "Gaze",
+      "x": 16,
+      "y": 0,
+      "width": 7,
+      "height": 12,
+      "color": 4280499299
+    },
+    {
+      "kind": "rectangle",
+      "name": "Mouth",
+      "parent": "Cloud",
+      "x": 0,
+      "y": 22,
+      "width": 15,
+      "height": 4,
+      "color": 4280499299,
+      "radius": 2
+    },
+    {
+      "kind": "ellipse",
+      "name": "BlushL",
+      "parent": "Cloud",
+      "x": -31,
+      "y": 16,
+      "width": 10,
+      "height": 5,
+      "color": 4292386977
+    },
+    {
+      "kind": "ellipse",
+      "name": "BlushR",
+      "parent": "Cloud",
+      "x": 31,
+      "y": 16,
+      "width": 10,
+      "height": 5,
+      "color": 4292386977
+    },
+    {
+      "kind": "ellipse",
+      "name": "CloudBelly",
+      "parent": "Cloud",
+      "x": 0,
+      "y": 15,
+      "width": 114,
+      "height": 58,
+      "color": 4294244863
+    },
+    {
+      "kind": "ellipse",
+      "name": "CloudLobeLeft",
+      "parent": "Cloud",
+      "x": -32,
+      "y": -7,
+      "width": 54,
+      "height": 55,
+      "color": 4294244863
+    },
+    {
+      "kind": "ellipse",
+      "name": "CloudLobeCrown",
+      "parent": "Cloud",
+      "x": 0,
+      "y": -21,
+      "width": 63,
+      "height": 65,
+      "color": 4294244863
+    },
+    {
+      "kind": "ellipse",
+      "name": "CloudLobeRight",
+      "parent": "Cloud",
+      "x": 38,
+      "y": -1,
+      "width": 47,
+      "height": 44,
+      "color": 4294244863
+    },
+    {
+      "kind": "ellipse",
+      "name": "CloudRimBelly",
+      "parent": "Cloud",
+      "x": 0,
+      "y": 16,
+      "width": 121,
+      "height": 64,
+      "color": 4289316069
+    },
+    {
+      "kind": "ellipse",
+      "name": "CloudRimLeft",
+      "parent": "Cloud",
+      "x": -32,
+      "y": -6,
+      "width": 61,
+      "height": 61,
+      "color": 4289316069
+    },
+    {
+      "kind": "ellipse",
+      "name": "CloudRimCrown",
+      "parent": "Cloud",
+      "x": 0,
+      "y": -20,
+      "width": 70,
+      "height": 71,
+      "color": 4289316069
+    },
+    {
+      "kind": "ellipse",
+      "name": "CloudRimRight",
+      "parent": "Cloud",
+      "x": 38,
+      "y": 0,
+      "width": 54,
+      "height": 51,
+      "color": 4289316069
+    },
+    {
+      "kind": "group",
+      "name": "DewL",
+      "parent": "Artboard",
+      "x": 85,
+      "y": 188,
+      "rotation": -0.22
+    },
+    {
+      "kind": "ellipse",
+      "name": "DewLGleam",
+      "parent": "DewL",
+      "x": -2,
+      "y": -3,
+      "width": 3,
+      "height": 6,
+      "color": 4293260031
+    },
+    {
+      "kind": "ellipse",
+      "name": "DewLBody",
+      "parent": "DewL",
+      "x": 0,
+      "y": 0,
+      "width": 12,
+      "height": 17,
+      "color": 4285701836
+    },
+    {
+      "kind": "group",
+      "name": "DewC",
+      "parent": "Artboard",
+      "x": 126,
+      "y": 195,
+      "rotation": 0
+    },
+    {
+      "kind": "ellipse",
+      "name": "DewCGleam",
+      "parent": "DewC",
+      "x": -2,
+      "y": -3,
+      "width": 3,
+      "height": 6,
+      "color": 4293260031
+    },
+    {
+      "kind": "ellipse",
+      "name": "DewCBody",
+      "parent": "DewC",
+      "x": 0,
+      "y": 0,
+      "width": 12,
+      "height": 20,
+      "color": 4285701836
+    },
+    {
+      "kind": "group",
+      "name": "DewR",
+      "parent": "Artboard",
+      "x": 167,
+      "y": 188,
+      "rotation": 0.22
+    },
+    {
+      "kind": "ellipse",
+      "name": "DewRGleam",
+      "parent": "DewR",
+      "x": -2,
+      "y": -3,
+      "width": 3,
+      "height": 6,
+      "color": 4293260031
+    },
+    {
+      "kind": "ellipse",
+      "name": "DewRBody",
+      "parent": "DewR",
+      "x": 0,
+      "y": 0,
+      "width": 12,
+      "height": 17,
+      "color": 4285701836
+    },
+    {
+      "kind": "group",
+      "name": "Badge",
+      "parent": "Artboard",
+      "x": 190,
+      "y": 65
+    },
+    {
+      "kind": "group",
+      "name": "SignalIdle",
+      "parent": "Badge",
+      "scaleX": 1
+    },
+    {
+      "kind": "ellipse",
+      "name": "SignalRest",
+      "parent": "SignalIdle",
+      "x": 0,
+      "y": 0,
+      "width": 5,
+      "height": 5,
+      "color": 4280499299
+    },
+    {
+      "kind": "group",
+      "name": "SignalThinking",
+      "parent": "Badge",
+      "scaleX": 0
+    },
+    {
+      "kind": "ellipse",
+      "name": "Thought0",
+      "parent": "SignalThinking",
+      "x": -7,
+      "y": 3,
+      "width": 4,
+      "height": 4,
+      "color": 4280499299
+    },
+    {
+      "kind": "ellipse",
+      "name": "Thought1",
+      "parent": "SignalThinking",
+      "x": 0,
+      "y": 0,
+      "width": 4,
+      "height": 4,
+      "color": 4280499299
+    },
+    {
+      "kind": "ellipse",
+      "name": "Thought2",
+      "parent": "SignalThinking",
+      "x": 7,
+      "y": -3,
+      "width": 4,
+      "height": 4,
+      "color": 4280499299
+    },
+    {
+      "kind": "group",
+      "name": "SignalWorking",
+      "parent": "Badge",
+      "scaleX": 0
+    },
+    {
+      "kind": "rectangle",
+      "name": "WorkBar0",
+      "parent": "SignalWorking",
+      "x": -6,
+      "y": 3.5,
+      "width": 3,
+      "height": 7,
+      "color": 4280499299,
+      "radius": 1.5
+    },
+    {
+      "kind": "rectangle",
+      "name": "WorkBar1",
+      "parent": "SignalWorking",
+      "x": 0,
+      "y": -0.5,
+      "width": 3,
+      "height": 15,
+      "color": 4280499299,
+      "radius": 1.5
+    },
+    {
+      "kind": "rectangle",
+      "name": "WorkBar2",
+      "parent": "SignalWorking",
+      "x": 6,
+      "y": 1.5,
+      "width": 3,
+      "height": 11,
+      "color": 4280499299,
+      "radius": 1.5
+    },
+    {
+      "kind": "group",
+      "name": "SignalQueued",
+      "parent": "Badge",
+      "scaleX": 0
+    },
+    {
+      "kind": "rectangle",
+      "name": "QueueRow0",
+      "parent": "SignalQueued",
+      "x": 0,
+      "y": -6,
+      "width": 10,
+      "height": 3,
+      "color": 4280499299,
+      "radius": 1.5
+    },
+    {
+      "kind": "rectangle",
+      "name": "QueueRow1",
+      "parent": "SignalQueued",
+      "x": 0,
+      "y": 0,
+      "width": 15,
+      "height": 3,
+      "color": 4280499299,
+      "radius": 1.5
+    },
+    {
+      "kind": "rectangle",
+      "name": "QueueRow2",
+      "parent": "SignalQueued",
+      "x": 0,
+      "y": 6,
+      "width": 20,
+      "height": 3,
+      "color": 4280499299,
+      "radius": 1.5
+    },
+    {
+      "kind": "group",
+      "name": "SignalWaitingProvider",
+      "parent": "Badge",
+      "scaleX": 0
+    },
+    {
+      "kind": "rectangle",
+      "name": "LinkBridge",
+      "parent": "SignalWaitingProvider",
+      "x": 0,
+      "y": 0,
+      "width": 12,
+      "height": 3,
+      "color": 4280499299,
+      "radius": 1.5
+    },
+    {
+      "kind": "rectangle",
+      "name": "LinkNodeL",
+      "parent": "SignalWaitingProvider",
+      "x": -8,
+      "y": 0,
+      "width": 6,
+      "height": 10,
+      "color": 4280499299,
+      "radius": 2
+    },
+    {
+      "kind": "rectangle",
+      "name": "LinkNodeR",
+      "parent": "SignalWaitingProvider",
+      "x": 8,
+      "y": 0,
+      "width": 6,
+      "height": 10,
+      "color": 4280499299,
+      "radius": 2
+    },
+    {
+      "kind": "group",
+      "name": "SignalWaitingUser",
+      "parent": "Badge",
+      "scaleX": 0
+    },
+    {
+      "kind": "ellipse",
+      "name": "PromptDot",
+      "parent": "SignalWaitingUser",
+      "x": 1,
+      "y": -1,
+      "width": 4,
+      "height": 4,
+      "color": 4294966000
+    },
+    {
+      "kind": "rectangle",
+      "name": "PromptTail",
+      "parent": "SignalWaitingUser",
+      "x": -5,
+      "y": 7,
+      "width": 5,
+      "height": 8,
+      "color": 4280499299,
+      "radius": 1.5,
+      "rotation": 0.4
+    },
+    {
+      "kind": "rectangle",
+      "name": "PromptBubble",
+      "parent": "SignalWaitingUser",
+      "x": 0,
+      "y": -1,
+      "width": 20,
+      "height": 14,
+      "color": 4280499299,
+      "radius": 5
+    },
+    {
+      "kind": "group",
+      "name": "SignalDone",
+      "parent": "Badge",
+      "scaleX": 0
+    },
+    {
+      "kind": "rectangle",
+      "name": "CheckShort",
+      "parent": "SignalDone",
+      "x": -5,
+      "y": 3,
+      "width": 10,
+      "height": 4,
+      "color": 4280499299,
+      "radius": 2,
+      "rotation": 0.72
+    },
+    {
+      "kind": "rectangle",
+      "name": "CheckLong",
+      "parent": "SignalDone",
+      "x": 3,
+      "y": 0,
+      "width": 17,
+      "height": 4,
+      "color": 4280499299,
+      "radius": 2,
+      "rotation": -0.8
+    },
+    {
+      "kind": "group",
+      "name": "SignalError",
+      "parent": "Badge",
+      "scaleX": 0
+    },
+    {
+      "kind": "ellipse",
+      "name": "ErrorDot",
+      "parent": "SignalError",
+      "x": 0,
+      "y": 8,
+      "width": 4,
+      "height": 4,
+      "color": 4280499299
+    },
+    {
+      "kind": "rectangle",
+      "name": "ErrorStem",
+      "parent": "SignalError",
+      "x": 0,
+      "y": -3,
+      "width": 4,
+      "height": 13,
+      "color": 4280499299,
+      "radius": 2
+    },
+    {
+      "kind": "group",
+      "name": "SignalInterrupted",
+      "parent": "Badge",
+      "scaleX": 0
+    },
+    {
+      "kind": "rectangle",
+      "name": "PauseL",
+      "parent": "SignalInterrupted",
+      "x": -5,
+      "y": 0,
+      "width": 4,
+      "height": 16,
+      "color": 4280499299,
+      "radius": 2
+    },
+    {
+      "kind": "rectangle",
+      "name": "PauseR",
+      "parent": "SignalInterrupted",
+      "x": 5,
+      "y": 0,
+      "width": 4,
+      "height": 16,
+      "color": 4280499299,
+      "radius": 2
+    },
+    {
+      "kind": "ellipse",
+      "name": "BadgeFace",
+      "parent": "Badge",
+      "x": 0,
+      "y": 0,
+      "width": 31,
+      "height": 31,
+      "color": 4294966000
+    },
+    {
+      "kind": "ellipse",
+      "name": "BadgeRim",
+      "parent": "Badge",
+      "x": 0,
+      "y": 1,
+      "width": 35,
+      "height": 35,
+      "color": 4289316069
+    },
+    {
+      "kind": "ellipse",
+      "name": "Shadow",
+      "parent": "Artboard",
+      "x": 127,
+      "y": 222,
+      "width": 101,
+      "height": 9,
+      "color": 4292667120
+    }
+  ],
+  "animations": {
+    "Idle": {
+      "duration": 180,
+      "loop": true,
+      "tracks": [
+        {
+          "node": "SignalIdle",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "SignalThinking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWorking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalQueued",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingProvider",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingUser",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalDone",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalError",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalInterrupted",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              126
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              119
+            ],
+            [
+              90,
+              117
+            ],
+            [
+              180,
+              119
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ],
+            [
+              90,
+              1.02
+            ],
+            [
+              180,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              3
+            ]
+          ]
+        },
+        {
+          "node": "EyeL",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "EyeR",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              85
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              188
+            ],
+            [
+              90,
+              190
+            ],
+            [
+              180,
+              188
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.22
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              126
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              195
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              167
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              188
+            ],
+            [
+              90,
+              186
+            ],
+            [
+              180,
+              188
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.22
+            ]
+          ]
+        },
+        {
+          "node": "Badge",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Shadow",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    "Thinking": {
+      "duration": 160,
+      "loop": true,
+      "tracks": [
+        {
+          "node": "SignalIdle",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalThinking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "SignalWorking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalQueued",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingProvider",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingUser",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalDone",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalError",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalInterrupted",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              126
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              119
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.055
+            ],
+            [
+              80,
+              -0.025
+            ],
+            [
+              160,
+              -0.055
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              -4
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -2
+            ]
+          ]
+        },
+        {
+          "node": "EyeL",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "EyeR",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0.48
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              82
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              176
+            ],
+            [
+              80,
+              172
+            ],
+            [
+              160,
+              176
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.22
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              113
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              185
+            ],
+            [
+              80,
+              182
+            ],
+            [
+              160,
+              185
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              146
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              192
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.22
+            ]
+          ]
+        },
+        {
+          "node": "Badge",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Shadow",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    "Working": {
+      "duration": 108,
+      "loop": true,
+      "tracks": [
+        {
+          "node": "SignalIdle",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalThinking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWorking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "SignalQueued",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingProvider",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingUser",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalDone",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalError",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalInterrupted",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              126
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              117
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1.035
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              0.97
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              -3
+            ],
+            [
+              54,
+              3
+            ],
+            [
+              108,
+              -3
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              3
+            ]
+          ]
+        },
+        {
+          "node": "EyeL",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "EyeR",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0.75
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              85
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              187
+            ],
+            [
+              18,
+              179
+            ],
+            [
+              36,
+              187
+            ],
+            [
+              108,
+              187
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.22
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              126
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              187
+            ],
+            [
+              36,
+              187
+            ],
+            [
+              54,
+              179
+            ],
+            [
+              72,
+              187
+            ],
+            [
+              108,
+              187
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              167
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              187
+            ],
+            [
+              72,
+              187
+            ],
+            [
+              90,
+              179
+            ],
+            [
+              108,
+              187
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.22
+            ]
+          ]
+        },
+        {
+          "node": "Badge",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Shadow",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    "Queued": {
+      "duration": 210,
+      "loop": true,
+      "tracks": [
+        {
+          "node": "SignalIdle",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalThinking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWorking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalQueued",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingProvider",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingUser",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalDone",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalError",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalInterrupted",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              126
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              124
+            ],
+            [
+              105,
+              125.5
+            ],
+            [
+              210,
+              124
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              0.95
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              3
+            ]
+          ]
+        },
+        {
+          "node": "EyeL",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              0.7
+            ]
+          ]
+        },
+        {
+          "node": "EyeR",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              0.7
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0.65
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              105
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              190
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              126
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              190
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              147
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              190
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Badge",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Shadow",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    "WaitingProvider": {
+      "duration": 192,
+      "loop": true,
+      "tracks": [
+        {
+          "node": "SignalIdle",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalThinking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWorking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalQueued",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingProvider",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingUser",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalDone",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalError",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalInterrupted",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              126
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              119
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.06
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              5
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              3
+            ]
+          ]
+        },
+        {
+          "node": "EyeL",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "EyeR",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0.55
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              101
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              192
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.22
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              148
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              185
+            ],
+            [
+              96,
+              182
+            ],
+            [
+              192,
+              185
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              179
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              172
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.4
+            ],
+            [
+              96,
+              0.25
+            ],
+            [
+              192,
+              0.4
+            ]
+          ]
+        },
+        {
+          "node": "Badge",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Shadow",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    "WaitingUser": {
+      "duration": 180,
+      "loop": true,
+      "tracks": [
+        {
+          "node": "SignalIdle",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalThinking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWorking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalQueued",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingProvider",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingUser",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "SignalDone",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalError",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalInterrupted",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              126
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              116
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1.035
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              3
+            ]
+          ]
+        },
+        {
+          "node": "EyeL",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "EyeR",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1.25
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              77
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              164
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.65
+            ],
+            [
+              90,
+              -0.5
+            ],
+            [
+              180,
+              -0.65
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              126
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              191
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              167
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              187
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.22
+            ]
+          ]
+        },
+        {
+          "node": "Badge",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Shadow",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    "Done": {
+      "duration": 72,
+      "loop": false,
+      "tracks": [
+        {
+          "node": "SignalIdle",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalThinking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWorking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalQueued",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingProvider",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingUser",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalDone",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "SignalError",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalInterrupted",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              126
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              114
+            ],
+            [
+              24,
+              109
+            ],
+            [
+              48,
+              113
+            ],
+            [
+              72,
+              114
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1.04
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              3
+            ]
+          ]
+        },
+        {
+          "node": "EyeL",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              0.42
+            ]
+          ]
+        },
+        {
+          "node": "EyeR",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              0.42
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1.25
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              79
+            ],
+            [
+              36,
+              75
+            ],
+            [
+              72,
+              79
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              178
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.55
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              126
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              187
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              173
+            ],
+            [
+              36,
+              177
+            ],
+            [
+              72,
+              173
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              178
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.55
+            ]
+          ]
+        },
+        {
+          "node": "Badge",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Shadow",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    "Error": {
+      "duration": 90,
+      "loop": false,
+      "tracks": [
+        {
+          "node": "SignalIdle",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalThinking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWorking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalQueued",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingProvider",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingUser",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalDone",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalError",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "SignalInterrupted",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              126
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              123
+            ],
+            [
+              45,
+              128
+            ],
+            [
+              90,
+              127
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.07
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              0.94
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              3
+            ]
+          ]
+        },
+        {
+          "node": "EyeL",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "EyeR",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0.55
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.22
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              101
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              195
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.1
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              127
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              201
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              153
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              195
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.22
+            ]
+          ]
+        },
+        {
+          "node": "Badge",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Shadow",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    "Interrupted": {
+      "duration": 48,
+      "loop": false,
+      "tracks": [
+        {
+          "node": "SignalIdle",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalThinking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWorking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalQueued",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingProvider",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingUser",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalDone",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalError",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalInterrupted",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              126
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              121
+            ],
+            [
+              24,
+              125
+            ],
+            [
+              48,
+              124
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0.97
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              0.96
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              3
+            ]
+          ]
+        },
+        {
+          "node": "EyeL",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              0.55
+            ]
+          ]
+        },
+        {
+          "node": "EyeR",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              0.55
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0.8
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              104
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              188
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              126
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              198
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              148
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              188
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Badge",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Shadow",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    "IdleReduced": {
+      "duration": 1,
+      "loop": false,
+      "tracks": [
+        {
+          "node": "SignalIdle",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "SignalThinking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWorking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalQueued",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingProvider",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingUser",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalDone",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalError",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalInterrupted",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              126
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              119
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              3
+            ]
+          ]
+        },
+        {
+          "node": "EyeL",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "EyeR",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              85
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              188
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.22
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              126
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              195
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              167
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              188
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.22
+            ]
+          ]
+        },
+        {
+          "node": "Badge",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Shadow",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    "ThinkingReduced": {
+      "duration": 1,
+      "loop": false,
+      "tracks": [
+        {
+          "node": "SignalIdle",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalThinking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "SignalWorking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalQueued",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingProvider",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingUser",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalDone",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalError",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalInterrupted",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              126
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              119
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.055
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              -4
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              -2
+            ]
+          ]
+        },
+        {
+          "node": "EyeL",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "EyeR",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0.48
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              82
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              176
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.22
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              113
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              185
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              146
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              192
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.22
+            ]
+          ]
+        },
+        {
+          "node": "Badge",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Shadow",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    "WorkingReduced": {
+      "duration": 1,
+      "loop": false,
+      "tracks": [
+        {
+          "node": "SignalIdle",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalThinking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWorking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "SignalQueued",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingProvider",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingUser",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalDone",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalError",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalInterrupted",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              126
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              117
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1.035
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              0.97
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              3
+            ]
+          ]
+        },
+        {
+          "node": "EyeL",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "EyeR",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0.75
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              85
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              187
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.22
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              126
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              187
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              167
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              187
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.22
+            ]
+          ]
+        },
+        {
+          "node": "Badge",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Shadow",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    "QueuedReduced": {
+      "duration": 1,
+      "loop": false,
+      "tracks": [
+        {
+          "node": "SignalIdle",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalThinking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWorking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalQueued",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingProvider",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingUser",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalDone",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalError",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalInterrupted",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              126
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              124
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              0.95
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              3
+            ]
+          ]
+        },
+        {
+          "node": "EyeL",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              0.7
+            ]
+          ]
+        },
+        {
+          "node": "EyeR",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              0.7
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0.65
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              105
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              190
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              126
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              190
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              147
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              190
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Badge",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Shadow",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    "WaitingProviderReduced": {
+      "duration": 1,
+      "loop": false,
+      "tracks": [
+        {
+          "node": "SignalIdle",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalThinking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWorking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalQueued",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingProvider",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingUser",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalDone",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalError",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalInterrupted",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              126
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              119
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.06
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              5
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              3
+            ]
+          ]
+        },
+        {
+          "node": "EyeL",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "EyeR",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0.55
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              101
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              192
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.22
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              148
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              185
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              179
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              172
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.4
+            ]
+          ]
+        },
+        {
+          "node": "Badge",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Shadow",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    "WaitingUserReduced": {
+      "duration": 1,
+      "loop": false,
+      "tracks": [
+        {
+          "node": "SignalIdle",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalThinking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWorking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalQueued",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingProvider",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingUser",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "SignalDone",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalError",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalInterrupted",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              126
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              116
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1.035
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              3
+            ]
+          ]
+        },
+        {
+          "node": "EyeL",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "EyeR",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1.25
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              77
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              164
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.65
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              126
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              191
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              167
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              187
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.22
+            ]
+          ]
+        },
+        {
+          "node": "Badge",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Shadow",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    "DoneReduced": {
+      "duration": 1,
+      "loop": false,
+      "tracks": [
+        {
+          "node": "SignalIdle",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalThinking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWorking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalQueued",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingProvider",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingUser",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalDone",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "SignalError",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalInterrupted",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              126
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              114
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1.04
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              3
+            ]
+          ]
+        },
+        {
+          "node": "EyeL",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              0.42
+            ]
+          ]
+        },
+        {
+          "node": "EyeR",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              0.42
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1.25
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              79
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              178
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.55
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              126
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              187
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              173
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              178
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.55
+            ]
+          ]
+        },
+        {
+          "node": "Badge",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Shadow",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    "ErrorReduced": {
+      "duration": 1,
+      "loop": false,
+      "tracks": [
+        {
+          "node": "SignalIdle",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalThinking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWorking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalQueued",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingProvider",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingUser",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalDone",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalError",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "SignalInterrupted",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              126
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              127
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.07
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              0.94
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              3
+            ]
+          ]
+        },
+        {
+          "node": "EyeL",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "EyeR",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0.55
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.22
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              101
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              195
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.1
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              127
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              201
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              153
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              195
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.22
+            ]
+          ]
+        },
+        {
+          "node": "Badge",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Shadow",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    "InterruptedReduced": {
+      "duration": 1,
+      "loop": false,
+      "tracks": [
+        {
+          "node": "SignalIdle",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalThinking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWorking",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalQueued",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingProvider",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalWaitingUser",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalDone",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalError",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "SignalInterrupted",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              126
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              124
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0.97
+            ]
+          ]
+        },
+        {
+          "node": "Cloud",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              0.96
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Gaze",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              3
+            ]
+          ]
+        },
+        {
+          "node": "EyeL",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              0.55
+            ]
+          ]
+        },
+        {
+          "node": "EyeR",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              0.55
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              0.8
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "Mouth",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              104
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              188
+            ]
+          ]
+        },
+        {
+          "node": "DewL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              126
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              198
+            ]
+          ]
+        },
+        {
+          "node": "DewC",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "x",
+          "keys": [
+            [
+              0,
+              148
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              188
+            ]
+          ]
+        },
+        {
+          "node": "DewR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Badge",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Shadow",
+          "property": "scaleX",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        }
+      ]
+    }
+  }
+}

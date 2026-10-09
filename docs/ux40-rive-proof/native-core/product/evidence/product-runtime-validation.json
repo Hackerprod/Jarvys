@@ -1,0 +1,219 @@
+{
+  "scope": "Official Rive WASM host import/binding/state tests of actual Kotlin outputs. Not Android/device acceptance.",
+  "runtime": "@rive-app/canvas-advanced@2.44.1",
+  "mascots": [
+    {
+      "id": "folio",
+      "bytes": 15264,
+      "sha256": "1d3b4f3443084472677c51f38e41f743018fa206358c9cb1890a5456df6dda0b",
+      "animations": 18,
+      "viewModels": 1,
+      "properties": 2,
+      "legacyInputs": 0,
+      "transitions": 306,
+      "normalDirectedTransitions": 72,
+      "staticReducedStates": 9,
+      "motion": [
+        {
+          "name": "Idle",
+          "distinctPoses": 181,
+          "noReentryFrames": 180
+        },
+        {
+          "name": "Thinking",
+          "distinctPoses": 181,
+          "noReentryFrames": 180
+        },
+        {
+          "name": "Working",
+          "distinctPoses": 181,
+          "noReentryFrames": 180
+        },
+        {
+          "name": "Queued",
+          "distinctPoses": 123,
+          "noReentryFrames": 180
+        },
+        {
+          "name": "WaitingProvider",
+          "distinctPoses": 181,
+          "noReentryFrames": 180
+        },
+        {
+          "name": "WaitingUser",
+          "distinctPoses": 181,
+          "noReentryFrames": 180
+        },
+        {
+          "name": "Done",
+          "distinctPoses": 85,
+          "noReentryFrames": 180
+        },
+        {
+          "name": "Error",
+          "distinctPoses": 90,
+          "noReentryFrames": 180
+        },
+        {
+          "name": "Interrupted",
+          "distinctPoses": 48,
+          "noReentryFrames": 180
+        },
+        {
+          "name": "IdleReduced",
+          "distinctPoses": 1,
+          "noReentryFrames": 180
+        },
+        {
+          "name": "ThinkingReduced",
+          "distinctPoses": 1,
+          "noReentryFrames": 180
+        },
+        {
+          "name": "WorkingReduced",
+          "distinctPoses": 1,
+          "noReentryFrames": 180
+        },
+        {
+          "name": "QueuedReduced",
+          "distinctPoses": 1,
+          "noReentryFrames": 180
+        },
+        {
+          "name": "WaitingProviderReduced",
+          "distinctPoses": 1,
+          "noReentryFrames": 180
+        },
+        {
+          "name": "WaitingUserReduced",
+          "distinctPoses": 1,
+          "noReentryFrames": 180
+        },
+        {
+          "name": "DoneReduced",
+          "distinctPoses": 1,
+          "noReentryFrames": 180
+        },
+        {
+          "name": "ErrorReduced",
+          "distinctPoses": 1,
+          "noReentryFrames": 180
+        },
+        {
+          "name": "InterruptedReduced",
+          "distinctPoses": 1,
+          "noReentryFrames": 180
+        }
+      ],
+      "midpointChecks": 31,
+      "independentInstances": true
+    },
+    {
+      "id": "nimbo",
+      "bytes": 15471,
+      "sha256": "83473fed7db18da9a3ad4302b403a29b5a9e2396f4b49801a5499cf5e57e8b77",
+      "animations": 18,
+      "viewModels": 1,
+      "properties": 2,
+      "legacyInputs": 0,
+      "transitions": 306,
+      "normalDirectedTransitions": 72,
+      "staticReducedStates": 9,
+      "motion": [
+        {
+          "name": "Idle",
+          "distinctPoses": 141,
+          "noReentryFrames": 180
+        },
+        {
+          "name": "Thinking",
+          "distinctPoses": 181,
+          "noReentryFrames": 180
+        },
+        {
+          "name": "Working",
+          "distinctPoses": 181,
+          "noReentryFrames": 180
+        },
+        {
+          "name": "Queued",
+          "distinctPoses": 122,
+          "noReentryFrames": 180
+        },
+        {
+          "name": "WaitingProvider",
+          "distinctPoses": 181,
+          "noReentryFrames": 180
+        },
+        {
+          "name": "WaitingUser",
+          "distinctPoses": 181,
+          "noReentryFrames": 180
+        },
+        {
+          "name": "Done",
+          "distinctPoses": 72,
+          "noReentryFrames": 180
+        },
+        {
+          "name": "Error",
+          "distinctPoses": 81,
+          "noReentryFrames": 180
+        },
+        {
+          "name": "Interrupted",
+          "distinctPoses": 42,
+          "noReentryFrames": 180
+        },
+        {
+          "name": "IdleReduced",
+          "distinctPoses": 1,
+          "noReentryFrames": 180
+        },
+        {
+          "name": "ThinkingReduced",
+          "distinctPoses": 1,
+          "noReentryFrames": 180
+        },
+        {
+          "name": "WorkingReduced",
+          "distinctPoses": 1,
+          "noReentryFrames": 180
+        },
+        {
+          "name": "QueuedReduced",
+          "distinctPoses": 1,
+          "noReentryFrames": 180
+        },
+        {
+          "name": "WaitingProviderReduced",
+          "distinctPoses": 1,
+          "noReentryFrames": 180
+        },
+        {
+          "name": "WaitingUserReduced",
+          "distinctPoses": 1,
+          "noReentryFrames": 180
+        },
+        {
+          "name": "DoneReduced",
+          "distinctPoses": 1,
+          "noReentryFrames": 180
+        },
+        {
+          "name": "ErrorReduced",
+          "distinctPoses": 1,
+          "noReentryFrames": 180
+        },
+        {
+          "name": "InterruptedReduced",
+          "distinctPoses": 1,
+          "noReentryFrames": 180
+        }
+      ],
+      "midpointChecks": 45,
+      "independentInstances": true
+    }
+  ],
+  "passed": true
+}

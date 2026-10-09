@@ -5,6 +5,7 @@ import android.system.ErrnoException;
 import android.system.Os;
 import android.system.OsConstants;
 import android.util.AtomicFile;
+import com.jarvys.agent.BotMascotStore;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -28,7 +29,7 @@ import org.json.JSONObject;
 public final class CrewProfileRepository {
     private static final Object LOCK = new Object();
     private static final CopyOnWriteArrayList<Subscription> LISTENERS = new CopyOnWriteArrayList<>();
-    public static final int SCHEMA_VERSION = 3;
+    public static final int SCHEMA_VERSION = 4;
     private final File root;
     private final File target;
 
@@ -155,8 +156,9 @@ public final class CrewProfileRepository {
             BotDefinition previous = requireEditable(definitions, edited.id);
             if (previous.profile.version != edited.version) throw conflict();
             if (expected != null && (previous.revision != expected.revision || expected.builtIn
-                    || previous.enabled != expected.enabled || !previous.iconRef.equals(expected.iconRef))) throw conflict();
-            saved = new BotDefinition(edited.withVersion(next(previous.profile.version)), next(previous.revision), previous.enabled, false, previous.iconRef);
+                    || previous.enabled != expected.enabled || !previous.iconRef.equals(expected.iconRef)
+                    || !java.util.Objects.equals(previous.mascot, expected.mascot))) throw conflict();
+            saved = new BotDefinition(edited.withVersion(next(previous.profile.version)), next(previous.revision), previous.enabled, false, previous.iconRef, previous.mascot, previous.mascotReceipts);
             definitions.put(saved.id, saved);
             persist(definitions.values());
         }
@@ -171,7 +173,7 @@ public final class CrewProfileRepository {
             BotDefinition previous = requireEditable(definitions, id);
             if (previous.revision != expectedRevision) throw conflict();
             if (previous.enabled == enabled) return previous;
-            saved = new BotDefinition(previous.profile.withVersion(next(previous.profile.version)), next(previous.revision), enabled, false, previous.iconRef);
+            saved = new BotDefinition(previous.profile.withVersion(next(previous.profile.version)), next(previous.revision), enabled, false, previous.iconRef, previous.mascot, previous.mascotReceipts);
             definitions.put(id, saved);
             persist(definitions.values());
         }
@@ -188,12 +190,94 @@ public final class CrewProfileRepository {
             if (previous.revision != expectedRevision) throw conflict();
             if (!previous.enabled) throw CrewProfile.invalid("disabled bots cannot receive generated icons");
             if (previous.iconRef.equals(iconRef)) return previous;
-            saved = new BotDefinition(previous.profile, next(previous.revision), previous.enabled, false, iconRef);
+            saved = new BotDefinition(previous.profile, next(previous.revision), previous.enabled, false, iconRef, previous.mascot, previous.mascotReceipts);
             definitions.put(id, saved);
             persist(definitions.values());
         }
         notifyChanged(saved);
         return saved;
+    }
+
+    public static final class MascotAssignment {
+        /** Current catalog definition; it may be newer than the original successful receipt. */
+        public final BotDefinition definition;
+        public final BotMascotDescriptor.Receipt receipt;
+        public final boolean alreadyExisted;
+        private MascotAssignment(BotDefinition definition, BotMascotDescriptor.Receipt receipt, boolean alreadyExisted) {
+            this.definition = definition; this.receipt = receipt; this.alreadyExisted = alreadyExisted;
+        }
+    }
+
+    /** Check before compilation. A known operation never repeats a generation or overwrites a newer asset. */
+    public MascotAssignment mascotOperation(String id, String operationId, String payloadHash) {
+        BotMascotDescriptor.requireOperationId(operationId);
+        BotMascotDescriptor.requireHash(payloadHash);
+        synchronized (LOCK) { return existingMascotOperation(requireEditable(load(), id), operationId, payloadHash); }
+    }
+
+    /**
+     * Publication accepts only a private package handle produced by the trusted local compiler.
+     * The service wraps this call in its CancellationToken CommitGate, just as icon assignment does.
+     * The assignment and idempotency receipt are one AtomicFile write. Executable version is unchanged.
+     */
+    public MascotAssignment setMascot(String id, int expectedRevision, BotMascotStore.ValidatedPackage validated,
+            String operationId, String payloadHash) {
+        BotMascotDescriptor.requireOperationId(operationId);
+        BotMascotDescriptor.requireHash(payloadHash);
+        if (expectedRevision < 1) throw CrewProfile.invalid("expected mascot revision must be positive");
+        BotDefinition saved;
+        BotMascotDescriptor.Receipt receipt;
+        synchronized (LOCK) {
+            Map<String, BotDefinition> definitions = load();
+            BotDefinition previous = requireEditable(definitions, id);
+            MascotAssignment existing = existingMascotOperation(previous, operationId, payloadHash);
+            if (existing != null) return existing;
+            if (previous.revision != expectedRevision) throw conflict();
+            if (!previous.enabled) throw CrewProfile.invalid("disabled bots cannot receive mascots");
+            if (previous.mascotReceipts.size() >= BotMascotDescriptor.MAX_RECEIPTS)
+                throw CrewProfile.invalid("mascot operation receipt limit reached (64); the current mascot was kept. Existing operations can still be retried; no receipts were discarded");
+            if (validated == null) throw CrewProfile.invalid("a locally compiled mascot package is required");
+            validated.verifyForAssignment(root.getParentFile(), id);
+            BotMascotDescriptor mascot = validated.descriptor();
+            receipt = new BotMascotDescriptor.Receipt(operationId, payloadHash, next(previous.revision), mascot);
+            List<BotMascotDescriptor.Receipt> receipts = new ArrayList<>(previous.mascotReceipts);
+            receipts.add(receipt);
+            saved = new BotDefinition(previous.profile, receipt.assignedRevision, previous.enabled, false,
+                    previous.iconRef, mascot, receipts);
+            definitions.put(id, saved);
+            persist(definitions.values());
+        }
+        notifyChanged(saved);
+        return new MascotAssignment(saved, receipt, false);
+    }
+
+    private static MascotAssignment existingMascotOperation(BotDefinition definition, String operationId, String payloadHash) {
+        for (BotMascotDescriptor.Receipt receipt : definition.mascotReceipts) {
+            if (!receipt.operationId.equals(operationId)) continue;
+            if (!receipt.payloadHash.equals(payloadHash))
+                throw CrewProfile.invalid("this mascot operation_id already identifies different content; reopen the bot and use a new operation only for a new request");
+            return new MascotAssignment(definition, receipt, true);
+        }
+        return null;
+    }
+
+    /** Safe cleanup shares assignment's lock and preserves current AND prior receipt packages. */
+    public boolean cleanupUnassignedMascotPackage(File appFilesDirectory, String id, String packageRef, Runnable cleanup) {
+        BotMascotDescriptor.requirePackageRef(packageRef);
+        if (cleanup == null) throw CrewProfile.invalid("mascot cleanup action is required");
+        try {
+            if (!root.getParentFile().equals(appFilesDirectory.getCanonicalFile()))
+                throw CrewProfile.invalid("mascot cleanup belongs to a different private catalog");
+        } catch (IOException error) { throw CrewProfile.invalid("could not verify mascot cleanup scope", error); }
+        synchronized (LOCK) {
+            // Unknown, corrupt or unreadable catalog state throws before cleanup. Never guess.
+            BotDefinition definition = requireEditable(load(), id);
+            if (definition.mascot != null && definition.mascot.packageRef.equals(packageRef)) return false;
+            for (BotMascotDescriptor.Receipt receipt : definition.mascotReceipts)
+                if (receipt.mascot.packageRef.equals(packageRef)) return false;
+            cleanup.run();
+            return true;
+        }
     }
 
     public Runnable addChangeListener(Consumer<BotDefinition> listener) {
@@ -265,7 +349,7 @@ public final class CrewProfileRepository {
             JSONObject data = new JSONObject(source);
             int schema = CrewProfile.positiveInteger(data, "schemaVersion");
             if (schema < 1 || schema > SCHEMA_VERSION) throw CrewProfile.invalid("unsupported repository schema version: " + schema);
-            String field = schema == SCHEMA_VERSION ? "bots" : "profiles";
+            String field = schema >= 3 ? "bots" : "profiles";
             CrewProfile.exactFields(data, "schemaVersion", field);
             if (!(data.opt(field) instanceof JSONArray)) throw CrewProfile.invalid(field + " must be an array");
             JSONArray rows = (JSONArray) data.opt(field);
@@ -275,8 +359,8 @@ public final class CrewProfileRepository {
                 if (!(rows.opt(index) instanceof JSONObject)) throw CrewProfile.invalid("each bot must be an object");
                 JSONObject row = (JSONObject) rows.opt(index);
                 BotDefinition definition;
-                if (schema == SCHEMA_VERSION) {
-                    definition = BotDefinition.fromJson(row);
+                if (schema >= 3) {
+                    definition = BotDefinition.fromJson(row, schema);
                     requireCustomId(definition.id);
                 } else {
                     CrewProfile profile = schema == 1 ? CrewProfile.fromLegacyJson(row) : CrewProfile.fromJson(row);

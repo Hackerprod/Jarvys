@@ -1,0 +1,66 @@
+{
+  "scope": "Host-only checker; mutations are not runtime fuzzing or Android acceptance",
+  "results": [
+    {
+      "id": "nimbo",
+      "bytes": 15471,
+      "sha256": "83473fed7db18da9a3ad4302b403a29b5a9e2396f4b49801a5499cf5e57e8b77",
+      "records": 1978,
+      "timelines": 18,
+      "modernConditions": 36,
+      "directedBranches": 18,
+      "fullSourceRecordParity": true,
+      "checkerNegativeTests": [
+        "wrong source VM index",
+        "wrong source property index",
+        "missing path segment",
+        "extra path segment",
+        "wrong bind target",
+        "wrong bind direction",
+        "wrong VM association",
+        "missing VM association",
+        "wrong instance VM index",
+        "wrong property value index",
+        "wrong comparator operator",
+        "wrong numeric mode literal",
+        "wrong transition destination",
+        "comparator before bind",
+        "artboard before VM prefix",
+        "wrong CoreBytes ToC kind",
+        "truncated final object"
+      ],
+      "passed": true
+    },
+    {
+      "id": "folio",
+      "bytes": 15264,
+      "sha256": "1d3b4f3443084472677c51f38e41f743018fa206358c9cb1890a5456df6dda0b",
+      "records": 1932,
+      "timelines": 18,
+      "modernConditions": 36,
+      "directedBranches": 18,
+      "fullSourceRecordParity": true,
+      "checkerNegativeTests": [
+        "wrong source VM index",
+        "wrong source property index",
+        "missing path segment",
+        "extra path segment",
+        "wrong bind target",
+        "wrong bind direction",
+        "wrong VM association",
+        "missing VM association",
+        "wrong instance VM index",
+        "wrong property value index",
+        "wrong comparator operator",
+        "wrong numeric mode literal",
+        "wrong transition destination",
+        "comparator before bind",
+        "artboard before VM prefix",
+        "wrong CoreBytes ToC kind",
+        "truncated final object"
+      ],
+      "passed": true
+    }
+  ],
+  "passed": true
+}

@@ -698,7 +698,7 @@ public final class CrewManager implements AutoCloseable {
 
     public static boolean isCaptainOnly(String name) {
         if ("import_project_image".equals(name)) return true;
-        return java.util.Arrays.asList("crew_spawn", "crew_stop", "crew_wait", "crew_list", "crew_send", "generate_bot_icon", "list_bots", "create_bot", "deliver_file").contains(name);
+        return java.util.Arrays.asList("crew_spawn", "crew_stop", "crew_wait", "crew_list", "crew_send", "generate_bot_icon", "list_bots", "create_bot", "compile_bot_mascot", "deliver_file").contains(name);
     }
 
     private void runBot(Bot bot) {

@@ -1,0 +1,97 @@
+{
+  "scope": "Fresh focused host tests, not aggregate suites or Android acceptance",
+  "dateUtc": "2026-10-09",
+  "flavors": {
+    "Play": [
+      {
+        "name": "com.jarvys.agent.BotCreationToolTest",
+        "tests": "14",
+        "failures": "0",
+        "errors": "0",
+        "skipped": "0",
+        "timestamp": "2026-10-09T14:10:43.829Z"
+      },
+      {
+        "name": "com.jarvys.agent.BotMascotPersistenceTest",
+        "tests": "24",
+        "failures": "0",
+        "errors": "0",
+        "skipped": "0",
+        "timestamp": "2026-10-09T14:10:43.087Z"
+      },
+      {
+        "name": "com.jarvys.agent.BotMascotSceneCompilerTest",
+        "tests": "33",
+        "failures": "0",
+        "errors": "0",
+        "skipped": "0",
+        "timestamp": "2026-10-09T14:10:46.568Z"
+      },
+      {
+        "name": "com.jarvys.agent.BotMascotToolTest",
+        "tests": "14",
+        "failures": "0",
+        "errors": "0",
+        "skipped": "0",
+        "timestamp": "2026-10-09T14:10:39.900Z"
+      },
+      {
+        "name": "com.jarvys.agent.crew.BotCatalogRepositoryTest",
+        "tests": "8",
+        "failures": "0",
+        "errors": "0",
+        "skipped": "0",
+        "timestamp": "2026-10-09T14:10:46.832Z"
+      }
+    ],
+    "Full": [
+      {
+        "name": "com.jarvys.agent.BotCreationToolTest",
+        "tests": "14",
+        "failures": "0",
+        "errors": "0",
+        "skipped": "0",
+        "timestamp": "2026-10-09T14:12:37.538Z"
+      },
+      {
+        "name": "com.jarvys.agent.BotMascotPersistenceTest",
+        "tests": "24",
+        "failures": "0",
+        "errors": "0",
+        "skipped": "0",
+        "timestamp": "2026-10-09T14:12:44.366Z"
+      },
+      {
+        "name": "com.jarvys.agent.BotMascotSceneCompilerTest",
+        "tests": "33",
+        "failures": "0",
+        "errors": "0",
+        "skipped": "0",
+        "timestamp": "2026-10-09T14:12:42.070Z"
+      },
+      {
+        "name": "com.jarvys.agent.BotMascotToolTest",
+        "tests": "14",
+        "failures": "0",
+        "errors": "0",
+        "skipped": "0",
+        "timestamp": "2026-10-09T14:12:42.540Z"
+      },
+      {
+        "name": "com.jarvys.agent.crew.BotCatalogRepositoryTest",
+        "tests": "8",
+        "failures": "0",
+        "errors": "0",
+        "skipped": "0",
+        "timestamp": "2026-10-09T14:12:44.957Z"
+      }
+    ]
+  },
+  "testGuard": {
+    "workers": 2,
+    "verifiedInstallShutdownRecords": true,
+    "blockedAttempts": 0,
+    "scope": "Reviewed JDK URL/HttpURLConnection hooks in test workers only, not whole-system network isolation"
+  },
+  "storageTestAdapter": "Host FileChannel directory sync only in test source; production Android Os directory sync is not executed by these tests"
+}

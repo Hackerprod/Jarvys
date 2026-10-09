@@ -17,8 +17,10 @@ import java.security.MessageDigest
  * files, scripts, URLs, native executables or network services are loaded here.
  * Names are opaque labels; they are never interpreted as code or locations.
  *
- * Contract: one 256x256 Mascot artboard, Idle/Active/Reduced animations, and
- * MascotController with numeric mode and boolean reducedMotion inputs.
+ * Historical proof: Idle/Active/Reduced with legacy state-machine inputs.
+ * Product contract bot-mascot-v1: nine modes, each with a static Reduced variant,
+ * a MascotState ViewModel/Default instance, and mode:number/reducedMotion:boolean.
+ * Both contracts use a 256x256 Mascot artboard and MascotController.
  * Source name is metadata, not the stable artboard name. Reduced overrides mode.
  *
  * Public format: https://rive.app/docs/runtimes/advanced-topic/format
@@ -54,12 +56,24 @@ object BotMascotSceneCompiler {
     const val MAX_KEYS_PER_TRACK = 64
     const val MAX_TOTAL_TRACKS = MAX_TRACKS_PER_STATE * 3
     const val MAX_TOTAL_KEYFRAMES = MAX_TOTAL_TRACKS * MAX_KEYS_PER_TRACK
+    const val MAX_PRODUCT_TOTAL_TRACKS = 18 * MAX_TRACKS_PER_STATE
+    const val MAX_PRODUCT_TOTAL_KEYFRAMES = MAX_PRODUCT_TOTAL_TRACKS * MAX_KEYS_PER_TRACK
     const val MAX_DURATION_FRAMES = 600
     const val MAX_NAME_BYTES = 80
     const val FORMAT_MAJOR = 7
     const val FORMAT_MINOR = 4
     const val ARTBOARD_NAME = "Mascot"
     const val STATE_MACHINE_NAME = "MascotController"
+    const val PRODUCT_CONTRACT = "bot-mascot-v1"
+    const val VIEW_MODEL_NAME = "MascotState"
+    const val DEFAULT_INSTANCE_NAME = "Default"
+    const val MAX_RAW_PROPERTY_BYTES = 256
+    const val DEFAULT_JSON_STRING_CHARS = 256
+    const val MAX_METADATA_STRING_CHARS = 1200
+
+    /** The app must supply an integer mode in 0..8; other values have no product transition. */
+    val productModeNames: List<String> get() = productModes.toList()
+    private val productModes = listOf("Idle", "Thinking", "Working", "Queued", "WaitingProvider", "WaitingUser", "Done", "Error", "Interrupted")
 
     data class Complexity(
         val nodeCount: Int,
@@ -70,24 +84,44 @@ object BotMascotSceneCompiler {
         val binaryObjectCount: Int,
     )
 
-    data class Validation(val name: String, val sourceBytes: Int, val complexity: Complexity)
+    data class Validation(
+        val name: String, val sourceBytes: Int, val complexity: Complexity,
+        val contract: String? = null, val formatMajor: Int = FORMAT_MAJOR, val formatMinor: Int = FORMAT_MINOR,
+    )
     data class CompiledScene(val bytes: ByteArray, val validation: Validation, val sha256: String)
 
-    /** All invalid or over-budget sources fail with IllegalArgumentException. */
+    /** Historical three-state proof; never silently interprets a product contract. */
     @JvmStatic fun compile(source: String): CompiledScene = compile(encodeSource(source))
-    @JvmStatic fun compile(source: ByteArray): CompiledScene {
-        val scene = parseAndValidate(source)
+    @JvmStatic fun compile(source: ByteArray): CompiledScene = compileWithContract(source, Contract.LEGACY)
+
+    /** Versioned nine-mode product source; does not accept the historical proof schema. */
+    @JvmStatic fun compileProduct(source: String): CompiledScene = compileProduct(encodeSource(source))
+    @JvmStatic fun compileProduct(source: ByteArray): CompiledScene = compileWithContract(source, Contract.PRODUCT)
+
+    /** Includes the output budget check, so validation and compilation accept the same sources. */
+    @JvmStatic fun validate(source: String): Validation = validate(encodeSource(source))
+    @JvmStatic fun validate(source: ByteArray): Validation = validateWithContract(source, Contract.LEGACY)
+    @JvmStatic fun validateProduct(source: String): Validation = validateProduct(encodeSource(source))
+    @JvmStatic fun validateProduct(source: ByteArray): Validation = validateWithContract(source, Contract.PRODUCT)
+
+    // Test/probe bridge, not an additional production source contract.
+    internal fun compileViewModelProof(source: String): CompiledScene = compileViewModelProof(encodeSource(source))
+    internal fun compileViewModelProof(source: ByteArray): CompiledScene = compileWithContract(source, Contract.MODERN_PROOF)
+
+    private enum class Contract(val modern: Boolean, val product: Boolean, val controllerObjects: Int) {
+        LEGACY(false, false, 19), MODERN_PROOF(true, false, 37), PRODUCT(true, true, 222)
+    }
+
+    private fun compileWithContract(source: ByteArray, contract: Contract): CompiledScene {
+        val scene = parseAndValidate(source, contract)
         val bytes = serialize(scene)
         val sha = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") {
             (it.toInt() and 255).toString(16).padStart(2, '0')
         }
         return CompiledScene(bytes, scene.validation, sha)
     }
-
-    /** Includes the output budget check, so validation and compilation accept the same sources. */
-    @JvmStatic fun validate(source: String): Validation = validate(encodeSource(source))
-    @JvmStatic fun validate(source: ByteArray): Validation {
-        val scene = parseAndValidate(source)
+    private fun validateWithContract(source: ByteArray, contract: Contract): Validation {
+        val scene = parseAndValidate(source, contract)
         serialize(scene)
         return scene.validation
     }
@@ -102,7 +136,7 @@ object BotMascotSceneCompiler {
     private data class Key(val frame: Int, val value: Float)
     private data class Track(val node: String, val property: String, val keys: List<Key>)
     private data class Animation(val name: String, val duration: Int, val loop: Boolean, val tracks: List<Track>)
-    private data class Scene(val nodes: List<Node>, val animations: List<Animation>, val validation: Validation)
+    private data class Scene(val nodes: List<Node>, val animations: List<Animation>, val validation: Validation, val contract: Contract)
 
     private fun encodeSource(source: String): ByteArray {
         require(source.length <= MAX_SOURCE_BYTES) { "Source byte budget exceeded." }
@@ -116,7 +150,17 @@ object BotMascotSceneCompiler {
         }
     }
 
-    private fun parseAndValidate(source: ByteArray): Scene {
+    /**
+     * Strict, bounded UTF-8 JSON object ingestion shared with source/manifest stores.
+     * This checks syntax and work budgets only; callers must enforce their own schema
+     * and any smaller byte budget. No file access, source lookup or execution occurs.
+     */
+    @JvmStatic fun parseBoundedJsonObject(source: ByteArray): JSONObject =
+        parseBoundedJsonObject(source, DEFAULT_JSON_STRING_CHARS)
+
+    /** Metadata-only opt-in: this does not widen either scene compilation entry point. */
+    @JvmStatic fun parseBoundedJsonObject(source: ByteArray, maxStringChars: Int): JSONObject {
+        require(maxStringChars in 1..MAX_METADATA_STRING_CHARS) { "Invalid bounded JSON string limit." }
         require(source.size in 1..MAX_SOURCE_BYTES) { "Source byte budget exceeded or empty source." }
         val text = try {
             StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
@@ -126,8 +170,13 @@ object BotMascotSceneCompiler {
         }
         // Do not use lenient JSONTokener coercions: reject duplicates, comments, trailing
         // text, single quotes, missing values and non-JSON numbers before schema validation.
-        val root = objectValue(StrictJson(text).read(), "scene")
-        fields(root, setOf("name", "nodes", "animations"))
+        return objectValue(StrictJson(text, 18, maxStringChars).read(), "JSON root")
+    }
+
+    private fun parseAndValidate(source: ByteArray, contract: Contract): Scene {
+        val root = parseBoundedJsonObject(source)
+        fields(root, setOf("name", "nodes", "animations") + if (contract.product) setOf("contract") else emptySet())
+        if (contract.product) require(root.opt("contract") == PRODUCT_CONTRACT) { "Unsupported mascot scene contract." }
         val name = name(root.opt("name"))
         val rawNodes = array(root.opt("nodes"), "nodes")
         require(rawNodes.length() in 1..MAX_NODES) { "Node count budget exceeded." }
@@ -165,12 +214,15 @@ object BotMascotSceneCompiler {
                 } else null)
         }
         val rawAnimations = objectValue(root.opt("animations"), "animations")
-        fields(rawAnimations, stateNames.toSet())
+        val requiredStates = if (contract.product) productModes + productModes.map { it + "Reduced" } else stateNames
+        fields(rawAnimations, requiredStates.toSet())
+        val maxTotalTracks = if (contract.product) MAX_PRODUCT_TOTAL_TRACKS else MAX_TOTAL_TRACKS
+        val maxTotalKeys = if (contract.product) MAX_PRODUCT_TOTAL_KEYFRAMES else MAX_TOTAL_KEYFRAMES
         var totalTracks = 0
         var totalKeys = 0
         var animatedObjects = 0
         var expectedTargets: Set<Pair<String, String>>? = null
-        val animations = stateNames.map { state ->
+        val animations = requiredStates.map { state ->
             val raw = objectValue(rawAnimations.opt(state), "animation")
             fields(raw, setOf("duration", "loop", "tracks"))
             val duration = integer(raw.opt("duration"), 1, MAX_DURATION_FRAMES.toLong()).toInt()
@@ -199,22 +251,31 @@ object BotMascotSceneCompiler {
                     Key(frame, transformNumber(pair.opt(1), property))
                 }
                 require(keys.first().frame == 0) { "Explicit frame-zero reset required." }
-                require(state != "Reduced" || (!loop && keys.size == 1)) { "Reduced must contain only constant tracks and must not loop." }
+                require(!(if (contract.product) state.endsWith("Reduced") else state == "Reduced") || (!loop && keys.size == 1)) { "Reduced must contain only constant tracks and must not loop." }
                 totalKeys += keys.size
+                require(totalKeys <= maxTotalKeys) { "Total keyframe budget exceeded." }
                 Track(target, property, keys)
+            }
+            if (contract.product && !state.endsWith("Reduced")) {
+                require(tracks.any { track ->
+                    val initial = track.keys.first().value
+                    track.keys.any { it.value != initial }
+                }) { "Every normal product animation must contain authored motion." }
             }
             if (expectedTargets == null) expectedTargets = targets
             else require(targets == expectedTargets) { "Every state must reset every animated target." }
             totalTracks += tracks.size
+            require(totalTracks <= maxTotalTracks) { "Total track budget exceeded." }
             animatedObjects += tracks.map { it.node }.toSet().size
             Animation(state, duration, loop, tracks)
         }
-        require(totalTracks <= MAX_TOTAL_TRACKS && totalKeys <= MAX_TOTAL_KEYFRAMES) { "Total animation complexity budget exceeded." }
-        // 2 scene roots + authored nodes + 3 per shape + 3 animations + animated
-        // objects/properties/keys + 19 fixed controller objects.
+        require(totalTracks <= maxTotalTracks && totalKeys <= maxTotalKeys) { "Total animation complexity budget exceeded." }
+        // File-level VM objects precede the artboard and never change component IDs.
         val complexity = Complexity(nodes.size, shapes, maxDepth, totalTracks, totalKeys,
-            2 + nodes.size + 3 * shapes + 3 + animatedObjects + totalTracks + totalKeys + 19)
-        return Scene(nodes, animations, Validation(name, source.size, complexity))
+            2 + (if (contract.modern) 6 else 0) + nodes.size + 3 * shapes + animations.size +
+                animatedObjects + totalTracks + totalKeys + contract.controllerObjects)
+        return Scene(nodes, animations, Validation(name, source.size, complexity,
+            contract = if (contract.product) PRODUCT_CONTRACT else null), contract)
     }
 
     private fun fields(value: JSONObject, allowed: Set<String>, required: Set<String> = allowed) {
@@ -252,7 +313,17 @@ object BotMascotSceneCompiler {
     private fun serialize(scene: Scene): ByteArray {
         val writer = Binary()
         writer.obj(23)
-        writer.obj(1, s(4, ARTBOARD_NAME), f(7, 256f), f(8, 256f), u(236, 0))
+        if (scene.contract.modern) {
+            writer.obj(435, s(557, VIEW_MODEL_NAME))
+            writer.obj(431, s(557, "mode"))
+            writer.obj(448, s(557, "reducedMotion"))
+            writer.obj(437, s(4, DEFAULT_INSTANCE_NAME), u(566, 0))
+            writer.obj(442, u(554, 0), f(575, 0f))
+            writer.obj(449, u(554, 1), b(593, false))
+        }
+        val artboard = mutableListOf(s(4, ARTBOARD_NAME), f(7, 256f), f(8, 256f), u(236, 0))
+        if (scene.contract.modern) artboard.add(u(583, 0))
+        writer.obj(1, *artboard.toTypedArray())
         val ids = linkedMapOf("Artboard" to 0)
         var index = 1
         scene.nodes.forEach { node ->
@@ -268,7 +339,7 @@ object BotMascotSceneCompiler {
                 index++
                 val fillId = index++
                 writer.obj(20, u(5, ownId))
-                writer.obj(18, u(5, fillId), Property(37, 3, requireNotNull(node.color)))
+                writer.obj(18, u(5, fillId), Property(37, Primitive.COLOR, requireNotNull(node.color)))
                 index++
             }
         }
@@ -282,53 +353,126 @@ object BotMascotSceneCompiler {
                 }
             }
         }
+        if (scene.contract.product) productController(writer) else proofController(writer, scene.contract.modern)
+        check(writer.objectCount == scene.validation.complexity.binaryObjectCount) { "Serializer complexity count mismatch." }
+        return writer.finish()
+    }
+
+    private fun proofController(writer: Binary, modern: Boolean) {
         writer.obj(53, s(55, STATE_MACHINE_NAME))
-        writer.obj(56, s(138, "mode"), f(140, 0f))
-        writer.obj(59, s(138, "reducedMotion"), u(141, 0))
+        if (!modern) {
+            writer.obj(56, s(138, "mode"), f(140, 0f))
+            writer.obj(59, s(138, "reducedMotion"), b(141, false))
+        }
         writer.obj(57, s(138, "Presence"))
         writer.obj(63) // Entry, state index 0.
         writer.obj(65, u(151, 3))
         writer.obj(62) // Any, state index 1. Reduced transition has priority.
         writer.obj(65, u(151, 5))
-        writer.obj(71, u(155, 1), u(156, 0))
+        if (modern) booleanCondition(writer, true) else writer.obj(71, u(155, 1), u(156, 0))
         writer.obj(65, u(151, 4))
-        writer.obj(70, u(155, 0), u(156, 5), f(157, 0f))
-        writer.obj(71, u(155, 1), u(156, 1))
+        if (modern) {
+            numberCondition(writer, 5, 0f)
+            booleanCondition(writer, false)
+        } else {
+            writer.obj(70, u(155, 0), u(156, 5), f(157, 0f))
+            writer.obj(71, u(155, 1), u(156, 1))
+        }
         writer.obj(65, u(151, 3))
-        writer.obj(70, u(155, 0), u(156, 2), f(157, 0f))
-        writer.obj(71, u(155, 1), u(156, 1))
+        if (modern) {
+            numberCondition(writer, 2, 0f)
+            booleanCondition(writer, false)
+        } else {
+            writer.obj(70, u(155, 0), u(156, 2), f(157, 0f))
+            writer.obj(71, u(155, 1), u(156, 1))
+        }
         writer.obj(64) // Exit, state index 2.
         repeat(3) { writer.obj(61, u(149, it)) }
-        check(writer.objectCount == scene.validation.complexity.binaryObjectCount) { "Serializer complexity count mismatch." }
-        return writer.finish()
     }
 
-    private data class Property(val id: Int, val wireType: Int, val value: Any)
-    private fun u(id: Int, value: Int) = Property(id, 0, value.toLong())
-    private fun s(id: Int, value: String) = Property(id, 1, value)
-    private fun f(id: Int, value: Float) = Property(id, 2, value)
+    private fun productController(writer: Binary) {
+        writer.obj(53, s(55, STATE_MACHINE_NAME))
+        writer.obj(57, s(138, "Presence"))
+        writer.obj(63)
+        writer.obj(65, u(151, 3)) // Entry -> Idle; bind Default VMI before stepping.
+        writer.obj(62)
+        // Mutually exclusive equality branches. No fallback for invalid mode data:
+        // the app's typed input boundary must validate finite integers in 0..8.
+        for (reduced in listOf(true, false)) productModes.indices.forEach { mode ->
+            val animation = mode + if (reduced) productModes.size else 0
+            writer.obj(65, u(151, 3 + animation))
+            numberCondition(writer, 0, mode.toFloat())
+            booleanCondition(writer, reduced)
+        }
+        writer.obj(64)
+        repeat(productModes.size * 2) { writer.obj(61, u(149, it)) }
+    }
 
-    private class Binary {
+    private fun numberCondition(writer: Binary, operator: Int, value: Float) {
+        writer.obj(482, u(650, operator))
+        writer.obj(473)
+        writer.obj(447, u(586, 636), u(587, 0), x(588, byteArrayOf(0, 0)))
+        writer.obj(479)
+        writer.obj(484, f(652, value))
+    }
+
+    private fun booleanCondition(writer: Binary, value: Boolean) {
+        writer.obj(482, u(650, 0))
+        writer.obj(472)
+        writer.obj(447, u(586, 634), u(587, 0), x(588, byteArrayOf(0, 1)))
+        writer.obj(479)
+        writer.obj(481, b(647, value))
+    }
+
+    internal enum class Primitive(val wireType: Int) {
+        UINT(0), BOOLEAN(0), STRING(1), FLOAT(2), COLOR(3), BYTES(1)
+    }
+    internal data class Property(val id: Int, val kind: Primitive, val value: Any)
+    private fun u(id: Int, value: Int) = Property(id, Primitive.UINT, value.toLong())
+    private fun b(id: Int, value: Boolean) = Property(id, Primitive.BOOLEAN, value)
+    private fun s(id: Int, value: String) = Property(id, Primitive.STRING, value)
+    private fun f(id: Int, value: Float) = Property(id, Primitive.FLOAT, value)
+    private fun x(id: Int, value: ByteArray) = Property(id, Primitive.BYTES, value)
+
+    internal class Binary {
         private val body = ByteArrayOutputStream()
-        private val types = sortedMapOf<Int, Int>()
+        private val types = sortedMapOf<Int, Primitive>()
         var objectCount = 0
             private set
         fun obj(type: Int, vararg properties: Property) {
+            require(type > 0 && properties.map { it.id }.toSet().size == properties.size) { "Invalid object type or duplicate property." }
             uint(body, type.toLong())
             properties.forEach { property ->
-                val existing = types.put(property.id, property.wireType)
-                check(existing == null || existing == property.wireType) { "Inconsistent property wire type." }
+                require(property.id > 0) { "Invalid property key." }
+                val existing = types[property.id]
+                require(existing == null || existing == property.kind) { "Inconsistent property primitive type." }
+                types[property.id] = property.kind
                 uint(body, property.id.toLong())
-                when (property.wireType) {
-                    0 -> uint(body, property.value as Long)
-                    1 -> {
-                        val bytes = (property.value as String).toByteArray(StandardCharsets.UTF_8)
-                        uint(body, bytes.size.toLong())
-                        body.write(bytes, 0, bytes.size)
+                when (property.kind) {
+                    Primitive.UINT -> {
+                        require(property.value is Long) { "Expected unsigned integer primitive." }
+                        uint(body, property.value)
                     }
-                    2 -> littleEndian(body, java.lang.Float.floatToRawIntBits(property.value as Float).toLong())
-                    3 -> littleEndian(body, property.value as Long)
-                    else -> error("Unsupported property wire type.")
+                    Primitive.BOOLEAN -> {
+                        require(property.value is Boolean) { "Expected boolean primitive." }
+                        body.write(if (property.value) 1 else 0)
+                    }
+                    Primitive.STRING -> {
+                        require(property.value is String) { "Expected string primitive." }
+                        writeBytes(name(property.value).toByteArray(StandardCharsets.UTF_8))
+                    }
+                    Primitive.BYTES -> {
+                        require(property.value is ByteArray && property.value.size <= MAX_RAW_PROPERTY_BYTES) { "Invalid bounded bytes primitive." }
+                        writeBytes(property.value)
+                    }
+                    Primitive.FLOAT -> {
+                        require(property.value is Float && property.value.isFinite()) { "Expected finite float primitive." }
+                        littleEndian(body, java.lang.Float.floatToRawIntBits(property.value).toLong())
+                    }
+                    Primitive.COLOR -> {
+                        require(property.value is Long && property.value in 0..0xffffffffL) { "Invalid color primitive." }
+                        littleEndian(body, property.value)
+                    }
                 }
             }
             body.write(0)
@@ -344,15 +488,19 @@ object BotMascotSceneCompiler {
             output.write(0)
             keys.chunked(4).forEach { group ->
                 var packed = 0
-                group.forEachIndexed { index, key -> packed = packed or (types.getValue(key) shl (2 * index)) }
+                group.forEachIndexed { index, key -> packed = packed or (types.getValue(key).wireType shl (2 * index)) }
                 littleEndian(output, packed.toLong())
             }
             require(output.size() + body.size() <= MAX_OUTPUT_BYTES) { "Output byte budget exceeded." }
             body.writeTo(output)
             return output.toByteArray()
         }
+        private fun writeBytes(value: ByteArray) {
+            uint(body, value.size.toLong())
+            body.write(value, 0, value.size)
+        }
         private fun uint(output: ByteArrayOutputStream, value: Long) {
-            check(value in 0..0xffffffffL) { "Unsigned integer outside uint32." }
+            require(value in 0..0xffffffffL) { "Unsigned integer outside uint32." }
             var remaining = value
             while (remaining >= 128) {
                 output.write(((remaining and 127) or 128).toInt())
@@ -366,7 +514,7 @@ object BotMascotSceneCompiler {
     }
 
     /** Bounded strict JSON, independent of Android/JVM JSONTokener differences. */
-    private class StrictJson(private val source: String) {
+    private class StrictJson(private val source: String, private val maxObjectFields: Int, private val maxStringChars: Int) {
         private var position = 0
         private var values = 0
         fun read(): Any {
@@ -400,7 +548,7 @@ object BotMascotSceneCompiler {
                 whitespace()
                 val key = string()
                 require(names.add(key)) { "Duplicate JSON field." }
-                require(names.size <= 16) { "JSON object field budget exceeded." }
+                require(names.size <= maxObjectFields) { "JSON object field budget exceeded." }
                 whitespace(); expect(':')
                 result.put(key, value(depth))
                 whitespace()
@@ -462,7 +610,7 @@ object BotMascotSceneCompiler {
                         else -> throw IllegalArgumentException("Invalid JSON escape.")
                     }
                 }
-                require(result.length <= 256) { "JSON string budget exceeded." }
+                require(result.length <= maxStringChars) { "JSON string budget exceeded." }
             }
             throw IllegalArgumentException("Unterminated JSON string.")
         }

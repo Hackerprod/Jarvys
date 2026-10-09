@@ -268,6 +268,7 @@ public final class CoreAgentRuntime {
       available.remove("generate_bot_icon");
       available.remove("list_bots");
       available.remove("create_bot");
+      available.remove(BotMascotTool.NAME);
       available.remove("list_image_references");
       available.remove(ImportProjectImageTool.NAME);
       toolRegistry = toolRegistry.subset(available);
@@ -361,7 +362,7 @@ public final class CoreAgentRuntime {
   }
 
   static boolean lambda$runInternal$0(String name) {
-    return ("deliver_file".equals(name) || "generate_image".equals(name) || "generate_bot_icon".equals(name) || "list_bots".equals(name) || "create_bot".equals(name) || "list_image_references".equals(name)) ? false : true;
+    return ("deliver_file".equals(name) || "generate_image".equals(name) || "generate_bot_icon".equals(name) || "list_bots".equals(name) || "create_bot".equals(name) || BotMascotTool.NAME.equals(name) || "list_image_references".equals(name)) ? false : true;
   }
 
   /** Run-bound interactive capability, never part of inherited generic or Crew tool inventories. */
@@ -1165,7 +1166,7 @@ public final class CoreAgentRuntime {
             || ProjectImageTool.NAME.equals(name)
             || "generate_bot_icon".equals(name)
             || "list_bots".equals(name)
-            || "create_bot".equals(name)
+            || "create_bot".equals(name) || BotMascotTool.NAME.equals(name)
             || "list_image_references".equals(name)
             || name.startsWith("linux_")
             || TaskManagementTools.TOOL_NAMES.contains(name))
@@ -1230,6 +1231,8 @@ public final class CoreAgentRuntime {
       if (allowed(catalog)) tools.add(catalog);
       CoreTool creator = new BotCreationTool(this.context, this.sessionId);
       if (allowed(creator)) tools.add(creator);
+      CoreTool mascot = new BotMascotTool(this.context, this.sessionId);
+      if (allowed(mascot)) tools.add(mascot);
     }
     if (this.context != null
         && CodexImageGenerationTool.isAvailable(
@@ -1300,7 +1303,7 @@ public final class CoreAgentRuntime {
     List<String> names = new ArrayList<>();
     for (CoreTool tool : includedMcpTools) {
       String name = tool.declaration().name;
-      if (ImportProjectImageTool.NAME.equals(name) || ProjectImageTool.NAME.equals(name) || DeliverFileTool.NAME.equals(name) || BotCatalogTool.NAME.equals(name) || BotIconGenerationTool.NAME.equals(name) || BotCreationTool.NAME.equals(name)) continue;
+      if (ImportProjectImageTool.NAME.equals(name) || ProjectImageTool.NAME.equals(name) || DeliverFileTool.NAME.equals(name) || BotCatalogTool.NAME.equals(name) || BotIconGenerationTool.NAME.equals(name) || BotCreationTool.NAME.equals(name) || BotMascotTool.NAME.equals(name)) continue;
       if (!includeDelegate || !"search_files".equals(name)) {
         if (!includeDelegate
             || (!"generate_image".equals(name) && !"list_image_references".equals(name))) {
@@ -1712,13 +1715,22 @@ public final class CoreAgentRuntime {
     if (declared.contains(BotCreationTool.NAME)) {
       prompt.append("\n\nWhen the user asks for a reusable bot, use create_bot to save it completely: "
           + "choose a simple name (ideally 1-3 words), write reusable instructions in English, select only the minimum "
-          + "declared tools/skills and invent an appropriate freeform icon prompt. The tool presents a one-time review "
+          + "declared tools/skills, invent an appropriate freeform fallback icon prompt, and author an original mascot_scene_json with visual_description using the declared bounded scene schema. "
+          + "Create a genuinely distinct silhouette and state-specific motion, not a fixed character template or recolor. Include all nine modes and their nine static reduced poses. The tool presents a one-time review "
           + "of this exact definition and icon request before saving; this does not grant connector permissions or launch a task. "
           + "Keep the same request_id on retries and check list_bots afterward. Never claim a generated icon unless icon_complete is true. "
           + "If icon generation is unavailable or fails, explain that the definition is saved and the icon remains incomplete; "
           + "use generate_bot_icon for that exact existing bot after resolving access, never recreate it. "
+          + "Mascot compilation is local and does not depend on the image backend. Check mascot_compiled separately from icon_complete. LOCAL_COMPILED is not verified Android playback; the current visual remains static fallback and Android playback is not available yet. "
+          + "If a mascot is incomplete, use compile_bot_mascot with the same existing bot identity and current revision, never recreate the profile. "
           + "Catalog management is main-chat-only and must be performed directly even when Crew is enabled. "
           + "Do not send the user to the UI or merely output a draft when the declared creation tool can complete the request.");
+    }
+    if (declared.contains(BotMascotTool.NAME)) {
+      prompt.append("\n\nMascot edits: compile_bot_mascot is main-chat-only and changes presentation, never capabilities. "
+          + "Use it only for a user-requested mascot or to finish the visual in an approved bot-creation request. Obtain exact bot_id/revision from list_bots. "
+          + "Retain request_id and identical source/description on retries; changed designs require a new operation. Author all geometry/keyframes from the request, with no external assets or executable content. "
+          + "The tool preserves editable source and versioned bytes. Never infer Android rendering acceptance from compilation, and preserve custom PNG fallbacks.");
     }
     CrewMode mode = crewMode();
     if (this.depth == 0 && mode.enabled() && declared.contains("crew_spawn")) {

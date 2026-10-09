@@ -99,7 +99,7 @@ public class BotCatalogRepositoryTest {
         CrewProfileRepository repository = new CrewProfileRepository(root);
         assertEquals(3, repository.definitions().size());
         assertEquals(3, new CrewProfileRepository(root).definitions().size());
-        assertEquals(3, new JSONObject(new String(Files.readAllBytes(target.toPath()), StandardCharsets.UTF_8)).getInt("schemaVersion"));
+        assertEquals(CrewProfileRepository.SCHEMA_VERSION, new JSONObject(new String(Files.readAllBytes(target.toPath()), StandardCharsets.UTF_8)).getInt("schemaVersion"));
         assertEquals(CrewProfile.codingDefault().prompt, repository.codingProfile().prompt);
         assertFalse(repository.definition(clone.id).builtIn);
         assertEquals(8, repository.save(clone.profile, previous.capabilities, previous.skillIds).version);
@@ -175,7 +175,7 @@ public class BotCatalogRepositoryTest {
     }
 
     private static String schema(JSONObject row) throws Exception {
-        return new JSONObject().put("schemaVersion", 3).put("bots", new JSONArray().put(row)).toString();
+        return new JSONObject().put("schemaVersion", CrewProfileRepository.SCHEMA_VERSION).put("bots", new JSONArray().put(row)).toString();
     }
     private static CrewProfile profile(List<String> capabilities, List<String> skills) {
         return new CrewProfile(CrewProfileRepository.newCustomId(), 1, "Helper", "Short catalog description", "PRIVATE CHILD INSTRUCTIONS", skills, capabilities);

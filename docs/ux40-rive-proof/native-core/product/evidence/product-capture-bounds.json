@@ -1,0 +1,67 @@
+{
+  "scope": "Host snapshots only; not full motion-envelope or compact-icon acceptance",
+  "captures": 72,
+  "size": [
+    256,
+    256
+  ],
+  "noAlphaTouchingCanvasEdges": true,
+  "minimumCapturedAlphaMargin": 29,
+  "distinctReducedPixelHashes": {
+    "nimbo": 9,
+    "folio": 9
+  },
+  "tightestFiveCaptures": [
+    [
+      29,
+      "folio-Done-1.png",
+      [
+        72,
+        48,
+        210,
+        227
+      ]
+    ],
+    [
+      29,
+      "folio-Done-31.png",
+      [
+        71,
+        47,
+        210,
+        227
+      ]
+    ],
+    [
+      29,
+      "folio-DoneReduced-1.png",
+      [
+        72,
+        48,
+        210,
+        227
+      ]
+    ],
+    [
+      29,
+      "folio-DoneReduced-181.png",
+      [
+        72,
+        48,
+        210,
+        227
+      ]
+    ],
+    [
+      29,
+      "folio-Error-1.png",
+      [
+        70,
+        65,
+        190,
+        227
+      ]
+    ]
+  ],
+  "passed": true
+}

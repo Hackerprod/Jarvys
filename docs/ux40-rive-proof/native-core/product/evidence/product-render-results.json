@@ -1,0 +1,582 @@
+{
+  "scope": "Official Rive Canvas2D WASM 2.44.1 and host canvas adapter, not Android",
+  "captures": [
+    {
+      "id": "folio",
+      "state": "Idle",
+      "mode": 0,
+      "reduced": false,
+      "frames": 1,
+      "filename": "folio-Idle-1.png"
+    },
+    {
+      "id": "folio",
+      "state": "Idle",
+      "mode": 0,
+      "reduced": false,
+      "frames": 31,
+      "filename": "folio-Idle-31.png"
+    },
+    {
+      "id": "folio",
+      "state": "IdleReduced",
+      "mode": 0,
+      "reduced": true,
+      "frames": 1,
+      "filename": "folio-IdleReduced-1.png"
+    },
+    {
+      "id": "folio",
+      "state": "IdleReduced",
+      "mode": 0,
+      "reduced": true,
+      "frames": 181,
+      "filename": "folio-IdleReduced-181.png"
+    },
+    {
+      "id": "folio",
+      "state": "Thinking",
+      "mode": 1,
+      "reduced": false,
+      "frames": 1,
+      "filename": "folio-Thinking-1.png"
+    },
+    {
+      "id": "folio",
+      "state": "Thinking",
+      "mode": 1,
+      "reduced": false,
+      "frames": 31,
+      "filename": "folio-Thinking-31.png"
+    },
+    {
+      "id": "folio",
+      "state": "ThinkingReduced",
+      "mode": 1,
+      "reduced": true,
+      "frames": 1,
+      "filename": "folio-ThinkingReduced-1.png"
+    },
+    {
+      "id": "folio",
+      "state": "ThinkingReduced",
+      "mode": 1,
+      "reduced": true,
+      "frames": 181,
+      "filename": "folio-ThinkingReduced-181.png"
+    },
+    {
+      "id": "folio",
+      "state": "Working",
+      "mode": 2,
+      "reduced": false,
+      "frames": 1,
+      "filename": "folio-Working-1.png"
+    },
+    {
+      "id": "folio",
+      "state": "Working",
+      "mode": 2,
+      "reduced": false,
+      "frames": 31,
+      "filename": "folio-Working-31.png"
+    },
+    {
+      "id": "folio",
+      "state": "WorkingReduced",
+      "mode": 2,
+      "reduced": true,
+      "frames": 1,
+      "filename": "folio-WorkingReduced-1.png"
+    },
+    {
+      "id": "folio",
+      "state": "WorkingReduced",
+      "mode": 2,
+      "reduced": true,
+      "frames": 181,
+      "filename": "folio-WorkingReduced-181.png"
+    },
+    {
+      "id": "folio",
+      "state": "Queued",
+      "mode": 3,
+      "reduced": false,
+      "frames": 1,
+      "filename": "folio-Queued-1.png"
+    },
+    {
+      "id": "folio",
+      "state": "Queued",
+      "mode": 3,
+      "reduced": false,
+      "frames": 31,
+      "filename": "folio-Queued-31.png"
+    },
+    {
+      "id": "folio",
+      "state": "QueuedReduced",
+      "mode": 3,
+      "reduced": true,
+      "frames": 1,
+      "filename": "folio-QueuedReduced-1.png"
+    },
+    {
+      "id": "folio",
+      "state": "QueuedReduced",
+      "mode": 3,
+      "reduced": true,
+      "frames": 181,
+      "filename": "folio-QueuedReduced-181.png"
+    },
+    {
+      "id": "folio",
+      "state": "WaitingProvider",
+      "mode": 4,
+      "reduced": false,
+      "frames": 1,
+      "filename": "folio-WaitingProvider-1.png"
+    },
+    {
+      "id": "folio",
+      "state": "WaitingProvider",
+      "mode": 4,
+      "reduced": false,
+      "frames": 31,
+      "filename": "folio-WaitingProvider-31.png"
+    },
+    {
+      "id": "folio",
+      "state": "WaitingProviderReduced",
+      "mode": 4,
+      "reduced": true,
+      "frames": 1,
+      "filename": "folio-WaitingProviderReduced-1.png"
+    },
+    {
+      "id": "folio",
+      "state": "WaitingProviderReduced",
+      "mode": 4,
+      "reduced": true,
+      "frames": 181,
+      "filename": "folio-WaitingProviderReduced-181.png"
+    },
+    {
+      "id": "folio",
+      "state": "WaitingUser",
+      "mode": 5,
+      "reduced": false,
+      "frames": 1,
+      "filename": "folio-WaitingUser-1.png"
+    },
+    {
+      "id": "folio",
+      "state": "WaitingUser",
+      "mode": 5,
+      "reduced": false,
+      "frames": 31,
+      "filename": "folio-WaitingUser-31.png"
+    },
+    {
+      "id": "folio",
+      "state": "WaitingUserReduced",
+      "mode": 5,
+      "reduced": true,
+      "frames": 1,
+      "filename": "folio-WaitingUserReduced-1.png"
+    },
+    {
+      "id": "folio",
+      "state": "WaitingUserReduced",
+      "mode": 5,
+      "reduced": true,
+      "frames": 181,
+      "filename": "folio-WaitingUserReduced-181.png"
+    },
+    {
+      "id": "folio",
+      "state": "Done",
+      "mode": 6,
+      "reduced": false,
+      "frames": 1,
+      "filename": "folio-Done-1.png"
+    },
+    {
+      "id": "folio",
+      "state": "Done",
+      "mode": 6,
+      "reduced": false,
+      "frames": 31,
+      "filename": "folio-Done-31.png"
+    },
+    {
+      "id": "folio",
+      "state": "DoneReduced",
+      "mode": 6,
+      "reduced": true,
+      "frames": 1,
+      "filename": "folio-DoneReduced-1.png"
+    },
+    {
+      "id": "folio",
+      "state": "DoneReduced",
+      "mode": 6,
+      "reduced": true,
+      "frames": 181,
+      "filename": "folio-DoneReduced-181.png"
+    },
+    {
+      "id": "folio",
+      "state": "Error",
+      "mode": 7,
+      "reduced": false,
+      "frames": 1,
+      "filename": "folio-Error-1.png"
+    },
+    {
+      "id": "folio",
+      "state": "Error",
+      "mode": 7,
+      "reduced": false,
+      "frames": 31,
+      "filename": "folio-Error-31.png"
+    },
+    {
+      "id": "folio",
+      "state": "ErrorReduced",
+      "mode": 7,
+      "reduced": true,
+      "frames": 1,
+      "filename": "folio-ErrorReduced-1.png"
+    },
+    {
+      "id": "folio",
+      "state": "ErrorReduced",
+      "mode": 7,
+      "reduced": true,
+      "frames": 181,
+      "filename": "folio-ErrorReduced-181.png"
+    },
+    {
+      "id": "folio",
+      "state": "Interrupted",
+      "mode": 8,
+      "reduced": false,
+      "frames": 1,
+      "filename": "folio-Interrupted-1.png"
+    },
+    {
+      "id": "folio",
+      "state": "Interrupted",
+      "mode": 8,
+      "reduced": false,
+      "frames": 31,
+      "filename": "folio-Interrupted-31.png"
+    },
+    {
+      "id": "folio",
+      "state": "InterruptedReduced",
+      "mode": 8,
+      "reduced": true,
+      "frames": 1,
+      "filename": "folio-InterruptedReduced-1.png"
+    },
+    {
+      "id": "folio",
+      "state": "InterruptedReduced",
+      "mode": 8,
+      "reduced": true,
+      "frames": 181,
+      "filename": "folio-InterruptedReduced-181.png"
+    },
+    {
+      "id": "nimbo",
+      "state": "Idle",
+      "mode": 0,
+      "reduced": false,
+      "frames": 1,
+      "filename": "nimbo-Idle-1.png"
+    },
+    {
+      "id": "nimbo",
+      "state": "Idle",
+      "mode": 0,
+      "reduced": false,
+      "frames": 31,
+      "filename": "nimbo-Idle-31.png"
+    },
+    {
+      "id": "nimbo",
+      "state": "IdleReduced",
+      "mode": 0,
+      "reduced": true,
+      "frames": 1,
+      "filename": "nimbo-IdleReduced-1.png"
+    },
+    {
+      "id": "nimbo",
+      "state": "IdleReduced",
+      "mode": 0,
+      "reduced": true,
+      "frames": 181,
+      "filename": "nimbo-IdleReduced-181.png"
+    },
+    {
+      "id": "nimbo",
+      "state": "Thinking",
+      "mode": 1,
+      "reduced": false,
+      "frames": 1,
+      "filename": "nimbo-Thinking-1.png"
+    },
+    {
+      "id": "nimbo",
+      "state": "Thinking",
+      "mode": 1,
+      "reduced": false,
+      "frames": 31,
+      "filename": "nimbo-Thinking-31.png"
+    },
+    {
+      "id": "nimbo",
+      "state": "ThinkingReduced",
+      "mode": 1,
+      "reduced": true,
+      "frames": 1,
+      "filename": "nimbo-ThinkingReduced-1.png"
+    },
+    {
+      "id": "nimbo",
+      "state": "ThinkingReduced",
+      "mode": 1,
+      "reduced": true,
+      "frames": 181,
+      "filename": "nimbo-ThinkingReduced-181.png"
+    },
+    {
+      "id": "nimbo",
+      "state": "Working",
+      "mode": 2,
+      "reduced": false,
+      "frames": 1,
+      "filename": "nimbo-Working-1.png"
+    },
+    {
+      "id": "nimbo",
+      "state": "Working",
+      "mode": 2,
+      "reduced": false,
+      "frames": 31,
+      "filename": "nimbo-Working-31.png"
+    },
+    {
+      "id": "nimbo",
+      "state": "WorkingReduced",
+      "mode": 2,
+      "reduced": true,
+      "frames": 1,
+      "filename": "nimbo-WorkingReduced-1.png"
+    },
+    {
+      "id": "nimbo",
+      "state": "WorkingReduced",
+      "mode": 2,
+      "reduced": true,
+      "frames": 181,
+      "filename": "nimbo-WorkingReduced-181.png"
+    },
+    {
+      "id": "nimbo",
+      "state": "Queued",
+      "mode": 3,
+      "reduced": false,
+      "frames": 1,
+      "filename": "nimbo-Queued-1.png"
+    },
+    {
+      "id": "nimbo",
+      "state": "Queued",
+      "mode": 3,
+      "reduced": false,
+      "frames": 31,
+      "filename": "nimbo-Queued-31.png"
+    },
+    {
+      "id": "nimbo",
+      "state": "QueuedReduced",
+      "mode": 3,
+      "reduced": true,
+      "frames": 1,
+      "filename": "nimbo-QueuedReduced-1.png"
+    },
+    {
+      "id": "nimbo",
+      "state": "QueuedReduced",
+      "mode": 3,
+      "reduced": true,
+      "frames": 181,
+      "filename": "nimbo-QueuedReduced-181.png"
+    },
+    {
+      "id": "nimbo",
+      "state": "WaitingProvider",
+      "mode": 4,
+      "reduced": false,
+      "frames": 1,
+      "filename": "nimbo-WaitingProvider-1.png"
+    },
+    {
+      "id": "nimbo",
+      "state": "WaitingProvider",
+      "mode": 4,
+      "reduced": false,
+      "frames": 31,
+      "filename": "nimbo-WaitingProvider-31.png"
+    },
+    {
+      "id": "nimbo",
+      "state": "WaitingProviderReduced",
+      "mode": 4,
+      "reduced": true,
+      "frames": 1,
+      "filename": "nimbo-WaitingProviderReduced-1.png"
+    },
+    {
+      "id": "nimbo",
+      "state": "WaitingProviderReduced",
+      "mode": 4,
+      "reduced": true,
+      "frames": 181,
+      "filename": "nimbo-WaitingProviderReduced-181.png"
+    },
+    {
+      "id": "nimbo",
+      "state": "WaitingUser",
+      "mode": 5,
+      "reduced": false,
+      "frames": 1,
+      "filename": "nimbo-WaitingUser-1.png"
+    },
+    {
+      "id": "nimbo",
+      "state": "WaitingUser",
+      "mode": 5,
+      "reduced": false,
+      "frames": 31,
+      "filename": "nimbo-WaitingUser-31.png"
+    },
+    {
+      "id": "nimbo",
+      "state": "WaitingUserReduced",
+      "mode": 5,
+      "reduced": true,
+      "frames": 1,
+      "filename": "nimbo-WaitingUserReduced-1.png"
+    },
+    {
+      "id": "nimbo",
+      "state": "WaitingUserReduced",
+      "mode": 5,
+      "reduced": true,
+      "frames": 181,
+      "filename": "nimbo-WaitingUserReduced-181.png"
+    },
+    {
+      "id": "nimbo",
+      "state": "Done",
+      "mode": 6,
+      "reduced": false,
+      "frames": 1,
+      "filename": "nimbo-Done-1.png"
+    },
+    {
+      "id": "nimbo",
+      "state": "Done",
+      "mode": 6,
+      "reduced": false,
+      "frames": 31,
+      "filename": "nimbo-Done-31.png"
+    },
+    {
+      "id": "nimbo",
+      "state": "DoneReduced",
+      "mode": 6,
+      "reduced": true,
+      "frames": 1,
+      "filename": "nimbo-DoneReduced-1.png"
+    },
+    {
+      "id": "nimbo",
+      "state": "DoneReduced",
+      "mode": 6,
+      "reduced": true,
+      "frames": 181,
+      "filename": "nimbo-DoneReduced-181.png"
+    },
+    {
+      "id": "nimbo",
+      "state": "Error",
+      "mode": 7,
+      "reduced": false,
+      "frames": 1,
+      "filename": "nimbo-Error-1.png"
+    },
+    {
+      "id": "nimbo",
+      "state": "Error",
+      "mode": 7,
+      "reduced": false,
+      "frames": 31,
+      "filename": "nimbo-Error-31.png"
+    },
+    {
+      "id": "nimbo",
+      "state": "ErrorReduced",
+      "mode": 7,
+      "reduced": true,
+      "frames": 1,
+      "filename": "nimbo-ErrorReduced-1.png"
+    },
+    {
+      "id": "nimbo",
+      "state": "ErrorReduced",
+      "mode": 7,
+      "reduced": true,
+      "frames": 181,
+      "filename": "nimbo-ErrorReduced-181.png"
+    },
+    {
+      "id": "nimbo",
+      "state": "Interrupted",
+      "mode": 8,
+      "reduced": false,
+      "frames": 1,
+      "filename": "nimbo-Interrupted-1.png"
+    },
+    {
+      "id": "nimbo",
+      "state": "Interrupted",
+      "mode": 8,
+      "reduced": false,
+      "frames": 31,
+      "filename": "nimbo-Interrupted-31.png"
+    },
+    {
+      "id": "nimbo",
+      "state": "InterruptedReduced",
+      "mode": 8,
+      "reduced": true,
+      "frames": 1,
+      "filename": "nimbo-InterruptedReduced-1.png"
+    },
+    {
+      "id": "nimbo",
+      "state": "InterruptedReduced",
+      "mode": 8,
+      "reduced": true,
+      "frames": 181,
+      "filename": "nimbo-InterruptedReduced-181.png"
+    }
+  ],
+  "passed": true
+}

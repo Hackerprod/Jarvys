@@ -35,12 +35,14 @@ class BotCreationTool internal constructor(private val service: BotCreationServi
             "capabilities" to choices(service.capabilities()),
             "skill_ids" to choices(service.skills(), SkillRepository.MAX_SKILLS_PER_RUN),
             "workspace_mode" to mapOf("type" to "string", "enum" to listOf("legacy_chat", "conversation_project"), "description" to "coding_* and project_* tools require conversation_project. project_exec also requires project_jobs. Skills require read_skill."),
-            "icon_prompt" to text("Freeform thematic visual prompt for the requested bot's generated icon. No private images, attachments, URLs or paths are read.", BotIconService.MAX_PROMPT_CHARS),
+            "icon_prompt" to text("Freeform thematic visual prompt for the requested bot's static fallback icon. No private images, attachments, URLs or paths are read.", BotIconService.MAX_PROMPT_CHARS),
+            "visual_description" to text("Original mascot design and state-specific movement description, separate from bot instructions. Plain text, no control characters.", 1200),
+            "mascot_scene_json" to text(BotMascotTool.SCENE_GUIDE, BotMascotSceneCompiler.MAX_SOURCE_BYTES),
         )
-        return ToolSpec(NAME, "jarvys/bots", "Create and persist a custom bot from the user's request, including its simple name, English instructions and generated icon. " +
-            "The user reviews this exact definition, icon prompt and minimum capability/skill scope before saving. This never changes connector permissions or starts a task. " +
+        return ToolSpec(NAME, "jarvys/bots", "Create and persist a custom bot from the user's request, including its simple name, English instructions, original locally compiled mascot and generated static fallback icon. " +
+            "The user reviews this exact definition, visual description, scene hash, icon prompt and minimum capability/skill scope before saving. This never changes connector permissions or starts a task. " +
             "Image generation uses existing signed-in Codex image access only; unavailable or failed generation returns a saved bot with an explicitly incomplete icon. " +
-            "Never claim the icon is finished unless icon_status is generated. Retry only with the same request_id, then inspect list_bots; never recreate to fix an icon. Main chat only.",
+            "Never claim the icon is finished unless icon_status is generated. Mascot compilation is local and independent of image access; LOCAL_COMPILED does not prove Android playback. The current visual stays static; Android playback is not available yet. Retry only with the same request_id, then inspect list_bots; never recreate to fix a visual. Main chat only.",
             "bots", ToolSpec.Status.IMPLEMENTED, emptyMap(), properties.keys.toList(),
             mapOf("type" to "object", "properties" to properties, "required" to properties.keys.toList(), "additionalProperties" to false))
     }
@@ -60,6 +62,7 @@ internal class BotCreationService(
     private val approve: (ApprovalSummary, CancellationToken) -> ApprovalDecision,
     private val iconAvailable: () -> Boolean,
     private val generateIcon: (String, Int, String, CancellationToken) -> BotDefinition,
+    private val compileMascot: ((String, Int, String, String, String, CancellationToken) -> BotDefinition)? = null,
 ) {
     constructor(context: Context, sessionId: String) : this(
         CrewProfileRepository(context), sessionId,
@@ -68,6 +71,8 @@ internal class BotCreationService(
         { summary, token -> ApprovalGate.INSTANCE.request(summary, token) },
         { BotIconService(context, sessionId, ProviderSettings(context)).isAvailable },
         { id, revision, prompt, token -> BotIconService(context, sessionId, ProviderSettings(context)).generateAndAssign(id, revision, prompt, token) },
+        { id, revision, request, description, scene, token -> BotMascotService(context, sessionId)
+            .assign(id, revision, request, description, scene, token, false).definition },
     )
 
     fun capabilities() = currentCapabilities().filterNot { it == com.jarvys.agent.skills.SkillScopePolicy.APK_FACTORY_TOOL }.distinct()
@@ -78,7 +83,9 @@ internal class BotCreationService(
         if (token.isCrewRun || (sessionId.isBlank() || sessionId == ProactiveConversation.SESSION_ID || sessionId == ScheduledTaskConversation.SESSION_ID))
             return CoreToolResult.failure("Bot creation is available only in the main chat.")
         try {
-            require(arguments != null && arguments.keys == FIELDS) { "Provide exactly request_id, name, description, instructions, capabilities, skill_ids, workspace_mode and icon_prompt." }
+            require(arguments != null && (arguments.keys == LEGACY_FIELDS || arguments.keys == FIELDS)) {
+                "Provide the bot definition and both visual_description and mascot_scene_json; unknown fields are not accepted."
+            }
             fun text(field: String, max: Int): String {
                 val value = arguments[field]
                 require(value is String && value.isNotBlank() && value.length <= max && !value.contains('\u0000')) { "Invalid $field." }
@@ -95,6 +102,14 @@ internal class BotCreationService(
             require(name.split(Regex("\\s+")).size <= 4) { "Use a simple bot name of at most four words." }
             val instructions = text("instructions", 16000)
             val iconPrompt = text("icon_prompt", BotIconService.MAX_PROMPT_CHARS)
+            val hasMascot = arguments.keys == FIELDS
+            val visualDescription = if (hasMascot) text("visual_description", 1200).also { value ->
+                com.jarvys.agent.crew.BotMascotDescriptor.requireVisualDescription(value)
+            } else null
+            // Keep the exact source bytes in the fingerprint; do not trim or silently rewrite the agent's design.
+            val mascotScene = if (hasMascot) (arguments["mascot_scene_json"] as? String)?.also {
+                BotMascotSceneCompiler.validateProduct(it)
+            } ?: throw IllegalArgumentException("mascot_scene_json must be a bounded product scene JSON string.") else null
             val workspace = text("workspace_mode", 32)
             require(workspace in listOf("legacy_chat", "conversation_project")) { "Unsupported workspace_mode." }
             val description = text("description", 240)
@@ -103,8 +118,10 @@ internal class BotCreationService(
             val operationPrefix = "custom-chat-" + digest(sessionId + "\u0000" + requestKey) + "-"
             // Both hashes are persisted atomically as the stable ID. A reused operation key with
             // any changed approved field (including icon prompt) must never create another bot.
-            val fingerprint = digest(JSONArray(listOf(name, description, instructions, JSONArray(selectedSkills),
-                JSONArray(selectedCapabilities), workspace, iconPrompt)).toString())
+            val approvedPayload = JSONArray(listOf(name, description, instructions, JSONArray(selectedSkills),
+                JSONArray(selectedCapabilities), workspace, iconPrompt))
+            if (hasMascot) approvedPayload.put(visualDescription).put(mascotScene)
+            val fingerprint = digest(approvedPayload.toString())
             val id = operationPrefix + fingerprint
             val draft = CrewProfile(id, 1, name, description, instructions, selectedSkills, selectedCapabilities,
                 if (workspace == "conversation_project") CrewProfile.WorkspaceMode.CONVERSATION_PROJECT else CrewProfile.WorkspaceMode.LEGACY_CHAT)
@@ -115,6 +132,8 @@ internal class BotCreationService(
                 lines = listOf("Purpose: ${draft.description}", "Instructions (English):\n$instructions",
                     "Tools: ${draft.capabilities.joinToString().ifEmpty { "None" }}", "Skills: ${draft.skillIds.joinToString().ifEmpty { "None" }}",
                     "Workspace: $workspace", "Icon prompt: $iconPrompt",
+                    if (hasMascot) "Mascot design and motion: $visualDescription\nScene SHA-256: ${digest(checkNotNull(mascotScene))}\nNine states plus nine reduced poses; compiled locally. Android playback is not available yet; the current visual remains static."
+                    else "Legacy request: no animated mascot source was supplied.",
                     if (iconAvailable()) "Generate the icon with existing Codex image access and quota." else "Image access is unavailable. Save the bot now with its default icon; generation remains incomplete.",
                     "Saves this definition only. Existing connector approvals remain in force; no task starts."),
                 allowAlwaysAvailable = false,
@@ -132,12 +151,26 @@ internal class BotCreationService(
             } }
             val created = checkNotNull(saved)
             if (duplicate) return outcome(created, true, "not_retried")
-            if (!iconAvailable()) return outcome(created, false, "unavailable")
+            var current = created
+            var mascotStatus = if (hasMascot) "unavailable" else "not_requested_legacy"
+            if (hasMascot && compileMascot != null) {
+                try {
+                    current = compileMascot.invoke(created.id, created.revision, requestKey,
+                        checkNotNull(visualDescription), checkNotNull(mascotScene), token)
+                    mascotStatus = "LOCAL_COMPILED"
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: RuntimeException) {
+                    current = repository.definition(created.id); mascotStatus = "failed"
+                    // Never rebase the original icon request onto a concurrent visual/profile edit.
+                    if (current.revision != created.revision) return outcome(current, false, "not_started_conflict", mascotStatus)
+                }
+            }
+            if (!iconAvailable()) return outcome(current, false, "unavailable", mascotStatus)
             return try {
-                outcome(generateIcon(created.id, created.revision, iconPrompt, token), false, "generated")
+                outcome(generateIcon(current.id, current.revision, iconPrompt, token), false, "generated", mascotStatus)
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (failure: BotIconService.Failure) { outcome(repository.definition(created.id), false, "failed_${failure.reason.name.lowercase()}") }
-            catch (_: RuntimeException) { outcome(repository.definition(created.id), false, "failed") }
+            catch (failure: BotIconService.Failure) { outcome(repository.definition(created.id), false, "failed_${failure.reason.name.lowercase()}", mascotStatus) }
+            catch (_: RuntimeException) { outcome(repository.definition(created.id), false, "failed", mascotStatus) }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (invalid: IllegalArgumentException) { return CoreToolResult.failure(invalid.message ?: "Invalid bot definition. Nothing was changed.") }
         catch (_: RuntimeException) { return CoreToolResult.failure("Could not finish bot creation. Use list_bots to check the catalog and retry only with the same request_id.") }
@@ -153,11 +186,15 @@ internal class BotCreationService(
         }
     }
 
-    private fun outcome(bot: BotDefinition, duplicate: Boolean, status: String): CoreToolResult {
+    private fun outcome(bot: BotDefinition, duplicate: Boolean, status: String, mascotStatus: String = "not_retried"): CoreToolResult {
         val actual = if (bot.iconRef.isNotEmpty()) "generated" else status
         return CoreToolResult.success(JSONObject().put("bot_id", bot.id).put("name", bot.profile.name).put("revision", bot.revision)
             .put("saved", true).put("already_existed", duplicate).put("icon_status", actual)
             .put("icon_complete", bot.iconRef.isNotEmpty()).put("enabled", bot.enabled)
+            .put("mascot_status", if (bot.mascot != null) "LOCAL_COMPILED" else mascotStatus)
+            .put("mascot_compiled", bot.mascot != null).put("android_playback_verified", false)
+            .put("mascot_next_step", if (bot.mascot != null) "Scene saved locally. Android playback is not available yet; the current visual remains static."
+                else "Mascot is incomplete. Use compile_bot_mascot for this exact existing bot; do not recreate it.")
             .put("next_step", if (bot.iconRef.isNotEmpty()) "Verify with list_bots. No task was started."
                 else "The bot is saved, but its generated icon is incomplete. Do not recreate it. Generate an icon for this exact bot after resolving image access or cancellation.")
             .toString())
@@ -167,6 +204,7 @@ internal class BotCreationService(
 
     companion object {
         private val CREATION_LOCK = Any()
-        private val FIELDS = setOf("request_id", "name", "description", "instructions", "capabilities", "skill_ids", "workspace_mode", "icon_prompt")
+        private val LEGACY_FIELDS = setOf("request_id", "name", "description", "instructions", "capabilities", "skill_ids", "workspace_mode", "icon_prompt")
+        private val FIELDS = LEGACY_FIELDS + setOf("visual_description", "mascot_scene_json")
     }
 }
