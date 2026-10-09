@@ -32,10 +32,16 @@ import com.jarvys.agent.crew.MascotPilotSession
 import com.jarvys.agent.crew.rememberMascotResumed
 import com.jarvys.agent.ui.motion.rememberMotionViewport
 
-/**
- * Consent exists only in this visible conversation composition. No preference/saveable value is
- * written, so recreation or a native process crash can never re-enable playback on restart.
- */
+/** Process-memory only. A new process starts disabled; no preferences or saved state are written. */
+internal object JarvysMascotProcessConsent {
+    var session by mutableStateOf(MascotPilotSession())
+        private set
+
+    fun enable(resumed: Boolean, visible: Boolean) { session = session.start(resumed, visible) }
+    fun revoke() { session = session.stop() }
+}
+
+/** Consent survives UI navigation/background in this process; native views never do. */
 @Composable
 internal fun JarvysMascotAccountMenu(
     mode: Int?,
@@ -44,7 +50,7 @@ internal fun JarvysMascotAccountMenu(
     surfaceVisible: Boolean,
     content: @Composable (closeMenu: () -> Unit) -> Unit,
 ) {
-    // Drawer coverage, history/new-chat navigation and session replacement all forget consent.
+    // These keys close local menus/dialogs and dispose renderers; process consent is separate.
     key(visibleSessionId, liveConversationVisible, surfaceVisible) {
         JarvysMascotAccountMenuSession(mode, visibleSessionId, liveConversationVisible, surfaceVisible, content)
     }
@@ -61,27 +67,29 @@ private fun JarvysMascotAccountMenuSession(
     var menuOpen by remember { mutableStateOf(false) }
     var warningOpen by remember { mutableStateOf(false) }
     var pilotOpen by remember { mutableStateOf(false) }
-    var session by remember { mutableStateOf(MascotPilotSession()) }
+    val session = JarvysMascotProcessConsent.session
+    val surface = remember { MascotAccountSurface() }
     var playbackFailed by remember { mutableStateOf(false) }
     val viewport = rememberMotionViewport()
     fun revoke() {
-        session = session.stop()
+        JarvysMascotProcessConsent.revoke()
         warningOpen = false
     }
-    val resumed = rememberMascotResumed { revoke() }
+    val resumed = rememberMascotResumed { warningOpen = false }
     val eligible = liveConversationVisible && !visibleSessionId.isNullOrBlank() && surfaceVisible
     LaunchedEffect(viewport.visible, eligible) {
-        if (!viewport.visible || !eligible) revoke()
+        if (!viewport.visible || !eligible) warningOpen = false
     }
-    DisposableEffect(Unit) { onDispose { session = session.stop() } }
+    DisposableEffect(surface) { onDispose { surface.active = false } }
     val canEnable = eligible && resumed && viewport.visible
     val accountDescription = stringResource(R.string.jarvys_account_menu)
     val latestMode by rememberUpdatedState(mode)
     val latestResumed by rememberUpdatedState(resumed)
     val latestVisible by rememberUpdatedState(viewport.visible)
     val renderEpoch = session.generation
-    fun isCurrent() = eligible && !menuOpen && !warningOpen && !pilotOpen &&
-        jarvysMascotKnownLiveMode(latestMode) && session.accepts(renderEpoch, latestResumed, latestVisible)
+    fun isCurrent() = surface.active && eligible && !menuOpen && !warningOpen && !pilotOpen &&
+        jarvysMascotKnownLiveMode(latestMode) &&
+        JarvysMascotProcessConsent.session.accepts(renderEpoch, latestResumed, latestVisible)
     Box {
         IconButton(onClick = { menuOpen = true },
             modifier = Modifier.size(48.dp).then(viewport.modifier).testTag("jarvys-account-menu")
@@ -92,9 +100,9 @@ private fun JarvysMascotAccountMenuSession(
                     animationOptedIn = isCurrent(),
                     isAnimationCurrent = { isCurrent() },
                     onAnimationStopped = { failed ->
-                        // An old disposed renderer must not revoke a newer explicit opt-in.
-                        if (session.optedIn && session.generation == renderEpoch) {
-                            playbackFailed = failed
+                        // Background/coverage only pauses. Old surfaces cannot revoke current consent.
+                        if (failed && isCurrent()) {
+                            playbackFailed = true
                             revoke()
                         }
                     },
@@ -117,7 +125,7 @@ private fun JarvysMascotAccountMenuSession(
                 text = { Text(stringResource(R.string.jarvys_mascot_visual_test)) },
                 enabled = resumed && surfaceVisible,
                 modifier = Modifier.testTag("jarvys-mascot-visual-test"),
-                onClick = { menuOpen = false; revoke(); pilotOpen = true },
+                onClick = { menuOpen = false; pilotOpen = true },
             )
             if (playbackFailed) DropdownMenuItem(
                 text = { Text(stringResource(R.string.jarvys_mascot_unavailable)) },
@@ -135,7 +143,10 @@ private fun JarvysMascotAccountMenuSession(
         confirmButton = { TextButton(
             onClick = {
                 warningOpen = false
-                if (canEnable) { playbackFailed = false; session = session.start(resumed, viewport.visible) }
+                if (canEnable) {
+                    playbackFailed = false
+                    JarvysMascotProcessConsent.enable(resumed, viewport.visible)
+                }
             }, enabled = canEnable, modifier = Modifier.testTag("jarvys-mascot-confirm-enable"),
         ) { Text(stringResource(R.string.jarvys_mascot_enable_once)) } },
         dismissButton = { TextButton(onClick = { warningOpen = false }) {
@@ -158,3 +169,6 @@ private fun JarvysMascotAccountMenuSession(
         }
     }
 }
+
+/** Validity belongs to one surface, independently of the retained consent generation. */
+private class MascotAccountSurface(var active: Boolean = true)

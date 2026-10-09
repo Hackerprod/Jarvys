@@ -18,6 +18,8 @@ import com.jarvys.agent.R
 import com.jarvys.agent.ui.motion.LocalReducedMotion
 import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Assert.assertEquals
+import org.junit.Before
+import org.junit.After
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -32,6 +34,9 @@ import org.robolectric.annotation.GraphicsMode
 class JarvysMascotUiTest {
     @OptIn(ExperimentalTestApi::class)
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>(effectContext = StandardTestDispatcher())
+
+    @Before fun resetProcessConsent() { JarvysMascotProcessConsent.revoke() }
+    @After fun clearProcessConsent() { JarvysMascotProcessConsent.revoke() }
 
     private fun noNative() {
         compose.onNodeWithTag("jarvys-mascot-native").assertDoesNotExist()
@@ -86,7 +91,7 @@ class JarvysMascotUiTest {
         }
     }
 
-    @Test fun explicitUnknownModeOptInIsNonNativeAndBackgroundRevokesIt() {
+    @Test fun explicitUnknownModeOptInIsNonNativeAndBackgroundRetainsConsent() {
         compose.setContent { MaterialTheme {
             CompositionLocalProvider(LocalReducedMotion provides true) {
                 JarvysMascotAccountMenu(null, "session", true, true) {}
@@ -94,46 +99,58 @@ class JarvysMascotUiTest {
         } }
         enableUnknownMode()
         compose.activityRule.scenario.moveToState(Lifecycle.State.STARTED)
+        compose.waitForIdle()
+        noNative()
         compose.activityRule.scenario.moveToState(Lifecycle.State.RESUMED)
         compose.waitForIdle()
         openMenu()
-        compose.onNodeWithText(compose.activity.getString(R.string.jarvys_mascot_enable)).assertExists()
-        compose.onNodeWithText(compose.activity.getString(R.string.jarvys_mascot_disable)).assertDoesNotExist()
+        compose.onNodeWithText(compose.activity.getString(R.string.jarvys_mascot_disable)).assertExists()
+        compose.onNodeWithText(compose.activity.getString(R.string.jarvys_mascot_enable)).assertDoesNotExist()
         noNative()
     }
 
-    @Test fun sessionHistoryDrawerAndOffscreenChangesForgetTemporaryConsent() {
+    @Test fun chatDrawerOffscreenAndRouteRecreationRetainConsentUntilExplicitStop() {
         var sessionId by mutableStateOf("one")
         var liveVisible by mutableStateOf(true)
         var surfaceVisible by mutableStateOf(true)
         var onScreen by mutableStateOf(true)
+        var showAccount by mutableStateOf(true)
         compose.setContent { MaterialTheme {
-            Box(Modifier.offset(y = if (onScreen) 0.dp else 2000.dp)) {
-                JarvysMascotAccountMenu(null, sessionId, liveVisible, surfaceVisible) {}
+            if (showAccount) Box(Modifier.offset(y = if (onScreen) 0.dp else 2000.dp)) {
+                JarvysMascotAccountMenu(null, sessionId, liveVisible, surfaceVisible) { close ->
+                    DropdownMenuItem(text = { Text("Close test menu") }, onClick = close)
+                }
             }
         } }
+        fun assertRetained() {
+            openMenu()
+            compose.onNodeWithText(compose.activity.getString(R.string.jarvys_mascot_disable)).assertExists()
+            compose.onNodeWithText("Close test menu").performClick()
+            noNative()
+        }
         enableUnknownMode()
         compose.runOnIdle { sessionId = "two" }
-        openMenu()
-        compose.onNodeWithText(compose.activity.getString(R.string.jarvys_mascot_enable)).assertExists()
-        compose.onNodeWithTag("jarvys-mascot-toggle").performClick()
-        compose.onNodeWithTag("jarvys-mascot-confirm-enable").performClick()
+        assertRetained()
         compose.runOnIdle { liveVisible = false }
+        noNative()
         compose.runOnIdle { liveVisible = true }
-        openMenu()
-        compose.onNodeWithText(compose.activity.getString(R.string.jarvys_mascot_enable)).assertExists()
-        compose.onNodeWithTag("jarvys-mascot-toggle").performClick()
-        compose.onNodeWithTag("jarvys-mascot-confirm-enable").performClick()
+        assertRetained()
         compose.runOnIdle { surfaceVisible = false }
+        noNative()
         compose.runOnIdle { surfaceVisible = true }
-        openMenu()
-        compose.onNodeWithText(compose.activity.getString(R.string.jarvys_mascot_enable)).assertExists()
-        compose.onNodeWithTag("jarvys-mascot-toggle").performClick()
-        compose.onNodeWithTag("jarvys-mascot-confirm-enable").performClick()
+        assertRetained()
         compose.runOnIdle { onScreen = false }
         compose.waitForIdle()
+        noNative()
         compose.runOnIdle { onScreen = true }
         compose.waitForIdle()
+        assertRetained()
+        compose.runOnIdle { showAccount = false }
+        noNative()
+        compose.runOnIdle { showAccount = true }
+        assertRetained()
+        openMenu()
+        compose.onNodeWithTag("jarvys-mascot-toggle").performClick()
         openMenu()
         compose.onNodeWithText(compose.activity.getString(R.string.jarvys_mascot_enable)).assertExists()
         noNative()

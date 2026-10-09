@@ -40,7 +40,19 @@ class JarvysMascotPolicyTest {
         assertEquals(0, inits)
     }
 
-    @Test fun temporaryConsentCannotSurviveRevocationOrNewComposition() {
+    @Test fun visibilityPauseDoesNotConsumeProcessConsentButStillBlocksPreparation() {
+        val consent = MascotPilotSession().start(true, true)
+        assertFalse(consent.accepts(consent.generation, false, true))
+        assertFalse(consent.accepts(consent.generation, true, false))
+        assertTrue(consent.optedIn)
+        assertTrue(consent.accepts(consent.generation, true, true))
+        assertFalse(jarvysMascotMayPrepare(2, consent.optedIn, false, true))
+        assertFalse(jarvysMascotMayPrepare(2, consent.optedIn, true, false))
+        assertFalse(jarvysMascotMayPrepare(null, consent.optedIn, true, true))
+        assertTrue(jarvysMascotMayPrepare(7, consent.optedIn, true, true))
+    }
+
+    @Test fun temporaryConsentCannotSurviveRevocationOrNewProcess() {
         val allowed = MascotPilotSession().start(true, true)
         val revoked = allowed.stop()
         assertFalse(revoked.accepts(allowed.generation, true, true))

@@ -5,9 +5,9 @@
     <string name="jarvys_mascot_disable">Detener animación de Jarvys</string>
     <string name="jarvys_mascot_visual_test">Prueba visual de Jarvys</string>
     <string name="jarvys_mascot_warning_title">¿Probar la animación de Jarvys?</string>
-    <string name="jarvys_mascot_warning">La reproducción nativa experimental aún no ha superado las comprobaciones en un dispositivo Android físico. Puede cerrar la app inesperadamente. Se activa solo para esta sesión de chat visible. Al salir del chat, abrir el panel lateral, dejar de ver el icono o poner la app en segundo plano, se desactiva. Reiniciar nunca la activa automáticamente.</string>
+    <string name="jarvys_mascot_warning">La reproducción nativa experimental aún no ha superado las comprobaciones en un dispositivo Android físico. Puede cerrar la app inesperadamente. Se activa para esta sesión de la app. La reproducción se pausa mientras no se ve o la app está en segundo plano, y se reanuda con la actividad actual al volver, incluso después de cambiar de chat. La elección se conserva solo en memoria. Puedes detenerla desde este menú; un nuevo proceso de la app o un fallo de reproducción la desactivan.</string>
     <string name="jarvys_mascot_activity_notice">El robot se anima solo con actividad de herramientas verificada y resultados finales explícitos. Si la actividad es desconocida, permanece estático. Se respeta el ajuste de movimiento reducido de Android.</string>
-    <string name="jarvys_mascot_enable_once">Activar para esta sesión</string>
+    <string name="jarvys_mascot_enable_once">Activar para esta sesión de la app</string>
     <string name="jarvys_mascot_keep_static">Mantener estático</string>
     <string name="jarvys_mascot_unavailable">Reproducción detenida; Jarvys se muestra estático</string>
 </resources>
