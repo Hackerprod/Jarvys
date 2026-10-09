@@ -2,8 +2,6 @@ package com.jarvys.agent.ui.chat
 
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.EnterTransition
-import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
@@ -25,6 +23,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -38,10 +37,8 @@ import androidx.compose.ui.unit.dp
 import com.jarvys.agent.JarvysMotion
 import com.jarvys.agent.R
 import com.jarvys.agent.ui.motion.rememberMotionEnabled
-import com.jarvys.agent.ui.motion.LocalReducedMotion
 import com.jarvys.agent.ui.motion.rememberMotionViewport
 import kotlin.math.PI
-import kotlin.math.cos
 import kotlin.math.sin
 
 @Composable
@@ -52,8 +49,9 @@ fun AgentPresenceIndicator(
     showLabel: Boolean = true,
 ) {
     val presence = remember(snapshot) { AgentPresence.from(snapshot) }
-    val reducedMotion = LocalReducedMotion.current
-    val animate = rememberMotionEnabled(active = presence.active, visible = visible)
+    val viewport = rememberMotionViewport()
+    val motionAllowed = rememberMotionEnabled(active = true, visible = visible && viewport.visible)
+    val animate = presence.active && motionAllowed
     val label = presenceLabel(presence)
     Row(
         modifier = modifier.semantics(mergeDescendants = true) {
@@ -63,15 +61,18 @@ fun AgentPresenceIndicator(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Box(Modifier.size(34.dp).testTag("agent-presence-glyph"), contentAlignment = Alignment.Center) {
-            AnimatedContent(targetState = presence.state, transitionSpec = {
-                if (reducedMotion) EnterTransition.None togetherWith ExitTransition.None
-                else fadeIn(JarvysMotion.presence()) togetherWith fadeOut(JarvysMotion.presence())
-            }, label = "agent-presence-state") { state ->
-                if (animate && (state == AgentPresence.State.THINKING || state == AgentPresence.State.WORKING)) {
-                    OrbitalPresenceGlyph(state)
-                } else StillPresenceGlyph(state)
-            }
+        Box(Modifier.size(34.dp).then(viewport.modifier).testTag("agent-presence-glyph"),
+            contentAlignment = Alignment.Center) {
+            // Remove both infinite loops and finite state transitions when motion is unavailable.
+            if (motionAllowed) {
+                AnimatedContent(targetState = presence.state, transitionSpec = {
+                    fadeIn(JarvysMotion.presence()) togetherWith fadeOut(JarvysMotion.presence())
+                }, label = "agent-presence-state") { state ->
+                    if (animate && (state == AgentPresence.State.THINKING || state == AgentPresence.State.WORKING)) {
+                        LatticePresenceGlyph(state)
+                    } else StillPresenceGlyph(state)
+                }
+            } else StillPresenceGlyph(presence.state)
         }
         if (showLabel) Text(label, Modifier.weight(1f),
             style = MaterialTheme.typography.labelSmall,
@@ -130,18 +131,17 @@ private fun presenceColor(state: AgentPresence.State) = when (state) {
 }
 
 @Composable
-private fun OrbitalPresenceGlyph(state: AgentPresence.State) {
-    val cycle = if (state == AgentPresence.State.THINKING) JarvysMotion.BotPulseCycleMillis else JarvysMotion.AntennaCycleMillis
-    val rotation = rememberInfiniteTransition(label = "agent-presence-cycle").animateFloat(
+private fun LatticePresenceGlyph(state: AgentPresence.State) {
+    // One clock, read only during drawing; changing opacity never recomposes the label or layout.
+    val phase = rememberInfiniteTransition(label = "agent-presence-cycle").animateFloat(
         initialValue = 0f,
         targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(cycle, easing = LinearEasing), RepeatMode.Restart),
+        animationSpec = infiniteRepeatable(tween(LatticePresence.CycleMillis, easing = LinearEasing), RepeatMode.Restart),
         label = "agent-presence-phase",
     )
     val color = presenceColor(state)
-    val surface = MaterialTheme.colorScheme.surface
     Canvas(Modifier.size(34.dp).testTag("agent-presence-motion-active")) {
-        drawOrbit(state, color, surface, rotation.value)
+        drawLattice(color, phase.value)
     }
 }
 
@@ -154,32 +154,12 @@ private fun StillPresenceGlyph(state: AgentPresence.State) {
     }
 }
 
-private fun DrawScope.drawOrbit(state: AgentPresence.State, color: androidx.compose.ui.graphics.Color,
-                               surface: androidx.compose.ui.graphics.Color, phase: Float) {
-    val center = Offset(size.width / 2f, size.height / 2f)
-    val outer = size.minDimension * 0.39f
-    val stroke = 1.5.dp.toPx()
-    drawCircle(color.copy(alpha = 0.24f), outer, center, style = Stroke(stroke))
-    when (state) {
-        AgentPresence.State.THINKING -> {
-            drawArc(color.copy(alpha = 0.78f), phase * 360f, 88f, false,
-                topLeft = Offset(center.x - outer, center.y - outer),
-                size = androidx.compose.ui.geometry.Size(outer * 2, outer * 2), style = Stroke(stroke, cap = StrokeCap.Round))
-            val angle = phase * (2f * PI.toFloat())
-            drawCircle(color, 2.8.dp.toPx(), Offset(center.x + cos(angle) * outer, center.y + sin(angle) * outer))
-            drawCircle(color.copy(alpha = 0.92f), 3.7.dp.toPx(), center)
-        }
-        AgentPresence.State.WORKING -> {
-            drawArc(color.copy(alpha = 0.8f), phase * 360f, 132f, false,
-                topLeft = Offset(center.x - outer, center.y - outer),
-                size = androidx.compose.ui.geometry.Size(outer * 2, outer * 2), style = Stroke(stroke, cap = StrokeCap.Round))
-            val angle = phase * (2f * PI.toFloat())
-            val opposite = angle + PI.toFloat()
-            drawCircle(color, 2.6.dp.toPx(), Offset(center.x + cos(angle) * outer, center.y + sin(angle) * outer))
-            drawCircle(color.copy(alpha = 0.58f), 2.2.dp.toPx(), Offset(center.x + cos(opposite) * outer, center.y + sin(opposite) * outer))
-            drawCircle(color, 3.2.dp.toPx(), center)
-        }
-        else -> drawStill(state, color, surface)
+private fun DrawScope.drawLattice(color: Color, phase: Float? = null) {
+    val spacing = 8.dp.toPx()
+    val radius = 3.dp.toPx()
+    for (row in 0..2) for (column in 0..2) {
+        drawCircle(color.copy(alpha = LatticePresence.opacity(row, column, phase)), radius,
+            Offset(size.width / 2f + (column - 1) * spacing, size.height / 2f + (row - 1) * spacing))
     }
 }
 
@@ -194,8 +174,7 @@ private fun DrawScope.drawStill(state: AgentPresence.State, color: androidx.comp
             drawCircle(color, 3.dp.toPx(), center)
         }
         AgentPresence.State.THINKING, AgentPresence.State.WORKING -> {
-            drawCircle(color.copy(alpha = 0.45f), outer, center, style = Stroke(stroke))
-            drawCircle(color.copy(alpha = 0.75f), 3.6.dp.toPx(), center)
+            drawLattice(color)
         }
         AgentPresence.State.WAITING_USER -> {
             drawCircle(color.copy(alpha = 0.6f), outer, center, style = Stroke(stroke))

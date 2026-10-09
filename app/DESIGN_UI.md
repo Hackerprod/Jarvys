@@ -93,3 +93,12 @@ Se conserva intacta la implementación original de `tasks/ui` de ST3: listado, d
 - Una sola llegada breve (fade + desplazamiento mínimo, 190ms) se aplica al último evento nuevo de una sesión viva; la restauración del historial y el scroll no vuelven a dispararla. El caret de streaming pulsa a 760ms, se pausa al salir de pantalla y conserva una descripción accesible. El control enviar/detener cambia con feedback de 120ms sin retrasar el toque ni mover su área táctil.
 
 Transiciones de pantalla sutiles y breves; expansión de secciones con el token `JarvysMotion.expand`; foco y cambios de estado también accesibles sin animación. Loading, error recuperable, vacío, filtrado sin coincidencias, desconectado, run activo, éxito y acción destructiva tienen tratamiento explícito. En layouts compactos/densos se priorizan scroll y agrupación antes que reducir tipografía; en fontScale 2, botones y textos pueden crecer/ocupar varias líneas.
+
+
+### Actualización UX29: presencia de puntos nativa
+
+THINKING y WORKING usan una cuadrícula de 3 × 3 puntos fijos dentro del área original de 34 dp. Cada punto mide 6 dp y la separación es de 2 dp. Una única fase de 864 ms desplaza una onda suave de opacidad por los ocho puntos del perímetro; el centro conserva una tinta tenue. Es un modelo matemático original dibujado con Canvas, sin dependencia de React, WebView, reloj mostrado ni código de terceros.
+
+La etiqueta existente, semántica, colores y cursor de streaming permanecen sin cambios. Los símbolos de reposo, espera, error y fin conservan su geometría. El glifo mide su propia visibilidad; si está recortado fuera de pantalla, el propietario deja STARTED o se activa movimiento reducido, se desmontan tanto el ciclo como la transición entre estados. En reposo de movimiento, el perímetro es uniforme y estático. Los cambios de opacidad se leen durante dibujo, sin cambiar layout ni recomponer la etiqueta por fotograma.
+
+Las pruebas nativas de host verifican píxeles, estados, clipping por scroll y preferencias; no certifican fluidez, batería, TalkBack ni instalación en un dispositivo físico.
