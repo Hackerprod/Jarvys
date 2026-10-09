@@ -1,0 +1,18 @@
+{
+  "scope": "Pure Kotlin bounded-source serializer tests; Android runtime/device validation not performed by these tests",
+  "format": "7.4",
+  "mascots": [
+    {
+      "sha256": "72bca638c9c6e8e8ad588cd8dbb6c0320f64378cf6cb40c8d126a3297efbe642",
+      "bytes": 1303,
+      "binaryObjectCount": 122,
+      "name": "miga"
+    },
+    {
+      "sha256": "e42d0d7a0b7b8c61898fa3a11e0ac22ea552403a6c8e3307c79b2ba96dd4cddc",
+      "bytes": 1158,
+      "binaryObjectCount": 102,
+      "name": "tallo"
+    }
+  ]
+}

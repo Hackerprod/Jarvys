@@ -1,0 +1,71 @@
+{
+  "comparisons": [
+    {
+      "mascot": "miga",
+      "mode": "Idle",
+      "frames": [
+        1,
+        31
+      ],
+      "visiblePixels": 10539,
+      "changedPixels": 1057,
+      "passed": true
+    },
+    {
+      "mascot": "miga",
+      "mode": "Active",
+      "frames": [
+        1,
+        22
+      ],
+      "visiblePixels": 10499,
+      "changedPixels": 3714,
+      "passed": true
+    },
+    {
+      "mascot": "miga",
+      "mode": "Reduced",
+      "frames": [
+        1,
+        181
+      ],
+      "visiblePixels": 10539,
+      "changedPixels": 0,
+      "passed": true
+    },
+    {
+      "mascot": "tallo",
+      "mode": "Idle",
+      "frames": [
+        1,
+        31
+      ],
+      "visiblePixels": 9931,
+      "changedPixels": 671,
+      "passed": true
+    },
+    {
+      "mascot": "tallo",
+      "mode": "Active",
+      "frames": [
+        1,
+        22
+      ],
+      "visiblePixels": 9941,
+      "changedPixels": 2611,
+      "passed": true
+    },
+    {
+      "mascot": "tallo",
+      "mode": "Reduced",
+      "frames": [
+        1,
+        181
+      ],
+      "visiblePixels": 9881,
+      "changedPixels": 0,
+      "passed": true
+    }
+  ],
+  "passed": true
+}

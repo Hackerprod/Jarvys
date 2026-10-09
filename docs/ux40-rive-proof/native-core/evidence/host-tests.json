@@ -1,0 +1,23 @@
+{
+  "dateUtc": "2026-10-09",
+  "scope": "Fresh targeted JVM tests, not aggregate suites or Android runtime/device validation",
+  "class": "com.jarvys.agent.BotMascotSceneCompilerTest",
+  "Play": {
+    "tests": 21,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "Full": {
+    "tests": 21,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "testWorkerHttpGuard": {
+    "workers": 2,
+    "installedAndShutdownRecordsVerified": true,
+    "blockedAttempts": 0,
+    "scope": "Reviewed JDK URL/HttpURLConnection test-worker hooks, not whole-system isolation"
+  }
+}

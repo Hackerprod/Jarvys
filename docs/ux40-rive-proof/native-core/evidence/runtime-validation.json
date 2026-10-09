@@ -1,0 +1,156 @@
+{
+  "scope": "Independent official Rive WASM 2.44.1 host import/state/transform tests. No Rive CLI compilation, Android execution or production-security claim.",
+  "mascots": [
+    {
+      "id": "miga",
+      "bytes": 1303,
+      "sha256": "72bca638c9c6e8e8ad588cd8dbb6c0320f64378cf6cb40c8d126a3297efbe642",
+      "animationCount": 3,
+      "stateMachines": 1,
+      "stateInputs": 2,
+      "motion": [
+        {
+          "name": "Idle",
+          "entered": true,
+          "selectedTransformsMove": true,
+          "constantFrames": null
+        },
+        {
+          "name": "Active",
+          "entered": true,
+          "selectedTransformsMove": true,
+          "constantFrames": null
+        },
+        {
+          "name": "Reduced",
+          "entered": true,
+          "selectedTransformsMove": false,
+          "constantFrames": 180
+        }
+      ],
+      "transitions": [
+        {
+          "from": "Idle",
+          "to": "Active",
+          "passed": true
+        },
+        {
+          "from": "Idle",
+          "to": "Reduced",
+          "passed": true
+        },
+        {
+          "from": "Active",
+          "to": "Idle",
+          "passed": true
+        },
+        {
+          "from": "Active",
+          "to": "Reduced",
+          "passed": true
+        },
+        {
+          "from": "Reduced",
+          "to": "Idle",
+          "passed": true
+        },
+        {
+          "from": "Reduced",
+          "to": "Active",
+          "passed": true
+        }
+      ],
+      "independentInstances": true,
+      "sameStateNotRetriggered": true,
+      "postCycleMovement": true,
+      "neutralReset": true,
+      "modeChangeWhileReducedStatic": true,
+      "linearMidpoints": true
+    },
+    {
+      "id": "tallo",
+      "bytes": 1158,
+      "sha256": "e42d0d7a0b7b8c61898fa3a11e0ac22ea552403a6c8e3307c79b2ba96dd4cddc",
+      "animationCount": 3,
+      "stateMachines": 1,
+      "stateInputs": 2,
+      "motion": [
+        {
+          "name": "Idle",
+          "entered": true,
+          "selectedTransformsMove": true,
+          "constantFrames": null
+        },
+        {
+          "name": "Active",
+          "entered": true,
+          "selectedTransformsMove": true,
+          "constantFrames": null
+        },
+        {
+          "name": "Reduced",
+          "entered": true,
+          "selectedTransformsMove": false,
+          "constantFrames": 180
+        }
+      ],
+      "transitions": [
+        {
+          "from": "Idle",
+          "to": "Active",
+          "passed": true
+        },
+        {
+          "from": "Idle",
+          "to": "Reduced",
+          "passed": true
+        },
+        {
+          "from": "Active",
+          "to": "Idle",
+          "passed": true
+        },
+        {
+          "from": "Active",
+          "to": "Reduced",
+          "passed": true
+        },
+        {
+          "from": "Reduced",
+          "to": "Idle",
+          "passed": true
+        },
+        {
+          "from": "Reduced",
+          "to": "Active",
+          "passed": true
+        }
+      ],
+      "independentInstances": true,
+      "sameStateNotRetriggered": true,
+      "postCycleMovement": true,
+      "neutralReset": true,
+      "modeChangeWhileReducedStatic": true,
+      "linearMidpoints": true
+    }
+  ],
+  "invalid": [
+    {
+      "name": "badMagic",
+      "rejected": true
+    },
+    {
+      "name": "headerTruncated",
+      "rejected": true
+    },
+    {
+      "name": "wrongMajor",
+      "rejected": true
+    },
+    {
+      "name": "bodyTruncated",
+      "rejected": true
+    }
+  ],
+  "passed": true
+}

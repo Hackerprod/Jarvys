@@ -38,7 +38,7 @@ JVM unit tests use `org.json:json` version 20240303 to exercise the same JSON co
 >
 > THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-`app/src/main/java/com/jarvys/agent/BrandIcons.kt` is generated from official SVG paths and brand colors in Simple Icons 16.33.0 ([project](https://github.com/simple-icons/simple-icons)), distributed under CC0-1.0. Brand logos, names, and colors remain identifiers of their respective owners and are used nominatively only to identify the corresponding service available for connection; this use does not imply endorsement. Canva has no Simple Icons mark in this catalog and uses only a colored initial-letter fallback. Generation script: `/root/generate_brand_icons_compose.py`.
+`app/src/main/java/com/jarvys/agent/BrandIcons.kt` is generated from official SVG paths and brand colors in Simple Icons 16.33.0 ([project](https://github.com/simple-icons/simple-icons)), distributed under CC0-1.0. Brand logos, names, and colors remain identifiers of their respective owners and are used nominatively only to identify the corresponding service available for connection; this use does not imply endorsement. Canva has no Simple Icons mark in this catalog and uses only a colored initial-letter fallback. Generation script: `generate_brand_icons_compose.py`.
 
 Only the Full flavor uses `com.google.android.gms:play-services-auth:22.0.0` for Google Identity `AuthorizationClient` (`Gmail`/`Drive`). Its Maven POM identifies the [Android Software Development Kit License](https://developer.android.com/studio/terms.html). The dependency is declared as `fullImplementation`; Play does not package it.
 
@@ -51,3 +51,15 @@ The message reaction validator derives its Unicode 16.0 emoji forms from https:/
 The factory runtime uses `androidx.webkit:webkit:1.14.0` and its AndroidX dependencies, licensed under Apache-2.0. The runtime carries the Apache license and attribution in `apk-runtime/src/main/assets/factory-licenses.txt`; generated APKs preserve that asset. The local signer uses Google's AOSP `com.android.tools.build:apksig:8.13.2`, licensed under Apache-2.0; its distributed LICENSE is retained as `app/src/main/assets/apk_factory/apksig-LICENSE.txt`.
 
 The original `TemplateApk.java` implementation reads the binary structures documented in AOSP `libs/androidfw/include/androidfw/ResourceTypes.h` (Apache-2.0). It does not copy a third-party APK editing implementation. Android platform SDK tools are build-time only and are not shipped in generated applications. No signing keys are bundled.
+
+## Local Rive file serializer (UX40)
+
+The original bounded `BotMascotSceneCompiler` follows the public Rive `.riv`
+format and the MIT-licensed runtime's generated type/property definitions and
+small binary-writer test helper. Copyright (c) 2020 Rive. The MIT notice is retained
+in `app/src/main/assets/licenses/rive-runtime-MIT.txt`. Reference source:
+https://github.com/rive-app/rive-runtime/tree/6f3510dcc545bc8b2a78f1004a06929d17cd022b
+
+This serializer is not Rive CLI, an RML compiler or the Rive editor. No CLI/editor
+binary or private source is included. Its staged native-core validation does not
+establish Android rendering or enable animated mascots by itself.

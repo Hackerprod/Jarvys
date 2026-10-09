@@ -1,0 +1,102 @@
+{
+  "renderer": "Official Rive Canvas2D WASM 2.44.1 with @napi-rs/canvas 1.0.10 host-only adapter; not Android or browser rendering.",
+  "captures": [
+    {
+      "id": "miga",
+      "label": "Idle",
+      "mode": 0,
+      "reduced": false,
+      "frames": 1,
+      "filename": "miga-Idle-1.png"
+    },
+    {
+      "id": "miga",
+      "label": "Idle",
+      "mode": 0,
+      "reduced": false,
+      "frames": 31,
+      "filename": "miga-Idle-31.png"
+    },
+    {
+      "id": "miga",
+      "label": "Active",
+      "mode": 1,
+      "reduced": false,
+      "frames": 1,
+      "filename": "miga-Active-1.png"
+    },
+    {
+      "id": "miga",
+      "label": "Active",
+      "mode": 1,
+      "reduced": false,
+      "frames": 22,
+      "filename": "miga-Active-22.png"
+    },
+    {
+      "id": "miga",
+      "label": "Reduced",
+      "mode": 1,
+      "reduced": true,
+      "frames": 1,
+      "filename": "miga-Reduced-1.png"
+    },
+    {
+      "id": "miga",
+      "label": "Reduced",
+      "mode": 1,
+      "reduced": true,
+      "frames": 181,
+      "filename": "miga-Reduced-181.png"
+    },
+    {
+      "id": "tallo",
+      "label": "Idle",
+      "mode": 0,
+      "reduced": false,
+      "frames": 1,
+      "filename": "tallo-Idle-1.png"
+    },
+    {
+      "id": "tallo",
+      "label": "Idle",
+      "mode": 0,
+      "reduced": false,
+      "frames": 31,
+      "filename": "tallo-Idle-31.png"
+    },
+    {
+      "id": "tallo",
+      "label": "Active",
+      "mode": 1,
+      "reduced": false,
+      "frames": 1,
+      "filename": "tallo-Active-1.png"
+    },
+    {
+      "id": "tallo",
+      "label": "Active",
+      "mode": 1,
+      "reduced": false,
+      "frames": 22,
+      "filename": "tallo-Active-22.png"
+    },
+    {
+      "id": "tallo",
+      "label": "Reduced",
+      "mode": 1,
+      "reduced": true,
+      "frames": 1,
+      "filename": "tallo-Reduced-1.png"
+    },
+    {
+      "id": "tallo",
+      "label": "Reduced",
+      "mode": 1,
+      "reduced": true,
+      "frames": 181,
+      "filename": "tallo-Reduced-181.png"
+    }
+  ],
+  "passed": true
+}

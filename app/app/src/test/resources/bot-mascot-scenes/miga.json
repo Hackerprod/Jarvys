@@ -1,0 +1,359 @@
+{
+  "name": "Miga",
+  "nodes": [
+    {
+      "kind": "group",
+      "name": "Body",
+      "parent": "Artboard",
+      "x": 128,
+      "y": 132
+    },
+    {
+      "kind": "ellipse",
+      "name": "EyeL",
+      "parent": "Body",
+      "x": -16,
+      "y": -11,
+      "width": 8,
+      "height": 12,
+      "color": 4280563530
+    },
+    {
+      "kind": "ellipse",
+      "name": "EyeR",
+      "parent": "Body",
+      "x": 16,
+      "y": -11,
+      "width": 8,
+      "height": 12,
+      "color": 4280563530
+    },
+    {
+      "kind": "rectangle",
+      "name": "Smile",
+      "parent": "Body",
+      "x": 0,
+      "y": 10,
+      "width": 16,
+      "height": 4,
+      "color": 4280563530,
+      "radius": 2
+    },
+    {
+      "kind": "ellipse",
+      "name": "CheekL",
+      "parent": "Body",
+      "x": -29,
+      "y": 4,
+      "width": 12,
+      "height": 7,
+      "color": 4294023299
+    },
+    {
+      "kind": "ellipse",
+      "name": "CheekR",
+      "parent": "Body",
+      "x": 29,
+      "y": 4,
+      "width": 12,
+      "height": 7,
+      "color": 4294023299
+    },
+    {
+      "kind": "rectangle",
+      "name": "Satchel",
+      "parent": "Body",
+      "x": 36,
+      "y": 25,
+      "width": 25,
+      "height": 29,
+      "color": 4291589712,
+      "radius": 6,
+      "rotation": -0.15
+    },
+    {
+      "kind": "ellipse",
+      "name": "BodyShell",
+      "parent": "Body",
+      "x": 0,
+      "y": 0,
+      "width": 110,
+      "height": 98,
+      "color": 4294956944
+    },
+    {
+      "kind": "rectangle",
+      "name": "FootL",
+      "parent": "Body",
+      "x": -25,
+      "y": 49,
+      "width": 30,
+      "height": 15,
+      "color": 4291589712,
+      "radius": 7
+    },
+    {
+      "kind": "rectangle",
+      "name": "FootR",
+      "parent": "Body",
+      "x": 25,
+      "y": 49,
+      "width": 30,
+      "height": 15,
+      "color": 4291589712,
+      "radius": 7
+    },
+    {
+      "kind": "ellipse",
+      "name": "Shadow",
+      "parent": "Artboard",
+      "x": 128,
+      "y": 206,
+      "width": 105,
+      "height": 12,
+      "color": 4292402917
+    }
+  ],
+  "animations": {
+    "Idle": {
+      "duration": 120,
+      "loop": true,
+      "tracks": [
+        {
+          "node": "Body",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              132
+            ],
+            [
+              60,
+              130
+            ],
+            [
+              120,
+              132
+            ]
+          ]
+        },
+        {
+          "node": "Body",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Body",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ],
+            [
+              60,
+              1.025
+            ],
+            [
+              120,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        }
+      ]
+    },
+    "Active": {
+      "duration": 60,
+      "loop": true,
+      "tracks": [
+        {
+          "node": "Body",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              132
+            ],
+            [
+              12,
+              136
+            ],
+            [
+              30,
+              112
+            ],
+            [
+              48,
+              136
+            ],
+            [
+              60,
+              132
+            ]
+          ]
+        },
+        {
+          "node": "Body",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.07
+            ],
+            [
+              30,
+              0.07
+            ],
+            [
+              60,
+              -0.07
+            ]
+          ]
+        },
+        {
+          "node": "Body",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ],
+            [
+              12,
+              0.92
+            ],
+            [
+              30,
+              1.08
+            ],
+            [
+              48,
+              0.92
+            ],
+            [
+              60,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              -0.15
+            ],
+            [
+              30,
+              0.25
+            ],
+            [
+              60,
+              -0.15
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0.15
+            ],
+            [
+              30,
+              -0.25
+            ],
+            [
+              60,
+              0.15
+            ]
+          ]
+        }
+      ]
+    },
+    "Reduced": {
+      "duration": 1,
+      "loop": false,
+      "tracks": [
+        {
+          "node": "Body",
+          "property": "y",
+          "keys": [
+            [
+              0,
+              132
+            ]
+          ]
+        },
+        {
+          "node": "Body",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "Body",
+          "property": "scaleY",
+          "keys": [
+            [
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "node": "FootL",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "node": "FootR",
+          "property": "rotation",
+          "keys": [
+            [
+              0,
+              0
+            ]
+          ]
+        }
+      ]
+    }
+  }
+}
