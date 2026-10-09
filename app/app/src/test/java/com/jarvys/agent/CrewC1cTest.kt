@@ -229,6 +229,8 @@ class CrewC1cTest {
         val store = LocalRunStore(Files.createTempDirectory("crew-c1c-ledger").toFile())
         val followUpEntered = CountDownLatch(1)
         val releaseFollowUp = CountDownLatch(1)
+        val runningSnapshotPersisted = CountDownLatch(1)
+        val finalSnapshotPersisted = CountDownLatch(1)
         val observed = AtomicReference<Pair<List<ConversationTurn>, String>>()
         val manager = CrewManager(session, emptyTools, { _, _ -> emptyTools },
             { _, _, _ -> throw AssertionError("Configure persistence listener before spawn") }, null)
@@ -243,13 +245,22 @@ class CrewC1cTest {
                     ModelReply("follow-up done", emptyList())
                 }
             }
-        }, null, null, { snapshot -> store.appendCrewMissionSnapshot(snapshot) })
+        }, null, null, { snapshot ->
+            store.appendCrewMissionSnapshot(snapshot)
+            if (snapshot.bots.singleOrNull()?.status == "RUNNING" && snapshot.messages.any {
+                    it.from == "user" && it.text == "Please revisit the conclusion"
+                }) runningSnapshotPersisted.countDown()
+            if (snapshot.bots.singleOrNull()?.let { it.status == "DONE" && it.result == "follow-up done" } == true && snapshot.messages.any {
+                    it.from == "user" && it.text == "Please revisit the conclusion"
+                }) finalSnapshotPersisted.countDown()
+        })
         try {
             val bot = manager.spawn("custom", "Wait for owner follow-up", emptyList(), "Worker")
             bot.awaitTermination()
             assertEquals(CrewManager.Status.DONE, bot.status())
             manager.sendUserMessage(bot.id, "Please revisit the conclusion")
             assertTrue(followUpEntered.await(30, TimeUnit.SECONDS))
+            assertTrue(runningSnapshotPersisted.await(30, TimeUnit.SECONDS))
             val running = store.readCrewMissionSnapshots(session).single()
             assertEquals("RUNNING", running.bots.single().status)
             releaseFollowUp.countDown()
@@ -261,6 +272,9 @@ class CrewC1cTest {
             assertTrue(prompt.contains("UNTRUSTED CREW DATA").not())
             val userRow = manager.messageBus().snapshot().single { it.from == "user" }
             assertEquals("user", userRow.from)
+            // Worker termination does not join the coalesced snapshot callback drainer.
+            // Await the actual durable terminal callback, then retain the exact disk assertions.
+            assertTrue(finalSnapshotPersisted.await(30, TimeUnit.SECONDS))
             val persisted = store.readCrewMissionSnapshots(session).single()
             assertEquals("DONE", persisted.bots.single().status)
             assertTrue(persisted.messages.any { it.from == "user" && it.text == "Please revisit the conclusion" })
