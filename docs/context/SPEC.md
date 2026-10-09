@@ -1,6 +1,6 @@
 # Especificación de gestión selectiva del contexto
 
-Versión de contrato: 1.0. Estado: diseño aceptado para un prototipo controlado; implementación no iniciada. Tarea de producto: UX34, situada al final de la cola, después de todos los pendientes anteriores. Se pueden publicar estos documentos antes de comenzar el desarrollo.
+Versión de contrato: 1.0. Estado: diseño aceptado para un prototipo controlado; fase 0 diagnóstica implementada y documentada en [PHASE0_RESULTS.md](PHASE0_RESULTS.md), sin activar gestión selectiva. Tarea de producto: UX34. La continuación posterior a fase 0 espera el cierre de los pendientes de producto prioritarios y sus gates correspondientes.
 
 Este documento es normativo. «DEBE», «NO DEBE» y «PUEDE» describen requisitos del prototipo, no funcionalidades presentes ni pruebas ejecutadas. [AUDIT.md](AUDIT.md) conserva la evidencia del código; [CONTRACT_REVIEW.md](CONTRACT_REVIEW.md) explica las decisiones; [PHASE0_ACCEPTANCE.md](PHASE0_ACCEPTANCE.md) define el primer entregable de desarrollo.
 

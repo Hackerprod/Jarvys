@@ -1,6 +1,6 @@
 # Aceptación de fase 0 de gestión selectiva del contexto
 
-Estado: trabajo de desarrollo pendiente en UX34. Iniciar únicamente después de terminar todos los pendientes anteriores. Este archivo define pruebas y entregables; no contiene resultados ejecutados.
+Estado: contrato de aceptación de la fase 0 de UX34. La implementación diagnóstica y sus resultados se documentan en [PHASE0_RESULTS.md](PHASE0_RESULTS.md). Este archivo conserva los requisitos; no sustituye el informe de ejecución ni habilita otras fases.
 
 Contrato normativo: [SPEC.md](SPEC.md). La fase 0 prepara observabilidad/contratos internos y transporte de prueba. No implementa gestión de memoria ni habilita otras fases.
 
