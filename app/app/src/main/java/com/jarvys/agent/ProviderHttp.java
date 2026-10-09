@@ -12,6 +12,14 @@ import java.util.Map;
 final class ProviderHttp {
     private static final int MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 
+    /** Instance-injected connection seam; production has no mutable transport override. */
+    interface ConnectionFactory {
+        HttpURLConnection open(String endpoint) throws java.io.IOException;
+    }
+
+    static final ConnectionFactory DEFAULT_CONNECTION_FACTORY =
+            endpoint -> (HttpURLConnection) new URL(endpoint).openConnection();
+
     static final class Response {
         final int status;
         final String body;
@@ -35,11 +43,16 @@ final class ProviderHttp {
 
     static Response post(String endpoint, Map<String, String> headers, byte[] body, CancellationToken token,
                          boolean followRedirects) {
+        return post(endpoint, headers, body, token, followRedirects, DEFAULT_CONNECTION_FACTORY);
+    }
+
+    static Response post(String endpoint, Map<String, String> headers, byte[] body, CancellationToken token,
+                         boolean followRedirects, ConnectionFactory connectionFactory) {
         token.throwIfCancelled();
         HttpURLConnection connection = null;
         Runnable unregister = () -> { };
         try {
-            connection = (HttpURLConnection) new URL(endpoint).openConnection();
+            connection = connectionFactory.open(endpoint);
             HttpURLConnection activeConnection = connection;
             unregister = token.registerCancelAction(activeConnection::disconnect);
             connection.setRequestMethod("POST");

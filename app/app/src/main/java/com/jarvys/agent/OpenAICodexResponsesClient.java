@@ -24,12 +24,21 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
   public static final String ENDPOINT = "https://chatgpt.com/backend-api/codex/responses";
   private static final String TAG = "JarvysCodex";
   private static final String OPENAI_BETA = "responses=experimental";
-  private final CodexOAuthManager oauth;
   private final ProviderSettings settings;
+  private final CodexAuthenticatedRequestExecutor.CredentialProvider credentialProvider;
+  private final ProviderHttp.ConnectionFactory connectionFactory;
 
   public OpenAICodexResponsesClient(CodexOAuthManager oauth, ProviderSettings settings) {
-    this.oauth = oauth;
+    this(settings, (forceRefresh, token) -> oauth.getValidCredentials(forceRefresh, token),
+        ProviderHttp.DEFAULT_CONNECTION_FACTORY);
+  }
+
+  OpenAICodexResponsesClient(ProviderSettings settings,
+      CodexAuthenticatedRequestExecutor.CredentialProvider credentialProvider,
+      ProviderHttp.ConnectionFactory connectionFactory) {
     this.settings = settings;
+    this.credentialProvider = java.util.Objects.requireNonNull(credentialProvider);
+    this.connectionFactory = java.util.Objects.requireNonNull(connectionFactory);
   }
 
   @Override
@@ -96,13 +105,16 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
             sessionId,
             token,
             settings.getModel(),
-            (forceRefresh, currentToken) -> oauth.getValidCredentials(forceRefresh, currentToken),
+            credentialProvider,
             (payload, credentials, currentSession, currentToken) ->
                 send(
                     payload,
                     (SecretStore.CodexCredentials) credentials,
                     currentSession,
-                    currentToken));
+                    currentToken,
+                    true,
+                    false,
+                    connectionFactory));
     if (response.status < 200 || response.status >= 300) {
       throw new CodexHttpException(
           response.status, response.rawBody, settings.getModel(), null, response.retryAfterMillis);
@@ -125,7 +137,8 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
         response.rawBody,
         response.status,
         settings.getModel(),
-        parsed.contextTokensUsed);
+        parsed.contextTokensUsed,
+        ResponseDiagnostics.fromCodex(response.rawBody));
   }
 
   private JSONObject buildRequest(
@@ -265,10 +278,22 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
       CancellationToken token,
       boolean logErrors,
       boolean captureRetryAfter) {
+    return send(request, credentials, sessionId, token, logErrors, captureRetryAfter,
+        ProviderHttp.DEFAULT_CONNECTION_FACTORY);
+  }
+
+  private static ProviderHttp.Response send(
+      JSONObject request,
+      SecretStore.CodexCredentials credentials,
+      String sessionId,
+      CancellationToken token,
+      boolean logErrors,
+      boolean captureRetryAfter,
+      ProviderHttp.ConnectionFactory connectionFactory) {
     HttpURLConnection connection = null;
     Runnable unregister = () -> {};
     try {
-      connection = (HttpURLConnection) new URL(ENDPOINT).openConnection();
+      connection = connectionFactory.open(ENDPOINT);
       HttpURLConnection activeConnection = connection;
       unregister = token.registerCancelAction(activeConnection::disconnect);
       connection.setRequestMethod("POST");

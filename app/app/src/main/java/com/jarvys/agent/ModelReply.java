@@ -25,6 +25,8 @@ public final class ModelReply {
     public final Integer httpStatus;
     public final String model;
     public final Integer contextTokensUsed;
+    /** Additive evidence only. Phase 0 does not use this to change loop or history behavior. */
+    public final ResponseDiagnostics diagnostics;
 
     public ModelReply(String text, List<Call> calls) {
         this(text, calls, "", null, "");
@@ -36,11 +38,18 @@ public final class ModelReply {
 
     public ModelReply(String text, List<Call> calls, String rawResponseBody, Integer httpStatus,
                       String model, Integer contextTokensUsed) {
+        this(text, calls, rawResponseBody, httpStatus, model, contextTokensUsed,
+                ResponseDiagnostics.unknown());
+    }
+
+    public ModelReply(String text, List<Call> calls, String rawResponseBody, Integer httpStatus,
+                      String model, Integer contextTokensUsed, ResponseDiagnostics diagnostics) {
         this.text = text == null ? "" : text;
         this.calls = Collections.unmodifiableList(new ArrayList<>(calls));
         this.rawResponseBody = rawResponseBody == null ? "" : rawResponseBody;
         this.httpStatus = httpStatus;
         this.model = model == null ? "" : model;
         this.contextTokensUsed = contextTokensUsed != null && contextTokensUsed > 0 ? contextTokensUsed : null;
+        this.diagnostics = diagnostics == null ? ResponseDiagnostics.unknown() : diagnostics;
     }
 }

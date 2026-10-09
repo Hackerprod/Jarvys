@@ -29,7 +29,7 @@ Modo de ejecución: continuar la cola completa. Al cerrar cada pendiente o corre
 - **UX32 / preparación v49 completada en host:** nuevo icono de la aplicación con el PNG original preservado, launcher y round para cinco densidades e iconos adaptativos. 1963 Full, 1730 Play, 17 runtime y nueve JavaScript aprobadas; doce capturas nativas y revisión independiente, sin nuevos diagnósticos de lint. Ambos APK verificados para firma original; aceptación física pendiente. v48 permanece inmutable.
 - **UX31 / preparación v50 completada en host:** gestión general de Gmail, permisos efectivos, etiquetas, mensajes/hilos, borradores y lotes reanudables. 2115 Full, 1733 Play, 17 runtime y nueve JavaScript aprobadas; 50 capturas de Google, revisión independiente y cero nuevos diagnósticos de lint. Ambos APK originales verificados para firma externa. No se actuó sobre cuentas reales ni se ampliaron concesiones OAuth.
 - **UX33 / preparación v51 completada en host:** miniatura HTML de borde a borde, un borde exterior y acciones superpuestas sobre degradado. 2132 Full, 1750 Play, 17 runtime y nueve JavaScript aprobadas; 40 capturas y revisión independiente, sin nuevos diagnósticos de lint. Ambos APK originales verificados para firma externa; aceptación física pendiente.
-- **Siguiente etapa:** UX34 queda al final de la cola, después de UX33. Especificación y fase 0 documentadas; implementación no iniciada, sin activar mantenimiento de memoria. Las fases y activaciones posteriores conservan sus gates.
+- **Siguiente etapa:** UX33 está cerrado y UX34 inició únicamente la fase 0 de diagnóstico y transporte sintético; no cambia la gestión del historial ni activa mantenimiento de memoria. Al cerrar su gate se prioriza UX38 y después se continúa con UX35, UX36 y UX37, antes de cualquier fase posterior de memoria; estas conservan sus gates.
 - La paridad completa con el comportamiento de v28 en un teléfono sigue pendiente de validación; la fiabilidad del agente es prioritaria antes de añadir funciones.
 
 ## Entregas previas
@@ -465,7 +465,7 @@ Contrato: app/FILE_DELIVERY.md y app/WEB_PREVIEW_ACCEPTANCE.md. Fuente validada:
 
 ### 18. UX34: gestión selectiva del contexto — especificación y fase 0 de desarrollo
 
-Estado: diseño consensuado y especificación técnica preparada; implementación todavía no iniciada. Esta tarea queda al final de la cola y solo comienza después de cerrar todos los pendientes anteriores, incluido UX33. El respaldo de estos documentos no cambia el estado de la aplicación ni activa mantenimiento.
+Estado: fase 0 en implementación y validación de desarrollo, después del cierre de UX33 y los pendientes anteriores. El alcance es diagnóstico aditivo de respuestas y transporte sintético; no modifica la selección de historial ni activa mantenimiento. Sin incremento de versión ni release de aplicación en esta fase. Las fases posteriores siguen sujetas a sus gates.
 
 - Referencias versionadas: `docs/context/SPEC.md` es el contrato normativo; `docs/context/AUDIT.md` conserva la auditoría técnica y sus límites; `docs/context/CONTRACT_REVIEW.md` recoge las decisiones R1–R6 y las precisiones finales. `docs/context/PHASE0_ACCEPTANCE.md` define fixtures, pruebas y evidencia de la primera fase.
 - Primer trabajo de desarrollo acotado: ampliar diagnóstico de finalización/identidad/uso de respuestas y añadir o reutilizar seams de transporte con datos sintéticos, manteniendo la semántica y selección de historial legacy. Verificar respuestas finales, tool-only, incompletas, truncadas, filtradas/fallidas, canceladas y desconocidas, SSE fragmentado, EOF sin final confirmado y reintentos simulados sin cuentas o credenciales reales.
@@ -476,6 +476,58 @@ Estado: diseño consensuado y especificación técnica preparada; implementació
 - LEGACY, DRY_RUN, APPLY y PAUSED tienen contratos distintos; PAUSED conserva exclusiones/resúmenes y admite nuevos originales sin reactivar recortes incompatibles. No se promete compatibilidad automática con APK antiguas.
 - Separar ensayo mecánico con elegibilidad anotada de evaluación semántica con candidatos definidos solo por reglas estructurales; el oráculo evalúa pero no oculta los casos difíciles. Medir éxito y coste total, contenido retenido por clase y punto de bloqueo frente al compactor actual, sin porcentajes de ahorro prometidos. Usuarios, grupos de herramientas, recuperaciones, adjuntos y otros agentes quedan fuera de edición en el prototipo inicial.
 - Fases 1–4, migraciones reales y activación sobre conversaciones reales permanecen sujetas a sus gates y aprobación posterior; el acuerdo de diseño no acredita ahorro, autonomía general ni durabilidad ejecutada.
+
+
+### 19. UX38: límite global de ejecución y mensajes de estado localizados
+
+Estado: corrección prioritaria en cola inmediatamente después del gate de UX34 fase 0, antes de UX35, UX36 y UX37. Auditoría de solo lectura identifica el corte global del principal; no cambiar código de timeout dentro de la fase diagnóstica actual.
+
+- Diferenciar el timeout global del run principal del timeout de un comando Coding, de una petición HTTP y de una espera entre agentes. El corte observado procede del límite global que puede cancelar al principal y detener sus bots durante una espera; no atribuirlo al límite de quince minutos de un comando individual.
+- El timeout global actual admite 0 como ilimitado, pero la petición más reciente exige retirar el corte automático de misión por tiempo transcurrido. Migrar explícitamente la preferencia heredada (incluido el antiguo valor de quince minutos) y retirar o redefinir su control de UI para que no siga cancelando trabajos. Conservar únicamente plazos solicitados como parte de una tarea concreta, con semántica explícita. Los timeouts de red o procesos colgados deben tratarse como incidencias recuperables, sin finalizar automáticamente toda la misión.
+- Mantener Stop/cancelación explícita, límites y recibos de recursos pertinentes, presupuestos de contexto y mecanismos contra bucles sin progreso. La solución debe ser general para trabajos largos, no una excepción por nombre de herramienta, bot o tarea concreta.
+- Sustituir el mensaje hardcodeado en español por los recursos localizados correspondientes; existen recursos de resultado por timeout en inglés/español que deben conectarse al flujo real. Cubrir idioma actual de la aplicación y superficies del chat, notificación y detalle de misión donde corresponda.
+- Conservar estado veraz: un resultado PARTIAL por timeout no debe mapearse indiscriminadamente a FAILED en la misión. Separar completado, detenido por usuario, límite/timeout, fallo real y efectos inciertos; conservar razón y trabajo parcial, sin presentar una operación ya terminada como fallida ni ocultar bots detenidos por el principal.
+- Comprobar cancelación y propagación a bots, espera prolongada con progreso, respuesta tardía, reinicio/reanudación y límites explícitos. No repetir acciones ya ejecutadas para continuar una tarea interrumpida.
+- Validar migración de configuración 0/valor heredado, trabajo que supera el antiguo límite, plazo realmente solicitado para una tarea, inactividad, error HTTP y comando colgado como casos distintos; cubrir inglés/español y persistencia de estados. Diseñar continuación durable compatible con restricciones de Android, sin prometer ejecución ininterrumpida durante días. Publicar y entregar la corrección funcional tras las pruebas y revisión correspondientes.
+
+### 20. UX35: barras del sistema y área útil de las aplicaciones generadas
+
+Estado: en cola después de UX38 y antes de fases posteriores de memoria. Auditoría de solo lectura realizada; corrección del runtime de fábrica aún no implementada.
+
+- La plantilla ya usa un tema nativo sin ActionBar. La evidencia visual confirma contraste insuficiente entre iconos blancos y fondo claro de la barra del sistema; no demuestra por sí sola recorte de contenido ni la presencia de una barra de título de la aplicación. Evitar corregir un ActionBar inexistente.
+- Revisar el tratamiento de insets de FactoryActivity: actualmente aplica padding y devuelve los mismos insets a la WebView, lo que puede duplicar su efecto. Definir una única estrategia explícita de área útil y consumo/puesta a cero de los tipos ya aplicados, sin desplazar ni recortar el contenido dos veces.
+- Cubrir barras de estado/navegación, recortes de pantalla, teclado/IME, cambios de orientación, redimensionado y versiones de Android pertinentes. Mantener controles HTML accesibles y el scroll hasta el final; no ocultar barras del sistema ni activar modo inmersivo sin una necesidad solicitada.
+- Adaptar el contraste de iconos y fondos de las barras a los temas claro/oscuro y al fondo efectivo. La solución debe pertenecer al runtime genérico de fábrica, sin reglas por página, nombre de aplicación o contenido HTML concreto.
+- Regenerar la plantilla/runtime de la fábrica y sus hashes/manifiestos mediante el flujo existente. Verificar que el generador empaqueta esa nueva plantilla y mantiene permisos, bridge, recursos, identidad y aislamiento existentes.
+- Validar con fixtures sintéticos claros/oscuros, teclado abierto/cerrado, rotación, cutout, navegación gestual y por botones; distinguir capturas de host de comprobación física. Actualizar pruebas y contrato correspondiente antes de entregar la corrección.
+- Las APK ya generadas contienen la plantilla anterior: necesitan reconstruirse para recibir el arreglo, conservando package ID y clave de firma de cada aplicación y aumentando su versionCode cuando se actualice una instalación. Actualizar Jarvys por sí solo no modifica esas APK existentes.
+
+### 21. UX36: generación de imágenes en Coding y descripción fiel de sus capacidades
+
+Estado: corrección crítica en cola después de UX35 y antes de fases posteriores de memoria. Auditoría de solo lectura en curso; no ampliar el alcance de UX34 fase 0.
+
+- Auditar el inventario efectivo de herramientas de Coding integrado en Full y las variantes/perfiles aplicables: selección de capacidades, registro, delegación, creación y reanudación de bots. Verificar si generación/edición de imágenes está realmente disponible y dónde se pierde o queda fuera del inventario.
+- Proponer e integrar una capacidad genérica para que Coding genere o edite imágenes cuando el trabajo lo necesite, usando la implementación real existente o una ampliación justificada. No incorporar decisiones por tipo fijo de proyecto, palabras clave, ejemplos particulares ni rutinas centradas en una imagen concreta.
+- Las instrucciones de Coding deben explicar cuándo usar imágenes generadas o de referencia como parte del trabajo y cómo comprobar el resultado. No prometer acceso a una herramienta que no está registrada y autorizada en ese runtime/variante.
+- El agente principal debe describir las capacidades efectivas del bot y delegar con el contexto necesario; no afirmar que Coding no puede generar imágenes si ya dispone de esa función ni prometerla donde el backend no existe. Mantener catálogo, prompts, permisos y ejecución coherentes.
+- Integrar los archivos generados en el proyecto correspondiente con rutas utilizables por HTML/CSS/JS u otros recursos, referencias estables, tipo/tamaño comprobados y trazabilidad del resultado. Evitar que el flujo entregue solo una imagen en el chat sin permitir que el proyecto la use.
+- Mantener aislamiento de conversación/proyecto, pertenencia de imágenes de entrada, manejo de errores y cancelación, resultados parciales y límites reales del proveedor. No inventar archivos, URLs públicas, disponibilidad de edición ni éxito a partir de un mensaje de intención.
+- Validar registro y ejecución efectiva con fixtures sintéticos, generación/edición y referencias cuando estén soportadas, integración del asset en un proyecto y preview, persistencia/reanudación, denegaciones y ausencia de backend en variantes que no lo tengan. Diferenciar pruebas simuladas de llamadas reales y aceptación visual.
+- Publicar la corrección y Pending.md tras validación; entregar la APK actualizada cuando corresponda a una corrección funcional, manteniendo identidad y firma existentes.
+
+
+### 22. UX37: actividad de skills y herramientas sin filas duplicadas
+
+Estado: en cola después de UX36 y antes de fases posteriores de memoria. Auditoría de solo lectura solicitada; no ampliar la implementación diagnóstica de UX34 fase 0.
+
+- Mostrar la carga o uso verificable de skills en las superficies de actividad pertinentes, con el mismo lenguaje visual de herramientas. La señal debe provenir de la operación real o del contenido efectivamente cargado; no afirmar que un skill se ejecutó porque solo fue mencionado, listado o solicitado sin éxito.
+- El agente principal debe usar el icono propio actual de Jarvys en las secciones de Bots/actividad que lo representen. Mantener una identidad coherente con las tarjetas y el detalle, conservando los iconos propios de los bots y los assets existentes.
+- Una invocación de herramienta debe tener una sola fila visible que transicione por sus estados, por ejemplo «Using Read» → «Used Read» o su fallo/cancelación correspondiente. Evitar el par redundante de fila de uso y fila de completado para la misma invocación, sin ocultar sus resultados o detalles útiles.
+- Conservar el historial/eventos durables y unificar únicamente su proyección visual mediante callId y la identidad real de ejecución/conversación disponible. No agrupar por nombre de herramienta: invocaciones simultáneas, reintentos y dos lecturas distintas deben seguir siendo distinguibles.
+- «To Jarvys» o un destinatario equivalente debe aparecer únicamente para mensajes realmente dirigidos entre agentes. Una lectura local o una operación sin envío no debe presentarse como un mensaje al principal.
+- Mantener progreso, errores, cancelaciones, resultados parciales y evidencia de la misma invocación accesibles desde su fila. Al reabrir la app o cambiar de conversación, reconstruir la misma presentación sin duplicar filas ni perder los detalles de herramientas/preview.
+- Validar carga de skills correcta/fallida/cancelada, herramientas repetidas con el mismo nombre, concurrencia, respuesta tardía, reintento, reinicio y datos legacy con identidad insuficiente. Si no puede demostrarse que dos eventos son la misma invocación, no fusionarlos mediante una heurística que oculte trabajo.
+- Revisar iconos, animaciones existentes, accesibilidad, temas claro/oscuro, texto grande y localización. Publicar código y Pending.md tras validación y entregar la APK funcional correspondiente con la identidad de firma existente.
 
 ## Validaciones que siguen abiertas
 

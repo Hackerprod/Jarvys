@@ -17,6 +17,7 @@ public final class OpenRouterClient implements ModelProviderClient {
   private final SecretStore secrets;
   private final ProviderSettings settings;
   private final ChatCompletionsConfig config;
+  private final ProviderHttp.ConnectionFactory connectionFactory;
 
   public OpenRouterClient(SecretStore secrets, ProviderSettings settings) {
     this(secrets, settings, ChatCompletionsConfig.openRouterDefault());
@@ -24,9 +25,15 @@ public final class OpenRouterClient implements ModelProviderClient {
 
   public OpenRouterClient(
       SecretStore secrets, ProviderSettings settings, ChatCompletionsConfig config) {
+    this(secrets, settings, config, ProviderHttp.DEFAULT_CONNECTION_FACTORY);
+  }
+
+  OpenRouterClient(SecretStore secrets, ProviderSettings settings, ChatCompletionsConfig config,
+      ProviderHttp.ConnectionFactory connectionFactory) {
     this.secrets = secrets;
     this.settings = settings;
     this.config = config;
+    this.connectionFactory = java.util.Objects.requireNonNull(connectionFactory);
   }
 
   @Override
@@ -125,7 +132,8 @@ public final class OpenRouterClient implements ModelProviderClient {
             headers,
             request.toString().getBytes(StandardCharsets.UTF_8),
             token,
-            config.followsRedirects());
+            config.followsRedirects(),
+            connectionFactory);
     if (response.status < 200 || response.status >= 300) {
       if ((response.status == 401 || response.status == 403)
           && config.hasSpecificAuthorizationFailureMessage()) {
@@ -165,7 +173,8 @@ public final class OpenRouterClient implements ModelProviderClient {
         response.body,
         response.status,
         settings.getModel(),
-        parsed.contextTokensUsed);
+        parsed.contextTokensUsed,
+        ResponseDiagnostics.fromChatCompletions(response.body));
   }
 
   private static JSONArray conversationMessages(
