@@ -23,6 +23,7 @@ import com.jarvys.agent.crew.CrewMode
 import com.jarvys.agent.ui.motion.LocalReducedMotion
 import java.io.File
 import java.util.Locale
+import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.*
 import org.junit.Assert.*
 import org.junit.runner.RunWith
@@ -34,7 +35,9 @@ import org.robolectric.annotation.GraphicsMode
 @Config(sdk = [34], qualifiers = "w320dp-h900dp-mdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class MainAgentComposerTest {
-    @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
+    // Queue markdown StateFlow resumptions on the test scheduler instead of its parser worker.
+    @OptIn(ExperimentalTestApi::class)
+    @get:Rule val compose = createAndroidComposeRule<ComponentActivity>(effectContext = StandardTestDispatcher())
     @Test fun englishLight() = scene("en", false, 1f)
     @Test fun englishDark() = scene("en", true, 1f)
     @Test fun spanishLight() = scene("es", false, 1f)
@@ -105,6 +108,10 @@ class MainAgentComposerTest {
                     }
                 }
             }
+        }
+        // Markdown parsing runs on Default; Compose idleness alone does not await publication.
+        compose.waitUntil(10_000) {
+            compose.onAllNodesWithText(progress.text).fetchSemanticsNodes().size == 1
         }
         compose.waitForIdle()
         compose.onNodeWithText(progress.text).assertIsDisplayed()
