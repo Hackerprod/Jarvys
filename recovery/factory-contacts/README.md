@@ -48,3 +48,12 @@ pattern elsewhere in this repository. Only the two rules now use `StandardTestDi
 its required opt-in/imports; every test body and assertion is unchanged. Both failed runs are
 retained. Independent review approved this bounded test-only lint reuse; focused checks in both
 flavors and a fresh complete aggregate remain required before release.
+
+The first dispatcher-only focused Memory run exposed inadequate fixture readiness and ended
+with missing-node failures plus JVM OOM; its evidence is retained. Compose's unbounded async
+scroll loop was identified as a plausible OOM path, not proven by an OOM stack. Memory now uses
+the repository's finite measured-scroll pattern with real scroll actions, test-clock settlement,
+progress/full-visibility assertions, and destination readiness. All 20 cases, all 66 original
+assertion calls and all three system-back actions remain. Independent review approved this
+fixture-only adaptation. Isolated focused checks passed Memory 20/20 in each flavor and Workspace
+2/2 in each flavor. Fresh aggregate, builds and final independent release audit remain pending.
