@@ -10,5 +10,9 @@
   "README-REBUILT-HELPERS.md": "d6b6c849ddf9fe0c801fda2fafe237c21a6f793737754a2213c0b58fa69ff006",
   "SymbolicProbe.java": "88088f754fa1807153e2a624986096eb82b51c01f82f1168564fab1f18d75a2c",
   "ProbeManifest.xml": "de595d8821895749b78f7041df45fa8343432347366a1517259dcb9512b70719",
-  "rebuild_probes.py": "35803779e26a96b067fc6680d3be8aeb723ac07ddab3496428e394cb81c72bf1"
+  "rebuild_probes.py": "35803779e26a96b067fc6680d3be8aeb723ac07ddab3496428e394cb81c72bf1",
+  "lint_metadata_snapshot.py": "6f2f0326044c7f04b170fc4795925ab253c0dd0d60ed69206eca93e462fd6d91",
+  "test_lint_metadata_snapshot.py": "8d612aa166cf81cc035f1783fe6ea8f308d45a5b6e1847580b78b265949fee4f",
+  "README-LINT-METADATA.md": "e7236bc5a47b8bd9c5f1471664e91c1bfed03e916fc8d005eee1c777e44f9d90",
+  "derive_expected_scope.py": "c32271253e5ba1bc3b12f405f3857e8e89fecd3458f225b5f749ff6c9a64fee8"
 }

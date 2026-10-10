@@ -3,9 +3,11 @@
 from pathlib import Path
 import sys,subprocess,json,shutil,hashlib
 V=Path(__file__).resolve().parent; R=V.parent; H=R/'UX39-recovered-validation'; P=R/'integration'; kind=sys.argv[1]
-assert kind in ('baseline','baseline-build','lint','aggregate','build')
+assert kind in ('baseline-prepare','baseline','baseline-build','lint','aggregate','build')
 base=kind.startswith('baseline'); project=R/'v79-baseline' if base else P
-out=R/'FACTORY-SENSORS-v79-validation' if base else V;out.mkdir(exist_ok=True)
+out=R/'FACTORY-SENSORS-v79-validation' if base else V
+if kind=='baseline-prepare':out=out/'metadata-preparation'
+out.mkdir(parents=True,exist_ok=True)
 def baseline_freeze():
  assert subprocess.check_output(['git','rev-parse','HEAD'],cwd=project,text=True).strip()=='5c177d32cfc1b13209a54131753f98cec3582d42'
  assert subprocess.check_output(['git','rev-parse','HEAD:app'],cwd=project,text=True).strip()=='805c0cc19c5aa9b8bb50649c0e2aef2a238cff43'
@@ -15,9 +17,9 @@ def baseline_freeze():
 if base:
  before=baseline_freeze();(out/'baseline-source-freeze.json').write_text(json.dumps({'reconstructed':True,'head':'5c177d32cfc1b13209a54131753f98cec3582d42','appTree':'805c0cc19c5aa9b8bb50649c0e2aef2a238cff43','files':before},indent=2)+'\n')
 if not base:subprocess.run([sys.executable,str(V/'freeze_source.py'),kind+'-source-freeze.json'],check=True)
-args=['--info']+([] if base else ['--offline'])
+args=['--info']+([] if kind in ('baseline-prepare','baseline-build') else ['--offline'])
 if kind in ('baseline-build','build'):args+=['-I',str(V/'fresh-apks.init.gradle')]
-if kind in ('baseline','lint'):
+if kind in ('baseline-prepare','baseline','lint'):
  args+=['-I',str(H/'fresh-lint.init.gradle'),'-I',str(V/'library-lint.init.gradle'),':app:lintReportFullDebug',':app:lintReportPlayDebug',':apk-runtime:lintReportRelease',':factory-runtime-core:lintReportRelease','-x',':apk-runtime:lintVitalRelease']
 elif kind=='aggregate':
  args+=['-I',str(H/'fresh-tests.init.gradle'),'-I',str(V/'factory-evidence.init.gradle'),':app:testFullDebugUnitTest',':app:testPlayDebugUnitTest',':apk-runtime:testDebugUnitTest',':apk-runtime:testReleaseUnitTest',':factory-runtime-core:testDebugUnitTest',':factory-runtime-core:testReleaseUnitTest']
@@ -26,7 +28,7 @@ prior=set((H/'runs').glob('*'));rc=subprocess.run([sys.executable,str(H/'run_gra
 created=set((H/'runs').glob('*'))-prior;assert len(created)==1;run=created.pop();(out/(kind+'-run.txt')).write_text(str(run)+'\n')
 if rc:sys.exit(rc)
 r=json.loads((run/'run.json').read_text());assert r['exit_code']==0
-if kind in ('baseline','lint'):
+if kind in ('baseline-prepare','baseline','lint'):
  for module,name in [('app','fullDebug'),('app','playDebug'),('apk-runtime','release'),('factory-runtime-core','release')]:
   src=project/'app'/module/'build/reports'/('lint-results-'+name+'.xml');assert r['start_epoch']<=src.stat().st_mtime<=r['finish_epoch']+1;shutil.copy2(src,out/(module+'-'+src.name))
 if kind=='aggregate':

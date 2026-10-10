@@ -32,8 +32,8 @@
   },
   "run_gate.py": {
     "source_relative_path": "FACTORY-BIOMETRICS-v80-validation/run_gate.py",
-    "source_sha256": "566d12ef88a36c6e984ceb36035f6385df329998f754650c80d8b5561b22945e",
-    "packaged_sha256": "566d12ef88a36c6e984ceb36035f6385df329998f754650c80d8b5561b22945e",
+    "source_sha256": "72bcc155ef5dcddd7f5805368159c7d37295ad447746640e10645acbb6fa3cf1",
+    "packaged_sha256": "72bcc155ef5dcddd7f5805368159c7d37295ad447746640e10645acbb6fa3cf1",
     "unchanged_logic": true
   }
 }

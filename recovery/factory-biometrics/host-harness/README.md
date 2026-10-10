@@ -52,7 +52,8 @@ R/
   toolchain/                         caller-owned tools/env/cache
   UX39-recovered-validation/          H: launcher/init/guard/SDK/run evidence
   FACTORY-BIOMETRICS-v80-validation/   V: materialized orchestration and v80 evidence
-  FACTORY-SENSORS-v79-validation/     reconstructed baseline evidence
+  FACTORY-SENSORS-v79-validation/     final reconstructed offline baseline evidence
+    metadata-preparation/             completed online preparation evidence only
   UX42-fixtures/                     synthetic factory evidence (caller-selected root)
 ```
 
@@ -67,9 +68,22 @@ Before baseline execution, `run_gate.py` requires baseline HEAD `5c177d32cfc1b13
 
 Complete authorized compilation and actual Test classpath producer prerequisites before running `restoreHostTestRuntimeCache` with `warm-test-runtime-v80.init.gradle`. Compilation alone may not produce runtime JARs: inspect the actual Test classpath build dependencies and execute every required producer without executing tests. Verify the inputs exist. The warmer resolves actual Test classpaths; it does not invoke missing producers or promise that compilation alone is sufficient. Do not execute Test tasks as a warming shortcut. After dependencies and exact Robolectric SDKs are warmed, actual tests are offline and guarded. Lint runs all four Full/Play/runtime reports with only `:apk-runtime:lintVitalRelease` excluded. This narrow reviewed workaround addresses the reproduced AGP graph defect where `lintVitalReportRelease` is disabled but its dependent `lintVitalRelease` still consumes missing files. Full release runtime analysis and `:apk-runtime:lintReportRelease` remain requested and must execute freshly, alongside the other three reports. No other task exclusion, diagnostic suppression or ordering shim is introduced. Compare exact baseline/current issue multisets, not totals alone; the preserved v80 comparison also expects 313/300/3/2 issues.
 
-The coordinating task invokes the materialized `run_gate.py` with `baseline`, `baseline-build`, `lint`, `aggregate` or `build` only when their prerequisites and authority are satisfied. `baseline` now runs only the complete four-report reconstructed-baseline lint stage with the narrow vital-task exclusion above. `baseline-build` runs the three unsigned baseline assembly targets separately with normal vital tasks and no exclusions; current `build` likewise has no lint exclusion. Its six aggregate Test tasks and 41 JavaScript tests do not substitute for per-fork guard verification, source binding, signed/unsigned APK inspection or real device acceptance.
+The coordinating task invokes the materialized `run_gate.py` with `baseline-prepare`, `baseline`, `baseline-build`, `lint`, `aggregate` or `build` only when their prerequisites and authority are satisfied. `baseline-prepare` runs the complete four-report reconstructed-baseline lint stage online and archives its preparation outputs only under `FACTORY-SENSORS-v79-validation/metadata-preparation`. After the separately reviewed metadata freeze/seed below, `baseline` runs the complete four-report final baseline offline; candidate `lint` likewise remains offline. All three lint modes retain only the narrow vital-task exclusion above. `baseline-build` remains a separate normal three-target unsigned build with normal vital tasks and no exclusions; current `build` likewise has no lint exclusion. Candidate `lint`, `aggregate` and `build` retain `--offline`. Its six aggregate Test tasks and 41 JavaScript tests do not substitute for per-fork guard verification, source binding, signed/unsigned APK inspection or real device acceptance.
 
 The earlier combined baseline attempt failed on the AGP vital-task graph defect. It remains a failed run; partial output and previously captured reports are not fresh passing evidence. Splitting the subsequent stages and preserving this workaround does not establish that any final v80 gate has passed.
+
+### Matched lint metadata prerequisites
+
+Verified AGP 8.13.2 propagates Gradle offline mode to lint 31.13.2. Lint dependency diagnostics can also depend on task-local public remote metadata, so an online baseline and an empty-cache offline candidate are not equivalent inputs. Metadata differences remain an open reproducibility issue until the matched offline runs and post-run verification establish the result; this source correction does not claim the drift is resolved.
+
+1. Complete `baseline-prepare` online and preserve its successful run JSON, logs and all four fresh reports under the separate metadata-preparation directory. Failed, interrupted or partial preparation cannot authorize a snapshot. Preparation reports are not the final offline baseline.
+2. Have the independent reviewer use the separately reviewed `independent/lint_metadata_snapshot.py`, its tests and `README-LINT-METADATA.md` to freeze the prepared public metadata and exact lint-version markers. Bind the snapshot to the completed preparation run, exact reconstructed baseline HEAD/app tree, and a separately recorded reviewed manifest SHA-256.
+3. Under the same existing nonblocking Gradle lock, have the reviewer seed the candidate from that approved digest and verify both projects before the offline comparison. The allowlist covers only reviewed task-local Google Maven indexes, Maven version metadata, SDK index payloads and the exact `Cache for Android Lint31.13.2` plus LF marker. It excludes API/typo databases, models, reports and partial-analysis results. No real snapshot payload belongs in this source package.
+4. Run `baseline` and candidate `lint` with matching frozen sources/tooling, the same approved metadata inputs and `--offline`. Both must produce their complete fresh four-report evidence. The narrow vital-task exclusion remains identical on both sides.
+5. Have the reviewer verify metadata bytes/inventory for both projects against the same externally recorded digest after their gates, then review the actual complete diagnostic multisets. Do not infer a pass from preparation output or an unchanged total.
+
+These are required orchestration prerequisites; `run_gate.py` does not itself freeze, seed or verify metadata. The reviewer owns the real snapshot/seed and associated checks. Retain the historical expected issue counts 313/300/3/2 unchanged until a separate explicit gate-policy review. Additional remote-metadata warnings must not be suppressed, removed from comparisons or hidden by editing caches to recover desired totals. No final lint or other v80 gate pass is established by this package update.
+
 
 ## Restore exact prerequisites
 
