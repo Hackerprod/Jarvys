@@ -6,7 +6,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageInstaller
-import android.net.Uri
+import androidx.core.net.toUri
 import android.os.Build
 import android.util.AtomicFile
 import com.jarvys.agent.BuildConfig
@@ -19,7 +19,7 @@ import java.util.UUID
 
 /** One durable operation, never a queue. No automatic commit, retry, settings grant or success inference. */
 internal class FactoryInstallCoordinator(
-    private val context: Context,
+    context: Context,
     private val backend: Backend = AndroidBackend(context),
     private val fullDistribution: Boolean = BuildConfig.FLAVOR == "full"
 ) {
@@ -204,23 +204,28 @@ internal class FactoryInstallCoordinator(
         if (corrupt) return
         val record = read() ?: return
         if (nonce != record.getString("nonce") || sessionId != record.getInt("sessionId") || sessionId < 0) return
-        if (record.getString("state") !in setOf("committing", "pending_system", "system_ui_open", "outcome_unknown", "cancel_requested")) return
-        if (status == PackageInstaller.STATUS_PENDING_USER_ACTION && record.getString("state") != "committing") return
-        val next = when (status) {
-            PackageInstaller.STATUS_PENDING_USER_ACTION -> "pending_system"
+        val state = record.getString("state")
+        val terminal = terminalOutcome(status)
+        if (state == "cancelled_outcome_unknown") {
+            // Late authenticated evidence can resolve uncertainty, without reopening a closed interaction.
+            if (terminal == null) return
+        } else if (state !in setOf("committing", "pending_system", "system_ui_open", "outcome_unknown", "cancel_requested")) return
+        if (status == PackageInstaller.STATUS_PENDING_USER_ACTION && state != "committing") return
+        val next = if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) "pending_system" else terminal ?: "outcome_unknown"
+        record.put("state", next).put("systemStatus", status)
+        save(record)
+        pendingIntent = if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) confirmation else null
+        observer?.invoke()
+    }
+    private fun terminalOutcome(status: Int): String? = when (status) {
             PackageInstaller.STATUS_SUCCESS -> "succeeded"
             PackageInstaller.STATUS_FAILURE_ABORTED -> "aborted_by_system" // Android does not reliably distinguish rejection from abort.
             PackageInstaller.STATUS_FAILURE_BLOCKED -> "blocked_by_system"
             PackageInstaller.STATUS_FAILURE, PackageInstaller.STATUS_FAILURE_CONFLICT,
             PackageInstaller.STATUS_FAILURE_INCOMPATIBLE, PackageInstaller.STATUS_FAILURE_INVALID,
             PackageInstaller.STATUS_FAILURE_STORAGE -> "failed_by_system"
-            else -> "outcome_unknown"
+            else -> if (Build.VERSION.SDK_INT >= 34 && status == PackageInstaller.STATUS_FAILURE_TIMEOUT) "failed_by_system" else null
         }
-        record.put("state", next).put("systemStatus", status)
-        save(record)
-        pendingIntent = if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) confirmation else null
-        observer?.invoke()
-    }
     /** System confirmation is launched only by a fresh native human button, never from a receiver. */
     @Synchronized fun takeSystemIntent(humanCheck: () -> Unit): Intent {
         humanCheck()
@@ -241,9 +246,13 @@ internal class FactoryInstallCoordinator(
             record.put("state", "cancel_requested"); save(record)
             if (id >= 0) {
                 try {
-                    backend.abandon(id)
+                    // Android throws for a missing session. Absence permits review/close, never a success claim.
+                    if (backend.exists(id)) backend.abandon(id)
                     record.put("state", if (backend.exists(id)) "cancel_requested" else "cancelled_outcome_unknown")
-                } catch (_: Exception) { record.put("state", "outcome_unknown") }
+                } catch (_: Exception) {
+                    val absent = runCatching { !backend.exists(id) }.getOrDefault(false)
+                    record.put("state", if (absent) "cancelled_outcome_unknown" else "outcome_unknown")
+                }
             } else record.put("state", "cancelled_before_commit")
             save(record)
         }
@@ -307,7 +316,7 @@ internal class FactoryInstallCoordinator(
         }
         override fun commit(sessionId: Int, nonce: String) {
             val intent = Intent(context, FactoryInstallReceiver::class.java).setAction("com.jarvys.agent.FACTORY_INSTALL_RESULT")
-                .setData(Uri.parse("jarvys-install:$nonce"))
+                .setData("jarvys-install:$nonce".toUri())
             val flags = PendingIntent.FLAG_UPDATE_CURRENT or if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0
             val sender = PendingIntent.getBroadcast(context, sessionId, intent, flags).intentSender
             installer.openSession(sessionId).use { it.commit(sender) }

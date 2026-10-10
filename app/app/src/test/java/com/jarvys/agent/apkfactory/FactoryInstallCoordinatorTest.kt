@@ -223,6 +223,161 @@ class FactoryInstallCoordinatorTest {
         assertFalse(MemoryUiAutomationGuard.isProtected())
     }
 
+    @Test fun lateAuthenticatedSuccessReconcilesCancelledUnknownWithoutLiftingProtection() {
+        fixture.seed("outcome_unknown", 17)
+        fixture.coordinator.cancel()
+        assertEquals("cancelled_outcome_unknown", fixture.state())
+        fixture.coordinator.callback(fixture.nonce(), 17, PackageInstaller.STATUS_SUCCESS, null)
+        assertEquals("succeeded", fixture.state())
+        assertEquals(PackageInstaller.STATUS_SUCCESS, fixture.coordinator.status().getInt("system_status"))
+        assertTrue(fixture.coordinator.status().getBoolean("automation_protected"))
+        assertTrue(MemoryUiAutomationGuard.isProtected())
+        assertEquals(0, fixture.backend.commits)
+    }
+
+    @Test fun lateKnownFailuresReconcileCancelledUnknownToSpecificTerminalOutcomes() {
+        for ((status, expected) in listOf(
+            PackageInstaller.STATUS_FAILURE_ABORTED to "aborted_by_system",
+            PackageInstaller.STATUS_FAILURE_BLOCKED to "blocked_by_system",
+            PackageInstaller.STATUS_FAILURE to "failed_by_system",
+            PackageInstaller.STATUS_FAILURE_CONFLICT to "failed_by_system",
+            PackageInstaller.STATUS_FAILURE_INCOMPATIBLE to "failed_by_system",
+            PackageInstaller.STATUS_FAILURE_INVALID to "failed_by_system",
+            PackageInstaller.STATUS_FAILURE_STORAGE to "failed_by_system",
+            PackageInstaller.STATUS_FAILURE_TIMEOUT to "failed_by_system"
+        )) {
+            fixture.seed("outcome_unknown", 17)
+            fixture.coordinator.cancel()
+            fixture.coordinator.callback(fixture.nonce(), 17, status, null)
+            assertEquals(expected, fixture.state())
+            assertEquals(status, fixture.coordinator.status().getInt("system_status"))
+            assertTrue(fixture.coordinator.status().getBoolean("automation_protected"))
+            assertTrue(MemoryUiAutomationGuard.isProtected())
+        }
+        assertEquals(0, fixture.backend.commits)
+    }
+
+    @Test fun cancelledUnknownIgnoresLatePendingUnknownAndUnauthenticatedCallbacks() {
+        fixture.seed("outcome_unknown", 17)
+        fixture.coordinator.cancel()
+        val unchanged = fixture.record().toString()
+        for ((nonce, session, status) in listOf(
+            Triple(fixture.nonce(), 17, PackageInstaller.STATUS_PENDING_USER_ACTION),
+            Triple(fixture.nonce(), 17, 777),
+            Triple("forged", 17, PackageInstaller.STATUS_SUCCESS),
+            Triple(fixture.nonce(), 18, PackageInstaller.STATUS_SUCCESS),
+            Triple(fixture.nonce(), -1, PackageInstaller.STATUS_FAILURE_ABORTED)
+        )) {
+            fixture.coordinator.callback(nonce, session, status, Intent("synthetic.late.confirmation"))
+            assertEquals(unchanged, fixture.record().toString())
+            assertEquals("cancelled_outcome_unknown", fixture.state())
+            fails { fixture.coordinator.takeSystemIntent {} }
+            assertTrue(MemoryUiAutomationGuard.isProtected())
+        }
+        assertEquals(0, fixture.backend.commits)
+    }
+
+    @Test fun lateTerminalReconciliationNeverReopensHumanClosedInteraction() {
+        for ((status, expected) in listOf(
+            PackageInstaller.STATUS_SUCCESS to "succeeded",
+            PackageInstaller.STATUS_FAILURE_ABORTED to "aborted_by_system"
+        )) {
+            fixture.seed("outcome_unknown", 17)
+            fixture.coordinator.cancel()
+            fixture.coordinator.closeInteraction {}
+            assertFalse(MemoryUiAutomationGuard.isProtected())
+            assertFalse(fixture.coordinator.status().getBoolean("automation_protected"))
+            val automationEpoch = MemoryUiAutomationGuard.captureAutomationEpoch()
+            fixture.coordinator.callback(fixture.nonce(), 17, status, null)
+            assertEquals(expected, fixture.state())
+            assertFalse(fixture.coordinator.status().getBoolean("automation_protected"))
+            assertFalse(MemoryUiAutomationGuard.isProtected())
+            assertTrue(MemoryUiAutomationGuard.isAutomationEpochValid(automationEpoch))
+            fixture.restart()
+            assertEquals(expected, fixture.state())
+            assertFalse(fixture.coordinator.status().getBoolean("automation_protected"))
+            assertFalse(MemoryUiAutomationGuard.isProtected())
+        }
+    }
+
+    @Test fun newOperationRejectsOldCallbackEvenWhenSyntheticSessionIdIsReused() {
+        fixture.seed("outcome_unknown", 17)
+        val oldNonce = fixture.nonce()
+        fixture.coordinator.cancel()
+        fixture.coordinator.closeInteraction {}
+        fixture.signed()
+        fixture.prepare()
+        fixture.coordinator.install {}
+        val newNonce = fixture.nonce()
+        assertNotEquals(oldNonce, newNonce)
+        assertEquals(17, fixture.coordinator.status().getInt("session_id"))
+        assertEquals("committing", fixture.state())
+        for (status in listOf(PackageInstaller.STATUS_SUCCESS, PackageInstaller.STATUS_FAILURE_ABORTED, PackageInstaller.STATUS_PENDING_USER_ACTION)) {
+            fixture.coordinator.callback(oldNonce, 17, status, Intent("synthetic.old.confirmation"))
+            assertEquals("committing", fixture.state())
+            assertEquals(newNonce, fixture.nonce())
+        }
+        assertEquals(1, fixture.backend.commits)
+        assertTrue(MemoryUiAutomationGuard.isProtected())
+        fixture.coordinator.callback(newNonce, 17, PackageInstaller.STATUS_SUCCESS, null)
+        assertEquals("succeeded", fixture.state())
+    }
+
+    @Test fun missingSessionAfterUnknownCanCloseWithoutAbandon() {
+        fixture.seed("outcome_unknown", 17)
+        fixture.backend.exists = false
+        fixture.backend.failAbandon = true
+        assertEquals("cancelled_outcome_unknown", fixture.coordinator.cancel().getString("state"))
+        assertEquals(0, fixture.backend.abandons)
+        assertTrue(MemoryUiAutomationGuard.isProtected())
+        fixture.coordinator.closeInteraction {}
+        assertEquals("cancelled_outcome_unknown", fixture.state())
+        assertFalse(fixture.coordinator.status().getBoolean("automation_protected"))
+        assertFalse(MemoryUiAutomationGuard.isProtected())
+        assertEquals(0, fixture.backend.commits)
+    }
+
+    @Test fun sessionDisappearingBetweenExistenceCheckAndAbandonRemainsUnknownAndClosable() {
+        fixture.seed("outcome_unknown", 17)
+        fixture.backend.exists = true
+        fixture.backend.beforeAbandon = {
+            fixture.backend.exists = false
+            fixture.backend.failAbandon = true
+        }
+        assertEquals("cancelled_outcome_unknown", fixture.coordinator.cancel().getString("state"))
+        assertEquals(1, fixture.backend.abandons)
+        assertTrue(MemoryUiAutomationGuard.isProtected())
+        fixture.coordinator.closeInteraction {}
+        assertEquals("cancelled_outcome_unknown", fixture.state())
+        assertFalse(MemoryUiAutomationGuard.isProtected())
+        assertEquals(0, fixture.backend.commits)
+    }
+
+    @Test fun failedAbandonAndFailedExistenceQueryKeepOutcomeUnknownAndProtected() {
+        fixture.seed("outcome_unknown", 17)
+        fixture.backend.exists = true
+        fixture.backend.beforeAbandon = {
+            fixture.backend.failAbandon = true
+            fixture.backend.existsFailure = true
+        }
+        assertEquals("outcome_unknown", fixture.coordinator.cancel().getString("state"))
+        assertEquals(1, fixture.backend.abandons)
+        assertTrue(fixture.coordinator.status().getBoolean("automation_protected"))
+        assertTrue(MemoryUiAutomationGuard.isProtected())
+        fails { fixture.coordinator.closeInteraction {} }
+        assertEquals(0, fixture.backend.commits)
+    }
+
+    @Test fun authenticatedTimeoutFromCommittingRecordsTerminalFailure() {
+        fixture.seed("committing", 17)
+        fixture.coordinator.callback(fixture.nonce(), 17, PackageInstaller.STATUS_FAILURE_TIMEOUT, null)
+        assertEquals("failed_by_system", fixture.state())
+        assertEquals(PackageInstaller.STATUS_FAILURE_TIMEOUT, fixture.coordinator.status().getInt("system_status"))
+        assertTrue(fixture.coordinator.status().getBoolean("automation_protected"))
+        assertTrue(MemoryUiAutomationGuard.isProtected())
+        assertEquals(0, fixture.backend.commits)
+    }
+
     @Test fun sessionStillPresentOrAbandonFailureCannotReleaseProtection() {
         fixture.seed("committing", 17); fixture.backend.exists = true
         fixture.backend.keepOnAbandon = true
@@ -390,6 +545,8 @@ internal class FakeInstallBackend : FactoryInstallCoordinator.Backend {
     var exists = false
     var keepOnAbandon = false
     var failAbandon = false
+    var existsFailure = false
+    var beforeAbandon: () -> Unit = {}
     var permissionChecks = 0
     var creates = 0
     var writes = 0
@@ -401,6 +558,6 @@ internal class FakeInstallBackend : FactoryInstallCoordinator.Backend {
     override fun create(appId: String, size: Long): Int { creates++; exists = true; return 17 }
     override fun write(sessionId: Int, apk: File) { writes++; afterWrite() }
     override fun commit(sessionId: Int, nonce: String) { commits++; onCommit() }
-    override fun abandon(sessionId: Int) { abandons++; check(!failAbandon); if (!keepOnAbandon) exists = false }
-    override fun exists(sessionId: Int) = exists
+    override fun abandon(sessionId: Int) { abandons++; beforeAbandon(); check(!failAbandon); if (!keepOnAbandon) exists = false }
+    override fun exists(sessionId: Int): Boolean { check(!existsFailure); return exists }
 }
