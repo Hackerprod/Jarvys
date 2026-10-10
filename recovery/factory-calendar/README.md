@@ -17,3 +17,13 @@ UX34 is gated, UX44 remains documentation-only future defaults, and UX43 remains
 An inherited coverage gap was found: the v74 template matrix iterated 32,768 masks but read only
 14 capability bits. v75 expands and verifies all 16 bits/65,536 profiles. This does not retroactively
 claim that v74 tested every profile. Existing prior assertions and gates are retained.
+
+## Retained exploratory validation
+
+The first full aggregate ran 3,495 Full cases with one failure in the unchanged Factory-skill
+scope fixture: compression had removed four required legacy phrases. The original assertions
+were preserved and the exact wording restored; the corrected asset is 16,352 bytes, below16KiB.
+The failed aggregate and its prior lint/source freeze remain retained separately. Both flavors’
+skill/contract fixtures and fresh final lint/full aggregate/builds are being rerun; this is not
+a passed release gate. Calendar’s preliminary 613 core,72 runtime and276 focused Full cases
+and SDK24 passed. No real calendar editor or provider operation was performed.

@@ -7,9 +7,10 @@ allowed-tools: [ls, read, write, edit, coding_grep, coding_glob, coding_patch, c
 tags: [android, coding, apk, offline]
 ---
 # APK Factory
+HTML/CSS/JS, not a fixed notes application.
 Factory API26+/apps API24+.
 ## Contract
-Inspect schema/capabilities/limits/template with `apk_factory inspect`; availability governs. Read scope/files; relative paths and Captain-reviewed external adoption. Clarify audience/workflows/style/identity/data. New app: unique ID/name/icon; update: same appId/key, higher versionCode. Preserve other apps. Web/spec cannot extend DEX, libraries, permissions, services or APIs; unsupported features need template review.
+Inspect schema/capabilities/limits/template with `apk_factory inspect`; availability governs. Read scope/files; relative paths and Captain-reviewed external adoption. Clarify audience/workflows/style/identity/data. New app: unique ID/name/icon; update: same appId/key, higher versionCode. Preserve other apps. Web/spec cannot extend precompiled DEX, libraries, permissions, services or APIs; unsupported features need template review.
 ## Capabilities
 Offline WebView: no CDNs/remote fonts/scripts/API/login. Accessible text/targets; loading/empty/error/recovery states.
 Responsive/scrollable forms with viewport meta. Native owns bar/cutout/keyboard insets: no double subtraction; inputs reachable/bars visible.
@@ -56,8 +57,8 @@ Read back spec/sources; verify references/offline dependencies/branding/JS/escap
 `build`: spec_path, fresh expected_scope_version, new relative output_path. No per-app compile; retain path/hash/app/version/template.
 Error/interruption/conflict: reread state, preserve uncertainty, use fresh outputs; no replay/overwrite. Filename proves no build/installability.
 `sign`: input_path, exact expected_sha256, distinct output_path, current expected_scope_version; same-project receipt and in-app approval. Never bypass/export keys/use debug keys/replace identity.
-Legacy AndroidKeyStore keys are non-exportable; loss can prevent updates. New keys: native Factory identities, passphrase-encrypted export/import. No passphrases/private keys in chat/tools/projects/JS. Source/APK backups cannot restore keys.
-Report artifact/checks; no implicit installation.
+Legacy AndroidKeyStore keys are non-exportable; losing them can prevent updates. New keys: native Factory identities, passphrase-encrypted export/import. No passphrases/private keys in chat/tools/projects/JS. Source/APK backups cannot restore keys.
+Report artifact/checks. No step here installs the APK.
 ## Handoff
 Test workflows/storage/export/Unicode/bounds/reload/cancel. Authorized devices must verify coexistence/same-key updates/data retention; host tests prove no ARM64 behavior. Return source/APK/identity/signature/checks/blockers/evidence.
 ## Manifest checks
