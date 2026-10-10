@@ -8,7 +8,8 @@ No completed host gate, APK audit, signed delivery or physical acceptance is cla
 
 The reserved Coding-only Factory skill previously occupied 16,377 of 16,384 bytes and included
 an inaccessible reference to a repository document. The new core remains under the unchanged
-16 KiB skill limit and has an additional 8 KiB UTF-8 bound. It is appended to the eligible
+16 KiB skill limit and has an additional 8 KiB UTF-8 bound. The reviewed core is
+7,167 UTF-8 bytes, leaving over 1 KiB below that stricter bound. It is appended to the eligible
 Coding runtime's instructions, including read-only review, independently of transcript
 compaction. It does not grant tools, access, approval or implementation authority.
 
@@ -37,3 +38,12 @@ separate release-bound version.
 This maintenance does not enable TTS/voice, other unfinished F1, F2/F3, or any permission/provider
 access. UX34 remains gated, UX44 documentary, UX43 last. Physical-device/model/provider behavior
 and all earlier outstanding acceptance checks remain unverified.
+
+## Intermediate checks
+
+The first focused checks passed 85 Full and 85 Play cases, SDK30 passed, and exact lint
+preserved all 313/300/3/2 inherited diagnostics. A subsequent reviewed core-only prose
+refinement creates future catalog headroom without changing detail modules. Those earlier
+passes are retained as intermediate evidence; fresh final checks are pending. An initial
+compile command failed before compilation because it used the repository rather than Android
+build directory; the corrected command passed. No test assertions were weakened.
