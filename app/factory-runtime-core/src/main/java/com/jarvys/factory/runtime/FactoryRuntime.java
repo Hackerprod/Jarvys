@@ -152,8 +152,16 @@ public final class FactoryRuntime implements AutoCloseable {
     private String previewProfile;
     private static final PreviewProfiles PROFILES = new PreviewProfiles();
     private static final PreviewProfiles.Provider PROFILE_PROVIDER = new PreviewProfiles.Provider() {
-        public java.util.List<String> names() { return androidx.webkit.ProfileStore.getInstance().getAllProfileNames(); }
-        public boolean delete(String name) { return androidx.webkit.ProfileStore.getInstance().deleteProfile(name); }
+        public java.util.List<String> names() {
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE))
+                return androidx.webkit.ProfileStore.getInstance().getAllProfileNames();
+            throw new UnsupportedOperationException("Isolated WebView profiles are unavailable");
+        }
+        public boolean delete(String name) {
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE))
+                return androidx.webkit.ProfileStore.getInstance().deleteProfile(name);
+            return false;
+        }
     };
     // JavaScript is required for reviewed local assets; network, file access and frames are blocked,
     // and the native message listener independently enforces exact origin and main-frame identity.
@@ -164,16 +172,21 @@ public final class FactoryRuntime implements AutoCloseable {
             showError("Please update Android System WebView to use this application safely.");
             return false;
         }
-        if (host.isPreview() && !WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) {
-            showError("Factory preview requires an Android System WebView with isolated profile support. Update WebView or test the installed APK separately.");
-            return false;
-        }
-        if (host.isPreview() && !PROFILES.cleanup(PROFILE_PROVIDER)) host.onTrace("runtime", "cleanup_pending");
-        webView = new WebView(activity);
         if (host.isPreview()) {
-            previewProfile = PROFILES.reserve();
-            WebViewCompat.setProfile(webView, previewProfile);
-            WebViewCompat.getProfile(webView).getCookieManager().setAcceptCookie(false);
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) {
+                if (!PROFILES.cleanup(PROFILE_PROVIDER)) host.onTrace("runtime", "cleanup_pending");
+                webView = new WebView(activity);
+                previewProfile = PROFILES.reserve();
+                WebViewCompat.setProfile(webView, previewProfile);
+                CookieManager cookies = WebViewCompat.getProfile(webView).getCookieManager();
+                cookies.setAcceptCookie(false);
+                cookies.setAcceptThirdPartyCookies(webView, false);
+            } else {
+                showError("Factory preview requires an Android System WebView with isolated profile support. Update WebView or test the installed APK separately.");
+                return false;
+            }
+        } else {
+            webView = new WebView(activity);
         }
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
@@ -191,9 +204,10 @@ public final class FactoryRuntime implements AutoCloseable {
         settings.setSupportMultipleWindows(true);
         settings.setMediaPlaybackRequiresUserGesture(true);
         settings.setCacheMode(WebSettings.LOAD_NO_CACHE);
-        if (!host.isPreview()) CookieManager.getInstance().setAcceptCookie(false);
-        if (host.isPreview()) WebViewCompat.getProfile(webView).getCookieManager().setAcceptThirdPartyCookies(webView, false);
-        else CookieManager.getInstance().setAcceptThirdPartyCookies(webView, false);
+        if (!host.isPreview()) {
+            CookieManager.getInstance().setAcceptCookie(false);
+            CookieManager.getInstance().setAcceptThirdPartyCookies(webView, false);
+        }
         if (!host.isPreview()) WebView.setWebContentsDebuggingEnabled(false);
         webView.setDownloadListener((url, userAgent, disposition, mime, length) -> { /* use export.text */ });
         webView.setWebChromeClient(new WebChromeClient() {
@@ -440,8 +454,10 @@ public final class FactoryRuntime implements AutoCloseable {
         Export(Reply reply, String text) { this.reply = reply; this.text = text; }
     }
     private void safePost(JavaScriptReplyProxy proxy, String response) {
-        if (destroyed || !host.isActive() || !WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) return;
-        try { proxy.postMessage(response); } catch (RuntimeException ignored) { /* originating frame was destroyed */ }
+        if (destroyed || !host.isActive()) return;
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+            try { proxy.postMessage(response); } catch (RuntimeException ignored) { /* originating frame was destroyed */ }
+        }
     }
     private void showError(String message) {
         synchronized (lifecycle) { invalidate(); }

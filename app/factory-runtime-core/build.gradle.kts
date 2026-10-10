@@ -14,7 +14,7 @@ configurations.configureEach {
 }
 dependencies {
     api(project(":factory-contract"))
-    implementation("androidx.core:core:1.15.0")
+    api("androidx.core:core:1.15.0")
     implementation("androidx.webkit:webkit:1.14.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
