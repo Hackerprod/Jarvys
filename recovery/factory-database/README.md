@@ -1,7 +1,8 @@
 # UX42 F1 v76: private typed SQLite
 
 Version 76 / `1.2.69-FACTORY-DATABASE`: final host tests, exact lint, three APK builds and
-independent source/binary audit passed. Signing and native delivery are pending. This is not
+independent source/binary audit passed. Signed native attachment accepted; exact Library bytes
+independently verified. This is not
 physical Android acceptance or completion of Factory.
 
 A standalone zero-permission `database` capability supplies typed CRUD, equality/ID queries,
@@ -17,7 +18,7 @@ Cancellation invalidates queued work; precommit failures roll back schema/versio
 A commit that crossed its boundary is not undone; lost replies require inspection, never blind
 replay. Corrupt data/metadata is preserved rather than silently reset. The 16 MiB main-database
 cap is not a total disk/RAM ceiling: journal/temp files, caches and cursors consume extra space.
-Exact methods, types, limits and pagination semantics are in [APK_FACTORY](../../app/APK_FACTORY.md#private-typed-sqlite-ux42-f1-v76).
+Exact methods, types, limits and pagination semantics are in [APK_FACTORY](../../app/APK_FACTORY.md#private-structured-database-ux42-f1-v76).
 
 ## Retained exploratory and failed attempts
 
@@ -73,3 +74,19 @@ inspection do not establish physical device/OEM/WebView persistence or compatibi
 and accepted attachment do not prove download, installation or retained data. Remaining F1,
 strict TTS/voice, sensors/biometrics, F2/F3, UX34 gates, UX44 documentation-only future defaults
 and UX43-last are preserved.
+
+
+## Signed native delivery receipt
+
+Native ARM64 test APK attachment accepted on 2026-10-10 at 16:53:20.385629 UTC.
+Signed size: 19,310,139 bytes. SHA-256:
+`af2d78fa1890c8805f6f347374a5c8677d5bfd4d6971bb4fbe44b6cce9d914c1`.
+
+Independent review retrieved the exact delivered Library artifact afresh and matched it to the
+signer's bytes. APK v2/v3 signatures, CRC and 16 KiB ZIP alignment pass. D7 test certificate SHA-1:
+`D7:C0:1F:59:79:78:32:3E:32:CA:AF:22:E9:F6:00:9A:B7:2F:32:B8`.
+Package `com.jarvys.agent`, version 76 / `1.2.69-FACTORY-DATABASE`, ARM64-only. All 239 retained
+entries are byte-identical to the independently audited unsigned release APK; exactly nine
+non-ARM64 native libraries were omitted and only signing entries added. ZIP alignment does not
+establish ELF 16 KiB page compatibility. Attachment acceptance does not establish download,
+installation, physical database persistence or data-preserving upgrade acceptance.
