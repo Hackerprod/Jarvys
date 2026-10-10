@@ -15,3 +15,10 @@ The first implementation passed 86 focused checks. Independent source audit then
 ## Remaining acceptance
 
 All installer tests use synthetic backends and callbacks. Fixture signing uses ephemeral test keys only. No real device installation, unknown-source permission change, real signing-identity action or silent installer was executed. Android/OEM consent UI, source permission denial, update compatibility, data preservation, actual system lifecycle and recovery remain physical acceptance gates. UX34 phases beyond diagnostic phase 0 remain gated; UX43 stays last.
+
+
+## Permission handoff and damaged-journal recovery
+
+A final boundary review found that returning an unprotected missing-permission error could leave sibling device automation active during manual settings work. Full now persists protection before querying permission. Denied, unavailable and unsupported results open human-only review without a PackageInstaller session; protection survives background/restart, and granting permission cannot resume the request. Native close and a fresh request are required. This is a Factory-workflow boundary, not a universal OS-security-settings ban.
+
+Unreadable records offer explicit native-only recovery, with disclosure that it may discard staged APK data and cannot undo completed installs or recover lost outcomes. It queries only Jarvys-owned installer sessions, validates a maximum of 16 IDs, checks foreground consent before each abandonment, requires a successful empty final query, and writes a fresh unknown-outcome journal atomically. A separate Close rechecks absence. Query/action/write errors retain protection. Recovery never touches installed-package inventory, signing identities or project APKs. These changes and their host regressions are awaiting final-source gates.

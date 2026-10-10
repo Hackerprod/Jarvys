@@ -46,6 +46,91 @@ class FactoryInstallActivityTest {
         assertTrue(MemoryUiAutomationGuard.isProtected())
     }
 
+    @Test fun permissionReviewBlocksAutomatedCloseAndSurvivesBackgroundAndManualGrant() {
+        val epoch = MemoryUiAutomationGuard.captureAutomationEpoch()
+        fixture.backend.allowed = false
+        val result = fixture.prepare()
+        val activity = launch(result.getString("launch_token"))
+        assertEquals("permission_required", fixture.state())
+        assertFalse(button(activity, "approve").isEnabled)
+        assertFalse(button(activity, "system").isEnabled)
+        assertTrue(button(activity, "close").isEnabled)
+        assertNull(shadowOf(activity).nextStartedActivity)
+        var dispatched = false
+        assertFalse(MemoryUiAutomationGuard.runAutomated(epoch) {
+            dispatched = true
+            button(activity, "close").performClick()
+        })
+        assertFalse(dispatched)
+        assertFalse(activity.isFinishing)
+        controller!!.pause().stop()
+        assertEquals("permission_required", fixture.state())
+        assertTrue(MemoryUiAutomationGuard.isProtected())
+        button(activity, "close").performClick()
+        assertFalse(activity.isFinishing)
+        fixture.backend.allowed = true
+        controller!!.restart().start().resume().visible()
+        assertEquals("permission_required", fixture.state())
+        assertFalse(button(activity, "approve").isEnabled)
+        assertFalse(button(activity, "system").isEnabled)
+        assertNull(shadowOf(activity).nextStartedActivity)
+        assertEquals(0, fixture.backend.creates)
+        assertEquals(0, fixture.backend.commits)
+        button(activity, "close").performClick()
+        assertTrue(activity.isFinishing)
+        assertFalse(fixture.coordinator.status().getBoolean("automation_protected"))
+    }
+
+    @Test fun permissionQueryFailureScreenCannotApproveOrLaunchSettings() {
+        fixture.backend.availabilityFailure = true
+        val result = fixture.prepare()
+        val activity = launch(result.getString("launch_token"))
+        assertEquals("permission_unavailable", fixture.state())
+        assertFalse(button(activity, "approve").isEnabled)
+        assertFalse(button(activity, "system").isEnabled)
+        assertTrue(button(activity, "close").isEnabled)
+        assertNull(shadowOf(activity).nextStartedActivity)
+        assertTrue(MemoryUiAutomationGuard.isProtected())
+        button(activity, "close").performClick()
+        assertTrue(activity.isFinishing)
+        assertFalse(fixture.coordinator.status().getBoolean("automation_protected"))
+        assertEquals(0, fixture.backend.creates)
+    }
+
+    @Test fun unsupportedInstallerScreenCannotApproveOrLaunchSettings() {
+        fixture.backend.availabilityOverride = FactoryInstallCoordinator.Availability.UNSUPPORTED
+        val result = fixture.prepare()
+        val activity = launch(result.getString("launch_token"))
+        assertEquals("installation_unavailable", fixture.state())
+        assertFalse(button(activity, "approve").isEnabled)
+        assertFalse(button(activity, "system").isEnabled)
+        assertTrue(button(activity, "close").isEnabled)
+        assertNull(shadowOf(activity).nextStartedActivity)
+        assertTrue(MemoryUiAutomationGuard.isProtected())
+        button(activity, "close").performClick()
+        assertTrue(activity.isFinishing)
+        assertFalse(fixture.coordinator.status().getBoolean("automation_protected"))
+        assertEquals(0, fixture.backend.creates)
+    }
+
+    @Test fun damagedRecoveryButtonRequiresForegroundAndDoesNotLaunchExternalUi() {
+        fixture.journal.parentFile!!.mkdirs(); fixture.journal.writeText("{broken")
+        fixture.coordinator.restore()
+        val activity = launch()
+        assertTrue(button(activity, "recover").isEnabled)
+        assertFalse(button(activity, "approve").isEnabled)
+        assertFalse(button(activity, "system").isEnabled)
+        assertTrue(button(activity, "recover").filterTouchesWhenObscured)
+        assertNull(shadowOf(activity).nextStartedActivity)
+        controller!!.pause()
+        button(activity, "recover").performClick()
+        assertEquals(0, fixture.backend.ownedQueries)
+        assertEquals(0, fixture.backend.abandons)
+        assertEquals("journal_unavailable", fixture.state())
+        assertTrue(MemoryUiAutomationGuard.isProtected())
+        controller!!.resume()
+    }
+
     @Test fun openingReviewDoesNotCommitAndPausingRevokesApproval() {
         val result = fixture.prepare()
         val activity = launch(result.getString("launch_token"))

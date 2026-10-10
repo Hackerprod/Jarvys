@@ -23,8 +23,11 @@ internal class FactoryInstallCoordinator(
     private val backend: Backend = AndroidBackend(context),
     private val fullDistribution: Boolean = BuildConfig.FLAVOR == "full"
 ) {
+    enum class Availability { READY, SOURCE_PERMISSION_REQUIRED, UNSUPPORTED }
     interface Backend {
         fun allowed(): Boolean
+        fun availability(): Availability = if (allowed()) Availability.READY else Availability.SOURCE_PERMISSION_REQUIRED
+        fun ownedSessionIds(): List<Int>
         fun create(appId: String, size: Long): Int
         fun write(sessionId: Int, apk: File)
         fun commit(sessionId: Int, nonce: String)
@@ -43,6 +46,8 @@ internal class FactoryInstallCoordinator(
     private var observer: (() -> Unit)? = null
     private var corrupt = false
     private var workInFlight = false
+    private var recovering = false
+    private var recoveryError: String? = null
 
     @Synchronized fun restore() {
         if (!journalExists()) return
@@ -50,7 +55,9 @@ internal class FactoryInstallCoordinator(
             val saved = read() ?: return
             if (saved.getBoolean("interactionOpen")) {
                 protect()
-                if (saved.getString("state") in setOf("awaiting_user", "staging")) {
+                if (saved.getString("state") == "checking_permission") {
+                    saved.put("state", "permission_unavailable"); save(saved)
+                } else if (saved.getString("state") in setOf("awaiting_user", "staging")) {
                     saved.put("state", "interrupted_before_commit")
                     save(saved)
                 } else if (saved.getString("state") in setOf("committing", "pending_system", "system_ui_open")) {
@@ -74,6 +81,7 @@ internal class FactoryInstallCoordinator(
         check(result.getString("state") in STATES)
         check(result.getInt("sessionId") >= -1)
         result.getBoolean("interactionOpen")
+        result.getJSONObject("binding")
         return result
     }
     private fun save(record: JSONObject) {
@@ -89,7 +97,6 @@ internal class FactoryInstallCoordinator(
         check(read()?.getBoolean("interactionOpen") != true) { "An installation interaction is still open. Review it in Settings > Factory installations; never replay it." }
         validate()
         check(fullDistribution) { "Integrated installation is unavailable in Play. Keep the signed artifact; no workaround is attempted." }
-        check(backend.allowed()) { "This source is not allowed to request installs. Change Android's per-source permission yourself only if desired, then request installation again. No settings were opened." }
         protect()
         if (protection?.isReadyForUser != true) {
             protection?.close(); protection = null
@@ -98,6 +105,7 @@ internal class FactoryInstallCoordinator(
         val record = JSONObject().put("schemaVersion", 1).put("nonce", UUID.randomUUID().toString())
             .put("binding", JSONObject(metadata.toString())).put("sessionId", -1).put("state", "awaiting_user")
             .put("interactionOpen", true).put("systemStatus", JSONObject.NULL)
+            .put("state", "checking_permission")
         try {
             check(root.isDirectory || root.mkdirs())
             artifact.outputStream().use { it.write(bytes); it.fd.sync() }
@@ -108,9 +116,20 @@ internal class FactoryInstallCoordinator(
             corrupt = true
             throw failure
         }
-        validation = validate
-        finalValidation = finalCheck
-        unregister = token.registerCancelAction { revokeBeforeCommit() }
+        // The durable guard precedes even the permission query. No unprotected error-to-settings handoff.
+        val readyState = try {
+            when (backend.availability()) {
+                Availability.READY -> "awaiting_user"
+                Availability.SOURCE_PERMISSION_REQUIRED -> "permission_required"
+                Availability.UNSUPPORTED -> "installation_unavailable"
+            }
+        } catch (_: Exception) { "permission_unavailable" }
+        record.put("state", readyState); save(record)
+        if (readyState == "awaiting_user") {
+            validation = validate
+            finalValidation = finalCheck
+            unregister = token.registerCancelAction { revokeBeforeCommit() }
+        }
         launchToken = UUID.randomUUID().toString()
         return publicStatus(record).put("launch_token", launchToken)
     }
@@ -120,18 +139,25 @@ internal class FactoryInstallCoordinator(
         return true
     }
     @Synchronized fun status(binding: JSONObject? = null): JSONObject {
-        if (corrupt) return JSONObject().put("state", "journal_unavailable").put("automation_protected", true)
-        val record = read() ?: return JSONObject().put("state", "no_session")
+        if (corrupt) return damagedStatus()
+        val record = try { read() } catch (_: Exception) {
+            corrupt = true; protect(); return damagedStatus()
+        } ?: return JSONObject().put("state", "no_session")
         if (binding != null) requireBinding(record.getJSONObject("binding"), binding)
         return publicStatus(record)
     }
+    private fun damagedStatus() = JSONObject().put("state", "journal_unavailable").put("automation_protected", true)
+        .put("recovery_error", recoveryError ?: JSONObject.NULL)
     private fun publicStatus(record: JSONObject) = JSONObject(record.getJSONObject("binding").toString())
         .put("state", record.getString("state")).put("session_id", record.getInt("sessionId"))
         .put("system_status", record.opt("systemStatus")).put("automation_protected", record.getBoolean("interactionOpen"))
         .put("notice", "Only an authenticated PackageInstaller success callback confirms this session succeeded. Opening UI, missing sessions or an installed version are not success evidence. Physical app behavior and data retention are untested.")
     @Synchronized fun observe(callback: (() -> Unit)?) { observer = callback }
     @Synchronized fun revokeBeforeCommit() {
-        val record = read() ?: return
+        if (corrupt) return
+        val record = try { read() } catch (_: Exception) {
+            corrupt = true; protect(); observer?.invoke(); return
+        } ?: return
         if (record.getString("state") !in setOf("awaiting_user", "staging")) return
         record.put("state", "revoked")
         save(record)
@@ -238,6 +264,7 @@ internal class FactoryInstallCoordinator(
     }
     @Synchronized fun cancel(binding: JSONObject? = null): JSONObject {
         check(!corrupt) { "Install journal unavailable" }
+        check(!recovering) { "Native recovery is in progress" }
         val record = read() ?: return JSONObject().put("state", "no_session")
         if (binding != null) requireBinding(record.getJSONObject("binding"), binding)
         val state = record.getString("state")
@@ -261,6 +288,50 @@ internal class FactoryInstallCoordinator(
         observer?.invoke()
         return publicStatus(record)
     }
+    /** Explicit native-only recovery. Own installer sessions are not an installed-package inventory. */
+    fun recoverDamagedJournal(humanCheck: () -> Unit) {
+        synchronized(this) {
+            humanCheck()
+            check(corrupt) { "The journal is readable; use the ordinary session controls" }
+            check(!workInFlight && !recovering) { "Wait for the active operation" }
+            recovering = true; workInFlight = true; recoveryError = null
+        }
+        var failureStage = "session_query_failed"
+        try {
+            val ids = backend.ownedSessionIds()
+            failureStage = "too_many_or_invalid_sessions"
+            check(ids.size <= 16 && ids.distinct().size == ids.size && ids.all { it >= 0 })
+            for (id in ids) {
+                failureStage = "foreground_lost"
+                humanCheck()
+                failureStage = "session_abandon_failed"
+                try { backend.abandon(id) } catch (failure: Exception) {
+                    if (backend.exists(id)) throw failure
+                }
+            }
+            failureStage = "session_query_failed"
+            val remaining = backend.ownedSessionIds()
+            failureStage = "sessions_still_present"
+            check(remaining.isEmpty())
+            synchronized(this) {
+                failureStage = "foreground_lost"
+                humanCheck()
+                val record = JSONObject().put("schemaVersion", 1).put("nonce", UUID.randomUUID().toString())
+                    .put("binding", JSONObject()).put("sessionId", -1).put("state", "recovery_outcome_unknown")
+                    .put("interactionOpen", true).put("systemStatus", JSONObject.NULL)
+                failureStage = "journal_write_failed"
+                save(record)
+                validation = null; finalValidation = null; pendingIntent = null; launchToken = null
+                unregister?.run(); unregister = null
+                corrupt = false
+            }
+        } catch (failure: Exception) {
+            synchronized(this) { recoveryError = failureStage }
+            throw failure
+        } finally {
+            synchronized(this) { recovering = false; workInFlight = false; observer?.invoke() }
+        }
+    }
     /** Foreground protected native close only. An absent session never changes its recorded outcome. */
     @Synchronized fun closeInteraction(humanCheck: () -> Unit) {
         humanCheck()
@@ -270,14 +341,15 @@ internal class FactoryInstallCoordinator(
         check(record.getString("state") in TERMINAL) { "Cancel or wait for the active session first" }
         val id = record.getInt("sessionId")
         check(id < 0 || !backend.exists(id)) { "Android still has this session; cancel it before closing" }
+        if (record.getString("state") == "recovery_outcome_unknown") check(backend.ownedSessionIds().isEmpty()) { "Android still has owned installer sessions" }
         record.put("interactionOpen", false); save(record)
         artifact.delete()
         validation = null; pendingIntent = null; unregister?.run(); unregister = null
         protection?.close(); protection = null
     }
     companion object {
-        private val TERMINAL = setOf("succeeded", "aborted_by_system", "blocked_by_system", "failed_by_system", "failed_before_commit", "cancelled_before_commit", "cancelled_outcome_unknown", "interrupted_before_commit", "revoked")
-        private val STATES = TERMINAL + setOf("awaiting_user", "staging", "committing", "pending_system", "system_ui_open", "outcome_unknown", "cancel_requested")
+        private val TERMINAL = setOf("succeeded", "aborted_by_system", "blocked_by_system", "failed_by_system", "failed_before_commit", "cancelled_before_commit", "cancelled_outcome_unknown", "interrupted_before_commit", "revoked", "permission_required", "permission_unavailable", "installation_unavailable", "recovery_outcome_unknown")
+        private val STATES = TERMINAL + setOf("checking_permission", "awaiting_user", "staging", "committing", "pending_system", "system_ui_open", "outcome_unknown", "cancel_requested")
         private var instance: FactoryInstallCoordinator? = null
         @Synchronized fun get(context: Context): FactoryInstallCoordinator = instance ?: FactoryInstallCoordinator(context.applicationContext).also { instance = it; it.restore() }
         internal fun requireBinding(saved: JSONObject, requested: JSONObject) {
@@ -291,14 +363,15 @@ internal class FactoryInstallCoordinator(
     }
     private class AndroidBackend(private val context: Context) : Backend {
         private val installer get() = context.packageManager.packageInstaller
-        override fun allowed(): Boolean {
-            if (Build.VERSION.SDK_INT < 26 || BuildConfig.FLAVOR != "full") return false
-            // Managed/privileged installers can skip OS consent on older Android. Never use that route.
+        override fun allowed() = availability() == Availability.READY
+        override fun availability(): Availability {
+            if (Build.VERSION.SDK_INT < 26 || BuildConfig.FLAVOR != "full") return Availability.UNSUPPORTED
             val policy = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
-            if (policy.isDeviceOwnerApp(context.packageName) || policy.isProfileOwnerApp(context.packageName)) return false
-            if (context.checkSelfPermission(android.Manifest.permission.INSTALL_PACKAGES) == android.content.pm.PackageManager.PERMISSION_GRANTED) return false
-            return context.packageManager.canRequestPackageInstalls()
+            if (policy.isDeviceOwnerApp(context.packageName) || policy.isProfileOwnerApp(context.packageName)) return Availability.UNSUPPORTED
+            if (context.checkSelfPermission(android.Manifest.permission.INSTALL_PACKAGES) == android.content.pm.PackageManager.PERMISSION_GRANTED) return Availability.UNSUPPORTED
+            return if (context.packageManager.canRequestPackageInstalls()) Availability.READY else Availability.SOURCE_PERMISSION_REQUIRED
         }
+        override fun ownedSessionIds() = installer.mySessions.map { it.sessionId }
         override fun create(appId: String, size: Long): Int {
             check(allowed())
             val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {

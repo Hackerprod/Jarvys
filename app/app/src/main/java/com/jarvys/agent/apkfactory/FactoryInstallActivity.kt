@@ -31,6 +31,7 @@ open class FactoryInstallActivity : ComponentActivity() {
     private lateinit var system: Button
     private lateinit var cancel: Button
     private lateinit var close: Button
+    private lateinit var recover: Button
 
     override fun attachBaseContext(newBase: Context) { super.attachBaseContext(AppLanguageRuntime.attachBaseContext(newBase)) }
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -64,6 +65,16 @@ open class FactoryInstallActivity : ComponentActivity() {
         cancel = button(R.string.factory_install_cancel, "factory-install-cancel") {
             failed = runCatching { coordinator.cancel() }.isFailure; render()
         }
+        recover = button(R.string.factory_install_recover, "factory-install-recover") {
+            val approvedGeneration = generation
+            working = true; failed = false; render()
+            worker.execute {
+                val result = runCatching {
+                    coordinator.recoverDamagedJournal { check(resumed && generation == approvedGeneration); guard.requireHumanUiInteraction() }
+                }
+                runOnUiThread { failed = result.isFailure; working = false; render() }
+            }
+        }
         close = button(R.string.factory_install_close, "factory-install-close") { closeSafely() }
         close.setOnClickListener { if (!guard.isReadyForUser) finish() else if (humanReady()) closeSafely() }
         val scroll = ScrollView(this).apply { isFillViewport = true; addView(column); isSaveEnabled = false }
@@ -92,13 +103,22 @@ open class FactoryInstallActivity : ComponentActivity() {
         val ready = guard.isReadyForUser
         if (!ready) {
             status.setText(R.string.factory_install_reopen)
-            install.isEnabled = false; system.isEnabled = false; cancel.isEnabled = false; close.isEnabled = true
+            install.isEnabled = false; system.isEnabled = false; cancel.isEnabled = false; recover.isEnabled = false; close.isEnabled = true
             return
         }
         val result = runCatching { coordinator.status() }.getOrNull()
         val state = result?.optString("state") ?: "journal_unavailable"
         status.text = buildString {
             append(getString(R.string.factory_install_disclosure)).append("\n\n")
+            val detail = when (state) {
+                "permission_required" -> R.string.factory_install_permission_required
+                "permission_unavailable" -> R.string.factory_install_permission_unavailable
+                "installation_unavailable" -> R.string.factory_install_unavailable
+                "journal_unavailable" -> R.string.factory_install_recovery_warning
+                "recovery_outcome_unknown" -> R.string.factory_install_recovery_done
+                else -> null
+            }
+            if (detail != null) append(getString(detail)).append("\n\n")
             if (result?.has("app_id") == true) {
                 append(result.optString("app_name")).append("\n").append(result.optString("app_id"))
                 append("\n").append(result.optString("version_name")).append(" / ").append(result.optInt("version_code"))
@@ -114,6 +134,8 @@ open class FactoryInstallActivity : ComponentActivity() {
         install.isEnabled = resumed && !working && state == "awaiting_user"
         system.isEnabled = resumed && !working && state == "pending_system"
         cancel.isEnabled = resumed && !working && state !in setOf("no_session", "journal_unavailable")
+        recover.isEnabled = resumed && !working && state == "journal_unavailable"
+        recover.visibility = if (state == "journal_unavailable") View.VISIBLE else View.GONE
         close.isEnabled = resumed && !working
     }
     override fun onResume() { super.onResume(); resumed = true; render() }
