@@ -2,10 +2,12 @@ package com.jarvys.agent.apkfactory
 
 import android.app.Activity
 import android.content.Context
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.Button
@@ -59,7 +61,9 @@ open class FactoryBrowserActivity : ComponentActivity() {
         column.addView(TextView(this).apply { setText(R.string.factory_browser_title); textSize = 22f; isSaveEnabled = false })
         status = TextView(this).apply { textSize = 16f; isSaveEnabled = false; autoLinkMask = 0 }; column.addView(status)
         choices = RadioGroup(this).apply { isSaveEnabled = false }; column.addView(choices)
-        fun button(label: Int, name: String, action: () -> Unit) = Button(this).also {
+        fun button(label: Int, name: String, action: () -> Unit) = object : Button(this) {
+            override fun onFilterTouchEventForSecurity(event: MotionEvent) = super.onFilterTouchEventForSecurity(event) && unoccluded(event)
+        }.also {
             it.setText(label); it.tag = "factory-browser-$name"; it.filterTouchesWhenObscured = true; it.isSaveEnabled = false
             it.setOnClickListener { if (humanReady() && !working) runCatching(action).onFailure { rejected = true; render() } }; column.addView(it)
         }
@@ -100,7 +104,9 @@ open class FactoryBrowserActivity : ComponentActivity() {
                             if (!isDestroyed && !isFinishing && generation == approved && !value.revoked.get()) {
                                 guard = MemoryUiAutomationGuard.enterProtectedSurface(); session = value; candidates = targets
                                 targets.forEach { target ->
-                                    choices.addView(RadioButton(this).apply {
+                                    choices.addView(object : RadioButton(this) {
+                                        override fun onFilterTouchEventForSecurity(event: MotionEvent) = super.onFilterTouchEventForSecurity(event) && unoccluded(event)
+                                    }.apply {
                                         text = target.component.flattenToString(); tag = target.component.flattenToString()
                                         id = View.generateViewId(); isSaveEnabled = false; filterTouchesWhenObscured = true
                                         setOnClickListener { if (humanReady() && !working && !value.attempted) { requireHuman(); selected = target; render() } }
@@ -121,6 +127,7 @@ open class FactoryBrowserActivity : ComponentActivity() {
         if (recovery) FactoryBrowserCoordinator.afterStartup { if (!isDestroyed && !isFinishing) { session = coordinator.session(); render() } }
         render()
     }
+    private fun unoccluded(event: MotionEvent) = Build.VERSION.SDK_INT < 29 || event.flags and MotionEvent.FLAG_WINDOW_IS_PARTIALLY_OBSCURED == 0
     private fun awaitStartup(action: () -> Unit) {
         val approved = generation
         fun alive() = generation == approved && !isDestroyed && !isFinishing

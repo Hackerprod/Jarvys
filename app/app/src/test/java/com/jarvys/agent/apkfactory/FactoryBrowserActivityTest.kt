@@ -41,7 +41,7 @@ import java.util.concurrent.atomic.AtomicInteger
 
 /** Native host review and verified PM resolution; only external startActivity is recorded. */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34], application = android.app.Application::class, shadows = [FactoryBrowserPackageManagerShadow::class])
+@Config(sdk = [34], application = android.app.Application::class, shadows = [FactoryBrowserPackageManagerShadow::class, FactoryFileShareOsShadow::class])
 class FactoryBrowserActivityTest {
     private val context: Context get() = ApplicationProvider.getApplicationContext()
     private val root get() = File(context.noBackupFilesDir, "factory-browser")
@@ -99,6 +99,66 @@ class FactoryBrowserActivityTest {
         val registration = value.registration!!
         val action = registration.javaClass.getDeclaredField("action").apply { isAccessible = true }
         val original = action.get(registration) as Runnable; action.set(registration, Runnable { around(original) })
+    }
+    @Test fun coldStartWaitsForAudioThenSharingRestorationBeforeAdmittingReview() = startupOrdering(false)
+    @Test fun destroyedStartupWaiterCannotOccupyNextBrokerOrStarveFreshReview() = startupOrdering(true)
+    private fun startupOrdering(destroyFirst: Boolean) {
+        for (name in listOf("factory-audio", "factory-file-sharing")) File(context.noBackupFilesDir, name).deleteRecursively()
+        File(context.cacheDir, "factory-file-shares").deleteRecursively()
+        val audio = FactoryAudioCoordinator.WORKER; val sharing = FactoryFileShareCoordinator.WORKER
+        val audioEntered = CountDownLatch(1); val audioRelease = CountDownLatch(1)
+        val sharingEntered = CountDownLatch(1); val sharingRelease = CountDownLatch(1)
+        fun barrier(executor: java.util.concurrent.ThreadPoolExecutor) {
+            val task = FutureTask(Callable { Unit }); check(executor.queue.offer(task, 5, TimeUnit.SECONDS)); task.get(5, TimeUnit.SECONDS)
+        }
+        audio.execute { audioEntered.countDown(); check(audioRelease.await(10, TimeUnit.SECONDS)) }
+        sharing.execute { sharingEntered.countDown(); check(sharingRelease.await(10, TimeUnit.SECONDS)) }
+        assertTrue(audioEntered.await(5, TimeUnit.SECONDS)); assertTrue(sharingEntered.await(5, TimeUnit.SECONDS))
+        try {
+            FactoryAudioCoordinator.get(context); val sharingOwner = FactoryFileShareCoordinator.get(context)
+            val first = launch(); var activity = first.get()
+            assertFalse(activity.isFinishing); assertNull(coordinator.session()); assertFalse(button(activity, "open").isEnabled)
+            assertTrue(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
+            if (destroyFirst) { first.pause().stop().destroy(); controllers.remove(first) }
+            audioRelease.countDown(); barrier(audio); shadowOf(Looper.getMainLooper()).idle()
+            assertNull(coordinator.session()); assertFalse(FactoryInteractionAdmission.available())
+            if (destroyFirst) {
+                val waiter = FactoryFileShareCoordinator::class.java.getDeclaredField("startupWaiter").apply { isAccessible = true }
+                assertNull("Destroyed Activity must not claim the following broker's waiter", waiter.get(sharingOwner))
+                activity = launch().get(); assertFalse(activity.isFinishing)
+            }
+            assertEquals(0, activity.launches.size); sharingRelease.countDown(); barrier(sharing)
+            shadowOf(Looper.getMainLooper()).idle(); drain()
+            assertNotNull(coordinator.session()); assertFalse(activity.isFinishing); assertEquals("review", coordinator.status())
+            choose(activity); assertTrue(button(activity, "open").isEnabled); assertEquals(0, activity.launches.size)
+            button(activity, "close").performClick(); drain(); assertEquals(Activity.RESULT_OK, shadowOf(activity).resultCode)
+        } finally { audioRelease.countDown(); sharingRelease.countDown(); barrier(audio); barrier(sharing); shadowOf(Looper.getMainLooper()).idle(); drain() }
+    }
+    @Test fun fullyAndPartiallyObscuredNativeControlsRejectSyntheticTouch() {
+        val activity = launch().get()
+        val controls = listOf<View>(button(activity, "open"), button(activity, "close"), activity.window.decorView.findViewWithTag<RadioButton>(fixture.component.flattenToString()))
+        fun event(flags: Int): android.view.MotionEvent = android.view.MotionEvent.obtain(0L, 0L, android.view.MotionEvent.ACTION_DOWN, 1,
+            arrayOf(android.view.MotionEvent.PointerProperties().apply { id = 0; toolType = android.view.MotionEvent.TOOL_TYPE_FINGER }),
+            arrayOf(android.view.MotionEvent.PointerCoords().apply { x = 1f; y = 1f; pressure = 1f; size = 1f }),
+            0, 0, 1f, 1f, 0, 0, android.view.InputDevice.SOURCE_TOUCHSCREEN, flags)
+        for (control in controls) {
+            for (flags in listOf(android.view.MotionEvent.FLAG_WINDOW_IS_OBSCURED, android.view.MotionEvent.FLAG_WINDOW_IS_PARTIALLY_OBSCURED)) {
+                val touch = event(flags); try { assertFalse(control.onFilterTouchEventForSecurity(touch)) } finally { touch.recycle() }
+            }
+            val clean = event(0); try { assertTrue(control.onFilterTouchEventForSecurity(clean)) } finally { clean.recycle() }
+        }
+        assertEquals(0, activity.launches.size); assertFalse(coordinator.session()!!.attempted)
+    }
+    @Test fun cancelledControlBeforeRegistrationCannotEnableAnyLaunch() {
+        source.cancel(); val activity = launch().get()
+        assertTrue(coordinator.needsRecovery()); assertTrue(coordinator.session()!!.revoked.get()); assertFalse(button(activity, "open").isEnabled)
+        assertEquals(0, activity.launches.size); assertFalse(FactoryInteractionAdmission.available())
+    }
+    @Test fun noEligibleBrowserLeavesReviewClosableWithoutAutomaticFallback() {
+        shadowOf(context.packageManager).setResolveInfosForIntent(FactoryBrowserTestPackages.view(FactoryBrowserTestPackages.DISCOVERY), emptyList())
+        val activity = launch().get(); assertFalse(button(activity, "open").isEnabled); assertEquals(0, activity.launches.size)
+        button(activity, "close").performClick(); drain(); assertEquals(Activity.RESULT_OK, shadowOf(activity).resultCode)
+        assertFalse(shadowOf(activity).resultIntent.getBooleanExtra("launchRequested", true))
     }
     @Test fun fullUrlSecureNativeReviewRequiresSelectionAndNeverAutolaunches() {
         val activity = launch().get(); val value = coordinator.session()!!

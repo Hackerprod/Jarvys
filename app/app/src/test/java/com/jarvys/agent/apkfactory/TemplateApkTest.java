@@ -102,6 +102,21 @@ public class TemplateApkTest {
             assertThrows(UnsupportedOperationException.class,()->plan.capabilities.clear());
         }
     }
+    @Test public void browserOnlyAndCombinedAppsBuildWithOneSharedZeroPermissionQueryProfile() throws Exception {
+        byte[] browserManifest = null;
+        for (List<String> capabilities : Arrays.asList(Collections.singletonList("browser"), Arrays.asList("browser", "documents"))) {
+            TemplateApk.Spec browser = new TemplateApk.Spec(spec.appId,spec.label,spec.versionCode,spec.versionName,capabilities);
+            byte[] generated = TemplateApk.build(template,browser,icon,assets);
+            TemplateApk.ManifestInfo info = TemplateApk.verify(generated,browser);
+            assertEquals(capabilities,info.plan.capabilities);
+            assertEquals(Arrays.asList("com.jarvys.agent","com.jarvys.agent.recoverytest"),info.plan.queries);
+            assertEquals(10,info.plan.nodes.size()); assertEquals(1,info.plan.exportedComponents.size());
+            assertTrue(info.permissions.isEmpty()); assertTrue(info.plan.features.isEmpty());
+            byte[] actual = unzip(generated).get("AndroidManifest.xml");
+            if (browserManifest == null) browserManifest = actual; else assertArrayEquals(browserManifest,actual);
+            assertStoredEntriesAligned(generated);
+        }
+    }
     @Test public void documentQueriesAreTheOnlyAdditiveManifestProfile() throws Exception {
         TemplateApk.Spec docs = new TemplateApk.Spec(spec.appId,spec.label,1,"1.0",Collections.singletonList("documents"));
         byte[] apk = TemplateApk.build(template,docs,icon,assets);

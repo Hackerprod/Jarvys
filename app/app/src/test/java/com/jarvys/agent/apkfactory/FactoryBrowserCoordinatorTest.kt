@@ -89,6 +89,20 @@ class FactoryBrowserCoordinatorTest {
         denied { io { coordinator.begin(proof.appId, request()) { error("Caller is no longer active") } } }
         assertTrue(coordinator.canBegin()); assertFalse(File(root, "interaction.json").exists())
     }
+    @Test fun automationAlreadyInFlightTaintsReviewAndCannotAcquireAuthority() {
+        val epoch = MemoryUiAutomationGuard.captureAutomationEpoch(); val active = MemoryUiAutomationGuard.beginAsyncAction(epoch)
+        try { denied { begin() }; assertNull(coordinator.session()); assertFalse(File(root, "interaction.json").exists()) }
+        finally { active.close() }
+        assertTrue(coordinator.canBegin()); assertFalse(MemoryUiAutomationGuard.isProtected())
+    }
+    @Test fun failedDurableWriteRetainsGuardUntilActualHumanRecoveryCanPersist() {
+        root.writeText("Synthetic filesystem obstruction")
+        denied { begin() }; assertTrue(coordinator.needsRecovery()); assertFalse(FactoryInteractionAdmission.available())
+        assertTrue(MemoryUiAutomationGuard.isProtected()); denied { io { coordinator.close(coordinator.session(), true, true) {} } }
+        assertTrue(coordinator.needsRecovery()); check(root.delete()); check(root.mkdirs())
+        assertNull(io { coordinator.close(coordinator.session(), true, true) {} }); assertEquals("closed_outcome_unknown", coordinator.status())
+        assertTrue(FactoryInteractionAdmission.available())
+    }
     @Test fun reviewJournalContainsOnlyMinimalNonceStateAndNeverUrlOrRecipient() {
         val value = begin(); val raw = File(root, "interaction.json").readText(); val journal = JSONObject(raw)
         assertEquals(setOf("schemaVersion", "state", "open", "nonce"), journal.keys().asSequence().toSet())

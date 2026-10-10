@@ -22,3 +22,18 @@ signing/native delivery and physical acceptance remain pending at this checkpoin
 the repository. Preserve v63–v70 and TTS/voice, other F1, F2/F3, UX34 and UX43-last gates.
 
 Detailed scope and current official references: [APK_FACTORY](../../app/APK_FACTORY.md#https-browser-launch-ux42-f1-v71).
+
+Initial host-focused suite passed 71 synthetic cases (18 Activity, 16 coordinator, 34 target
+API-matrix cases and three actual Application startup cases). This includes blocked final
+recipient verification with pause/focus/source cancellation and close-callback receipt races.
+Additional cold-start ordering and partial-obscuration regressions are being added before freeze.
+Runtime metadata explicitly scopes legacy offline:true to embedded_webview and declares that
+the external browser may use its own network. All later changes need fresh final validation.
+
+Expanded host validation passed 167 cases with zero failures/errors/skips, including 78 browser
+cases: 23 Activity, 18 coordinator, 34 target API-matrix and three actual Application cases.
+All seven JVMs have guard launch/install/shutdown evidence. Browser cases ran with zero blocked
+attempts. One attempt was blocked during an unchanged skill-suite worker; the guard stores no
+URI/stack, so its cause is not established. No zero-total-network-attempt claim is made.
+The direct new browser-only/combined APK packaging test and one new runtime metadata assertion
+remain pending the final full aggregate. Exact lint and all release gates remain pending.

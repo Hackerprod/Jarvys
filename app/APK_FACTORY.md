@@ -319,7 +319,9 @@ These rules do not detect arbitrary secrets in a path/query or prove a public/sa
 Do not put passwords, tokens or other secrets into a URL.
 
 An authenticated native FLAG_SECURE review displays the full exact URL and canonical host without
-links or ellipsis, only after human-only automation protection is acquired. The user chooses a
+links or ellipsis, only after human-only automation protection is acquired. Native controls reject
+obscured touches, including partial obscuration on API29+. This does not control unrelated
+accessibility services. The user chooses a
 native browser component; JavaScript cannot choose packages, components, flags, extras or schemes.
 Discovery uses a single host-only HTTPS/BROWSABLE query and public GET_RESOLVED_FILTER metadata.
 Eligible components have a general HTTPS filter without authority/path/SSP/MIME/relative-filter
@@ -338,7 +340,8 @@ is added. HTTPS-only refers to the initial reviewed URL, not an enforced browser
 
 The host persists `launch_pending` before its one-shot dispatch. Minimal durable journal contains
 state/open/nonce only, never URL or browser data. Source cancellation/death, expiry and interrupted
-preparation revoke authority. Five-minute native expiry is independent of JavaScript timeout.
+preparation revoke authority. IPC cancellation delivery is not a hard realtime guarantee;
+local checks and host expiry remain fail-safes. Five-minute native expiry is independent of JavaScript timeout.
 The durable automation guard and global admission remain held until explicit human closure or
 recovery; no automatic retries, relaunches or resurrection after restart. A worker still preparing
 blocks recovery until it finishes. The user must manually close the external browser screen/task
