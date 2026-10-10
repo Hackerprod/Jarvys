@@ -7,7 +7,7 @@ Reconstructed from scratch on 2026-10-10 after the executor reset. The former ex
 - `symbolic_dex.py`: read-only standard-library DEX/APK extraction, complete symbolic inventories, conservative ordinal reconciliation and full changed-method reports.
 - `apk_surface.py`: read-only ZIP/AXML inventory and exact per-entry before/after SHA-256 change policy, with independent manifest/permission/resource/native-library checks.
 - `rebuild_probes.py`, `SymbolicProbe.java`, `ProbeManifest.xml`: source-only fixture regeneration, with pinned local tool paths and generated provenance.
-- `test_symbolic_dex.py`, `test_apk_surface.py`, `helper-tests.log`: 42 positive/negative controls.
+- `test_symbolic_dex.py`, `test_apk_surface.py`: 42 fixture-backed controls; `test_ordinal_finalizer.py`: 12 standalone synthetic mapping-collision controls.
 - `SymbolicProbe.java`, `ProbeManifest.xml`, `probe-classes/`, `probe-dex/`, `probe.dexdump.txt`, `probe-v1.apk`, `probe-v2.apk`: synthetic audit inputs built only with the restored pinned JDK, D8 and aapt2. These APKs are unsigned test inputs, not delivery artifacts.
 
 ## Source-only recovery after an executor reset
@@ -19,6 +19,7 @@ Durable source backups should contain exactly these implementation/input files (
 - rebuild_probes.py
 - test_symbolic_dex.py
 - test_apk_surface.py
+- test_ordinal_finalizer.py
 - SymbolicProbe.java
 - ProbeManifest.xml
 
@@ -31,7 +32,7 @@ python3 rebuild_probes.py \
   --toolchain /workspace/scratch/2ac40fb4b2af/Jarvys-recovery/toolchain \
   --output rebuilt-probes
 JARVYS_AUDIT_FIXTURES="$PWD/rebuilt-probes" \
-  python3 -m unittest -v test_symbolic_dex test_apk_surface
+  python3 -m unittest -v test_symbolic_dex test_apk_surface test_ordinal_finalizer
 ```
 
 The output must be new or empty; the generator does not overwrite old fixtures. It performs no downloads and requires these already-present files below --toolchain:
@@ -57,6 +58,8 @@ DEX binary parsing independently verifies SHA-1/Adler-32, type/prototype/member 
 
 Ordinal reconciliation is limited to access$<digits>, lambda$<same family>$<digits>, owner$<digits> anonymous classes and owner$$ExternalSyntheticLambda/Backport/Outline<digits>. Method candidates on both sides must carry ACC_SYNTHETIC; a manually named access$/lambda$ method is never eligible. A mapping needs a unique exact same-family body+prototype+access match (methods), or exact complete class content after replacing its own descriptor (classes). Previously proven symbol mappings can unlock additional exact matches. All proofs are rechecked after final symbol translation. The mapping is atomic, including ordinal permutations. String literals and encoded string values are never renamed. Ambiguous matches remain deltas. There is no package/class allowlist and no exception based on a class merely looking generated.
 
+Candidate correspondences must also be globally injective over the complete old inventory, including entries that retain their original names. The finalizer repeatedly rejects moves into still-occupied class/method names and any dependent move whose final exact-body proof no longer holds. It records every rejected candidate and its original local proof under `ordinalMappingRejections`; rejection leaves the original entries visible as genuine deltas. Closed permutations and exact chains into unused names remain eligible. Class/method inventory cardinality and complete proof accounting are checked. An unresolved prototype-only collision without an attributable moved method remains a hard failure. This narrows accepted correspondences and does not expand the eligible name families.
+
 The report includes raw class delta counts, every mapping and its exact-content proof digest, every added/removed class in full, class metadata changes, and every added/removed/changed method with complete before/after bodies and unified diffs. The comparator does not interpret deltas as approved security behavior.
 
 `parse-dump DUMP --dex INPUT.dex --output RESULT.json` permits saved text inspection. Without --dex it is explicitly partial; payloads fail closed and a partial-only comparison cannot pass the CLI's complete semantic audit status.
@@ -77,7 +80,7 @@ The optional policy is an object keyed by an exact APK entry name. Each value mu
 ## Tests and scope
 
 ```sh
-python3 -m unittest -v test_symbolic_dex test_apk_surface
+python3 -m unittest -v test_symbolic_dex test_apk_surface test_ordinal_finalizer
 ```
 
 The real D8 probe covers sparse and packed switches, a 12-element fill-array payload, exception handling, generated lambda class/method, runtime annotation/static value metadata, and a non-BMP Unicode string. Tests additionally cover offset/index/debug-only changes; changed branches, masks and authentication type constants; checksums; method prototypes/access; exact accessor permutations; anonymous/lambda class renumbering; ambiguous bodies; literal protection; unknown opcodes/references; and complete negative APK/version/permission/resource/native/profile controls, rejected noncanonical/gapped DEX archives, and nonsynthetic access$/lambda$ name changes.

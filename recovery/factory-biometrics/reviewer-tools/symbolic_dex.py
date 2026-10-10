@@ -9,6 +9,7 @@ No package allowlists, no automatic approval of changed methods, no execution.
 """
 import argparse
 import copy
+import collections
 import difflib
 import hashlib
 import json
@@ -468,6 +469,54 @@ def transformed_classes(classes, cm, mm):
     return result
 
 
+def finalize_ordinal_mappings(before, after, class_map, method_map, proofs):
+    cm,mm=dict(class_map),dict(method_map); rejected=[]
+    class_proofs={p['before']:p for p in proofs if p['kind']=='class'}
+    method_proofs={(p['owner'],p['before']):p for p in proofs if p['kind']=='method'}
+    def drop_class(owner,reason):
+        target=cm.pop(owner)
+        rejected.append({'kind':'class','before':owner,'after':target,'reason':reason,'localProof':class_proofs[owner]})
+    def drop_method(key,reason):
+        target=mm.pop(key)
+        rejected.append({'kind':'method','owner':key[0],'before':key[1],'after':target,'reason':reason,'localProof':method_proofs[key]})
+    while True:
+        changed=False; groups=collections.defaultdict(list)
+        for owner in before:groups[cm.get(owner,owner)].append(owner)
+        for target,owners in sorted(groups.items()):
+            if len(owners)<2:continue
+            movers=[o for o in owners if cm.get(o,o)!=o]
+            require(movers,'Identity-only class collision')
+            for owner in movers:drop_class(owner,'Noninjective class destination '+target);changed=True
+        for owner,value in before.items():
+            groups=collections.defaultdict(list)
+            for old in value['methods']:
+                new=translate(mm.get((owner,old),old),cm,{})
+                groups[new].append(old)
+            for target,keys in sorted(groups.items()):
+                if len(keys)<2:continue
+                movers=[k for k in keys if mm.get((owner,k),k)!=k]
+                require(movers,'Identity-only method collision')
+                for key in movers:drop_method((owner,key),'Noninjective method destination '+target);changed=True
+        # Pruning one move can expose an upstream destination collision. Iterate
+        # to injectivity before ever constructing a keyed result dictionary.
+        if changed:continue
+        mapped=transformed_classes(before,cm,mm)
+        bad_classes=[owner for owner,target in cm.items() if owner!=target and mapped[target]!=after.get(target)]
+        bad_methods=[]
+        for (owner,old),target in mm.items():
+            if old==target:continue
+            final_owner=cm.get(owner,owner);final_key=translate(target,cm,{})
+            if mapped[final_owner]['methods'][final_key]!=after.get(final_owner,{}).get('methods',{}).get(final_key):bad_methods.append((owner,old))
+        for owner in bad_classes:drop_class(owner,'Final exact class proof no longer holds after mapping pruning')
+        for key in bad_methods:drop_method(key,'Final exact method body/prototype/access proof no longer holds after mapping pruning')
+        if bad_classes or bad_methods:continue
+        kept=[p for p in proofs if (cm.get(p['before'])==p['after'] if p['kind']=='class' else mm.get((p['owner'],p['before']))==p['after'])]
+        require(len(kept)+len(rejected)==len(proofs),'Candidate proof record lost or duplicated')
+        require(len(mapped)==len(before),'Class inventory lost during finalization')
+        for owner,value in before.items():require(len(mapped[cm.get(owner,owner)]['methods'])==len(value['methods']),'Method inventory lost during finalization')
+        return mapped,sorted(kept,key=stable),sorted(rejected,key=stable)
+
+
 def reconcile(before, after):
     cm, mm, proofs, ambiguous = {}, {}, [], []
     # Only ACC_SYNTHETIC, exact, one-to-one, same-owner/prototype/body/access matches can move an ordinal.
@@ -496,6 +545,8 @@ def reconcile(before, after):
         for owner, value in before.items():
             match = ORDINAL_CLASS.fullmatch(owner)
             if match and owner not in cm:
+                method_names = [translate(mm.get((owner, key), key), cm, {}) for key in value['methods']]
+                if len(method_names) != len(set(method_names)): continue  # Finalizer retains/reports collisions.
                 mapped = transformed_classes({owner: value}, cm, mm)[owner]
                 sig = digest(translate(mapped, {owner: '@SELF;'}, {}))
                 oldgroups.setdefault((match[1], sig), []).append(owner)
@@ -510,21 +561,13 @@ def reconcile(before, after):
                 old, new = olds[0], news[0]; cm[old] = new; changed = True
                 if old != new: proofs.append({'kind': 'class', 'before': old, 'after': new, 'exactSelfNormalizedClassSha256': family_sig[1]})
         if not changed: break
-    mapped = transformed_classes(before, cm, mm)
-    # Revalidate every proof against final mappings; a later replacement must not invalidate an earlier proof.
-    for proof in proofs:
-        if proof['kind'] == 'class':
-            require(mapped[proof['after']] == after[proof['after']], 'Ordinal class proof invalidated by later mapping')
-        else:
-            owner = cm.get(proof['owner'], proof['owner']); key = translate(proof['after'], cm, {})
-            require(mapped[owner]['methods'][key] == after[owner]['methods'][key], 'Ordinal method proof invalidated')
-    return mapped, proofs
+    return finalize_ordinal_mappings(before, after, cm, mm, proofs)
 
 
 def compare(before, after, allow_ordinals=True):
     require(before['format'] == after['format'] == FORMAT, 'Incompatible inventory format')
     old, new = before['classes'], after['classes']
-    mapped, proofs = reconcile(old, new) if allow_ordinals else (old, [])
+    mapped, proofs, rejections = reconcile(old, new) if allow_ordinals else (old, [], [])
     added, removed = sorted(new.keys() - mapped.keys()), sorted(mapped.keys() - new.keys())
     changed = []
     unchanged = 0
@@ -550,14 +593,14 @@ def compare(before, after, allow_ordinals=True):
             'rawClassDeltaCounts': {'added': len(new.keys() - old.keys()), 'removed': len(old.keys() - new.keys()),
                                     'changed': sum(old[k] != new[k] for k in old.keys() & new.keys())},
             'completeBinaryMetadata': bool(before.get('completeBinaryMetadata') and after.get('completeBinaryMetadata')),
-            'limits': LIMITS, 'ordinalMappings': proofs, 'unchangedClasses': unchanged,
+            'limits': LIMITS, 'ordinalMappings': proofs, 'ordinalMappingRejections': rejections, 'unchangedClasses': unchanged,
             'addedClasses': {k: new[k] for k in added}, 'removedClasses': {k: mapped[k] for k in removed},
             'changedClasses': changed,
             'summary': {'addedClasses': len(added), 'removedClasses': len(removed), 'changedClasses': len(changed),
                         'changedMethods': sum(len(x['changedMethods']) for x in changed),
                         'addedMethodsInExistingClasses': sum(len(x['addedMethods']) for x in changed),
                         'removedMethodsInExistingClasses': sum(len(x['removedMethods']) for x in changed),
-                        'ordinalMappings': len(proofs)}}
+                        'ordinalMappings': len(proofs), 'rejectedOrdinalMappings': len(rejections)}}
 
 
 def main():
