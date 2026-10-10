@@ -21,7 +21,7 @@ import java.io.File
 
 /** Synthetic host contract tests: no device picker, private key, document I/O or real URI grant. */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
+@Config(sdk = [34], application = android.app.Application::class)
 class FactoryDocumentCoordinatorTest {
     private val context: Context get() = ApplicationProvider.getApplicationContext()
     private val root get() = File(context.noBackupFilesDir, "factory-documents")
@@ -36,6 +36,7 @@ class FactoryDocumentCoordinatorTest {
     @After fun cleanup() {
         // Process death in synthetic tests drops process-local leases; production has no such reset.
         for (name in listOf("protectedSurfaces", "taintedSurfaces", "activeActions")) MemoryUiAutomationGuard::class.java.getDeclaredField(name).apply { isAccessible = true }.setInt(null, 0)
+        FactoryInteractionAdmission::class.java.getDeclaredField("owners").apply { isAccessible = true }.let { (it.get(null) as MutableSet<*>).clear() }
         root.deleteRecursively()
     }
     @Test fun exactRequestRejectsSpoofedFieldsAndUris() {

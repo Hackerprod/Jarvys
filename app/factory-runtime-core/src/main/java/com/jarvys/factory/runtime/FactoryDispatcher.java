@@ -30,7 +30,7 @@ public final class FactoryDispatcher {
     public static Effects simulatedEffects() {
         return (method, args) -> {
             switch (method) {
-                case DOCUMENTS_OPEN: case DOCUMENTS_CREATE: case DOCUMENTS_READ: case DOCUMENTS_WRITE: case DOCUMENTS_CLOSE: case DOCUMENTS_CANCEL:
+                case SHARE_FILE: case DOCUMENTS_OPEN: case DOCUMENTS_CREATE: case DOCUMENTS_READ: case DOCUMENTS_WRITE: case DOCUMENTS_CLOSE: case DOCUMENTS_CANCEL:
                     throw new FactoryException("UNAVAILABLE", "Documents require an installed generated app and the matching human-only Jarvys broker; preview never opens files.");
                 case HAPTICS_PERFORM: case SHARE_TEXT: case CLIPBOARD_WRITE: case EXPORT_TEXT:
                     return new JSONObject().put("simulated", true).put("performed", false).put("mode", "preview")
@@ -56,6 +56,8 @@ public final class FactoryDispatcher {
                                 ? java.util.Arrays.asList("export", "share", "clipboard", "haptics") : java.util.Collections.emptyList()))
                         .put("unavailableCapabilities", new JSONArray("preview".equals(metadata.mode())
                                 ? java.util.Collections.singletonList("documents") : java.util.Collections.emptyList()))
+                        .put("fileShareProtocolVersion", 1)
+                        .put("fileShareRequires", new JSONArray(java.util.Arrays.asList("documents", "share")))
                         .put("documentProtocolVersion", 1)
                         .put("documentBrokerRequired", true)
                         .put("implementedCapabilities", new JSONArray(FactoryConfig.SUPPORTED))
@@ -65,9 +67,10 @@ public final class FactoryDispatcher {
                                 .put("storageBytes", BoundedStore.MAX_TOTAL_BYTES).put("storageEntries", BoundedStore.MAX_ENTRIES)
                                 .put("documentChunkBytes", 32768).put("documentBytes", 16 * 1024 * 1024)
                                 .put("documentSessionBytes", 32 * 1024 * 1024).put("documentHandles", 4)
+                                .put("fileShareBytes", 8 * 1024 * 1024).put("fileShareLifetimeMs", 300000)
                                 .put("documentHandleLifetimeMs", 300000));
             case DEVICE_INFO: return metadata.deviceInfo().put("declaredAppId", config.appId);
-            case DOCUMENTS_OPEN: case DOCUMENTS_CREATE: case DOCUMENTS_READ: case DOCUMENTS_WRITE: case DOCUMENTS_CLOSE: case DOCUMENTS_CANCEL:
+            case SHARE_FILE: case DOCUMENTS_OPEN: case DOCUMENTS_CREATE: case DOCUMENTS_READ: case DOCUMENTS_WRITE: case DOCUMENTS_CLOSE: case DOCUMENTS_CANCEL:
             case HAPTICS_PERFORM: case SHARE_TEXT: case CLIPBOARD_WRITE: case EXPORT_TEXT:
                 return effects.perform(request.operation, request.args);
             default: throw new FactoryException("UNKNOWN_METHOD", "Unknown operation.");

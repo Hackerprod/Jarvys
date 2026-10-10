@@ -55,7 +55,7 @@ This offline template declares **zero Android permissions**. Its JavaScript cann
 
 ### Closed capability and manifest contract (UX42 F0a-1)
 
-Pure Java `:factory-contract` owns seven capabilities and sixteen wire methods (including ungated, non-sensitive `runtime.info`). FactorySpec, FactoryConfig, bridge validation, dispatch and introspection share this catalog; native validation and handlers remain explicit switches. v67 adds SDK 2 document methods while schema and bridge protocol remain 1. All 128 capability subsets retain zero Android permissions and the same launcher component. Only `documents` contributes exact package visibility queries for `com.jarvys.agent` and `com.jarvys.agent.recoverytest`; it adds no generated-app permission, provider, service, receiver or Activity. This remains a bounded extension, not completion of Runtime2 or the broader selective-manifest roadmap.
+Pure Java `:factory-contract` owns seven capabilities and seventeen wire methods (including ungated, non-sensitive `runtime.info`). FactorySpec, FactoryConfig, bridge validation, dispatch and introspection share this catalog; native validation and handlers remain explicit switches. v67 adds SDK 2 document methods while schema and bridge protocol remain 1. All 128 capability subsets retain zero Android permissions and the same launcher component. Only `documents` contributes exact package visibility queries for `com.jarvys.agent` and `com.jarvys.agent.recoverytest`; it adds no generated-app permission, provider, service, receiver or Activity. This remains a bounded extension, not completion of Runtime2 or the broader selective-manifest roadmap.
 
 `ManifestPlan` is an immutable, closed expected tree with exact names, namespaces, Android attribute resource IDs, types and values. It pins API 24/35/compile 36, the launcher, theme, backup/cleartext policy and compiled icon/backup references. Project JSON cannot supply XML, nodes or arbitrary manifest attributes. F0a-2 adds an immutable compiled construction vocabulary and deterministic typed AXML encoder, including bounded repeated permissions/features/private components/filters/package and intent queries/metadata. Apart from the two exact `documents` package queries, these extra nodes remain host construction fixtures. Other contributions and project-defined nodes remain rejected. See [the construction scope and gates](../recovery/ux42-f0a2/README.md).
 
@@ -173,4 +173,37 @@ Handles carry no path/URI and cannot be persisted or restored. Reads/writes are 
 
 Cancellation cannot roll back provider work. Create may leave an empty or partial file even if no handle is returned; a user-selected cloud provider may transfer data remotely. `close_requested` and `providerCommitConfirmed:false` do not certify flush, durable commit or upload. At exact quota, close rather than reading an extra byte to prove EOF. Interrupted-picker recovery requires the human to close the old picker/task and acknowledge it in **Settings → Factory documents**. That is user-reported closure, not OS proof; outcome stays unknown and no grant is restored.
 
-FileProvider binary sharing and the remaining F1/F2/F3 roadmap are not implemented by this slice. Current v67 test/artifact and physical acceptance gates remain pending until their own recorded results exist. Required device checks include exact-latest identity rejection, both-host ambiguity, picker denial/cancel, Use this document, background/rotation/reset, slow/cloud providers, quota boundaries, partial output and unknown-outcome recovery. Host tests and preview never establish those results.
+v67 host test and delivery results are recorded in recovery/factory-documents. Physical acceptance remains pending. The bounded v68 file-sharing extension is described below; the other F1/F2/F3 families remain closed. Required device checks include exact-latest identity rejection, both-host ambiguity, picker denial/cancel, Use this document, background/rotation/reset, slow/cloud providers, quota boundaries, partial output and unknown-outcome recovery. Host tests and preview never establish those results.
+
+
+## v68: bounded binary file sharing
+
+`share.file({handle,filename,mimeType})` requires both `documents` and `share`, an untouched
+read handle and strict concrete metadata. The source handle is consumed into a complete 1-byte
+to 8 MiB immutable snapshot with charged EOF proof and existing cumulative quotas. Native
+Binder sends sequential chunks of at most 32 KiB to the pinned, uniquely identified host; exact
+length/hash/EOF validation precedes publication. One process-wide transfer admission and a
+five-minute lifetime bound authority. No caller URI/path or persistent grant is introduced.
+
+The host rechecks exact latest signed caller identity and both capabilities, then stages one
+private snapshot. A separate human-only sharing coordinator uses shared document/share admission
+and its own durable automation latch, restored before automation starts. Host-only FileProvider
+`${applicationId}.factory.files` exposes only `cache/factory-file-shares/`, with an exact registered
+URI, monotonic expiry, read-only operations and process-death fail-closed behavior. Generated
+manifest permissions/providers are unchanged. See [the complete API and lifecycle contract](apk-runtime/docs/RUNTIME.md#binary-file-sharing-v68).
+
+Only a native human action opens the system chooser. Read-only URI grants never include write,
+prefix or persistable authority. Chooser callbacks do not release automation protection: the
+human must close the chooser/recipient task and acknowledge uncertainty in native closure or
+Settings recovery. No outcome is reported as delivery; `deliveryConfirmed` is always false.
+Deletion/revocation cannot recall already opened descriptors, recipient copies or uploads.
+Preview remains unavailable for file sharing. Existing text sharing and SAF behavior are preserved.
+
+Implementation and synthetic tests do not prove device Binder IPC, chooser grants, recipient
+access or revocation. The v68 three-APK/source/test/lint/signing gates are recorded separately
+in recovery/factory-files; no actual user file or third-party sharing is part of host validation.
+
+Design references: [Android FileProvider](https://developer.android.com/reference/androidx/core/content/FileProvider),
+[narrow provider paths](https://developer.android.com/privacy-and-security/risks/file-providers),
+[Binder transaction limits](https://developer.android.com/reference/android/os/TransactionTooLargeException),
+and [URI revocation](https://developer.android.com/reference/android/content/Context#revokeUriPermission(android.net.Uri,%20int)).

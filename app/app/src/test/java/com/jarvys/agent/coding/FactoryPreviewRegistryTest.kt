@@ -155,7 +155,7 @@ class FactoryPreviewRegistryTest {
             val result = FactoryRuntimeContractTests.run(snapshot(capabilities), "com.jarvys.host", 34, 34) {}
             assertEquals("passed", result.getString("state"))
             val observations = result.getJSONArray("observations")
-            assertEquals(19, observations.length())
+            assertEquals(20, observations.length())
             val documentAssertions = (0 until observations.length()).map { observations.getJSONObject(it) }
                 .filter { it.getString("operation").startsWith("documents.") }
             assertEquals(6, documentAssertions.size)

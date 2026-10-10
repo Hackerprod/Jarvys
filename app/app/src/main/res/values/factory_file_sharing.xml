@@ -1,0 +1,12 @@
+<resources>
+    <string name="factory_file_sharing_title">Factory file sharing</string>
+    <string name="factory_file_sharing_settings_summary">Review and close interrupted file sharing</string>
+    <string name="factory_file_sharing_disclosure">Review this app and file yourself. Only a verified private copy, up to 8 MiB, can be shared. Choose the recipient in Android’s chooser. The recipient may copy the file or send it to a remote service or another person. Jarvys cannot recall copies or confirm delivery. Automated device access remains blocked until you explicitly acknowledge closing the chooser and recipient task.</string>
+    <string name="factory_file_sharing_checking">Checking the requesting app and complete file. No sharing has been authorized.</string>
+    <string name="factory_file_sharing_choose">Choose who receives this file</string>
+    <string name="factory_file_sharing_close">Cancel / close</string>
+    <string name="factory_file_sharing_acknowledge">I closed the chooser and recipient task; acknowledge and close</string>
+    <string name="factory_file_sharing_waiting">Close the chooser and recipient app task yourself before acknowledging below. A chooser callback does not prove they closed or that the file was delivered. Acknowledgment revokes further access and removes the private copy; copies already made cannot be recalled.</string>
+    <string name="factory_file_sharing_unknown">This interaction was interrupted. Its outcome is unknown. No file access can be restored. First close any old chooser and recipient app task. Your acknowledgment is your report of closure, not Android proof. Recovery revokes access and removes the private copy before releasing automation.</string>
+    <string name="factory_file_sharing_rejected">This request is unavailable, expired or revoked. No delivery is confirmed. Review interrupted sharing here if needed.</string>
+</resources>

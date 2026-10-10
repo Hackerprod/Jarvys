@@ -25,6 +25,7 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 
     <queries>
+        <intent><action android:name="android.intent.action.CHOOSER" /></intent>
         <intent>
             <action android:name="android.intent.action.OPEN_DOCUMENT" />
             <category android:name="android.intent.category.OPENABLE" />
@@ -44,7 +45,7 @@
     </queries>
 
     <application
-        android:name="com.jarvys.agent.apkfactory.FactoryInstallApplication"
+        android:name="com.jarvys.agent.apkfactory.FactoryGuardApplication"
         android:allowBackup="false"
         android:usesCleartextTraffic="true"
         android:label="${jarvysApplicationLabel}"
@@ -81,6 +82,17 @@
             android:name="com.jarvys.agent.apkfactory.FactoryDocumentActivity"
             android:exported="true"
             android:windowSoftInputMode="adjustResize" />
+        <activity
+            android:name="com.jarvys.agent.apkfactory.FactoryFileShareActivity"
+            android:exported="true"
+            android:windowSoftInputMode="adjustResize" />
+        <provider
+            android:name="com.jarvys.agent.apkfactory.FactoryFileShareProvider"
+            android:authorities="${applicationId}.factory.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/factory_file_share_paths" />
+        </provider>
         <receiver
             android:name="com.jarvys.agent.apkfactory.FactoryInstallReceiver"
             android:exported="false" />

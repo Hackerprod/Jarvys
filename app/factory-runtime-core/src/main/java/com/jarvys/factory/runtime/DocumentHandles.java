@@ -153,6 +153,37 @@ public final class DocumentHandles {
             return new ReadResult(encode(buffer,actual),offset,entry.offset,entry.eof);
         }
     }
+    /** Consumes an untouched read handle into a bounded immutable sharing snapshot.
+     * The extra byte proves EOF without bypassing either cumulative quota. The handle is
+     * retired even after failure; provider close retains the existing bounded async path.
+     */
+    public byte[] snapshotForShare(String token) throws FactoryException {
+        final int maximum = 8 * 1024 * 1024;
+        final Entry entry;
+        synchronized(lock) { entry=lookup(token,false,0); entry.busy=true; }
+        java.io.ByteArrayOutputStream output=new java.io.ByteArrayOutputStream();
+        try {
+            while (true) {
+                int requested=Math.min(MAX_CHUNK_BYTES,maximum+1-output.size());
+                synchronized(lock) { finishCheck(entry); begin(entry,requested); }
+                byte[] bytes=new byte[requested]; final int count;
+                try { count=((InputStream)entry.stream).read(bytes); }
+                catch (Exception failure) { throw error("DOCUMENT_IO"); }
+                if (count < -1 || count == 0 || count > requested) throw error("DOCUMENT_IO");
+                synchronized(lock) {
+                    finishCheck(entry);
+                    int actual=Math.max(0,count); charged-=requested-actual; entry.charged-=requested-actual;
+                    entry.offset+=actual;
+                }
+                if (count == -1) {
+                    if (output.size() == 0) throw error("EMPTY_FILE");
+                    return output.toByteArray();
+                }
+                if (count > maximum-output.size()) throw error("SHARE_TOO_LARGE");
+                output.write(bytes,0,count);
+            }
+        } finally { synchronized(lock) { remove(entry); } }
+    }
     public WriteResult write(String token,long offset,String base64) throws FactoryException {
         byte[] bytes=decode(base64); Entry entry;
         synchronized(lock) { entry=lookup(token,true,offset); begin(entry,bytes.length); }

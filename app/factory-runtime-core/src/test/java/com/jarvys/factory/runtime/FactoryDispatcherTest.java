@@ -82,6 +82,25 @@ public class FactoryDispatcherTest {
                 new BoundedStore(new MemoryBackend()), FactoryDispatcher.previewMetadata("host.app", 35, 35), forbidden); fail(); }
         catch (FactoryException e) { assertEquals("CAPABILITY_DENIED", e.code); }
     }
+    @Test public void fileSharingIsUnavailableInPreviewAndRequiresBothCapabilitiesAtDispatch() throws Exception {
+        FactoryConfig both=FactoryConfig.parsePreview(configuration("[\"share\",\"documents\"]"));
+        JSONObject args=new JSONObject().put("handle",new String(new char[64]).replace('\0','a')).put("filename","file.bin").put("mimeType","application/octet-stream");
+        BridgeProtocol.Request request=request("share.file",args,both);
+        try { FactoryDispatcher.dispatch(request,both,new BoundedStore(new MemoryBackend()),
+                FactoryDispatcher.previewMetadata("host",35,35),FactoryDispatcher.simulatedEffects()); fail(); }
+        catch(FactoryException expected){assertEquals("UNAVAILABLE",expected.code);}
+        for(String caps:Arrays.asList("[]","[\"share\"]","[\"documents\"]")) {
+            try { FactoryDispatcher.dispatch(request,FactoryConfig.parsePreview(configuration(caps)),new BoundedStore(new MemoryBackend()),
+                    FactoryDispatcher.previewMetadata("host",35,35),(method,value)->{throw new AssertionError("Effect invoked");});fail();}
+            catch(FactoryException expected){assertEquals("CAPABILITY_DENIED",expected.code);}
+        }
+        assertEquals("adapter",FactoryDispatcher.dispatch(request,both,new BoundedStore(new MemoryBackend()),
+            FactoryDispatcher.metadata("installed","app",35,35),(method,value)->{assertEquals(CapabilityCatalog.Method.SHARE_FILE,method);return "adapter";}));
+        JSONObject info=(JSONObject)FactoryDispatcher.dispatch(request("runtime.info",new JSONObject(),both),both,new BoundedStore(new MemoryBackend()),
+                FactoryDispatcher.previewMetadata("host",35,35),FactoryDispatcher.simulatedEffects());
+        assertEquals(8388608,info.getJSONObject("limits").getInt("fileShareBytes"));
+        assertEquals("[\"documents\",\"share\"]",info.getJSONArray("fileShareRequires").toString());
+    }
     @Test public void installedDispatcherDelegatesEachRealEffectExactlyOnce() throws Exception {
         HashSet<CapabilityCatalog.Method> observed = new HashSet<>();
         for (String method : Arrays.asList("haptics.perform", "share.text", "clipboard.write", "export.text")) {

@@ -206,6 +206,11 @@ private fun SettingsIndex(
             stringResource(R.string.factory_documents_settings_summary),
             { context.startActivity(com.jarvys.agent.apkfactory.FactoryDocumentCoordinator.recoveryIntent(context)) },
             testTag = "settings-factory-documents-row")
+        SettingsRule()
+        SettingsIndexRow(LucideIcons.Boxes, stringResource(R.string.factory_file_sharing_title),
+            stringResource(R.string.factory_file_sharing_settings_summary),
+            { context.startActivity(com.jarvys.agent.apkfactory.FactoryFileShareCoordinator.recoveryIntent(context)) },
+            testTag = "settings-factory-file-sharing-row")
     }
 }
 

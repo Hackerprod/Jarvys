@@ -1,0 +1,12 @@
+<resources>
+    <string name="factory_file_sharing_title">Compartir archivos de Factory</string>
+    <string name="factory_file_sharing_settings_summary">Revisar y cerrar un envío de archivo interrumpido</string>
+    <string name="factory_file_sharing_disclosure">Revisa tú esta app y el archivo. Solo se comparte una copia privada verificada, de hasta 8 MiB. Elige el destinatario en el selector de Android. El destinatario puede copiar el archivo o enviarlo a un servicio remoto u otra persona. Jarvys no puede retirar copias ni confirmar la entrega. La automatización permanece bloqueada hasta que confirmes explícitamente haber cerrado el selector y la tarea destinataria.</string>
+    <string name="factory_file_sharing_checking">Comprobando la app solicitante y el archivo completo. No se ha autorizado ningún envío.</string>
+    <string name="factory_file_sharing_choose">Elegir quién recibe este archivo</string>
+    <string name="factory_file_sharing_close">Cancelar / cerrar</string>
+    <string name="factory_file_sharing_acknowledge">Cerré el selector y la tarea destinataria; confirmar y cerrar</string>
+    <string name="factory_file_sharing_waiting">Cierra tú el selector y la tarea de la app destinataria antes de confirmar abajo. Una respuesta del selector no demuestra que se hayan cerrado ni que se haya entregado el archivo. La confirmación revoca el acceso posterior y elimina la copia privada; no se pueden retirar las copias ya realizadas.</string>
+    <string name="factory_file_sharing_unknown">Esta interacción se interrumpió. Su resultado es desconocido. No se puede restaurar el acceso al archivo. Cierra primero cualquier selector y tarea destinataria anteriores. Tu confirmación comunica que los cerraste; Android no lo verifica. La recuperación revoca el acceso y elimina la copia privada antes de liberar la automatización.</string>
+    <string name="factory_file_sharing_rejected">Esta solicitud no está disponible, caducó o fue revocada. No se confirma ninguna entrega. Revisa aquí el envío interrumpido si es necesario.</string>
+</resources>

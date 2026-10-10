@@ -19,7 +19,7 @@ public final class CapabilityCatalog {
         RUNTIME_INFO("runtime.info", null),
         STORAGE_GET("storage.get", "storage"), STORAGE_SET("storage.set", "storage"),
         STORAGE_REMOVE("storage.remove", "storage"), STORAGE_LIST("storage.list", "storage"),
-        EXPORT_TEXT("export.text", "export"), SHARE_TEXT("share.text", "share"),
+        EXPORT_TEXT("export.text", "export"), SHARE_TEXT("share.text", "share"), SHARE_FILE("share.file", "share"),
         CLIPBOARD_WRITE("clipboard.write", "clipboard"), HAPTICS_PERFORM("haptics.perform", "haptics"),
         DEVICE_INFO("device.info", "device"),
         DOCUMENTS_OPEN("documents.open", "documents"), DOCUMENTS_CREATE("documents.create", "documents"),

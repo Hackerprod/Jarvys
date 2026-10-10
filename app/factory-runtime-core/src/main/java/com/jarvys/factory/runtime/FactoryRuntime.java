@@ -55,6 +55,7 @@ public final class FactoryRuntime implements AutoCloseable {
     private static final String BRIDGE_NAME = "JarvysNative";
     private static final int EXPORT_REQUEST = 41;
     private static final int DOCUMENT_REQUEST = 42;
+    private static final int FILE_SHARE_REQUEST = 43;
     private static final int MAX_PENDING = 16;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ThreadPoolExecutor io = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
@@ -73,6 +74,7 @@ public final class FactoryRuntime implements AutoCloseable {
     private DocumentHandles documents = new DocumentHandles();
     private volatile boolean documentForeground;
     private DocumentSelection documentSelection;
+    private volatile FileShare fileShare;
     // No new selection while old descriptors/grants are closing: a delayed revoke for the
     // same URI must never revoke a newer selection. Provider cleanup may block indefinitely.
     private static final java.util.concurrent.atomic.AtomicInteger documentResources = new java.util.concurrent.atomic.AtomicInteger();
@@ -85,6 +87,8 @@ public final class FactoryRuntime implements AutoCloseable {
         public void run() {
             if (destroyed) return;
             documents.expire();
+            FileShare share = fileShare;
+            if (share != null && share.snapshot != null) share.snapshot.expire();
             main.postDelayed(this, 1000);
         }
     };
@@ -165,7 +169,7 @@ public final class FactoryRuntime implements AutoCloseable {
     private void invalidate() {
         generation++; pending.clear(); uiOwner = null;
         documents.revokeAll(); documents = new DocumentHandles();
-        cancelDocumentSelection();
+        cancelDocumentSelection(); cancelFileShare();
         // Keep an outstanding picker tombstone until its callback: request code 41 must never
         // attach an old result to a new page's export request.
         if (export != null) export.text = null;
@@ -350,6 +354,8 @@ public final class FactoryRuntime implements AutoCloseable {
     private void dispatchInstalledEffect(BridgeProtocol.Request request, Reply reply) throws Exception {
         if (!reply.current()) return;
         switch (request.operation) {
+            case SHARE_FILE:
+                shareFile(request, reply); break;
             case DOCUMENTS_OPEN: case DOCUMENTS_CREATE:
                 openDocument(request, reply); break;
             case DOCUMENTS_READ:
@@ -372,7 +378,7 @@ public final class FactoryRuntime implements AutoCloseable {
                 documents.close(request.args.getString("handle"));
                 reply.ok(new JSONObject().put("status", "close_requested").put("providerCommitConfirmed", false)); break;
             case DOCUMENTS_CANCEL:
-                documents.cancelAll(); cancelDocumentSelection();
+                documents.cancelAll(); cancelDocumentSelection(); cancelFileShare();
                 reply.ok(new JSONObject().put("cancelled", true).put("rollbackConfirmed", false)
                         .put("pickerMayRemainOpen", documentSelection != null)); break;
             case HAPTICS_PERFORM:
@@ -428,13 +434,21 @@ public final class FactoryRuntime implements AutoCloseable {
     }
 
     private boolean claimUi(Reply reply) {
-        if (uiOwner != null || export != null || documentSelection != null || !activity.hasWindowFocus() || activity.isFinishing()) {
+        if (uiOwner != null || export != null || documentSelection != null || fileShare != null || !activity.hasWindowFocus() || activity.isFinishing()) {
             reply.fail("BUSY", "Another native prompt is open, or the application is not in the foreground."); return false;
         }
         uiOwner = reply; return true;
     }
 
     public void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == FILE_SHARE_REQUEST) {
+            FileShare work = fileShare;
+            if (work == null) return;
+            work.returned = true; work.resultCode = resultCode; work.result = data;
+            if (work.snapshot != null) work.snapshot.close();
+            if (documentForeground) finishFileShare(work);
+            return;
+        }
         if (requestCode == DOCUMENT_REQUEST) {
             DocumentSelection work = documentSelection;
             if (work == null) { releaseDocumentGrant(data); return; }
@@ -472,6 +486,8 @@ public final class FactoryRuntime implements AutoCloseable {
     /** Pause always revokes existing handles. The external broker alone may retain a picker tombstone. */
     public void onPause() {
         documentForeground = false;
+        FileShare share = fileShare;
+        if (share != null && !share.launched) cancelFileShare();
         documents.cancelAll();
         DocumentSelection work = documentSelection;
         if (work != null && work.returned) cancelDocumentSelection();
@@ -482,12 +498,125 @@ public final class FactoryRuntime implements AutoCloseable {
     }
     public void onResume() {
         documentForeground = true;
+        FileShare share = fileShare;
+        if (share != null && share.returned) finishFileShare(share);
         DocumentSelection work = documentSelection;
         if (work != null && work.result != null) acceptDocumentSelection(work);
     }
     private void requireDocumentForeground() throws FactoryException {
         if (!documentForeground || destroyed || activity.isFinishing() || !host.isActive())
             throw new FactoryException("UNAVAILABLE", "Document access requires the foreground application.");
+    }
+    private static final class FileShare {
+        final Reply reply;
+        final String nonce;
+        volatile FileShareTransfer snapshot;
+        volatile boolean cancelled, launched;
+        boolean returned;
+        int resultCode;
+        Intent result;
+        FileShare(Reply reply, String nonce) { this.reply=reply; this.nonce=nonce; }
+    }
+    private void shareFile(BridgeProtocol.Request request, Reply reply) throws Exception {
+        requireDocumentForeground();
+        DocumentBrokerIdentity.verify(activity, config.documentBroker);
+        if (!claimUi(reply)) return;
+        final FileShareTransfer.Admission admission = FileShareTransfer.reserve();
+        byte[] random = new byte[32]; new java.security.SecureRandom().nextBytes(random);
+        StringBuilder nonce = new StringBuilder();
+        for (byte b:random) nonce.append(String.format(java.util.Locale.ROOT,"%02x",b & 255));
+        FileShare work = new FileShare(reply,nonce.toString()); fileShare=work;
+        final DocumentHandles source=documents;
+        try { io.execute(() -> {
+            byte[] bytes=null;
+            try {
+                requireDocumentForeground();
+                if (work.cancelled || !reply.current()) throw new FactoryException("CANCELLED","File sharing was cancelled.");
+                bytes=source.snapshotForShare(request.args.getString("handle"));
+                requireDocumentForeground();
+                DocumentBrokerIdentity.verify(activity,config.documentBroker);
+                final int hostUid=activity.getPackageManager().getApplicationInfo(config.documentBroker.packageName,0).uid;
+                String[] packages=activity.getPackageManager().getPackagesForUid(hostUid);
+                if (packages == null || packages.length != 1 || !packages[0].equals(config.documentBroker.packageName))
+                    throw new FactoryException("UNAVAILABLE","The sharing host has an ambiguous UID.");
+                work.snapshot=admission.complete(bytes,work.nonce,uid -> {
+                    if (uid != hostUid || work.cancelled || !work.launched || destroyed || fileShare != work || !reply.current()) return false;
+                    try {
+                        DocumentBrokerIdentity.verify(activity,config.documentBroker);
+                        String[] current=activity.getPackageManager().getPackagesForUid(uid);
+                        return current != null && current.length == 1 && current[0].equals(config.documentBroker.packageName)
+                                && activity.getPackageManager().getApplicationInfo(config.documentBroker.packageName,0).uid == uid;
+                    } catch (Exception denied) { return false; }
+                });
+                bytes=null; // Ownership moved to bounded native endpoint, never JavaScript.
+                main.post(() -> {
+                    if (work.cancelled || !documentForeground || !reply.current() || fileShare != work) {
+                        cancelFileShare(); finishUnlaunchedShare(work); return;
+                    }
+                    try {
+                        DocumentBrokerIdentity.verify(activity,config.documentBroker);
+                        android.os.Bundle extras=new android.os.Bundle();
+                        extras.putInt("protocolVersion",1); extras.putString("nonce",work.nonce);
+                        extras.putString("filename",request.args.getString("filename"));
+                        extras.putString("mimeType",request.args.getString("mimeType"));
+                        extras.putInt("size",work.snapshot.size); extras.putString("sha256",work.snapshot.sha256);
+                        extras.putBinder("transfer",work.snapshot);
+                        Intent intent=new Intent().setComponent(new android.content.ComponentName(config.documentBroker.packageName,
+                                "com.jarvys.agent.apkfactory.FactoryFileShareActivity")).putExtras(extras);
+                        work.launched=true;
+                        activity.startActivityForResult(intent,FILE_SHARE_REQUEST);
+                    } catch (Exception failure) {
+                        work.launched=false; cancelFileShare(); finishUnlaunchedShare(work);
+                    }
+                });
+            } catch (Exception failure) {
+                if (bytes != null) java.util.Arrays.fill(bytes,(byte)0);
+                if (work.snapshot != null) work.snapshot.close();
+                admission.close();
+                main.post(() -> {
+                    if (fileShare == work) fileShare=null;
+                    if (uiOwner == reply) uiOwner=null;
+                    reply.fail(failure instanceof FactoryException ? ((FactoryException)failure).code : "SHARE_UNAVAILABLE",
+                            "The bounded file snapshot could not be prepared. Reopen the document to retry.");
+                });
+            }
+        }); } catch (RejectedExecutionException failure) {
+            admission.close(); fileShare=null; if (uiOwner == reply) uiOwner=null;
+            reply.fail("BUSY","The native file queue is full.");
+        }
+    }
+    private void cancelFileShare() {
+        FileShare work=fileShare;
+        if (work == null) return;
+        work.cancelled=true;
+        if (work.snapshot != null) work.snapshot.close();
+        // A launched broker remains a tombstone until its own callback. Cancellation cannot
+        // recall its staged copy or a recipient's copy, and never releases the host's guard.
+    }
+    private void finishUnlaunchedShare(FileShare work) {
+        if (fileShare == work) fileShare=null;
+        if (uiOwner == work.reply) uiOwner=null;
+        work.reply.fail("SHARE_UNAVAILABLE","File sharing could not open. Reopen the document to retry.");
+    }
+    private void finishFileShare(FileShare work) {
+        if (fileShare != work) return;
+        fileShare=null; if (uiOwner == work.reply) uiOwner=null;
+        if (work.cancelled || !work.reply.current()) {
+            work.reply.fail("CANCELLED","Sharing ended. Recipient copies or an external task may remain."); return;
+        }
+        try {
+            DocumentBrokerIdentity.verify(activity,config.documentBroker);
+            Intent result=work.result;
+            if (work.resultCode != Activity.RESULT_OK || result == null || result.getData() != null || result.getClipData() != null
+                    || result.getSelector() != null || result.getFlags() != 0) throw new IllegalArgumentException();
+            android.os.Bundle extras=result.getExtras();
+            if (extras == null || !extras.keySet().equals(new java.util.HashSet<>(java.util.Arrays.asList("nonce","chooserOpened","deliveryConfirmed")))
+                    || !work.nonce.equals(extras.get("nonce")) || !(extras.get("chooserOpened") instanceof Boolean)
+                    || !Boolean.FALSE.equals(extras.get("deliveryConfirmed"))) throw new IllegalArgumentException();
+            work.reply.ok(new JSONObject().put("chooserOpened",extras.getBoolean("chooserOpened")).put("deliveryConfirmed",false));
+        } catch (Exception denied) {
+            work.reply.fail("SHARE_UNAVAILABLE","The sharing outcome is unavailable. Opening a chooser never proves delivery.");
+        }
     }
     private void openDocument(BridgeProtocol.Request request, Reply reply) throws Exception {
         requireDocumentForeground();

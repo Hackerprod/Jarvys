@@ -115,7 +115,50 @@ Handle errors include `INVALID_HANDLE` (missing/expired/revoked), `WRONG_MODE`, 
 
 `close_requested` schedules best-effort provider close; it does not prove flush, durable commit, cloud upload or rollback. A started write may partially finish after cancellation. Create can leave empty/partial files even when no handle is granted. A selected cloud provider can use its own network despite the generated app's zero-permission offline WebView. JavaScript never receives/chooses a path or URI; there are no persistent grants. Jarvys automation is blocked throughout the human interaction. **Settings → Factory documents** handles interrupted-picker recovery: the human closes the old picker/task and acknowledges closure. This is explicitly user-reported, not OS-verified; the old outcome stays unknown and no authority is recovered.
 
-This slice does not implement FileProvider binary sharing or the remaining F1/F2/F3 roadmap. Current v67 test artifacts and device acceptance remain pending until independently recorded; synthetic tests cannot establish picker/provider, lifecycle or physical-device behavior.
+v67 SAF host validation and APK delivery are recorded separately; physical picker/provider and grant lifecycle remain unverified. Binary sharing is the following bounded v68 slice; the other F1/F2/F3 families remain closed.
+
+## Binary file sharing (v68)
+
+`Jarvys.share.file({handle, filename, mimeType})` requires **both `documents` and `share`**.
+Use a newly opened, untouched read handle. No writes, previously read handles, raw bytes, URI,
+path, destination package, flags or persistent authority are accepted. Filename has the same
+simple bounded grammar as document creation; MIME must be one concrete type, without wildcards
+or parameters. These are declared metadata, not proof of the document's content format.
+
+The runtime consumes and closes the handle while preparing a complete 1-byte to **8 MiB** native
+snapshot. It verifies EOF without exceeding v67's 16 MiB handle / 32 MiB cumulative session quotas.
+Empty, oversized, partial, expired, busy or quota-exhausted sources fail closed; a failed attempt
+may have consumed the handle and some quota. Reopen through the human document flow before retrying.
+No source read occurs after the sharing broker opens. One process-wide snapshot/transfer slot
+bounds memory; a blocked native source retains admission until cleanup rather than admitting
+unbounded replacements. Pending work expires after five minutes.
+
+Native Binder transfers at most 32 KiB per transaction to the pinned Jarvys host. Calls authenticate
+its unique UID/certificate and bind nonce, exact size, hash and sequential offset. No file data,
+Binder object, path or URI is exposed in the JavaScript result. The host independently authenticates
+the caller's exact latest signed APK and both capabilities, rejects two installed hosts, then stages
+and verifies the complete immutable snapshot before enabling human review. Generated APKs still add
+no provider or Android permission. A compatible current Jarvys host is required.
+
+The protected native screen shows the requesting app, name, declared MIME and size. Only a human
+can open Android's chooser. Its FileProvider grants read access only to one registered private URI;
+there are no write, prefix or persistable grants. The host copy expires in five minutes. Registry
+loss on process restart rejects old reads. Closing/cancelling cannot recall an already opened file
+descriptor, recipient copy or completed network transfer; recipients may upload data remotely.
+
+The successful response is `{chooserOpened: true|false, deliveryConfirmed:false}` after explicit
+native closure. A chooser callback, selected target, cancelled UI or timeout never proves delivery.
+The human must close the old chooser/recipient task before acknowledging closure. Jarvys automation
+stays blocked across the chooser, callback, interruption and unknown outcomes until that native
+acknowledgment; **Settings → Factory file sharing** provides recovery. Acknowledgment is user-reported,
+not OS proof. No lost authority is restored. `documents.cancel()` closes the source-side transfer
+but cannot promise rollback of the host copy or dismiss the external UI.
+
+Preview rejects `share.file` with `UNAVAILABLE`; existing `share.text` simulation is unchanged.
+`runtime.info` discloses the 8 MiB limit, five-minute lifetime and both required capabilities.
+Errors additionally include `EMPTY_FILE`, `SHARE_TOO_LARGE`, `SHARE_BUSY` and `SHARE_UNAVAILABLE`.
+Host synthetic tests cannot establish actual Binder IPC, chooser grant behavior, recipient access,
+revocation, OEM lifecycle or physical-device acceptance. v68 release gates are recorded separately.
 
 ## Security boundary
 

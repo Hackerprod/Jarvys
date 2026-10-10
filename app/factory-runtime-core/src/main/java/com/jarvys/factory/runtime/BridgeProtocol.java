@@ -56,6 +56,15 @@ public final class BridgeProtocol {
                     if (!mime.equals("text/plain") && !mime.equals("text/markdown") && !mime.equals("application/json") && !mime.equals("text/csv"))
                         throw new FactoryException("INVALID_ARGUMENT", "Unsupported text export format.");
                     break;
+                case SHARE_FILE:
+                    FactoryConfig.exactKeys(args, "handle", "filename", "mimeType"); documentHandle(args);
+                    String shareName = text(args, "filename", 120, false);
+                    if (!shareName.matches("[a-zA-Z0-9][a-zA-Z0-9 _.-]{0,119}") || shareName.endsWith(".") || shareName.contains(".."))
+                        throw new FactoryException("INVALID_ARGUMENT", "Use a simple document filename without paths.");
+                    documentMime(args, false);
+                    if (!config.capabilities.contains("documents"))
+                        throw new FactoryException("CAPABILITY_DENIED", "File sharing also requires documents capability.");
+                    break;
                 case SHARE_TEXT:
                     FactoryConfig.exactKeys(args, "text", "title");
                     text(args, "text", MAX_TEXT_BYTES, false);

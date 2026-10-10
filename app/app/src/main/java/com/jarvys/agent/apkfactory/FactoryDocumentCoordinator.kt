@@ -49,7 +49,7 @@ internal class FactoryDocumentCoordinator(context: Context, private val verify: 
     @Synchronized fun restore() {
         if (!journal.baseFile.exists() && !File(journal.baseFile.path + ".bak").exists()) return
         // Protection precedes parsing: malformed/truncated state also fails closed.
-        protect()
+        protect(); FactoryInteractionAdmission.restore(this)
         try {
             val bytes = journal.openRead().use { input -> val bytes = ByteArray(4097); var count = 0; while (count < bytes.size) { val n = input.read(bytes, count, bytes.size - count); if (n < 0) break; count += n }; require(count <= 4096); bytes.copyOf(count) }
             val saved = FactoryJson.objectFrom(bytes, 4096)
@@ -62,7 +62,7 @@ internal class FactoryDocumentCoordinator(context: Context, private val verify: 
             require(if (open) savedState in setOf("review", "picker", "cancelling", "selected", "cancelled", "outcome_unknown") else savedState in setOf("returned", "cancelled", "closed_outcome_unknown"))
             require(previousNonce!!.matches(Regex("[a-f0-9]{64}")) || (previousNonce == "" && savedState == "closed_outcome_unknown"))
             state = if (open) "outcome_unknown" else saved.getString("state")
-            if (open) save() else { lease?.close(); lease = null }
+            if (open) save() else { lease?.close(); lease = null; FactoryInteractionAdmission.release(this) }
         } catch (_: Exception) { broken = true; open = true; state = "outcome_unknown" }
     }
     private fun save() {
@@ -75,12 +75,13 @@ internal class FactoryDocumentCoordinator(context: Context, private val verify: 
             check(journal.readFully().contentEquals(bytes))
         } catch (e: Exception) { broken = true; open = true; state = "outcome_unknown"; protect(); throw e }
     }
-    @Synchronized fun canBegin() = !open && !broken && !verifying
+    @Synchronized fun canBegin() = !open && !broken && !verifying && FactoryInteractionAdmission.available()
     fun begin(callingPackage: String?, value: Request): String {
         require(!callingPackage.isNullOrBlank()) { "Android calling package is required" }
         synchronized(this) {
             check(!open && !broken && !verifying) { "A document interaction is already in progress" }
             require(value.nonce != previousNonce) { "Replayed document request" }
+            FactoryInteractionAdmission.acquire(this)
             verifying = true
         }
         try {
@@ -94,7 +95,7 @@ internal class FactoryDocumentCoordinator(context: Context, private val verify: 
                 previousNonce = value.nonce; state = "review"; open = true; save()
                 owner!!
             }
-        } finally { synchronized(this) { verifying = false } }
+        } finally { synchronized(this) { verifying = false; if (!open && !broken) FactoryInteractionAdmission.release(this) } }
     }
     @Synchronized fun status() = state
     @Synchronized fun needsRecovery() = open && (owner == null || broken)
@@ -133,7 +134,7 @@ internal class FactoryDocumentCoordinator(context: Context, private val verify: 
         check(state in setOf("review", "selected", "cancelled"))
         val result = if (deliver) { check(state == "selected" && proof == p); request } else null
         state = if (deliver) "returned" else "cancelled"; open = false; save()
-        proof = null; request = null; owner = null; lease?.close(); lease = null
+        proof = null; request = null; owner = null; lease?.close(); lease = null; FactoryInteractionAdmission.release(this)
         result
         }
     }
@@ -141,7 +142,7 @@ internal class FactoryDocumentCoordinator(context: Context, private val verify: 
     @Synchronized fun acknowledgeRecovery(human: () -> Unit) {
         human(); check(needsRecovery()); lease!!.requireHumanUiInteraction()
         state = "closed_outcome_unknown"; open = false; if (previousNonce?.matches(Regex("[a-f0-9]{64}")) != true) previousNonce = ""; save(); broken = false
-        proof = null; request = null; owner = null; lease?.close(); lease = null
+        proof = null; request = null; owner = null; lease?.close(); lease = null; FactoryInteractionAdmission.release(this)
     }
     companion object {
         private val STATES = setOf("idle", "review", "picker", "cancelling", "selected", "cancelled", "returned", "outcome_unknown", "closed_outcome_unknown")
@@ -161,7 +162,7 @@ internal class FactoryDocumentCoordinator(context: Context, private val verify: 
         fun get(context: Context): FactoryDocumentCoordinator = instance ?: synchronized(this) {
             instance ?: FactoryDocumentCoordinator(context.applicationContext).also { it.restore(); instance = it }
         }
-        internal fun verifyInstalled(context: Context, appId: String): Proof {
+        internal fun verifyInstalled(context: Context, appId: String, requiredCapabilities: Set<String> = setOf("documents")): Proof {
             require(context.packageName in HOSTS && appId !in HOSTS)
             val pm = context.packageManager
             fun requireOnlyHost() {
@@ -174,7 +175,7 @@ internal class FactoryDocumentCoordinator(context: Context, private val verify: 
             val before = installedSnapshot(pm, appId)
             // Reject unknown/unsigned callers before spending I/O on their installed APK.
             val evidence = FactorySigningIdentity(context).state(appId)
-            verifyEvidence(appId, before.certificate, evidence.lastApkSha256 ?: error("Unknown signed APK"), before.version, evidence)
+            verifyEvidence(appId, before.certificate, evidence.lastApkSha256 ?: error("Unknown signed APK"), before.version, evidence, requiredCapabilities)
             val file = File(before.sourceDir)
             val originalLength = file.length()
             require(file.isFile && originalLength in 1..MAX_APK_BYTES)
@@ -183,7 +184,7 @@ internal class FactoryDocumentCoordinator(context: Context, private val verify: 
             require(evidence == FactorySigningIdentity(context).state(appId)) { "Signing evidence changed during verification" }
             requireOnlyHost()
             require(before == installedSnapshot(pm, appId)) { "Installed package changed during verification" }
-            return verifyEvidence(appId, before.certificate, apk, before.version, evidence)
+            return verifyEvidence(appId, before.certificate, apk, before.version, evidence, requiredCapabilities)
         }
         private const val MAX_APK_BYTES = 256L * 1024 * 1024
         private data class InstalledSnapshot(val sourceDir: String, val certificate: String, val version: Long, val uid: Int, val updated: Long)
@@ -216,10 +217,10 @@ internal class FactoryDocumentCoordinator(context: Context, private val verify: 
             require(info.sharedUserId == null && uidPackages == setOf(appId)) { "Shared or unknown caller UID" }
             require(info.packageName == appId && app.packageName == appId && app.splitSourceDirs.isNullOrEmpty() && info.splitNames.isNullOrEmpty())
         }
-        internal fun verifyEvidence(appId: String, cert: String, apk: String, version: Long, evidence: FactorySigningIdentity.State): Proof {
+        internal fun verifyEvidence(appId: String, cert: String, apk: String, version: Long, evidence: FactorySigningIdentity.State, requiredCapabilities: Set<String> = setOf("documents")): Proof {
             require(evidence.existing && evidence.continuityKnown && evidence.fingerprint == cert && evidence.lastApkSha256 == apk && evidence.lastVersion.toLong() == version)
             val scope = evidence.lastScope?.toJson()?.getJSONArray("capabilities") ?: error("Unknown signed scope")
-            require((0 until scope.length()).any { scope.getString(it) == "documents" })
+            require(requiredCapabilities.isNotEmpty() && requiredCapabilities.all { required -> (0 until scope.length()).any { scope.getString(it) == required } })
             return Proof(appId, cert, apk, version, evidence.recordSha256 ?: error("Unknown identity record"))
         }
         private fun digest(bytes: ByteArray) = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }

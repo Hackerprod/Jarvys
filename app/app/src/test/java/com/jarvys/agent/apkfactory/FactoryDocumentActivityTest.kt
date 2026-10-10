@@ -28,7 +28,7 @@ import java.util.concurrent.TimeUnit
 
 /** Exercises the production native handlers; only URI permission checks and signed proof are fake. */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
+@Config(sdk = [34], application = android.app.Application::class)
 class FactoryDocumentActivityTest {
     class GrantedDocumentActivity : FactoryDocumentActivity() {
         override fun checkUriPermission(uri: Uri, pid: Int, uid: Int, modeFlags: Int) = PackageManager.PERMISSION_GRANTED
@@ -48,6 +48,7 @@ class FactoryDocumentActivityTest {
         controllers.forEach { runCatching { it.pause().stop().destroy() } }
         FactoryDocumentCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(null, null)
         for (name in listOf("protectedSurfaces", "taintedSurfaces", "activeActions")) MemoryUiAutomationGuard::class.java.getDeclaredField(name).apply { isAccessible = true }.setInt(null, 0)
+        FactoryInteractionAdmission::class.java.getDeclaredField("owners").apply { isAccessible = true }.let { (it.get(null) as MutableSet<*>).clear() }
         root.deleteRecursively()
     }
     private fun launch(saved: Bundle? = null): ActivityController<GrantedDocumentActivity> {

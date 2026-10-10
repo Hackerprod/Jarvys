@@ -31,7 +31,8 @@ public class BridgeProtocolTest {
             {"documents.create", "{\"filename\":\"file.bin\",\"mimeType\":\"application/octet-stream\"}"},
             {"documents.read", "{\"handle\":\""+HANDLE+"\",\"offset\":0,\"length\":1}"},
             {"documents.write", "{\"handle\":\""+HANDLE+"\",\"offset\":0,\"data\":\"AA==\"}"},
-            {"documents.close", "{\"handle\":\""+HANDLE+"\"}"}, {"documents.cancel", "{}"}};
+            {"documents.close", "{\"handle\":\""+HANDLE+"\"}"}, {"documents.cancel", "{}"},
+            {"share.file", "{\"handle\":\""+HANDLE+"\",\"filename\":\"file.bin\",\"mimeType\":\"application/octet-stream\"}"}};
         for (String[] call : methods) rejected("CAPABILITY_DENIED", BridgeProtocol.ORIGIN, true, request(call[0], call[1]), empty);
     }
     @Test public void typedAllowlistRejectsDangerousOrUnknownRequests() throws Exception {
@@ -80,7 +81,8 @@ public class BridgeProtocolTest {
             {"documents.create", "{\"filename\":\"file.bin\",\"mimeType\":\"application/octet-stream\"}"},
             {"documents.read", "{\"handle\":\""+HANDLE+"\",\"offset\":0,\"length\":1}"},
             {"documents.write", "{\"handle\":\""+HANDLE+"\",\"offset\":0,\"data\":\"AA==\"}"},
-            {"documents.close", "{\"handle\":\""+HANDLE+"\"}"}, {"documents.cancel", "{}"}};
+            {"documents.close", "{\"handle\":\""+HANDLE+"\"}"}, {"documents.cancel", "{}"},
+            {"share.file", "{\"handle\":\""+HANDLE+"\",\"filename\":\"file.bin\",\"mimeType\":\"application/octet-stream\"}"}};
         assertEquals(com.jarvys.factory.contract.CapabilityCatalog.METHODS.size(), calls.length);
         for (int mask = 0; mask < 128; mask++) {
             org.json.JSONArray declared = new org.json.JSONArray();
@@ -91,7 +93,8 @@ public class BridgeProtocolTest {
                 com.jarvys.factory.contract.CapabilityCatalog.Method method =
                     com.jarvys.factory.contract.CapabilityCatalog.METHODS.get(call[0]);
                 assertNotNull(method);
-                if (method.capability == null || selected.capabilities.contains(method.capability)) {
+                if ((method.capability == null || selected.capabilities.contains(method.capability))
+                        && (!call[0].equals("share.file") || selected.capabilities.contains("documents"))) {
                     assertSame(method, BridgeProtocol.validate(BridgeProtocol.ORIGIN, true,
                         request(call[0], call[1]), selected).operation);
                 } else rejected("CAPABILITY_DENIED", BridgeProtocol.ORIGIN, true,
@@ -101,6 +104,18 @@ public class BridgeProtocolTest {
                     request(call[0], invalid.toString()), selected);
             }
         }
+    }
+
+    @Test public void sharingRejectsUrisPathsMimeWildcardsAndExtraAuthority() throws Exception {
+        FactoryConfig both=config("[\"share\",\"documents\"]");
+        JSONObject valid=new JSONObject().put("handle",HANDLE).put("filename","file.bin").put("mimeType","application/octet-stream");
+        assertEquals("share.file",BridgeProtocol.validate(BridgeProtocol.ORIGIN,true,request("share.file",valid.toString()),both).method);
+        for (String extra:new String[]{"uri","path","targetPackage","flags","bytes","offset","persist"})
+            rejected("INVALID_ARGUMENT",BridgeProtocol.ORIGIN,true,request("share.file",new JSONObject(valid.toString()).put(extra,"ignored").toString()),both);
+        for (String mime:new String[]{"*/*","image/*","text/plain; charset=utf-8","text/plain\n","content://private"})
+            rejected("INVALID_ARGUMENT",BridgeProtocol.ORIGIN,true,request("share.file",new JSONObject(valid.toString()).put("mimeType",mime).toString()),both);
+        for (String name:new String[]{"../secret","/secret","a\\b","a..b","name.",".hidden","a\n"})
+            rejected("INVALID_ARGUMENT",BridgeProtocol.ORIGIN,true,request("share.file",new JSONObject(valid.toString()).put("filename",name).toString()),both);
     }
 
     @Test public void documentsRejectPathsNonCanonicalChunksAndNonIntegerOffsets() throws Exception {

@@ -83,7 +83,8 @@
       cancel: function (options) { return call('documents.cancel', options === undefined ? {} : options); }
     }),
     export: Object.freeze({ text: function (options) { return call('export.text', options); } }),
-    share: Object.freeze({ text: function (options) { return call('share.text', options); } }),
+    share: Object.freeze({ text: function (options) { return call('share.text', options); },
+      file: function (options) { return call('share.file', options); } }),
     clipboard: Object.freeze({ write: function (text) { return call('clipboard.write', { text: text }); } }),
     haptics: Object.freeze({ perform: function (kind) { return call('haptics.perform', { kind: kind === undefined ? 'tap' : kind }); } }),
     device: Object.freeze({ info: function () { return call('device.info', {}); } })
