@@ -90,7 +90,26 @@ public class FactoryRuntimeSensorsTest {
         for(int i=0;i<15;i++)pending.put("blocked"+i,constructor.newInstance(runtime,"blocked"+i,"sensors.capture",new Response(),field("generation").getInt(runtime)));
         assertEquals(16,pending.size());assertEquals("BUSY",request("sensors.list","{}").error());
         field("rateWindow").setLong(runtime,SystemClock.elapsedRealtime());field("rateCount").setInt(runtime,80);
-        assertEquals("RATE_LIMITED",request("sensors.list","{}").error());assertTrue(request("sensors.cancel","{}").result().getBoolean("cancelled"));assertEquals("CANCELLED",capture.error());assertEquals(1,driver.unregisters);
+        assertTrue(request("sensors.cancel","{}").result().getBoolean("cancelled"));assertEquals("CANCELLED",capture.error());assertEquals(1,driver.unregisters);
+    }
+    @Test public void globalRateFailureImmediatelyDiscardsAndUnregistersOrphanedCapture()throws Exception{
+        Response capture=request("sensors.capture",arguments());driver.events.sample(now,new float[]{42});
+        SensorCapture.Events stale=driver.events;
+        field("rateWindow").setLong(runtime,SystemClock.elapsedRealtime());field("rateCount").setInt(runtime,80);
+        assertEquals("RATE_LIMITED",request("sensors.list","{}").error());
+        assertEquals("CANCELLED",capture.error());assertEquals(1,capture.count);assertEquals(1,driver.unregisters);
+        stale.sample(now,new float[]{999});advance(5000);assertEquals(1,capture.count);assertEquals(1,driver.registrations);
+        assertFalse(request("sensors.cancel","{}").result().getBoolean("cancelled"));
+    }
+    @Test public void globalRateFailurePreservesCleanupUncertaintyAndClosedLatch()throws Exception{
+        Response capture=request("sensors.capture",arguments());driver.throwUnregister=true;
+        field("rateWindow").setLong(runtime,SystemClock.elapsedRealtime());field("rateCount").setInt(runtime,80);
+        assertEquals("RATE_LIMITED",request("sensors.list","{}").error());
+        assertEquals("UNAVAILABLE",capture.error());assertEquals(1,driver.unregisters);
+        driver.throwUnregister=false;
+        assertEquals("UNAVAILABLE",request("sensors.cancel","{}").error());
+        field("rateCount").setInt(runtime,0);
+        assertEquals("UNAVAILABLE",request("sensors.capture",arguments()).error());assertEquals(1,driver.registrations);
     }
     @Test public void malformedCancelCannotReleaseCaptureAndNewRequestStaysThrottledAfterReset()throws Exception{
         Response first=request("sensors.capture",arguments().replace("\"maxSamples\":50","\"maxSamples\":1"));driver.events.sample(now,new float[]{1});assertEquals(1,first.result().getJSONArray("samples").length());runtime.reset();

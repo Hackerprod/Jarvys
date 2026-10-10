@@ -358,6 +358,9 @@ public final class FactoryRuntime implements AutoCloseable {
         long now = SystemClock.elapsedRealtime();
         if (now - rateWindow >= 10000) { rateWindow = now; rateCount = 0; }
         if (++rateCount > 80) {
+            // The SDK rejects every pending Promise for this global failure. Revoke its
+            // capture immediately instead of leaving a known orphan until the deadline.
+            if(sensors!=null) sensors.cancel();
             safePost(proxy, BridgeProtocol.failure(null, "RATE_LIMITED", "Too many native requests; try again shortly.")); return;
         }
         final BridgeProtocol.Request request;
