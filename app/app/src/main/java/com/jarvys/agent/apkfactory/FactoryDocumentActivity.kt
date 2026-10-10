@@ -62,7 +62,6 @@ open class FactoryDocumentActivity : ComponentActivity() {
         val externalRequest = if (!recovery && savedInstanceState == null && caller != null)
             runCatching { FactoryDocumentCoordinator.Request.parse(intent) }.getOrNull() else null
         if (!recovery && externalRequest == null) { rejected = true; finish(); return }
-        if (externalRequest != null && !coordinator.canBegin()) { rejected = true; finish(); return }
         if (recovery) guard = MemoryUiAutomationGuard.enterProtectedSurface()
         val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 32, 24, 32) }
         column.addView(TextView(this).apply { setText(R.string.factory_documents_title); textSize = 22f })
@@ -118,22 +117,31 @@ open class FactoryDocumentActivity : ComponentActivity() {
         if (externalRequest != null && caller != null) {
             val approved = generation
             working = true
-            execute {
-                val result = runCatching {
-                    coordinator.begin(caller, externalRequest) to externalRequest
-                }
-                runOnUiThread {
+            val deferred = FactoryFileShareCoordinator.afterStartup {
+                if (generation != approved || isDestroyed || isFinishing) {
                     working = false
-                    result.onSuccess { (owner, value) ->
-                        if (!isDestroyed && !isFinishing && generation == approved) {
-                            guard = MemoryUiAutomationGuard.enterProtectedSurface()
-                            token = owner; request = value
+                } else if (!coordinator.canBegin()) {
+                    working = false; rejected = true; finish()
+                } else {
+                    execute {
+                        val result = runCatching {
+                            coordinator.begin(caller, externalRequest) to externalRequest
                         }
-                        else runCatching { coordinator.revoke(owner) }
-                    }.onFailure { rejected = true; finish() }
-                    render()
+                        runOnUiThread {
+                            working = false
+                            result.onSuccess { (owner, value) ->
+                                if (!isDestroyed && !isFinishing && generation == approved) {
+                                    guard = MemoryUiAutomationGuard.enterProtectedSurface()
+                                    token = owner; request = value
+                                }
+                                else runCatching { coordinator.revoke(owner) }
+                            }.onFailure { rejected = true; finish() }
+                            render()
+                        }
+                    }
                 }
             }
+            if (!deferred) { working = false; rejected = true; finish() }
         } else if (savedInstanceState != null) rejected = true
         render()
     }

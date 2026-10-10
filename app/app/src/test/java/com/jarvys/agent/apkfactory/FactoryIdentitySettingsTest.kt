@@ -25,7 +25,7 @@ import org.robolectric.annotation.Config
 class FactoryIdentitySettingsTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
-    @Test fun settingsManuallyOpensNativeIdentityActivityWithNoSecretExtras() {
+    private fun showSettings() {
         compose.setContent {
             MaterialTheme {
                 JarvysSettingsScreen(
@@ -44,6 +44,10 @@ class FactoryIdentitySettingsTest {
                 )
             }
         }
+    }
+
+    @Test fun settingsManuallyOpensNativeIdentityActivityWithNoSecretExtras() {
+        showSettings()
         assertNull(shadowOf(compose.activity).nextStartedActivity)
         compose.onNodeWithTag("settings-factory-identities-row").performScrollTo().assertIsDisplayed().performClick()
         val intent = shadowOf(compose.activity).nextStartedActivity
@@ -51,4 +55,16 @@ class FactoryIdentitySettingsTest {
         assertNull(intent.extras)
         assertNull(intent.data)
     }
+    @Test fun settingsOpensOneShotNativeFileSharingRecoveryWithoutFileAuthority() {
+        showSettings()
+        assertNull(shadowOf(compose.activity).nextStartedActivity)
+        compose.onNodeWithTag("settings-factory-file-sharing-row").performScrollTo().assertIsDisplayed().performClick()
+        val intent = shadowOf(compose.activity).nextStartedActivity
+        assertEquals(FactoryFileShareActivity::class.java.name, intent.component?.className)
+        assertEquals(setOf("nativeRecoveryToken"), intent.extras!!.keySet())
+        assertNull(intent.data); assertNull(intent.clipData); assertEquals(0, intent.flags)
+        assertTrue(FactoryFileShareCoordinator.consumeRecoveryToken(intent))
+        assertFalse(FactoryFileShareCoordinator.consumeRecoveryToken(intent))
+    }
+
 }

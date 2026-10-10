@@ -1,7 +1,7 @@
 <resources>
     <string name="factory_file_sharing_title">Factory file sharing</string>
     <string name="factory_file_sharing_settings_summary">Review and close interrupted file sharing</string>
-    <string name="factory_file_sharing_disclosure">Review this app and file yourself. Only a verified private copy, up to 8 MiB, can be shared. Choose the recipient in Android’s chooser. The recipient may copy the file or send it to a remote service or another person. Jarvys cannot recall copies or confirm delivery. Automated device access remains blocked until you explicitly acknowledge closing the chooser and recipient task.</string>
+    <string name="factory_file_sharing_disclosure">Review this app and file yourself. Only a verified private copy, up to 8 MiB, can be shared. Choose the recipient in Android’s chooser. The recipient may copy the file or send it to a remote service or another person. New read access expires after five minutes. Copies and already opened file streams cannot be recalled. Jarvys cannot confirm delivery. Automated device access remains blocked until you explicitly acknowledge closing the chooser and recipient task.</string>
     <string name="factory_file_sharing_checking">Checking the requesting app and complete file. No sharing has been authorized.</string>
     <string name="factory_file_sharing_choose">Choose who receives this file</string>
     <string name="factory_file_sharing_close">Cancel / close</string>

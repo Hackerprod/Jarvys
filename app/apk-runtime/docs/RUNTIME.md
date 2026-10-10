@@ -68,6 +68,7 @@ HTML uses external scripts, including `<script src="/factory-sdk.js"></script>` 
 | `Jarvys.storage.list()` | Sorted string keys | `storage` |
 | `Jarvys.export.text({filename,text,mimeType?})` | `{saved:true}` after writing | `export` |
 | `Jarvys.share.text({text,title?})` | `{chooserOpened:true}`, never delivery confirmation | `share` |
+| `Jarvys.share.file({handle,filename,mimeType})` | `{chooserOpened,deliveryConfirmed:false}` after native human closure | `share` + `documents` |
 | `Jarvys.clipboard.write(text)` | `null` after native confirmation | `clipboard` |
 | `Jarvys.haptics.perform("tap" or "longPress")` | Boolean, respects system haptic settings | `haptics` |
 | `Jarvys.device.info()` | Android platform/API level, actual app ID, target SDK | `device` |
@@ -156,6 +157,8 @@ but cannot promise rollback of the host copy or dismiss the external UI.
 
 Preview rejects `share.file` with `UNAVAILABLE`; existing `share.text` simulation is unchanged.
 `runtime.info` discloses the 8 MiB limit, five-minute lifetime and both required capabilities.
+Its preview `unavailableMethods` explicitly includes `share.file`; `simulatedCapabilities` keeps
+`share` because text sharing is simulated, not because every sharing method is simulated.
 Errors additionally include `EMPTY_FILE`, `SHARE_TOO_LARGE`, `SHARE_BUSY` and `SHARE_UNAVAILABLE`.
 Host synthetic tests cannot establish actual Binder IPC, chooser grant behavior, recipient access,
 revocation, OEM lifecycle or physical-device acceptance. v68 release gates are recorded separately.

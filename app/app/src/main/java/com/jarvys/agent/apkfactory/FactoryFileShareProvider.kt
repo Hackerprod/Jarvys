@@ -48,8 +48,12 @@ class FactoryFileShareProvider : FileProvider() {
     override fun query(uri: Uri, projection: Array<out String>?, selection: String?,
                        selectionArgs: Array<out String>?, sortOrder: String?): Cursor = read(uri) { snapshot, _, _ ->
         require(selection == null && selectionArgs == null && sortOrder == null) { "Unsupported file-share query" }
-        val columns = (projection ?: arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE))
-            .filter { it == OpenableColumns.DISPLAY_NAME || it == OpenableColumns.SIZE }.toTypedArray()
+        val requested = projection ?: arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE)
+        require(requested.size in 1..2) { "Unsupported file-share projection" }
+        require(requested.distinct().size == requested.size && requested.all {
+            it == OpenableColumns.DISPLAY_NAME || it == OpenableColumns.SIZE
+        }) { "Unsupported file-share projection" }
+        val columns = requested.map { it }.toTypedArray()
         MatrixCursor(columns, 1).apply {
             addRow(columns.map { if (it == OpenableColumns.DISPLAY_NAME) snapshot.filename else snapshot.size.toLong() }.toTypedArray())
         }

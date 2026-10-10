@@ -18,7 +18,7 @@ import static org.junit.Assert.*;
 
 /** Synthetic runtime/broker boundary only; no chooser, recipient or user file. */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk={24,28,32},manifest=Config.NONE)
+@Config(sdk={24,28,32},manifest=Config.NONE,shadows=FactoryRuntimeDocumentsTest.Features.class)
 @LooperMode(LooperMode.Mode.PAUSED)
 public class FactoryRuntimeFileSharingTest {
     public static class Screen extends Activity {
@@ -72,8 +72,8 @@ public class FactoryRuntimeFileSharingTest {
         assertTrue(reply.value.getJSONObject("result").getBoolean("chooserOpened"));assertFalse(reply.value.getJSONObject("result").getBoolean("deliveryConfirmed"));
     }
     @Test public void duplicateRequestsRemainBusyUntilBrokerCallback()throws Exception{
-        share(new byte[]{1});idle();Response duplicate=share(new byte[]{2});assertEquals("BUSY",duplicate.error());
-        request("documents.cancel",new JSONObject());Response stillBusy=share(new byte[]{3});assertEquals("BUSY",stillBusy.error());
+        Response original=share(new byte[]{1});idle();Response duplicate=share(new byte[]{2});assertEquals("BUSY",duplicate.error());
+        request("documents.cancel",new JSONObject());assertEquals("CANCELLED",original.error());Response stillBusy=share(new byte[]{3});assertEquals("BUSY",stillBusy.error());
         runtime.onActivityResult(43,Activity.RESULT_CANCELED,null);assertNull(field("fileShare").get(runtime));
     }
     @Test public void noChooserForPreviewOrInvalidSource()throws Exception{
@@ -102,4 +102,18 @@ public class FactoryRuntimeFileSharingTest {
         DocumentBrokerIdentityTest.install(screen,DocumentBrokerIdentity.RECOVERY,new Signature(DocumentBrokerIdentityTest.CERTIFICATE));
         assertEquals("UNAVAILABLE",share(new byte[]{1}).error());assertNull(screen.launched);
     }
+    @Test public void explicitCancelSettlesPromptlyWhileBlockedSnapshotRetainsAdmission()throws Exception{
+        CountDownLatch entered=new CountDownLatch(1),release=new CountDownLatch(1);
+        String token=handles().grantRead(new InputStream(){public int read(){return 0;}
+            public int read(byte[] bytes){entered.countDown();try{release.await();}catch(InterruptedException e){throw new AssertionError(e);}bytes[0]=1;return 1;}});
+        Response pending=shareHandle(token);
+        try {
+            assertTrue(entered.await(5,TimeUnit.SECONDS));request("documents.cancel",new JSONObject());
+            assertEquals("CANCELLED",pending.error());assertNotNull(field("fileShare").get(runtime));
+            try{FileShareTransfer.reserve();fail();}catch(FactoryException expected){assertEquals("SHARE_BUSY",expected.code);}
+            release.countDown();idle();assertNull(screen.launched);assertNull(field("fileShare").get(runtime));
+            FileShareTransfer.reserve().close();
+        } finally {release.countDown();}
+    }
+
 }

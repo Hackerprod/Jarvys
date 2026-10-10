@@ -99,6 +99,7 @@ public class FactoryDispatcherTest {
         JSONObject info=(JSONObject)FactoryDispatcher.dispatch(request("runtime.info",new JSONObject(),both),both,new BoundedStore(new MemoryBackend()),
                 FactoryDispatcher.previewMetadata("host",35,35),FactoryDispatcher.simulatedEffects());
         assertEquals(8388608,info.getJSONObject("limits").getInt("fileShareBytes"));
+        assertEquals("share.file",info.getJSONArray("unavailableMethods").getString(0));
         assertEquals("[\"documents\",\"share\"]",info.getJSONArray("fileShareRequires").toString());
     }
     @Test public void installedDispatcherDelegatesEachRealEffectExactlyOnce() throws Exception {

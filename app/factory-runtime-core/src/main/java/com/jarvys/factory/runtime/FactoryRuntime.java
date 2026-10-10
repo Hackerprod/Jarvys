@@ -566,7 +566,8 @@ public final class FactoryRuntime implements AutoCloseable {
                         work.launched=true;
                         activity.startActivityForResult(intent,FILE_SHARE_REQUEST);
                     } catch (Exception failure) {
-                        work.launched=false; cancelFileShare(); finishUnlaunchedShare(work);
+                        work.launched=false; reply.fail("SHARE_UNAVAILABLE","The matching native sharing broker could not open.");
+                        cancelFileShare(); finishUnlaunchedShare(work);
                     }
                 });
             } catch (Exception failure) {
@@ -589,6 +590,7 @@ public final class FactoryRuntime implements AutoCloseable {
         FileShare work=fileShare;
         if (work == null) return;
         work.cancelled=true;
+        work.reply.fail("CANCELLED","File sharing was cancelled. Host or recipient copies may remain; close the native sharing flow.");
         if (work.snapshot != null) work.snapshot.close();
         // A launched broker remains a tombstone until its own callback. Cancellation cannot
         // recall its staged copy or a recipient's copy, and never releases the host's guard.

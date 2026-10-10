@@ -88,31 +88,49 @@ internal class FactoryFileShareStore(
 
     /** Invalidate first, revoke globally (including forwarded grants), then remove only our flat cache. */
     fun cleanup() {
-        val uris = FactoryFileShareRegistry.invalidate()
+        val uris = FactoryFileShareRegistry.invalidate().toMutableSet()
         var failure: Exception? = null
-        for (uri in uris) {
-            try { context.revokeUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-            catch (e: Exception) { if (failure == null) failure = e else failure.addSuppressed(e) }
-        }
+        var entries: Array<File>? = null
+        fun failed(error: Exception) { if (failure == null) failure = error else failure!!.addSuppressed(error) }
         try {
-            FactoryFileShareRegistry.closeInvalidated()
             val root = privateRoot(context, create = false)
             if (root != null) {
-                val entries = root.listFiles() ?: error("Cannot inspect file-share cache")
-                check(entries.size <= MAX_CACHE_ENTRIES) { "Unexpected file-share cache entries" }
-                for (entry in entries) {
-                    check(CACHE_NAME.matches(entry.name)) { "Unexpected file-share cache entry" }
-                    deleteCacheEntry(entry)
+                val found = root.listFiles() ?: error("Cannot inspect file-share cache")
+                check(found.size <= MAX_CACHE_ENTRIES) { "Unexpected file-share cache entries" }
+                for (file in found) {
+                    check(CACHE_NAME.matches(file.name)) { "Unexpected file-share cache entry" }
+                    // Revoke orphan grants after restart without ever restoring read authority.
+                    // Building the exact fixed-root URI must not canonical-resolve a symlink.
+                    if (file.name.startsWith("snapshot-")) {
+                        uris += Uri.Builder().scheme("content").authority(authority(context))
+                            .appendPath("files").appendPath(file.name).build()
+                    }
                 }
-                check(root.list()?.isEmpty() == true) { "File-share cleanup incomplete" }
+                entries = found
             }
-        } catch (e: Exception) { if (failure == null) failure = e else failure.addSuppressed(e) }
+        } catch (e: Exception) { failed(e) }
+        for (uri in uris) {
+            try { context.revokeUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+            catch (e: Exception) { failed(e) }
+        }
+        try { FactoryFileShareRegistry.closeInvalidated() }
+        catch (e: Exception) { failed(e) }
+        entries?.let { files ->
+            for (file in files) {
+                try { deleteCacheEntry(file) }
+                catch (e: Exception) { failed(e) }
+            }
+            try {
+                val root = privateRoot(context, create = false)
+                check(root == null || root.list()?.isEmpty() == true) { "File-share cleanup incomplete" }
+            } catch (e: Exception) { failed(e) }
+        }
         // Preserve failed revocations for another cleanup attempt. They remain unreadable in the registry.
         if (failure != null) {
-            FactoryFileShareRegistry.retainRevocations(uris)
-            throw failure
+            FactoryFileShareRegistry.retainRevocations(uris.toList())
+            throw failure!!
         }
-        FactoryFileShareRegistry.cleaned(uris)
+        FactoryFileShareRegistry.cleaned(uris.toList())
     }
 
     private class CheckedOutput(private val target: OutputStream, private val size: Int,
@@ -142,7 +160,8 @@ internal class FactoryFileShareStore(
         private const val OWNER_RW = 384 // 0600
         private const val OWNER_DIR = 448 // 0700
         private const val MAX_CACHE_ENTRIES = 8
-        private val CACHE_NAME = Regex("(?:staging-[0-9a-f-]{36}\\.tmp|snapshot-[0-9a-f-]{36}\\.bin)")
+        private const val UUID_PATTERN = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+        private val CACHE_NAME = Regex("(?:staging-$UUID_PATTERN\\.tmp|snapshot-$UUID_PATTERN\\.bin)")
         internal fun authority(context: Context) = context.packageName + ".factory.files"
 
         internal fun privateRoot(context: Context, create: Boolean): File? {

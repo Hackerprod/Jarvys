@@ -1,6 +1,6 @@
 # v68 / 1.2.61-FACTORY-FILES
 
-Status: implementation in progress; independent design review approved.
+Status: implementation complete; independent design/source review approved, final release gates in progress.
 
 Bounded `share.file` consumes an untouched read handle, maximum 8 MiB, into an immutable
 snapshot. A native 32 KiB Binder protocol transfers it to the exactly authenticated
@@ -11,7 +11,12 @@ the chooser. No raw JS paths/URIs, persistent grants, generated providers or per
 Chooser opened is distinct from delivery. Native human closure/recovery acknowledges
 closing external tasks but cannot verify OS closure or recall copies/open descriptors.
 
-Source/release security review, full/focused test evidence, exact lint comparison,
-three actual unsigned APK audits, existing D7 signing and native delivery are pending.
+Production compile passed. Focused host tests: 116 passed; SDK: 12 passed.
+Initial core test failures were retained and fixed (strict Parcel fixture representation
+and explicit WebView-feature test shadow); the subsequent core/runtime pass was 201/68.
+The final six-module aggregate, exact lint comparison and three unsigned APK build/audit
+are running against 1,012 frozen app inputs. D7 signing and native delivery remain pending.
+A cold-start admission race found by independent review was fixed with one bounded
+startup waiter; both sharing and existing SAF have explicit interrupted-startup tests.
 No real device, user document or third-party share has been used. Other F1/F2/F3 and
 UX34 gated phases remain closed; UX43 remains last.

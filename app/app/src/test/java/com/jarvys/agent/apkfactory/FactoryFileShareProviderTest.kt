@@ -5,7 +5,6 @@ import android.content.ContentProviderOperation
 import android.content.ContentValues
 import android.content.Context
 import android.content.ContextWrapper
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ProviderInfo
 import android.net.Uri
@@ -59,7 +58,8 @@ internal abstract class FactoryFileShareTestSupport {
         root.deleteRecursively()
         FactoryFileShareStore(context).cleanup()
         val info = context.packageManager.getProviderInfo(ComponentName(context, FactoryFileShareProvider::class.java), PackageManager.GET_META_DATA)
-        provider = FactoryFileShareProvider().apply { attachInfo(context, info) }
+        provider = FactoryFileShareProvider()
+        provider.attachInfo(context, info)
     }
     @After fun tearDownShare() {
         context.failRevocation = false
@@ -70,7 +70,7 @@ internal abstract class FactoryFileShareTestSupport {
 
 /** Synthetic host tests. Real resolver grants, chooser forwarding and receiver FDs require device QA. */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
+@Config(sdk = [34], application = android.app.Application::class, shadows = [FactoryFileShareOsShadow::class])
 internal class FactoryFileShareProviderTest : FactoryFileShareTestSupport() {
     @Test fun manifestAndAttachRequireExactPrivateGrantingAuthority() {
         val info = context.packageManager.getProviderInfo(ComponentName(context, FactoryFileShareProvider::class.java), PackageManager.GET_META_DATA)
@@ -97,6 +97,20 @@ internal class FactoryFileShareProviderTest : FactoryFileShareTestSupport() {
         }
         assertFalse(snapshot.uri.toString().contains("report.txt"))
         assertEquals(256, Os.lstat(snapshotFile(snapshot).path).st_mode and 511)
+    }
+
+    @Test fun queryRejectsUnboundedDuplicateAndUnknownProjections() {
+        val uri = stage().uri
+        for (projection in listOf(emptyArray(), arrayOf("_data"),
+            arrayOf(OpenableColumns.SIZE, OpenableColumns.SIZE),
+            Array(4096) { OpenableColumns.DISPLAY_NAME })) {
+            reject { provider.query(uri, projection, null, null, null) }
+        }
+        provider.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null).use {
+            assertEquals(1, it.columnCount)
+            assertTrue(it.moveToFirst())
+            assertEquals(bytes.size.toLong(), it.getLong(0))
+        }
     }
 
     @Test fun writableModesAndEveryMutationAreRejected() {

@@ -45,7 +45,7 @@
     </queries>
 
     <application
-        android:name="com.jarvys.agent.apkfactory.FactoryGuardApplication"
+        android:name="com.jarvys.agent.apkfactory.FactoryInstallApplication"
         android:allowBackup="false"
         android:usesCleartextTraffic="true"
         android:label="${jarvysApplicationLabel}"

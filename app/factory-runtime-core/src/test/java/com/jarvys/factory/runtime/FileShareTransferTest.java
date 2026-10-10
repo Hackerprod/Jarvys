@@ -6,6 +6,7 @@ import android.os.Parcel;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -91,8 +92,8 @@ public class FileShareTransferTest {
     }
     private static Parcel request(String nonce, Integer offset) {
         Parcel request = Parcel.obtain();
-        request.writeString(FileShareTransfer.DESCRIPTOR);
-        request.writeString(nonce);
+        request.writeByteArray(FileShareTransfer.DESCRIPTOR.getBytes(StandardCharsets.US_ASCII));
+        request.writeByteArray(nonce == null ? null : nonce.getBytes(StandardCharsets.US_ASCII));
         if (offset != null) request.writeInt(offset);
         request.setDataPosition(0);
         return request;
@@ -321,13 +322,13 @@ public class FileShareTransferTest {
         FileShareTransfer endpoint = endpoint(pattern(1));
         for (String nonce : new String[] {null, "", OTHER, repeat('a', 63), repeat('a', 65)})
             denied(() -> read(endpoint, nonce, 0));
-        Parcel wrong = Parcel.obtain(); wrong.writeString(repeat('x', FileShareTransfer.DESCRIPTOR.length()));
-        wrong.writeString(NONCE); wrong.writeInt(0);
+        Parcel wrong = Parcel.obtain(); wrong.writeByteArray(repeat('x', FileShareTransfer.DESCRIPTOR.length()).getBytes(StandardCharsets.US_ASCII));
+        wrong.writeByteArray(NONCE.getBytes(StandardCharsets.US_ASCII)); wrong.writeInt(0);
         denied(() -> raw(endpoint, FileShareTransfer.TRANSACTION_READ, wrong, 0));
         assertEquals(1, read(endpoint, NONCE, 0).length);
     }
 
-    @Test public void trailingFieldsOversizeAndMalformedStringsAreRejectedBeforeReading() throws Exception {
+    @Test public void trailingFieldsOversizeAndMalformedFieldsAreRejectedBeforeReading() throws Exception {
         FileShareTransfer endpoint = endpoint(pattern(2));
         Parcel trailing = request(NONCE, 0); trailing.setDataPosition(trailing.dataSize()); trailing.writeInt(32);
         denied(() -> raw(endpoint, FileShareTransfer.TRANSACTION_READ, trailing, 0));
@@ -339,7 +340,7 @@ public class FileShareTransferTest {
             Parcel malformed = Parcel.obtain(); malformed.writeInt(length);
             denied(() -> raw(endpoint, FileShareTransfer.TRANSACTION_READ, malformed, 0));
         }
-        Parcel nonceLength = Parcel.obtain(); nonceLength.writeString(FileShareTransfer.DESCRIPTOR);
+        Parcel nonceLength = Parcel.obtain(); nonceLength.writeByteArray(FileShareTransfer.DESCRIPTOR.getBytes(StandardCharsets.US_ASCII));
         nonceLength.writeInt(Integer.MAX_VALUE);
         denied(() -> raw(endpoint, FileShareTransfer.TRANSACTION_READ, nonceLength, 0));
         assertEquals(2, read(endpoint, NONCE, 0).length);

@@ -6,6 +6,7 @@ import android.os.Looper;
 import android.os.Parcel;
 import android.os.SystemClock;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.concurrent.ScheduledFuture;
@@ -248,21 +249,22 @@ public final class FileShareTransfer extends Binder implements AutoCloseable {
         } finally { reply.recycle(); request.recycle(); }
     }
 
-    // Fixed UTF-16 strings are checked against both advertised and available lengths before the
-    // framework is allowed to allocate. This is a private protocol, not an AIDL interface token.
+    // Fixed ASCII fields are byte arrays, with both encoded and available lengths checked before
+    // bounded allocation. No remote-controlled string length reaches a framework string reader.
+    // This is a private protocol, not an AIDL interface token.
     private static String readFixedString(Parcel parcel, int length) {
         if (parcel.dataAvail() < 4) throw denied();
         int start = parcel.dataPosition();
-        if (parcel.readInt() != length || parcel.dataAvail() < aligned((length + 1) * 2)) throw denied();
+        if (parcel.readInt() != length || parcel.dataAvail() < aligned(length)) throw denied();
         parcel.setDataPosition(start);
-        String value = parcel.readString();
-        if (value == null || value.length() != length) throw denied();
-        return value;
+        byte[] bytes = new byte[length];
+        parcel.readByteArray(bytes);
+        return new String(bytes, StandardCharsets.US_ASCII);
     }
 
     private static void writeRequest(Parcel request, String nonce) {
-        request.writeString(DESCRIPTOR);
-        request.writeString(nonce);
+        request.writeByteArray(DESCRIPTOR.getBytes(StandardCharsets.US_ASCII));
+        request.writeByteArray(nonce.getBytes(StandardCharsets.US_ASCII));
     }
 
     private static void writeChunk(Parcel reply, byte[] bytes, int offset, int count) {

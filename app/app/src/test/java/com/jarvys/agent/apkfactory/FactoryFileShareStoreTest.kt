@@ -12,7 +12,7 @@ import org.robolectric.annotation.Config
 import java.io.File
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
+@Config(sdk = [34], application = android.app.Application::class, shadows = [FactoryFileShareOsShadow::class])
 internal class FactoryFileShareStoreTest : FactoryFileShareTestSupport() {
     @Test fun cleanupGloballyRevokesThenDeletesAndInvalidatesEveryRead() {
         val store = store()
@@ -24,6 +24,22 @@ internal class FactoryFileShareStoreTest : FactoryFileShareTestSupport() {
         reject { provider.getType(snapshot.uri) }
         reject { provider.query(snapshot.uri, null, null, null, null) }
         assertNotEquals(snapshot.uri, stage().uri)
+    }
+
+    @Test fun orphanSnapshotGrantsAreRevokedWithoutRestoringRegistryAuthority() {
+        root.mkdirs()
+        Os.chmod(root.path, 448)
+        val orphan = File(root, "snapshot-00000000-0000-0000-0000-000000000000.bin").apply { writeBytes(bytes) }
+        val uri = FileProvider.getUriForFile(context, FactoryFileShareStore.authority(context), orphan)
+        reject { provider.getType(uri) }
+        context.failRevocation = true
+        reject { store().cleanup() }
+        assertFalse(orphan.exists())
+        reject { stage() }
+        context.failRevocation = false
+        store().cleanup()
+        assertEquals(listOf(uri, uri), context.revocations.map { it.first })
+        reject { provider.getType(uri) }
     }
 
     @Test fun failedRevocationRetainsAdmissionUntilCleanupCanRetry() {
@@ -108,6 +124,7 @@ internal class FactoryFileShareStoreTest : FactoryFileShareTestSupport() {
             Os.symlink(elsewhere.path, symlink.path)
             store().cleanup()
             assertEquals("keep", elsewhere.readText())
+            assertEquals("/files/" + symlink.name, context.revocations.single().first.path)
             assertFalse(symlink.exists())
             val nested = File(root, "staging-00000000-0000-0000-0000-000000000000.tmp").apply { mkdir() }
             reject { store().cleanup() }

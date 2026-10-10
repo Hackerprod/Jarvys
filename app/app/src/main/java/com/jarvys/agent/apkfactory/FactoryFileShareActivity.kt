@@ -49,7 +49,6 @@ open class FactoryFileShareActivity : ComponentActivity() {
         val incoming = if (!recovery && savedInstanceState == null && caller != null)
             runCatching { FactoryFileShareCoordinator.Request.parse(intent) }.getOrNull() else null
         if (!recovery && incoming == null) { rejected = true; finish(); return }
-        if (incoming != null && !coordinator.canBegin()) { rejected = true; finish(); return }
         if (recovery) guard = MemoryUiAutomationGuard.enterProtectedSurface()
         val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 32, 24, 32); isSaveEnabled = false }
         column.addView(TextView(this).apply { setText(R.string.factory_file_sharing_title); textSize = 22f; isSaveEnabled = false })
@@ -106,25 +105,34 @@ open class FactoryFileShareActivity : ComponentActivity() {
         })
         if (incoming != null && caller != null) {
             val approved = generation; working = true
-            execute {
-                val result = runCatching { coordinator.begin(caller, incoming) {
-                    check(generation == approved && !isDestroyed && !isFinishing) { "Request Activity was interrupted" }
-                } }
-                runOnUiThread {
+            val deferred = FactoryFileShareCoordinator.afterStartup {
+                if (generation != approved || isDestroyed || isFinishing) {
                     working = false
-                    result.onSuccess { owner ->
-                        if (!isDestroyed && !isFinishing && generation == approved) {
-                            guard = MemoryUiAutomationGuard.enterProtectedSurface(); token = owner; request = incoming
-                        } else coordinator.invalidate(owner)
-                    }.onFailure {
-                        rejected = true
-                        if (coordinator.needsRecovery() && !isDestroyed && !isFinishing) {
-                            if (!::guard.isInitialized) guard = MemoryUiAutomationGuard.enterProtectedSurface()
-                        } else finish()
+                } else if (!coordinator.canBegin()) {
+                    working = false; rejected = true; finish()
+                } else {
+                    execute {
+                        val result = runCatching { coordinator.begin(caller, incoming) {
+                            check(generation == approved && !isDestroyed && !isFinishing) { "Request Activity was interrupted" }
+                        } }
+                        runOnUiThread {
+                            working = false
+                            result.onSuccess { owner ->
+                                if (!isDestroyed && !isFinishing && generation == approved) {
+                                    guard = MemoryUiAutomationGuard.enterProtectedSurface(); token = owner; request = incoming
+                                } else coordinator.invalidate(owner)
+                            }.onFailure {
+                                rejected = true
+                                if (coordinator.needsRecovery() && !isDestroyed && !isFinishing) {
+                                    if (!::guard.isInitialized) guard = MemoryUiAutomationGuard.enterProtectedSurface()
+                                } else finish()
+                            }
+                            render()
+                        }
                     }
-                    render()
                 }
             }
+            if (!deferred) { working = false; rejected = true; finish() }
         }
         render()
     }

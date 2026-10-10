@@ -152,3 +152,18 @@ test('documents API preserves exact options and extends only picker timeouts', a
   assert.deepEqual(env.sent.at(-1).args, {});
   env.reply(env.sent.at(-1), null); await cancel;
 });
+
+
+test('file sharing preserves opaque handle metadata and human chooser timeout', async () => {
+  const env = environment();
+  const options = {handle: 'a'.repeat(64), filename: 'fixture.bin', mimeType: 'application/octet-stream'};
+  const promise = env.api.share.file(options);
+  const request = env.sent.at(-1);
+  assert.equal(request.method, 'share.file');
+  assert.deepEqual(request.args, options);
+  assert.equal(env.delays.at(-1), 600000);
+  env.reply(request, {chooserOpened: true, deliveryConfirmed: false});
+  const result = await promise;
+  assert.equal(result.chooserOpened, true);
+  assert.equal(result.deliveryConfirmed, false);
+});

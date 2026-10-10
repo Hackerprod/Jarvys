@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.os.IBinder
+import android.os.Handler
 import android.os.Looper
 import android.util.AtomicFile
 import com.jarvys.agent.MemoryUiAutomationGuard
@@ -11,7 +12,7 @@ import com.jarvys.factory.runtime.FileShareTransfer
 import org.json.JSONObject
 import java.io.File
 import java.util.UUID
-import java.util.concurrent.SynchronousQueue
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
@@ -32,7 +33,7 @@ internal class FactoryFileShareCoordinator(
                 require(intent.flags and GRANT_FLAGS == 0)
                 val extras = intent.extras ?: error("Missing file sharing request")
                 require(extras.keySet() == setOf("protocolVersion", "nonce", "filename", "mimeType", "size", "sha256", "transfer"))
-                @Suppress("DEPRECATION") fun value(key: String): Any? = extras.get(key)
+                fun value(key: String): Any? = extras.get(key)
                 fun string(key: String): String = value(key).also { require(it is String) } as String
                 require(value("protocolVersion") is Int && value("protocolVersion") == 1)
                 val size = value("size"); require(size is Int && size in 1..FileShareTransfer.MAX_BYTES)
@@ -60,8 +61,10 @@ internal class FactoryFileShareCoordinator(
     private var broken = false
     private var busy = false
     private var restoring = false
+    private var startupWaiter: (() -> Unit)? = null
     private var opened = false // Process-local only. Restart must never claim the chooser opened.
     private fun protect() { if (lease == null) lease = MemoryUiAutomationGuard.enterProtectedSurface() }
+    @Synchronized fun isRestoring() = restoring
     @Synchronized fun status() = state
     @Synchronized fun canBegin() = !open && !broken && !busy && !restoring && FactoryInteractionAdmission.available()
     @Synchronized fun needsRecovery() = !restoring && open && (owner == null || broken)
@@ -109,7 +112,10 @@ internal class FactoryFileShareCoordinator(
             }
         } catch (_: Exception) {
             synchronized(this) { broken = true; open = true; state = "outcome_unknown"; owner = null; protect(); FactoryInteractionAdmission.restore(this) }
-        } finally { synchronized(this) { restoring = false } }
+        } finally {
+            val ready = synchronized(this) { restoring = false; startupWaiter.also { startupWaiter = null } }
+            ready?.let { Handler(Looper.getMainLooper()).post(it) }
+        }
     }
     fun begin(callingPackage: String?, value: Request, checkActive: () -> Unit): String {
         requireWorker(); require(!callingPackage.isNullOrBlank()) { "Android calling package is required" }
@@ -117,9 +123,10 @@ internal class FactoryFileShareCoordinator(
             check(canBegin()); require(value.nonce != nonce) { "Replayed file sharing request" }
             FactoryInteractionAdmission.acquire(this); busy = true
         }
+        var authenticated = false
         try {
             val identity = verify(callingPackage)
-            check(identity.appId == callingPackage); checkActive()
+            check(identity.appId == callingPackage); authenticated = true; checkActive()
             val token = synchronized(this) {
                 check(!open && !broken); protect()
                 if (lease?.isReadyForUser != true) { lease?.close(); lease = null; error("Automated action in flight") }
@@ -141,6 +148,9 @@ internal class FactoryFileShareCoordinator(
                 if (open) { owner = null; proof = null; request = null; state = "outcome_unknown"; runCatching { save() } }
             }
             if (synchronized(this) { open }) runCatching { cleanup() }
+            // This endpoint belongs to the verified caller only. A stalled cancellation keeps this
+            // same worker and admission occupied; never spawn a replacement Binder worker.
+            if (authenticated) runCatching { FileShareTransfer.cancel(value.transfer, value.nonce) }
             throw failure
         } finally {
             synchronized(this) { busy = false; if (!open && !broken) FactoryInteractionAdmission.release(this) }
@@ -206,7 +216,20 @@ internal class FactoryFileShareCoordinator(
         private const val GRANT_FLAGS = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
         private val OPEN_STATES = setOf("receiving", "review", "chooser_pending", "chooser_opened", "launch_failed", "outcome_unknown")
         private val CLOSED_STATES = setOf("closed", "closed_outcome_unknown")
-        internal val WORKER = ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS, SynchronousQueue()).apply { allowCoreThreadTimeOut(true) }
+        internal val WORKER = ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS, ArrayBlockingQueue(1)).apply { allowCoreThreadTimeOut(true) }
+        /** At most one incoming Activity waits for startup, never a queue of external requests. */
+        fun startupPending() = instance?.isRestoring() == true
+        fun afterStartup(action: () -> Unit): Boolean {
+            val current = instance
+            if (current != null) synchronized(current) {
+                if (current.restoring) {
+                    if (current.startupWaiter != null) return false
+                    current.startupWaiter = action
+                    return true
+                }
+            }
+            action(); return true
+        }
         private var recoveryToken: String? = null
         @Synchronized fun recoveryIntent(context: Context): Intent {
             recoveryToken = UUID.randomUUID().toString()

@@ -1,7 +1,7 @@
 <resources>
     <string name="factory_file_sharing_title">Compartir archivos de Factory</string>
     <string name="factory_file_sharing_settings_summary">Revisar y cerrar un envío de archivo interrumpido</string>
-    <string name="factory_file_sharing_disclosure">Revisa tú esta app y el archivo. Solo se comparte una copia privada verificada, de hasta 8 MiB. Elige el destinatario en el selector de Android. El destinatario puede copiar el archivo o enviarlo a un servicio remoto u otra persona. Jarvys no puede retirar copias ni confirmar la entrega. La automatización permanece bloqueada hasta que confirmes explícitamente haber cerrado el selector y la tarea destinataria.</string>
+    <string name="factory_file_sharing_disclosure">Revisa tú esta app y el archivo. Solo se comparte una copia privada verificada, de hasta 8 MiB. Elige el destinatario en el selector de Android. El destinatario puede copiar el archivo o enviarlo a un servicio remoto u otra persona. El acceso nuevo de lectura caduca a los cinco minutos. No se pueden retirar las copias ni el acceso a archivos ya abiertos. Jarvys no puede confirmar la entrega. La automatización permanece bloqueada hasta que confirmes explícitamente haber cerrado el selector y la tarea destinataria.</string>
     <string name="factory_file_sharing_checking">Comprobando la app solicitante y el archivo completo. No se ha autorizado ningún envío.</string>
     <string name="factory_file_sharing_choose">Elegir quién recibe este archivo</string>
     <string name="factory_file_sharing_close">Cancelar / cerrar</string>

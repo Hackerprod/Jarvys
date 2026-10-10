@@ -95,7 +95,7 @@ class FactoryFileShareCoordinatorTest {
         assertEquals("chooser_pending", JSONObject(journal.readText()).getString("state"))
         assertEquals(Intent.ACTION_CHOOSER, chooser.action)
         assertEquals(Intent.FLAG_GRANT_READ_URI_PERMISSION, chooser.flags)
-        @Suppress("DEPRECATION") val send = chooser.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)!!
+        val send = chooser.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)!!
         assertEquals(Intent.ACTION_SEND, send.action); assertNull(send.component); assertNull(send.`package`)
         assertEquals(Intent.FLAG_GRANT_READ_URI_PERMISSION, send.flags)
         assertEquals(send.getParcelableExtra<Uri>(Intent.EXTRA_STREAM), send.clipData!!.getItemAt(0).uri)
@@ -179,4 +179,39 @@ class FactoryFileShareCoordinatorTest {
         }
         assertEquals(proof, FactoryDocumentCoordinator.verifyEvidence(proof.appId, proof.certificate, proof.apk, 2, evidence(listOf("documents", "share")), setOf("documents", "share")))
     }
+    @Test fun malformedDocumentAndShareJournalsRestoreIndependentGuards() {
+        val documentRoot = File(context.noBackupFilesDir, "factory-documents").apply { mkdirs() }
+        File(documentRoot, "interaction.json").writeText("{")
+        root.mkdirs(); journal.writeText("{")
+        val documents = FactoryDocumentCoordinator(context) { proof }
+        documents.restore(); io { coordinator.restore() }
+        assertTrue(documents.needsRecovery()); assertTrue(coordinator.needsRecovery())
+        io { coordinator.acknowledgeRecovery {} }
+        assertTrue(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
+        documents.acknowledgeRecovery {}
+        assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available())
+    }
+    @Test fun stalledTransferRetainsAdmissionUntilActualWorkerCompletion() {
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        coordinator = FactoryFileShareCoordinator(context, { proof }, receive = { value, active ->
+            entered.countDown(); check(release.await(10, TimeUnit.SECONDS)); active()
+            FactoryFileShareStore.Snapshot(Uri.parse("content://${context.packageName}.factory.files/files/synthetic.bin"), value.filename, value.mimeType, value.size, SystemClock.elapsedRealtime() + 300000)
+        }, clean = {})
+        val future = executor.submit(Callable { coordinator.begin(proof.appId, request()) {} })
+        try {
+            assertTrue(entered.await(5, TimeUnit.SECONDS))
+            assertFalse(coordinator.canBegin()); assertFalse(FactoryInteractionAdmission.available())
+            assertTrue(MemoryUiAutomationGuard.isProtected())
+            val documents = FactoryDocumentCoordinator(context) { proof }
+            fail { documents.begin(proof.appId, FactoryDocumentCoordinator.Request("open", "text/plain", null, "b".repeat(64))) }
+            assertEquals(1, FactoryFileShareCoordinator.WORKER.maximumPoolSize)
+            assertTrue(FactoryFileShareCoordinator.WORKER.queue is java.util.concurrent.ArrayBlockingQueue<*>)
+            assertEquals(1, FactoryFileShareCoordinator.WORKER.queue.remainingCapacity())
+        } finally { release.countDown() }
+        val owner = future.get(10, TimeUnit.SECONDS)
+        io { coordinator.close(owner, false) {} }
+        assertTrue(FactoryInteractionAdmission.available())
+    }
+
 }
