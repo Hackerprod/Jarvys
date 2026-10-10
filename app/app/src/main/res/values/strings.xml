@@ -1372,5 +1372,5 @@ Their exit results are unknown. Do not repeat them automatically. Review project
     <string name="crew_progress_compaction_error">Compaction failed</string>
     <string name="crew_progress_tool_result">Tool finished</string>
     <string name="crew_progress_tool_error">Tool reported an error</string>
-    <!-- Elapsed minutes:seconds is a clock, not a plural quantity. --><string xmlns:tools="http://schemas.android.com/tools" name="crew_last_progress" tools:ignore="PluralsCandidate">%1$s · Last activity: %2$s · %3$d:%4$02d ago</string>
+    <!-- Elapsed minutes:seconds is a clock, not a plural quantity. --><string name="crew_last_progress" xmlns:tools="http://schemas.android.com/tools" tools:ignore="PluralsCandidate">%1$s · Last activity: %2$s · %3$d:%4$02d ago</string>
 </resources>
