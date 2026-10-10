@@ -1,6 +1,6 @@
 # UX42 F1 v75: calendar event editor
 
-Version 75 / `1.2.68-FACTORY-CALENDAR`: final host tests, exact lint, three APK builds and independent source/binary audit passed. Signed native delivery is pending. This is not physical Android acceptance or complete Factory.
+Version 75 / `1.2.68-FACTORY-CALENDAR`: final host tests, exact lint, three APK builds and independent source/binary audit passed. Signed native delivery was accepted. This is not physical Android acceptance or complete Factory.
 
 The strict `calendar.insert` capability reuses the authenticated latest-source-APK external editor
 broker and durable single-use human review. Fixed ACTION_INSERT/event URI/MIME, seven exact native
@@ -55,4 +55,21 @@ Actual unsigned APKs, version 75 / `1.2.68-FACTORY-CALENDAR`:
 
 Physical Android/Binder/lifecycle, OEM editor/timezone/all-day semantics, installation/update,
 calendar saving and actual external-task closure remain unverified. No automatic saving or
-calendar database access was added. Signed delivery will be recorded separately after confirmation.
+calendar database access was added. Signed delivery is recorded below; it does not close those physical gates.
+
+## Signed native delivery
+
+Native attachment of `Jarvys-Factory-calendar-full-v75-arm64-test.apk` was accepted on
+10 October 2026 at 15:30:02 UTC. Size: 19,289,659 bytes; SHA-256
+`317f27a5f25529af62254683d4055c939d1827dd2b2e08a05f2184ed7bacd3b4`.
+Existing approved D7 test identity, SHA-1
+`D7:C0:1F:59:79:78:32:3E:32:CA:AF:22:E9:F6:00:9A:B7:2F:32:B8`, verifies APK v2/v3.
+CRC and 16 KiB ZIP alignment pass. The manifest and all 239 retained unsigned-source entries
+are byte-identical; only nine non-ARM64 native libraries are omitted, with signing metadata added.
+Package remains `com.jarvys.agent`, version 75 / `1.2.68-FACTORY-CALENDAR`, ARM64, minimum API24.
+
+This is a test-key artifact; it cannot update an installation signed by another certificate.
+Accepted attachment is not confirmation of download, installation/update, preserved data, a rendered
+calendar editor or a created/saved event. ZIP alignment does not certify ELF16KiB page compatibility.
+TTS/voice, sensors/biometrics and other F1 families, F2/F3 and physical gates remain pending;
+UX34 stays gated, UX44 stays documentation-only future defaults and UX43 remains last.
