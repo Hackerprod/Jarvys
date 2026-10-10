@@ -7,9 +7,10 @@ import org.json.JSONObject;
 /** Shared JSON boundary for both the generated bridge and authenticated native host. */
 public final class ExternalLaunchRequest {
     public static final int MAX_ARGS_BYTES = 8192;
+    public static final int MAX_EDITOR_ARGS_BYTES = 32768;
     private ExternalLaunchRequest() { }
     public static ExternalLaunchSpec parse(String method, String argsJson) throws FactoryException {
-        JSONObject args = StrictJson.object(argsJson, MAX_ARGS_BYTES);
+        JSONObject args = StrictJson.object(argsJson, ("email.compose".equals(method) || "sms.compose".equals(method)) ? MAX_EDITOR_ARGS_BYTES : MAX_ARGS_BYTES);
         try {
             if ("maps.open".equals(method)) {
                 if (args.has("query")) {
@@ -26,9 +27,17 @@ public final class ExternalLaunchRequest {
                 FactoryConfig.exactKeys(args, "number");
                 return ExternalLaunchSpec.dial(FactoryConfig.string(args, "number"));
             }
+            if ("email.compose".equals(method)) {
+                FactoryConfig.exactKeys(args, "to", "subject", "body");
+                return ExternalLaunchSpec.email(FactoryConfig.string(args, "to"), FactoryConfig.string(args, "subject"), FactoryConfig.string(args, "body"));
+            }
+            if ("sms.compose".equals(method)) {
+                FactoryConfig.exactKeys(args, "number", "body");
+                return ExternalLaunchSpec.sms(FactoryConfig.string(args, "number"), FactoryConfig.string(args, "body"));
+            }
             throw new FactoryException("UNKNOWN_METHOD", "Unsupported typed external action.");
         } catch (JSONException | IllegalArgumentException invalid) {
-            throw new FactoryException("INVALID_ARGUMENT", "Use exact typed map coordinates, a safe bounded query, or a plain dialer number.");
+            throw new FactoryException("INVALID_ARGUMENT", "Use exact bounded fields for a typed map, dialer, email or SMS editor.");
         }
     }
 }

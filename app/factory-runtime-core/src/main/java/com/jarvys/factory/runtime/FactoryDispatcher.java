@@ -1,6 +1,7 @@
 package com.jarvys.factory.runtime;
 
 import com.jarvys.factory.contract.CapabilityCatalog;
+import com.jarvys.factory.contract.ExternalLaunchSpec;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -30,8 +31,8 @@ public final class FactoryDispatcher {
     public static Effects simulatedEffects() {
         return (method, args) -> {
             switch (method) {
-                case MAPS_OPEN: case PHONE_DIAL: case BROWSER_OPEN: case AUDIO_PLAY: case PHOTOS_PICK: case PHOTOS_CAPTURE: case SHARE_FILE: case DOCUMENTS_OPEN: case DOCUMENTS_CREATE: case DOCUMENTS_READ: case DOCUMENTS_WRITE: case DOCUMENTS_CLOSE: case DOCUMENTS_CANCEL:
-                    throw new FactoryException("UNAVAILABLE", "Documents, photos, audio, browser, maps and phone require an installed generated app and the matching human-only Jarvys broker; preview never opens files, the camera, audio playback external URLs, maps or a dialer.");
+                case MAPS_OPEN: case PHONE_DIAL: case EMAIL_COMPOSE: case SMS_COMPOSE: case BROWSER_OPEN: case AUDIO_PLAY: case PHOTOS_PICK: case PHOTOS_CAPTURE: case SHARE_FILE: case DOCUMENTS_OPEN: case DOCUMENTS_CREATE: case DOCUMENTS_READ: case DOCUMENTS_WRITE: case DOCUMENTS_CLOSE: case DOCUMENTS_CANCEL:
+                    throw new FactoryException("UNAVAILABLE", "Documents, photos, audio, browser, maps, phone, email and SMS require an installed generated app and the matching human-only Jarvys broker; preview never opens files, camera, audio, external URLs, maps, dialers or message editors.");
                 case HAPTICS_PERFORM: case SHARE_TEXT: case CLIPBOARD_WRITE: case EXPORT_TEXT:
                     return new JSONObject().put("simulated", true).put("performed", false).put("mode", "preview")
                             .put("operation", method.wireName);
@@ -58,13 +59,16 @@ public final class FactoryDispatcher {
                         .put("simulatedCapabilities", new JSONArray("preview".equals(metadata.mode())
                                 ? java.util.Arrays.asList("export", "share", "clipboard", "haptics") : java.util.Collections.emptyList()))
                         .put("unavailableCapabilities", new JSONArray("preview".equals(metadata.mode())
-                                ? java.util.Arrays.asList("documents", "photos", "audio", "browser", "maps", "phone") : java.util.Collections.emptyList()))
+                                ? java.util.Arrays.asList("documents", "photos", "audio", "browser", "maps", "phone", "email", "sms") : java.util.Collections.emptyList()))
                         .put("unavailableMethods", new JSONArray("preview".equals(metadata.mode())
-                                ? java.util.Arrays.asList("share.file", "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture", "audio.play", "browser.open", "maps.open", "phone.dial")
+                                ? java.util.Arrays.asList("share.file", "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture", "audio.play", "browser.open", "maps.open", "phone.dial", "email.compose", "sms.compose")
                                 : java.util.Collections.emptyList()))
                         .put("externalLaunchProtocolVersion", 1)
                         .put("mapsRequires", new JSONArray(java.util.Collections.singletonList("maps")))
                         .put("phoneRequires", new JSONArray(java.util.Collections.singletonList("phone")))
+                        .put("emailRequires", new JSONArray(java.util.Collections.singletonList("email")))
+                        .put("smsRequires", new JSONArray(java.util.Collections.singletonList("sms")))
+                        .put("externalEditorsMaySyncDrafts", true)
                         .put("externalLaunchBrokerRequired", true)
                         .put("browserProtocolVersion", 1)
                         .put("browserRequires", new JSONArray(java.util.Collections.singletonList("browser")))
@@ -88,6 +92,11 @@ public final class FactoryDispatcher {
                                 .put("browserUrlLength", com.jarvys.factory.contract.BrowserUrl.MAX_LENGTH)
                                 .put("browserLifetimeMs", 300000)
                                 .put("externalLaunchLifetimeMs", 300000)
+                                .put("emailAddressCharacters", ExternalLaunchSpec.MAX_EMAIL_ADDRESS)
+                                .put("editorSubjectCodePoints", ExternalLaunchSpec.MAX_SUBJECT_CODE_POINTS)
+                                .put("editorSubjectBytes", ExternalLaunchSpec.MAX_SUBJECT_BYTES)
+                                .put("editorBodyBytes", ExternalLaunchSpec.MAX_BODY_BYTES)
+                                .put("editorArgumentsBytes", ExternalLaunchRequest.MAX_EDITOR_ARGS_BYTES)
                                 .put("mapsQueryCodePoints", com.jarvys.factory.contract.ExternalLaunchSpec.MAX_QUERY_CODE_POINTS)
                                 .put("mapsQueryBytes", com.jarvys.factory.contract.ExternalLaunchSpec.MAX_QUERY_BYTES)
                                 .put("phoneDigits", com.jarvys.factory.contract.ExternalLaunchSpec.MAX_PHONE_DIGITS)
@@ -99,7 +108,7 @@ public final class FactoryDispatcher {
                                 .put("audioSampleRateMin", 8000).put("audioSampleRateMax", 48000)
                                 .put("documentHandleLifetimeMs", 300000));
             case DEVICE_INFO: return metadata.deviceInfo().put("declaredAppId", config.appId);
-            case MAPS_OPEN: case PHONE_DIAL: case BROWSER_OPEN: case AUDIO_PLAY: case PHOTOS_PICK: case PHOTOS_CAPTURE: case SHARE_FILE: case DOCUMENTS_OPEN: case DOCUMENTS_CREATE: case DOCUMENTS_READ: case DOCUMENTS_WRITE: case DOCUMENTS_CLOSE: case DOCUMENTS_CANCEL:
+            case MAPS_OPEN: case PHONE_DIAL: case EMAIL_COMPOSE: case SMS_COMPOSE: case BROWSER_OPEN: case AUDIO_PLAY: case PHOTOS_PICK: case PHOTOS_CAPTURE: case SHARE_FILE: case DOCUMENTS_OPEN: case DOCUMENTS_CREATE: case DOCUMENTS_READ: case DOCUMENTS_WRITE: case DOCUMENTS_CLOSE: case DOCUMENTS_CANCEL:
             case HAPTICS_PERFORM: case SHARE_TEXT: case CLIPBOARD_WRITE: case EXPORT_TEXT:
                 return effects.perform(request.operation, request.args);
             default: throw new FactoryException("UNKNOWN_METHOD", "Unknown operation.");

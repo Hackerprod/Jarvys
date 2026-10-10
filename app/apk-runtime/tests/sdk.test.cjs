@@ -105,7 +105,7 @@ test('all SDK calls exactly match the catalog and explicit native validator/disp
   const path = require('node:path');
   const catalog = fs.readFileSync(path.join(__dirname, '../../factory-contract/src/main/java/com/jarvys/factory/contract/CapabilityCatalog.java'), 'utf8');
   const rows = [...catalog.matchAll(/\b([A-Z][A-Z_]+)\("([a-z]+\.[a-z]+)", (?:"[a-z]+"|null)\)/g)];
-  assert.equal(rows.length, 23);
+  assert.equal(rows.length, 25);
   const env = environment();
   const args = { 'storage.get': ['key'], 'storage.set': ['key', 'value'], 'storage.remove': ['key'],
     'export.text': [{ filename: 'test.txt', text: 'hello' }], 'share.text': [{ text: 'hello' }],
@@ -248,5 +248,33 @@ test('typed external action timeout and pagehide stay terminal despite late laun
     if (event === 'timeout') env.timers.values().next().value(); else env.handlers.get('pagehide')();
     await rejected;
     env.reply(env.sent.at(-1), {launchRequested: true, actionConfirmed: false});
+  }
+});
+
+
+test('typed email and SMS composers preserve fields, review timeout and unconfirmed receipts', async () => {
+  const env = environment();
+  for (const [group, options] of [
+    ['email', {to: 'fixture+tag@example.invalid', subject: 'Subject', body: 'Line 1\nLine 2'}],
+    ['sms', {number: '+00123', body: 'Body %2F & + #'}],
+    ['email', {to: 'fixture@example.invalid', subject: '', body: '', bcc: 'blocked@example.invalid'}],
+    ['sms', {number: '123', body: '', extras: {arbitrary: true}}]
+  ]) {
+    assert.equal(Object.isFrozen(env.api[group]), true); assert.deepEqual(Object.keys(env.api[group]), ['compose']);
+    const pending = env.api[group].compose(options); const request = env.sent.at(-1);
+    assert.equal(request.method, group + '.compose'); assert.deepEqual(request.args, options);
+    assert.equal(env.delays.at(-1), 600000);
+    env.reply(request, {launchRequested: true, actionConfirmed: false});
+    const result = await pending; assert.equal(result.launchRequested, true); assert.equal(result.actionConfirmed, false); assert.equal(Object.keys(result).length, 2);
+  }
+});
+test('editor timeout and pagehide never become sending or delivery confirmation', async () => {
+  for (const event of ['timeout', 'pagehide']) for (const group of ['email', 'sms']) {
+    const env = environment();
+    const options = group === 'email' ? {to: 'fixture@example.invalid', subject: '', body: ''} : {number: '0', body: ''};
+    const pending = env.api[group].compose(options);
+    const rejected = assert.rejects(pending, {code: event === 'timeout' ? 'TIMEOUT' : 'PAGE_CLOSED'});
+    if (event === 'timeout') env.timers.values().next().value(); else env.handlers.get('pagehide')();
+    await rejected; env.reply(env.sent.at(-1), {launchRequested: true, actionConfirmed: false});
   }
 });

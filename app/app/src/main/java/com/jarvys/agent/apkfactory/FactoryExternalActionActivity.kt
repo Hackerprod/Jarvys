@@ -9,6 +9,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewStructure
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.LinearLayout
@@ -23,6 +24,7 @@ import androidx.core.view.WindowInsetsCompat
 import com.jarvys.agent.AppLanguageRuntime
 import com.jarvys.agent.MemoryUiAutomationGuard
 import com.jarvys.agent.R
+import com.jarvys.factory.contract.ExternalLaunchSpec
 import com.jarvys.factory.runtime.ExternalLaunchControl
 import java.util.concurrent.RejectedExecutionException
 
@@ -44,6 +46,7 @@ open class FactoryExternalActionActivity : ComponentActivity() {
     private val handler = Handler(Looper.getMainLooper())
     private val expire = Runnable { session?.revoke(); generation++; render() }
     private lateinit var status: TextView
+    private lateinit var details: LinearLayout
     private lateinit var choices: RadioGroup
     private lateinit var open: Button
     private lateinit var close: Button
@@ -56,9 +59,10 @@ open class FactoryExternalActionActivity : ComponentActivity() {
         val incoming = if (!recovery && savedInstanceState == null && caller != null) runCatching { FactoryExternalLaunchCoordinator.Request.parse(intent) }.getOrNull() else null
         if (!recovery && incoming == null) { rejected = true; finish(); return }
         if (recovery) { guard = MemoryUiAutomationGuard.enterProtectedSurface(); session = coordinator.session() }
-        val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 32, 24, 32); isSaveEnabled = false }
+        val column = PrivateReviewColumn(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 32, 24, 32); isSaveEnabled = false }
         column.addView(TextView(this).apply { setText(R.string.factory_external_launch_title); textSize = 22f; isSaveEnabled = false })
-        status = TextView(this).apply { textSize = 16f; isSaveEnabled = false; autoLinkMask = 0 }; column.addView(status)
+        status = TextView(this).apply { textSize = 16f; privateReview(); autoLinkMask = 0 }; column.addView(status)
+        details = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; privateReview() }; column.addView(details)
         choices = RadioGroup(this).apply { isSaveEnabled = false }; column.addView(choices)
         fun button(label: Int, name: String, action: () -> Unit) = object : Button(this) {
             override fun onFilterTouchEventForSecurity(event: MotionEvent) = super.onFilterTouchEventForSecurity(event) && unoccluded(event)
@@ -68,7 +72,7 @@ open class FactoryExternalActionActivity : ComponentActivity() {
         }
         open = button(R.string.factory_external_launch_open, "open") { openNative() }
         close = button(R.string.factory_external_launch_close, "close") { closeNative() }
-        val scroll = ScrollView(this).apply { isFillViewport = true; isSaveEnabled = false; addView(column) }; setContentView(scroll)
+        val scroll = ScrollView(this).apply { privateReview(); isFillViewport = true; addView(column) }; setContentView(scroll)
         ViewCompat.setOnApplyWindowInsetsListener(scroll) { view, insets ->
             val safe = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout() or WindowInsetsCompat.Type.ime())
             view.setPadding(safe.left, safe.top, safe.right, safe.bottom); insets
@@ -199,13 +203,34 @@ open class FactoryExternalActionActivity : ComponentActivity() {
             append(getString(R.string.factory_external_launch_disclosure))
             if (value != null && ::guard.isInitialized) {
                 append("\n\n").append(value.proof.appId).append("\n\n").append(value.request.method)
-                append("\n\n").append(value.request.spec.display)
+                if (value.request.spec.recipient == null) append("\n\n").append(value.request.spec.display)
                 selected?.let { append("\n\n").append(it.component.flattenToString()) }
             }
             if (working || coordinator.isBusy()) append("\n\n").append(getString(R.string.factory_external_launch_checking))
             if (coordinator.needsRecovery()) append("\n\n").append(getString(R.string.factory_external_launch_unknown))
             else if (value?.attempted == true) append("\n\n").append(getString(R.string.factory_external_launch_attempted))
             if (rejected || (value != null && candidates.isEmpty() && !value.attempted)) append("\n\n").append(getString(R.string.factory_external_launch_unavailable))
+        }
+        details.removeAllViews()
+        if (value != null && ::guard.isInitialized && value.request.spec.recipient != null) {
+            val spec = value.request.spec
+            fun field(label: Int, name: String, content: String) {
+                details.addView(TextView(this).apply {
+                    privateReview(); setText(label); setTypeface(typeface, android.graphics.Typeface.BOLD)
+                    tag = "factory-editor-$name-label"; setPadding(0, 24, 0, 4)
+                })
+                details.addView(TextView(this).apply {
+                    privateReview(); text = content.ifEmpty { getString(R.string.factory_external_editor_empty) }
+                    tag = "factory-editor-$name"; autoLinkMask = 0; textSize = 16f
+                    setPadding(16, 12, 16, 12)
+                    background = android.graphics.drawable.GradientDrawable().apply {
+                        setColor(android.graphics.Color.TRANSPARENT); setStroke(1, android.graphics.Color.GRAY)
+                    }
+                })
+            }
+            field(R.string.factory_external_editor_recipient, "recipient", spec.recipient)
+            if (spec.kind == ExternalLaunchSpec.Kind.EMAIL_COMPOSE) field(R.string.factory_external_editor_subject, "subject", spec.subject)
+            field(R.string.factory_external_editor_body, "body", spec.body)
         }
         val ready = humanReady() && !working && !rejected && value != null && !value.attempted && !value.revoked.get() && value.registration?.isRevoked == false && coordinator.status() == "review"
         open.isEnabled = ready && selected != null
@@ -232,4 +257,18 @@ open class FactoryExternalActionActivity : ComponentActivity() {
         }
         super.onDestroy()
     }
+}
+
+/** Never export review descendants through autofill, including explicit include-unimportant requests. */
+internal class PrivateReviewColumn(context: Context) : LinearLayout(context) {
+    init { privateReview() }
+    override fun dispatchProvideAutofillStructure(structure: ViewStructure, flags: Int) {
+        if (Build.VERSION.SDK_INT >= 26) structure.setAutofillId(autofillId)
+    }
+}
+private fun View.privateReview() {
+    isSaveEnabled = false
+    isSaveFromParentEnabled = false
+    if (Build.VERSION.SDK_INT >= 26) importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
+    if (Build.VERSION.SDK_INT >= 30) importantForContentCapture = View.IMPORTANT_FOR_CONTENT_CAPTURE_NO_EXCLUDE_DESCENDANTS
 }

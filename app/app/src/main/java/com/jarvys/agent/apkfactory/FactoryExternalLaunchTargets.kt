@@ -59,11 +59,34 @@ internal class FactoryExternalLaunchTargets(private val context: Context) {
         return Target(ComponentName(activity.packageName, activity.name), certificate, version, installed.lastUpdateTime, activity.applicationInfo.uid)
     }
     companion object {
-        private fun action(spec: ExternalLaunchSpec) = if (spec.capability == "phone") Intent.ACTION_DIAL else Intent.ACTION_VIEW
-        private fun scheme(spec: ExternalLaunchSpec) = if (spec.capability == "phone") "tel" else "geo"
+        private fun action(spec: ExternalLaunchSpec) = when (spec.kind) {
+            ExternalLaunchSpec.Kind.MAPS_COORDINATES, ExternalLaunchSpec.Kind.MAPS_QUERY -> Intent.ACTION_VIEW
+            ExternalLaunchSpec.Kind.PHONE_DIAL -> Intent.ACTION_DIAL
+            ExternalLaunchSpec.Kind.EMAIL_COMPOSE, ExternalLaunchSpec.Kind.SMS_COMPOSE -> Intent.ACTION_SENDTO
+        }
+        private fun scheme(spec: ExternalLaunchSpec) = when (spec.kind) {
+            ExternalLaunchSpec.Kind.MAPS_COORDINATES, ExternalLaunchSpec.Kind.MAPS_QUERY -> "geo"
+            ExternalLaunchSpec.Kind.PHONE_DIAL -> "tel"
+            ExternalLaunchSpec.Kind.EMAIL_COMPOSE -> "mailto"
+            ExternalLaunchSpec.Kind.SMS_COMPOSE -> "smsto"
+        }
         private fun view(spec: ExternalLaunchSpec, discovery: Boolean = false): Intent {
-            val uri = if (discovery) { if (spec.capability == "phone") "tel:0" else "geo:0,0" } else spec.uri
-            return Intent(action(spec), uri.toUri()).addCategory(Intent.CATEGORY_DEFAULT)
+            val uri = if (!discovery) spec.uri else when (spec.kind) {
+                ExternalLaunchSpec.Kind.MAPS_COORDINATES, ExternalLaunchSpec.Kind.MAPS_QUERY -> "geo:0,0"
+                ExternalLaunchSpec.Kind.PHONE_DIAL -> "tel:0"
+                ExternalLaunchSpec.Kind.EMAIL_COMPOSE -> "mailto:fixture@example.invalid"
+                ExternalLaunchSpec.Kind.SMS_COMPOSE -> "smsto:0"
+            }
+            return Intent(action(spec), uri.toUri()).addCategory(Intent.CATEGORY_DEFAULT).apply {
+                if (!discovery) when (spec.kind) {
+                    ExternalLaunchSpec.Kind.EMAIL_COMPOSE -> {
+                        putExtra(Intent.EXTRA_SUBJECT, spec.subject)
+                        putExtra(Intent.EXTRA_TEXT, spec.body)
+                    }
+                    ExternalLaunchSpec.Kind.SMS_COMPOSE -> putExtra("sms_body", spec.body)
+                    ExternalLaunchSpec.Kind.MAPS_COORDINATES, ExternalLaunchSpec.Kind.MAPS_QUERY, ExternalLaunchSpec.Kind.PHONE_DIAL -> Unit
+                }
+            }
         }
         internal fun broadTypedFilter(filter: IntentFilter?, spec: ExternalLaunchSpec): Boolean = filter != null &&
             filter.hasAction(action(spec)) && filter.hasCategory(Intent.CATEGORY_DEFAULT) &&

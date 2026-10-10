@@ -1393,14 +1393,18 @@ Se desconoce cómo terminaron. No se repiten automáticamente. Revisa los cambio
     <string name="factory_browser_unknown">Resultado interrumpido, vencido o incierto. Nunca se reintenta automáticamente. Cierra tú cualquier pantalla o tarea del navegador externo y confirma abajo. Tu confirmación no demuestra de forma independiente que el navegador esté cerrado.</string>
     <string name="factory_browser_attempted">Esta autorización de una sola apertura ya se consumió. Solicitar abrir no acredita que el navegador se haya mostrado, que la página cargue ni que se entreguen datos. Cierra tú la pantalla o tarea del navegador externo antes de terminar.</string>
     <string name="factory_browser_unavailable">No hay un navegador compatible o se interrumpió la revisión. Sin destino implícito alternativo ni reintento automático.</string>
-    <string name="factory_external_launch_title">Revisión de mapas y marcador</string>
-    <string name="factory_external_launch_settings_summary">Revisa o recupera una apertura pendiente de mapas o marcador.</string>
-    <string name="factory_external_launch_disclosure">Revisa la ubicación, consulta o número completos y elige la app destinataria exacta. Esa app recibe estos datos y puede usar su propia red, cuentas e historial. Mapas solo solicita mostrar un lugar; teléfono solo solicita abrir el marcador (ACTION_DIAL), nunca llamar automáticamente. Jarvys no controla el comportamiento de la app externa. Jarvys no lee la ubicación del dispositivo para esta petición. Las apps externas pueden usar sus permisos existentes. Esta petición no confirma visualización, navegación, llamada ni entrega. No incluyas secretos. Tras intentar abrirla, cierra manualmente la pantalla o tarea externa antes de confirmar aquí su cierre. El cierre es tu declaración, no una comprobación independiente.</string>
+    <string name="factory_external_launch_title">Revisión de acción externa</string>
+    <string name="factory_external_launch_settings_summary">Revisa o recupera una apertura pendiente de mapas, marcador o editor de correo/SMS.</string>
+    <string name="factory_external_launch_disclosure">Revisa los datos completos y elige la aplicación receptora exacta. Abrir comparte estos campos con ella; puede usar su red, cuentas, historial, permisos existentes y sincronización de borradores en la nube. Mapas solicita mostrar una ubicación; teléfono abre el marcador (ACTION_DIAL); correo y SMS abren un editor (ACTION_SENDTO). Jarvys nunca pulsa Enviar ni llama automáticamente. La aplicación externa puede ignorar o cambiar los campos y transmitirlos o guardarlos; su comportamiento queda fuera del control de Jarvys. Esta solicitud no lee ubicación ni contactos. Abrir no confirma pantalla, navegación, llamada, borrador guardado, envío ni entrega. No introduzcas secretos. Tras intentar abrir, cierra manualmente la pantalla/tarea externa antes de reconocerlo aquí. El cierre es tu declaración, no una comprobación independiente.</string>
     <string name="factory_external_launch_open">Abrir la app elegida</string>
     <string name="factory_external_launch_close">Cancelar revisión</string>
     <string name="factory_external_launch_recover">He cerrado la pantalla o tarea externa; cerrar revisión</string>
     <string name="factory_external_launch_checking">Comprobando las identidades exactas. Espera.</string>
     <string name="factory_external_launch_unknown">El resultado anterior es desconocido. No se repetirá la apertura. Cierra tú la pantalla o tarea externa antes de confirmar la recuperación.</string>
-    <string name="factory_external_launch_attempted">La autorización de apertura ya se consumió. Visualización, navegación y llamada siguen sin confirmar. Cierra manualmente la pantalla o tarea externa antes de confirmar el cierre.</string>
+    <string name="factory_external_launch_attempted">La autorización de apertura ya se consumió. Pantalla, navegación, llamada, borrador guardado, envío y entrega siguen sin confirmar. Cierra manualmente la pantalla/tarea externa antes de reconocer su cierre.</string>
     <string name="factory_external_launch_unavailable">Esta petición o destinatario no está disponible, cambió o se revocó. No se reintentará automáticamente.</string>
+    <string name="factory_external_editor_recipient">Destinatario</string>
+    <string name="factory_external_editor_subject">Asunto</string>
+    <string name="factory_external_editor_body">Cuerpo</string>
+    <string name="factory_external_editor_empty">(vacío)</string>
 </resources>

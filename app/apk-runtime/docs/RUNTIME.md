@@ -35,15 +35,15 @@ assets/www/style.css          # optional
 }
 ```
 
-For a documents-enabled installed app, factory-owned configuration also requires `documentBroker: {packageName, certificateSha256}`. The package is exactly `com.jarvys.agent` or `com.jarvys.agent.recoverytest`, and the certificate is a lowercase 64-hex SHA-256. The factory pins its own host at build time; project JSON/JS cannot supply a broker. Configuration rejects this field without `documents`; installed documents startup rejects a missing pin. Preview may parse without a pin but cannot perform documents operations.
+For an installed app declaring documents, browser, maps, phone, email or sms, factory-owned configuration also requires `documentBroker: {packageName, certificateSha256}`. The package is exactly `com.jarvys.agent` or `com.jarvys.agent.recoverytest`, and the certificate is a lowercase 64-hex SHA-256. The factory pins its own host at build time; project JSON/JS cannot supply a broker. Configuration rejects this field without a broker-dependent capability; installed broker startup rejects a missing pin. Preview may parse without a pin but cannot perform these operations.
 
 The default `src/main/assets/www` is a runnable offline-notes acceptance fixture. Replace those assets for other apps; the native runtime contains no notes-specific behavior. The fixture provides explicit save, reopen, delete, and export flows. It limits notes to 20, each 60 title characters and 600 body characters, to fit native storage quotas. It does not silently fall back to temporary browser memory if native storage fails.
 
 ## Shared contract (UX42 F0a and v67)
 
-`:factory-contract` is a dependency-free Java library shared with the factory. Its immutable CapabilityCatalog contains seven capabilities and sixteen methods. FactoryConfig, BridgeProtocol and explicit FactoryDispatcher dispatch use it, and SDK parity tests compare the actual JS calls with catalog/validator/handler cases. SDK 2 adds six `documents` methods; schema and bridge protocol remain 1, without reflection.
+`:factory-contract` is a dependency-free Java library shared with the factory. Its immutable CapabilityCatalog contains fourteen capabilities and twenty-five methods. FactoryConfig, BridgeProtocol and explicit FactoryDispatcher dispatch use it, and SDK parity tests compare the actual JS calls with catalog/validator/handler cases. SDK 2 adds six `documents` methods; schema and bridge protocol remain 1, without reflection.
 
-The factory uses a closed immutable ManifestPlan and a separate read-only AXML auditor to validate the actual compiled tree, typed attributes, resource bindings and backup rules before/after packaging and signing. All 128 selections request zero Android permissions; only the existing launcher is exported. Every classes*.dex name/hash and all signed payload entries are checked. F0a-2 adds typed construction primitives and a deterministic AXML encoder with explicit parent identity. Only `documents` contributes the exact package queries `com.jarvys.agent` and `com.jarvys.agent.recoverytest`; all other extra construction nodes remain host fixtures. No generated-app components or permissions are added; arbitrary nodes/resources and complete F0a remain gated. See [the packaging contract](../../APK_FACTORY.md#closed-capability-and-manifest-contract-ux42-f0a-1).
+The factory uses a closed immutable ManifestPlan and a separate read-only AXML auditor to validate the actual compiled tree, typed attributes, resource bindings and backup rules before/after packaging and signing. All 16,384 selections request zero Android permissions; only the existing launcher is exported. Every classes*.dex name/hash and all signed payload entries are checked. F0a-2 adds typed construction primitives and a deterministic AXML encoder with explicit parent identity. Any of `documents`, `browser`, `maps`, `phone`, `email` or `sms` contributes the exact package queries `com.jarvys.agent` and `com.jarvys.agent.recoverytest`; all other extra construction nodes remain host fixtures. No generated-app components or permissions are added; arbitrary nodes/resources and complete F0a remain gated. See [the packaging contract](../../APK_FACTORY.md#closed-capability-and-manifest-contract-ux42-f0a-1).
 
 F0a-3 additionally verifies the complete resource-table structure and symbol identities, required compiled icon/backup files, and actual public concrete launcher/component-factory DEX class definitions with their superclass and constructor. Immutable inspect evidence identifies the verified bindings. DEX metadata integrity checks do not replace template authentication or Android bytecode/launch acceptance. Signing discloses additions/removals against an anchored last-signed scope snapshot, or explicitly says the baseline is unavailable for older records. Those F0a-3 checks do not themselves change runtime capabilities; the additive v67 SDK is described below.
 
@@ -272,3 +272,39 @@ Metadata distinguishes external recipient network use from the embedded WebView 
 Generated apps keep zero permissions and the existing exact two-host queries. Rebuild old generated
 APKs to gain this runtime. Complete grammar, recovery and physical limits:
 [APK_FACTORY](../../APK_FACTORY.md#typed-maps-and-dialer-launch-ux42-f1-v72).
+
+
+### Email/SMS editors, v73
+
+`Jarvys.email.compose({to,subject,body})` requires only email;
+`Jarvys.sms.compose({number,body})` requires only sms. Exact required string fields; subject/body
+may be empty. One conservative ASCII email address (<=254 characters): local part <=64,
+`[A-Za-z0-9_+\-]+(\.[A-Za-z0-9_+\-]+)*`; domain >=2 labels, <=253 total, each 1–63
+letters/digits/hyphens with alphanumeric ends. SMS number is optional + and 1–15 ASCII digits.
+No normalization or existence guarantee. Subject <=256 code points/1024 UTF-8 bytes; body <=4096
+UTF-8 bytes. Valid paired Unicode only; reject ISO controls, format/bidi and line/paragraph
+separators, except LF/TAB in body. CR is rejected. Editor argument JSON <=32768 bytes; maps/dialer
+stay <=8192. No CC/BCC, attachments, recipient lists, supplied URI/extras or contacts access.
+
+The v72 closed broker constructs ACTION_SENDTO mailto/smsto only. Email local part is encoded
+once (including + as %2B), with fixed EXTRA_SUBJECT/EXTRA_TEXT; SMS uses fixed sms_body. No URI
+query carries editor text and no implicit/ACTION_SEND fallback exists. Same exact latest signed
+APK, pinned host and selected recipient verification, no new permissions, zero-permission generated
+apps and two exact host queries. Native human review shows full labelled fields and chosen app;
+FLAG_SECURE, no saved view state/autofill descendants/content capture and durable automation guard
+remain required. Opening shares fields: recipient apps may ignore/change them, sync drafts or
+transmit data using their own accounts/network. Jarvys does not press Send or control those apps.
+
+Five-minute expiry, lifecycle/source revocation, durable consumed launch/no replay and manual
+external-task closure followed by native acknowledgment remain mandatory. Settings → External
+action review recovers unknown outcomes; closure is user-declared, never OS-verified. Receipt
+`{launchRequested,actionConfirmed:false}` confirms only dispatch acceptance, never display,
+draft saving, sending or delivery. Cancellation cannot retract data or dismiss recipients.
+Preview returns UNAVAILABLE; documents.cancel remains unrelated.
+
+runtime.info adds emailRequires/smsRequires, externalEditorsMaySyncDrafts:true and unavailable
+preview methods/capabilities. Limits: emailAddressCharacters=254, editorSubjectCodePoints=256,
+editorSubjectBytes=1024, editorBodyBytes=4096, editorArgumentsBytes=32768. Offline still means only
+the embedded WebView. Physical editor acceptance, transmission and installation are unproven.
+TTS/voice and remaining F1 pending; F2/F3 closed, UX34 gated, UX44 documentation-only future defaults,
+UX43 last. Full contract and official sources: [APK_FACTORY](../../APK_FACTORY.md#email-and-sms-editors-ux42-f1-v73).

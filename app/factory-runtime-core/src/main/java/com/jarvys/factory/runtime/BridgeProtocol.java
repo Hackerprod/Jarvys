@@ -57,7 +57,7 @@ public final class BridgeProtocol {
                     if (!mime.equals("text/plain") && !mime.equals("text/markdown") && !mime.equals("application/json") && !mime.equals("text/csv"))
                         throw new FactoryException("INVALID_ARGUMENT", "Unsupported text export format.");
                     break;
-                case MAPS_OPEN: case PHONE_DIAL:
+                case MAPS_OPEN: case PHONE_DIAL: case EMAIL_COMPOSE: case SMS_COMPOSE:
                     ExternalLaunchRequest.parse(method, args.toString());
                     break;
                 case BROWSER_OPEN:

@@ -223,4 +223,41 @@ public class FactoryRuntimeExternalLaunchTest {
         assertEquals("EXTERNAL_UNAVAILABLE",reply.error());assertEquals(1,reply.count);
     }
 
+    private JSONObject editorArgs(String capability) throws Exception {
+        return capability.equals("email") ? new JSONObject().put("to", "fixture+tag@example.invalid").put("subject", "Subject").put("body", "Line 1\nLine 2")
+                : new JSONObject().put("number", "+00123").put("body", "SMS fixture");
+    }
+    @Test public void editorsUseOnlyExactPinnedNativeReviewAndNeverReturnDeliveryClaims() throws Exception {
+        for (String capability : new String[]{"email", "sms"}) {
+            setCapabilities("[\"" + capability + "\"]");
+            JSONObject args = editorArgs(capability); Response response = request(capability + ".compose", args); idle();
+            assertEquals(capability + ".compose", screen.launched.getStringExtra("method"));
+            assertEquals(args.toString(), screen.launched.getStringExtra("args"));
+            assertEquals("com.jarvys.agent.apkfactory.FactoryExternalActionActivity", screen.launched.getComponent().getClassName());
+            assertNull(screen.launched.getData()); assertNull(screen.launched.getAction()); assertNull(screen.launched.getClipData());
+            assertEquals(0, screen.launched.getFlags());
+            runtime.onActivityResult(47, Activity.RESULT_OK, result());
+            JSONObject receipt = response.value.getJSONObject("result");
+            assertEquals(2, receipt.length()); assertTrue(receipt.getBoolean("launchRequested")); assertFalse(receipt.getBoolean("actionConfirmed"));
+            assertFalse(receipt.has("sent")); assertFalse(receipt.has("delivered")); assertNull(work());
+        }
+    }
+    @Test public void editorQueuedAuthorityCannotSurvivePauseOrSwitchToAnotherCapability() throws Exception {
+        for (String capability : new String[]{"email", "sms"}) {
+            setCapabilities("[\"" + capability + "\"]"); screen.launched = null;
+            Response response = request(capability + ".compose", editorArgs(capability)); runtime.onPause(); idle();
+            assertEquals("CANCELLED", response.error()); assertNull(screen.launched); assertNull(work()); runtime.onResume();
+            String other = capability.equals("email") ? "sms" : "email";
+            assertEquals("CAPABILITY_DENIED", request(other + ".compose", editorArgs(other)).error());
+        }
+    }
+    @Test public void editorCancellationKeepsLaunchedOwnerAndRejectsForgedCompletion() throws Exception {
+        setCapabilities("[\"email\"]"); Response response = request("email.compose", editorArgs("email")); idle();
+        CountDownLatch cancelled = new CountDownLatch(1); ExternalLaunchControl.Registration registration = register(cancelled);
+        runtime.reset(); assertTrue(cancelled.await(5, TimeUnit.SECONDS)); assertNotNull(work());
+        assertEquals("BUSY", request("email.compose", editorArgs("email")).error());
+        runtime.onActivityResult(47, Activity.RESULT_OK, result().putExtra("sent", true));
+        assertNull(response.value); assertNull(work()); registration.close();
+    }
+
 }

@@ -1393,14 +1393,18 @@ Their exit results are unknown. Do not repeat them automatically. Review project
     <string name="factory_browser_unknown">Interrupted, expired or uncertain outcome. Never retried automatically. Close any external browser screen or task yourself, then confirm below. Your confirmation is not independent proof of browser closure.</string>
     <string name="factory_browser_attempted">This one-shot authorization has been consumed. A launch request does not prove that a browser rendered, a page loaded or data was delivered. Close the external browser screen or task yourself before finishing.</string>
     <string name="factory_browser_unavailable">No compatible browser is available, or this review was interrupted. No implicit fallback or automatic retry.</string>
-    <string name="factory_external_launch_title">Maps and dialer review</string>
-    <string name="factory_external_launch_settings_summary">Review or recover a pending maps or dialer launch.</string>
-    <string name="factory_external_launch_disclosure">Review the complete location, query or number and choose the exact receiving app. The selected app receives these data and may use its own network, accounts and history. Maps only requests a location display; phone only requests a dialer screen (ACTION_DIAL), never automatic calling. External app behavior is outside Jarvys control. Jarvys does not read device location for this request. External apps may use their existing permissions. This request does not confirm display, navigation, a call or delivery. Do not submit secrets. After attempting a launch, manually close the external screen/task before acknowledging closure here. Closure is your declaration, not independently verified.</string>
+    <string name="factory_external_launch_title">External action review</string>
+    <string name="factory_external_launch_settings_summary">Review or recover a pending map, dialer, email or SMS editor launch.</string>
+    <string name="factory_external_launch_disclosure">Review the complete data and choose the exact receiving app. Opening shares these fields with that app, which may use its network, accounts, history, existing permissions and cloud draft sync. Maps requests a location display; phone requests a dialer (ACTION_DIAL); email and SMS request an editor (ACTION_SENDTO). Jarvys never presses Send or calls automatically. The external app may ignore or change the fields and may transmit or save them; its behavior is outside Jarvys control. Jarvys reads no location or contacts for this request. Opening does not confirm display, navigation, calling, draft saving, sending or delivery. Do not submit secrets. After a launch attempt, manually close the external screen/task before acknowledging closure here. Closure is your declaration, not independently verified.</string>
     <string name="factory_external_launch_open">Open selected app</string>
     <string name="factory_external_launch_close">Cancel review</string>
     <string name="factory_external_launch_recover">I closed the external screen/task; close review</string>
     <string name="factory_external_launch_checking">Checking exact app identities. Please wait.</string>
     <string name="factory_external_launch_unknown">The previous outcome is unknown. No launch will be repeated. Close the external screen/task yourself before acknowledging recovery.</string>
-    <string name="factory_external_launch_attempted">Launch authority has been consumed. Display, navigation and calling remain unconfirmed. Manually close the external screen/task before acknowledging closure.</string>
+    <string name="factory_external_launch_attempted">Launch authority has been consumed. Display, navigation, calling, draft saving, sending and delivery remain unconfirmed. Manually close the external screen/task before acknowledging closure.</string>
     <string name="factory_external_launch_unavailable">This request or recipient is unavailable, changed or revoked. Nothing will be retried automatically.</string>
+    <string name="factory_external_editor_recipient">Recipient</string>
+    <string name="factory_external_editor_subject">Subject</string>
+    <string name="factory_external_editor_body">Body</string>
+    <string name="factory_external_editor_empty">(empty)</string>
 </resources>

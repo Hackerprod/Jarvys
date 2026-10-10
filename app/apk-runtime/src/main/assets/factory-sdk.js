@@ -52,7 +52,7 @@
         payload = JSON.stringify({ v: 1, id: id, method: method, args: args });
         if (new TextEncoder().encode(payload).length > MAX_MESSAGE_BYTES) throw failure('TOO_LARGE', 'Native request exceeds 512 KiB.');
       } catch (error) { reject(error.code ? error : failure('INVALID_ARGUMENT', 'Arguments must be serializable JSON.')); return; }
-      var timeout = /^(export|clipboard|share)\./.test(method) || /^(documents\.(open|create)|photos\.(pick|capture)|audio\.play|browser\.open|maps\.open|phone\.dial)$/.test(method) ? 600000 : 30000;
+      var timeout = /^(export|clipboard|share)\./.test(method) || /^(documents\.(open|create)|photos\.(pick|capture)|audio\.play|browser\.open|maps\.open|phone\.dial|email\.compose|sms\.compose)$/.test(method) ? 600000 : 30000;
       var timer = global.setTimeout(function () {
         if (!pending.has(id)) return;
         pending.delete(id);
@@ -76,6 +76,8 @@
     }),
     maps: Object.freeze({ open: function (options) { return call('maps.open', options); } }),
     phone: Object.freeze({ dial: function (options) { return call('phone.dial', options); } }),
+    email: Object.freeze({ compose: function (options) { return call('email.compose', options); } }),
+    sms: Object.freeze({ compose: function (options) { return call('sms.compose', options); } }),
     browser: Object.freeze({ open: function (options) { return call('browser.open', options); } }),
     audio: Object.freeze({ play: function (options) { return call('audio.play', options); } }),
     photos: Object.freeze({
