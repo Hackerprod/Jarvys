@@ -59,6 +59,8 @@ public final class FactoryRuntime implements AutoCloseable {
     private static final int PHOTO_REQUEST = 44;
     private static final int AUDIO_REQUEST = 45;
     private static final int BROWSER_REQUEST = 46;
+    private static final int EXTERNAL_REQUEST = 47;
+    private static final long EXTERNAL_LIFETIME_MS = 300000;
     private static final long BROWSER_LIFETIME_MS = 300000;
     private static final int MAX_PENDING = 16;
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -81,6 +83,7 @@ public final class FactoryRuntime implements AutoCloseable {
     private volatile FileShare fileShare;
     private volatile AudioPlayback audioPlayback;
     private volatile BrowserOpen browserOpen;
+    private volatile ExternalLaunch externalLaunch;
     private volatile PhotoSelection photoSelection;
     private static final java.util.concurrent.Semaphore PHOTO_ADMISSION = new java.util.concurrent.Semaphore(1);
     private static final ThreadPoolExecutor PHOTO_IO = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
@@ -185,6 +188,7 @@ public final class FactoryRuntime implements AutoCloseable {
         documents.revokeAll(); documents = new DocumentHandles();
         cancelDocumentSelection(); cancelFileShare(); cancelPhotoSelection(); cancelAudioPlayback();
         cancelBrowserOpen(browserOpen, "CANCELLED", "Browser launch authority ended. A browser already opened may remain open.");
+        cancelExternalLaunch(externalLaunch, "CANCELLED", "External launch authority ended. An external application already opened may remain open.");
         // Keep an outstanding picker tombstone until its callback: request code 41 must never
         // attach an old result to a new page's export request.
         if (export != null) export.text = null;
@@ -371,6 +375,8 @@ public final class FactoryRuntime implements AutoCloseable {
         switch (request.operation) {
             case PHOTOS_PICK: case PHOTOS_CAPTURE:
                 openPhoto(request, reply); break;
+            case MAPS_OPEN: case PHONE_DIAL:
+                openExternalLaunch(request, reply); break;
             case BROWSER_OPEN:
                 openBrowser(request, reply); break;
             case AUDIO_PLAY:
@@ -455,13 +461,20 @@ public final class FactoryRuntime implements AutoCloseable {
     }
 
     private boolean claimUi(Reply reply) {
-        if (uiOwner != null || export != null || documentSelection != null || fileShare != null || photoSelection != null || audioPlayback != null || browserOpen != null || !activity.hasWindowFocus() || activity.isFinishing()) {
+        if (uiOwner != null || export != null || documentSelection != null || fileShare != null || photoSelection != null || audioPlayback != null || browserOpen != null || externalLaunch != null || !activity.hasWindowFocus() || activity.isFinishing()) {
             reply.fail("BUSY", "Another native prompt is open, or the application is not in the foreground."); return false;
         }
         uiOwner = reply; return true;
     }
 
     public void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == EXTERNAL_REQUEST) {
+            ExternalLaunch work = externalLaunch;
+            if (work == null || work.returned) return;
+            work.returned = true; work.resultCode = resultCode; work.result = data;
+            if (documentForeground) finishExternalLaunch(work);
+            return;
+        }
         if (requestCode == BROWSER_REQUEST) {
             BrowserOpen work = browserOpen;
             if (work == null || work.returned) return;
@@ -530,6 +543,9 @@ public final class FactoryRuntime implements AutoCloseable {
     /** Pause always revokes existing handles. The external broker alone may retain a picker tombstone. */
     public void onPause() {
         documentForeground = false;
+        ExternalLaunch external = externalLaunch;
+        if (external != null && (!external.launched || external.returned))
+            cancelExternalLaunch(external, "CANCELLED", "External launch authority ended in background. An external application already opened may remain open.");
         BrowserOpen browser = browserOpen;
         if (browser != null && (!browser.launched || browser.returned))
             cancelBrowserOpen(browser, "CANCELLED", "Browser launch authority ended in background. A browser already opened may remain open.");
@@ -549,6 +565,8 @@ public final class FactoryRuntime implements AutoCloseable {
     }
     public void onResume() {
         documentForeground = true;
+        ExternalLaunch external = externalLaunch;
+        if (external != null && external.returned) finishExternalLaunch(external);
         BrowserOpen browser = browserOpen;
         if (browser != null && browser.returned) finishBrowserOpen(browser);
         PhotoSelection photo=photoSelection;
@@ -916,6 +934,107 @@ public final class FactoryRuntime implements AutoCloseable {
             work.reply.ok(new JSONObject().put("launchRequested", extras.getBoolean("launchRequested")).put("pageLoadConfirmed", false));
         } catch (Exception denied) {
             work.reply.fail("BROWSER_UNAVAILABLE", "The browser outcome is unavailable. A launch request never proves page loading.");
+        }
+    }
+
+    private static final class ExternalLaunch {
+        final Reply reply;
+        final String nonce, method, args;
+        final long expiresAt;
+        ExternalLaunchControl control;
+        Runnable expiration;
+        boolean cancelled, launched, returned;
+        int resultCode;
+        Intent result;
+        ExternalLaunch(Reply reply, String nonce, String method, String args) {
+            this.reply = reply; this.nonce = nonce; this.method = method; this.args = args;
+            this.expiresAt = SystemClock.elapsedRealtime() + EXTERNAL_LIFETIME_MS;
+        }
+    }
+    private void openExternalLaunch(BridgeProtocol.Request request, Reply reply) throws Exception {
+        if (!documentForeground || destroyed || activity.isFinishing() || !host.isActive())
+            throw new FactoryException("UNAVAILABLE", "External actions require the foreground application.");
+        final String argsJson = request.args.toString();
+        ExternalLaunchRequest.parse(request.method, argsJson);
+        DocumentBrokerIdentity.verify(activity, config.documentBroker);
+        final int hostUid = activity.getPackageManager().getApplicationInfo(config.documentBroker.packageName, 0).uid;
+        String[] packages = activity.getPackageManager().getPackagesForUid(hostUid);
+        if (packages == null || packages.length != 1 || !packages[0].equals(config.documentBroker.packageName))
+            throw new FactoryException("UNAVAILABLE", "The external action host has an ambiguous UID.");
+        ExternalLaunchControl.HostVerifier verifiedHost = uid -> {
+            if (uid != hostUid) return false;
+            try {
+                DocumentBrokerIdentity.verify(activity, config.documentBroker);
+                String[] current = activity.getPackageManager().getPackagesForUid(uid);
+                return current != null && current.length == 1 && current[0].equals(config.documentBroker.packageName)
+                        && activity.getPackageManager().getApplicationInfo(config.documentBroker.packageName, 0).uid == uid;
+            } catch (Exception denied) { return false; }
+        };
+        byte[] random = new byte[32]; new java.security.SecureRandom().nextBytes(random);
+        StringBuilder nonce = new StringBuilder();
+        for (byte b : random) nonce.append(String.format(java.util.Locale.ROOT, "%02x", b & 255));
+        if (!claimUi(reply)) return;
+        ExternalLaunch work = new ExternalLaunch(reply, nonce.toString(), request.method, argsJson);
+        work.control = new ExternalLaunchControl(work.nonce, verifiedHost);
+        work.expiration = () -> cancelExternalLaunch(work, "TIMEOUT",
+                "External action review expired. Launch and action completion are unconfirmed; close the native flow and external application yourself.");
+        externalLaunch = work;
+        main.postDelayed(work.expiration, EXTERNAL_LIFETIME_MS);
+        // A queued handoff has no authority after pause/reload/expiry, even before host registration.
+        main.post(() -> {
+            if (externalLaunch != work) return;
+            if (work.cancelled || !documentForeground || !reply.current() || SystemClock.elapsedRealtime() >= work.expiresAt) {
+                cancelExternalLaunch(work, "CANCELLED", "External action launch authority ended before native review."); return;
+            }
+            try {
+                if (!verifiedHost.allowed(hostUid)) throw new FactoryException("UNAVAILABLE", "The matching external action host changed.");
+                android.os.Bundle extras = new android.os.Bundle();
+                extras.putInt("protocolVersion", 1); extras.putString("nonce", work.nonce); extras.putString("method", work.method); extras.putString("args", work.args);
+                extras.putBinder("control", work.control);
+                Intent intent = new Intent().setComponent(new android.content.ComponentName(config.documentBroker.packageName,
+                        "com.jarvys.agent.apkfactory.FactoryExternalLaunchActivity")).putExtras(extras);
+                work.launched = true;
+                activity.startActivityForResult(intent, EXTERNAL_REQUEST);
+            } catch (Exception unavailable) {
+                work.launched = false;
+                cancelExternalLaunch(work, "EXTERNAL_UNAVAILABLE", "The matching native external action review could not open.");
+            }
+        });
+    }
+    private void cancelExternalLaunch(ExternalLaunch work, String code, String message) {
+        if (work == null || externalLaunch != work) return;
+        work.cancelled = true;
+        work.control.cancel();
+        main.removeCallbacks(work.expiration);
+        work.reply.fail(code, message);
+        // A launched host owns its durable human-only guard until explicit manual closure.
+        // Cancellation does not prove launch prevention, action completion or external application closure.
+        if (!work.launched) {
+            externalLaunch = null;
+            if (uiOwner == work.reply) uiOwner = null;
+        }
+    }
+    private void finishExternalLaunch(ExternalLaunch work) {
+        if (externalLaunch != work) return;
+        if (SystemClock.elapsedRealtime() >= work.expiresAt)
+            cancelExternalLaunch(work, "TIMEOUT", "External action review expired. Launch and action completion remain unconfirmed.");
+        externalLaunch = null; main.removeCallbacks(work.expiration); work.control.close();
+        if (uiOwner == work.reply) uiOwner = null;
+        if (work.cancelled || !work.reply.current()) return;
+        try {
+            DocumentBrokerIdentity.verify(activity, config.documentBroker);
+            Intent result = work.result;
+            if (work.resultCode != Activity.RESULT_OK || result == null || result.getData() != null || result.getClipData() != null
+                    || result.getSelector() != null || result.getFlags() != 0 || result.getAction() != null
+                    || result.getComponent() != null || result.getPackage() != null || result.getType() != null
+                    || result.getCategories() != null) throw new IllegalArgumentException();
+            android.os.Bundle extras = result.getExtras();
+            if (extras == null || !extras.keySet().equals(new java.util.HashSet<>(java.util.Arrays.asList("nonce", "launchRequested", "actionConfirmed")))
+                    || !work.nonce.equals(extras.get("nonce")) || !(extras.get("launchRequested") instanceof Boolean)
+                    || !Boolean.FALSE.equals(extras.get("actionConfirmed"))) throw new IllegalArgumentException();
+            work.reply.ok(new JSONObject().put("launchRequested", extras.getBoolean("launchRequested")).put("actionConfirmed", false));
+        } catch (Exception denied) {
+            work.reply.fail("EXTERNAL_UNAVAILABLE", "The external action outcome is unavailable. A launch request never proves action completion.");
         }
     }
 

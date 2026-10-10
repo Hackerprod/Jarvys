@@ -224,14 +224,14 @@ public class FactoryDispatcherTest {
         }
     }
 
-    @Test public void all1024CapabilityPlansKeepZeroPermissionsAndDeduplicateHostVisibility() {
-        assertEquals(10, CapabilityCatalog.NAMES.size()); assertEquals(21, CapabilityCatalog.METHODS.size());
-        for (int mask = 0; mask < 1024; mask++) {
+    @Test public void all4096CapabilityPlansKeepZeroPermissionsAndDeduplicateHostVisibility() {
+        assertEquals(12, CapabilityCatalog.NAMES.size()); assertEquals(23, CapabilityCatalog.METHODS.size());
+        for (int mask = 0; mask < 4096; mask++) {
             java.util.List<String> selected = new java.util.ArrayList<>();
-            for (int bit = 0; bit < 10; bit++) if ((mask & (1 << bit)) != 0) selected.add(CapabilityCatalog.NAMES.get(bit));
+            for (int bit = 0; bit < 12; bit++) if ((mask & (1 << bit)) != 0) selected.add(CapabilityCatalog.NAMES.get(bit));
             com.jarvys.factory.contract.ManifestPlan plan = new com.jarvys.factory.contract.ManifestPlan(
                     "com.example.browser", "Browser fixture", 1, "1.0", 0x7f010001, 0x7f020001, selected);
-            boolean host = selected.contains("browser") || selected.contains("documents");
+            boolean host = selected.contains("browser") || selected.contains("documents") || selected.contains("maps") || selected.contains("phone");
             assertTrue(plan.permissions.isEmpty()); assertTrue(plan.features.isEmpty()); assertTrue(plan.hosts.isEmpty());
             assertEquals(java.util.Collections.singletonList(com.jarvys.factory.contract.ManifestPlan.ACTIVITY), plan.exportedComponents);
             assertEquals(host ? 2 : 0, plan.queries.size());
@@ -243,6 +243,37 @@ public class FactoryDispatcherTest {
                 assertTrue(capability.permissions.isEmpty()); assertTrue(capability.components.isEmpty());
                 assertTrue(capability.dependencies.isEmpty()); assertTrue(capability.features.isEmpty());
             }
+        }
+    }
+
+    @Test public void mapsAndPhoneHaveIndependentInstalledDispatchAndHonestUnavailablePreviewMetadata() throws Exception {
+        for(String method:Arrays.asList("maps.open","phone.dial")) {
+            String capability=method.startsWith("maps")?"maps":"phone";
+            FactoryConfig config=FactoryConfig.parsePreview(configuration("[\""+capability+"\"]"));
+            JSONObject args=method.startsWith("maps")?new JSONObject().put("query","Synthetic map fixture"):new JSONObject().put("number","+15550100");
+            BridgeProtocol.Request call=request(method,args,config);
+            BoundedStore store=new BoundedStore(new MemoryBackend());
+            FactoryException denied=assertThrows(FactoryException.class,()->FactoryDispatcher.dispatch(call,config,store,FactoryDispatcher.previewMetadata("host",35,35),FactoryDispatcher.simulatedEffects()));
+            assertEquals("UNAVAILABLE",denied.code);
+            assertEquals("adapter",FactoryDispatcher.dispatch(call,config,store,FactoryDispatcher.metadata("installed","app",35,35),(operation,value)->{
+                assertEquals(method,operation.wireName);assertEquals(args.toString(),value.toString());return "adapter";
+            }));
+            JSONObject info=(JSONObject)FactoryDispatcher.dispatch(request("runtime.info",new JSONObject(),config),config,store,
+                    FactoryDispatcher.previewMetadata("host",35,35),FactoryDispatcher.simulatedEffects());
+            assertEquals("embedded_webview",info.getString("offlineScope"));assertTrue(info.getBoolean("externalRecipientsMayUseNetwork"));
+            assertFalse(info.getBoolean("externalActionConfirmed"));assertTrue(info.getBoolean("externalLaunchBrokerRequired"));
+            assertEquals(1,info.getInt("externalLaunchProtocolVersion"));
+            assertEquals("[\"maps\"]",info.getJSONArray("mapsRequires").toString());
+            assertEquals("[\"phone\"]",info.getJSONArray("phoneRequires").toString());
+            assertTrue(info.getJSONArray("unavailableMethods").toString().contains(method));
+            assertTrue(info.getJSONArray("unavailableCapabilities").toString().contains(capability));
+            assertEquals(300000,info.getJSONObject("limits").getInt("externalLaunchLifetimeMs"));
+            assertEquals(256,info.getJSONObject("limits").getInt("mapsQueryCodePoints"));
+            assertEquals(1024,info.getJSONObject("limits").getInt("mapsQueryBytes"));
+            assertEquals(15,info.getJSONObject("limits").getInt("phoneDigits"));
+            call.args.put("flags",0);
+            FactoryException mutated=assertThrows(FactoryException.class,()->FactoryDispatcher.dispatch(call,config,store,FactoryDispatcher.metadata("installed","app",35,35),(op,value)->{throw new AssertionError("effect called");}));
+            assertEquals("INVALID_ARGUMENT",mutated.code);
         }
     }
 

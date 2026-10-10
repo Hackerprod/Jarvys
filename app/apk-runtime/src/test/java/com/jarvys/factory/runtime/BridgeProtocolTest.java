@@ -34,6 +34,8 @@ public class BridgeProtocolTest {
             {"documents.close", "{\"handle\":\""+HANDLE+"\"}"}, {"documents.cancel", "{}"},
             {"photos.pick", "{}"}, {"photos.capture", "{}"},
             {"audio.play", "{\"handle\":\""+HANDLE+"\"}"},
+            {"maps.open", "{\"query\":\"Synthetic map fixture\"}"},
+            {"phone.dial", "{\"number\":\"+15550100\"}"},
             {"browser.open", "{\"url\":\"https://example.com/review?fixture=1\"}"},
             {"share.file", "{\"handle\":\""+HANDLE+"\",\"filename\":\"file.bin\",\"mimeType\":\"application/octet-stream\"}"}};
         for (String[] call : methods) rejected("CAPABILITY_DENIED", BridgeProtocol.ORIGIN, true, request(call[0], call[1]), empty);
@@ -87,10 +89,12 @@ public class BridgeProtocolTest {
             {"documents.close", "{\"handle\":\""+HANDLE+"\"}"}, {"documents.cancel", "{}"},
             {"photos.pick", "{}"}, {"photos.capture", "{}"},
             {"audio.play", "{\"handle\":\""+HANDLE+"\"}"},
+            {"maps.open", "{\"query\":\"Synthetic map fixture\"}"},
+            {"phone.dial", "{\"number\":\"+15550100\"}"},
             {"browser.open", "{\"url\":\"https://example.com/review?fixture=1\"}"},
             {"share.file", "{\"handle\":\""+HANDLE+"\",\"filename\":\"file.bin\",\"mimeType\":\"application/octet-stream\"}"}};
-        assertEquals(21, calls.length);
-        assertEquals(10, com.jarvys.factory.contract.CapabilityCatalog.NAMES.size());
+        assertEquals(23, calls.length);
+        assertEquals(12, com.jarvys.factory.contract.CapabilityCatalog.NAMES.size());
         assertEquals(com.jarvys.factory.contract.CapabilityCatalog.METHODS.size(), calls.length);
         for (int mask = 0; mask < (1 << com.jarvys.factory.contract.CapabilityCatalog.NAMES.size()); mask++) {
             org.json.JSONArray declared = new org.json.JSONArray();

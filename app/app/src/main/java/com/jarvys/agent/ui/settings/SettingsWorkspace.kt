@@ -226,6 +226,11 @@ private fun SettingsIndex(
             stringResource(R.string.factory_browser_settings_summary),
             { context.startActivity(com.jarvys.agent.apkfactory.FactoryBrowserCoordinator.recoveryIntent(context)) },
             testTag = "settings-factory-browser-row")
+        SettingsRule()
+        SettingsIndexRow(LucideIcons.Boxes, stringResource(R.string.factory_external_launch_title),
+            stringResource(R.string.factory_external_launch_settings_summary),
+            { context.startActivity(com.jarvys.agent.apkfactory.FactoryExternalLaunchCoordinator.recoveryIntent(context)) },
+            testTag = "settings-factory-external-launch-row")
     }
 }
 

@@ -61,13 +61,13 @@ class FactorySpecTest {
         val value=FactorySpec.parse(spec().put("capabilities",JSONArray()))
         assertTrue(value.capabilities.isEmpty())
     }
-    @Test fun all1024SelectionsUseImmutableCatalogWithoutImpliedCapabilities() {
-        assertEquals(10, FactorySpec.CAPABILITIES.size)
-        for (mask in 0 until 1024) {
+    @Test fun all4096SelectionsUseImmutableCatalogWithoutImpliedCapabilities() {
+        assertEquals(12, FactorySpec.CAPABILITIES.size)
+        for (mask in 0 until 4096) {
             val selected = FactorySpec.CAPABILITIES.filterIndexed { bit, _ -> mask and (1 shl bit) != 0 }
             val value = FactorySpec.parse(spec().put("capabilities", JSONArray(selected.reversed())))
             assertEquals(selected.sorted(), value.capabilities)
-            assertEquals(1, JSONObject(String(value.runtimeConfig(if ("documents" in selected || "browser" in selected) broker() else null))).getInt("schemaVersion"))
+            assertEquals(1, JSONObject(String(value.runtimeConfig(if ("documents" in selected || "browser" in selected || "maps" in selected || "phone" in selected) broker() else null))).getInt("schemaVersion"))
             for (name in selected) {
                 val capability = com.jarvys.factory.contract.CapabilityCatalog.CAPABILITIES[name]!!
                 assertTrue(capability.permissions.isEmpty())
@@ -82,6 +82,17 @@ class FactorySpecTest {
         }
     }
 
+    @Test fun mapsAndPhoneOnlyGeneratedConfigPinsHostAndKeepsCapabilitiesIndependent() {
+        for (capability in listOf("maps", "phone")) {
+            val typed = FactorySpec.parse(spec().put("capabilities", JSONArray(listOf(capability))))
+            assertThrows(Exception::class.java) { typed.runtimeConfig() }
+            val configBytes = typed.runtimeConfig(broker())
+            val parsed = com.jarvys.factory.runtime.FactoryConfig.parse(String(configBytes), typed.appId)
+            assertEquals(setOf(capability), parsed.capabilities)
+            assertEquals("com.jarvys.agent", parsed.documentBroker.packageName)
+            assertEquals("a".repeat(64), parsed.documentBroker.certificateSha256)
+        }
+    }
     private fun broker() = JSONObject().put("packageName","com.jarvys.agent").put("certificateSha256","a".repeat(64))
     @Test fun documentBrokerIsBuildOwnedAndCannotBeDeclaredInProjectSpec() {
         rejects { it.put("documentBroker",broker()) }

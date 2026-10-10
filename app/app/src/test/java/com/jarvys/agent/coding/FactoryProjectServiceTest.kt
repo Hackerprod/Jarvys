@@ -91,6 +91,37 @@ class FactoryProjectServiceTest {
             .put("webDir","web").put("icon","icon.json").toString())}
         fun build(path:String="notes.apk")=service.build("factory.json",path,scope.version(),CancellationToken.cancellable())
     }
+    @Test fun mapsAndPhoneOnlyBuildsEmbedVerifiedHostPinsAndNoPermissions() {
+        for (capability in listOf("maps", "phone")) {
+            val f = Fixture()
+            val packageManager = f.context.packageManager
+            val own = packageManager.getPackageInfo(f.context.packageName, android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES)
+            val originalSigning = own.signingInfo
+            val synthetic = android.content.pm.Signature(byteArrayOf(7, 12, 24, 42))
+            own.signingInfo = android.content.pm.SigningInfo().also {
+                org.robolectric.shadow.api.Shadow.extract<org.robolectric.shadows.ShadowSigningInfo>(it).setSignatures(arrayOf(synthetic))
+            }
+            org.robolectric.Shadows.shadowOf(packageManager).installPackage(own)
+            try {
+                f.spec("org.example.typed$capability", 1, listOf(capability))
+                f.build()
+                ZipFile(File(f.root, "notes.apk")).use { zip ->
+                    val configText = zip.getInputStream(zip.getEntry("assets/factory-app.json")).bufferedReader().use { it.readText() }
+                    val config = com.jarvys.factory.runtime.FactoryConfig.parse(configText, "org.example.typed$capability")
+                    assertEquals(setOf(capability), config.capabilities)
+                    assertEquals(f.context.packageName, config.documentBroker.packageName)
+                    assertEquals(ProjectScope.sha256(synthetic.toByteArray()), config.documentBroker.certificateSha256)
+                }
+                val manifest = TemplateApk.inspect(File(f.root, "notes.apk").readBytes())
+                assertTrue(manifest.permissions.isEmpty())
+                assertEquals(listOf("com.jarvys.agent", "com.jarvys.agent.recoverytest"), manifest.plan.queries)
+                assertEquals(0, f.requested); assertEquals(0, f.obtained)
+            } finally {
+                own.signingInfo = originalSigning
+                org.robolectric.Shadows.shadowOf(packageManager).installPackage(own)
+            }
+        }
+    }
     @Test fun installationRejectsUnsignedBuildWithoutApprovalOrSession() {
         val f = Fixture(); val built = f.build()
         assertThrows(Exception::class.java) { f.service.installation("install", "notes.apk", built.getString("sha256"), f.scope.version(), CancellationToken.cancellable()) }

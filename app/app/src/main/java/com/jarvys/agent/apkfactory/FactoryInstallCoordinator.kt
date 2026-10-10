@@ -403,6 +403,7 @@ internal class FactoryInstallCoordinator(
 class FactoryInstallApplication : Application() {
     override fun onCreate() {
         super.onCreate()
+        FactoryExternalLaunchCoordinator.get(this)
         FactoryBrowserCoordinator.get(this)
         FactoryAudioCoordinator.get(this)
         FactoryFileShareCoordinator.get(this)

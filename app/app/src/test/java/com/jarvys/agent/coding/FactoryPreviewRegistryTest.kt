@@ -151,11 +151,11 @@ class FactoryPreviewRegistryTest {
         assertEquals(1, results.size); results.single().close()
     }
     @Test fun realSharedHandlerAssertionsPassForAllAndNoCapabilitiesAndNeverExecuteJavascript() {
-        for (capabilities in listOf(emptyList(), listOf("share"), listOf("documents"), listOf("audio"), listOf("audio", "documents"), listOf("browser"), listOf("browser", "documents"), com.jarvys.factory.contract.CapabilityCatalog.NAMES)) {
+        for (capabilities in listOf(emptyList(), listOf("share"), listOf("documents"), listOf("audio"), listOf("audio", "documents"), listOf("browser"), listOf("browser", "documents"), listOf("maps"), listOf("phone"), listOf("maps", "phone"), com.jarvys.factory.contract.CapabilityCatalog.NAMES)) {
             val result = FactoryRuntimeContractTests.run(snapshot(capabilities), "com.jarvys.host", 34, 34) {}
             assertEquals("passed", result.getString("state"))
             val observations = result.getJSONArray("observations")
-            assertEquals(24, observations.length())
+            assertEquals(26, observations.length())
             val documentAssertions = (0 until observations.length()).map { observations.getJSONObject(it) }
                 .filter { it.getString("operation").startsWith("documents.") }
             assertEquals(6, documentAssertions.size)
@@ -170,6 +170,13 @@ class FactoryPreviewRegistryTest {
             val browser = (0 until observations.length()).map { observations.getJSONObject(it) }.single { it.getString("operation").startsWith("browser.open:") }
             assertEquals("browser.open:" + if ("browser" in capabilities) "preview_unavailable" else "undeclared_denied", browser.getString("operation"))
             assertEquals("passed", browser.getString("outcome"))
+            for ((capability, method) in listOf("maps" to "maps.open", "phone" to "phone.dial")) {
+                val external = (0 until observations.length()).map { observations.getJSONObject(it) }.single { it.getString("operation").startsWith("$method:") }
+                assertEquals("$method:" + if (capability in capabilities) "preview_unavailable" else "undeclared_denied", external.getString("operation"))
+                assertEquals("passed", external.getString("outcome"))
+            }
+            assertFalse(result.toString().contains("Synthetic map fixture"))
+            assertFalse(result.toString().contains("+15550100"))
             assertEquals("shared_core_test", result.getString("mode"))
             assertTrue(result.getString("evidence_limit").contains("were not tested"))
             assertFalse(result.toString().contains("factory-test"))

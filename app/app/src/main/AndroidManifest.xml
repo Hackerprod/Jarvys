@@ -25,6 +25,8 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 
     <queries>
+        <intent><action android:name="android.intent.action.VIEW" /><category android:name="android.intent.category.DEFAULT" /><data android:scheme="geo" /></intent>
+        <intent><action android:name="android.intent.action.DIAL" /><category android:name="android.intent.category.DEFAULT" /><data android:scheme="tel" /></intent>
         <intent><action android:name="android.intent.action.VIEW" /><category android:name="android.intent.category.BROWSABLE" /><data android:scheme="https" /></intent>
         <intent><action android:name="android.media.action.IMAGE_CAPTURE" /></intent>
         <intent><action android:name="android.provider.action.PICK_IMAGES" /><data android:mimeType="image/*" /></intent>
@@ -96,6 +98,7 @@
             android:grantUriPermissions="true">
             <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/factory_file_share_paths" />
         </provider>
+        <activity android:name="com.jarvys.agent.apkfactory.FactoryExternalLaunchActivity" android:exported="true" android:windowSoftInputMode="adjustResize" />
         <activity android:name="com.jarvys.agent.apkfactory.FactoryBrowserActivity" android:exported="true" android:windowSoftInputMode="adjustResize" />
         <activity android:name="com.jarvys.agent.apkfactory.FactoryAudioActivity" android:exported="true" android:windowSoftInputMode="adjustResize" />
         <activity android:name="com.jarvys.agent.apkfactory.FactoryPhotoActivity" android:exported="true" android:windowSoftInputMode="adjustResize" />

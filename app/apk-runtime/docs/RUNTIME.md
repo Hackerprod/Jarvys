@@ -250,3 +250,25 @@ control. Runtime's five-minute timer revokes pending launch authority even after
 reload/closure and control death revoke too. Expected pause during the host flow does not fabricate
 cancellation; interrupted outcomes stay uncertain, never auto-replayed. `documents.cancel` is not
 browser cancellation. Full contract and physical-acceptance limits: [APK_FACTORY](../../APK_FACTORY.md#https-browser-launch-ux42-f1-v71).
+
+
+### Maps and dialer-only launch, v72
+
+`maps.open({latitude,longitude})` or `maps.open({query})` requires only maps;
+`phone.dial({number})` requires only phone. Both require the exact build-pinned host, not documents.
+Coordinates are finite actual JSON numbers in [-90,90]/[-180,180]. Queries are nonblank,
+valid Unicode, 1–256 code points/1,024 UTF-8 bytes, without control/format/line/paragraph characters;
+accepted text is encoded once. Phone is optional + and 1–15 ASCII digits, preserved exactly.
+No supplied URI, extra keys, GPS read, CALL_PHONE, permission request or automatic call.
+
+Native human review shows complete input and chosen recipient, including external network/accounts/
+history disclosure. Constructed geo ACTION_VIEW and tel ACTION_DIAL only; no implicit fallback.
+Separate broker/recovery namespace preserves v71, sharing the durable admission/automation guard.
+Five-minute expiry, source cancellation/death, lifecycle loss and interrupted preparation cannot
+reapprove a launch. The user manually closes the external task and acknowledges closure; this is
+not OS verification. Receipt `{launchRequested,actionConfirmed:false}` proves only launch request,
+never display/navigation/calling/delivery. Preview unavailable; documents.cancel is unrelated.
+Metadata distinguishes external recipient network use from the embedded WebView offline scope.
+Generated apps keep zero permissions and the existing exact two-host queries. Rebuild old generated
+APKs to gain this runtime. Complete grammar, recovery and physical limits:
+[APK_FACTORY](../../APK_FACTORY.md#typed-maps-and-dialer-launch-ux42-f1-v72).

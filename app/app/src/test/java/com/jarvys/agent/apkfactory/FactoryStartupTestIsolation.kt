@@ -17,6 +17,11 @@ internal object FactoryStartupTestIsolation {
         // Bounded test-only backpressure avoids racing execute() against that transition.
         check(worker.queue.offer(barrier, 10, TimeUnit.SECONDS)) { "Synthetic sharing worker queue remained occupied" }
         barrier.get(10, TimeUnit.SECONDS)
+        val external = FactoryExternalLaunchCoordinator.WORKER
+        check(!external.isShutdown); external.prestartCoreThread()
+        val externalBarrier = java.util.concurrent.FutureTask(java.util.concurrent.Callable { Unit })
+        check(external.queue.offer(externalBarrier, 10, TimeUnit.SECONDS)) { "Synthetic external worker queue remained occupied" }
+        externalBarrier.get(10, TimeUnit.SECONDS)
         val browser = FactoryBrowserCoordinator.WORKER
         check(!browser.isShutdown); browser.prestartCoreThread()
         val browserBarrier = java.util.concurrent.FutureTask(java.util.concurrent.Callable { Unit })
@@ -30,6 +35,13 @@ internal object FactoryStartupTestIsolation {
     }
     fun releaseCompletedSharingStartup() {
         awaitSharingWorkerCompletion()
+        val externalSingleton = FactoryExternalLaunchCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }
+        (externalSingleton.get(null) as? FactoryExternalLaunchCoordinator)?.let { external ->
+            check(!external.isBusy() && !external.needsRecovery() && external.session() == null) { "Cannot reset a live synthetic external interaction" }
+            val externalLease = FactoryExternalLaunchCoordinator::class.java.getDeclaredField("lease").apply { isAccessible = true }
+            check(externalLease.get(external) == null) { "Cannot erase live external protection" }
+            FactoryInteractionAdmission.release(external); externalSingleton.set(null, null)
+        }
         val browserSingleton = FactoryBrowserCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }
         (browserSingleton.get(null) as? FactoryBrowserCoordinator)?.let { browser ->
             check(!browser.isBusy() && !browser.needsRecovery() && browser.session() == null) { "Cannot reset a live synthetic browser interaction" }

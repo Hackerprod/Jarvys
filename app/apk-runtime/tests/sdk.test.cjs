@@ -105,7 +105,7 @@ test('all SDK calls exactly match the catalog and explicit native validator/disp
   const path = require('node:path');
   const catalog = fs.readFileSync(path.join(__dirname, '../../factory-contract/src/main/java/com/jarvys/factory/contract/CapabilityCatalog.java'), 'utf8');
   const rows = [...catalog.matchAll(/\b([A-Z][A-Z_]+)\("([a-z]+\.[a-z]+)", (?:"[a-z]+"|null)\)/g)];
-  assert.equal(rows.length, 21);
+  assert.equal(rows.length, 23);
   const env = environment();
   const args = { 'storage.get': ['key'], 'storage.set': ['key', 'value'], 'storage.remove': ['key'],
     'export.text': [{ filename: 'test.txt', text: 'hello' }], 'share.text': [{ text: 'hello' }],
@@ -216,5 +216,37 @@ test('browser timeout/pagehide cannot be mistaken for external page confirmation
     if (event === 'timeout') env.timers.values().next().value(); else env.handlers.get('pagehide')();
     await rejected;
     env.reply(env.sent.at(-1), {launchRequested: true, pageLoadConfirmed: false});
+  }
+});
+
+test('typed maps and phone preserve options, separate frozen APIs, and human review timeout', async () => {
+  const env = environment();
+  assert.equal(Object.isFrozen(env.api.maps), true); assert.equal(Object.isFrozen(env.api.phone), true);
+  assert.deepEqual(Object.keys(env.api.maps), ['open']); assert.deepEqual(Object.keys(env.api.phone), ['dial']);
+  for (const [group, method, options] of [
+    ['maps', 'open', {latitude: -90, longitude: 180}],
+    ['maps', 'open', {query: ' Café %2F & + # 東京 😀 '}],
+    ['maps', 'open', {query: 'q', flags: 1}],
+    ['phone', 'dial', {number: '+0012345'}],
+    ['phone', 'dial', {number: '*123#', uri: 'tel:123'}]
+  ]) {
+    const pending = env.api[group][method](options); const request = env.sent.at(-1);
+    assert.equal(request.method, group + '.' + method); assert.deepEqual(request.args, options);
+    assert.equal(env.delays.at(-1), 600000);
+    env.reply(request, {launchRequested: true, actionConfirmed: false});
+    const result = await pending;
+    assert.equal(result.launchRequested, true); assert.equal(result.actionConfirmed, false);
+    assert.equal(Object.keys(result).length, 2);
+  }
+});
+
+test('typed external action timeout and pagehide stay terminal despite late launch results', async () => {
+  for (const event of ['timeout', 'pagehide']) for (const group of ['maps', 'phone']) {
+    const env = environment();
+    const pending = group === 'maps' ? env.api.maps.open({query: 'fixture'}) : env.api.phone.dial({number: '123'});
+    const rejected = assert.rejects(pending, {code: event === 'timeout' ? 'TIMEOUT' : 'PAGE_CLOSED'});
+    if (event === 'timeout') env.timers.values().next().value(); else env.handlers.get('pagehide')();
+    await rejected;
+    env.reply(env.sent.at(-1), {launchRequested: true, actionConfirmed: false});
   }
 });
