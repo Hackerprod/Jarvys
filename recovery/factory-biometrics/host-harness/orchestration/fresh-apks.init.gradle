@@ -1,5 +1,9 @@
 // Repackage all three host deliverables freshly without changing sources or signing.
 gradle.projectsEvaluated {
+    // Reconstructed ordering: these exact vital tasks also consume generated Factory assets.
+    rootProject.project(':app').tasks.matching { it.name in ['generateFullReleaseLintVitalReportModel','lintVitalAnalyzeFullRelease'] }.configureEach {
+        dependsOn(':app:prepareApkFactoryTemplate')
+    }
     rootProject.project(':app').tasks.matching { it.name in ['packageFullDebug','packagePlayDebug','packageFullRelease'] }.configureEach {
         outputs.upToDateWhen { false }
     }

@@ -14,5 +14,9 @@
   "lint_metadata_snapshot.py": "6f2f0326044c7f04b170fc4795925ab253c0dd0d60ed69206eca93e462fd6d91",
   "test_lint_metadata_snapshot.py": "8d612aa166cf81cc035f1783fe6ea8f308d45a5b6e1847580b78b265949fee4f",
   "README-LINT-METADATA.md": "e7236bc5a47b8bd9c5f1471664e91c1bfed03e916fc8d005eee1c777e44f9d90",
-  "derive_expected_scope.py": "c32271253e5ba1bc3b12f405f3857e8e89fecd3458f225b5f749ff6c9a64fee8"
+  "derive_expected_scope.py": "c32271253e5ba1bc3b12f405f3857e8e89fecd3458f225b5f749ff6c9a64fee8",
+  "reconcile_delivered_v79_template.py": "e3d8790604442297a777f9c8ba6e400d4afd41d299e3d45420a437b2082e208d",
+  "profile_payloads.py": "b9cd459984d98fae36aa4edbd8c16a68d1c0a1c70ed038506c08b4bb5bd4aef3",
+  "test_profile_payloads.py": "826e82817a045fb5bd005bd67f90314cb504958544e1374611a11b501bf33499",
+  "review_profile_payloads.py": "075a8e6a97e4d1174a279531020511bbcc4c8225c3c8f2ec99a2005f859cf7a2"
 }

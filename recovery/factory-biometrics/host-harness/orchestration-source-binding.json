@@ -20,8 +20,8 @@
   },
   "fresh-apks.init.gradle": {
     "source_relative_path": "FACTORY-BIOMETRICS-v80-validation/fresh-apks.init.gradle",
-    "source_sha256": "3a3da5c99634c07e6003265af41df7ab4da06eb9567b96a5429b6ff4a0c3ab2c",
-    "packaged_sha256": "3a3da5c99634c07e6003265af41df7ab4da06eb9567b96a5429b6ff4a0c3ab2c",
+    "source_sha256": "adbecddf8a49f61b6748e506094b6aed1cff10173cb515eb21f71f64b4f13359",
+    "packaged_sha256": "adbecddf8a49f61b6748e506094b6aed1cff10173cb515eb21f71f64b4f13359",
     "unchanged_logic": true
   },
   "library-lint.init.gradle": {
