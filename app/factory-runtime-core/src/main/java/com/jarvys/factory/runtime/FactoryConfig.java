@@ -22,13 +22,18 @@ public final class FactoryConfig {
         this.capabilities = Collections.unmodifiableSet(capabilities);
     }
     public static FactoryConfig parse(String text, String installedPackage) throws FactoryException {
+        if (installedPackage == null) throw new FactoryException("INVALID_CONFIG", "Installed identity required.");
+        return parseInternal(text, installedPackage);
+    }
+    public static FactoryConfig parsePreview(String text) throws FactoryException { return parseInternal(text, null); }
+    private static FactoryConfig parseInternal(String text, String installedPackage) throws FactoryException {
         try {
             JSONObject object = StrictJson.object(text, 8192);
             exactKeys(object, "schemaVersion", "appId", "name", "entryPoint", "capabilities");
             if (!(object.get("schemaVersion") instanceof Integer) || object.getInt("schemaVersion") != 1)
                 throw new FactoryException("INVALID_CONFIG", "Unsupported application configuration version.");
             String appId = string(object, "appId");
-            if (!appId.matches("[a-zA-Z][a-zA-Z0-9_]*(\\.[a-zA-Z][a-zA-Z0-9_]*){1,15}") || appId.length() > 160 || !appId.equals(installedPackage))
+            if (!appId.matches("[a-zA-Z][a-zA-Z0-9_]*(\\.[a-zA-Z][a-zA-Z0-9_]*){1,15}") || appId.length() > 160 || (installedPackage != null && !appId.equals(installedPackage)))
                 throw new FactoryException("INVALID_CONFIG", "Application identity does not match the installed package.");
             String name = string(object, "name");
             if (name.trim().isEmpty() || name.length() > 80 || containsControl(name))

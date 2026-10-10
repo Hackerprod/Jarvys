@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="factory_preview_reset">Reset test data</string>
+    <string name="factory_preview_close">Close preview</string>
+    <string name="factory_preview_disclosure">Factory functional preview · %1$s · v%2$d\nIsolated temporary native test data. Share, export, clipboard and haptics are simulated. Runs inside Jarvys, not as an installed app. WebView profiles may use disk; cleanup is best effort.\nAPK SHA-256: %3$s</string>
+    <string name="factory_preview_expired">Factory preview closed or unavailable. Reopen it from Coding with the current verified build. Native test data is cleared. WebView profile cleanup may remain pending; no app was installed.</string>
+</resources>

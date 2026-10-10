@@ -31,8 +31,8 @@ android {
         applicationId = if (recoveryTestBuild) "com.jarvys.agent.recoverytest" else "com.jarvys.agent"
         minSdk = 24
         targetSdk = 35
-        versionCode = 64
-        versionName = "1.2.57-MEMORYSCOPE" + if (recoveryTestBuild) "-test" else ""
+        versionCode = 65
+        versionName = "1.2.58-FACTORY-PREVIEW" + if (recoveryTestBuild) "-test" else ""
         manifestPlaceholders["jarvysApplicationLabel"] = if (recoveryTestBuild) "Jarvys Prueba" else "@string/app_name"
         manifestPlaceholders["jarvysNotificationListenerLabel"] =
             if (recoveryTestBuild) "Jarvys Prueba: notificaciones" else "@string/notification_listener_label"
@@ -78,6 +78,8 @@ android {
 
 dependencies {
     implementation(project(":factory-contract"))
+    implementation(project(":factory-runtime-core"))
+    implementation("androidx.webkit:webkit:1.14.0")
     // Pinned to the APK factory signing/verification contract; upgrade only with its dedicated compatibility validation.
     //noinspection GradleDependency
     implementation("com.android.tools.build:apksig:8.13.2")

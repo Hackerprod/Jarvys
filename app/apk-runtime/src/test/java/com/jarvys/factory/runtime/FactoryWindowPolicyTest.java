@@ -91,10 +91,13 @@ public class FactoryWindowPolicyTest {
 
         // Exercise a later error (for example blocked navigation), after safe-area ownership
         // already exists. Reflection invokes production showError; it does not replace it.
-        Method showError = FactoryActivity.class.getDeclaredMethod("showError", String.class);
+        java.lang.reflect.Field runtimeField = FactoryActivity.class.getDeclaredField("runtime");
+        runtimeField.setAccessible(true);
+        FactoryRuntime runtime = (FactoryRuntime) runtimeField.get(activity);
+        Method showError = FactoryRuntime.class.getDeclaredMethod("showError", String.class);
         showError.setAccessible(true);
         for (String message : new String[]{"First runtime error", "Second runtime error"}) {
-            showError.invoke(activity, message);
+            showError.invoke(runtime, message);
             assertSame(root, root(activity));
             assertEquals(1, root.getChildCount());
             TextView error = (TextView) root.getChildAt(0);

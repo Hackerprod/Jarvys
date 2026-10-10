@@ -117,9 +117,10 @@ test('all SDK calls exactly match the catalog and explicit native validator/disp
     const pending = env.api[group][method](...(args[wire] || []));
     assert.equal(env.sent.at(-1).method, wire); env.reply(env.sent.at(-1), null); await pending;
   }
-  for (const name of ['BridgeProtocol', 'FactoryActivity']) {
-    const java = fs.readFileSync(path.join(__dirname, '../src/main/java/com/jarvys/factory/runtime/' + name + '.java'), 'utf8');
-    const cases = [...java.matchAll(/case ([A-Z][A-Z_]+):/g)].map(r => r[1]);
+  for (const name of ['BridgeProtocol', 'FactoryDispatcher']) {
+    const java = fs.readFileSync(path.join(__dirname, '../../factory-runtime-core/src/main/java/com/jarvys/factory/runtime/' + name + '.java'), 'utf8');
+    const dispatch = name === 'FactoryDispatcher' ? java.slice(java.indexOf('public static Object dispatch(')) : java;
+    const cases = [...dispatch.matchAll(/case ([A-Z][A-Z_]+):/g)].map(r => r[1]);
     assert.deepEqual(cases.sort(), rows.map(r => r[1]).sort(), name);
   }
 });

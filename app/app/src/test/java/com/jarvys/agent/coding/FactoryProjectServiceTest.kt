@@ -91,6 +91,68 @@ class FactoryProjectServiceTest {
             .put("webDir","web").put("icon","icon.json").toString())}
         fun build(path:String="notes.apk")=service.build("factory.json",path,scope.version(),CancellationToken.cancellable())
     }
+    @Test fun factoryTestBindsActualBuildWithoutKeysWritesOrInstalledClaims() {
+        val f=Fixture(); val built=f.build(); val version=f.scope.version()
+        val result=f.service.harness("test","notes.apk",built.getString("sha256"),version,CancellationToken.cancellable())
+        assertEquals("passed",result.getString("state")); assertEquals("shared_core_test",result.getString("mode"))
+        assertEquals(built.getString("sha256"),result.getString("apk_sha256"))
+        assertEquals(version,f.scope.version()); assertEquals(0,f.requested); assertEquals(0,f.obtained)
+        assertFalse(result.toString().contains(f.root.absolutePath))
+    }
+    @Test fun factoryHarnessRejectsHashScopeAndAvailabilityChanges() {
+        val f=Fixture(); val built=f.build(); val sha=built.getString("sha256")
+        assertThrows(Exception::class.java) { f.service.harness("test","notes.apk",sha,0,CancellationToken.cancellable()) }
+        f.active=false
+        assertThrows(Exception::class.java) { f.service.harness("test","notes.apk",sha,f.scope.version(),CancellationToken.cancellable()) }
+        f.active=true; File(f.root,"notes.apk").appendText("changed")
+        assertThrows(Exception::class.java) { f.service.harness("test","notes.apk",sha,f.scope.version(),CancellationToken.cancellable()) }
+        assertEquals(0,f.obtained)
+    }
+    @Test fun factoryHarnessRejectsCopiedArtifactWithoutMatchingReceiptAndCancelledRun() {
+        val f=Fixture(); val built=f.build(); val sha=built.getString("sha256")
+        File(f.root,"notes.apk").copyTo(File(f.root,"copy.apk"))
+        assertThrows(Exception::class.java) { f.service.harness("test","copy.apk",sha,f.scope.version(),CancellationToken.cancellable()) }
+        val token=CancellationToken.cancellable().apply { cancel() }
+        assertThrows(java.util.concurrent.CancellationException::class.java) { f.service.harness("preview","notes.apk",sha,f.scope.version(),token) }
+    }
+    @Test fun previewStatusBindsRealLongScopeVersionAndRetainsCancelledReceipt() {
+        val f=Fixture(); val built=f.build(); val sha=built.getString("sha256")
+        val token=CancellationToken.cancellable()
+        assertEquals(1L,f.scope.version())
+        try {
+            val launch=f.service.harness("preview","notes.apk",sha,1L,token)
+            assertEquals("launch_requested",launch.getString("state"))
+            val status=f.service.harness("preview_status","notes.apk",sha,1L,CancellationToken.cancellable())
+            assertEquals("launch_requested",status.getString("state"))
+            assertEquals(launch.getString("build_id"),status.getString("build_id"))
+            token.cancel()
+            val cancelled=f.service.harness("preview_status","notes.apk",sha,1L,CancellationToken.cancellable())
+            assertEquals("revoked",cancelled.getString("state"))
+        } finally { token.cancel() }
+    }
+    @Test fun factoryHarnessRejectsReadDeniedAndForgedReceiptMetadata() {
+        val f=Fixture(); val built=f.build(); val sha=built.getString("sha256")
+        val denied=FactoryProjectService(f.context,f.scope.restrict(setOf(ProjectScope.Capability.WRITE)),"test",f.gate,{true},f.identities)
+        assertThrows(Exception::class.java) { denied.harness("test","notes.apk",sha,f.scope.version(),CancellationToken.cancellable()) }
+        val file=receiptFile(f,sha); val original=file.readText()
+        for (field in listOf("state","projectIdentity","projectId","templateSha256","apkSha256")) {
+            file.writeText(JSONObject(original).put(field,"forged").toString())
+            assertThrows(Exception::class.java) { f.service.harness("test","notes.apk",sha,f.scope.version(),CancellationToken.cancellable()) }
+        }
+        file.writeText(JSONObject(original).apply { getJSONObject("sources").put("web/index.html","0".repeat(64)) }.toString())
+        assertThrows(Exception::class.java) { f.service.harness("test","notes.apk",sha,f.scope.version(),CancellationToken.cancellable()) }
+        file.writeText(JSONObject(original).apply { getJSONObject("spec").put("name","Changed") }.toString())
+        assertThrows(Exception::class.java) { f.service.harness("test","notes.apk",sha,f.scope.version(),CancellationToken.cancellable()) }
+        assertEquals(0,f.requested); assertEquals(0,f.obtained)
+    }
+    @Test fun factoryToolRejectsExtraArgumentsMissingBindingsAndNonIntegerVersion() {
+        val f=Fixture(); val tool=ApkFactoryTools.Tool(f.service)
+        val valid=mapOf<String,Any>("action" to "test", "input_path" to "notes.apk", "expected_sha256" to "0".repeat(64), "expected_scope_version" to 0L)
+        for (arguments in listOf(valid + ("javascript" to "secret"), valid - "expected_sha256", valid + ("expected_scope_version" to 0.0))) {
+            val result=tool.execute(arguments,CancellationToken.cancellable())
+            assertFalse(result.success)
+        }
+    }
     @Test fun completeOfflineBuildPreservesDexAndProvenanceWithNoAndroidPermissions() {
         val f=Fixture();val result=f.build();assertFalse(result.getBoolean("signed"));assertEquals(0,f.obtained)
         val apk=File(f.root,"notes.apk");assertEquals(result.getString("sha256"),ProjectScope.sha256(apk.readBytes()))

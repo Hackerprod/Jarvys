@@ -15,21 +15,22 @@ public final class BoundedStore {
     // Android isolates app processes. No component in this runtime uses android:process.
     private static final Object TRANSACTION_LOCK = new Object();
     public interface Backend {
+        default Object transactionLock() { return TRANSACTION_LOCK; }
         Map<String, String> read();
         boolean replace(Map<String, String> values);
     }
     private final Backend backend;
     public BoundedStore(Backend backend) { this.backend = backend; }
     public String get(String key) {
-        synchronized (TRANSACTION_LOCK) { return backend.read().get(key); }
+        synchronized (backend.transactionLock()) { return backend.read().get(key); }
     }
     public List<String> list() {
-        synchronized (TRANSACTION_LOCK) {
+        synchronized (backend.transactionLock()) {
             List<String> keys = new ArrayList<>(backend.read().keySet()); Collections.sort(keys); return keys;
         }
     }
     public void set(String key, String value) throws FactoryException {
-        synchronized (TRANSACTION_LOCK) {
+        synchronized (backend.transactionLock()) {
             if (!key.matches("[a-zA-Z0-9_.:-]{1,96}") || bytes(value) > BridgeProtocol.MAX_VALUE_BYTES)
                 throw new FactoryException("INVALID_ARGUMENT", "Storage entry exceeds the supported limits.");
             Map<String, String> values = new HashMap<>(backend.read()); values.put(key, value);
@@ -41,7 +42,7 @@ public final class BoundedStore {
         }
     }
     public void remove(String key) throws FactoryException {
-        synchronized (TRANSACTION_LOCK) {
+        synchronized (backend.transactionLock()) {
             Map<String, String> values = new HashMap<>(backend.read()); values.remove(key);
             if (!backend.replace(values)) throw new FactoryException("STORAGE_ERROR", "Could not persist application data.");
         }
