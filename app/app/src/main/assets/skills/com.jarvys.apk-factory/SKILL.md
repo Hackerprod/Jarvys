@@ -11,7 +11,7 @@ tags: [android, coding, apk, offline]
 
 Factory requires Android API 26+; generated apps API 24+. Inspect availability first.
 
-Build the user’s application, not a fixed notes application, with distinct HTML/CSS/JS, workflows, identity, branding and minimal capabilities. Preserve identity and data formats for updates.
+Build distinct HTML/CSS/JS for the brief. Preserve identity/data formats for updates.
 
 ## Confirm the actual contract
 
@@ -24,13 +24,13 @@ Build the user’s application, not a fixed notes application, with distinct HTM
 
 Keep all WebView resources offline: no CDNs, remote fonts/scripts, API calls or login. Provide accessible text/touch targets and loading, empty, error and recovery states.
 
-Use `<meta name="viewport" content="width=device-width, initial-scale=1">`, responsive layouts and scrollable forms. Native code owns system-bar/cutout/keyboard safe areas: never hardcode bar padding or subtract twice. Keep focused inputs reachable on resize. Bars stay visible with native light/dark contrast; no immersive fullscreen.
+Use responsive layouts, scrollable forms and `<meta name="viewport" content="width=device-width, initial-scale=1">`. Native owns bar/cutout/keyboard insets; never subtract twice. Keep focused inputs reachable; bars stay visible.
 
-Select only capabilities required by the brief and confirmed by inspect: storage, export, share, clipboard, haptics, device, documents and photos. They do not mean arbitrary filesystem access, clipboard reading, unrestricted hardware control or installed-app automation. Photos only supports the bounded picker/system-camera contract below. Do not invent direct camera, microphone, location, Bluetooth, notifications, background execution, network or billing support. A capability in a JSON file cannot grant an Android permission or add native code.
+Select minimal inspected capabilities: storage, export, share, clipboard, haptics, device, documents, photos and audio. Only documented bounded contracts are available. No arbitrary files, clipboard reading, direct camera/microphone, location, Bluetooth, notifications, background execution, network or billing. JSON cannot add permissions/native code.
 
-Use only the supplied SDK; await results and handle rejection/cancellation/unavailability. Browser previews cannot prove native effects. Never log user content or credentials.
+Use the SDK; await results and handle rejection. No user-content/credential logs; previews cannot prove native effects.
 
-Load the runtime asset with `<script src="/factory-sdk.js"></script>`, followed by your local external JavaScript such as `<script src="app.js" defer></script>`. It is served at the trusted offline origin https://app.jarvys.invalid. Use event listeners in external files; inline scripts and inline onclick handlers are blocked by the runtime CSP. Do not replace the SDK or relax its origin/frame checks.
+Load `<script src="/factory-sdk.js"></script>` before local external JS at https://app.jarvys.invalid. CSP blocks inline scripts/handlers. Never replace the SDK or weaken origin/frame checks.
 
 The frozen window.Jarvys API returns Promises:
 - Jarvys.runtime.info() reads runtime metadata without a capability grant.
@@ -63,6 +63,8 @@ Jarvys.share.file({handle,filename,mimeType}) requires documents+share and an un
 ## Photos (v69)
 Jarvys.photos.pick({}) / capture({}) require photos+documents and the same exact-latest authenticated host. Native human launch/Use only; never automate. Return opaque read handles for documents.read/close/share.file; 8 MiB JPEG/PNG, <=4096 per side/12 MP, five minutes. Snapshot acquisition also charges cumulative quota. Original metadata, including location if present, stays intact. Camera uses one write-only bounded pipe; seeking/reopen-dependent cameras fail, never thumbnail fallback. No gallery save/autosend; external camera may retain copies. Preview unavailable. Close interrupted external UI yourself and use Settings → Factory photos recovery. API24–29: provider FDs must be regular.
 
+Jarvys.audio.play({handle}) requires audio+documents; consumes an untouched read handle (6 MiB, charged EOF/quota). Canonical 44-byte-header PCM16 WAV only: mono/stereo, 8–48 kHz, whole frames, <=30 s. Authenticated host reviews bytes; human Play once, current Android output/volume. No URI/path, codec, TTS, network engine, looping, resume or background audio. Native Close/recovery retains automation protection; focus/lifecycle/route loss stops. documents.cancel requests revocation, not confirmed stop. {playbackAttempted,audibilityConfirmed:false} never proves hearing. Earlier document selection may use cloud providers. Preview unavailable.
+
 ## Author the project
 
 Create factory.json, index.html/app.css/app.js and a distinct icon; implement the brief with minimal capabilities.
@@ -90,7 +92,7 @@ Return source/APK references, appId/version, signature status, checks and blocke
 
 ## Closed manifest verification
 
-Eight capabilities use SDK 2/schema 1. Generated apps have zero permissions and only the launcher; documents adds the exact two Jarvys host-package queries. F0a fixture nodes are not JS features. Build/sign verify closed AXML/resources/DEX and unchanged signed payload; inspect resourceBindings/componentDex. Approval compares the latest signed scope, disclosing unknown baselines. Preserve template authentication. Signed does not mean published, installed or Android-tested. Pre-UX35 receipts retain old window limits; rebuild unsupported layouts with retained appId/key and higher version.
+Nine capabilities use SDK 2/schema 1. Generated apps have zero permissions and only the launcher; documents adds the exact two Jarvys host-package queries. F0a fixture nodes are not JS features. Build/sign verify closed AXML/resources/DEX and unchanged signed payload; inspect resourceBindings/componentDex. Approval compares the latest signed scope, disclosing unknown baselines. Preserve template authentication. Signed does not mean published, installed or Android-tested. Pre-UX35 receipts retain old window limits; rebuild unsupported layouts with retained appId/key and higher version.
 
 ## Recoverable identity workflow (UX42 F0b)
 
@@ -98,7 +100,7 @@ Only native Factory identities handles secrets. Never bypass it or change legacy
 
 
 ## Factory preview/tests (F0c)
-Use action preview, preview_status or test with exactly input_path, expected_sha256 and expected_scope_version from a current same-project build. Preview opens a private functional harness: isolated native test storage, simulated export/share/clipboard/haptics, Reset and Close. documents/photos/share.file return UNAVAILABLE; no fake handles/picker. Supported isolated WebView profiles are required; profiles may use disk and cleanup is best effort. It runs under Jarvys, never the installed app identity. preview_status returns bounded observed events; launch/page callbacks do not prove rendering or app workflows. test executes fixed synthetic shared-handler/validator assertions, not project JavaScript or browser/device tests. Inspect each result; no installation, hardware, persistence or zero-network claims. Scope changes, active-run cancellation and native closure revoke the preview. Rebuild old-template artifacts; preserve real-device acceptance gates.
+Use action preview, preview_status or test with exactly input_path, expected_sha256 and expected_scope_version from a current same-project build. Preview opens a private functional harness: isolated native test storage, simulated export/share/clipboard/haptics, Reset and Close. documents/photos/audio/share.file return UNAVAILABLE; no fake handles/picker. Supported isolated WebView profiles are required; profiles may use disk and cleanup is best effort. It runs under Jarvys, never the installed app identity. preview_status returns bounded observed events; launch/page callbacks do not prove rendering or app workflows. test executes fixed synthetic shared-handler/validator assertions, not project JavaScript or browser/device tests. Inspect each result; no installation, hardware, persistence or zero-network claims. Scope changes, active-run cancellation and native closure revoke the preview. Rebuild old-template artifacts; preserve real-device acceptance gates.
 
 ## Explicit installation (F0c)
 Only after the user requests installation, use install with exactly input_path, expected_sha256 and expected_scope_version for a completed signed receipt. Full opens human-only native review bound to app/version/hash/certificate/receipt, then Android consent. Signing approval never authorizes installation. Never automate either screen, grant unknown-source permission, accept security warnings or retry a commit. Play returns unavailable and preserves the signed artifact without a bypass. install_status and install_cancel use the same exact fields; status/cancel do not require the APK bytes to remain readable. Settings → Factory installations provides native recovery if project access changes. Backgrounding revokes uncommitted approval; restart cannot replay it. Only authenticated system success confirms the session; missing sessions, opened UI and cancellation after commit do not prove success or rollback. Unknown outcomes keep device automation blocked until native recovery. Device behavior and update/data retention still need actual acceptance.

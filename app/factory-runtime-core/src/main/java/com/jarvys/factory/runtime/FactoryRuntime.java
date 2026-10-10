@@ -57,6 +57,7 @@ public final class FactoryRuntime implements AutoCloseable {
     private static final int DOCUMENT_REQUEST = 42;
     private static final int FILE_SHARE_REQUEST = 43;
     private static final int PHOTO_REQUEST = 44;
+    private static final int AUDIO_REQUEST = 45;
     private static final int MAX_PENDING = 16;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ThreadPoolExecutor io = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
@@ -76,6 +77,7 @@ public final class FactoryRuntime implements AutoCloseable {
     private volatile boolean documentForeground;
     private DocumentSelection documentSelection;
     private volatile FileShare fileShare;
+    private volatile AudioPlayback audioPlayback;
     private volatile PhotoSelection photoSelection;
     private static final java.util.concurrent.Semaphore PHOTO_ADMISSION = new java.util.concurrent.Semaphore(1);
     private static final ThreadPoolExecutor PHOTO_IO = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
@@ -178,7 +180,7 @@ public final class FactoryRuntime implements AutoCloseable {
     private void invalidate() {
         generation++; pending.clear(); uiOwner = null;
         documents.revokeAll(); documents = new DocumentHandles();
-        cancelDocumentSelection(); cancelFileShare(); cancelPhotoSelection();
+        cancelDocumentSelection(); cancelFileShare(); cancelPhotoSelection(); cancelAudioPlayback();
         // Keep an outstanding picker tombstone until its callback: request code 41 must never
         // attach an old result to a new page's export request.
         if (export != null) export.text = null;
@@ -365,6 +367,8 @@ public final class FactoryRuntime implements AutoCloseable {
         switch (request.operation) {
             case PHOTOS_PICK: case PHOTOS_CAPTURE:
                 openPhoto(request, reply); break;
+            case AUDIO_PLAY:
+                playAudio(request, reply); break;
             case SHARE_FILE:
                 shareFile(request, reply); break;
             case DOCUMENTS_OPEN: case DOCUMENTS_CREATE:
@@ -389,7 +393,7 @@ public final class FactoryRuntime implements AutoCloseable {
                 documents.close(request.args.getString("handle"));
                 reply.ok(new JSONObject().put("status", "close_requested").put("providerCommitConfirmed", false)); break;
             case DOCUMENTS_CANCEL:
-                documents.cancelAll(); cancelDocumentSelection(); cancelFileShare(); cancelPhotoSelection();
+                documents.cancelAll(); cancelDocumentSelection(); cancelFileShare(); cancelPhotoSelection(); cancelAudioPlayback();
                 reply.ok(new JSONObject().put("cancelled", true).put("rollbackConfirmed", false)
                         .put("pickerMayRemainOpen", documentSelection != null || photoSelection != null)); break;
             case HAPTICS_PERFORM:
@@ -445,13 +449,21 @@ public final class FactoryRuntime implements AutoCloseable {
     }
 
     private boolean claimUi(Reply reply) {
-        if (uiOwner != null || export != null || documentSelection != null || fileShare != null || photoSelection != null || !activity.hasWindowFocus() || activity.isFinishing()) {
+        if (uiOwner != null || export != null || documentSelection != null || fileShare != null || photoSelection != null || audioPlayback != null || !activity.hasWindowFocus() || activity.isFinishing()) {
             reply.fail("BUSY", "Another native prompt is open, or the application is not in the foreground."); return false;
         }
         uiOwner = reply; return true;
     }
 
     public void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == AUDIO_REQUEST) {
+            AudioPlayback work = audioPlayback;
+            if (work == null || work.returned) return;
+            work.returned=true; work.resultCode=resultCode; work.result=data;
+            if (work.snapshot != null) work.snapshot.close();
+            if (documentForeground) finishAudioPlayback(work);
+            return;
+        }
         if (requestCode == PHOTO_REQUEST) {
             PhotoSelection work=photoSelection;
             if (work == null || work.returned) return;
@@ -507,6 +519,8 @@ public final class FactoryRuntime implements AutoCloseable {
         documentForeground = false;
         PhotoSelection photo=photoSelection;
         if (photo != null && photo.returned) cancelPhotoSelection();
+        AudioPlayback audio=audioPlayback;
+        if (audio != null && (!audio.launched || audio.returned)) cancelAudioPlayback();
         FileShare share = fileShare;
         if (share != null && !share.launched) cancelFileShare();
         documents.cancelAll();
@@ -521,6 +535,8 @@ public final class FactoryRuntime implements AutoCloseable {
         documentForeground = true;
         PhotoSelection photo=photoSelection;
         if (photo != null && photo.returned) acceptPhotoSelection(photo);
+        AudioPlayback audio=audioPlayback;
+        if (audio != null && audio.returned) finishAudioPlayback(audio);
         FileShare share = fileShare;
         if (share != null && share.returned) finishFileShare(share);
         DocumentSelection work = documentSelection;
@@ -784,6 +800,123 @@ public final class FactoryRuntime implements AutoCloseable {
             work.reply.ok(new JSONObject().put("chooserOpened",extras.getBoolean("chooserOpened")).put("deliveryConfirmed",false));
         } catch (Exception denied) {
             work.reply.fail("SHARE_UNAVAILABLE","The sharing outcome is unavailable. Opening a chooser never proves delivery.");
+        }
+    }
+    private static final class AudioPlayback {
+        final Reply reply;
+        final String nonce;
+        volatile FileShareTransfer snapshot;
+        volatile AudioPlaybackControl control;
+        volatile boolean cancelled, launched;
+        boolean returned;
+        int resultCode;
+        Intent result;
+        AudioPlayback(Reply reply, String nonce) { this.reply=reply; this.nonce=nonce; }
+    }
+    private void playAudio(BridgeProtocol.Request request, Reply reply) throws Exception {
+        requireDocumentForeground();
+        DocumentBrokerIdentity.verify(activity, config.documentBroker);
+        if (!claimUi(reply)) return;
+        final FileShareTransfer.Admission admission = FileShareTransfer.reserve();
+        byte[] random = new byte[32]; new java.security.SecureRandom().nextBytes(random);
+        StringBuilder nonce = new StringBuilder();
+        for (byte b:random) nonce.append(String.format(java.util.Locale.ROOT,"%02x",b & 255));
+        AudioPlayback work = new AudioPlayback(reply,nonce.toString()); audioPlayback=work;
+        final DocumentHandles source=documents;
+        try { io.execute(() -> {
+            byte[] bytes=null;
+            try {
+                requireDocumentForeground();
+                if (work.cancelled || !reply.current()) throw new FactoryException("CANCELLED","Audio playback was cancelled.");
+                bytes=source.snapshotForAudio(request.args.getString("handle"));
+                requireDocumentForeground();
+                DocumentBrokerIdentity.verify(activity,config.documentBroker);
+                final int hostUid=activity.getPackageManager().getApplicationInfo(config.documentBroker.packageName,0).uid;
+                String[] packages=activity.getPackageManager().getPackagesForUid(hostUid);
+                if (packages == null || packages.length != 1 || !packages[0].equals(config.documentBroker.packageName))
+                    throw new FactoryException("UNAVAILABLE","The audio host has an ambiguous UID.");
+                FileShareTransfer.HostVerifier verifiedHost = uid -> {
+                    if (uid != hostUid) return false;
+                    try {
+                        DocumentBrokerIdentity.verify(activity,config.documentBroker);
+                        String[] current=activity.getPackageManager().getPackagesForUid(uid);
+                        return current != null && current.length == 1 && current[0].equals(config.documentBroker.packageName)
+                                && activity.getPackageManager().getApplicationInfo(config.documentBroker.packageName,0).uid == uid;
+                    } catch (Exception denied) { return false; }
+                };
+                work.control=new AudioPlaybackControl(work.nonce,verifiedHost);
+                if (work.cancelled) work.control.cancel();
+                work.snapshot=admission.complete(bytes,work.nonce,uid -> !work.cancelled && work.launched && !destroyed && audioPlayback == work && reply.current() && verifiedHost.allowed(uid));
+                bytes=null; // Ownership moved to bounded native endpoint, never JavaScript.
+                main.post(() -> {
+                    if (work.cancelled || !documentForeground || !reply.current() || audioPlayback != work) {
+                        cancelAudioPlayback(); finishUnlaunchedAudio(work); return;
+                    }
+                    try {
+                        DocumentBrokerIdentity.verify(activity,config.documentBroker);
+                        android.os.Bundle extras=new android.os.Bundle();
+                        extras.putInt("protocolVersion",1); extras.putString("nonce",work.nonce);
+                        extras.putInt("size",work.snapshot.size); extras.putString("sha256",work.snapshot.sha256);
+                        extras.putBinder("transfer",work.snapshot); extras.putBinder("control",work.control);
+                        Intent intent=new Intent().setComponent(new android.content.ComponentName(config.documentBroker.packageName,
+                                "com.jarvys.agent.apkfactory.FactoryAudioActivity")).putExtras(extras);
+                        work.launched=true;
+                        activity.startActivityForResult(intent,AUDIO_REQUEST);
+                    } catch (Exception failure) {
+                        work.launched=false; reply.fail("AUDIO_UNAVAILABLE","The matching native audio broker could not open.");
+                        cancelAudioPlayback(); finishUnlaunchedAudio(work);
+                    }
+                });
+            } catch (Exception failure) {
+                if (bytes != null) java.util.Arrays.fill(bytes,(byte)0);
+                if (work.snapshot != null) work.snapshot.close();
+                if (work.control != null) work.control.cancel();
+                admission.close();
+                main.post(() -> {
+                    if (audioPlayback == work) audioPlayback=null;
+                    if (uiOwner == reply) uiOwner=null;
+                    reply.fail(failure instanceof FactoryException ? ((FactoryException)failure).code : "AUDIO_UNAVAILABLE",
+                            "The bounded audio snapshot could not be prepared. Reopen the document to retry.");
+                });
+            }
+        }); } catch (RejectedExecutionException failure) {
+            admission.close(); audioPlayback=null; if (uiOwner == reply) uiOwner=null;
+            reply.fail("BUSY","The native file queue is full.");
+        }
+    }
+    private void cancelAudioPlayback() {
+        AudioPlayback work=audioPlayback;
+        if (work == null) return;
+        work.cancelled=true;
+        work.reply.fail("CANCELLED","Audio playback was cancelled. Playback stop is unconfirmed; close the native audio flow.");
+        if (work.control != null) work.control.cancel();
+        if (work.snapshot != null) work.snapshot.close();
+        // A launched broker remains a tombstone until its own callback. Cancellation cannot
+        // prove remote stop, and never releases the host's guard.
+    }
+    private void finishUnlaunchedAudio(AudioPlayback work) {
+        if (audioPlayback == work) audioPlayback=null;
+        if (uiOwner == work.reply) uiOwner=null;
+        work.reply.fail("AUDIO_UNAVAILABLE","Audio playback could not open. Reopen the document to retry.");
+    }
+    private void finishAudioPlayback(AudioPlayback work) {
+        if (audioPlayback != work) return;
+        audioPlayback=null; if (work.control != null) work.control.close(); if (uiOwner == work.reply) uiOwner=null;
+        if (work.cancelled || !work.reply.current()) {
+            work.reply.fail("CANCELLED","Playback ended without an audibility claim."); return;
+        }
+        try {
+            DocumentBrokerIdentity.verify(activity,config.documentBroker);
+            Intent result=work.result;
+            if (work.resultCode != Activity.RESULT_OK || result == null || result.getData() != null || result.getClipData() != null
+                    || result.getSelector() != null || result.getFlags() != 0) throw new IllegalArgumentException();
+            android.os.Bundle extras=result.getExtras();
+            if (extras == null || !extras.keySet().equals(new java.util.HashSet<>(java.util.Arrays.asList("nonce","playbackAttempted","audibilityConfirmed")))
+                    || !work.nonce.equals(extras.get("nonce")) || !(extras.get("playbackAttempted") instanceof Boolean)
+                    || !Boolean.FALSE.equals(extras.get("audibilityConfirmed"))) throw new IllegalArgumentException();
+            work.reply.ok(new JSONObject().put("playbackAttempted",extras.getBoolean("playbackAttempted")).put("audibilityConfirmed",false));
+        } catch (Exception denied) {
+            work.reply.fail("AUDIO_UNAVAILABLE","The audio outcome is unavailable. A playback attempt never proves audibility.");
         }
     }
     private void openDocument(BridgeProtocol.Request request, Reply reply) throws Exception {

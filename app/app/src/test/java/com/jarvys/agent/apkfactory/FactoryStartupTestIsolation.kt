@@ -17,9 +17,21 @@ internal object FactoryStartupTestIsolation {
         // Bounded test-only backpressure avoids racing execute() against that transition.
         check(worker.queue.offer(barrier, 10, TimeUnit.SECONDS)) { "Synthetic sharing worker queue remained occupied" }
         barrier.get(10, TimeUnit.SECONDS)
+        val audio = FactoryAudioCoordinator.WORKER
+        check(!audio.isShutdown); audio.prestartCoreThread()
+        val audioBarrier = java.util.concurrent.FutureTask(java.util.concurrent.Callable { Unit })
+        check(audio.queue.offer(audioBarrier, 10, TimeUnit.SECONDS)) { "Synthetic audio worker queue remained occupied" }
+        audioBarrier.get(10, TimeUnit.SECONDS)
     }
     fun releaseCompletedSharingStartup() {
         awaitSharingWorkerCompletion()
+        val audioSingleton = FactoryAudioCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }
+        (audioSingleton.get(null) as? FactoryAudioCoordinator)?.let { audio ->
+            check(!audio.isBusy() && !audio.needsRecovery() && audio.session() == null) { "Cannot reset a live synthetic audio interaction" }
+            val audioLease = FactoryAudioCoordinator::class.java.getDeclaredField("lease").apply { isAccessible = true }
+            check(audioLease.get(audio) == null) { "Cannot erase live audio protection" }
+            FactoryInteractionAdmission.release(audio); audioSingleton.set(null, null)
+        }
         val singleton = FactoryFileShareCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }
         val previous = singleton.get(null) as? FactoryFileShareCoordinator ?: return
         check(!previous.isRestoring()) { "Previous synthetic startup is still active" }

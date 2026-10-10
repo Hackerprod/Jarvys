@@ -168,4 +168,23 @@ public class FactoryDispatcherTest {
                 CapabilityCatalog.manifestContributions(Arrays.asList("documents", "photos")).size());
     }
 
+    @org.junit.Test public void audioDispatchRequiresBothCapabilitiesAndPreviewNeverPlays() throws Exception {
+        FactoryConfig both=FactoryConfig.parsePreview(configuration("[\"audio\",\"documents\"]"));
+        JSONObject args=new JSONObject().put("handle",new String(new char[64]).replace('\0','a'));
+        BridgeProtocol.Request request=request("audio.play",args,both);
+        try { FactoryDispatcher.dispatch(request,both,new BoundedStore(new MemoryBackend()),
+                FactoryDispatcher.previewMetadata("host",35,35),FactoryDispatcher.simulatedEffects()); fail(); }
+        catch(FactoryException denied){assertEquals("UNAVAILABLE",denied.code);}
+        assertEquals("adapter",FactoryDispatcher.dispatch(request,both,new BoundedStore(new MemoryBackend()),
+                FactoryDispatcher.metadata("installed","app",35,35),(method,value)->{assertEquals(CapabilityCatalog.Method.AUDIO_PLAY,method);return "adapter";}));
+        JSONObject info=(JSONObject)FactoryDispatcher.dispatch(request("runtime.info",new JSONObject(),both),both,new BoundedStore(new MemoryBackend()),
+                FactoryDispatcher.previewMetadata("host",35,35),FactoryDispatcher.simulatedEffects());
+        assertEquals(1,info.getInt("audioProtocolVersion"));assertTrue(info.getBoolean("audioBrokerRequired"));
+        assertEquals("[\"documents\",\"audio\"]",info.getJSONArray("audioRequires").toString());
+        assertEquals("[\"documents\",\"photos\"]",info.getJSONArray("photoRequires").toString());
+        assertTrue(info.getJSONArray("unavailableMethods").toString().contains("audio.play"));
+        assertEquals("wav-pcm16",info.getJSONArray("audioFormats").getString(0));
+        assertEquals(6291456,info.getJSONObject("limits").getInt("audioBytes"));
+        assertEquals(30000,info.getJSONObject("limits").getInt("audioDurationMs"));
+    }
 }

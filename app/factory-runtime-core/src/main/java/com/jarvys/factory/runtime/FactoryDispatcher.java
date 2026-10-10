@@ -30,8 +30,8 @@ public final class FactoryDispatcher {
     public static Effects simulatedEffects() {
         return (method, args) -> {
             switch (method) {
-                case PHOTOS_PICK: case PHOTOS_CAPTURE: case SHARE_FILE: case DOCUMENTS_OPEN: case DOCUMENTS_CREATE: case DOCUMENTS_READ: case DOCUMENTS_WRITE: case DOCUMENTS_CLOSE: case DOCUMENTS_CANCEL:
-                    throw new FactoryException("UNAVAILABLE", "Documents and photos require an installed generated app and the matching human-only Jarvys broker; preview never opens files or the camera.");
+                case AUDIO_PLAY: case PHOTOS_PICK: case PHOTOS_CAPTURE: case SHARE_FILE: case DOCUMENTS_OPEN: case DOCUMENTS_CREATE: case DOCUMENTS_READ: case DOCUMENTS_WRITE: case DOCUMENTS_CLOSE: case DOCUMENTS_CANCEL:
+                    throw new FactoryException("UNAVAILABLE", "Documents, photos and audio require an installed generated app and the matching human-only Jarvys broker; preview never opens files, the camera or audio playback.");
                 case HAPTICS_PERFORM: case SHARE_TEXT: case CLIPBOARD_WRITE: case EXPORT_TEXT:
                     return new JSONObject().put("simulated", true).put("performed", false).put("mode", "preview")
                             .put("operation", method.wireName);
@@ -55,12 +55,16 @@ public final class FactoryDispatcher {
                         .put("simulatedCapabilities", new JSONArray("preview".equals(metadata.mode())
                                 ? java.util.Arrays.asList("export", "share", "clipboard", "haptics") : java.util.Collections.emptyList()))
                         .put("unavailableCapabilities", new JSONArray("preview".equals(metadata.mode())
-                                ? java.util.Arrays.asList("documents", "photos") : java.util.Collections.emptyList()))
+                                ? java.util.Arrays.asList("documents", "photos", "audio") : java.util.Collections.emptyList()))
                         .put("unavailableMethods", new JSONArray("preview".equals(metadata.mode())
-                                ? java.util.Arrays.asList("share.file", "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture")
+                                ? java.util.Arrays.asList("share.file", "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture", "audio.play")
                                 : java.util.Collections.emptyList()))
                         .put("fileShareProtocolVersion", 1)
                         .put("fileShareRequires", new JSONArray(java.util.Arrays.asList("documents", "share")))
+                        .put("audioProtocolVersion", 1)
+                        .put("audioRequires", new JSONArray(java.util.Arrays.asList("documents", "audio")))
+                        .put("audioBrokerRequired", true)
+                        .put("audioFormats", new JSONArray(java.util.Collections.singletonList("wav-pcm16")))
                         .put("photoProtocolVersion", 1)
                         .put("photoRequires", new JSONArray(java.util.Arrays.asList("documents", "photos")))
                         .put("photoBrokerRequired", true)
@@ -74,9 +78,12 @@ public final class FactoryDispatcher {
                                 .put("documentChunkBytes", 32768).put("documentBytes", 16 * 1024 * 1024)
                                 .put("documentSessionBytes", 32 * 1024 * 1024).put("documentHandles", 4)
                                 .put("fileShareBytes", 8 * 1024 * 1024).put("fileShareLifetimeMs", 300000)
+                                .put("audioBytes", 6 * 1024 * 1024).put("audioDurationMs", 30000)
+                                .put("audioChannelsMax", 2).put("audioBitsPerSample", 16)
+                                .put("audioSampleRateMin", 8000).put("audioSampleRateMax", 48000)
                                 .put("documentHandleLifetimeMs", 300000));
             case DEVICE_INFO: return metadata.deviceInfo().put("declaredAppId", config.appId);
-            case PHOTOS_PICK: case PHOTOS_CAPTURE: case SHARE_FILE: case DOCUMENTS_OPEN: case DOCUMENTS_CREATE: case DOCUMENTS_READ: case DOCUMENTS_WRITE: case DOCUMENTS_CLOSE: case DOCUMENTS_CANCEL:
+            case AUDIO_PLAY: case PHOTOS_PICK: case PHOTOS_CAPTURE: case SHARE_FILE: case DOCUMENTS_OPEN: case DOCUMENTS_CREATE: case DOCUMENTS_READ: case DOCUMENTS_WRITE: case DOCUMENTS_CLOSE: case DOCUMENTS_CANCEL:
             case HAPTICS_PERFORM: case SHARE_TEXT: case CLIPBOARD_WRITE: case EXPORT_TEXT:
                 return effects.perform(request.operation, request.args);
             default: throw new FactoryException("UNKNOWN_METHOD", "Unknown operation.");

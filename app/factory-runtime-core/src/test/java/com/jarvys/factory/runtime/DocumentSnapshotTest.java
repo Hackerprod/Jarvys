@@ -27,6 +27,15 @@ public class DocumentSnapshotTest {
             assertFalse(closed[0]); cleanup.remove().run(); assertTrue(closed[0]);
         }
     }
+    @Test public void audioHasItsOwnSixMiBBoundAndConsumesUntouchedHandle() throws Exception {
+        byte[] bytes=new byte[6*1024*1024]; String token=handles.grantRead(new ByteArrayInputStream(bytes));
+        assertArrayEquals(bytes,handles.snapshotForAudio(token)); retired(token); cleanup.remove().run();
+        String large=handles.grantRead(new ByteArrayInputStream(new byte[6*1024*1024+1]));
+        rejects("AUDIO_TOO_LARGE",()->handles.snapshotForAudio(large)); retired(large); cleanup.remove().run();
+        String partial=handles.grantRead(new ByteArrayInputStream(new byte[]{1,2})); handles.read(partial,0,1);
+        rejects("INVALID_OFFSET",()->handles.snapshotForAudio(partial));
+        String write=handles.grantWrite(new ByteArrayOutputStream()); rejects("WRONG_MODE",()->handles.snapshotForAudio(write));
+    }
     @Test public void emptyOversizedAndNonterminatingStreamsCannotBecomeShares() throws Exception {
         String empty=handles.grantRead(new ByteArrayInputStream(new byte[0]));
         rejects("EMPTY_FILE",() -> handles.snapshotForShare(empty)); retired(empty); cleanup.remove().run();

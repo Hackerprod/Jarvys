@@ -33,6 +33,7 @@ public class BridgeProtocolTest {
             {"documents.write", "{\"handle\":\""+HANDLE+"\",\"offset\":0,\"data\":\"AA==\"}"},
             {"documents.close", "{\"handle\":\""+HANDLE+"\"}"}, {"documents.cancel", "{}"},
             {"photos.pick", "{}"}, {"photos.capture", "{}"},
+            {"audio.play", "{\"handle\":\""+HANDLE+"\"}"},
             {"share.file", "{\"handle\":\""+HANDLE+"\",\"filename\":\"file.bin\",\"mimeType\":\"application/octet-stream\"}"}};
         for (String[] call : methods) rejected("CAPABILITY_DENIED", BridgeProtocol.ORIGIN, true, request(call[0], call[1]), empty);
     }
@@ -84,6 +85,7 @@ public class BridgeProtocolTest {
             {"documents.write", "{\"handle\":\""+HANDLE+"\",\"offset\":0,\"data\":\"AA==\"}"},
             {"documents.close", "{\"handle\":\""+HANDLE+"\"}"}, {"documents.cancel", "{}"},
             {"photos.pick", "{}"}, {"photos.capture", "{}"},
+            {"audio.play", "{\"handle\":\""+HANDLE+"\"}"},
             {"share.file", "{\"handle\":\""+HANDLE+"\",\"filename\":\"file.bin\",\"mimeType\":\"application/octet-stream\"}"}};
         assertEquals(com.jarvys.factory.contract.CapabilityCatalog.METHODS.size(), calls.length);
         for (int mask = 0; mask < (1 << com.jarvys.factory.contract.CapabilityCatalog.NAMES.size()); mask++) {
@@ -96,7 +98,7 @@ public class BridgeProtocolTest {
                     com.jarvys.factory.contract.CapabilityCatalog.METHODS.get(call[0]);
                 assertNotNull(method);
                 if ((method.capability == null || selected.capabilities.contains(method.capability))
-                        && (!(call[0].equals("share.file") || call[0].startsWith("photos.")) || selected.capabilities.contains("documents"))) {
+                        && (!(call[0].equals("share.file") || call[0].startsWith("photos.") || call[0].equals("audio.play")) || selected.capabilities.contains("documents"))) {
                     assertSame(method, BridgeProtocol.validate(BridgeProtocol.ORIGIN, true,
                         request(call[0], call[1]), selected).operation);
                 } else rejected("CAPABILITY_DENIED", BridgeProtocol.ORIGIN, true,
@@ -163,4 +165,15 @@ public class BridgeProtocolTest {
         }
     }
 
+    @Test public void audioAcceptsOnlyOpaqueHandleAndRequiresBothDeclarations() throws Exception {
+        FactoryConfig both=config("[\"audio\",\"documents\"]");
+        JSONObject args=new JSONObject().put("handle",HANDLE);
+        assertEquals("audio.play",BridgeProtocol.validate(BridgeProtocol.ORIGIN,true,request("audio.play",args.toString()),both).method);
+        for(String extra:new String[]{"uri","path","url","text","data","mimeType","volume","loop","autoplay","control"})
+            rejected("INVALID_ARGUMENT",BridgeProtocol.ORIGIN,true,request("audio.play",new JSONObject(args.toString()).put(extra,"x").toString()),both);
+        for(String handle:new String[]{"content://private/sound","/private/file","https://remote/sound","AA==","",HANDLE.toUpperCase()})
+            rejected("INVALID_ARGUMENT",BridgeProtocol.ORIGIN,true,request("audio.play",new JSONObject().put("handle",handle).toString()),both);
+        for(String caps:new String[]{"[]","[\"audio\"]","[\"documents\"]"})
+            rejected("CAPABILITY_DENIED",BridgeProtocol.ORIGIN,true,request("audio.play",args.toString()),config(caps));
+    }
 }

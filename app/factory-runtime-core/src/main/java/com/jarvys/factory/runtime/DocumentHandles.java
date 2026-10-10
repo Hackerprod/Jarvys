@@ -168,7 +168,13 @@ public final class DocumentHandles {
      * retired even after failure; provider close retains the existing bounded async path.
      */
     public byte[] snapshotForShare(String token) throws FactoryException {
-        final int maximum = 8 * 1024 * 1024;
+        return snapshot(token, 8 * 1024 * 1024, "SHARE_TOO_LARGE");
+    }
+    /** Consumes an untouched read handle. Format validation belongs to the authenticated host. */
+    public byte[] snapshotForAudio(String token) throws FactoryException {
+        return snapshot(token, 6 * 1024 * 1024, "AUDIO_TOO_LARGE");
+    }
+    private byte[] snapshot(String token, int maximum, String tooLarge) throws FactoryException {
         final Entry entry;
         synchronized(lock) { entry=lookup(token,false,0); entry.busy=true; }
         java.io.ByteArrayOutputStream output=new java.io.ByteArrayOutputStream();
@@ -189,7 +195,7 @@ public final class DocumentHandles {
                     if (output.size() == 0) throw error("EMPTY_FILE");
                     return output.toByteArray();
                 }
-                if (count > maximum-output.size()) throw error("SHARE_TOO_LARGE");
+                if (count > maximum-output.size()) throw error(tooLarge);
                 output.write(bytes,0,count);
             }
         } finally { synchronized(lock) { remove(entry); } }

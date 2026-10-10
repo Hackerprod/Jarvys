@@ -403,6 +403,7 @@ internal class FactoryInstallCoordinator(
 class FactoryInstallApplication : Application() {
     override fun onCreate() {
         super.onCreate()
+        FactoryAudioCoordinator.get(this)
         FactoryFileShareCoordinator.get(this)
         FactoryDocumentCoordinator.get(this)
         FactoryPhotoCoordinator.get(this)

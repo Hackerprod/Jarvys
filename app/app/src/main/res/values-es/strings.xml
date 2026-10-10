@@ -1373,4 +1373,14 @@ Se desconoce cómo terminaron. No se repiten automáticamente. Revisa los cambio
     <string name="crew_progress_tool_result">Herramienta finalizada</string>
     <string name="crew_progress_tool_error">Herramienta con error</string>
     <string name="crew_last_progress">%1$s · Última actividad: %2$s · hace %3$d:%4$02d</string>
+    <string name="factory_audio_title">Audio de Factory</string>
+    <string name="factory_audio_play">Reproducir una vez</string>
+    <string name="factory_audio_close">Detener y cerrar</string>
+    <string name="factory_audio_recover">Confirmar limpieza y cerrar</string>
+    <string name="factory_audio_settings_summary">Cerrar una revisión nativa de audio interrumpida</string>
+    <string name="factory_audio_disclosure">Revisa este WAV PCM16 local antes de pulsar Reproducir. Máximo 30 segundos. Usa la salida y volumen actuales de Android; otras personas o dispositivos conectados pueden oírlo. Sin cambiar volumen ni salida, motor de voz, subida, bucle o reproducción en segundo plano. La selección previa del documento puede usar un proveedor en la nube. Solicitar cancelación no acredita una parada remota inmediata.</string>
+    <string name="factory_audio_checking">Verificando audio nativo acotado. Aún no se autoriza la reproducción.</string>
+    <string name="factory_audio_unknown">Resultado interrumpido o incierto. Nunca se reanuda automáticamente. Hace falta limpieza nativa explícita antes de continuar la automatización.</string>
+    <string name="factory_audio_attempted">Esta autorización de reproducción única ya se utilizó. El resultado no acredita que se haya oído sonido. Cierra para liberar esta revisión protegida.</string>
+    <string name="factory_audio_unavailable">Audio no disponible o interrumpido. Sin reintento automático.</string>
 </resources>

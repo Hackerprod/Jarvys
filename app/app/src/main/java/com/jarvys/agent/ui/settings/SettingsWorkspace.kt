@@ -216,6 +216,11 @@ private fun SettingsIndex(
             stringResource(R.string.factory_photos_settings_summary),
             { context.startActivity(com.jarvys.agent.apkfactory.FactoryPhotoCoordinator.recoveryIntent(context)) },
             testTag = "settings-factory-photos-row")
+        SettingsRule()
+        SettingsIndexRow(LucideIcons.Boxes, stringResource(R.string.factory_audio_title),
+            stringResource(R.string.factory_audio_settings_summary),
+            { context.startActivity(com.jarvys.agent.apkfactory.FactoryAudioCoordinator.recoveryIntent(context)) },
+            testTag = "settings-factory-audio-row")
     }
 }
 

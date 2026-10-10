@@ -25,7 +25,7 @@ internal object FactoryRuntimeContractTests {
             FactoryDispatcher.previewMetadata(hostAppId, api, targetSdk), FactoryDispatcher.simulatedEffects())
         try {
             val ordered = listOf("runtime.info", "storage.set", "storage.get", "storage.list", "storage.remove", "export.text", "share.text", "share.file", "clipboard.write", "haptics.perform", "device.info",
-                "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture")
+                "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture", "audio.play")
             check(ordered.toSet() == CapabilityCatalog.METHODS.keys) { "Synthetic contract cases must cover the compiled catalog" }
             for (method in ordered) {
                 val args = when (method) {
@@ -39,15 +39,15 @@ internal object FactoryRuntimeContractTests {
                     "documents.create" -> JSONObject().put("mimeType", "application/octet-stream").put("filename", "synthetic.bin")
                     "documents.read" -> JSONObject().put("handle", "0".repeat(64)).put("offset", 0).put("length", 1)
                     "documents.write" -> JSONObject().put("handle", "0".repeat(64)).put("offset", 0).put("data", "AA==")
-                    "documents.close" -> JSONObject().put("handle", "0".repeat(64))
+                    "documents.close", "audio.play" -> JSONObject().put("handle", "0".repeat(64))
                     else -> JSONObject()
                 }
                 val capability = CapabilityCatalog.METHODS.getValue(method).capability
-                if (capability != null && (capability !in config.capabilities || ((method == "share.file" || capability == "photos") && "documents" !in config.capabilities))) {
+                if (capability != null && (capability !in config.capabilities || ((method == "share.file" || (capability == "photos" || capability == "audio")) && "documents" !in config.capabilities))) {
                     assertion("$method:undeclared_denied") {
                         try { dispatch(method, args); false } catch (failure: FactoryException) { failure.code == "CAPABILITY_DENIED" }
                     }
-                } else if (capability == "documents" || capability == "photos" || method == "share.file") {
+                } else if (capability == "documents" || (capability == "photos" || capability == "audio") || method == "share.file") {
                     assertion("$method:preview_unavailable") {
                         try { dispatch(method, args); false } catch (failure: FactoryException) { failure.code == "UNAVAILABLE" }
                     }

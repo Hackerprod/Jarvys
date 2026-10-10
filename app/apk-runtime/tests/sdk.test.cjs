@@ -105,7 +105,7 @@ test('all SDK calls exactly match the catalog and explicit native validator/disp
   const path = require('node:path');
   const catalog = fs.readFileSync(path.join(__dirname, '../../factory-contract/src/main/java/com/jarvys/factory/contract/CapabilityCatalog.java'), 'utf8');
   const rows = [...catalog.matchAll(/\b([A-Z][A-Z_]+)\("([a-z]+\.[a-z]+)", (?:"[a-z]+"|null)\)/g)];
-  assert.equal(rows.length, 19);
+  assert.equal(rows.length, 20);
   const env = environment();
   const args = { 'storage.get': ['key'], 'storage.set': ['key', 'value'], 'storage.remove': ['key'],
     'export.text': [{ filename: 'test.txt', text: 'hello' }], 'share.text': [{ text: 'hello' }],
@@ -184,4 +184,14 @@ test('photos exposes frozen empty-options methods and human-action timeouts', as
       assert.equal((await promise).mimeType, 'image/jpeg');
     }
   }
+});
+
+ test('audio uses an opaque handle and a human review timeout', async () => {
+  const env = environment(); assert.equal(Object.isFrozen(env.api.audio), true);
+  const options = {handle: 'a'.repeat(64)};
+  const promise = env.api.audio.play(options); const request = env.sent.at(-1);
+  assert.equal(request.method, 'audio.play'); assert.deepEqual(request.args, options);
+  assert.equal(env.delays.at(-1), 600000);
+  env.reply(request, {playbackAttempted: true, audibilityConfirmed: false});
+  const result = await promise; assert.equal(result.playbackAttempted, true); assert.equal(result.audibilityConfirmed, false);
 });

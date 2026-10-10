@@ -1373,4 +1373,14 @@ Their exit results are unknown. Do not repeat them automatically. Review project
     <string name="crew_progress_tool_result">Tool finished</string>
     <string name="crew_progress_tool_error">Tool reported an error</string>
     <!-- Elapsed minutes:seconds is a clock, not a plural quantity. --><string name="crew_last_progress" xmlns:tools="http://schemas.android.com/tools" tools:ignore="PluralsCandidate">%1$s · Last activity: %2$s · %3$d:%4$02d ago</string>
+    <string name="factory_audio_title">Factory audio</string>
+    <string name="factory_audio_play">Play once</string>
+    <string name="factory_audio_close">Stop and close</string>
+    <string name="factory_audio_recover">Confirm cleanup and close</string>
+    <string name="factory_audio_settings_summary">Close an interrupted native audio review</string>
+    <string name="factory_audio_disclosure">Review this local PCM16 WAV before pressing Play. Maximum 30 seconds. Audio uses the current Android output and volume; other people or connected devices may hear it. No volume or output change, speech engine, upload, looping or background playback. Earlier document selection may use a cloud provider. Cancellation requests do not prove an immediate remote stop.</string>
+    <string name="factory_audio_checking">Checking bounded native audio. No playback is authorized yet.</string>
+    <string name="factory_audio_unknown">Interrupted or uncertain outcome. Playback never resumes automatically. Explicit native cleanup is required before automation can continue.</string>
+    <string name="factory_audio_attempted">This one-shot playback authorization is used. The result never proves sound was heard. Close to release this protected review.</string>
+    <string name="factory_audio_unavailable">Audio is unavailable or was interrupted. No automatic retry.</string>
 </resources>
