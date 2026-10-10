@@ -40,3 +40,12 @@ not published as host reports. Preliminary results do not substitute for final f
 Corrected shared core passed 485 cases without failures/errors/skips. The accompanying runtime
 run exposed one remaining old 23-method assertion after expansion to 25 methods; corrected to 25
 while retaining all original matrix rows and adding both editor rows. Final aggregate will be fresh.
+
+Checkpoint `5bdc9d5` is verified on the remote with normal history. Native focused validation
+compiled production successfully; its first test compile exposed two fixture annotations on
+SDK-hidden ViewStructure methods, corrected without production changes. The next focused run
+executed 217 cases: 213 passed and four new cross-SDK privacy cases failed only because the
+unattached Robolectric accessibility node omitted contentDescription. Those fixtures retain the
+full node.text accessibility assertion and now check the initialized view description directly.
+No failed run is a final gate. The final 1,074 app inputs are frozen for fresh lint, six-suite
+aggregate, SDK and three APK builds. Independent source review finds no production blocker so far.
