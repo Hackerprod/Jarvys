@@ -84,6 +84,15 @@ class FactoryBrowserTargetsTest {
         info.applicationInfo.flags = ApplicationInfo.FLAG_SUSPENDED; assertTrue(targets.discover().isEmpty()); info.applicationInfo.flags = 0
         info.applicationInfo.packageName = "example.wrong.browser"; assertTrue(targets.discover().isEmpty())
     }
+    @Test fun declaredSharedUidIsRejectedEvenWhenPackageVisibilityExposesOnlyTheBrowser() {
+        val fixture = FactoryBrowserTestPackages.install(context)
+        val reviewed = targets.discover().single()
+        assertArrayEquals(arrayOf(fixture.packageName), context.packageManager.getPackagesForUid(fixture.uid))
+        fixture.installed.sharedUserId = "example.synthetic.shared"
+        assertArrayEquals("Visible UID membership alone does not prove absence of shared UID", arrayOf(fixture.packageName), context.packageManager.getPackagesForUid(fixture.uid))
+        assertTrue(targets.discover().isEmpty())
+        denied { targets.verifiedIntent(reviewed, FactoryBrowserTestPackages.URL) }
+    }
     @Test fun sharedUidAndDifferentAndroidProfileAreUnavailable() {
         val fixture = FactoryBrowserTestPackages.install(context); val pm = shadowOf(context.packageManager)
         pm.setPackagesForUid(fixture.uid, fixture.packageName, "example.shared.browser"); assertTrue(targets.discover().isEmpty())

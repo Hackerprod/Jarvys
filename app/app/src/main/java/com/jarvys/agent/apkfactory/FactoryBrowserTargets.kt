@@ -7,7 +7,7 @@ import android.content.IntentFilter
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.content.pm.ResolveInfo
-import android.net.Uri
+import androidx.core.net.toUri
 import android.os.Build
 import android.os.Process
 import android.os.UserHandle
@@ -51,6 +51,7 @@ internal class FactoryBrowserTargets(private val context: Context) {
         val activity = info.activityInfo
         val flags = if (Build.VERSION.SDK_INT >= 28) PackageManager.GET_SIGNING_CERTIFICATES else PackageManager.GET_SIGNATURES
         val installed = pm.getPackageInfo(activity.packageName, flags)
+        check(installed.sharedUserId == null) { "Shared browser identity unsupported" }
         val signatures = if (Build.VERSION.SDK_INT >= 28) installed.signingInfo?.apkContentsSigners else installed.signatures
         check(signatures?.size == 1)
         val certificate = MessageDigest.getInstance("SHA-256").digest(signatures!![0].toByteArray()).joinToString("") { "%02x".format(it) }
@@ -59,7 +60,7 @@ internal class FactoryBrowserTargets(private val context: Context) {
         return Target(ComponentName(activity.packageName, activity.name), certificate, version, installed.lastUpdateTime, activity.applicationInfo.uid)
     }
     companion object {
-        private fun view(url: String) = Intent(Intent.ACTION_VIEW, Uri.parse(url)).addCategory(Intent.CATEGORY_BROWSABLE)
+        private fun view(url: String) = Intent(Intent.ACTION_VIEW, url.toUri()).addCategory(Intent.CATEGORY_BROWSABLE)
         internal fun broadHttpsFilter(filter: IntentFilter?): Boolean = filter != null &&
             filter.hasAction(Intent.ACTION_VIEW) && filter.hasCategory(Intent.CATEGORY_BROWSABLE) && filter.hasCategory(Intent.CATEGORY_DEFAULT) &&
             filter.hasDataScheme("https") && filter.countDataAuthorities() == 0 && filter.countDataPaths() == 0 &&
