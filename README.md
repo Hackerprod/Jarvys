@@ -30,7 +30,7 @@ This is an actively developed project with incremental, evidence-backed checkpoi
 | **v73 · Factory email and SMS editors** | Completed earlier delivery: 7,390 host tests, SDK20 and independent APK audit passed; signed test APK attachment accepted. Opening an editor is not sending a message. [Scope and status](recovery/factory-editors/README.md) |
 | Physical Android acceptance | Still open for the relevant recent features. A host test, signed APK or accepted file delivery does not prove installation or phone behavior. |
 | **v74 · Contact selection** | Latest completed delivery: 7,832 tests, SDK22 and independent three-APK audit passed; signed test APK attachment accepted. One human-selected phone/email with native exact-value approval. Calendar remains separate. [Scope](recovery/factory-contacts/README.md) |
-| **v75 · Factory calendar editor** | In development: strict typed ACTION_INSERT with full native review. No calendar database access or automatic saving. Final tests, audit and APK delivery pending. [Scope](recovery/factory-calendar/README.md) |
+| **v75 · Factory calendar editor** | Host-validated: 7,978 fresh tests, SDK24, exact lint and independent three-APK audit passed. Strict ACTION_INSERT with native review; no calendar database access or automatic saving. Signed delivery pending. [Scope and evidence](recovery/factory-calendar/README.md) |
 | Broader Factory roadmap | Remaining F1 capabilities and F2/F3 are unfinished. Strict Factory TTS remains blocked on its recipient/consent design. |
 
 This status is a **2026-10-10 snapshot**, not a live build badge. [Pending.md](Pending.md) is the current work queue; feature-specific evidence records distinguish passing, failed, interrupted and unrun checks.
