@@ -57,3 +57,34 @@ progress/full-visibility assertions, and destination readiness. All 20 cases, al
 assertion calls and all three system-back actions remain. Independent review approved this
 fixture-only adaptation. Isolated focused checks passed Memory 20/20 in each flavor and Workspace
 2/2 in each flavor. Fresh aggregate, builds and final independent release audit remain pending.
+
+## Final host validation
+
+Source commit `1076189`, app tree `a471df8334c17750e144a85326c372e81e1a0561`,
+1,087 frozen app inputs. The fresh complete aggregate passed 7,832 cases:
+3,458 Full, 3,076 Play, runtime 72/72 and shared core 577/577. No failures, errors or skips.
+SDK 22/22 passed. All 17 final test JVMs have verified guard installation and shutdown reports;
+16 HTTP(S) attempts were blocked (8 per host flavor, none in runtime/core), without per-test attribution.
+The failed exploratory OOM JVM has installation but no shutdown report: its blocked-attempt count
+is unknown and it is not passing release evidence.
+
+Exact lint diagnostic multisets remain 313/300/3/2, with no added/removed diagnostics or suppression
+changes. Original lint predates three independently reviewed test-only fixture corrections;
+production, build, resource and manifest inputs are identical. The final aggregate and all three
+APK builds use the final frozen source; original lint timestamps and its different test-input
+freeze remain explicit.
+
+Independent final source, gate, history, v63–v73 case-preservation and all three actual APK audits
+passed. Release contact bytecode expansion follows exact invoked compiler-outline signatures,
+excluding an unrelated uncalled WebView overload while checking every reachable outline method.
+The first stopped audit remains retained.
+
+| Unsigned APK | Bytes | SHA-256 |
+| --- | ---: | --- |
+| FullDebug | 35,188,832 | `4cd164a652c58df95df2bf0840be35c2eb69b47ec8723e47bf39ce2ef6888348` |
+| PlayDebug | 33,577,218 | `331e1e65ad6d5767bfca2dd21f5a75564bb0b9aff8e18670fea4c128b37fda26` |
+| FullRelease | 27,478,469 | `27733cd26e8538c409c83818be1c1a1d9bd94345b5d76f41f9d812e0df303da2` |
+
+Version 74 / `1.2.67-FACTORY-CONTACTS`. Signing and native attachment are pending.
+No real contacts, calendar writes, user-data transmission or device installation occurred in these
+checks. Synthetic tests and binary inspection do not establish physical Android acceptance.
