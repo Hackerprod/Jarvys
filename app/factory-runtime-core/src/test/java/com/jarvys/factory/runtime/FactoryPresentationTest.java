@@ -25,10 +25,14 @@ import static org.junit.Assert.*;
 public class FactoryPresentationTest {
     public static class Screen extends Activity implements FactoryPresentation.Owner {
         FactoryPresentation.State applied=FactoryPresentation.DEFAULT;
-        int recreations; boolean focus=true, failCommit;
+        int recreations; boolean focus=true, failCommit, rejectOrientation;
         @Override public FactoryPresentation.State appliedPresentation(){return applied;}
         @Override public boolean hasWindowFocus(){return focus;}
         @Override public void recreate(){recreations++;}
+        @Override public void setRequestedOrientation(int requested){
+            if(rejectOrientation) throw new IllegalStateException("Synthetic unsupported window policy");
+            super.setRequestedOrientation(requested);
+        }
         @Override public SharedPreferences getSharedPreferences(String name,int mode){
             SharedPreferences real=super.getSharedPreferences(name,mode);
             if(!failCommit || !FactoryPresentation.PREFERENCES.equals(name)) return real;
@@ -174,6 +178,14 @@ public class FactoryPresentationTest {
             assertEquals(orientation.equals("portrait")?ActivityInfo.SCREEN_ORIENTATION_PORTRAIT:orientation.equals("landscape")?ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE:ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED,screen.getRequestedOrientation());
             assertFalse(FactoryPresentation.result(screen,requested,false).getBoolean("orientationGuaranteed"));
         }
+    }
+    @Test public void rejectedOrientationKeepsActivityAndBridgeUsableWithoutChangingPreferences()throws Exception{
+        FactoryPresentation.State requested=FactoryPresentation.parse(new JSONObject(pair("dark","landscape")));
+        FactoryPresentation.save(screen,requested);screen.rejectOrientation=true;
+        assertFalse(FactoryPresentation.applyOrientation(screen,requested));assertFalse(screen.isFinishing());assertFalse(screen.isDestroyed());
+        assertTrue(requested.same(FactoryPresentation.read(screen)));
+        assertEquals("dark",request("presentation.get","{}").result().getString("theme"));
+        assertFalse(request("presentation.get","{}").result().getBoolean("orientationGuaranteed"));
     }
     @Test public void successfulRecreatedSnapshotMakesIgnoredOrientationIdempotent()throws Exception{
         FactoryPresentation.State state=FactoryPresentation.parse(new JSONObject(pair("dark","landscape")));FactoryPresentation.save(screen,state);screen.applied=state;

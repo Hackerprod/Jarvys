@@ -74,11 +74,16 @@ public final class FactoryPresentation {
                 (state.theme.equals("dark") ? Configuration.UI_MODE_NIGHT_YES : Configuration.UI_MODE_NIGHT_NO);
         return base.createConfigurationContext(override);
     }
-    public static void applyOrientation(Activity activity,State state) {
+    public static boolean applyOrientation(Activity activity,State state) {
         int requested=state.orientation.equals("portrait") ? ActivityInfo.SCREEN_ORIENTATION_PORTRAIT :
                 state.orientation.equals("landscape") ? ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE : ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
         // This is only a request. Android/OEM/window policies may ignore it, even if this getter agrees.
-        if (activity.getRequestedOrientation()!=requested) activity.setRequestedOrientation(requested);
+        try {
+            if (activity.getRequestedOrientation()!=requested) activity.setRequestedOrientation(requested);
+            return true; // Request path completed, never proof of actual rotation.
+        } catch(RuntimeException unavailable) {
+            return false; // Unsupported/OEM/window policy must not crash the otherwise usable app.
+        }
     }
     static JSONObject result(Activity activity,State requested,boolean recreate) throws JSONException {
         int observed=activity.getResources().getConfiguration().orientation;

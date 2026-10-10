@@ -24,7 +24,8 @@ public final class FactoryActivity extends Activity implements FactoryPresentati
         setContentView(root);
         ViewCompat.requestApplyInsets(root);
         runtime = new FactoryRuntime(this, root, FactoryRuntime.installedHost(this));
-        if (runtime.start() && presentation.enabled) FactoryPresentation.applyOrientation(this, presentation.state);
+        if (runtime.start() && presentation.enabled && !FactoryPresentation.applyOrientation(this, presentation.state))
+            android.util.Log.w("FactoryPresentation", "Orientation request unconfirmed by the current window policy.");
     }
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);

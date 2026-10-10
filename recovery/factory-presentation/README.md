@@ -32,3 +32,8 @@ new test assertion that queried the public `isLightTheme` attribute on API24/26/
 attribute existed publicly. All original UX35 assertions stayed intact. The reviewed test-only
 correction checks native background contrast on those APIs and the theme attribute on API29+;
 all 74 runtime cases then passed. Failed evidence is retained. Complete release gates are pending.
+
+A later pre-freeze review also bounded failures from Android's orientation getter/setter: rejected
+window-policy requests no longer abort an otherwise valid Activity. A synthetic rejecting window
+keeps preferences and the bridge usable. This delta receives fresh focused native tests and the
+entire final aggregate; earlier passes are not presented as checks of this later delta.
