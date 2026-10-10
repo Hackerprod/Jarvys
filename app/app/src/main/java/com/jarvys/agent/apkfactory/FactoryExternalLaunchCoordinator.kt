@@ -169,7 +169,7 @@ internal class FactoryExternalLaunchCoordinator(
         private var recoveryToken: String? = null
         @Synchronized fun recoveryIntent(context: Context): Intent {
             recoveryToken = UUID.randomUUID().toString()
-            return Intent(context, FactoryExternalLaunchActivity::class.java).putExtra("nativeRecoveryToken", recoveryToken)
+            return Intent(context, FactoryExternalActionActivity::class.java).putExtra("nativeRecoveryToken", recoveryToken)
         }
         @Synchronized fun consumeRecoveryToken(intent: Intent): Boolean {
             val token = intent.getStringExtra("nativeRecoveryToken")

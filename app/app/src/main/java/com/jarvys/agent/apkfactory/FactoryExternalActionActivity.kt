@@ -27,7 +27,7 @@ import com.jarvys.factory.runtime.ExternalLaunchControl
 import java.util.concurrent.RejectedExecutionException
 
 /** Human reviews the immutable typed input and chooses a native recipient; no automatic navigation. */
-open class FactoryExternalLaunchActivity : ComponentActivity() {
+open class FactoryExternalActionActivity : ComponentActivity() {
     private val coordinator by lazy { FactoryExternalLaunchCoordinator.get(applicationContext) }
     private val targets by lazy { FactoryExternalLaunchTargets(applicationContext) }
     private lateinit var guard: MemoryUiAutomationGuard.Lease

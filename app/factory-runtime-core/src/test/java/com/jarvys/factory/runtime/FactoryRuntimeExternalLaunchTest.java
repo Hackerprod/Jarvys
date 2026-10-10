@@ -80,7 +80,7 @@ public class FactoryRuntimeExternalLaunchTest {
     @Test public void mapsOnlyCallsExactPinnedHostAndPreservesOriginalTypedQueryWithoutFileAuthority()throws Exception{
         Response reply=open();assertNull(screen.launched);idle();assertNotNull(screen.launched);assertNull(reply.value);
         assertEquals("com.jarvys.agent",screen.launched.getComponent().getPackageName());
-        assertEquals("com.jarvys.agent.apkfactory.FactoryExternalLaunchActivity",screen.launched.getComponent().getClassName());
+        assertEquals("com.jarvys.agent.apkfactory.FactoryExternalActionActivity",screen.launched.getComponent().getClassName());
         assertEquals("maps.open",screen.launched.getStringExtra("method"));
         assertEquals("Café %2F & + # 東京",new JSONObject(screen.launched.getStringExtra("args")).getString("query"));
         assertEquals(new java.util.HashSet<>(java.util.Arrays.asList("protocolVersion","nonce","method","args","control")),screen.launched.getExtras().keySet());

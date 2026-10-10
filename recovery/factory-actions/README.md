@@ -43,7 +43,11 @@ Checkpoint `865b119` is backed up with normal history. Focused host validation p
 including 96 new native external-action cases; the single guarded worker blocked one external
 HTTP(S) attempt, whose cause is not attributed. Corrected core/runtime validation passed 462+72
 cases with zero failures/errors/skips and zero blocked external attempts across two guarded workers.
-SDK passed 18 cases. Five actual-Application startup tests are included in the 1,066 frozen app inputs and await the full aggregate.
+SDK passed 18 cases. Initial lint completed with one additional CustomSplashScreen warning in
+each host flavor (314/301 versus 313/300), caused by the new Activity name. The narrow
+FactoryExternalActionActivity rename updates exact manifest/runtime/recovery/test references;
+no suppression, permission or dispatch behavior changed. The failed-delta evidence is preserved;
+all final gates will run again after the rename. Five actual-Application startup tests are included in the 1,066 frozen app inputs and await the full aggregate.
 None of these focused results substitutes for final aggregate, lint, APK audits or physical acceptance.
 
 Full contract and current official sources: [APK_FACTORY](../../app/APK_FACTORY.md#typed-maps-and-dialer-launch-ux42-f1-v72).

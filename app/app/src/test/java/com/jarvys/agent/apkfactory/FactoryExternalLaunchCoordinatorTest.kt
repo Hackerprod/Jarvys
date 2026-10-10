@@ -42,7 +42,7 @@ class FactoryExternalLaunchCoordinatorTest {
     private fun <T> io(block: () -> T): T = executor.submit(Callable(block)).get(5, TimeUnit.SECONDS)
     private fun denied(block: () -> Unit) = assertTrue("Expected rejection", runCatching(block).isFailure)
     private fun make(verify: (String, String) -> FactoryDocumentCoordinator.Proof = { _, _ -> proof }) = FactoryExternalLaunchCoordinator(context, verify).also { owners += it }
-    private fun intent(method: String = "maps.open", args: String = ARGS) = Intent(context, FactoryExternalLaunchActivity::class.java).putExtras(Bundle().apply {
+    private fun intent(method: String = "maps.open", args: String = ARGS) = Intent(context, FactoryExternalActionActivity::class.java).putExtras(Bundle().apply {
         putInt("protocolVersion", 1); putString("nonce", "d".repeat(64)); putString("method", method); putString("args", args); putBinder("control", Binder())
     })
     private fun request(method: String = "maps.open", args: String = ARGS) = FactoryExternalLaunchCoordinator.Request.parse(intent(method, args))

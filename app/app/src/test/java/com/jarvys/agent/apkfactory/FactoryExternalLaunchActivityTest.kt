@@ -96,12 +96,12 @@ class FactoryExternalLaunchActivityTest {
         drain(); return controller
     }
     private fun recovery() = launch(FactoryExternalLaunchCoordinator.recoveryIntent(context), caller = null)
-    private fun button(activity: FactoryExternalLaunchActivity, name: String) = activity.window.decorView.findViewWithTag<Button>("factory-external-launch-$name")
-    private fun choose(activity: FactoryExternalLaunchActivity) {
+    private fun button(activity: FactoryExternalActionActivity, name: String) = activity.window.decorView.findViewWithTag<Button>("factory-external-launch-$name")
+    private fun choose(activity: FactoryExternalActionActivity) {
         val choice = activity.window.decorView.findViewWithTag<RadioButton>(fixture.component.flattenToString())
         assertNotNull("Verified typed recipient must be offered as a native choice", choice); assertTrue(choice.isEnabled); choice.performClick()
     }
-    private fun render(activity: FactoryExternalLaunchActivity) = FactoryExternalLaunchActivity::class.java.getDeclaredMethod("render").apply { isAccessible = true }.invoke(activity)
+    private fun render(activity: FactoryExternalActionActivity) = FactoryExternalActionActivity::class.java.getDeclaredMethod("render").apply { isAccessible = true }.invoke(activity)
     private fun views(view: View): List<View> = listOf(view) + if (view is ViewGroup) (0 until view.childCount).flatMap { views(view.getChildAt(it)) } else emptyList()
     private fun wrapRevocation(value: FactoryExternalLaunchCoordinator.Session, around: (Runnable) -> Unit) {
         val registration = value.registration!!
@@ -359,7 +359,7 @@ class FactoryExternalLaunchActivityTest {
     }
     @Test fun expiredReviewNeverLaunchesAndOnlyExplicitRecoveryReleasesAdmission() {
         val activity = launch().get(); choose(activity)
-        val expire = FactoryExternalLaunchActivity::class.java.getDeclaredField("expire").apply { isAccessible = true }.get(activity) as Runnable
+        val expire = FactoryExternalActionActivity::class.java.getDeclaredField("expire").apply { isAccessible = true }.get(activity) as Runnable
         expire.run(); button(activity, "open").performClick(); drain()
         assertEquals(0, activity.launches.size); assertTrue(coordinator.needsRecovery()); assertFalse(FactoryInteractionAdmission.available())
         button(activity, "close").performClick(); drain(); assertTrue(FactoryInteractionAdmission.available()); assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode)
@@ -377,7 +377,7 @@ class FactoryExternalLaunchActivityTest {
 }
 
 /** No real Activity dispatch: preserve host logic up to the final platform effect. */
-class FactoryExternalLaunchRecordingActivity : FactoryExternalLaunchActivity() {
+class FactoryExternalLaunchRecordingActivity : FactoryExternalActionActivity() {
     val launches = mutableListOf<Intent>()
     var beforeStart: (() -> Unit)? = null
     override fun startActivity(intent: Intent) { launches += Intent(intent); beforeStart?.invoke() }

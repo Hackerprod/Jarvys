@@ -992,7 +992,7 @@ public final class FactoryRuntime implements AutoCloseable {
                 extras.putInt("protocolVersion", 1); extras.putString("nonce", work.nonce); extras.putString("method", work.method); extras.putString("args", work.args);
                 extras.putBinder("control", work.control);
                 Intent intent = new Intent().setComponent(new android.content.ComponentName(config.documentBroker.packageName,
-                        "com.jarvys.agent.apkfactory.FactoryExternalLaunchActivity")).putExtras(extras);
+                        "com.jarvys.agent.apkfactory.FactoryExternalActionActivity")).putExtras(extras);
                 work.launched = true;
                 activity.startActivityForResult(intent, EXTERNAL_REQUEST);
             } catch (Exception unavailable) {

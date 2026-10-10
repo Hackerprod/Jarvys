@@ -98,7 +98,7 @@
             android:grantUriPermissions="true">
             <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/factory_file_share_paths" />
         </provider>
-        <activity android:name="com.jarvys.agent.apkfactory.FactoryExternalLaunchActivity" android:exported="true" android:windowSoftInputMode="adjustResize" />
+        <activity android:name="com.jarvys.agent.apkfactory.FactoryExternalActionActivity" android:exported="true" android:windowSoftInputMode="adjustResize" />
         <activity android:name="com.jarvys.agent.apkfactory.FactoryBrowserActivity" android:exported="true" android:windowSoftInputMode="adjustResize" />
         <activity android:name="com.jarvys.agent.apkfactory.FactoryAudioActivity" android:exported="true" android:windowSoftInputMode="adjustResize" />
         <activity android:name="com.jarvys.agent.apkfactory.FactoryPhotoActivity" android:exported="true" android:windowSoftInputMode="adjustResize" />
