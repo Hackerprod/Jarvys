@@ -1,0 +1,6 @@
+// Repackage all three host deliverables freshly without changing sources or signing.
+gradle.projectsEvaluated {
+    rootProject.project(':app').tasks.matching { it.name in ['packageFullDebug','packagePlayDebug','packageFullRelease'] }.configureEach {
+        outputs.upToDateWhen { false }
+    }
+}

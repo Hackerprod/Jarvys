@@ -61,3 +61,18 @@ pending requests and requests cancellation. No effect or authentication is autom
 All v63–v79 consent, lifecycle, manifest, signing and recovery boundaries remain. TTS/voice,
 backup, local UI, remaining F1 and F2/F3 remain pending. UX34 retains its gates, UX44 is documentary,
 and UX43 remains last. This work neither enables them nor closes their acceptance criteria.
+
+## Recoverable validation sources
+
+The executor reset interrupted final validation on 2026-10-10. The implementation and two
+reviewed corrections were preserved through normal-history source checkpoint `99b9f34`.
+Final v80 gates must be rerun against that frozen source; pre-reset checks are not final evidence.
+
+[host-harness](host-harness/README.md) preserves source-only restoration, exact guard-hash gates,
+SDK30/toolchain checksum pins, fresh gate orchestration and fail-closed archive helpers.
+[reviewer-tools](reviewer-tools/README-REBUILT-HELPERS.md) preserves independent binary/manifest,
+fresh-evidence and semantic DEX audit sources, with synthetic probe regeneration controls.
+Materialize these tools into the documented external layout before use; rebuilding a guard
+requires fresh checks and independent approval before any exact hash re-pin. The portable
+launcher is a reviewed recovery source, not a claim that it ran the current final gates.
+No generated APK, guard JAR, signing material, private data or raw host report is included.

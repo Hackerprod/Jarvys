@@ -1,0 +1,4 @@
+// Preserve all library diagnostics while producing complete comparable reports.
+allprojects {
+    plugins.withId('com.android.library') { android.lint.abortOnError = false }
+}

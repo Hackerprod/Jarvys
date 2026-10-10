@@ -1,0 +1,11 @@
+// Host-only synthetic package evidence; no production configuration changes.
+def label = System.getenv('JARVYS_RUN_LABEL')
+if (!label) throw new GradleException('Fresh evidence label required')
+def root = System.getenv('JARVYS_FACTORY_EVIDENCE_ROOT')
+if (!root || !new File(root).isAbsolute())
+    throw new GradleException('Absolute external JARVYS_FACTORY_EVIDENCE_ROOT required')
+allprojects {
+    tasks.withType(Test).configureEach {
+        systemProperty 'jarvys.factory.evidenceDir', "${root}/${label}/${project.name}-${name}"
+    }
+}

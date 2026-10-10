@@ -1,0 +1,39 @@
+{
+  "compare_lint.py": {
+    "source_relative_path": "FACTORY-BIOMETRICS-v80-validation/compare_lint.py",
+    "source_sha256": "31519f79f442499c731a1cb23ef554da9805a46e897b13ea98d4c76ded72100e",
+    "packaged_sha256": "31519f79f442499c731a1cb23ef554da9805a46e897b13ea98d4c76ded72100e",
+    "unchanged_logic": true
+  },
+  "factory-evidence.init.gradle": {
+    "source_relative_path": "FACTORY-BIOMETRICS-v80-validation/factory-evidence.init.gradle",
+    "source_sha256": "85ef4a637b7fbd72901ba59b294dc78aa1bd618b41940e49ef31bee66795f0e2",
+    "packaged_sha256": "46cbbd3951c543364828bb7e05ec866e0c079bc194f59be2bc7a798d38b0cdb0",
+    "unchanged_logic": false,
+    "adaptation": "Only the hardcoded synthetic evidence root becomes required absolute JARVYS_FACTORY_EVIDENCE_ROOT; per-run/task path shape is unchanged"
+  },
+  "freeze_source.py": {
+    "source_relative_path": "FACTORY-BIOMETRICS-v80-validation/freeze_source.py",
+    "source_sha256": "e6849fd65f7d95c01606e10496d7b26b79210ffaf01af67a22d853fd7b32d7a2",
+    "packaged_sha256": "e6849fd65f7d95c01606e10496d7b26b79210ffaf01af67a22d853fd7b32d7a2",
+    "unchanged_logic": true
+  },
+  "fresh-apks.init.gradle": {
+    "source_relative_path": "FACTORY-BIOMETRICS-v80-validation/fresh-apks.init.gradle",
+    "source_sha256": "3a3da5c99634c07e6003265af41df7ab4da06eb9567b96a5429b6ff4a0c3ab2c",
+    "packaged_sha256": "3a3da5c99634c07e6003265af41df7ab4da06eb9567b96a5429b6ff4a0c3ab2c",
+    "unchanged_logic": true
+  },
+  "library-lint.init.gradle": {
+    "source_relative_path": "FACTORY-BIOMETRICS-v80-validation/library-lint.init.gradle",
+    "source_sha256": "1d22e829896715375543add0c2d5a48fb2dd88e9aba220267925fb44438beee0",
+    "packaged_sha256": "1d22e829896715375543add0c2d5a48fb2dd88e9aba220267925fb44438beee0",
+    "unchanged_logic": true
+  },
+  "run_gate.py": {
+    "source_relative_path": "FACTORY-BIOMETRICS-v80-validation/run_gate.py",
+    "source_sha256": "30998172f6cfbbf651347e59768015d461caef0ba6dbd51e7e2bf3e3d2577b53",
+    "packaged_sha256": "30998172f6cfbbf651347e59768015d461caef0ba6dbd51e7e2bf3e3d2577b53",
+    "unchanged_logic": true
+  }
+}
