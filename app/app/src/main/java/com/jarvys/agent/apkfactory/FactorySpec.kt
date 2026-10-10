@@ -1,6 +1,7 @@
 package com.jarvys.agent.apkfactory
 
 import com.jarvys.factory.contract.CapabilityCatalog
+import com.jarvys.factory.runtime.FactoryConfig
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -14,9 +15,15 @@ data class FactorySpec(
     val webDir: String,
     val icon: String,
 ) {
-    fun runtimeConfig(): ByteArray = JSONObject().put("schemaVersion", 1).put("appId", appId)
-        .put("name", name).put("entryPoint", "www/index.html")
-        .put("capabilities", JSONArray(capabilities)).toString().toByteArray(Charsets.UTF_8)
+    fun runtimeConfig(documentBroker: JSONObject? = null): ByteArray {
+        val config = JSONObject().put("schemaVersion", 1).put("appId", appId)
+            .put("name", name).put("entryPoint", "www/index.html")
+            .put("capabilities", JSONArray(capabilities))
+        if (documentBroker != null) config.put("documentBroker", documentBroker)
+        val text = config.toString()
+        FactoryConfig.parse(text, appId)
+        return text.toByteArray(Charsets.UTF_8)
+    }
 
     fun toJson(): JSONObject = JSONObject().put("schemaVersion", 1).put("appId", appId).put("name", name)
         .put("versionCode", versionCode).put("versionName", versionName)

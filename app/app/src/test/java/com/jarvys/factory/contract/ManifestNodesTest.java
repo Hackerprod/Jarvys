@@ -52,14 +52,24 @@ public class ManifestNodesTest {
         assertEquals(7, current.nodes.size()); assertEquals(-1,current.nodes.get(0).parentIndex);
         assertEquals(4,current.nodes.get(6).parentIndex);
     }
-    @Test public void all64SelectionsStillEncodeOneZeroPermissionTree() throws Exception {
+    @Test public void all128SelectionsEncodeOnlyTheApprovedDocumentQueries() throws Exception {
         byte[] first = ManifestXml.encode(plan(Collections.emptyList()));
-        for (int mask=0; mask<64; mask++) {
+        for (int mask=0; mask<128; mask++) {
             List<String> caps = new ArrayList<>();
-            for (int bit=0; bit<6; bit++) if ((mask & (1<<bit)) != 0) caps.add(CapabilityCatalog.NAMES.get(bit));
+            for (int bit=0; bit<7; bit++) if ((mask & (1<<bit)) != 0) caps.add(CapabilityCatalog.NAMES.get(bit));
             ManifestPlan p = plan(caps);
-            assertArrayEquals(first, ManifestXml.encode(p)); assertTrue(CapabilityCatalog.manifestContributions(caps).isEmpty());
-            assertTrue(p.permissions.isEmpty()); assertTrue(p.features.isEmpty()); assertTrue(p.queries.isEmpty());
+            boolean documents = caps.contains("documents");
+            if (!documents) assertArrayEquals(first, ManifestXml.encode(p));
+            ManifestAudit.read(ManifestXml.encode(p)).verify(p);
+            assertEquals(documents ? 1 : 0, CapabilityCatalog.manifestContributions(caps).size());
+            assertEquals(documents ? 10 : 7, p.nodes.size());
+            assertTrue(p.permissions.isEmpty()); assertTrue(p.features.isEmpty());
+            assertEquals(documents ? 2 : 0, p.queries.size());
+            if (documents) {
+                assertEquals(new ArrayList<>(CapabilityCatalog.DOCUMENT_BROKER_PACKAGES), p.queries);
+                assertEquals(7, p.nodes.get(8).parentIndex); assertEquals(7, p.nodes.get(9).parentIndex);
+                assertThrows(IOException.class, () -> ManifestAudit.read(ManifestXml.encode(p)).verify(plan(Collections.emptyList())));
+            }
         }
         for (CapabilityCatalog.Capability c : CapabilityCatalog.CAPABILITIES.values()) assertThrows(UnsupportedOperationException.class, () -> c.manifestNodes.add(ManifestNodes.feature("android.hardware.camera", false)));
         assertThrows(IllegalArgumentException.class, () -> plan(list("camera")));

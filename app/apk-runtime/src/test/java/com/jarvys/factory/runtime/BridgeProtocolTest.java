@@ -5,8 +5,9 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class BridgeProtocolTest {
+    private static final String HANDLE = new String(new char[64]).replace('\0', 'a');
     static FactoryConfig config(String capabilities) throws Exception {
-        return FactoryConfig.parse("{\"schemaVersion\":1,\"appId\":\"com.example.notes\",\"name\":\"Notes\",\"entryPoint\":\"www/index.html\",\"capabilities\":" + capabilities + "}", "com.example.notes");
+        return FactoryConfig.parsePreview("{\"schemaVersion\":1,\"appId\":\"com.example.notes\",\"name\":\"Notes\",\"entryPoint\":\"www/index.html\",\"capabilities\":" + capabilities + "}");
     }
     static String request(String method, String args) {
         return "{\"v\":1,\"id\":\"r_1\",\"method\":\"" + method + "\",\"args\":" + args + "}";
@@ -25,7 +26,12 @@ public class BridgeProtocolTest {
         FactoryConfig empty = config("[]");
         rejected("CAPABILITY_DENIED", BridgeProtocol.ORIGIN, true, request("storage.get", "{\"key\":\"notes\"}"), empty);
         assertEquals("runtime.info", BridgeProtocol.validate(BridgeProtocol.ORIGIN, true, request("runtime.info", "{}"), empty).method);
-        String[][] methods = {{"export.text", "{\"filename\":\"note.txt\",\"text\":\"hi\"}"}, {"share.text", "{\"text\":\"hi\"}"}, {"clipboard.write", "{\"text\":\"hi\"}"}, {"haptics.perform", "{}"}, {"device.info", "{}"}};
+        String[][] methods = {{"export.text", "{\"filename\":\"note.txt\",\"text\":\"hi\"}"}, {"share.text", "{\"text\":\"hi\"}"}, {"clipboard.write", "{\"text\":\"hi\"}"}, {"haptics.perform", "{}"}, {"device.info", "{}"},
+            {"documents.open", "{\"mimeType\":\"*/*\"}"},
+            {"documents.create", "{\"filename\":\"file.bin\",\"mimeType\":\"application/octet-stream\"}"},
+            {"documents.read", "{\"handle\":\""+HANDLE+"\",\"offset\":0,\"length\":1}"},
+            {"documents.write", "{\"handle\":\""+HANDLE+"\",\"offset\":0,\"data\":\"AA==\"}"},
+            {"documents.close", "{\"handle\":\""+HANDLE+"\"}"}, {"documents.cancel", "{}"}};
         for (String[] call : methods) rejected("CAPABILITY_DENIED", BridgeProtocol.ORIGIN, true, request(call[0], call[1]), empty);
     }
     @Test public void typedAllowlistRejectsDangerousOrUnknownRequests() throws Exception {
@@ -64,16 +70,21 @@ public class BridgeProtocolTest {
         JSONObject failure = new JSONObject(BridgeProtocol.failure("r_1", "CANCELLED", "Cancelled"));
         assertFalse(failure.getBoolean("ok")); assertEquals("CANCELLED", failure.getJSONObject("error").getString("code"));
     }
-    @Test public void all64CapabilitySelectionsMatchCatalogAndTypedValidators() throws Exception {
+    @Test public void all128CapabilitySelectionsMatchCatalogAndTypedValidators() throws Exception {
         String[][] calls = {{"runtime.info", "{}"}, {"storage.get", "{\"key\":\"x\"}"},
             {"storage.set", "{\"key\":\"x\",\"value\":\"v\"}"}, {"storage.remove", "{\"key\":\"x\"}"},
             {"storage.list", "{}"}, {"export.text", "{\"filename\":\"x.txt\",\"text\":\"x\"}"},
             {"share.text", "{\"text\":\"x\"}"}, {"clipboard.write", "{\"text\":\"x\"}"},
-            {"haptics.perform", "{}"}, {"device.info", "{}"}};
+            {"haptics.perform", "{}"}, {"device.info", "{}"},
+            {"documents.open", "{\"mimeType\":\"*/*\"}"},
+            {"documents.create", "{\"filename\":\"file.bin\",\"mimeType\":\"application/octet-stream\"}"},
+            {"documents.read", "{\"handle\":\""+HANDLE+"\",\"offset\":0,\"length\":1}"},
+            {"documents.write", "{\"handle\":\""+HANDLE+"\",\"offset\":0,\"data\":\"AA==\"}"},
+            {"documents.close", "{\"handle\":\""+HANDLE+"\"}"}, {"documents.cancel", "{}"}};
         assertEquals(com.jarvys.factory.contract.CapabilityCatalog.METHODS.size(), calls.length);
-        for (int mask = 0; mask < 64; mask++) {
+        for (int mask = 0; mask < 128; mask++) {
             org.json.JSONArray declared = new org.json.JSONArray();
-            for (int bit = 0; bit < 6; bit++) if ((mask & (1 << bit)) != 0)
+            for (int bit = 0; bit < 7; bit++) if ((mask & (1 << bit)) != 0)
                 declared.put(com.jarvys.factory.contract.CapabilityCatalog.NAMES.get(bit));
             FactoryConfig selected = config(declared.toString());
             for (String[] call : calls) {
@@ -90,6 +101,35 @@ public class BridgeProtocolTest {
                     request(call[0], invalid.toString()), selected);
             }
         }
+    }
+
+    @Test public void documentsRejectPathsNonCanonicalChunksAndNonIntegerOffsets() throws Exception {
+        FactoryConfig docs = config("[\"documents\"]");
+        String[] mimeInvalid = {"text/plain; charset=utf-8", "*/plain", "text/plain,application/json", "file:///tmp/a", "", "text/plain\n"};
+        for (String mime : mimeInvalid) {
+            JSONObject args = new JSONObject().put("mimeType", mime);
+            rejected("INVALID_ARGUMENT", BridgeProtocol.ORIGIN, true, request("documents.open", args.toString()), docs);
+        }
+        for (String mime : new String[]{"*/*","text/*","image/png","application/vnd.example+json"})
+            BridgeProtocol.validate(BridgeProtocol.ORIGIN,true,request("documents.open",new JSONObject().put("mimeType",mime).toString()),docs);
+        for (String mime : new String[]{"*/*","text/*"})
+            rejected("INVALID_ARGUMENT",BridgeProtocol.ORIGIN,true,request("documents.create",new JSONObject().put("filename","file.txt").put("mimeType",mime).toString()),docs);
+        for (String data : new String[]{"", "AA", "AB==", "AAA", "AAB=", "AA==\n", "AA--", "====", new String(new char[43696]).replace('\0','A')})
+            rejected("INVALID_ARGUMENT",BridgeProtocol.ORIGIN,true,request("documents.write",new JSONObject().put("handle",HANDLE).put("offset",0).put("data",data).toString()),docs);
+        for (String number : new String[]{"0.0","1e0","-1","16777217","2147483648","\"0\"","null"})
+            rejected("INVALID_ARGUMENT",BridgeProtocol.ORIGIN,true,request("documents.read","{\"handle\":\""+HANDLE+"\",\"offset\":"+number+",\"length\":1}"),docs);
+        for (String extra : new String[]{"uri","path","url","persist","packageName"}) {
+            JSONObject args = new JSONObject().put("handle",HANDLE).put(extra,"content://private");
+            rejected("INVALID_ARGUMENT",BridgeProtocol.ORIGIN,true,request("documents.close",args.toString()),docs);
+        }
+        for (String handle : new String[]{HANDLE.toUpperCase(),HANDLE.substring(1),"content://private"})
+            rejected("INVALID_ARGUMENT",BridgeProtocol.ORIGIN,true,request("documents.close",new JSONObject().put("handle",handle).toString()),docs);
+        for (int length : new int[]{0,-1,32769})
+            rejected("INVALID_ARGUMENT",BridgeProtocol.ORIGIN,true,request("documents.read",new JSONObject().put("handle",HANDLE).put("offset",0).put("length",length).toString()),docs);
+        BridgeProtocol.validate(BridgeProtocol.ORIGIN,true,request("documents.read",new JSONObject().put("handle",HANDLE).put("offset",16777216).put("length",1).toString()),docs);
+        String maximum = java.util.Base64.getEncoder().encodeToString(new byte[32768]);
+        BridgeProtocol.validate(BridgeProtocol.ORIGIN,true,request("documents.write",new JSONObject().put("handle",HANDLE).put("offset",16744448).put("data",maximum).toString()),docs);
+        rejected("INVALID_ARGUMENT",BridgeProtocol.ORIGIN,true,request("documents.write",new JSONObject().put("handle",HANDLE).put("offset",16744449).put("data",maximum).toString()),docs);
     }
 
 }

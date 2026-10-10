@@ -16,8 +16,16 @@ public final class FactoryConfig {
     public final String name;
     public final String entryPoint;
     public final Set<String> capabilities;
+    public final DocumentBroker documentBroker;
+    public static final class DocumentBroker {
+        public final String packageName, certificateSha256;
+        private DocumentBroker(String packageName, String certificateSha256) {
+            this.packageName = packageName; this.certificateSha256 = certificateSha256;
+        }
+    }
 
-    private FactoryConfig(String appId, String name, String entryPoint, Set<String> capabilities) {
+    private FactoryConfig(String appId, String name, String entryPoint, Set<String> capabilities, DocumentBroker documentBroker) {
+        this.documentBroker = documentBroker;
         this.appId = appId; this.name = name; this.entryPoint = entryPoint;
         this.capabilities = Collections.unmodifiableSet(capabilities);
     }
@@ -29,7 +37,7 @@ public final class FactoryConfig {
     private static FactoryConfig parseInternal(String text, String installedPackage) throws FactoryException {
         try {
             JSONObject object = StrictJson.object(text, 8192);
-            exactKeys(object, "schemaVersion", "appId", "name", "entryPoint", "capabilities");
+            exactKeys(object, "schemaVersion", "appId", "name", "entryPoint", "capabilities", "documentBroker");
             if (!(object.get("schemaVersion") instanceof Integer) || object.getInt("schemaVersion") != 1)
                 throw new FactoryException("INVALID_CONFIG", "Unsupported application configuration version.");
             String appId = string(object, "appId");
@@ -49,7 +57,19 @@ public final class FactoryConfig {
                 if (!(value instanceof String) || !SUPPORTED.contains(value) || !capabilities.add((String) value))
                     throw new FactoryException("INVALID_CONFIG", "Unknown or duplicate application capability.");
             }
-            return new FactoryConfig(appId, name, entry, capabilities);
+            DocumentBroker broker = null;
+            if (object.has("documentBroker")) {
+                if (!capabilities.contains("documents")) throw new FactoryException("INVALID_CONFIG", "Document broker requires documents capability.");
+                JSONObject metadata = object.getJSONObject("documentBroker");
+                exactKeys(metadata, "packageName", "certificateSha256");
+                String host = string(metadata, "packageName"), certificate = string(metadata, "certificateSha256");
+                if (!CapabilityCatalog.DOCUMENT_BROKER_PACKAGES.contains(host) || !certificate.matches("[a-f0-9]{64}"))
+                    throw new FactoryException("INVALID_CONFIG", "Invalid pinned document broker.");
+                broker = new DocumentBroker(host, certificate);
+            }
+            if (installedPackage != null && capabilities.contains("documents") && broker == null)
+                throw new FactoryException("INVALID_CONFIG", "Documents requires a pinned compatible Jarvys broker.");
+            return new FactoryConfig(appId, name, entry, capabilities, broker);
         } catch (JSONException e) {
             throw new FactoryException("INVALID_CONFIG", "Invalid application configuration.");
         }

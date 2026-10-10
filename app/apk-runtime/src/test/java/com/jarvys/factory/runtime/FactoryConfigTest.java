@@ -22,6 +22,33 @@ public class FactoryConfigTest {
         FactoryConfig config = FactoryConfig.parse(text("com.example.app", "www/index.html", "[\"storage\"]"), "com.example.app");
         try { config.capabilities.add("export"); fail(); } catch (UnsupportedOperationException expected) { }
     }
+    @Test public void documentBrokerIsPinnedAndOnlyAcceptedForDocuments() throws Exception {
+        String base = text("com.example.app", "www/index.html", "[\"documents\"]");
+        reject(base, "com.example.app");
+        assertNull(FactoryConfig.parsePreview(base).documentBroker);
+        String digest = new String(new char[64]).replace('\0', 'a');
+        for (String host : new String[]{"com.jarvys.agent","com.jarvys.agent.recoverytest"}) {
+            org.json.JSONObject config = new org.json.JSONObject(base).put("documentBroker",
+                new org.json.JSONObject().put("packageName",host).put("certificateSha256",digest));
+            FactoryConfig parsed = FactoryConfig.parse(config.toString(),"com.example.app");
+            assertEquals(host,parsed.documentBroker.packageName); assertEquals(digest,parsed.documentBroker.certificateSha256);
+            assertEquals(host,FactoryConfig.parsePreview(config.toString()).documentBroker.packageName);
+            config.put("capabilities",new org.json.JSONArray()); reject(config.toString(),"com.example.app");
+        }
+        for (String host : new String[]{"org.example.broker","com.jarvys.agent.fake","com.jarvys.agent.debug",""}) {
+            org.json.JSONObject config = new org.json.JSONObject(base).put("documentBroker",
+                new org.json.JSONObject().put("packageName",host).put("certificateSha256",digest));
+            reject(config.toString(),"com.example.app");
+        }
+        for (String certificate : new String[]{digest.toUpperCase(), "aa", digest + "a", "", "sha256:" + digest}) {
+            org.json.JSONObject config = new org.json.JSONObject(base).put("documentBroker",
+                new org.json.JSONObject().put("packageName","com.jarvys.agent").put("certificateSha256",certificate));
+            reject(config.toString(),"com.example.app");
+        }
+        org.json.JSONObject metadata = new org.json.JSONObject().put("packageName","com.jarvys.agent").put("certificateSha256",digest);
+        reject(new org.json.JSONObject(base).put("documentBroker",metadata.put("uri","content://private")).toString(),"com.example.app");
+        reject(new org.json.JSONObject(base).put("documentBroker",org.json.JSONObject.NULL).toString(),"com.example.app");
+    }
     private void reject(String text, String installed) throws Exception {
         try { FactoryConfig.parse(text, installed); fail("Invalid config accepted"); } catch (FactoryException expected) { }
     }

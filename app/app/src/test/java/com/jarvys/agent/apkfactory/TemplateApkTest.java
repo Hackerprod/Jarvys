@@ -100,6 +100,48 @@ public class TemplateApkTest {
             assertThrows(UnsupportedOperationException.class,()->plan.capabilities.clear());
         }
     }
+    @Test public void documentQueriesAreTheOnlyAdditiveManifestProfile() throws Exception {
+        TemplateApk.Spec docs = new TemplateApk.Spec(spec.appId,spec.label,1,"1.0",Collections.singletonList("documents"));
+        byte[] apk = TemplateApk.build(template,docs,icon,assets);
+        TemplateApk.ManifestInfo info = TemplateApk.inspect(apk);
+        assertEquals(Arrays.asList("com.jarvys.agent","com.jarvys.agent.recoverytest"),info.plan.queries);
+        assertTrue(info.permissions.isEmpty()); assertTrue(info.plan.features.isEmpty());
+        assertEquals(10,info.plan.nodes.size()); assertEquals(1,info.plan.exportedComponents.size());
+        TemplateApk.verify(apk,docs);
+        rejects(() -> TemplateApk.verify(apk,spec));
+        byte[] original = unzip(apk).get("AndroidManifest.xml");
+        // Change one allowed package while retaining perfectly valid binary XML.
+        Map<String,byte[]> wrong = unzip(apk);
+        wrong.put("AndroidManifest.xml",renamePoolString(original,"com.jarvys.agent.recoverytest","com.jarvys.agent.untrusted"));
+        rejects(() -> TemplateApk.inspect(zip(wrong,false)));
+        int packageStart = -1, packageEnd = -1;
+        int index = 0;
+        for (int at=8;at<original.length;at+=int32(original,at+4)) {
+            if (u16(original,at)==0x102) {
+                if (index++==8) packageStart=at;
+            } else if (u16(original,at)==0x103 && packageStart>=0 && packageEnd<0) packageEnd=at+int32(original,at+4);
+        }
+        assertTrue(packageEnd>packageStart);
+        Map<String,byte[]> duplicate=unzip(apk);
+        duplicate.put("AndroidManifest.xml",insert(original,packageStart,Arrays.copyOfRange(original,packageStart,packageEnd)));
+        rejects(() -> TemplateApk.inspect(zip(duplicate,false)));
+        byte[] missing = new byte[original.length-(packageEnd-packageStart)];
+        System.arraycopy(original,0,missing,0,packageStart);
+        System.arraycopy(original,packageEnd,missing,packageStart,original.length-packageEnd);
+        set32(missing,4,missing.length);
+        Map<String,byte[]> absent=unzip(apk);absent.put("AndroidManifest.xml",missing);
+        rejects(() -> TemplateApk.inspect(zip(absent,false)));
+        // Extra attributes on the queries parent cannot be hidden behind the approved package list.
+        int queries=-1; index=0;
+        for(int at=8;at<original.length;at+=int32(original,at+4))
+            if(u16(original,at)==0x102 && index++==7) { queries=at;break; }
+        assertTrue(queries>=0);
+        byte[] extra=insert(original,queries+36,Arrays.copyOfRange(original,packageStart+36,packageStart+56));
+        set32(extra,queries+4,56);set16(extra,queries+28,1);
+        Map<String,byte[]> attrs=unzip(apk);attrs.put("AndroidManifest.xml",extra);
+        rejects(() -> TemplateApk.inspect(zip(attrs,false)));
+    }
+
     @Test public void callerIdentityVersionAndResourcePlanCannotBeSubstituted() throws Exception {
         byte[] apk=build();
         for(TemplateApk.Spec wrong:new TemplateApk.Spec[]{new TemplateApk.Spec("org.example.other","Factory notes",1,"1.0"),

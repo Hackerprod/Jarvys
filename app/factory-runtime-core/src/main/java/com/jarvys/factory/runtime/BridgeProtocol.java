@@ -11,6 +11,8 @@ public final class BridgeProtocol {
     public static final int MAX_MESSAGE_BYTES = 524288;
     public static final int MAX_TEXT_BYTES = 262144;
     public static final int MAX_VALUE_BYTES = 65536;
+    public static final int MAX_DOCUMENT_CHUNK_BYTES = 32768;
+    public static final int MAX_DOCUMENT_BYTES = 16 * 1024 * 1024;
 
     public static final class Request {
         public final String id, method;
@@ -69,6 +71,29 @@ public final class BridgeProtocol {
                     }
                     break;
                 case DEVICE_INFO: FactoryConfig.exactKeys(args); break;
+                case DOCUMENTS_OPEN:
+                    FactoryConfig.exactKeys(args, "mimeType"); documentMime(args, true); break;
+                case DOCUMENTS_CREATE:
+                    FactoryConfig.exactKeys(args, "filename", "mimeType");
+                    String documentName = text(args, "filename", 120, false);
+                    if (!documentName.matches("[a-zA-Z0-9][a-zA-Z0-9 _.-]{0,119}") || documentName.endsWith(".") || documentName.contains(".."))
+                        throw new FactoryException("INVALID_ARGUMENT", "Use a simple document filename without paths.");
+                    documentMime(args, false); break;
+                case DOCUMENTS_READ:
+                    FactoryConfig.exactKeys(args, "handle", "offset", "length"); documentHandle(args);
+                    documentInteger(args, "offset", 0, MAX_DOCUMENT_BYTES);
+                    documentInteger(args, "length", 1, MAX_DOCUMENT_CHUNK_BYTES);
+                    break;
+                case DOCUMENTS_WRITE:
+                    FactoryConfig.exactKeys(args, "handle", "offset", "data"); documentHandle(args);
+                    long writeOffset = documentInteger(args, "offset", 0, MAX_DOCUMENT_BYTES);
+                    int byteCount = documentDataLength(FactoryConfig.string(args, "data"));
+                    if (writeOffset + byteCount > MAX_DOCUMENT_BYTES)
+                        throw new FactoryException("INVALID_ARGUMENT", "Write exceeds the document limit.");
+                    break;
+                case DOCUMENTS_CLOSE:
+                    FactoryConfig.exactKeys(args, "handle"); documentHandle(args); break;
+                case DOCUMENTS_CANCEL: FactoryConfig.exactKeys(args); break;
                 default: throw new FactoryException("UNKNOWN_METHOD", "Native method is not implemented.");
             }
             if (capability != null && !config.capabilities.contains(capability))
@@ -77,6 +102,40 @@ public final class BridgeProtocol {
         } catch (JSONException e) {
             throw new FactoryException("INVALID_REQUEST", "Missing or incorrectly typed bridge fields.");
         }
+    }
+    private static void documentMime(JSONObject args, boolean wildcard) throws JSONException, FactoryException {
+        String mime = FactoryConfig.string(args, "mimeType");
+        boolean plain = mime.matches("[a-zA-Z0-9][a-zA-Z0-9!#$&^_.+-]*/[a-zA-Z0-9][a-zA-Z0-9!#$&^_.+-]*");
+        boolean pattern = mime.equals("*/*") || mime.matches("[a-zA-Z0-9][a-zA-Z0-9!#$&^_.+-]*/\\*");
+        if (mime.length() > 127 || !(plain || (wildcard && pattern)))
+            throw new FactoryException("INVALID_ARGUMENT", "Use one plain MIME type.");
+    }
+    private static void documentHandle(JSONObject args) throws JSONException, FactoryException {
+        if (!FactoryConfig.string(args, "handle").matches("[a-f0-9]{64}"))
+            throw new FactoryException("INVALID_ARGUMENT", "Invalid document handle.");
+    }
+    private static long documentInteger(JSONObject args, String key, long min, long max) throws JSONException, FactoryException {
+        Object value = args.get(key);
+        if (!(value instanceof Integer) && !(value instanceof Long))
+            throw new FactoryException("INVALID_ARGUMENT", key + " must be an integer.");
+        long number = ((Number)value).longValue();
+        if (number < min || number > max) throw new FactoryException("INVALID_ARGUMENT", key + " is outside the document limit.");
+        return number;
+    }
+    private static int documentDataLength(String encoded) throws FactoryException {
+        final String alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        if (encoded == null || encoded.isEmpty() || encoded.length() > 43692 || encoded.length() % 4 != 0)
+            throw new FactoryException("INVALID_ARGUMENT", "Use canonical bounded base64 data.");
+        int length = encoded.length();
+        int padding = encoded.charAt(length - 1) == '=' ? (encoded.charAt(length - 2) == '=' ? 2 : 1) : 0;
+        int bytes = (length / 4) * 3 - padding;
+        for (int i = 0; i < length - padding; i++) if (alphabet.indexOf(encoded.charAt(i)) < 0)
+            throw new FactoryException("INVALID_ARGUMENT", "Use canonical bounded base64 data.");
+        if (bytes > MAX_DOCUMENT_CHUNK_BYTES ||
+                (padding == 2 && (alphabet.indexOf(encoded.charAt(length - 3)) & 15) != 0) ||
+                (padding == 1 && (alphabet.indexOf(encoded.charAt(length - 2)) & 3) != 0))
+            throw new FactoryException("INVALID_ARGUMENT", "Use canonical bounded base64 data.");
+        return bytes;
     }
     static String requestId(String raw) {
         try {

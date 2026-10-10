@@ -1,0 +1,12 @@
+<resources>
+    <string name="factory_documents_settings_summary">Review and close interrupted document access</string>
+    <string name="factory_documents_use">Use this document</string>
+    <string name="factory_documents_title">Factory documents</string>
+    <string name="factory_documents_disclosure">Only you can choose a document in Android’s picker. Automated device access stays blocked until this interaction is explicitly closed. Jarvys does not read the document. The verified app receives only temporary access to your selection. Only the latest exactly signed APK is supported.</string>
+    <string name="factory_documents_choose">Review in Android picker</string>
+    <string name="factory_documents_close">Cancel / close</string>
+    <string name="factory_documents_recover">I closed the old picker and task; acknowledge and close</string>
+    <string name="factory_documents_unknown">The previous interaction was interrupted. No selection or authority can be recovered. First close any old Android document picker and its app task. Jarvys cannot verify their closure. Your acknowledgment only releases the automation boundary; the old outcome remains unknown.</string>
+    <string name="factory_documents_rejected">This request is unavailable or revoked. No document access was returned. Close this screen and review recovery if needed.</string>
+    <string name="factory_documents_selected">A selection is ready. Press Use this document to grant the verified app temporary access.</string>
+</resources>

@@ -5,10 +5,10 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const source = fs.readFileSync(require('node:path').join(__dirname, '../src/main/assets/factory-sdk.js'), 'utf8');
 function environment(connected = true) {
-  const sent = [], timers = new Map(), handlers = new Map();
+  const sent = [], timers = new Map(), handlers = new Map(), delays = [];
   let timerId = 0;
   const window = {
-    setTimeout: callback => { timers.set(++timerId, callback); return timerId; },
+    setTimeout: (callback, delay) => { delays.push(delay); timers.set(++timerId, callback); return timerId; },
     clearTimeout: id => timers.delete(id),
     addEventListener: (event, callback) => handlers.set(event, callback)
   };
@@ -17,7 +17,7 @@ function environment(connected = true) {
   function reply(request, result) {
     window.JarvysNative.onmessage({ data: JSON.stringify({ v: 1, id: request.id, ok: true, result }) });
   }
-  return { window, api: window.Jarvys, sent, timers, handlers, reply };
+  return { window, api: window.Jarvys, sent, timers, handlers, delays, reply };
 }
 test('SDK exposes frozen Promise methods and correlates out-of-order responses', async () => {
   const env = environment();
@@ -105,7 +105,7 @@ test('all SDK calls exactly match the catalog and explicit native validator/disp
   const path = require('node:path');
   const catalog = fs.readFileSync(path.join(__dirname, '../../factory-contract/src/main/java/com/jarvys/factory/contract/CapabilityCatalog.java'), 'utf8');
   const rows = [...catalog.matchAll(/\b([A-Z][A-Z_]+)\("([a-z]+\.[a-z]+)", (?:"[a-z]+"|null)\)/g)];
-  assert.equal(rows.length, 10);
+  assert.equal(rows.length, 16);
   const env = environment();
   const args = { 'storage.get': ['key'], 'storage.set': ['key', 'value'], 'storage.remove': ['key'],
     'export.text': [{ filename: 'test.txt', text: 'hello' }], 'share.text': [{ text: 'hello' }],
@@ -123,4 +123,32 @@ test('all SDK calls exactly match the catalog and explicit native validator/disp
     const cases = [...dispatch.matchAll(/case ([A-Z][A-Z_]+):/g)].map(r => r[1]);
     assert.deepEqual(cases.sort(), rows.map(r => r[1]).sort(), name);
   }
+});
+
+
+test('documents API preserves exact options and extends only picker timeouts', async () => {
+  const env = environment();
+  assert.equal(Object.isFrozen(env.api.documents), true);
+  const handle = 'a'.repeat(64);
+  const cases = [
+    ['open', {mimeType: '*/*'}, 600000],
+    ['create', {filename: 'document.txt', mimeType: 'text/plain'}, 600000],
+    ['read', {handle, offset: 0, length: 32768}, 30000],
+    ['write', {handle, offset: 0, data: 'AA=='}, 30000],
+    ['close', {handle}, 30000],
+    ['cancel', {}, 30000]
+  ];
+  for (const [method, options, timeout] of cases) {
+    const result = env.api.documents[method](options);
+    assert.equal(typeof result.then, 'function');
+    const request = env.sent.at(-1);
+    assert.equal(request.method, 'documents.' + method);
+    assert.deepEqual(request.args, options);
+    assert.equal(env.delays.at(-1), timeout);
+    env.reply(request, {ok: true});
+    assert.equal((await result).ok, true);
+  }
+  const cancel = env.api.documents.cancel();
+  assert.deepEqual(env.sent.at(-1).args, {});
+  env.reply(env.sent.at(-1), null); await cancel;
 });

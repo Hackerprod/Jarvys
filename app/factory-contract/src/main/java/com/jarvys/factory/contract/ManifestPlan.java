@@ -19,7 +19,7 @@ public final class ManifestPlan {
     public final ManifestNodes.Element root;
     public final List<String> permissions = Collections.emptyList();
     public final List<String> features = Collections.emptyList();
-    public final List<String> queries = Collections.emptyList();
+    public final List<String> queries;
     public final List<String> hosts = Collections.emptyList();
     public final List<String> exportedComponents = Collections.singletonList(ACTIVITY);
 
@@ -88,9 +88,18 @@ public final class ManifestPlan {
             // Exact published v1 layout before UX35, only for previously receipted artifacts.
             result.set(3, without(result.get(3), "windowSoftInputMode"));
         }
-        // Catalog declarations remain empty until their native handlers/resources and policy are reviewed.
-        if (!CapabilityCatalog.manifestContributions(this.capabilities).isEmpty())
-            throw new IllegalArgumentException("Additional manifest declarations are not activated in v1");
+        List<ManifestNodes.Element> contributions = CapabilityCatalog.manifestContributions(this.capabilities);
+        if (contributions.isEmpty()) queries = Collections.emptyList();
+        else {
+            if (profile != Profile.CURRENT || contributions.size() != 1 ||
+                    contributions.get(0) != CapabilityCatalog.DOCUMENT_QUERIES)
+                throw new IllegalArgumentException("Additional manifest declarations are not activated");
+            queries = Collections.unmodifiableList(new ArrayList<>(CapabilityCatalog.DOCUMENT_BROKER_PACKAGES));
+            int queryIndex = result.size();
+            result.add(new Node("manifest/queries", 0));
+            for (String host : queries) result.add(new Node("manifest/queries/package", queryIndex,
+                    a("name", 0x01010003, 3, host)));
+        }
         nodes = Collections.unmodifiableList(result);
         root = tree(result, 0);
     }
@@ -103,6 +112,8 @@ public final class ManifestPlan {
         Node node = nodes.get(index); List<ManifestNodes.Element> children = new ArrayList<>();
         for (int i = index + 1; i < nodes.size(); i++) if (nodes.get(i).parentIndex == index) children.add(tree(nodes, i));
         String name = node.path.substring(node.path.lastIndexOf('/') + 1);
+        if (name.equals("queries")) return ManifestNodes.queries(children);
+        if (name.equals("package")) return ManifestNodes.queryPackage((String)node.attributes.values().iterator().next().value);
         return ManifestNodes.base(name, children, node.attributes.values().toArray(new Attribute[0]));
     }
     private static void text(String value, int max) { ManifestNodes.text(value, max); }

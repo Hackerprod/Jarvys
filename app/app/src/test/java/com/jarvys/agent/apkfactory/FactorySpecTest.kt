@@ -61,13 +61,13 @@ class FactorySpecTest {
         val value=FactorySpec.parse(spec().put("capabilities",JSONArray()))
         assertTrue(value.capabilities.isEmpty())
     }
-    @Test fun all64SelectionsUseImmutableCatalogWithoutImpliedCapabilities() {
-        assertEquals(6, FactorySpec.CAPABILITIES.size)
-        for (mask in 0 until 64) {
+    @Test fun all128SelectionsUseImmutableCatalogWithoutImpliedCapabilities() {
+        assertEquals(7, FactorySpec.CAPABILITIES.size)
+        for (mask in 0 until 128) {
             val selected = FactorySpec.CAPABILITIES.filterIndexed { bit, _ -> mask and (1 shl bit) != 0 }
             val value = FactorySpec.parse(spec().put("capabilities", JSONArray(selected.reversed())))
             assertEquals(selected.sorted(), value.capabilities)
-            assertEquals(1, JSONObject(String(value.runtimeConfig())).getInt("schemaVersion"))
+            assertEquals(1, JSONObject(String(value.runtimeConfig(if ("documents" in selected) broker() else null))).getInt("schemaVersion"))
             for (name in selected) {
                 val capability = com.jarvys.factory.contract.CapabilityCatalog.CAPABILITIES[name]!!
                 assertTrue(capability.permissions.isEmpty())
@@ -80,6 +80,17 @@ class FactorySpecTest {
                 (value.capabilities as MutableList<String>).add("camera")
             }
         }
+    }
+
+    private fun broker() = JSONObject().put("packageName","com.jarvys.agent").put("certificateSha256","a".repeat(64))
+    @Test fun documentBrokerIsBuildOwnedAndCannotBeDeclaredInProjectSpec() {
+        rejects { it.put("documentBroker",broker()) }
+        val docs = FactorySpec.parse(spec().put("capabilities",JSONArray(listOf("documents"))))
+        assertThrows(Exception::class.java) { docs.runtimeConfig() }
+        val config = JSONObject(String(docs.runtimeConfig(broker())))
+        assertEquals("com.jarvys.agent",config.getJSONObject("documentBroker").getString("packageName"))
+        assertThrows(Exception::class.java) { FactorySpec.parse(spec()).runtimeConfig(broker()) }
+        assertThrows(Exception::class.java) { docs.runtimeConfig(broker().put("packageName","org.example.untrusted")) }
     }
 
 }

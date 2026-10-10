@@ -201,6 +201,11 @@ private fun SettingsIndex(
             stringResource(R.string.factory_install_settings_summary),
             { context.startActivity(Intent(context, com.jarvys.agent.apkfactory.FactoryInstallActivity::class.java)) },
             testTag = "settings-factory-installations-row")
+        SettingsRule()
+        SettingsIndexRow(LucideIcons.Boxes, stringResource(R.string.factory_documents_title),
+            stringResource(R.string.factory_documents_settings_summary),
+            { context.startActivity(Intent(context, com.jarvys.agent.apkfactory.FactoryDocumentActivity::class.java)) },
+            testTag = "settings-factory-documents-row")
     }
 }
 

@@ -401,7 +401,7 @@ internal class FactoryInstallCoordinator(
 
 /** Runs before activities/services: restore the persisted external-consent automation boundary. */
 class FactoryInstallApplication : Application() {
-    override fun onCreate() { super.onCreate(); FactoryInstallCoordinator.get(this) }
+    override fun onCreate() { super.onCreate(); FactoryDocumentCoordinator.get(this); FactoryInstallCoordinator.get(this) }
 }
 
 class FactoryInstallReceiver : BroadcastReceiver() {

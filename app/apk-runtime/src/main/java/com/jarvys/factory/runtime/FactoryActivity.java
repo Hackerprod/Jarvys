@@ -21,6 +21,14 @@ public final class FactoryActivity extends Activity {
         super.onActivityResult(request, result, data);
         if (runtime != null) runtime.onActivityResult(request, result, data);
     }
+    @Override protected void onResume() {
+        super.onResume();
+        if (runtime != null) runtime.onResume();
+    }
+    @Override protected void onPause() {
+        if (runtime != null) runtime.onPause();
+        super.onPause();
+    }
     @Override protected void onDestroy() {
         if (runtime != null) runtime.close();
         super.onDestroy();

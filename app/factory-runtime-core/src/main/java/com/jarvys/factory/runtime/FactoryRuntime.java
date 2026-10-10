@@ -54,6 +54,7 @@ import java.util.concurrent.TimeUnit;
 public final class FactoryRuntime implements AutoCloseable {
     private static final String BRIDGE_NAME = "JarvysNative";
     private static final int EXPORT_REQUEST = 41;
+    private static final int DOCUMENT_REQUEST = 42;
     private static final int MAX_PENDING = 16;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ThreadPoolExecutor io = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
@@ -69,6 +70,24 @@ public final class FactoryRuntime implements AutoCloseable {
     private long rateWindow;
     private int rateCount;
     private Export export;
+    private DocumentHandles documents = new DocumentHandles();
+    private volatile boolean documentForeground;
+    private DocumentSelection documentSelection;
+    // No new selection while old descriptors/grants are closing: a delayed revoke for the
+    // same URI must never revoke a newer selection. Provider cleanup may block indefinitely.
+    private static final java.util.concurrent.atomic.AtomicInteger documentResources = new java.util.concurrent.atomic.AtomicInteger();
+    private static final ThreadPoolExecutor DOCUMENT_CLEANUP = new ThreadPoolExecutor(2, 2, 1, TimeUnit.SECONDS,
+            new ArrayBlockingQueue<>(256), runnable -> {
+                Thread thread = new Thread(runnable, "factory-document-grants"); thread.setDaemon(true); return thread;
+            }, new ThreadPoolExecutor.AbortPolicy());
+    static { DOCUMENT_CLEANUP.allowCoreThreadTimeOut(true); }
+    private final Runnable expireDocuments = new Runnable() {
+        public void run() {
+            if (destroyed) return;
+            documents.expire();
+            main.postDelayed(this, 1000);
+        }
+    };
 
     public interface AssetSource { InputStream open(String path) throws IOException; }
     public interface Host extends AssetSource {
@@ -125,6 +144,8 @@ public final class FactoryRuntime implements AutoCloseable {
             config = host.isPreview() ? FactoryConfig.parsePreview(host.configuration())
                     : FactoryConfig.parse(host.configuration(), activity.getPackageName());
             store = new BoundedStore(host.storage());
+            main.removeCallbacks(expireDocuments);
+            if (config.capabilities.contains("documents")) main.postDelayed(expireDocuments, 1000);
             return initializeWebView();
         } catch (IOException | FactoryException | RuntimeException e) {
             showError("This application's runtime or configuration is invalid. Rebuild it with Jarvys.");
@@ -142,7 +163,9 @@ public final class FactoryRuntime implements AutoCloseable {
         return false;
     }
     private void invalidate() {
-        generation++; pending.clear(); uiOwner = null; io.getQueue().clear();
+        generation++; pending.clear(); uiOwner = null;
+        documents.revokeAll(); documents = new DocumentHandles();
+        cancelDocumentSelection();
         // Keep an outstanding picker tombstone until its callback: request code 41 must never
         // attach an old result to a new page's export request.
         if (export != null) export.text = null;
@@ -313,6 +336,9 @@ public final class FactoryRuntime implements AutoCloseable {
             };
             Object result = FactoryDispatcher.dispatch(request, config, store, metadata(), effects);
             if (result != DEFERRED) reply.ok(result);
+        } catch (FactoryException e) {
+            if (uiOwner == reply) uiOwner = null;
+            reply.fail(e.code, e.getMessage());
         } catch (Exception e) {
             if (uiOwner == reply) uiOwner = null;
             if (export != null && export.reply == reply) export = null;
@@ -321,9 +347,34 @@ public final class FactoryRuntime implements AutoCloseable {
     }
     private static final Object DEFERRED = new Object();
     /** Installed side-effect adapter, never invoked by preview hosts. */
-    private void dispatchInstalledEffect(BridgeProtocol.Request request, Reply reply) throws JSONException {
+    private void dispatchInstalledEffect(BridgeProtocol.Request request, Reply reply) throws Exception {
         if (!reply.current()) return;
         switch (request.operation) {
+            case DOCUMENTS_OPEN: case DOCUMENTS_CREATE:
+                openDocument(request, reply); break;
+            case DOCUMENTS_READ:
+                requireDocumentForeground();
+                final DocumentHandles readHandles = documents;
+                background(reply, () -> {
+                    DocumentHandles.ReadResult value = readHandles.read(request.args.getString("handle"), request.args.getLong("offset"), request.args.getInt("length"));
+                    return new JSONObject().put("data", value.base64).put("offset", value.offset)
+                            .put("nextOffset", value.nextOffset).put("eof", value.eof);
+                }); break;
+            case DOCUMENTS_WRITE:
+                requireDocumentForeground();
+                final DocumentHandles writeHandles = documents;
+                background(reply, () -> {
+                    DocumentHandles.WriteResult value = writeHandles.write(request.args.getString("handle"), request.args.getLong("offset"), request.args.getString("data"));
+                    return new JSONObject().put("offset", value.offset).put("nextOffset", value.nextOffset)
+                            .put("bytesWritten", value.bytesWritten).put("providerCommitConfirmed", false);
+                }); break;
+            case DOCUMENTS_CLOSE:
+                documents.close(request.args.getString("handle"));
+                reply.ok(new JSONObject().put("status", "close_requested").put("providerCommitConfirmed", false)); break;
+            case DOCUMENTS_CANCEL:
+                documents.cancelAll(); cancelDocumentSelection();
+                reply.ok(new JSONObject().put("cancelled", true).put("rollbackConfirmed", false)
+                        .put("pickerMayRemainOpen", documentSelection != null)); break;
             case HAPTICS_PERFORM:
                 int kind = request.args.optString("kind", "tap").equals("longPress") ? HapticFeedbackConstants.LONG_PRESS : HapticFeedbackConstants.KEYBOARD_TAP;
                 reply.ok(webView.performHapticFeedback(kind)); // Respects the user's system haptic setting.
@@ -377,13 +428,27 @@ public final class FactoryRuntime implements AutoCloseable {
     }
 
     private boolean claimUi(Reply reply) {
-        if (uiOwner != null || export != null || !activity.hasWindowFocus() || activity.isFinishing()) {
+        if (uiOwner != null || export != null || documentSelection != null || !activity.hasWindowFocus() || activity.isFinishing()) {
             reply.fail("BUSY", "Another native prompt is open, or the application is not in the foreground."); return false;
         }
         uiOwner = reply; return true;
     }
 
     public void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == DOCUMENT_REQUEST) {
+            DocumentSelection work = documentSelection;
+            if (work == null) { releaseDocumentGrant(data); return; }
+            work.returned = true;
+            if (work.cancelled || !work.reply.current()) {
+                releaseDocumentGrant(data); finishDocumentSelection(work); return;
+            }
+            if (resultCode != Activity.RESULT_OK || data == null) {
+                finishDocumentSelection(work); work.reply.fail("CANCELLED", "Document selection ended without access. An empty file may remain."); return;
+            }
+            work.result = data;
+            if (documentForeground) acceptDocumentSelection(work);
+            return;
+        }
         if (requestCode != EXPORT_REQUEST) return;
         Export work = export; export = null;
         if (work != null && uiOwner == work.reply) uiOwner = null;
@@ -402,6 +467,185 @@ public final class FactoryRuntime implements AutoCloseable {
             }
             return new JSONObject().put("saved", true);
         });
+    }
+
+    /** Pause always revokes existing handles. The external broker alone may retain a picker tombstone. */
+    public void onPause() {
+        documentForeground = false;
+        documents.cancelAll();
+        DocumentSelection work = documentSelection;
+        if (work != null && work.returned) cancelDocumentSelection();
+        for (Reply reply : new java.util.ArrayList<>(pending.values())) {
+            if (reply.method.startsWith("documents.") && (work == null || reply != work.reply))
+                reply.fail("CANCELLED", "Document access ended in background. A started write may have partially completed.");
+        }
+    }
+    public void onResume() {
+        documentForeground = true;
+        DocumentSelection work = documentSelection;
+        if (work != null && work.result != null) acceptDocumentSelection(work);
+    }
+    private void requireDocumentForeground() throws FactoryException {
+        if (!documentForeground || destroyed || activity.isFinishing() || !host.isActive())
+            throw new FactoryException("UNAVAILABLE", "Document access requires the foreground application.");
+    }
+    private void openDocument(BridgeProtocol.Request request, Reply reply) throws Exception {
+        requireDocumentForeground();
+        DocumentBrokerIdentity.verify(activity, config.documentBroker);
+        documents.cancelAll();
+        if (documentResources.get() != 0)
+            throw new FactoryException("BUSY", "A previous document is still closing. Try again after provider cleanup.");
+        if (!claimUi(reply)) return;
+        byte[] nonceBytes = new byte[32]; new java.security.SecureRandom().nextBytes(nonceBytes);
+        StringBuilder nonce = new StringBuilder();
+        for (byte b : nonceBytes) nonce.append(String.format(java.util.Locale.ROOT, "%02x", b & 255));
+        boolean write = request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.DOCUMENTS_CREATE;
+        DocumentSelection work = new DocumentSelection(reply, nonce.toString(), write);
+        documentSelection = work;
+        Intent intent = new Intent().setComponent(new android.content.ComponentName(config.documentBroker.packageName, DocumentBrokerIdentity.ACTIVITY))
+                .putExtra("operation", write ? "create" : "open").putExtra("nonce", work.nonce)
+                .putExtra("mimeType", request.args.getString("mimeType"));
+        if (write) intent.putExtra("filename", request.args.getString("filename"));
+        try { activity.startActivityForResult(intent, DOCUMENT_REQUEST); }
+        catch (RuntimeException e) {
+            finishDocumentSelection(work);
+            reply.fail("UNAVAILABLE", "The matching human-only Jarvys document broker is unavailable.");
+        }
+    }
+    private void cancelDocumentSelection() {
+        DocumentSelection work = documentSelection;
+        if (work == null) return;
+        work.cancelled = true;
+        if (!work.cancelScheduled) {
+            work.cancelScheduled = true;
+            try { DOCUMENT_CLEANUP.execute(work.signal::cancel); }
+            catch (RejectedExecutionException ignored) { host.onTrace("documents.cancel", "cleanup_unconfirmed"); }
+        }
+        work.reply.fail("CANCELLED", "Document access cancelled. Close the Jarvys picker/review yourself; created files are not rolled back.");
+        if (work.result != null) { releaseDocumentGrant(work.result); work.result = null; }
+        // Never dismiss the broker from JavaScript: its protected picker and latch need native closure.
+        if (work.returned) finishDocumentSelection(work);
+    }
+    private void finishDocumentSelection(DocumentSelection work) {
+        if (documentSelection == work) documentSelection = null;
+        if (uiOwner == work.reply) uiOwner = null;
+    }
+    private void acceptDocumentSelection(DocumentSelection work) {
+        if (work != documentSelection || work.result == null || work.opening) return;
+        final Intent result = work.result;
+        final Uri uri = result.getData();
+        final int mode = work.write ? Intent.FLAG_GRANT_WRITE_URI_PERMISSION : Intent.FLAG_GRANT_READ_URI_PERMISSION;
+        try {
+            requireDocumentForeground(); DocumentBrokerIdentity.verify(activity, config.documentBroker);
+            if (work.cancelled || !work.reply.current() || !work.nonce.equals(result.getStringExtra("nonce"))
+                    || uri == null || !"content".equals(uri.getScheme()) || uri.getAuthority() == null
+                    || uri.getAuthority().isEmpty() || uri.getAuthority().contains("@")
+                    || (result.getFlags() & Intent.FLAG_GRANT_PREFIX_URI_PERMISSION) != 0
+                    || (result.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION)) != mode
+                    || (result.getClipData() != null && (result.getClipData().getItemCount() != 1
+                    || !uri.equals(result.getClipData().getItemAt(0).getUri())))
+                    || activity.checkUriPermission(uri, Process.myPid(), Process.myUid(), mode) != PackageManager.PERMISSION_GRANTED)
+                throw new FactoryException("PERMISSION_DENIED", "The verified broker did not return one scoped document grant.");
+            work.opening = true;
+            final DocumentHandles handles = documents;
+            final DocumentHandles.Reservation reservation = work.write ? handles.reserveWrite() : handles.reserveRead();
+            documentResources.incrementAndGet();
+            try { io.execute(() -> {
+                boolean streamOwnsResource = false;
+                try {
+                    if (work.cancelled || !documentForeground || !work.reply.current()) throw new FactoryException("CANCELLED", "Document selection expired.");
+                    reservation.beginOpen();
+                    android.os.ParcelFileDescriptor descriptor = activity.getContentResolver().openFileDescriptor(uri, work.write ? "w" : "r", work.signal);
+                    if (descriptor == null) throw new IOException("Document stream unavailable");
+                    String handle;
+                    if (work.write) {
+                        OutputStream raw = new android.os.ParcelFileDescriptor.AutoCloseOutputStream(descriptor);
+                        OutputStream stream = new java.io.FilterOutputStream(raw) {
+                            private void allowed() throws IOException { documentIoAllowed(work, uri, mode); }
+                            public void write(int value) throws IOException { allowed(); out.write(value); }
+                            public void write(byte[] data, int offset, int count) throws IOException { allowed(); out.write(data, offset, count); }
+                            public void close() throws IOException { try { out.close(); } finally { releaseDocumentGrant(uri, mode); documentResources.decrementAndGet(); } }
+                        };
+                        streamOwnsResource = true;
+                        handle = reservation.grantWrite(stream);
+                    } else {
+                        InputStream raw = new android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor);
+                        InputStream stream = new java.io.FilterInputStream(raw) {
+                            private void allowed() throws IOException { documentIoAllowed(work, uri, mode); }
+                            public int read() throws IOException { allowed(); return in.read(); }
+                            public int read(byte[] data, int offset, int count) throws IOException { allowed(); return in.read(data, offset, count); }
+                            public void close() throws IOException { try { in.close(); } finally { releaseDocumentGrant(uri, mode); documentResources.decrementAndGet(); } }
+                        };
+                        streamOwnsResource = true;
+                        handle = reservation.grantRead(stream);
+                    }
+                    if (work.cancelled || !documentForeground || !work.reply.current()) {
+                        handles.close(handle); throw new FactoryException("CANCELLED", "Document access expired.");
+                    }
+                    JSONObject response = new JSONObject().put("handle", handle).put("mode", work.write ? "write" : "read")
+                            .put("expiresAfterMs", 300000).put("maximumBytes", 16 * 1024 * 1024)
+                            .put("providerCommitConfirmed", false);
+                    main.post(() -> {
+                        if (work.cancelled || !documentForeground) {
+                            try { handles.close(handle); } catch (FactoryException ignored) { }
+                            work.reply.fail("CANCELLED", "Document access ended before delivery.");
+                        } else work.reply.ok(response);
+                    });
+                } catch (Exception error) {
+                    reservation.cancel();
+                    if (!streamOwnsResource) { reservation.abortOpen(); releaseDocumentGrant(uri, mode); documentResources.decrementAndGet(); }
+                    main.post(() -> work.reply.fail(error instanceof FactoryException ? ((FactoryException) error).code : "IO_ERROR",
+                            "The document stream could not be opened. A created file may remain."));
+                } finally { main.post(() -> finishDocumentSelection(work)); }
+            }); } catch (RejectedExecutionException rejected) {
+                reservation.cancel(); reservation.abortOpen();
+                releaseDocumentGrant(uri, mode); documentResources.decrementAndGet();
+                finishDocumentSelection(work); work.reply.fail("BUSY", "Document I/O queue is full.");
+            }
+        } catch (Exception error) {
+            releaseDocumentGrant(result); finishDocumentSelection(work);
+            work.reply.fail(error instanceof FactoryException ? ((FactoryException) error).code : "PERMISSION_DENIED",
+                    "Document access could not be admitted. No handle was issued; a created file may remain.");
+        }
+    }
+    private void documentIoAllowed(DocumentSelection work, Uri uri, int mode) throws IOException {
+        if (destroyed || !documentForeground || work.cancelled || work.page != generation || !host.isActive()
+                || activity.checkUriPermission(uri, Process.myPid(), Process.myUid(), mode) != PackageManager.PERMISSION_GRANTED)
+            throw new IOException("Document authority revoked");
+    }
+    private void releaseDocumentGrant(Intent data) {
+        if (data != null && data.getData() != null) releaseDocumentGrant(data.getData(),
+                data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION));
+    }
+    private void releaseDocumentGrant(Uri uri, int mode) {
+        if (uri == null || !"content".equals(uri.getScheme()) || mode == 0) return;
+        documentResources.incrementAndGet();
+        try {
+            DOCUMENT_CLEANUP.execute(() -> {
+                try {
+                    activity.revokeUriPermission(uri, mode);
+                    if (activity.checkUriPermission(uri, Process.myPid(), Process.myUid(), mode) == PackageManager.PERMISSION_GRANTED)
+                        host.onTrace("documents.close", "grant_cleanup_unconfirmed");
+                } catch (RuntimeException ignored) { host.onTrace("documents.close", "grant_cleanup_unconfirmed"); }
+                finally { documentResources.decrementAndGet(); }
+            });
+        } catch (RejectedExecutionException saturated) {
+            // Leave selection disabled for this runtime. Do not claim cleanup or spawn more threads.
+            host.onTrace("documents.close", "grant_cleanup_unconfirmed");
+        }
+    }
+    private final class DocumentSelection {
+        final Reply reply;
+        final String nonce;
+        final boolean write;
+        final int page;
+        final android.os.CancellationSignal signal = new android.os.CancellationSignal();
+        volatile boolean cancelled;
+        boolean returned, opening, cancelScheduled;
+        Intent result;
+        DocumentSelection(Reply reply, String nonce, boolean write) {
+            this.reply = reply; this.nonce = nonce; this.write = write; this.page = generation;
+        }
     }
 
     private FactoryDispatcher.Metadata metadata() {
@@ -472,7 +716,9 @@ public final class FactoryRuntime implements AutoCloseable {
     }
     @Override public void close() {
         synchronized (lifecycle) { destroyed = true; invalidate(); host.resetStorage(); }
-        io.shutdownNow();
+        main.removeCallbacks(expireDocuments);
+        documents.revokeAll();
+        io.shutdown();
         disposeWebView();
     }
     private void disposeWebView() {

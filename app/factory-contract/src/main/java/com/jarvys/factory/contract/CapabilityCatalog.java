@@ -13,7 +13,7 @@ import java.util.Set;
 public final class CapabilityCatalog {
     private CapabilityCatalog() {}
     public static final int SCHEMA_VERSION = 1;
-    public static final int SDK_VERSION = 1;
+    public static final int SDK_VERSION = 2;
     public static final int MIN_APP_API = 24;
     public enum Method {
         RUNTIME_INFO("runtime.info", null),
@@ -21,7 +21,10 @@ public final class CapabilityCatalog {
         STORAGE_REMOVE("storage.remove", "storage"), STORAGE_LIST("storage.list", "storage"),
         EXPORT_TEXT("export.text", "export"), SHARE_TEXT("share.text", "share"),
         CLIPBOARD_WRITE("clipboard.write", "clipboard"), HAPTICS_PERFORM("haptics.perform", "haptics"),
-        DEVICE_INFO("device.info", "device");
+        DEVICE_INFO("device.info", "device"),
+        DOCUMENTS_OPEN("documents.open", "documents"), DOCUMENTS_CREATE("documents.create", "documents"),
+        DOCUMENTS_READ("documents.read", "documents"), DOCUMENTS_WRITE("documents.write", "documents"),
+        DOCUMENTS_CLOSE("documents.close", "documents"), DOCUMENTS_CANCEL("documents.cancel", "documents");
         public final String wireName;
         public final String capability;
         Method(String wireName, String capability) { this.wireName = wireName; this.capability = capability; }
@@ -31,25 +34,31 @@ public final class CapabilityCatalog {
         public final int minimumApi = MIN_APP_API;
         public final List<Method> methods;
         // v1 has no per-capability additions. The closed base launcher is in ManifestPlan.
-        public final List<ManifestNodes.Element> manifestNodes = Collections.emptyList();
+        public final List<ManifestNodes.Element> manifestNodes;
         public final Set<String> permissions = Collections.emptySet();
         public final Set<String> features = Collections.emptySet();
         public final Set<String> components = Collections.emptySet();
         public final Set<String> intentFilters = Collections.emptySet();
-        public final Set<String> queries = Collections.emptySet();
+        public final Set<String> queries;
         public final Set<String> metadata = Collections.emptySet();
         public final Set<String> resources = Collections.emptySet();
         public final Set<String> dependencies = Collections.emptySet();
         public final Set<String> conflicts = Collections.emptySet();
         private Capability(String name) {
             this.name = name;
+            manifestNodes = name.equals("documents") ? Collections.singletonList(DOCUMENT_QUERIES) : Collections.emptyList();
+            queries = name.equals("documents") ? DOCUMENT_BROKER_PACKAGES : Collections.emptySet();
             List<Method> selected = new ArrayList<>();
             for (Method method : Method.values()) if (name.equals(method.capability)) selected.add(method);
             methods = Collections.unmodifiableList(selected);
         }
     }
+    public static final Set<String> DOCUMENT_BROKER_PACKAGES = Collections.unmodifiableSet(new LinkedHashSet<>(
+            Arrays.asList("com.jarvys.agent", "com.jarvys.agent.recoverytest")));
+    static final ManifestNodes.Element DOCUMENT_QUERIES = ManifestNodes.queries(Arrays.asList(
+            ManifestNodes.queryPackage("com.jarvys.agent"), ManifestNodes.queryPackage("com.jarvys.agent.recoverytest")));
     public static final List<String> NAMES = Collections.unmodifiableList(Arrays.asList(
-            "storage", "export", "share", "clipboard", "haptics", "device"));
+            "storage", "export", "share", "clipboard", "haptics", "device", "documents"));
     public static final Set<String> SUPPORTED = Collections.unmodifiableSet(new LinkedHashSet<>(NAMES));
     public static final Map<String, Capability> CAPABILITIES;
     public static final Map<String, Method> METHODS;

@@ -1,4 +1,4 @@
-/* Jarvys Factory SDK v1. Offline, Promise-only, capability-checked by the native runtime. */
+/* Jarvys Factory SDK v2. Offline, Promise-only, capability-checked by the native runtime. */
 (function (global) {
   'use strict';
   if (Object.prototype.hasOwnProperty.call(global, 'Jarvys')) return;
@@ -52,7 +52,7 @@
         payload = JSON.stringify({ v: 1, id: id, method: method, args: args });
         if (new TextEncoder().encode(payload).length > MAX_MESSAGE_BYTES) throw failure('TOO_LARGE', 'Native request exceeds 512 KiB.');
       } catch (error) { reject(error.code ? error : failure('INVALID_ARGUMENT', 'Arguments must be serializable JSON.')); return; }
-      var timeout = /^(export|clipboard|share)\./.test(method) ? 600000 : 30000;
+      var timeout = /^(export|clipboard|share)\./.test(method) || /^documents\.(open|create)$/.test(method) ? 600000 : 30000;
       var timer = global.setTimeout(function () {
         if (!pending.has(id)) return;
         pending.delete(id);
@@ -73,6 +73,14 @@
       set: function (key, value) { return call('storage.set', { key: key, value: value }); },
       remove: function (key) { return call('storage.remove', { key: key }); },
       list: function () { return call('storage.list', {}); }
+    }),
+    documents: Object.freeze({
+      open: function (options) { return call('documents.open', options); },
+      create: function (options) { return call('documents.create', options); },
+      read: function (options) { return call('documents.read', options); },
+      write: function (options) { return call('documents.write', options); },
+      close: function (options) { return call('documents.close', options); },
+      cancel: function (options) { return call('documents.cancel', options === undefined ? {} : options); }
     }),
     export: Object.freeze({ text: function (options) { return call('export.text', options); } }),
     share: Object.freeze({ text: function (options) { return call('share.text', options); } }),

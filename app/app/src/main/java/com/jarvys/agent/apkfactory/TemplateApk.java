@@ -113,7 +113,8 @@ public final class TemplateApk {
     }
     private static ManifestInfo inspectFiles(Map<String,byte[]> zip, Spec expected, ManifestPlan.Profile profile) throws IOException {
         byte[] manifest=required(zip,"AndroidManifest.xml");
-        ManifestInfo info=new Xml(manifest).info();
+        Xml baseXml=new Xml(manifest);
+        ManifestInfo info=baseXml.info();
         ManifestAudit.Document decoded=ManifestAudit.read(manifest);
         byte[] resources=required(zip,"resources.arsc");
         verifyResourceTable(resources);
@@ -132,7 +133,7 @@ public final class TemplateApk {
         try {
             plan=new ManifestPlan(expected==null?info.appId:expected.appId, expected==null?info.label:expected.label,
                 expected==null?info.versionCode:expected.versionCode, expected==null?info.versionName:expected.versionName,
-                info.iconResourceId,backupId,expected==null?Collections.<String>emptyList():expected.capabilities,profile);
+                info.iconResourceId,backupId,expected==null?(baseXml.queryPackages.isEmpty()?Collections.<String>emptyList():Collections.singletonList("documents")):expected.capabilities,profile);
         } catch(IllegalArgumentException error) { throw new IOException("Invalid manifest plan identity",error); }
         decoded.verify(plan);
         Map<String,ResourceBinding> bindings=new TreeMap<>();
@@ -381,6 +382,7 @@ public final class TemplateApk {
         int[] resourceIds=null;
         Attr appId,label,versionCode,versionName,icon,activity;
         final List<String> permissions=new ArrayList<>();
+        final Set<String> queryPackages=new java.util.LinkedHashSet<>();
         Xml(byte[] b) throws IOException {
             check(b.length<=1024*1024,"Manifest too large"); Chunk outer=new Chunk(b,0,b.length);
             check(outer.type==3 && outer.header==8 && outer.size==b.length,"Invalid binary XML");
@@ -408,11 +410,18 @@ public final class TemplateApk {
                 check(!rootClosed && namespaces==1 && c.size>=36,"Invalid element order"); stack.add(name); StringBuilder pathBuilder=new StringBuilder(); for(String part:stack) { if(pathBuilder.length()>0) pathBuilder.append('/'); pathBuilder.append(part); } String path=pathBuilder.toString();
                 check(Arrays.asList("manifest","manifest/uses-sdk","manifest/uses-permission","manifest/application",
                     "manifest/application/activity","manifest/application/activity/intent-filter",
-                    "manifest/application/activity/intent-filter/action","manifest/application/activity/intent-filter/category").contains(path),"Unsupported template component "+path);
-                check(seen.add(path),"Duplicate template element "+path);
+                    "manifest/application/activity/intent-filter/action","manifest/application/activity/intent-filter/category",
+                    "manifest/queries","manifest/queries/package").contains(path),"Unsupported template component "+path);
+                if (!path.equals("manifest/queries/package")) check(seen.add(path),"Duplicate template element "+path);
                 check(u16(n,24)==20 && u16(n,26)==20 && c.size==36+20*u16(n,28),"Unsupported attribute layout");
                 Map<String,Attr> attrs=new LinkedHashMap<>();
                 for(int a=36;a<n.length;a+=20) { Attr v=new Attr(n,a,pool); check(attrs.put(v.ns+"|"+v.name,v)==null,"Duplicate attribute"); }
+                if(path.equals("manifest/queries")) check(attrs.isEmpty(),"Queries cannot have attributes");
+                if(path.equals("manifest/queries/package")) {
+                    check(attrs.size()==1,"Query package must have exactly one attribute");
+                    String host=attr(attrs,ANDROID,"name").text();
+                    check(CapabilityCatalog.DOCUMENT_BROKER_PACKAGES.contains(host) && queryPackages.add(host),"Unapproved or duplicate document broker query");
+                }
                 if(path.equals("manifest")) { appId=attr(attrs,"","package"); versionCode=attr(attrs,ANDROID,"versionCode"); versionName=attr(attrs,ANDROID,"versionName"); }
                 if(path.equals("manifest/uses-sdk")) { check(attr(attrs,ANDROID,"minSdkVersion").number()>=24,"Unsupported min SDK"); }
                 if(path.equals("manifest/uses-permission")) permissions.add(attr(attrs,ANDROID,"name").text());
@@ -427,6 +436,8 @@ public final class TemplateApk {
                 if(path.endsWith("/action")) check("android.intent.action.MAIN".equals(attr(attrs,ANDROID,"name").text()),"Unexpected action");
                 if(path.endsWith("/category")) check("android.intent.category.LAUNCHER".equals(attr(attrs,ANDROID,"name").text()),"Unexpected category");
             }
+            check(!seen.contains("manifest/queries") || queryPackages.equals(CapabilityCatalog.DOCUMENT_BROKER_PACKAGES),
+                "Document broker queries must match the exact approved set");
             check(stack.isEmpty() && namespaces==0 && rootClosed && appId!=null && label!=null && icon!=null && activity!=null &&
                     seen.contains("manifest/uses-sdk") && seen.contains("manifest/application/activity/intent-filter/category") &&
                     seen.contains("manifest/application/activity/intent-filter/action"),"Incomplete factory manifest");

@@ -1,5 +1,7 @@
 # Pendientes de Jarvys
 
+- **UX42 / F1 v67 en implementación:** primer corte SAF/binarios con broker nativo de Jarvys, autenticación recíproca, protección humana durable y handles opacos efímeros. Solo código/pruebas sintéticas; todavía sin validación final, firma ni entrega. FileProvider y las otras familias F1/F2/F3 permanecen abiertas. La recuperación incierta exige intervención humana explícita; la convivencia de los dos hosts conocidos se rechaza. UX34 fases 1–4 conserva sus gates y UX43 permanece último.
+
 Actualizado: 2026-10-10 (UTC).
 
 Este archivo mantiene la cola vigente y el estado de cada etapa. Debe actualizarse con cada avance y publicarse en GitHub junto con los cambios. No sustituye las comprobaciones de código, pruebas y APK.

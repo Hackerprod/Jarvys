@@ -1,0 +1,12 @@
+<resources>
+    <string name="factory_documents_settings_summary">Revisar y cerrar el acceso a documentos interrumpido</string>
+    <string name="factory_documents_use">Usar este documento</string>
+    <string name="factory_documents_title">Documentos de Factory</string>
+    <string name="factory_documents_disclosure">Solo tú puedes elegir un documento en el selector de Android. La automatización del dispositivo permanece bloqueada hasta que cierres esta interacción explícitamente. Jarvys no lee el documento. La app verificada recibe acceso temporal únicamente a tu selección. Solo se admite el último APK firmado exactamente.</string>
+    <string name="factory_documents_choose">Revisar en el selector de Android</string>
+    <string name="factory_documents_close">Cancelar / cerrar</string>
+    <string name="factory_documents_recover">Cerré el selector y la tarea anteriores; confirmar y cerrar</string>
+    <string name="factory_documents_unknown">La interacción anterior se interrumpió. No se puede recuperar ninguna selección ni autorización. Cierra primero el selector de documentos de Android y la tarea de la app anterior. Jarvys no puede verificar que estén cerrados. Tu confirmación solo libera el bloqueo de automatización; el resultado anterior sigue siendo desconocido.</string>
+    <string name="factory_documents_rejected">Esta solicitud no está disponible o fue revocada. No se devolvió acceso a documentos. Cierra esta pantalla y revisa la recuperación si es necesario.</string>
+    <string name="factory_documents_selected">Hay una selección lista. Pulsa Usar este documento para conceder acceso temporal a la app verificada.</string>
+</resources>
