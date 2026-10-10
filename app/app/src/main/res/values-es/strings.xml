@@ -1383,4 +1383,14 @@ Se desconoce cómo terminaron. No se repiten automáticamente. Revisa los cambio
     <string name="factory_audio_unknown">Resultado interrumpido o incierto. Nunca se reanuda automáticamente. Hace falta limpieza nativa explícita antes de continuar la automatización.</string>
     <string name="factory_audio_attempted">Esta autorización de reproducción única ya se utilizó. El resultado no acredita que se haya oído sonido. Cierra para liberar esta revisión protegida.</string>
     <string name="factory_audio_unavailable">Audio no disponible o interrumpido. Sin reintento automático.</string>
+    <string name="factory_browser_title">Navegador de Factory</string>
+    <string name="factory_browser_open">Abrir esta URL exacta una vez</string>
+    <string name="factory_browser_close">Cancelar y cerrar revisión</string>
+    <string name="factory_browser_recover">He cerrado la pantalla o tarea del navegador; terminar</string>
+    <string name="factory_browser_settings_summary">Recuperar una revisión de navegador externo interrumpida</string>
+    <string name="factory_browser_disclosure">Revisa la URL completa y elige un navegador. Abrir envía esa URL, incluida su ruta y consulta, al navegador elegido y al sitio de destino. No continúes con contraseñas, tokens u otros secretos. El navegador puede usar sus cookies, cuenta iniciada, historial, sincronización y configuración de red. DNS, redirecciones, recursos de la página y comportamiento del navegador pueden contactar otros destinos, pasar a HTTP o abrir apps fuera del control de Jarvys. Validar HTTPS no acredita un destino seguro o público. Jarvys no descarga ni verifica la página. Debes cerrar tú la pantalla o tarea del navegador antes de terminar esta revisión protegida. Cancelar no retira una solicitud, cierra el navegador ni revierte efectos del sitio.</string>
+    <string name="factory_browser_checking">Verificando la app instalada y los navegadores disponibles. Aún no se autoriza navegar.</string>
+    <string name="factory_browser_unknown">Resultado interrumpido, vencido o incierto. Nunca se reintenta automáticamente. Cierra tú cualquier pantalla o tarea del navegador externo y confirma abajo. Tu confirmación no demuestra de forma independiente que el navegador esté cerrado.</string>
+    <string name="factory_browser_attempted">Esta autorización de una sola apertura ya se consumió. Solicitar abrir no acredita que el navegador se haya mostrado, que la página cargue ni que se entreguen datos. Cierra tú la pantalla o tarea del navegador externo antes de terminar.</string>
+    <string name="factory_browser_unavailable">No hay un navegador compatible o se interrumpió la revisión. Sin destino implícito alternativo ni reintento automático.</string>
 </resources>

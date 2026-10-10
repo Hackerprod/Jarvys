@@ -227,3 +227,26 @@ providers require Android 11/API30+. The private camera pipe remains supported f
 with its sole host-owned reader. Provider I/O may remain blocked despite cancellation or
 nonblocking setup (a provider may share descriptor flags). Worker and cross-broker admission
 stay held until actual cleanup; no forced provider-read termination is promised.
+
+
+### Browser-only launch, v71
+
+`runtime.info` retains `offline:true` and adds `offlineScope:"embedded_webview"` plus
+`browserMayUseExternalNetwork:true`; external browser/provider networks are outside that offline scope.
+
+`browser.open({url})` requires only `browser`, with the factory-owned pinned `documentBroker`
+metadata (also used by documents). It grants no document methods or network permission. Only an
+installed generated app can open authenticated human-only host review; preview is unavailable.
+URL is exact printable ASCII HTTPS, at most 2048 characters, strict lowercase DNS hostname and
+optional canonical :443, no credentials/userinfo/fragment, backslash/controls or malformed escapes.
+Escaped controls/space/DEL/backslash are rejected; no normalization or secret detection is claimed.
+
+The native user reviews the whole URL, data-transmission disclosure and exact selected browser.
+No caller-controlled component/extra/flag or implicit fallback. The host owns durable one-shot
+launch/recovery and protected manual closure. Result `{launchRequested,pageLoadConfirmed:false}`
+is only startActivity acceptance, never rendered page, delivery or browser-closure evidence.
+External browser cookies, DNS, redirects, resources and other destinations are outside Jarvys
+control. Runtime's five-minute timer revokes pending launch authority even after SDK timeout;
+reload/closure and control death revoke too. Expected pause during the host flow does not fabricate
+cancellation; interrupted outcomes stay uncertain, never auto-replayed. `documents.cancel` is not
+browser cancellation. Full contract and physical-acceptance limits: [APK_FACTORY](../../APK_FACTORY.md#https-browser-launch-ux42-f1-v71).

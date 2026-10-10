@@ -17,6 +17,11 @@ internal object FactoryStartupTestIsolation {
         // Bounded test-only backpressure avoids racing execute() against that transition.
         check(worker.queue.offer(barrier, 10, TimeUnit.SECONDS)) { "Synthetic sharing worker queue remained occupied" }
         barrier.get(10, TimeUnit.SECONDS)
+        val browser = FactoryBrowserCoordinator.WORKER
+        check(!browser.isShutdown); browser.prestartCoreThread()
+        val browserBarrier = java.util.concurrent.FutureTask(java.util.concurrent.Callable { Unit })
+        check(browser.queue.offer(browserBarrier, 10, TimeUnit.SECONDS)) { "Synthetic browser worker queue remained occupied" }
+        browserBarrier.get(10, TimeUnit.SECONDS)
         val audio = FactoryAudioCoordinator.WORKER
         check(!audio.isShutdown); audio.prestartCoreThread()
         val audioBarrier = java.util.concurrent.FutureTask(java.util.concurrent.Callable { Unit })
@@ -25,6 +30,13 @@ internal object FactoryStartupTestIsolation {
     }
     fun releaseCompletedSharingStartup() {
         awaitSharingWorkerCompletion()
+        val browserSingleton = FactoryBrowserCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }
+        (browserSingleton.get(null) as? FactoryBrowserCoordinator)?.let { browser ->
+            check(!browser.isBusy() && !browser.needsRecovery() && browser.session() == null) { "Cannot reset a live synthetic browser interaction" }
+            val browserLease = FactoryBrowserCoordinator::class.java.getDeclaredField("lease").apply { isAccessible = true }
+            check(browserLease.get(browser) == null) { "Cannot erase live browser protection" }
+            FactoryInteractionAdmission.release(browser); browserSingleton.set(null, null)
+        }
         val audioSingleton = FactoryAudioCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }
         (audioSingleton.get(null) as? FactoryAudioCoordinator)?.let { audio ->
             check(!audio.isBusy() && !audio.needsRecovery() && audio.session() == null) { "Cannot reset a live synthetic audio interaction" }

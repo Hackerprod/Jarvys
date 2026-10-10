@@ -187,4 +187,63 @@ public class FactoryDispatcherTest {
         assertEquals(6291456,info.getJSONObject("limits").getInt("audioBytes"));
         assertEquals(30000,info.getJSONObject("limits").getInt("audioDurationMs"));
     }
+    @Test public void browserIsStandaloneUnavailableInPreviewAndTypedInMetadata() throws Exception {
+        FactoryConfig browser = FactoryConfig.parsePreview(configuration("[\"browser\"]"));
+        JSONObject args = new JSONObject().put("url", "https://example.com/");
+        BridgeProtocol.Request call = request("browser.open", args, browser);
+        BoundedStore store = new BoundedStore(new MemoryBackend());
+        try { FactoryDispatcher.dispatch(call, browser, store, FactoryDispatcher.previewMetadata("host", 35, 35), FactoryDispatcher.simulatedEffects()); fail(); }
+        catch (FactoryException denied) { assertEquals("UNAVAILABLE", denied.code); }
+        assertEquals("adapter", FactoryDispatcher.dispatch(call, browser, store, FactoryDispatcher.metadata("installed", "app", 35, 35),
+                (method, value) -> { assertEquals(CapabilityCatalog.Method.BROWSER_OPEN, method); assertEquals(args.toString(), value.toString()); return "adapter"; }));
+        JSONObject info = (JSONObject) FactoryDispatcher.dispatch(request("runtime.info", new JSONObject(), browser), browser, store,
+                FactoryDispatcher.previewMetadata("host", 35, 35), FactoryDispatcher.simulatedEffects());
+        assertEquals(1, info.getInt("browserProtocolVersion")); assertTrue(info.getBoolean("browserBrokerRequired"));
+        assertEquals("[\"browser\"]", info.getJSONArray("browserRequires").toString());
+        assertTrue(info.getJSONArray("unavailableMethods").toString().contains("browser.open"));
+        assertTrue(info.getJSONArray("unavailableCapabilities").toString().contains("browser"));
+        assertEquals(2048, info.getJSONObject("limits").getInt("browserUrlLength"));
+        assertEquals(300000, info.getJSONObject("limits").getInt("browserLifetimeMs"));
+        call.args.put("url", "https://example.com/#changed");
+        try { FactoryDispatcher.dispatch(call, browser, store, FactoryDispatcher.metadata("installed", "app", 35, 35),
+                (method, value) -> { throw new AssertionError("Effect invoked"); }); fail(); }
+        catch (FactoryException denied) { assertEquals("INVALID_ARGUMENT", denied.code); }
+    }
+
+    @Test public void offlineMetadataExplicitlyLimitsClaimToEmbeddedWebviewInBothModes() throws Exception {
+        for (String mode : new String[]{"installed", "preview"}) {
+            for (String caps : new String[]{"[]", "[\"browser\"]"}) {
+                FactoryConfig config = FactoryConfig.parsePreview(configuration(caps));
+                JSONObject info = (JSONObject) FactoryDispatcher.dispatch(request("runtime.info", new JSONObject(), config), config,
+                        new BoundedStore(new MemoryBackend()), FactoryDispatcher.metadata(mode, "host", 35, 35), FactoryDispatcher.simulatedEffects());
+                assertTrue(info.getBoolean("offline"));
+                assertEquals("embedded_webview", info.getString("offlineScope"));
+                assertTrue(info.getBoolean("browserMayUseExternalNetwork"));
+                assertEquals(mode, info.getString("mode"));
+            }
+        }
+    }
+
+    @Test public void all1024CapabilityPlansKeepZeroPermissionsAndDeduplicateHostVisibility() {
+        assertEquals(10, CapabilityCatalog.NAMES.size()); assertEquals(21, CapabilityCatalog.METHODS.size());
+        for (int mask = 0; mask < 1024; mask++) {
+            java.util.List<String> selected = new java.util.ArrayList<>();
+            for (int bit = 0; bit < 10; bit++) if ((mask & (1 << bit)) != 0) selected.add(CapabilityCatalog.NAMES.get(bit));
+            com.jarvys.factory.contract.ManifestPlan plan = new com.jarvys.factory.contract.ManifestPlan(
+                    "com.example.browser", "Browser fixture", 1, "1.0", 0x7f010001, 0x7f020001, selected);
+            boolean host = selected.contains("browser") || selected.contains("documents");
+            assertTrue(plan.permissions.isEmpty()); assertTrue(plan.features.isEmpty()); assertTrue(plan.hosts.isEmpty());
+            assertEquals(java.util.Collections.singletonList(com.jarvys.factory.contract.ManifestPlan.ACTIVITY), plan.exportedComponents);
+            assertEquals(host ? 2 : 0, plan.queries.size());
+            assertEquals(host ? 1 : 0, CapabilityCatalog.manifestContributions(selected).size());
+            assertEquals(host ? 10 : 7, plan.nodes.size());
+            if (host) assertEquals(CapabilityCatalog.DOCUMENT_BROKER_PACKAGES, new java.util.LinkedHashSet<>(plan.queries));
+            for (String name : selected) {
+                CapabilityCatalog.Capability capability = CapabilityCatalog.CAPABILITIES.get(name);
+                assertTrue(capability.permissions.isEmpty()); assertTrue(capability.components.isEmpty());
+                assertTrue(capability.dependencies.isEmpty()); assertTrue(capability.features.isEmpty());
+            }
+        }
+    }
+
 }

@@ -221,6 +221,11 @@ private fun SettingsIndex(
             stringResource(R.string.factory_audio_settings_summary),
             { context.startActivity(com.jarvys.agent.apkfactory.FactoryAudioCoordinator.recoveryIntent(context)) },
             testTag = "settings-factory-audio-row")
+        SettingsRule()
+        SettingsIndexRow(LucideIcons.Boxes, stringResource(R.string.factory_browser_title),
+            stringResource(R.string.factory_browser_settings_summary),
+            { context.startActivity(com.jarvys.agent.apkfactory.FactoryBrowserCoordinator.recoveryIntent(context)) },
+            testTag = "settings-factory-browser-row")
     }
 }
 

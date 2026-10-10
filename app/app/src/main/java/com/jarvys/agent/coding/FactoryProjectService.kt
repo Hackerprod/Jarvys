@@ -85,7 +85,7 @@ internal class FactoryProjectService(
             val replacements = sortedMapOf<String, ByteArray>()
             web.forEach { (path, bytes) -> replacements["assets/www/$path"] = bytes }
             replacements["assets/factory-app.json"] = spec.runtimeConfig(
-                if ("documents" in spec.capabilities) com.jarvys.factory.runtime.DocumentBrokerIdentity.buildBinding(context) else null
+                if ("documents" in spec.capabilities || "browser" in spec.capabilities) com.jarvys.factory.runtime.DocumentBrokerIdentity.buildBinding(context) else null
             )
             replacements["assets/factory-provenance.json"] = JSONObject().put("schemaVersion", 1).put("runtimeVersion", 1)
                 .put("templateSha256", ProjectScope.sha256(template)).put("sourceSha256", JSONObject(sources))

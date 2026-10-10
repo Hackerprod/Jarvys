@@ -58,6 +58,8 @@ public final class FactoryRuntime implements AutoCloseable {
     private static final int FILE_SHARE_REQUEST = 43;
     private static final int PHOTO_REQUEST = 44;
     private static final int AUDIO_REQUEST = 45;
+    private static final int BROWSER_REQUEST = 46;
+    private static final long BROWSER_LIFETIME_MS = 300000;
     private static final int MAX_PENDING = 16;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ThreadPoolExecutor io = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
@@ -78,6 +80,7 @@ public final class FactoryRuntime implements AutoCloseable {
     private DocumentSelection documentSelection;
     private volatile FileShare fileShare;
     private volatile AudioPlayback audioPlayback;
+    private volatile BrowserOpen browserOpen;
     private volatile PhotoSelection photoSelection;
     private static final java.util.concurrent.Semaphore PHOTO_ADMISSION = new java.util.concurrent.Semaphore(1);
     private static final ThreadPoolExecutor PHOTO_IO = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
@@ -181,6 +184,7 @@ public final class FactoryRuntime implements AutoCloseable {
         generation++; pending.clear(); uiOwner = null;
         documents.revokeAll(); documents = new DocumentHandles();
         cancelDocumentSelection(); cancelFileShare(); cancelPhotoSelection(); cancelAudioPlayback();
+        cancelBrowserOpen(browserOpen, "CANCELLED", "Browser launch authority ended. A browser already opened may remain open.");
         // Keep an outstanding picker tombstone until its callback: request code 41 must never
         // attach an old result to a new page's export request.
         if (export != null) export.text = null;
@@ -367,6 +371,8 @@ public final class FactoryRuntime implements AutoCloseable {
         switch (request.operation) {
             case PHOTOS_PICK: case PHOTOS_CAPTURE:
                 openPhoto(request, reply); break;
+            case BROWSER_OPEN:
+                openBrowser(request, reply); break;
             case AUDIO_PLAY:
                 playAudio(request, reply); break;
             case SHARE_FILE:
@@ -449,13 +455,20 @@ public final class FactoryRuntime implements AutoCloseable {
     }
 
     private boolean claimUi(Reply reply) {
-        if (uiOwner != null || export != null || documentSelection != null || fileShare != null || photoSelection != null || audioPlayback != null || !activity.hasWindowFocus() || activity.isFinishing()) {
+        if (uiOwner != null || export != null || documentSelection != null || fileShare != null || photoSelection != null || audioPlayback != null || browserOpen != null || !activity.hasWindowFocus() || activity.isFinishing()) {
             reply.fail("BUSY", "Another native prompt is open, or the application is not in the foreground."); return false;
         }
         uiOwner = reply; return true;
     }
 
     public void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == BROWSER_REQUEST) {
+            BrowserOpen work = browserOpen;
+            if (work == null || work.returned) return;
+            work.returned = true; work.resultCode = resultCode; work.result = data;
+            if (documentForeground) finishBrowserOpen(work);
+            return;
+        }
         if (requestCode == AUDIO_REQUEST) {
             AudioPlayback work = audioPlayback;
             if (work == null || work.returned) return;
@@ -517,6 +530,9 @@ public final class FactoryRuntime implements AutoCloseable {
     /** Pause always revokes existing handles. The external broker alone may retain a picker tombstone. */
     public void onPause() {
         documentForeground = false;
+        BrowserOpen browser = browserOpen;
+        if (browser != null && (!browser.launched || browser.returned))
+            cancelBrowserOpen(browser, "CANCELLED", "Browser launch authority ended in background. A browser already opened may remain open.");
         PhotoSelection photo=photoSelection;
         if (photo != null && photo.returned) cancelPhotoSelection();
         AudioPlayback audio=audioPlayback;
@@ -533,6 +549,8 @@ public final class FactoryRuntime implements AutoCloseable {
     }
     public void onResume() {
         documentForeground = true;
+        BrowserOpen browser = browserOpen;
+        if (browser != null && browser.returned) finishBrowserOpen(browser);
         PhotoSelection photo=photoSelection;
         if (photo != null && photo.returned) acceptPhotoSelection(photo);
         AudioPlayback audio=audioPlayback;
@@ -802,6 +820,105 @@ public final class FactoryRuntime implements AutoCloseable {
             work.reply.fail("SHARE_UNAVAILABLE","The sharing outcome is unavailable. Opening a chooser never proves delivery.");
         }
     }
+    private static final class BrowserOpen {
+        final Reply reply;
+        final String nonce, url;
+        final long expiresAt;
+        BrowserLaunchControl control;
+        Runnable expiration;
+        boolean cancelled, launched, returned;
+        int resultCode;
+        Intent result;
+        BrowserOpen(Reply reply, String nonce, String url) {
+            this.reply = reply; this.nonce = nonce; this.url = url;
+            this.expiresAt = SystemClock.elapsedRealtime() + BROWSER_LIFETIME_MS;
+        }
+    }
+    private void openBrowser(BridgeProtocol.Request request, Reply reply) throws Exception {
+        requireDocumentForeground();
+        final String url = com.jarvys.factory.contract.BrowserUrl.parse(request.args.getString("url")).url;
+        DocumentBrokerIdentity.verify(activity, config.documentBroker);
+        final int hostUid = activity.getPackageManager().getApplicationInfo(config.documentBroker.packageName, 0).uid;
+        String[] packages = activity.getPackageManager().getPackagesForUid(hostUid);
+        if (packages == null || packages.length != 1 || !packages[0].equals(config.documentBroker.packageName))
+            throw new FactoryException("UNAVAILABLE", "The browser host has an ambiguous UID.");
+        BrowserLaunchControl.HostVerifier verifiedHost = uid -> {
+            if (uid != hostUid) return false;
+            try {
+                DocumentBrokerIdentity.verify(activity, config.documentBroker);
+                String[] current = activity.getPackageManager().getPackagesForUid(uid);
+                return current != null && current.length == 1 && current[0].equals(config.documentBroker.packageName)
+                        && activity.getPackageManager().getApplicationInfo(config.documentBroker.packageName, 0).uid == uid;
+            } catch (Exception denied) { return false; }
+        };
+        byte[] random = new byte[32]; new java.security.SecureRandom().nextBytes(random);
+        StringBuilder nonce = new StringBuilder();
+        for (byte b : random) nonce.append(String.format(java.util.Locale.ROOT, "%02x", b & 255));
+        if (!claimUi(reply)) return;
+        BrowserOpen work = new BrowserOpen(reply, nonce.toString(), url);
+        work.control = new BrowserLaunchControl(work.nonce, verifiedHost);
+        work.expiration = () -> cancelBrowserOpen(work, "TIMEOUT",
+                "Browser review expired. Any external launch or page load is unconfirmed; close the native flow and browser yourself.");
+        browserOpen = work;
+        main.postDelayed(work.expiration, BROWSER_LIFETIME_MS);
+        // A queued handoff has no authority after pause/reload/expiry, even before host registration.
+        main.post(() -> {
+            if (browserOpen != work) return;
+            if (work.cancelled || !documentForeground || !reply.current() || SystemClock.elapsedRealtime() >= work.expiresAt) {
+                cancelBrowserOpen(work, "CANCELLED", "Browser launch authority ended before native review."); return;
+            }
+            try {
+                if (!verifiedHost.allowed(hostUid)) throw new FactoryException("UNAVAILABLE", "The matching browser host changed.");
+                android.os.Bundle extras = new android.os.Bundle();
+                extras.putInt("protocolVersion", 1); extras.putString("nonce", work.nonce); extras.putString("url", work.url);
+                extras.putBinder("control", work.control);
+                Intent intent = new Intent().setComponent(new android.content.ComponentName(config.documentBroker.packageName,
+                        "com.jarvys.agent.apkfactory.FactoryBrowserActivity")).putExtras(extras);
+                work.launched = true;
+                activity.startActivityForResult(intent, BROWSER_REQUEST);
+            } catch (Exception unavailable) {
+                work.launched = false;
+                cancelBrowserOpen(work, "BROWSER_UNAVAILABLE", "The matching native browser review could not open.");
+            }
+        });
+    }
+    private void cancelBrowserOpen(BrowserOpen work, String code, String message) {
+        if (work == null || browserOpen != work) return;
+        work.cancelled = true;
+        work.control.cancel();
+        main.removeCallbacks(work.expiration);
+        work.reply.fail(code, message);
+        // A launched host owns its durable human-only guard until explicit manual closure.
+        // Cancellation does not prove launch prevention, page loading or browser closure.
+        if (!work.launched) {
+            browserOpen = null;
+            if (uiOwner == work.reply) uiOwner = null;
+        }
+    }
+    private void finishBrowserOpen(BrowserOpen work) {
+        if (browserOpen != work) return;
+        if (SystemClock.elapsedRealtime() >= work.expiresAt)
+            cancelBrowserOpen(work, "TIMEOUT", "Browser review expired. Launch and page loading remain unconfirmed.");
+        browserOpen = null; main.removeCallbacks(work.expiration); work.control.close();
+        if (uiOwner == work.reply) uiOwner = null;
+        if (work.cancelled || !work.reply.current()) return;
+        try {
+            DocumentBrokerIdentity.verify(activity, config.documentBroker);
+            Intent result = work.result;
+            if (work.resultCode != Activity.RESULT_OK || result == null || result.getData() != null || result.getClipData() != null
+                    || result.getSelector() != null || result.getFlags() != 0 || result.getAction() != null
+                    || result.getComponent() != null || result.getPackage() != null || result.getType() != null
+                    || result.getCategories() != null) throw new IllegalArgumentException();
+            android.os.Bundle extras = result.getExtras();
+            if (extras == null || !extras.keySet().equals(new java.util.HashSet<>(java.util.Arrays.asList("nonce", "launchRequested", "pageLoadConfirmed")))
+                    || !work.nonce.equals(extras.get("nonce")) || !(extras.get("launchRequested") instanceof Boolean)
+                    || !Boolean.FALSE.equals(extras.get("pageLoadConfirmed"))) throw new IllegalArgumentException();
+            work.reply.ok(new JSONObject().put("launchRequested", extras.getBoolean("launchRequested")).put("pageLoadConfirmed", false));
+        } catch (Exception denied) {
+            work.reply.fail("BROWSER_UNAVAILABLE", "The browser outcome is unavailable. A launch request never proves page loading.");
+        }
+    }
+
     private static final class AudioPlayback {
         final Reply reply;
         final String nonce;

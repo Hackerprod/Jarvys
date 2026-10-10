@@ -8,7 +8,7 @@ import android.os.Build;
 import org.json.JSONObject;
 import java.security.MessageDigest;
 
-/** Build-owned pinning for the bounded human document broker. No caller-controlled package names. */
+/** Build-owned pinning for the bounded human-only host broker. No caller-controlled package names. */
 public final class DocumentBrokerIdentity {
     public static final String PRIMARY = "com.jarvys.agent";
     public static final String RECOVERY = "com.jarvys.agent.recoverytest";
@@ -17,12 +17,12 @@ public final class DocumentBrokerIdentity {
     public static boolean supported(String name) { return PRIMARY.equals(name) || RECOVERY.equals(name); }
     @SuppressWarnings("deprecation")
     public static String certificate(Context context, String name) throws Exception {
-        if (!supported(name)) throw new FactoryException("UNAVAILABLE", "Unsupported document broker.");
+        if (!supported(name)) throw new FactoryException("UNAVAILABLE", "Unsupported Jarvys host broker.");
         PackageInfo info = context.getPackageManager().getPackageInfo(name,
                 Build.VERSION.SDK_INT >= 28 ? PackageManager.GET_SIGNING_CERTIFICATES : PackageManager.GET_SIGNATURES);
         Signature[] signers = Build.VERSION.SDK_INT >= 28
                 ? (info.signingInfo == null ? null : info.signingInfo.getApkContentsSigners()) : info.signatures;
-        if (signers == null || signers.length != 1) throw new FactoryException("UNAVAILABLE", "Document broker signature is unavailable.");
+        if (signers == null || signers.length != 1) throw new FactoryException("UNAVAILABLE", "Jarvys host signature is unavailable.");
         byte[] digest = MessageDigest.getInstance("SHA-256").digest(signers[0].toByteArray());
         StringBuilder result = new StringBuilder();
         for (byte value : digest) result.append(String.format(java.util.Locale.ROOT, "%02x", value & 255));
@@ -35,13 +35,13 @@ public final class DocumentBrokerIdentity {
     public static void verify(Context context, FactoryConfig.DocumentBroker broker) throws FactoryException {
         try {
             if (broker == null || !certificate(context, broker.packageName).equals(broker.certificateSha256))
-                throw new FactoryException("UNAVAILABLE", "Install the matching Jarvys document broker before opening documents.");
+                throw new FactoryException("UNAVAILABLE", "Install the matching Jarvys host before requesting native review.");
             String other = PRIMARY.equals(broker.packageName) ? RECOVERY : PRIMARY;
             try {
                 context.getPackageManager().getPackageInfo(other, 0);
-                throw new FactoryException("UNAVAILABLE", "Documents require a single installed Jarvys host; two hosts cannot share human-only protection.");
+                throw new FactoryException("UNAVAILABLE", "Native review requires a single installed Jarvys host; two hosts cannot share human-only protection.");
             } catch (PackageManager.NameNotFoundException absent) { /* expected single host */ }
         } catch (FactoryException e) { throw e; }
-        catch (Exception e) { throw new FactoryException("UNAVAILABLE", "The matching Jarvys document broker could not be verified."); }
+        catch (Exception e) { throw new FactoryException("UNAVAILABLE", "The matching Jarvys host broker could not be verified."); }
     }
 }

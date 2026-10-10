@@ -25,10 +25,11 @@ internal object FactoryRuntimeContractTests {
             FactoryDispatcher.previewMetadata(hostAppId, api, targetSdk), FactoryDispatcher.simulatedEffects())
         try {
             val ordered = listOf("runtime.info", "storage.set", "storage.get", "storage.list", "storage.remove", "export.text", "share.text", "share.file", "clipboard.write", "haptics.perform", "device.info",
-                "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture", "audio.play")
+                "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture", "audio.play", "browser.open")
             check(ordered.toSet() == CapabilityCatalog.METHODS.keys) { "Synthetic contract cases must cover the compiled catalog" }
             for (method in ordered) {
                 val args = when (method) {
+                    "browser.open" -> JSONObject().put("url", "https://example.com/review?fixture=1")
                     "storage.set" -> JSONObject().put("key", "factory-test").put("value", "synthetic")
                     "storage.get", "storage.remove" -> JSONObject().put("key", "factory-test")
                     "export.text" -> JSONObject().put("filename", "factory-test.txt").put("text", "synthetic")
@@ -47,7 +48,7 @@ internal object FactoryRuntimeContractTests {
                     assertion("$method:undeclared_denied") {
                         try { dispatch(method, args); false } catch (failure: FactoryException) { failure.code == "CAPABILITY_DENIED" }
                     }
-                } else if (capability == "documents" || (capability == "photos" || capability == "audio") || method == "share.file") {
+                } else if (capability == "browser" || capability == "documents" || (capability == "photos" || capability == "audio") || method == "share.file") {
                     assertion("$method:preview_unavailable") {
                         try { dispatch(method, args); false } catch (failure: FactoryException) { failure.code == "UNAVAILABLE" }
                     }

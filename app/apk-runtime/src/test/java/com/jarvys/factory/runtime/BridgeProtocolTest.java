@@ -34,6 +34,7 @@ public class BridgeProtocolTest {
             {"documents.close", "{\"handle\":\""+HANDLE+"\"}"}, {"documents.cancel", "{}"},
             {"photos.pick", "{}"}, {"photos.capture", "{}"},
             {"audio.play", "{\"handle\":\""+HANDLE+"\"}"},
+            {"browser.open", "{\"url\":\"https://example.com/review?fixture=1\"}"},
             {"share.file", "{\"handle\":\""+HANDLE+"\",\"filename\":\"file.bin\",\"mimeType\":\"application/octet-stream\"}"}};
         for (String[] call : methods) rejected("CAPABILITY_DENIED", BridgeProtocol.ORIGIN, true, request(call[0], call[1]), empty);
     }
@@ -86,7 +87,10 @@ public class BridgeProtocolTest {
             {"documents.close", "{\"handle\":\""+HANDLE+"\"}"}, {"documents.cancel", "{}"},
             {"photos.pick", "{}"}, {"photos.capture", "{}"},
             {"audio.play", "{\"handle\":\""+HANDLE+"\"}"},
+            {"browser.open", "{\"url\":\"https://example.com/review?fixture=1\"}"},
             {"share.file", "{\"handle\":\""+HANDLE+"\",\"filename\":\"file.bin\",\"mimeType\":\"application/octet-stream\"}"}};
+        assertEquals(21, calls.length);
+        assertEquals(10, com.jarvys.factory.contract.CapabilityCatalog.NAMES.size());
         assertEquals(com.jarvys.factory.contract.CapabilityCatalog.METHODS.size(), calls.length);
         for (int mask = 0; mask < (1 << com.jarvys.factory.contract.CapabilityCatalog.NAMES.size()); mask++) {
             org.json.JSONArray declared = new org.json.JSONArray();
@@ -176,4 +180,20 @@ public class BridgeProtocolTest {
         for(String caps:new String[]{"[]","[\"audio\"]","[\"documents\"]"})
             rejected("CAPABILITY_DENIED",BridgeProtocol.ORIGIN,true,request("audio.play",args.toString()),config(caps));
     }
+    @Test public void browserRequiresOnlyBrowserAndRejectsExtraAuthorityOrUntypedUrl() throws Exception {
+        FactoryConfig browser = config("[\"browser\"]");
+        JSONObject args = new JSONObject().put("url", "https://example.com/path?q=1");
+        assertEquals("browser.open", BridgeProtocol.validate(BridgeProtocol.ORIGIN, true, request("browser.open", args.toString()), browser).method);
+        for (String capability : new String[]{"documents", "photos", "audio", "share", "device"})
+            rejected("CAPABILITY_DENIED", BridgeProtocol.ORIGIN, true, request("browser.open", args.toString()), config("[\"" + capability + "\"]"));
+        for (String extra : new String[]{"headers", "cookies", "packageName", "component", "flags", "intent", "body", "method", "referrer", "control", "nonce"})
+            rejected("INVALID_ARGUMENT", BridgeProtocol.ORIGIN, true,
+                    request("browser.open", new JSONObject(args.toString()).put(extra, "forbidden").toString()), browser);
+        for (Object value : new Object[]{true, 1, JSONObject.NULL, new JSONObject(), new org.json.JSONArray()})
+            rejected("INVALID_ARGUMENT", BridgeProtocol.ORIGIN, true, request("browser.open", new JSONObject().put("url", value).toString()), browser);
+        rejected("INVALID_REQUEST", BridgeProtocol.ORIGIN, true, request("browser.open", "{}"), browser);
+        for (String url : new String[]{"http://example.com", "javascript:alert(1)", "https://user@example.com", "https://example.com/#private", "https://example.com/%0a", "https://EXAMPLE.com"})
+            rejected("INVALID_ARGUMENT", BridgeProtocol.ORIGIN, true, request("browser.open", new JSONObject().put("url", url).toString()), browser);
+    }
+
 }

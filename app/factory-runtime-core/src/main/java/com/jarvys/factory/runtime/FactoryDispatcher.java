@@ -30,8 +30,8 @@ public final class FactoryDispatcher {
     public static Effects simulatedEffects() {
         return (method, args) -> {
             switch (method) {
-                case AUDIO_PLAY: case PHOTOS_PICK: case PHOTOS_CAPTURE: case SHARE_FILE: case DOCUMENTS_OPEN: case DOCUMENTS_CREATE: case DOCUMENTS_READ: case DOCUMENTS_WRITE: case DOCUMENTS_CLOSE: case DOCUMENTS_CANCEL:
-                    throw new FactoryException("UNAVAILABLE", "Documents, photos and audio require an installed generated app and the matching human-only Jarvys broker; preview never opens files, the camera or audio playback.");
+                case BROWSER_OPEN: case AUDIO_PLAY: case PHOTOS_PICK: case PHOTOS_CAPTURE: case SHARE_FILE: case DOCUMENTS_OPEN: case DOCUMENTS_CREATE: case DOCUMENTS_READ: case DOCUMENTS_WRITE: case DOCUMENTS_CLOSE: case DOCUMENTS_CANCEL:
+                    throw new FactoryException("UNAVAILABLE", "Documents, photos, audio and browser require an installed generated app and the matching human-only Jarvys broker; preview never opens files, the camera, audio playback or external URLs.");
                 case HAPTICS_PERFORM: case SHARE_TEXT: case CLIPBOARD_WRITE: case EXPORT_TEXT:
                     return new JSONObject().put("simulated", true).put("performed", false).put("mode", "preview")
                             .put("operation", method.wireName);
@@ -51,14 +51,18 @@ public final class FactoryDispatcher {
             case STORAGE_LIST: return new JSONArray(store.list());
             case RUNTIME_INFO:
                 return new JSONObject().put("sdkVersion", CapabilityCatalog.SDK_VERSION).put("offline", true)
+                        .put("offlineScope", "embedded_webview").put("browserMayUseExternalNetwork", true)
                         .put("mode", metadata.mode()).put("declaredAppId", config.appId).put("hostAppId", metadata.hostAppId())
                         .put("simulatedCapabilities", new JSONArray("preview".equals(metadata.mode())
                                 ? java.util.Arrays.asList("export", "share", "clipboard", "haptics") : java.util.Collections.emptyList()))
                         .put("unavailableCapabilities", new JSONArray("preview".equals(metadata.mode())
-                                ? java.util.Arrays.asList("documents", "photos", "audio") : java.util.Collections.emptyList()))
+                                ? java.util.Arrays.asList("documents", "photos", "audio", "browser") : java.util.Collections.emptyList()))
                         .put("unavailableMethods", new JSONArray("preview".equals(metadata.mode())
-                                ? java.util.Arrays.asList("share.file", "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture", "audio.play")
+                                ? java.util.Arrays.asList("share.file", "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture", "audio.play", "browser.open")
                                 : java.util.Collections.emptyList()))
+                        .put("browserProtocolVersion", 1)
+                        .put("browserRequires", new JSONArray(java.util.Collections.singletonList("browser")))
+                        .put("browserBrokerRequired", true)
                         .put("fileShareProtocolVersion", 1)
                         .put("fileShareRequires", new JSONArray(java.util.Arrays.asList("documents", "share")))
                         .put("audioProtocolVersion", 1)
@@ -75,6 +79,8 @@ public final class FactoryDispatcher {
                         .put("limits", new JSONObject().put("messageBytes", BridgeProtocol.MAX_MESSAGE_BYTES)
                                 .put("textBytes", BridgeProtocol.MAX_TEXT_BYTES).put("storageValueBytes", BridgeProtocol.MAX_VALUE_BYTES)
                                 .put("storageBytes", BoundedStore.MAX_TOTAL_BYTES).put("storageEntries", BoundedStore.MAX_ENTRIES)
+                                .put("browserUrlLength", com.jarvys.factory.contract.BrowserUrl.MAX_LENGTH)
+                                .put("browserLifetimeMs", 300000)
                                 .put("documentChunkBytes", 32768).put("documentBytes", 16 * 1024 * 1024)
                                 .put("documentSessionBytes", 32 * 1024 * 1024).put("documentHandles", 4)
                                 .put("fileShareBytes", 8 * 1024 * 1024).put("fileShareLifetimeMs", 300000)
@@ -83,7 +89,7 @@ public final class FactoryDispatcher {
                                 .put("audioSampleRateMin", 8000).put("audioSampleRateMax", 48000)
                                 .put("documentHandleLifetimeMs", 300000));
             case DEVICE_INFO: return metadata.deviceInfo().put("declaredAppId", config.appId);
-            case AUDIO_PLAY: case PHOTOS_PICK: case PHOTOS_CAPTURE: case SHARE_FILE: case DOCUMENTS_OPEN: case DOCUMENTS_CREATE: case DOCUMENTS_READ: case DOCUMENTS_WRITE: case DOCUMENTS_CLOSE: case DOCUMENTS_CANCEL:
+            case BROWSER_OPEN: case AUDIO_PLAY: case PHOTOS_PICK: case PHOTOS_CAPTURE: case SHARE_FILE: case DOCUMENTS_OPEN: case DOCUMENTS_CREATE: case DOCUMENTS_READ: case DOCUMENTS_WRITE: case DOCUMENTS_CLOSE: case DOCUMENTS_CANCEL:
             case HAPTICS_PERFORM: case SHARE_TEXT: case CLIPBOARD_WRITE: case EXPORT_TEXT:
                 return effects.perform(request.operation, request.args);
             default: throw new FactoryException("UNKNOWN_METHOD", "Unknown operation.");

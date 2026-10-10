@@ -1,6 +1,7 @@
 package com.jarvys.factory.runtime;
 
 import com.jarvys.factory.contract.CapabilityCatalog;
+import com.jarvys.factory.contract.BrowserUrl;
 import org.json.JSONException;
 import org.json.JSONObject;
 import java.nio.charset.StandardCharsets;
@@ -55,6 +56,13 @@ public final class BridgeProtocol {
                     String mime = args.has("mimeType") ? FactoryConfig.string(args, "mimeType") : "text/plain";
                     if (!mime.equals("text/plain") && !mime.equals("text/markdown") && !mime.equals("application/json") && !mime.equals("text/csv"))
                         throw new FactoryException("INVALID_ARGUMENT", "Unsupported text export format.");
+                    break;
+                case BROWSER_OPEN:
+                    FactoryConfig.exactKeys(args, "url");
+                    try { BrowserUrl.parse(FactoryConfig.string(args, "url")); }
+                    catch (IllegalArgumentException invalid) {
+                        throw new FactoryException("INVALID_ARGUMENT", "Use a bounded canonical HTTPS URL without credentials or fragment.");
+                    }
                     break;
                 case AUDIO_PLAY:
                     FactoryConfig.exactKeys(args, "handle"); documentHandle(args);

@@ -105,7 +105,7 @@ test('all SDK calls exactly match the catalog and explicit native validator/disp
   const path = require('node:path');
   const catalog = fs.readFileSync(path.join(__dirname, '../../factory-contract/src/main/java/com/jarvys/factory/contract/CapabilityCatalog.java'), 'utf8');
   const rows = [...catalog.matchAll(/\b([A-Z][A-Z_]+)\("([a-z]+\.[a-z]+)", (?:"[a-z]+"|null)\)/g)];
-  assert.equal(rows.length, 20);
+  assert.equal(rows.length, 21);
   const env = environment();
   const args = { 'storage.get': ['key'], 'storage.set': ['key', 'value'], 'storage.remove': ['key'],
     'export.text': [{ filename: 'test.txt', text: 'hello' }], 'share.text': [{ text: 'hello' }],
@@ -194,4 +194,27 @@ test('photos exposes frozen empty-options methods and human-action timeouts', as
   assert.equal(env.delays.at(-1), 600000);
   env.reply(request, {playbackAttempted: true, audibilityConfirmed: false});
   const result = await promise; assert.equal(result.playbackAttempted, true); assert.equal(result.audibilityConfirmed, false);
+});
+
+
+test('browser open preserves exact URL/options and reports only a launch request', async () => {
+  const env = environment(); assert.equal(Object.isFrozen(env.api.browser), true);
+  assert.deepEqual(Object.keys(env.api.browser), ['open']);
+  for (const options of [{url: 'https://example.com:443/a%2Fb?q=%C3%A9'}, {url: 'https://example.com/', headers: {extra: true}}]) {
+    const promise = env.api.browser.open(options); const request = env.sent.at(-1);
+    assert.equal(request.method, 'browser.open'); assert.deepEqual(request.args, options);
+    assert.equal(env.delays.at(-1), 600000);
+    env.reply(request, {launchRequested: true, pageLoadConfirmed: false});
+    const result = await promise; assert.equal(result.launchRequested, true); assert.equal(result.pageLoadConfirmed, false);
+  }
+});
+
+test('browser timeout/pagehide cannot be mistaken for external page confirmation', async () => {
+  for (const event of ['timeout', 'pagehide']) {
+    const env = environment(); const promise = env.api.browser.open({url: 'https://example.com/'});
+    const rejected = assert.rejects(promise, {code: event === 'timeout' ? 'TIMEOUT' : 'PAGE_CLOSED'});
+    if (event === 'timeout') env.timers.values().next().value(); else env.handlers.get('pagehide')();
+    await rejected;
+    env.reply(env.sent.at(-1), {launchRequested: true, pageLoadConfirmed: false});
+  }
 });

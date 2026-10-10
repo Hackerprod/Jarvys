@@ -1383,4 +1383,14 @@ Their exit results are unknown. Do not repeat them automatically. Review project
     <string name="factory_audio_unknown">Interrupted or uncertain outcome. Playback never resumes automatically. Explicit native cleanup is required before automation can continue.</string>
     <string name="factory_audio_attempted">This one-shot playback authorization is used. The result never proves sound was heard. Close to release this protected review.</string>
     <string name="factory_audio_unavailable">Audio is unavailable or was interrupted. No automatic retry.</string>
+    <string name="factory_browser_title">Factory browser</string>
+    <string name="factory_browser_open">Open this exact URL once</string>
+    <string name="factory_browser_close">Cancel and close review</string>
+    <string name="factory_browser_recover">I closed the browser screen or task; finish</string>
+    <string name="factory_browser_settings_summary">Recover an interrupted external browser review</string>
+    <string name="factory_browser_disclosure">Review the complete URL and choose a browser below. Opening sends that URL, including its path and query, to the selected browser and destination website. Do not proceed with passwords, tokens or other secrets. The browser may use its cookies, signed-in account, history, sync and network settings. DNS, redirects, page resources and browser behavior can contact other destinations, switch to HTTP or open apps outside Jarvys control. HTTPS validation does not establish a safe or public destination. Jarvys does not fetch or verify the page. You must close the browser screen or task yourself before ending this protected review. Cancellation cannot retract a request, close the browser or undo website effects.</string>
+    <string name="factory_browser_checking">Checking the installed app and available browsers. No navigation is authorized yet.</string>
+    <string name="factory_browser_unknown">Interrupted, expired or uncertain outcome. Never retried automatically. Close any external browser screen or task yourself, then confirm below. Your confirmation is not independent proof of browser closure.</string>
+    <string name="factory_browser_attempted">This one-shot authorization has been consumed. A launch request does not prove that a browser rendered, a page loaded or data was delivered. Close the external browser screen or task yourself before finishing.</string>
+    <string name="factory_browser_unavailable">No compatible browser is available, or this review was interrupted. No implicit fallback or automatic retry.</string>
 </resources>

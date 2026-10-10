@@ -49,6 +49,27 @@ public class FactoryConfigTest {
         reject(new org.json.JSONObject(base).put("documentBroker",metadata.put("uri","content://private")).toString(),"com.example.app");
         reject(new org.json.JSONObject(base).put("documentBroker",org.json.JSONObject.NULL).toString(),"com.example.app");
     }
+
+    @Test public void browserAloneRequiresAndAcceptsTheSameBuildOwnedBrokerWithoutDocuments() throws Exception {
+        String digest = new String(new char[64]).replace('\0', 'a');
+        for (String caps : new String[]{"[\"browser\"]", "[\"browser\",\"documents\"]"}) {
+            String base = text("com.example.app", "www/index.html", caps);
+            reject(base, "com.example.app");
+            assertNull(FactoryConfig.parsePreview(base).documentBroker);
+            for (String host : new String[]{"com.jarvys.agent", "com.jarvys.agent.recoverytest"}) {
+                org.json.JSONObject json = new org.json.JSONObject(base).put("documentBroker",
+                        new org.json.JSONObject().put("packageName", host).put("certificateSha256", digest));
+                FactoryConfig parsed = FactoryConfig.parse(json.toString(), "com.example.app");
+                assertEquals(host, parsed.documentBroker.packageName);
+                assertEquals(caps.contains("documents"), parsed.capabilities.contains("documents"));
+            }
+        }
+        for (String caps : new String[]{"[]", "[\"audio\"]", "[\"photos\"]", "[\"share\"]"}) {
+            org.json.JSONObject json = new org.json.JSONObject(text("com.example.app", "www/index.html", caps)).put("documentBroker",
+                    new org.json.JSONObject().put("packageName", "com.jarvys.agent").put("certificateSha256", digest));
+            reject(json.toString(), "com.example.app");
+        }
+    }
     private void reject(String text, String installed) throws Exception {
         try { FactoryConfig.parse(text, installed); fail("Invalid config accepted"); } catch (FactoryException expected) { }
     }
