@@ -26,6 +26,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -73,8 +75,8 @@ internal fun MemoryScopeReviewDialog(
     var mutationInFlight by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var status by remember { mutableStateOf<String?>(null) }
-    var refresh by remember { mutableStateOf(0) }
-    var snapshotRequest by remember { mutableStateOf(0L) }
+    var refresh by remember { mutableIntStateOf(0) }
+    var snapshotRequest by remember { mutableLongStateOf(0L) }
     var open by remember { mutableStateOf(true) }
     var approvedSnapshot by remember { mutableStateOf<ReadOnlyMemoryPreview?>(null) }
 

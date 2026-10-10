@@ -599,7 +599,7 @@ description: Explicit preferences about language, tone, style, and how to help t
     <string name="memory_undo_title">Undo the latest memory change?</string>
     <string name="memory_undo_confirm">This creates a new revision that restores the previous content.</string>
     <string name="memory_clear_title">Delete this chat’s memory?</string>
-    <string name="memory_clear_first_confirm">This will remove %1$d local files and this chat’s complete memory revision journal. Sharing of these source notes will stop. Continue to the final confirmation?</string>
+    <string name="memory_clear_first_confirm">This will remove %1$d files in this chat and its complete memory revision journal. Sharing of these source notes will stop. Continue to the final confirmation?</string>
     <string name="memory_clear_confirm_title">Confirm permanent deletion</string>
     <string name="memory_clear_final_confirm">This chat’s memory and its revision history will be permanently deleted. Older unclassified originals and other chats remain unchanged. The empty starter index is recreated next time memory is used.</string>
     <string name="memory_cleared">This chat’s memory and revision history cleared.</string>
