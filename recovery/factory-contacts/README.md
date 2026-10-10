@@ -32,3 +32,11 @@ cases: three updated-system-provider flag variants and one expanded capability m
 its contacts broker binding. Fixtures were corrected without weakening production. The initial
 run is retained as failed, not a final pass; new activity/startup and blocked-cursor regressions
 were added afterward. Corrected focused validation and final frozen-source gates remain pending.
+
+Corrected focused gate passed 243 host tests, including 129 new contacts cases, and 577 shared-core
+tests. The first complete aggregate ran 3,458 Full cases and failed one inherited preview assertion
+that still expected 28 observations instead of 29. Only that count and the explicit contacts
+preview-denial/unavailability assertion were corrected; all original cases remain. Independent
+review permits reusing the exact pre-correction lint report because the sole app delta is this
+assertion-only fixture. Original lint source freeze/timestamps are retained; equal final lint/test
+input freezes are not claimed. A fresh complete six-suite aggregate and three builds will follow.

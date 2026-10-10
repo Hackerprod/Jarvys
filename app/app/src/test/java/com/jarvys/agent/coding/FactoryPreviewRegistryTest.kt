@@ -155,7 +155,7 @@ class FactoryPreviewRegistryTest {
             val result = FactoryRuntimeContractTests.run(snapshot(capabilities), "com.jarvys.host", 34, 34) {}
             assertEquals("passed", result.getString("state"))
             val observations = result.getJSONArray("observations")
-            assertEquals(28, observations.length())
+            assertEquals(29, observations.length())
             val documentAssertions = (0 until observations.length()).map { observations.getJSONObject(it) }
                 .filter { it.getString("operation").startsWith("documents.") }
             assertEquals(6, documentAssertions.size)
@@ -170,7 +170,7 @@ class FactoryPreviewRegistryTest {
             val browser = (0 until observations.length()).map { observations.getJSONObject(it) }.single { it.getString("operation").startsWith("browser.open:") }
             assertEquals("browser.open:" + if ("browser" in capabilities) "preview_unavailable" else "undeclared_denied", browser.getString("operation"))
             assertEquals("passed", browser.getString("outcome"))
-            for ((capability, method) in listOf("maps" to "maps.open", "phone" to "phone.dial", "email" to "email.compose", "sms" to "sms.compose")) {
+            for ((capability, method) in listOf("maps" to "maps.open", "phone" to "phone.dial", "email" to "email.compose", "sms" to "sms.compose", "contacts" to "contacts.pick")) {
                 val external = (0 until observations.length()).map { observations.getJSONObject(it) }.single { it.getString("operation").startsWith("$method:") }
                 assertEquals("$method:" + if (capability in capabilities) "preview_unavailable" else "undeclared_denied", external.getString("operation"))
                 assertEquals("passed", external.getString("outcome"))
