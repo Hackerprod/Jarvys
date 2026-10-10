@@ -28,6 +28,8 @@ import org.robolectric.annotation.Resetter;
 @Implements(Os.class)
 public class FactoryFileShareOsShadow {
     private static final Map<FileDescriptor, Handle> HANDLES = new IdentityHashMap<>();
+    private static final java.util.List<Integer> SHARE_OPEN_FLAGS = new java.util.ArrayList<>();
+    public static java.util.List<Integer> shareOpenFlags() { return new java.util.ArrayList<>(SHARE_OPEN_FLAGS); }
     private static final LinkOption[] NOFOLLOW = { LinkOption.NOFOLLOW_LINKS };
     private static final class Handle {
         final Path path;
@@ -73,6 +75,7 @@ public class FactoryFileShareOsShadow {
             RandomAccessFile file = new RandomAccessFile(path.toFile(), writable ? "rw" : "r");
             FileDescriptor descriptor = file.getFD();
             HANDLES.put(descriptor, new Handle(path, file));
+            if (path.getParent() != null && path.getParent().getFileName().toString().equals("factory-file-shares")) SHARE_OPEN_FLAGS.add(flags);
             return descriptor;
         } catch (IOException e) { throw errno("open", e); }
     }
@@ -116,5 +119,6 @@ public class FactoryFileShareOsShadow {
     @Resetter public static void reset() {
         for (Handle handle : HANDLES.values()) try { handle.file.close(); } catch (IOException ignored) { }
         HANDLES.clear();
+        SHARE_OPEN_FLAGS.clear();
     }
 }

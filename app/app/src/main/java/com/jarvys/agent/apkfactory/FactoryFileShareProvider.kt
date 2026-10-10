@@ -30,7 +30,7 @@ class FactoryFileShareProvider : FileProvider() {
         if (mode != "r") throw FileNotFoundException("File shares are read only")
         return read(uri) { snapshot, file, identity ->
             // Do not delegate to FileProvider: its canonical path resolution alone cannot pin an inode.
-            val descriptor = Os.open(file.path, OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW or OsConstants.O_CLOEXEC, 0)
+            val descriptor = Os.open(file.path, OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW or FactoryFileShareStore.ATOMIC_CLOSE_ON_EXEC, 0)
             try {
                 check(FactoryFileShareStore.Identity.file(Os.fstat(descriptor), snapshot.size) == identity)
                 ParcelFileDescriptor.dup(descriptor)

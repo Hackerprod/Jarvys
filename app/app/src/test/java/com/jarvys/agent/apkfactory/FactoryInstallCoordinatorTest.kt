@@ -24,10 +24,10 @@ import java.util.concurrent.TimeUnit
 
 /** Host-only installer contract tests. No installer, network, real identity or persisted private key. */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
+@Config(sdk = [34], application = android.app.Application::class)
 class FactoryInstallCoordinatorTest {
     private lateinit var fixture: InstallTestFixture
-    @Before fun before() { fixture = InstallTestFixture() }
+    @Before fun before() { FactoryStartupTestIsolation.releaseCompletedSharingStartup(); fixture = InstallTestFixture() }
     @After fun after() { fixture.close() }
     private fun fails(action: () -> Unit) { assertTrue("Expected closed authority boundary", runCatching(action).isFailure) }
 

@@ -4,6 +4,7 @@ import com.artemis.helper.GestureController
 import com.artemis.helper.HierarchyDumper
 import com.jarvys.agent.device.AccessibilityDriver
 import org.junit.Assert.*
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -13,8 +14,9 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
+@Config(sdk = [34], application = android.app.Application::class)
 class MemoryUiAutomationGuardTest {
+    @Before fun isolateFactoryStartup() { com.jarvys.agent.apkfactory.FactoryStartupTestIsolation.releaseCompletedSharingStartup() }
     private fun blocked(action: () -> Unit) {
         val error = runCatching(action).exceptionOrNull()
         assertTrue("Expected protected-memory denial, got $error", error is IllegalStateException)

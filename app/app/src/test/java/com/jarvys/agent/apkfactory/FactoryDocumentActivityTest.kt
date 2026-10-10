@@ -40,6 +40,7 @@ class FactoryDocumentActivityTest {
     private lateinit var coordinator: FactoryDocumentCoordinator
     private val controllers = mutableListOf<ActivityController<out FactoryDocumentActivity>>()
     @Before fun setup() {
+        FactoryStartupTestIsolation.releaseCompletedSharingStartup()
         root.deleteRecursively()
         coordinator = FactoryDocumentCoordinator(context) { caller -> check(caller == proof.appId); proof }
         FactoryDocumentCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(null, coordinator)

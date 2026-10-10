@@ -19,11 +19,11 @@ import org.robolectric.annotation.Config
 
 /** Native host-only UI tests; all installation state uses an injected fake backend. */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
+@Config(sdk = [34], application = android.app.Application::class)
 class FactoryInstallActivityTest {
     private lateinit var fixture: InstallTestFixture
     private var controller: ActivityController<FactoryInstallActivity>? = null
-    @Before fun before() { fixture = InstallTestFixture() }
+    @Before fun before() { FactoryStartupTestIsolation.releaseCompletedSharingStartup(); fixture = InstallTestFixture() }
     @After fun after() { controller?.pause()?.stop()?.destroy(); fixture.close() }
     private fun launch(token: String? = null): FactoryInstallActivity {
         val intent = Intent().apply { token?.let { putExtra("launch_token", it) } }

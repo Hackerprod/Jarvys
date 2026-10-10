@@ -48,7 +48,7 @@ internal class FactoryFileShareStore(
             staging = File(root, "staging-${UUID.randomUUID()}.tmp")
             completed = File(root, "snapshot-${UUID.randomUUID()}.bin")
             val descriptor = Os.open(staging.path, OsConstants.O_WRONLY or OsConstants.O_CREAT or
-                OsConstants.O_EXCL or OsConstants.O_NOFOLLOW or OsConstants.O_CLOEXEC, OWNER_RW)
+                OsConstants.O_EXCL or OsConstants.O_NOFOLLOW or ATOMIC_CLOSE_ON_EXEC, OWNER_RW)
             FileOutputStream(descriptor).use { stream ->
                 val checked = CheckedOutput(stream, size, sha256, active)
                 copy(transfer, nonce, size, sha256, checked, active)
@@ -156,6 +156,11 @@ internal class FactoryFileShareStore(
         const val MAX_BYTES = 8_388_608
         const val CHUNK_BYTES = 32_768
         const val LIFETIME_MILLIS = 300_000L
+        // Android/Linux has supported this atomic open flag before its Java field was public in
+        // API 27. Pass the stable native ABI bit to API-21 Os.open; never set it after open (fork race).
+        // https://android.googlesource.com/platform/bionic/+/6861c6f/libc/include/fcntl.h
+        // https://android.googlesource.com/platform/bionic/+/09cb3ce36fe6cda958b40f7113b0f10864c568bb/libc/kernel/uapi/asm-generic/fcntl.h
+        internal const val ATOMIC_CLOSE_ON_EXEC = 0x80000 // O_CLOEXEC, octal 02000000
         internal const val OWNER_READ = 256 // 0400
         private const val OWNER_RW = 384 // 0600
         private const val OWNER_DIR = 448 // 0700
@@ -239,7 +244,7 @@ internal object FactoryFileShareRegistry {
         check(snapshot.uri.scheme == "content" && snapshot.uri.query == null && snapshot.uri.fragment == null)
         check(snapshot.expiresAt > SystemClock.elapsedRealtime())
         // Keep this inode alive until invalidation: an unlinked/replaced path cannot reuse its inode.
-        val pinned = Os.open(file.path, OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW or OsConstants.O_CLOEXEC, 0)
+        val pinned = Os.open(file.path, OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW or FactoryFileShareStore.ATOMIC_CLOSE_ON_EXEC, 0)
         try {
             check(FactoryFileShareStore.Identity.file(Os.fstat(pinned), snapshot.size) == identity)
             entry = Entry(snapshot, file, root, identity, pinned)
