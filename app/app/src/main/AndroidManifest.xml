@@ -25,6 +25,8 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 
     <queries>
+        <intent><action android:name="android.media.action.IMAGE_CAPTURE" /></intent>
+        <intent><action android:name="android.provider.action.PICK_IMAGES" /><data android:mimeType="image/*" /></intent>
         <intent><action android:name="android.intent.action.CHOOSER" /></intent>
         <intent>
             <action android:name="android.intent.action.OPEN_DOCUMENT" />
@@ -93,6 +95,8 @@
             android:grantUriPermissions="true">
             <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/factory_file_share_paths" />
         </provider>
+        <activity android:name="com.jarvys.agent.apkfactory.FactoryPhotoActivity" android:exported="true" android:windowSoftInputMode="adjustResize" />
+        <provider android:name="com.jarvys.agent.apkfactory.FactoryPhotoProvider" android:authorities="${applicationId}.factory.camera" android:exported="false" android:grantUriPermissions="true" />
         <receiver
             android:name="com.jarvys.agent.apkfactory.FactoryInstallReceiver"
             android:exported="false" />

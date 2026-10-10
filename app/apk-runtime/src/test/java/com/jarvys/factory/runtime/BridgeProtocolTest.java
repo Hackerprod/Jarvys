@@ -32,6 +32,7 @@ public class BridgeProtocolTest {
             {"documents.read", "{\"handle\":\""+HANDLE+"\",\"offset\":0,\"length\":1}"},
             {"documents.write", "{\"handle\":\""+HANDLE+"\",\"offset\":0,\"data\":\"AA==\"}"},
             {"documents.close", "{\"handle\":\""+HANDLE+"\"}"}, {"documents.cancel", "{}"},
+            {"photos.pick", "{}"}, {"photos.capture", "{}"},
             {"share.file", "{\"handle\":\""+HANDLE+"\",\"filename\":\"file.bin\",\"mimeType\":\"application/octet-stream\"}"}};
         for (String[] call : methods) rejected("CAPABILITY_DENIED", BridgeProtocol.ORIGIN, true, request(call[0], call[1]), empty);
     }
@@ -71,7 +72,7 @@ public class BridgeProtocolTest {
         JSONObject failure = new JSONObject(BridgeProtocol.failure("r_1", "CANCELLED", "Cancelled"));
         assertFalse(failure.getBoolean("ok")); assertEquals("CANCELLED", failure.getJSONObject("error").getString("code"));
     }
-    @Test public void all128CapabilitySelectionsMatchCatalogAndTypedValidators() throws Exception {
+    @Test public void allCapabilitySelectionsMatchCatalogAndTypedValidators() throws Exception {
         String[][] calls = {{"runtime.info", "{}"}, {"storage.get", "{\"key\":\"x\"}"},
             {"storage.set", "{\"key\":\"x\",\"value\":\"v\"}"}, {"storage.remove", "{\"key\":\"x\"}"},
             {"storage.list", "{}"}, {"export.text", "{\"filename\":\"x.txt\",\"text\":\"x\"}"},
@@ -82,11 +83,12 @@ public class BridgeProtocolTest {
             {"documents.read", "{\"handle\":\""+HANDLE+"\",\"offset\":0,\"length\":1}"},
             {"documents.write", "{\"handle\":\""+HANDLE+"\",\"offset\":0,\"data\":\"AA==\"}"},
             {"documents.close", "{\"handle\":\""+HANDLE+"\"}"}, {"documents.cancel", "{}"},
+            {"photos.pick", "{}"}, {"photos.capture", "{}"},
             {"share.file", "{\"handle\":\""+HANDLE+"\",\"filename\":\"file.bin\",\"mimeType\":\"application/octet-stream\"}"}};
         assertEquals(com.jarvys.factory.contract.CapabilityCatalog.METHODS.size(), calls.length);
-        for (int mask = 0; mask < 128; mask++) {
+        for (int mask = 0; mask < (1 << com.jarvys.factory.contract.CapabilityCatalog.NAMES.size()); mask++) {
             org.json.JSONArray declared = new org.json.JSONArray();
-            for (int bit = 0; bit < 7; bit++) if ((mask & (1 << bit)) != 0)
+            for (int bit = 0; bit < com.jarvys.factory.contract.CapabilityCatalog.NAMES.size(); bit++) if ((mask & (1 << bit)) != 0)
                 declared.put(com.jarvys.factory.contract.CapabilityCatalog.NAMES.get(bit));
             FactoryConfig selected = config(declared.toString());
             for (String[] call : calls) {
@@ -94,7 +96,7 @@ public class BridgeProtocolTest {
                     com.jarvys.factory.contract.CapabilityCatalog.METHODS.get(call[0]);
                 assertNotNull(method);
                 if ((method.capability == null || selected.capabilities.contains(method.capability))
-                        && (!call[0].equals("share.file") || selected.capabilities.contains("documents"))) {
+                        && (!(call[0].equals("share.file") || call[0].startsWith("photos.")) || selected.capabilities.contains("documents"))) {
                     assertSame(method, BridgeProtocol.validate(BridgeProtocol.ORIGIN, true,
                         request(call[0], call[1]), selected).operation);
                 } else rejected("CAPABILITY_DENIED", BridgeProtocol.ORIGIN, true,
@@ -145,6 +147,20 @@ public class BridgeProtocolTest {
         String maximum = java.util.Base64.getEncoder().encodeToString(new byte[32768]);
         BridgeProtocol.validate(BridgeProtocol.ORIGIN,true,request("documents.write",new JSONObject().put("handle",HANDLE).put("offset",16744448).put("data",maximum).toString()),docs);
         rejected("INVALID_ARGUMENT",BridgeProtocol.ORIGIN,true,request("documents.write",new JSONObject().put("handle",HANDLE).put("offset",16744449).put("data",maximum).toString()),docs);
+    }
+
+    @Test public void photosRejectEveryCallerControlledOptionAndRequireBothDeclarations() throws Exception {
+        FactoryConfig both = config("[\"photos\",\"documents\"]");
+        for (String method : new String[]{"photos.pick", "photos.capture"}) {
+            assertEquals(method, BridgeProtocol.validate(BridgeProtocol.ORIGIN, true, request(method, "{}"), both).method);
+            for (String caps : new String[]{"[]", "[\"photos\"]", "[\"documents\"]"})
+                rejected("CAPABILITY_DENIED", BridgeProtocol.ORIGIN, true, request(method, "{}"), config(caps));
+            for (String extra : new String[]{"uri", "path", "mimeType", "output", "camera", "packageName", "flags", "persist", "multiple", "width", "quality"})
+                rejected("INVALID_ARGUMENT", BridgeProtocol.ORIGIN, true,
+                        request(method, new JSONObject().put(extra, "forbidden").toString()), both);
+            for (String invalid : new String[]{"null", "[]", "true", "1", "\"image/jpeg\""})
+                rejected("INVALID_REQUEST", BridgeProtocol.ORIGIN, true, request(method, invalid), both);
+        }
     }
 
 }

@@ -24,7 +24,8 @@ public final class CapabilityCatalog {
         DEVICE_INFO("device.info", "device"),
         DOCUMENTS_OPEN("documents.open", "documents"), DOCUMENTS_CREATE("documents.create", "documents"),
         DOCUMENTS_READ("documents.read", "documents"), DOCUMENTS_WRITE("documents.write", "documents"),
-        DOCUMENTS_CLOSE("documents.close", "documents"), DOCUMENTS_CANCEL("documents.cancel", "documents");
+        DOCUMENTS_CLOSE("documents.close", "documents"), DOCUMENTS_CANCEL("documents.cancel", "documents"),
+        PHOTOS_PICK("photos.pick", "photos"), PHOTOS_CAPTURE("photos.capture", "photos");
         public final String wireName;
         public final String capability;
         Method(String wireName, String capability) { this.wireName = wireName; this.capability = capability; }
@@ -58,7 +59,7 @@ public final class CapabilityCatalog {
     static final ManifestNodes.Element DOCUMENT_QUERIES = ManifestNodes.queries(Arrays.asList(
             ManifestNodes.queryPackage("com.jarvys.agent"), ManifestNodes.queryPackage("com.jarvys.agent.recoverytest")));
     public static final List<String> NAMES = Collections.unmodifiableList(Arrays.asList(
-            "storage", "export", "share", "clipboard", "haptics", "device", "documents"));
+            "storage", "export", "share", "clipboard", "haptics", "device", "documents", "photos"));
     public static final Set<String> SUPPORTED = Collections.unmodifiableSet(new LinkedHashSet<>(NAMES));
     public static final Map<String, Capability> CAPABILITIES;
     public static final Map<String, Method> METHODS;

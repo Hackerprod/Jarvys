@@ -52,7 +52,7 @@
         payload = JSON.stringify({ v: 1, id: id, method: method, args: args });
         if (new TextEncoder().encode(payload).length > MAX_MESSAGE_BYTES) throw failure('TOO_LARGE', 'Native request exceeds 512 KiB.');
       } catch (error) { reject(error.code ? error : failure('INVALID_ARGUMENT', 'Arguments must be serializable JSON.')); return; }
-      var timeout = /^(export|clipboard|share)\./.test(method) || /^documents\.(open|create)$/.test(method) ? 600000 : 30000;
+      var timeout = /^(export|clipboard|share)\./.test(method) || /^(documents\.(open|create)|photos\.(pick|capture))$/.test(method) ? 600000 : 30000;
       var timer = global.setTimeout(function () {
         if (!pending.has(id)) return;
         pending.delete(id);
@@ -73,6 +73,10 @@
       set: function (key, value) { return call('storage.set', { key: key, value: value }); },
       remove: function (key) { return call('storage.remove', { key: key }); },
       list: function () { return call('storage.list', {}); }
+    }),
+    photos: Object.freeze({
+      pick: function (options) { return call('photos.pick', options === undefined ? {} : options); },
+      capture: function (options) { return call('photos.capture', options === undefined ? {} : options); }
     }),
     documents: Object.freeze({
       open: function (options) { return call('documents.open', options); },

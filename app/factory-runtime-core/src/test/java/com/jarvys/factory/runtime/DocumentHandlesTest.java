@@ -241,6 +241,29 @@ public class DocumentHandlesTest {
         DocumentHandles.CloseResult result=h.handles.close(t); assertFalse(closed[0]); assertFalse(result.providerCommitConfirmed);
         h.cleanup(); assertTrue(closed[0]); fails("INVALID_HANDLE",() -> h.handles.close(t));
     }
+    @Test public void photoSnapshotChargesPersistAfterCancellationAndExhaustSession() throws Exception {
+        Harness h=new Harness();
+        for(int i=0;i<4;i++) {
+            DocumentHandles.Reservation r=h.handles.reserveRead();
+            r.chargeSnapshot(8*1024*1024);r.beginOpen();r.cancel();r.abortOpen();
+        }
+        DocumentHandles.Reservation refused=h.handles.reserveRead();
+        fails("DOCUMENT_QUOTA",()->refused.chargeSnapshot(1));refused.cancel();
+        String read=h.handles.grantRead(new ByteArrayInputStream(new byte[]{1}));
+        fails("DOCUMENT_QUOTA",()->h.handles.read(read,0,1));
+    }
+    @Test public void photoSnapshotAndSubsequentReadsShareCumulativeBudget() throws Exception {
+        Harness h=new Harness();
+        DocumentHandles.Reservation r=h.handles.reserveRead();r.chargeSnapshot(8*1024*1024);r.beginOpen();
+        String token=r.grantRead(new ByteArrayInputStream(new byte[8*1024*1024]));
+        for(int i=0;i<256;i++) h.handles.read(token,i*32768L,32768);
+        assertTrue(h.handles.read(token,8*1024*1024,1).eof);
+        h.handles.close(token);h.cleanup();
+        for(int i=0;i<2;i++) {
+            DocumentHandles.Reservation extra=h.handles.reserveRead();extra.chargeSnapshot(8*1024*1024);extra.cancel();
+        }
+        DocumentHandles.Reservation refused=h.handles.reserveRead();fails("DOCUMENT_QUOTA",()->refused.chargeSnapshot(1));
+    }
     static Thread run(Operation op,AtomicReference<Throwable> outcome) {
         Thread t=new Thread(() -> { try { op.run(); } catch (Throwable error) { outcome.set(error); } }); t.setDaemon(true); t.start(); return t;
     }

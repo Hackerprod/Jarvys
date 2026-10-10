@@ -68,6 +68,16 @@ public final class DocumentHandles {
                 remove(entry); releaseAdmission(entry);
             }
         }
+        /** Charge native snapshot acquisition before copying; cancellation never refunds this budget. */
+        public void chargeSnapshot(int bytes) throws FactoryException {
+            synchronized(lock) {
+                expireLocked();
+                if (revoked || entries.get(entry.token) != entry || entry.stream != null || entry.opening
+                        || bytes < 1 || bytes > 8 * 1024 * 1024) throw error("INVALID_HANDLE");
+                if (bytes > MAX_SESSION_BYTES-charged) throw error("DOCUMENT_QUOTA");
+                charged+=bytes;
+            }
+        }
         public String grantRead(InputStream stream) throws FactoryException { return grant(entry, stream, false); }
         public String grantWrite(OutputStream stream) throws FactoryException { return grant(entry, stream, true); }
         public void cancel() { synchronized(lock) { remove(entry); } }

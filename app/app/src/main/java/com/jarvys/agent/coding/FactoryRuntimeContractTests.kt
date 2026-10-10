@@ -25,7 +25,7 @@ internal object FactoryRuntimeContractTests {
             FactoryDispatcher.previewMetadata(hostAppId, api, targetSdk), FactoryDispatcher.simulatedEffects())
         try {
             val ordered = listOf("runtime.info", "storage.set", "storage.get", "storage.list", "storage.remove", "export.text", "share.text", "share.file", "clipboard.write", "haptics.perform", "device.info",
-                "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel")
+                "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture")
             check(ordered.toSet() == CapabilityCatalog.METHODS.keys) { "Synthetic contract cases must cover the compiled catalog" }
             for (method in ordered) {
                 val args = when (method) {
@@ -43,11 +43,11 @@ internal object FactoryRuntimeContractTests {
                     else -> JSONObject()
                 }
                 val capability = CapabilityCatalog.METHODS.getValue(method).capability
-                if (capability != null && (capability !in config.capabilities || (method == "share.file" && "documents" !in config.capabilities))) {
+                if (capability != null && (capability !in config.capabilities || ((method == "share.file" || capability == "photos") && "documents" !in config.capabilities))) {
                     assertion("$method:undeclared_denied") {
                         try { dispatch(method, args); false } catch (failure: FactoryException) { failure.code == "CAPABILITY_DENIED" }
                     }
-                } else if (capability == "documents" || method == "share.file") {
+                } else if (capability == "documents" || capability == "photos" || method == "share.file") {
                     assertion("$method:preview_unavailable") {
                         try { dispatch(method, args); false } catch (failure: FactoryException) { failure.code == "UNAVAILABLE" }
                     }

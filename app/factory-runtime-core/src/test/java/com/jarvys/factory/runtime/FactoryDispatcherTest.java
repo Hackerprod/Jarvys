@@ -116,4 +116,56 @@ public class FactoryDispatcherTest {
         }
         assertEquals(4, observed.size());
     }
+    @Test public void photosAreUnavailableInPreviewAndInstalledDispatchRevalidatesBothCapabilities() throws Exception {
+        FactoryConfig both = FactoryConfig.parsePreview(configuration("[\"photos\",\"documents\"]"));
+        BoundedStore store = new BoundedStore(new MemoryBackend());
+        for (String method : Arrays.asList("photos.pick", "photos.capture")) {
+            BridgeProtocol.Request call = request(method, new JSONObject(), both);
+            try { FactoryDispatcher.dispatch(call, both, store,
+                    FactoryDispatcher.previewMetadata("host", 35, 35), FactoryDispatcher.simulatedEffects()); fail(); }
+            catch (FactoryException expected) { assertEquals("UNAVAILABLE", expected.code); }
+            for (String caps : Arrays.asList("[]", "[\"photos\"]", "[\"documents\"]")) {
+                try { FactoryDispatcher.dispatch(call, FactoryConfig.parsePreview(configuration(caps)), store,
+                        FactoryDispatcher.metadata("installed", "app", 35, 35),
+                        (operation, args) -> { throw new AssertionError("Effect invoked"); }); fail(); }
+                catch (FactoryException expected) { assertEquals("CAPABILITY_DENIED", expected.code); }
+            }
+            assertEquals("adapter", FactoryDispatcher.dispatch(call, both, store,
+                    FactoryDispatcher.metadata("installed", "app", 35, 35),
+                    (operation, args) -> { assertEquals(method, operation.wireName); return "adapter"; }));
+            call.args.put("uri", "content://forbidden");
+            try { FactoryDispatcher.dispatch(call, both, store,
+                    FactoryDispatcher.metadata("installed", "app", 35, 35),
+                    (operation, args) -> { throw new AssertionError("Effect invoked"); }); fail(); }
+            catch (FactoryException expected) { assertEquals("INVALID_ARGUMENT", expected.code); }
+        }
+        JSONObject info = (JSONObject) FactoryDispatcher.dispatch(request("runtime.info", new JSONObject(), both), both, store,
+                FactoryDispatcher.previewMetadata("host", 35, 35), FactoryDispatcher.simulatedEffects());
+        assertEquals(2, info.getInt("sdkVersion"));
+        assertEquals(1, info.getInt("photoProtocolVersion"));
+        assertTrue(info.getBoolean("photoBrokerRequired"));
+        assertEquals("[\"documents\",\"photos\"]", info.getJSONArray("photoRequires").toString());
+        assertTrue(info.getJSONArray("unavailableCapabilities").toString().contains("photos"));
+        assertTrue(info.getJSONArray("unavailableMethods").toString().contains("photos.pick"));
+        assertTrue(info.getJSONArray("unavailableMethods").toString().contains("photos.capture"));
+        JSONObject installed = (JSONObject) FactoryDispatcher.dispatch(request("runtime.info", new JSONObject(), both), both, store,
+                FactoryDispatcher.metadata("installed", "app", 35, 35), FactoryDispatcher.simulatedEffects());
+        assertEquals(0, installed.getJSONArray("unavailableMethods").length());
+        assertEquals(0, installed.getJSONArray("unavailableCapabilities").length());
+    }
+
+    @Test public void photosCapabilityNeverAddsManifestPermissionsComponentsOrQueries() {
+        CapabilityCatalog.Capability photos = CapabilityCatalog.CAPABILITIES.get("photos");
+        assertNotNull(photos);
+        assertEquals(2, photos.methods.size());
+        assertTrue(photos.manifestNodes.isEmpty());
+        assertTrue(photos.permissions.isEmpty());
+        assertTrue(photos.features.isEmpty());
+        assertTrue(photos.components.isEmpty());
+        assertTrue(photos.queries.isEmpty());
+        assertTrue(CapabilityCatalog.manifestContributions(Arrays.asList("photos")).isEmpty());
+        assertEquals(CapabilityCatalog.manifestContributions(Arrays.asList("documents")).size(),
+                CapabilityCatalog.manifestContributions(Arrays.asList("documents", "photos")).size());
+    }
+
 }

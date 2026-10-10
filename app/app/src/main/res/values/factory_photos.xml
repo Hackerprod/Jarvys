@@ -1,0 +1,9 @@
+<resources>
+    <string name="factory_photos_title">Factory photos</string>
+    <string name="factory_photos_settings_summary">Close interrupted photo or camera interactions without restoring access.</string>
+    <string name="factory_photos_choose">Open system photo picker or camera</string>
+    <string name="factory_photos_use">Use this photo</string>
+    <string name="factory_photos_selected">A bounded JPEG or PNG photo is ready. Use this photo to give the app temporary read access.</string>
+    <string name="factory_photos_unavailable">Photo unavailable, cancelled, expired, too large or unsupported. Only JPEG/PNG up to 8 MiB, 4096 pixels per side and 12 megapixels are accepted. Cameras requiring seekable files or reopening output are unsupported. No thumbnail fallback is used.</string>
+    <string name="factory_photos_disclosure">Only you can open and approve this system interaction. Jarvys automation remains blocked until native closure or recovery. Selection may use a cloud provider. Original image metadata, potentially including location, is retained. Jarvys does not save to the gallery or automatically send the photo; the external camera may keep its own copy. Access is temporary and cancellation does not recall copies. After interruption, close the external picker/camera yourself before acknowledging recovery; its closure cannot be independently verified.</string>
+</resources>

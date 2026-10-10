@@ -56,6 +56,7 @@ public final class FactoryRuntime implements AutoCloseable {
     private static final int EXPORT_REQUEST = 41;
     private static final int DOCUMENT_REQUEST = 42;
     private static final int FILE_SHARE_REQUEST = 43;
+    private static final int PHOTO_REQUEST = 44;
     private static final int MAX_PENDING = 16;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ThreadPoolExecutor io = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
@@ -75,6 +76,12 @@ public final class FactoryRuntime implements AutoCloseable {
     private volatile boolean documentForeground;
     private DocumentSelection documentSelection;
     private volatile FileShare fileShare;
+    private volatile PhotoSelection photoSelection;
+    private static final java.util.concurrent.Semaphore PHOTO_ADMISSION = new java.util.concurrent.Semaphore(1);
+    private static final ThreadPoolExecutor PHOTO_IO = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
+            new ArrayBlockingQueue<>(1), runnable -> {
+                Thread thread=new Thread(runnable,"factory-photo-copy"); thread.setDaemon(true); return thread;
+            }, new ThreadPoolExecutor.AbortPolicy());
     // No new selection while old descriptors/grants are closing: a delayed revoke for the
     // same URI must never revoke a newer selection. Provider cleanup may block indefinitely.
     private static final java.util.concurrent.atomic.AtomicInteger documentResources = new java.util.concurrent.atomic.AtomicInteger();
@@ -87,6 +94,8 @@ public final class FactoryRuntime implements AutoCloseable {
         public void run() {
             if (destroyed) return;
             documents.expire();
+            PhotoSelection photo=photoSelection;
+            if (photo != null && photo.copying && SystemClock.elapsedRealtime()-photo.copyStarted >= 300000) cancelPhotoSelection();
             FileShare share = fileShare;
             if (share != null && share.snapshot != null) share.snapshot.expire();
             main.postDelayed(this, 1000);
@@ -169,7 +178,7 @@ public final class FactoryRuntime implements AutoCloseable {
     private void invalidate() {
         generation++; pending.clear(); uiOwner = null;
         documents.revokeAll(); documents = new DocumentHandles();
-        cancelDocumentSelection(); cancelFileShare();
+        cancelDocumentSelection(); cancelFileShare(); cancelPhotoSelection();
         // Keep an outstanding picker tombstone until its callback: request code 41 must never
         // attach an old result to a new page's export request.
         if (export != null) export.text = null;
@@ -354,6 +363,8 @@ public final class FactoryRuntime implements AutoCloseable {
     private void dispatchInstalledEffect(BridgeProtocol.Request request, Reply reply) throws Exception {
         if (!reply.current()) return;
         switch (request.operation) {
+            case PHOTOS_PICK: case PHOTOS_CAPTURE:
+                openPhoto(request, reply); break;
             case SHARE_FILE:
                 shareFile(request, reply); break;
             case DOCUMENTS_OPEN: case DOCUMENTS_CREATE:
@@ -378,9 +389,9 @@ public final class FactoryRuntime implements AutoCloseable {
                 documents.close(request.args.getString("handle"));
                 reply.ok(new JSONObject().put("status", "close_requested").put("providerCommitConfirmed", false)); break;
             case DOCUMENTS_CANCEL:
-                documents.cancelAll(); cancelDocumentSelection(); cancelFileShare();
+                documents.cancelAll(); cancelDocumentSelection(); cancelFileShare(); cancelPhotoSelection();
                 reply.ok(new JSONObject().put("cancelled", true).put("rollbackConfirmed", false)
-                        .put("pickerMayRemainOpen", documentSelection != null)); break;
+                        .put("pickerMayRemainOpen", documentSelection != null || photoSelection != null)); break;
             case HAPTICS_PERFORM:
                 int kind = request.args.optString("kind", "tap").equals("longPress") ? HapticFeedbackConstants.LONG_PRESS : HapticFeedbackConstants.KEYBOARD_TAP;
                 reply.ok(webView.performHapticFeedback(kind)); // Respects the user's system haptic setting.
@@ -434,13 +445,21 @@ public final class FactoryRuntime implements AutoCloseable {
     }
 
     private boolean claimUi(Reply reply) {
-        if (uiOwner != null || export != null || documentSelection != null || fileShare != null || !activity.hasWindowFocus() || activity.isFinishing()) {
+        if (uiOwner != null || export != null || documentSelection != null || fileShare != null || photoSelection != null || !activity.hasWindowFocus() || activity.isFinishing()) {
             reply.fail("BUSY", "Another native prompt is open, or the application is not in the foreground."); return false;
         }
         uiOwner = reply; return true;
     }
 
     public void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == PHOTO_REQUEST) {
+            PhotoSelection work=photoSelection;
+            if (work == null || work.returned) return;
+            work.returned=true; work.resultCode=resultCode; work.result=data;
+            if (work.cancelled || !work.reply.current()) { cancelPhotoSelection(); finishPhotoSelection(work); }
+            else if (documentForeground) acceptPhotoSelection(work);
+            return;
+        }
         if (requestCode == FILE_SHARE_REQUEST) {
             FileShare work = fileShare;
             if (work == null) return;
@@ -486,6 +505,8 @@ public final class FactoryRuntime implements AutoCloseable {
     /** Pause always revokes existing handles. The external broker alone may retain a picker tombstone. */
     public void onPause() {
         documentForeground = false;
+        PhotoSelection photo=photoSelection;
+        if (photo != null && photo.returned) cancelPhotoSelection();
         FileShare share = fileShare;
         if (share != null && !share.launched) cancelFileShare();
         documents.cancelAll();
@@ -498,6 +519,8 @@ public final class FactoryRuntime implements AutoCloseable {
     }
     public void onResume() {
         documentForeground = true;
+        PhotoSelection photo=photoSelection;
+        if (photo != null && photo.returned) acceptPhotoSelection(photo);
         FileShare share = fileShare;
         if (share != null && share.returned) finishFileShare(share);
         DocumentSelection work = documentSelection;
@@ -507,6 +530,149 @@ public final class FactoryRuntime implements AutoCloseable {
         if (!documentForeground || destroyed || activity.isFinishing() || !host.isActive())
             throw new FactoryException("UNAVAILABLE", "Document access requires the foreground application.");
     }
+    private static final class PhotoSelection {
+        final Reply reply; final String nonce;
+        volatile boolean cancelled, copying;
+        boolean returned, cancelScheduled;
+        int resultCode;
+        long copyStarted;
+        Intent result;
+        PhotoResult photo;
+        DocumentHandles.Reservation reservation;
+        PhotoSelection(Reply reply,String nonce) { this.reply=reply; this.nonce=nonce; }
+    }
+    private void openPhoto(BridgeProtocol.Request request,Reply reply) throws Exception {
+        requireDocumentForeground();
+        DocumentBrokerIdentity.verify(activity,config.documentBroker);
+        if (!claimUi(reply)) return;
+        byte[] random=new byte[32]; new java.security.SecureRandom().nextBytes(random);
+        StringBuilder nonce=new StringBuilder();
+        for (byte b:random) nonce.append(String.format(java.util.Locale.ROOT,"%02x",b & 255));
+        PhotoSelection work=new PhotoSelection(reply,nonce.toString()); photoSelection=work;
+        Intent intent=new Intent().setComponent(new android.content.ComponentName(config.documentBroker.packageName,
+                "com.jarvys.agent.apkfactory.FactoryPhotoActivity"))
+                .putExtra("operation",request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.PHOTOS_PICK ? "pick" : "capture")
+                .putExtra("nonce",work.nonce);
+        try { activity.startActivityForResult(intent,PHOTO_REQUEST); }
+        catch (Exception unavailable) {
+            finishPhotoSelection(work); reply.fail("UNAVAILABLE","The matching human-only photo broker is unavailable.");
+        }
+    }
+    private void cancelPhotoSelection() {
+        PhotoSelection work=photoSelection;
+        if (work == null) return;
+        work.cancelled=true;
+        if (work.reservation != null) work.reservation.cancel();
+        work.reply.fail("CANCELLED","Photo access cancelled. Close the native photo flow if it remains open.");
+        // A delayed result can only settle this tombstone, never a newer request.
+        if (work.photo == null && work.result != null) {
+            try { work.photo=new PhotoResult(work.result,work.nonce); } catch (FactoryException ignored) { }
+        }
+        if (work.photo != null && !work.cancelScheduled) {
+            work.cancelScheduled=true;
+            try { DOCUMENT_CLEANUP.execute(() -> {
+                try { FileShareTransfer.cancel(work.photo.transfer,work.nonce); } catch (Exception ignored) { }
+            }); } catch (RejectedExecutionException ignored) { /* Endpoint expires; never block main. */ }
+        }
+        if (work.returned && !work.copying) finishPhotoSelection(work);
+    }
+    private void finishPhotoSelection(PhotoSelection work) {
+        if (photoSelection == work) photoSelection=null;
+        if (uiOwner == work.reply) uiOwner=null;
+        work.result=null;
+    }
+    private void checkPhotoActive(PhotoSelection work) {
+        if (work.cancelled || photoSelection != work || !documentForeground || destroyed || !host.isActive()
+                || !work.reply.current() || SystemClock.elapsedRealtime()-work.copyStarted >= 300000)
+            throw new IllegalStateException("Photo access ended.");
+        try { DocumentBrokerIdentity.verify(activity,config.documentBroker); }
+        catch (FactoryException changed) { throw new IllegalStateException("Photo host changed."); }
+    }
+    private void acceptPhotoSelection(PhotoSelection work) {
+        if (photoSelection != work || !work.returned || work.copying) return;
+        if (work.cancelled || !work.reply.current()) { cancelPhotoSelection(); return; }
+        if (work.resultCode != Activity.RESULT_OK) {
+            finishPhotoSelection(work); work.reply.fail("CANCELLED","Photo selection ended without access."); return;
+        }
+        boolean admission=false;
+        try {
+            requireDocumentForeground(); DocumentBrokerIdentity.verify(activity,config.documentBroker);
+            work.photo=new PhotoResult(work.result,work.nonce);
+            if (!PHOTO_ADMISSION.tryAcquire()) throw new FactoryException("BUSY","A photo transfer is still active.");
+            admission=true;
+            final DocumentHandles handles=documents;
+            work.reservation=handles.reserveRead();
+            work.reservation.chargeSnapshot(work.photo.size);
+            work.reservation.beginOpen();
+            work.copying=true; work.copyStarted=SystemClock.elapsedRealtime();
+            PHOTO_IO.execute(() -> {
+                byte[] bytes=null;
+                boolean granted=false;
+                try {
+                    checkPhotoActive(work);
+                    bytes=new byte[work.photo.size];
+                    final byte[] snapshot=bytes;
+                    OutputStream output=new OutputStream() {
+                        int position;
+                        public void write(int value) throws IOException {
+                            if (position >= snapshot.length) throw new IOException("Photo too large");
+                            snapshot[position++]=(byte)value;
+                        }
+                        public void write(byte[] value,int offset,int length) throws IOException {
+                            if (length > snapshot.length-position) throw new IOException("Photo too large");
+                            System.arraycopy(value,offset,snapshot,position,length); position+=length;
+                        }
+                    };
+                    FileShareTransfer.copy(work.photo.transfer,work.nonce,work.photo.size,work.photo.sha256,
+                            output,() -> checkPhotoActive(work));
+                    checkPhotoActive(work);
+                    InputStream input=new ByteArrayInputStream(snapshot) {
+                        @Override public void close() { java.util.Arrays.fill(snapshot,(byte)0); }
+                    };
+                    // beginOpen delegates cleanup of stale completions to the handle registry.
+                    bytes=null;
+                    String handle=work.reservation.grantRead(input); granted=true;
+                    JSONObject response=new JSONObject().put("handle",handle).put("mode","read")
+                            .put("mimeType",work.photo.mimeType).put("width",work.photo.width).put("height",work.photo.height)
+                            .put("size",work.photo.size).put("expiresAfterMs",300000).put("metadataRetained",true);
+                    main.post(() -> {
+                        try { checkPhotoActive(work); work.reply.ok(response); }
+                        catch (RuntimeException stale) {
+                            try { handles.close(handle); } catch (FactoryException ignored) { }
+                            work.reply.fail("CANCELLED","Photo access ended before delivery.");
+                        } finally { finishPhotoSelection(work); }
+                    });
+                } catch (Exception failure) {
+                    if (bytes != null) java.util.Arrays.fill(bytes,(byte)0);
+                    work.reservation.cancel();
+                    if (!granted) work.reservation.abortOpen();
+                    main.post(() -> {
+                        cancelPhotoSelectionFor(work);
+                        work.reply.fail(failure instanceof FactoryException ? ((FactoryException)failure).code : "INVALID_PHOTO",
+                                "The bounded photo snapshot could not be verified.");
+                        finishPhotoSelection(work);
+                    });
+                } finally { PHOTO_ADMISSION.release(); }
+            });
+            admission=false; // Worker owns admission until all blocked copy work has ended.
+        } catch (Exception failure) {
+            if (work.reservation != null) { work.reservation.cancel(); work.reservation.abortOpen(); }
+            if (admission) PHOTO_ADMISSION.release();
+            work.copying=false;
+            cancelPhotoSelectionFor(work); finishPhotoSelection(work);
+            work.reply.fail(failure instanceof FactoryException ? ((FactoryException)failure).code : "BUSY",
+                    "Photo access could not be admitted.");
+        }
+    }
+    private void cancelPhotoSelectionFor(PhotoSelection work) {
+        // Cleanup must not cancel or modify a later selection.
+        if (work.photo == null || work.cancelScheduled) return;
+        work.cancelScheduled=true;
+        try { DOCUMENT_CLEANUP.execute(() -> {
+            try { FileShareTransfer.cancel(work.photo.transfer,work.nonce); } catch (Exception ignored) { }
+        }); } catch (RejectedExecutionException ignored) { }
+    }
+
     private static final class FileShare {
         final Reply reply;
         final String nonce;

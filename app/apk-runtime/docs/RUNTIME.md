@@ -174,7 +174,7 @@ revocation, OEM lifecycle or physical-device acceptance. v68 release gates are r
 - File/content access, universal file access, mixed content, cookies, DOM storage, network loads, JavaScript popups, downloads, file uploads, browser permissions, geolocation, and SSL-error bypass are disabled.
 - CSP blocks remote scripts, inline JavaScript, eval, connections, frames, workers, plugins, forms, and base-URL changes. Only packaged assets can load. Styles may be inline; image `data:` sources are permitted.
 - Native pending queue at most 16; incoming bridge limited to 80 calls per 10 seconds; all file persistence runs on a single bounded background executor.
-- No location, camera, microphone, notifications, contacts, alarms, Bluetooth, network, filesystem reads, arbitrary intents, or runtime permission grants. Documents permits only native-selected temporary streams, never arbitrary filesystem reads. Adding these requires a separately reviewed reusable-runtime release, manifest changes, typed policy, denial-path tests, and explicit capability declaration.
+- No location, direct camera access, microphone, notifications, contacts, alarms, Bluetooth, network, filesystem reads, arbitrary intents, or runtime permission grants. Documents permits only native-selected temporary streams, never arbitrary filesystem reads. Photos adds only the bounded v69 system-intent contract below. Adding these requires a separately reviewed reusable-runtime release, manifest changes, typed policy, denial-path tests, and explicit capability declaration.
 
 ## Verification
 
@@ -197,3 +197,27 @@ The generated launcher delegates to `FactoryRuntime` in the resource-ID-independ
 A separate private Jarvys Activity uses verified immutable build assets and an isolated native RAM backend. Its explicit preview metadata reports the real host package separately from declared appId. A provider-specific isolated profile is mandatory; there is no default-profile fallback. The controller does not change process-global cookies or debugging in preview mode. Profile cleanup is best effort and profiles may be disk-backed. Native UI/host tests do not establish actual provider cleanup, installed UID isolation, hardware, device rendering or absence of traffic.
 
 `start()` and `reset()` return whether native initialization and the load request were accepted, not whether rendering or JavaScript succeeded. Old page/reply generations are invalidated, with pending interactive ownership retained when required to reject stale system results. Installed provider I/O does not hold the lifecycle monitor used by UI teardown; cancellation cannot roll back an already-started external write. See [Factory preview/test contracts](../../APK_FACTORY.md#f0c-functional-preview-and-bounded-shared-core-tests) for exact tool scope and evidence limits.
+
+## Photos (v69)
+
+`Jarvys.photos.pick({})` and `Jarvys.photos.capture({})` require both photos and documents.
+Their strict empty argument object accepts no filenames, URI, paths, actions, target packages,
+MIME choices or flags. Preview returns UNAVAILABLE. The pinned compatible Jarvys host must
+verify this exact installed app against its latest signed receipt; native human launch/use is
+mandatory. The runtime receives a native-only Binder snapshot and returns only:
+
+`{handle, mode:"read", size, mimeType, width, height, expiresAfterMs:300000, metadataRetained:true}`
+
+The handle works with documents.read/close/cancel and an untouched handle with share.file.
+Input snapshot acquisition charges the existing cumulative 32 MiB page quota without refunds
+for failure/cancellation; later reads/sharing charge their normal sequential quotas. One photo
+copy is admitted process-wide, including blocked or cancelling copies. Length, SHA-256 and
+explicit EOF are verified before handle delivery. Backgrounding, reset and process death
+revoke authority; late callbacks cannot attach to a new request/page.
+
+Only JPEG/PNG up to 8 MiB, 4096 pixels per side and 12 megapixels are supported. Original
+metadata may include location. Capturing uses a one-open write-only bounded pipe, not a
+seekable file: incompatible camera handlers fail and no thumbnail fallback occurs. A system
+photo picker or SAF fallback must exist. Jarvys does not autosend or save to gallery, but the
+external camera/cloud provider can keep or transfer its own copies. No broad camera/gallery
+permission is added. Physical acceptance and interrupted external UI recovery remain required.

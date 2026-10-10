@@ -207,3 +207,43 @@ Design references: [Android FileProvider](https://developer.android.com/referenc
 [narrow provider paths](https://developer.android.com/privacy-and-security/risks/file-providers),
 [Binder transaction limits](https://developer.android.com/reference/android/os/TransactionTooLargeException),
 and [URI revocation](https://developer.android.com/reference/android/content/Context#revokeUriPermission(android.net.Uri,%20int)).
+
+## v69: bounded photo selection and full streaming capture
+
+Declare both `photos` and `documents`. `photos.pick({})` opens a uniquely resolved system
+photo picker on API 33+, with a system SAF image picker fallback; `photos.capture({})` opens
+a uniquely resolved system camera with an exact randomized one-use write-only output URI.
+The pipe-only provider has no file path or storage roots. It rejects other UIDs, URI variants,
+repeat opens and modes other than `w`; capture identity is pinned and checked before open.
+Cameras requiring seekable descriptors or reopening output are unsupported. There is no
+silent thumbnail fallback. Generated APK permissions/components remain unchanged.
+
+Both flows use a separate protected native review and **Use this photo** action, the same
+latest signed APK/certificate/receipt checks, shared interaction admission and a durable
+native recovery latch. Interrupted work cannot resume or restore image authority. Recovery
+acknowledges the person's closure of external tasks, never independently verified OS closure.
+No user photo, real camera or device is accessed during synthetic host validation.
+
+Full encoded input is frozen and bounded to 8 MiB before validation. JPEG/PNG only, at most
+4096 pixels per side and 12 megapixels; decoded allocation is bounded and validated. Camera
+output requires both RESULT_OK and clean reliable-pipe EOF. Deadline-aware nonblocking
+read/poll prevents an endless pipe from retaining authority. Some provider-open Binder calls
+or storage/kernel operations may be uninterruptible; their single worker and admission stay
+occupied until actual termination instead of spawning retries. This is an availability limit.
+
+Native Binder transports immutable chunks with length/hash/EOF checks into opaque temporary
+document read handles. Snapshot acquisition is charged to the cumulative session quota;
+subsequent document reads/sharing charge their normal quotas. Original image bytes and
+metadata, potentially including location, are retained. Jarvys does not write to the gallery
+or automatically send the photo; an external camera or cloud provider may retain/transfer
+its own copy. Revocation cannot recall copies. Preview returns unavailable.
+
+A compatible single Jarvys host and its exact latest signed receipt remain mandatory;
+newly signing another release does not update the installed generated app. Host tests do
+not establish OEM camera/picker/FD behavior, Binder interoperability, actual grant revocation,
+installation/update or data preservation. Other F1/F2/F3 families remain closed.
+
+References: [photo picker](https://developer.android.com/training/data-storage/shared/photo-picker),
+[camera intent](https://developer.android.com/reference/android/provider/MediaStore#ACTION_IMAGE_CAPTURE),
+[ContentProvider pipe modes](https://developer.android.com/reference/android/content/ContentProvider#openFile(android.net.Uri,%20java.lang.String)),
+[reliable pipes](https://developer.android.com/reference/android/os/ParcelFileDescriptor#createReliablePipe()).

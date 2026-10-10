@@ -80,6 +80,11 @@ public final class BridgeProtocol {
                     }
                     break;
                 case DEVICE_INFO: FactoryConfig.exactKeys(args); break;
+                case PHOTOS_PICK: case PHOTOS_CAPTURE:
+                    FactoryConfig.exactKeys(args);
+                    if (!config.capabilities.contains("documents"))
+                        throw new FactoryException("CAPABILITY_DENIED", "Photos also require documents capability.");
+                    break;
                 case DOCUMENTS_OPEN:
                     FactoryConfig.exactKeys(args, "mimeType"); documentMime(args, true); break;
                 case DOCUMENTS_CREATE:

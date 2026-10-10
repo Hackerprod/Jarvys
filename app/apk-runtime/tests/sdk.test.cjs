@@ -105,7 +105,7 @@ test('all SDK calls exactly match the catalog and explicit native validator/disp
   const path = require('node:path');
   const catalog = fs.readFileSync(path.join(__dirname, '../../factory-contract/src/main/java/com/jarvys/factory/contract/CapabilityCatalog.java'), 'utf8');
   const rows = [...catalog.matchAll(/\b([A-Z][A-Z_]+)\("([a-z]+\.[a-z]+)", (?:"[a-z]+"|null)\)/g)];
-  assert.equal(rows.length, 17);
+  assert.equal(rows.length, 19);
   const env = environment();
   const args = { 'storage.get': ['key'], 'storage.set': ['key', 'value'], 'storage.remove': ['key'],
     'export.text': [{ filename: 'test.txt', text: 'hello' }], 'share.text': [{ text: 'hello' }],
@@ -166,4 +166,22 @@ test('file sharing preserves opaque handle metadata and human chooser timeout', 
   const result = await promise;
   assert.equal(result.chooserOpened, true);
   assert.equal(result.deliveryConfirmed, false);
+});
+
+
+test('photos exposes frozen empty-options methods and human-action timeouts', async () => {
+  const env = environment();
+  assert.equal(Object.isFrozen(env.api.photos), true);
+  for (const method of ['pick', 'capture']) {
+    for (const options of [undefined, {}, {uri: 'content://forbidden'}]) {
+      const promise = env.api.photos[method](options);
+      const request = env.sent.at(-1);
+      assert.equal(request.method, 'photos.' + method);
+      assert.deepEqual(request.args, options === undefined ? {} : options);
+      assert.equal(env.delays.at(-1), 600000);
+      // Options are preserved so native exact-key validation cannot be bypassed by silently dropping them.
+      env.reply(request, {handle: 'a'.repeat(64), mimeType: 'image/jpeg'});
+      assert.equal((await promise).mimeType, 'image/jpeg');
+    }
+  }
 });

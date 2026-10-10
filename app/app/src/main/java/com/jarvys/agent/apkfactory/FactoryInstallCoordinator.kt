@@ -405,6 +405,7 @@ class FactoryInstallApplication : Application() {
         super.onCreate()
         FactoryFileShareCoordinator.get(this)
         FactoryDocumentCoordinator.get(this)
+        FactoryPhotoCoordinator.get(this)
         FactoryInstallCoordinator.get(this)
     }
 }
