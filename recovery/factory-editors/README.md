@@ -1,6 +1,6 @@
 # UX42 F1 v73: typed email and SMS editors
 
-Preparation version 73 / `1.2.66-FACTORY-EDITORS`. Host implementation, validation and independent release audit passed; signed delivery still pending.
+Preparation version 73 / `1.2.66-FACTORY-EDITORS`. Host implementation, validation and independent release audit passed; signed native delivery accepted.
 This is a bounded capability slice, not completion of Factory or physical Android acceptance.
 
 ## Scope
@@ -78,3 +78,17 @@ permissionless runtime templates. No real composer, contact lookup, email/SMS se
 or user-data transmission was executed. Physical Binder/UI behavior, update/data preservation,
 recipient behavior and actual external-task closure remain unverified. Signature and native
 delivery receipts are recorded separately after confirmation.
+
+## Signed native delivery
+
+Native attachment of `Jarvys-Factory-editors-full-v73-arm64-test.apk` was accepted on
+10 October 2026 at 12:39:16 UTC. Size: 19,252,795 bytes; SHA-256
+`2d2ca3949e1b790e62f50378cf609c3c1507fcb0616d2ee50e638477ae8cee5b`.
+The existing approved D7 debug signer verifies with APK v2/v3; CRC and 16 KiB ZIP alignment pass.
+The manifest and all 239 retained unsigned-source entries are byte-identical; only nine non-ARM64
+native libraries are omitted, with signature metadata added. Package remains `com.jarvys.agent`,
+version 73 / `1.2.66-FACTORY-EDITORS`, ARM64, minimum API 24. This test key does not update an
+older A6-signed installation. ZIP alignment does not certify 16 KiB ELF page compatibility.
+Accepted attachment does not prove download, installation, physical editor behavior or delivery
+of any email/SMS. No credentials, private signing keys, APK binaries or host reports are published
+in this source-repository receipt. Broader Factory completion and physical acceptance remain open.

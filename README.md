@@ -26,8 +26,8 @@ This is an actively developed project with incremental, evidence-backed checkpoi
 
 | Checkpoint | Status |
 | --- | --- |
-| **v72 · Factory maps and dialer** | Latest completed delivery at this README checkpoint; host tests and independent APK audit passed. [Evidence](recovery/factory-actions/README.md) |
-| **v73 · Factory email and SMS editors** | Implemented in the current source; final validation and delivery in progress. Opening an editor is not sending a message. [Scope and status](recovery/factory-editors/README.md) |
+| **v72 · Factory maps and dialer** | Completed earlier delivery; host tests and independent APK audit passed. [Evidence](recovery/factory-actions/README.md) |
+| **v73 · Factory email and SMS editors** | Latest completed delivery: 7,390 host tests, SDK20 and independent APK audit passed; signed test APK attachment accepted. Opening an editor is not sending a message. [Scope and status](recovery/factory-editors/README.md) |
 | Physical Android acceptance | Still open for the relevant recent features. A host test, signed APK or accepted file delivery does not prove installation or phone behavior. |
 | Broader Factory roadmap | Remaining F1 capabilities and F2/F3 are unfinished. Strict Factory TTS remains blocked on its recipient/consent design. |
 
@@ -134,7 +134,7 @@ Inspect → Build unsigned APK → Review signing scope → Sign
 | Camera/photos | Bounded capture/picker workflows with native consent | Camera compatibility varies; selected original image metadata can be retained |
 | Audio | Local bounded PCM16 WAV playback | Not synthesis, microphone recognition or cloud voice |
 | Browser, maps and dialer | Typed HTTPS, map and dialer launches with reviewed destinations | Dispatch does not prove page display, navigation, calling or external-task closure |
-| Email/SMS editors | v73 source adds typed editor launches with reviewed fields | Final v73 gates pending; no automatic sending or delivery claim |
+| Email/SMS editors | v73 adds typed editor launches with one recipient and reviewed fields | Host gates passed and signed test APK delivered; external apps may sync drafts; no automatic sending or delivery claim |
 
 **Not every generated app is standalone.** Local runtime features differ from brokered native capabilities. The latter require a compatible Jarvys host, exact caller/signing identity checks and native review. A generated APK's closed, zero-permission manifest does not make the host or selected third-party app permissionless or offline.
 
