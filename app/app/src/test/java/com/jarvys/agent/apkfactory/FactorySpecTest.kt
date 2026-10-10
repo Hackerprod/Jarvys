@@ -67,7 +67,7 @@ class FactorySpecTest {
             val selected = FactorySpec.CAPABILITIES.filterIndexed { bit, _ -> mask and (1 shl bit) != 0 }
             val value = FactorySpec.parse(spec().put("capabilities", JSONArray(selected.reversed())))
             assertEquals(selected.sorted(), value.capabilities)
-            assertEquals(1, JSONObject(String(value.runtimeConfig(if ("documents" in selected || "browser" in selected || "maps" in selected || "phone" in selected || "email" in selected || "sms" in selected) broker() else null))).getInt("schemaVersion"))
+            assertEquals(1, JSONObject(String(value.runtimeConfig(if ("documents" in selected || "browser" in selected || "maps" in selected || "phone" in selected || "email" in selected || "sms" in selected || "contacts" in selected) broker() else null))).getInt("schemaVersion"))
             for (name in selected) {
                 val capability = com.jarvys.factory.contract.CapabilityCatalog.CAPABILITIES[name]!!
                 assertTrue(capability.permissions.isEmpty())

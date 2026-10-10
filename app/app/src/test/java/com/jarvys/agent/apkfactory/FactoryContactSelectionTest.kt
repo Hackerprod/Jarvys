@@ -35,8 +35,11 @@ import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowContentResolver
 import org.robolectric.util.ReflectionHelpers
 import java.util.concurrent.Callable
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /** Synthetic installed system identities and exact-row provider only. Never accesses real contacts. */
 @RunWith(RobolectricTestRunner::class)
@@ -96,7 +99,9 @@ class FactoryContactSelectionTest {
     }
     @Test fun missingOrdinaryThirdPartyDisabledPrivateAndPermissionGuardedPickersFailClosed() {
         val activity = fixture.picker.resolve.activityInfo
-        activity.applicationInfo.flags = 0; denied { selection.discover("phone") }; activity.applicationInfo.flags = ApplicationInfo.FLAG_SYSTEM
+        val installedFlags = activity.applicationInfo.flags
+        activity.applicationInfo.flags = installedFlags and (ApplicationInfo.FLAG_SYSTEM or ApplicationInfo.FLAG_UPDATED_SYSTEM_APP).inv()
+        denied { selection.discover("phone") }; activity.applicationInfo.flags = installedFlags
         activity.enabled = false; denied { selection.discover("phone") }; activity.enabled = true
         activity.exported = false; denied { selection.discover("phone") }; activity.exported = true
         activity.permission = "example.PRIVATE"; denied { selection.discover("phone") }; activity.permission = null
@@ -112,8 +117,9 @@ class FactoryContactSelectionTest {
     }
     @Test fun updatedSystemPickerWorksButSuspendedOtherProfileAndHostOwnedIdentityDoNot() {
         val app = fixture.picker.resolve.activityInfo.applicationInfo
-        app.flags = ApplicationInfo.FLAG_UPDATED_SYSTEM_APP; assertNotNull(selection.discover("phone"))
-        app.flags = ApplicationInfo.FLAG_SYSTEM or ApplicationInfo.FLAG_SUSPENDED; denied { selection.discover("phone") }; app.flags = ApplicationInfo.FLAG_SYSTEM
+        val installedFlags = app.flags
+        app.flags = (installedFlags and ApplicationInfo.FLAG_SYSTEM.inv()) or ApplicationInfo.FLAG_UPDATED_SYSTEM_APP; assertNotNull(selection.discover("phone"))
+        app.flags = installedFlags or ApplicationInfo.FLAG_SUSPENDED; denied { selection.discover("phone") }; app.flags = installedFlags
         val originalUid = app.uid; app.uid = 120003; fixture.picker.installed.applicationInfo!!.uid = app.uid; denied { selection.discover("phone") }
         app.uid = originalUid; fixture.picker.installed.applicationInfo!!.uid = originalUid
         app.uid = context.applicationInfo.uid; denied { selection.discover("phone") }
@@ -126,11 +132,13 @@ class FactoryContactSelectionTest {
     }
     @Test fun providerMustBeEnabledExportedSystemAndInSameUser() {
         val provider = fixture.providerInfo; val app = provider.applicationInfo
+        val installedFlags = app.flags
         provider.enabled = false; denied { selection.discover("phone") }; provider.enabled = true
         provider.exported = false; denied { selection.discover("phone") }; provider.exported = true
-        app.flags = 0; denied { selection.discover("phone") }; app.flags = ApplicationInfo.FLAG_SYSTEM
+        app.flags = installedFlags and (ApplicationInfo.FLAG_SYSTEM or ApplicationInfo.FLAG_UPDATED_SYSTEM_APP).inv()
+        denied { selection.discover("phone") }; app.flags = installedFlags
         app.enabled = false; denied { selection.discover("phone") }; app.enabled = true
-        app.flags = ApplicationInfo.FLAG_SYSTEM or ApplicationInfo.FLAG_SUSPENDED; denied { selection.discover("phone") }; app.flags = ApplicationInfo.FLAG_SYSTEM
+        app.flags = installedFlags or ApplicationInfo.FLAG_SUSPENDED; denied { selection.discover("phone") }; app.flags = installedFlags
         app.uid = 120004; fixture.providerPackage.installed.applicationInfo!!.uid = app.uid; denied { selection.discover("phone") }
     }
     @Test fun legitimateSharedSystemProviderIsPinnedWithoutRequiringUriGrantDeclaration() {
@@ -237,6 +245,26 @@ class FactoryContactSelectionTest {
         fixture.provider.onQuery = { fixture.providerPackage.installed.lastUpdateTime = 100 }
         denied { read() }; assertEquals(1, fixture.provider.queries.size); assertTrue(fixture.provider.cursors.single().isClosed)
     }
+    @Test fun revocationWhileCursorPositioningIsBlockedPreventsReadingPersonalData() {
+        for (cancelSignal in listOf(false, true)) {
+            context.uriReadGranted = true; val target = selection.discover("phone"); val signal = CancellationSignal()
+            val active = AtomicBoolean(true); val dataReads = AtomicInteger(); val entered = CountDownLatch(1); val release = CountDownLatch(1)
+            fixture.provider.cursorFactory = { columns -> object : MatrixCursor(columns) {
+                override fun onMove(oldPosition: Int, newPosition: Int): Boolean {
+                    entered.countDown(); check(release.await(10, TimeUnit.SECONDS)); return super.onMove(oldPosition, newPosition)
+                }
+                override fun getString(column: Int): String? { if (column == 1) dataReads.incrementAndGet(); return super.getString(column) }
+            } }
+            val pending = executor.submit(Callable { selection.read(target, "phone", FactoryContactTestPackages.result(), signal) { check(active.get()) } })
+            try {
+                assertTrue(entered.await(5, TimeUnit.SECONDS))
+                if (cancelSignal) signal.cancel() else active.set(false)
+            } finally { release.countDown() }
+            denied { pending.get(5, TimeUnit.SECONDS) }
+            assertEquals("Revoked authority must not read DATA1 after a blocked cursor move", 0, dataReads.get())
+            assertTrue(fixture.provider.cursors.last().isClosed)
+        }
+    }
 }
 
 /** Only permission answers are faked; host picker/proof/callback/reader logic remains production. */
@@ -300,11 +328,12 @@ internal class FactorySyntheticContactProvider : ContentProvider() {
     var returnNull = false
     var failure: RuntimeException? = null
     var onQuery: (() -> Unit)? = null
+    var cursorFactory: ((Array<String>) -> MatrixCursor)? = null
     override fun onCreate() = true
     override fun query(uri: Uri, projection: Array<out String>?, selection: String?, selectionArgs: Array<out String>?, sortOrder: String?): Cursor? {
         queries += Query(uri, projection?.toList(), selection, selectionArgs?.toList(), sortOrder)
         failure?.let { throw it }; if (returnNull) return null
-        val cursor = MatrixCursor(columns).also { result -> rows.forEach { result.addRow(it) }; cursors += result }
+        val cursor = (cursorFactory?.invoke(columns) ?: MatrixCursor(columns)).also { result -> rows.forEach { result.addRow(it) }; cursors += result }
         onQuery?.invoke(); return cursor
     }
     override fun getType(uri: Uri) = ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE

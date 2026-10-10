@@ -23,3 +23,12 @@ cursor-cancellation cases incorporated before final gates. Final source, tests, 
 and independent release receipts will be recorded only after verified completion. Physical
 compatibility/installation remain unverified. TTS/voice/remaining F1/F2/F3, UX34 gates,
 UX44 documentation-only defaults and UX43-last are preserved.
+
+## In-progress checks
+
+Implementation checkpoint `d5d759f` is verified on the remote with normal history. First native
+production compile passed; SDK 22/22 passed. Initial focused host run executed 209 tests and failed in four fixture
+cases: three updated-system-provider flag variants and one expanded capability matrix missing
+its contacts broker binding. Fixtures were corrected without weakening production. The initial
+run is retained as failed, not a final pass; new activity/startup and blocked-cursor regressions
+were added afterward. Corrected focused validation and final frozen-source gates remain pending.
