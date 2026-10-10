@@ -13,6 +13,7 @@ public final class FactoryDispatcher {
         String mode();
         String hostAppId();
     }
+    public interface Database { Object perform(String method, JSONObject args) throws Exception; }
     public interface Effects { Object perform(CapabilityCatalog.Method method, JSONObject args) throws Exception; }
     public static Metadata metadata(String mode, String hostAppId, int apiLevel, int targetSdk) {
         if (!"preview".equals(mode) && !"installed".equals(mode)) throw new IllegalArgumentException("Unknown mode");
@@ -42,12 +43,21 @@ public final class FactoryDispatcher {
     }
     public static Object dispatch(BridgeProtocol.Request request, FactoryConfig config, BoundedStore store,
                                   Metadata metadata, Effects effects) throws Exception {
+        return dispatch(request,config,store,metadata,effects,null);
+    }
+    public static Object dispatch(BridgeProtocol.Request request, FactoryConfig config, BoundedStore store,
+                                  Metadata metadata, Effects effects, Database database) throws Exception {
+        // Preserve database numeric types before the defensive envelope serialization.
+        if ("database".equals(request.operation.capability)) DatabaseRequest.validate(request.method,request.args);
         // Preserve integer types before the defensive envelope serialization.
         if (request.operation == CapabilityCatalog.Method.CALENDAR_INSERT) ExternalLaunchRequest.parseCalendar(request.args);
         // Defense in depth for callers outside the WebView bridge, using the exact same validator.
         BridgeProtocol.validate(BridgeProtocol.ORIGIN, true,
                 new JSONObject().put("v", 1).put("id", request.id).put("method", request.method).put("args", request.args).toString(), config);
         switch (request.operation) {
+            case DATABASE_INFO: case DATABASE_MIGRATE: case DATABASE_TRANSACT: case DATABASE_SELECT: case DATABASE_CLOSE: case DATABASE_CANCEL:
+                if(database==null) throw new FactoryException("UNAVAILABLE","A private native database session is required.");
+                return database.perform(request.method,request.args);
             case STORAGE_GET: return store.get(request.args.getString("key"));
             case STORAGE_SET: store.set(request.args.getString("key"), request.args.getString("value")); return null;
             case STORAGE_REMOVE: store.remove(request.args.getString("key")); return null;
@@ -65,6 +75,9 @@ public final class FactoryDispatcher {
                         .put("unavailableMethods", new JSONArray("preview".equals(metadata.mode())
                                 ? java.util.Arrays.asList("share.file", "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture", "audio.play", "browser.open", "maps.open", "phone.dial", "email.compose", "sms.compose", "contacts.pick", "calendar.insert")
                                 : java.util.Collections.emptyList()))
+                        .put("databaseProtocolVersion", 1).put("databaseBrokerRequired", false)
+                        .put("databasePersistent", !"preview".equals(metadata.mode()))
+                        .put("databaseRequires", new JSONArray(java.util.Collections.singletonList("database")))
                         .put("contactPickProtocolVersion", 1)
                         .put("contactsRequires", new JSONArray(java.util.Collections.singletonList("contacts")))
                         .put("contactsBrokerRequired", true)

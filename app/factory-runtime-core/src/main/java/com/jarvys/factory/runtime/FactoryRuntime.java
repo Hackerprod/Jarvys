@@ -67,12 +67,17 @@ public final class FactoryRuntime implements AutoCloseable {
     private static final int MAX_PENDING = 16;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ThreadPoolExecutor io = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
-            new ArrayBlockingQueue<>(MAX_PENDING), new ThreadPoolExecutor.AbortPolicy());
+            new ArrayBlockingQueue<>(MAX_PENDING), new ThreadPoolExecutor.AbortPolicy()) {
+        @Override protected void afterExecute(Runnable task,Throwable failure) {
+            super.afterExecute(task,failure); closeRetiredDatabases();
+        }
+    };
     private final Map<String, Reply> pending = new java.util.concurrent.ConcurrentHashMap<>();
     private volatile WebView webView;
     private FrameLayout root;
     private FactoryConfig config;
     private BoundedStore store;
+    private volatile PrivateDatabase database;
     private volatile int generation;
     private volatile boolean destroyed;
     private Reply uiOwner;
@@ -168,6 +173,7 @@ public final class FactoryRuntime implements AutoCloseable {
             config = host.isPreview() ? FactoryConfig.parsePreview(host.configuration())
                     : FactoryConfig.parse(host.configuration(), activity.getPackageName());
             store = new BoundedStore(host.storage());
+            if(host.isPreview()) documentForeground=true; // Preview Activity closes its session on pause.
             main.removeCallbacks(expireDocuments);
             if (config.capabilities.contains("documents")) main.postDelayed(expireDocuments, 1000);
             return initializeWebView();
@@ -188,6 +194,7 @@ public final class FactoryRuntime implements AutoCloseable {
     }
     private void invalidate() {
         generation++; pending.clear(); uiOwner = null;
+        retireDatabase();
         documents.revokeAll(); documents = new DocumentHandles();
         cancelDocumentSelection(); cancelFileShare(); cancelPhotoSelection(); cancelAudioPlayback();
         cancelBrowserOpen(browserOpen, "CANCELLED", "Browser launch authority ended. A browser already opened may remain open.");
@@ -338,7 +345,9 @@ public final class FactoryRuntime implements AutoCloseable {
         Reply reply = new Reply(request.id, request.method, proxy, generation);
         pending.put(request.id, reply);
         host.onTrace(request.method, "requested");
-        if ("storage".equals(request.operation.capability)) {
+        if ("database".equals(request.operation.capability)) {
+            dispatchDatabase(request,reply);
+        } else if ("storage".equals(request.operation.capability)) {
             background(reply, () -> {
                 return FactoryDispatcher.dispatch(request, config, store, metadata(), FactoryDispatcher.simulatedEffects());
             });
@@ -370,6 +379,50 @@ public final class FactoryRuntime implements AutoCloseable {
             if (uiOwner == reply) uiOwner = null;
             if (export != null && export.reply == reply) export = null;
             reply.fail("NATIVE_ERROR", "The native operation could not be completed.");
+        }
+    }
+    /** Database I/O never holds the preview lifecycle monitor or runs on the UI thread. */
+    private void dispatchDatabase(BridgeProtocol.Request request, Reply reply) {
+        if(!documentForeground || !reply.current()) { reply.fail("CANCELLED","Database requires the active foreground page."); return; }
+        try {
+            PrivateDatabase current=database;
+            if(current==null) { current=host.isPreview()?PrivateDatabase.preview():PrivateDatabase.installed(activity,config.appId); database=current; }
+            final PrivateDatabase selected=current;
+            if(request.operation==com.jarvys.factory.contract.CapabilityCatalog.Method.DATABASE_CANCEL) {
+                selected.cancel(); reply.ok(PrivateDatabase.cancellation()); return;
+            }
+            if(request.operation==com.jarvys.factory.contract.CapabilityCatalog.Method.DATABASE_CLOSE) selected.cancel();
+            final long ticket=selected.ticket();
+            io.execute(() -> {
+                try {
+                    if(!reply.current() || !documentForeground || database!=selected) return;
+                    Object result=FactoryDispatcher.dispatch(request,config,store,metadata(),FactoryDispatcher.simulatedEffects(),
+                            (method,args) -> selected.execute(method,args,ticket,
+                                    () -> reply.current() && documentForeground && database==selected));
+                    main.post(() -> reply.ok(result));
+                } catch(FactoryException failure) { main.post(() -> reply.fail(failure.code,failure.getMessage())); }
+                catch(Exception failure) { main.post(() -> reply.fail("DATABASE_ERROR","Private database operation failed; inspect state before retrying.")); }
+            });
+        } catch(FactoryException failure) { reply.fail(failure.code,failure.getMessage()); }
+        catch(RejectedExecutionException failure) { reply.fail("BUSY","Native operation queue is full."); }
+        catch(Exception failure) { reply.fail("DATABASE_ERROR","Private database is unavailable."); }
+    }
+    private void retireDatabase() {
+        PrivateDatabase old=database; database=null;
+        if(old==null) return;
+        old.cancel();
+        // Lifecycle teardown cannot wait for SQLite. The worker drains stale requests before cleanup.
+        try { io.execute(old::close); }
+        catch(RejectedExecutionException full) {
+            // A full bounded queue still drains. Its last task performs the queued cleanup below.
+            retiredDatabases.add(old);
+        }
+    }
+    private final java.util.Queue<PrivateDatabase> retiredDatabases=new java.util.concurrent.ConcurrentLinkedQueue<>();
+    private void closeRetiredDatabases() {
+        PrivateDatabase old;
+        while((old=retiredDatabases.poll())!=null) {
+            try { old.close(); } catch(RuntimeException failure) { host.onTrace("database.close","error"); }
         }
     }
     private static final Object DEFERRED = new Object();
@@ -558,6 +611,9 @@ public final class FactoryRuntime implements AutoCloseable {
     /** Pause always revokes existing handles. The external broker alone may retain a picker tombstone. */
     public void onPause() {
         documentForeground = false;
+        retireDatabase();
+        for (Reply reply : new java.util.ArrayList<>(pending.values()))
+            if(reply.method.startsWith("database.")) reply.fail("CANCELLED","Database session ended. A prior commit is not undone.");
         ContactPick contact = contactPick;
         if (contact != null && (!contact.launched || contact.returned))
             cancelContactPick(contact, "CANCELLED", "Contact selection authority ended in background.");

@@ -103,6 +103,16 @@ class FactoryPreviewActivityTest {
         assertEquals(0, TestActivity.resets)
         assertEquals(1, TestActivity.closes)
     }
+    @Test fun pauseWithoutStopClosesPreviewAndNeverResumesAuthority() {
+        val activity=launch(issue())
+        controller!!.pause()
+        assertEquals(1,TestActivity.closes)
+        assertFalse(button(activity,"factory-preview-reset").isEnabled)
+        controller!!.resume().visible()
+        assertEquals(1,TestActivity.starts)
+        assertEquals(1,TestActivity.closes)
+        assertFalse(button(activity,"factory-preview-reset").isEnabled)
+    }
     @Test fun backgroundAndReturnNeverSilentlyResumePreview() {
         val activity = launch(issue())
         controller!!.pause().stop().restart().start().resume().visible()

@@ -11,6 +11,7 @@ internal object FactoryRuntimeContractTests {
         val config = FactoryConfig.parsePreview(String(snapshot.configBytes(), Charsets.UTF_8))
         val backend = MemoryBackend()
         val store = BoundedStore(backend)
+        val database = PrivateDatabase.preview()
         val observations = JSONArray()
         fun assertion(operation: String, action: () -> Boolean) {
             validate()
@@ -22,13 +23,17 @@ internal object FactoryRuntimeContractTests {
             .put("method", method).put("args", args).toString()
         fun dispatch(method: String, args: JSONObject): Any? = FactoryDispatcher.dispatch(
             BridgeProtocol.validate(BridgeProtocol.ORIGIN, true, request(method, args), config), config, store,
-            FactoryDispatcher.previewMetadata(hostAppId, api, targetSdk), FactoryDispatcher.simulatedEffects())
+            FactoryDispatcher.previewMetadata(hostAppId, api, targetSdk), FactoryDispatcher.simulatedEffects(),
+            FactoryDispatcher.Database { method, args -> database.execute(method, args, database.ticket()) { validate(); true } })
         try {
             val ordered = listOf("runtime.info", "storage.set", "storage.get", "storage.list", "storage.remove", "export.text", "share.text", "share.file", "clipboard.write", "haptics.perform", "device.info",
-                "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture", "audio.play", "browser.open", "maps.open", "phone.dial", "email.compose", "sms.compose", "contacts.pick", "calendar.insert")
+                "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture", "audio.play", "browser.open", "maps.open", "phone.dial", "email.compose", "sms.compose", "contacts.pick", "calendar.insert", "database.info", "database.migrate", "database.transact", "database.select", "database.close", "database.cancel")
             check(ordered.toSet() == CapabilityCatalog.METHODS.keys) { "Synthetic contract cases must cover the compiled catalog" }
             for (method in ordered) {
                 val args = when (method) {
+                    "database.migrate" -> JSONObject("""{"fromVersion":0,"toVersion":1,"steps":[{"kind":"createTable","table":"notes","columns":{"text":{"type":"text","nullable":false}}}]}""")
+                    "database.transact" -> JSONObject("""{"version":1,"operations":[{"kind":"insert","table":"notes","id":"one","values":{"text":"synthetic"}}]}""")
+                    "database.select" -> JSONObject("""{"version":1,"table":"notes"}""")
                     "email.compose" -> JSONObject().put("to", "fixture@example.invalid").put("subject", "Fixture").put("body", "Body")
                     "calendar.insert" -> JSONObject().put("title", "Synthetic calendar fixture").put("location", "").put("description", "").put("startTimeMillis", 0L).put("endTimeMillis", 3600000L).put("timeZone", "UTC").put("allDay", false)
                     "contacts.pick" -> JSONObject().put("kind", "phone")
@@ -61,6 +66,12 @@ internal object FactoryRuntimeContractTests {
                 } else assertion("$method:shared_handler") {
                     val result = dispatch(method, args)
                     when (method) {
+                        "database.info" -> (result as JSONObject).getInt("version") == 0 && !result.getBoolean("persistent")
+                        "database.migrate" -> (result as JSONObject).getInt("version") == 1 && result.getBoolean("committed")
+                        "database.transact" -> (result as JSONObject).getJSONArray("changes").getInt(0) == 1
+                        "database.select" -> (result as JSONObject).getJSONArray("rows").getJSONObject(0).getString("text") == "synthetic"
+                        "database.close" -> (result as JSONObject).getBoolean("closed") && !result.getBoolean("dataRetained")
+                        "database.cancel" -> (result as JSONObject).getBoolean("cancelRequested") && !result.getBoolean("rollbackConfirmed")
                         "runtime.info" -> (result as JSONObject).getString("mode") == "preview" && result.getString("declaredAppId") == config.appId
                         "storage.get" -> result == "synthetic"
                         "storage.set" -> store.get("factory-test") == "synthetic"
@@ -83,10 +94,10 @@ internal object FactoryRuntimeContractTests {
                 store.set("isolation", "synthetic")
                 BoundedStore(MemoryBackend()).get("isolation") == null
             }
-        } finally { backend.clear() }
+        } finally { database.cancel(); database.close(); backend.clear() }
         val passed = (0 until observations.length()).all { observations.getJSONObject(it).getString("outcome") == "passed" }
         return snapshot.metadata().put("mode", "shared_core_test").put("state", if (passed) "passed" else "failed")
             .put("observations", observations).put("test_inputs", "fixed_synthetic")
-            .put("evidence_limit", "Executed shared validators and native handler dispatch with isolated RAM storage and simulated effects. Project JavaScript, WebView rendering, installed APK identity, permissions, system effects and durable persistence were not tested. No network-absence claim.")
+            .put("evidence_limit", "Executed shared validators and native handler dispatch with isolated RAM storage, ephemeral SQLite and simulated effects. Project JavaScript, WebView rendering, installed APK identity, permissions, system effects and durable persistence were not tested. No network-absence claim.")
     }
 }

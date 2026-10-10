@@ -105,7 +105,7 @@ test('all SDK calls exactly match the catalog and explicit native validator/disp
   const path = require('node:path');
   const catalog = fs.readFileSync(path.join(__dirname, '../../factory-contract/src/main/java/com/jarvys/factory/contract/CapabilityCatalog.java'), 'utf8');
   const rows = [...catalog.matchAll(/\b([A-Z][A-Z_]+)\("([a-z]+\.[a-z]+)", (?:"[a-z]+"|null)\)/g)];
-  assert.equal(rows.length, 27);
+  assert.equal(rows.length, 33);
   const env = environment();
   const args = { 'storage.get': ['key'], 'storage.set': ['key', 'value'], 'storage.remove': ['key'],
     'export.text': [{ filename: 'test.txt', text: 'hello' }], 'share.text': [{ text: 'hello' }],
@@ -323,5 +323,59 @@ test('calendar timeout and pagehide cannot become event saving or sync confirmat
     if (event === 'timeout') env.timers.values().next().value(); else env.handlers.get('pagehide')();
     await rejected; env.reply(env.sent.at(-1), {launchRequested: true, actionConfirmed: false});
     if (event === 'pagehide') assert.equal(env.timers.size, 0);
+  }
+});
+
+test('database exposes exactly six frozen methods with ordinary timeouts and lossless options', async () => {
+  const env = environment();
+  assert.equal(Object.isFrozen(env.api.database), true);
+  assert.deepEqual(Object.keys(env.api.database), ['info', 'migrate', 'transact', 'select', 'close', 'cancel']);
+  for (const method of Object.keys(env.api.database)) {
+    for (const options of [undefined, {}, null, {extra: 'native exact-key validation must see this'},
+      {statements: [{sql: 'SELECT ? AS value', args: ['Café 東京 😀']}]}]) {
+      const pending = env.api.database[method](options);
+      assert.equal(typeof pending.then, 'function');
+      const request = env.sent.at(-1);
+      const defaults = ['info', 'close', 'cancel'].includes(method);
+      assert.equal(request.v, 1);
+      assert.equal(request.method, 'database.' + method);
+      assert.deepEqual(request.args, defaults && options === undefined ? {} : options);
+      assert.equal(env.delays.at(-1), 30000);
+      env.reply(request, {synthetic: true});
+      assert.equal((await pending).synthetic, true);
+      assert.equal(env.timers.size, 0);
+    }
+  }
+});
+
+test('database native denials reject every method and never resolve from late success', async () => {
+  for (const method of ['info', 'migrate', 'transact', 'select', 'close', 'cancel']) {
+    for (const code of ['CAPABILITY_DENIED', 'INVALID_ARGUMENT', 'CANCELLED', 'NATIVE_ERROR']) {
+      const env = environment();
+      const pending = env.api.database[method]({});
+      const request = env.sent.at(-1);
+      const rejected = assert.rejects(pending, {name: 'JarvysError', code, message: 'Synthetic native rejection'});
+      env.window.JarvysNative.onmessage({data: JSON.stringify({v: 1, id: request.id, ok: false,
+        error: {code, message: 'Synthetic native rejection'}})});
+      await rejected;
+      env.reply(request, {late: true});
+      assert.equal(env.timers.size, 0);
+    }
+  }
+});
+
+test('database timeout, pagehide, and missing bridge are terminal for every method', async () => {
+  for (const method of ['info', 'migrate', 'transact', 'select', 'close', 'cancel']) {
+    await assert.rejects(environment(false).api.database[method]({}), {code: 'BRIDGE_UNAVAILABLE'});
+    for (const event of ['timeout', 'pagehide']) {
+      const env = environment();
+      const pending = env.api.database[method]({});
+      const rejected = assert.rejects(pending, {code: event === 'timeout' ? 'TIMEOUT' : 'PAGE_CLOSED'});
+      assert.equal(env.delays.at(-1), 30000);
+      if (event === 'timeout') env.timers.values().next().value(); else env.handlers.get('pagehide')();
+      await rejected;
+      env.reply(env.sent.at(-1), {late: true});
+      if (event === 'pagehide') assert.equal(env.timers.size, 0);
+    }
   }
 });

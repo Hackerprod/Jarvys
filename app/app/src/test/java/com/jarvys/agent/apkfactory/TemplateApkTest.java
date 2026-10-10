@@ -84,16 +84,16 @@ public class TemplateApkTest {
     }
 
 
-    @Test public void all65536SelectionsHaveOnlyApprovedZeroPermissionProfiles() throws Exception {
+    @Test public void all131072SelectionsHaveOnlyApprovedZeroPermissionProfiles() throws Exception {
         byte[] apk=build();
         com.jarvys.factory.contract.ManifestPlan base=TemplateApk.inspect(apk).plan;
         com.jarvys.factory.contract.ManifestAudit.Document decoded=com.jarvys.factory.contract.ManifestAudit.read(unzip(apk).get("AndroidManifest.xml"));
         byte[] docs=TemplateApk.build(template,new TemplateApk.Spec(spec.appId,spec.label,spec.versionCode,spec.versionName,Collections.singletonList("documents")),icon,assets);
         com.jarvys.factory.contract.ManifestAudit.Document documentDecoded=com.jarvys.factory.contract.ManifestAudit.read(unzip(docs).get("AndroidManifest.xml"));
-        assertEquals(16, com.jarvys.factory.contract.CapabilityCatalog.NAMES.size());
-        for(int mask=0;mask<65536;mask++) {
+        assertEquals(17, com.jarvys.factory.contract.CapabilityCatalog.NAMES.size());
+        for(int mask=0;mask<131072;mask++) {
             List<String> requested=new ArrayList<>();
-            for(int bit=0;bit<16;bit++) if((mask&(1<<bit))!=0) requested.add(com.jarvys.factory.contract.CapabilityCatalog.NAMES.get(bit));
+            for(int bit=0;bit<com.jarvys.factory.contract.CapabilityCatalog.NAMES.size();bit++) if((mask&(1<<bit))!=0) requested.add(com.jarvys.factory.contract.CapabilityCatalog.NAMES.get(bit));
             com.jarvys.factory.contract.ManifestPlan plan=new com.jarvys.factory.contract.ManifestPlan(spec.appId,spec.label,spec.versionCode,spec.versionName,base.iconResourceId,base.backupResourceId,requested);
             ((requested.contains("documents") || requested.contains("browser") || requested.contains("maps") || requested.contains("phone") || requested.contains("email") || requested.contains("sms") || requested.contains("contacts") || requested.contains("calendar")) ? documentDecoded : decoded).verify(plan); assertTrue(plan.permissions.isEmpty()); assertTrue(plan.features.isEmpty());
             assertEquals((requested.contains("documents") || requested.contains("browser") || requested.contains("maps") || requested.contains("phone") || requested.contains("email") || requested.contains("sms") || requested.contains("contacts") || requested.contains("calendar")) ? 2 : 0,plan.queries.size()); assertTrue(plan.hosts.isEmpty()); assertEquals(1,plan.exportedComponents.size());

@@ -74,6 +74,14 @@
       remove: function (key) { return call('storage.remove', { key: key }); },
       list: function () { return call('storage.list', {}); }
     }),
+    database: Object.freeze({
+      info: function (options) { return call('database.info', options === undefined ? {} : options); },
+      migrate: function (options) { return call('database.migrate', options); },
+      transact: function (options) { return call('database.transact', options); },
+      select: function (options) { return call('database.select', options); },
+      close: function (options) { return call('database.close', options === undefined ? {} : options); },
+      cancel: function (options) { return call('database.cancel', options === undefined ? {} : options); }
+    }),
     maps: Object.freeze({ open: function (options) { return call('maps.open', options); } }),
     phone: Object.freeze({ dial: function (options) { return call('phone.dial', options); } }),
     email: Object.freeze({ compose: function (options) { return call('email.compose', options); } }),

@@ -27,7 +27,10 @@ public final class CapabilityCatalog {
         DOCUMENTS_CLOSE("documents.close", "documents"), DOCUMENTS_CANCEL("documents.cancel", "documents"),
         PHOTOS_PICK("photos.pick", "photos"), PHOTOS_CAPTURE("photos.capture", "photos"), AUDIO_PLAY("audio.play", "audio"),
         BROWSER_OPEN("browser.open", "browser"), MAPS_OPEN("maps.open", "maps"), PHONE_DIAL("phone.dial", "phone"),
-        EMAIL_COMPOSE("email.compose", "email"), SMS_COMPOSE("sms.compose", "sms"), CONTACTS_PICK("contacts.pick", "contacts"), CALENDAR_INSERT("calendar.insert", "calendar");
+        EMAIL_COMPOSE("email.compose", "email"), SMS_COMPOSE("sms.compose", "sms"), CONTACTS_PICK("contacts.pick", "contacts"), CALENDAR_INSERT("calendar.insert", "calendar"),
+        DATABASE_INFO("database.info", "database"), DATABASE_MIGRATE("database.migrate", "database"),
+        DATABASE_TRANSACT("database.transact", "database"), DATABASE_SELECT("database.select", "database"),
+        DATABASE_CLOSE("database.close", "database"), DATABASE_CANCEL("database.cancel", "database");
         public final String wireName;
         public final String capability;
         Method(String wireName, String capability) { this.wireName = wireName; this.capability = capability; }
@@ -61,7 +64,7 @@ public final class CapabilityCatalog {
     static final ManifestNodes.Element DOCUMENT_QUERIES = ManifestNodes.queries(Arrays.asList(
             ManifestNodes.queryPackage("com.jarvys.agent"), ManifestNodes.queryPackage("com.jarvys.agent.recoverytest")));
     public static final List<String> NAMES = Collections.unmodifiableList(Arrays.asList(
-            "storage", "export", "share", "clipboard", "haptics", "device", "documents", "photos", "audio", "browser", "maps", "phone", "email", "sms", "contacts", "calendar"));
+            "storage", "export", "share", "clipboard", "haptics", "device", "documents", "photos", "audio", "browser", "maps", "phone", "email", "sms", "contacts", "calendar", "database"));
     public static final Set<String> SUPPORTED = Collections.unmodifiableSet(new LinkedHashSet<>(NAMES));
     public static final Map<String, Capability> CAPABILITIES;
     public static final Map<String, Method> METHODS;

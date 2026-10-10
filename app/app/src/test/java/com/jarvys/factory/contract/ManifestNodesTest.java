@@ -52,8 +52,8 @@ public class ManifestNodesTest {
         assertEquals(7, current.nodes.size()); assertEquals(-1,current.nodes.get(0).parentIndex);
         assertEquals(4,current.nodes.get(6).parentIndex);
     }
-    @Test public void all65536SelectionsEncodeOnlyTheApprovedDocumentQueries() throws Exception {
-        assertEquals(16, CapabilityCatalog.NAMES.size());
+    @Test public void all131072SelectionsEncodeOnlyTheApprovedDocumentQueries() throws Exception {
+        assertEquals(17, CapabilityCatalog.NAMES.size());
         byte[] first = ManifestXml.encode(plan(Collections.emptyList()));
         for (int mask=0; mask<(1 << CapabilityCatalog.NAMES.size()); mask++) {
             List<String> caps = new ArrayList<>();
@@ -74,6 +74,28 @@ public class ManifestNodesTest {
         }
         for (CapabilityCatalog.Capability c : CapabilityCatalog.CAPABILITIES.values()) assertThrows(UnsupportedOperationException.class, () -> c.manifestNodes.add(ManifestNodes.feature("android.hardware.camera", false)));
         assertThrows(IllegalArgumentException.class, () -> plan(list("camera")));
+    }
+    @Test public void databaseIsStandaloneAndAddsNoManifestSurface() throws Exception {
+        CapabilityCatalog.Capability database = CapabilityCatalog.CAPABILITIES.get("database");
+        assertNotNull(database);
+        assertEquals(1, CapabilityCatalog.SCHEMA_VERSION); assertEquals(2, CapabilityCatalog.SDK_VERSION);
+        assertEquals(list(CapabilityCatalog.Method.DATABASE_INFO, CapabilityCatalog.Method.DATABASE_MIGRATE,
+                CapabilityCatalog.Method.DATABASE_TRANSACT, CapabilityCatalog.Method.DATABASE_SELECT,
+                CapabilityCatalog.Method.DATABASE_CLOSE, CapabilityCatalog.Method.DATABASE_CANCEL), database.methods);
+        assertTrue(database.permissions.isEmpty()); assertTrue(database.features.isEmpty());
+        assertTrue(database.components.isEmpty()); assertTrue(database.intentFilters.isEmpty());
+        assertTrue(database.queries.isEmpty()); assertTrue(database.metadata.isEmpty());
+        assertTrue(database.resources.isEmpty()); assertTrue(database.dependencies.isEmpty());
+        assertTrue(database.conflicts.isEmpty()); assertTrue(database.manifestNodes.isEmpty());
+        ManifestPlan standalone = plan(list("database"));
+        assertEquals(list("database"), standalone.capabilities);
+        assertTrue(standalone.hosts.isEmpty()); assertTrue(standalone.queries.isEmpty());
+        assertArrayEquals(ManifestXml.encode(plan(Collections.emptyList())), ManifestXml.encode(standalone));
+        for (CapabilityCatalog.Method method : database.methods) {
+            assertEquals("database", method.capability);
+            assertSame(method, CapabilityCatalog.METHODS.get(method.wireName));
+        }
+        assertThrows(UnsupportedOperationException.class, () -> database.methods.clear());
     }
     @Test public void repeatedTypedNodesHaveIndependentParentsAndCanonicalTypes() throws Exception {
         ManifestNodes.Element root = fixture(); byte[] bytes = ManifestXml.encodeTree(root);

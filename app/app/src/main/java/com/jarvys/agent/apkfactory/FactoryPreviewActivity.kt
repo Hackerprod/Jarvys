@@ -143,6 +143,14 @@ open class FactoryPreviewActivity : Activity() {
         }
     }
 
+    override fun onPause() {
+        // A visible but paused/multi-window preview has no authority to access private test data.
+        closePreview()
+        reset.isEnabled = false
+        status.setText(R.string.factory_preview_expired)
+        super.onPause()
+    }
+
     override fun onStop() {
         // No background harness, retained WebView or silent recreation after a lifecycle boundary.
         closePreview()

@@ -61,9 +61,9 @@ class FactorySpecTest {
         val value=FactorySpec.parse(spec().put("capabilities",JSONArray()))
         assertTrue(value.capabilities.isEmpty())
     }
-    @Test fun all65536SelectionsUseImmutableCatalogWithoutImpliedCapabilities() {
-        assertEquals(16, FactorySpec.CAPABILITIES.size)
-        for (mask in 0 until 65536) {
+    @Test fun all131072SelectionsUseImmutableCatalogWithoutImpliedCapabilities() {
+        assertEquals(17, FactorySpec.CAPABILITIES.size)
+        for (mask in 0 until 131072) {
             val selected = FactorySpec.CAPABILITIES.filterIndexed { bit, _ -> mask and (1 shl bit) != 0 }
             val value = FactorySpec.parse(spec().put("capabilities", JSONArray(selected.reversed())))
             assertEquals(selected.sorted(), value.capabilities)
@@ -92,6 +92,12 @@ class FactorySpecTest {
             assertEquals("com.jarvys.agent", parsed.documentBroker.packageName)
             assertEquals("a".repeat(64), parsed.documentBroker.certificateSha256)
         }
+    }
+    @Test fun standaloneDatabaseConfigDoesNotRequireOrImplyHostCapabilities() {
+        val database = FactorySpec.parse(spec().put("capabilities", JSONArray(listOf("database"))))
+        val config = com.jarvys.factory.runtime.FactoryConfig.parse(String(database.runtimeConfig()), database.appId)
+        assertEquals(setOf("database"), config.capabilities)
+        assertNull(config.documentBroker)
     }
     private fun broker() = JSONObject().put("packageName","com.jarvys.agent").put("certificateSha256","a".repeat(64))
     @Test fun documentBrokerIsBuildOwnedAndCannotBeDeclaredInProjectSpec() {

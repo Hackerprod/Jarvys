@@ -224,11 +224,11 @@ public class FactoryDispatcherTest {
         }
     }
 
-    @Test public void all65536CapabilityPlansKeepZeroPermissionsAndDeduplicateHostVisibility() {
-        assertEquals(16, CapabilityCatalog.NAMES.size()); assertEquals(27, CapabilityCatalog.METHODS.size());
-        for (int mask = 0; mask < 65536; mask++) {
+    @Test public void all131072CapabilityPlansKeepZeroPermissionsAndDeduplicateHostVisibility() {
+        assertEquals(17, CapabilityCatalog.NAMES.size()); assertEquals(33, CapabilityCatalog.METHODS.size());
+        for (int mask = 0; mask < 131072; mask++) {
             java.util.List<String> selected = new java.util.ArrayList<>();
-            for (int bit = 0; bit < 16; bit++) if ((mask & (1 << bit)) != 0) selected.add(CapabilityCatalog.NAMES.get(bit));
+            for (int bit = 0; bit < CapabilityCatalog.NAMES.size(); bit++) if ((mask & (1 << bit)) != 0) selected.add(CapabilityCatalog.NAMES.get(bit));
             com.jarvys.factory.contract.ManifestPlan plan = new com.jarvys.factory.contract.ManifestPlan(
                     "com.example.browser", "Browser fixture", 1, "1.0", 0x7f010001, 0x7f020001, selected);
             boolean host = selected.contains("browser") || selected.contains("documents") || selected.contains("maps") || selected.contains("phone") || selected.contains("email") || selected.contains("sms") || selected.contains("contacts") || selected.contains("calendar");
