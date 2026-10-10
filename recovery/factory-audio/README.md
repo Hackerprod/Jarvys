@@ -41,3 +41,15 @@ frozen lint, three binaries, independent audit, signing and native delivery rema
 The final nonce/admission ordering delta passed 282 fresh guarded core tests, with zero
 failures/errors/skips and zero blocked network attempts. Source is ready for the final freeze;
 the aggregate, lint, APK audit and delivery gates remain pending.
+
+The first frozen full aggregate completed 3,104 Full cases with one failure: an existing
+skill-contract assertion required the explicit instruction “not a fixed notes application”,
+removed during documentation compaction. The instruction is restored within the 16 KiB
+budget; no assertion is weakened. Other modules did not run in that failed aggregate.
+Original run, source freeze and Full XML are retained as failed evidence. A fresh full
+aggregate and final lint/build/audit must use the repaired source.
+
+The restored skill is 16,365 UTF-8 bytes and passes 18 focused unchanged skill-contract
+cases. One wrong-working-directory retry failed before any tests and is retained as a setup
+failure, not validation; the corrected invocation passed. Final pipeline restarts from the
+repaired frozen source.

@@ -11,7 +11,7 @@ tags: [android, coding, apk, offline]
 
 Factory requires Android API 26+; generated apps API 24+. Inspect availability first.
 
-Build distinct HTML/CSS/JS for the brief. Preserve identity/data formats for updates.
+Build distinct HTML/CSS/JS, not a fixed notes application. Preserve identity/data formats for updates.
 
 ## Confirm the actual contract
 
@@ -63,7 +63,7 @@ Jarvys.share.file({handle,filename,mimeType}) requires documents+share and an un
 ## Photos (v69)
 Jarvys.photos.pick({}) / capture({}) require photos+documents and the same exact-latest authenticated host. Native human launch/Use only; never automate. Return opaque read handles for documents.read/close/share.file; 8 MiB JPEG/PNG, <=4096 per side/12 MP, five minutes. Snapshot acquisition also charges cumulative quota. Original metadata, including location if present, stays intact. Camera uses one write-only bounded pipe; seeking/reopen-dependent cameras fail, never thumbnail fallback. No gallery save/autosend; external camera may retain copies. Preview unavailable. Close interrupted external UI yourself and use Settings → Factory photos recovery. API24–29: provider FDs must be regular.
 
-Jarvys.audio.play({handle}) requires audio+documents; consumes an untouched read handle (6 MiB, charged EOF/quota). Canonical 44-byte-header PCM16 WAV only: mono/stereo, 8–48 kHz, whole frames, <=30 s. Authenticated host reviews bytes; human Play once, current Android output/volume. No URI/path, codec, TTS, network engine, looping, resume or background audio. Native Close/recovery retains automation protection; focus/lifecycle/route loss stops. documents.cancel requests revocation, not confirmed stop. {playbackAttempted,audibilityConfirmed:false} never proves hearing. Earlier document selection may use cloud providers. Preview unavailable.
+Jarvys.audio.play({handle}) requires audio+documents; consumes an untouched read handle (6 MiB, charged EOF/quota). Canonical 44-byte-header PCM16 WAV only: mono/stereo, 8–48 kHz, whole frames, <=30 s. Authenticated host reviews bytes; human Play once, current Android output/volume. No URI/path, codec, TTS, network engine, looping, resume or background audio. Native Close/recovery retains automation protection; focus/lifecycle/route loss stops. documents.cancel requests revocation, not confirmed stop. {playbackAttempted,audibilityConfirmed:false} never proves hearing. Document selection may use cloud providers. Preview unavailable.
 
 ## Author the project
 
