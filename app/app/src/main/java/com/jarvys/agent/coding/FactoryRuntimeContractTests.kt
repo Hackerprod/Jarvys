@@ -27,10 +27,11 @@ internal object FactoryRuntimeContractTests {
             FactoryDispatcher.Database { method, args -> database.execute(method, args, database.ticket()) { validate(); true } })
         try {
             val ordered = listOf("runtime.info", "storage.set", "storage.get", "storage.list", "storage.remove", "export.text", "share.text", "share.file", "clipboard.write", "haptics.perform", "device.info",
-                "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture", "audio.play", "browser.open", "maps.open", "phone.dial", "email.compose", "sms.compose", "contacts.pick", "calendar.insert", "database.info", "database.migrate", "database.transact", "database.select", "database.close", "database.cancel")
+                "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture", "audio.play", "browser.open", "maps.open", "phone.dial", "email.compose", "sms.compose", "contacts.pick", "calendar.insert", "database.info", "database.migrate", "database.transact", "database.select", "database.close", "database.cancel", "presentation.get", "presentation.set", "presentation.reset")
             check(ordered.toSet() == CapabilityCatalog.METHODS.keys) { "Synthetic contract cases must cover the compiled catalog" }
             for (method in ordered) {
                 val args = when (method) {
+                    "presentation.set" -> JSONObject().put("theme", "dark").put("orientation", "portrait")
                     "database.migrate" -> JSONObject("""{"fromVersion":0,"toVersion":1,"steps":[{"kind":"createTable","table":"notes","columns":{"text":{"type":"text","nullable":false}}}]}""")
                     "database.transact" -> JSONObject("""{"version":1,"operations":[{"kind":"insert","table":"notes","id":"one","values":{"text":"synthetic"}}]}""")
                     "database.select" -> JSONObject("""{"version":1,"table":"notes"}""")
@@ -59,7 +60,7 @@ internal object FactoryRuntimeContractTests {
                     assertion("$method:undeclared_denied") {
                         try { dispatch(method, args); false } catch (failure: FactoryException) { failure.code == "CAPABILITY_DENIED" }
                     }
-                } else if (capability == "maps" || capability == "phone" || capability == "email" || capability == "sms" || capability == "contacts" || capability == "calendar" || capability == "browser" || capability == "documents" || (capability == "photos" || capability == "audio") || method == "share.file") {
+                } else if (capability == "presentation" || capability == "maps" || capability == "phone" || capability == "email" || capability == "sms" || capability == "contacts" || capability == "calendar" || capability == "browser" || capability == "documents" || (capability == "photos" || capability == "audio") || method == "share.file") {
                     assertion("$method:preview_unavailable") {
                         try { dispatch(method, args); false } catch (failure: FactoryException) { failure.code == "UNAVAILABLE" }
                     }

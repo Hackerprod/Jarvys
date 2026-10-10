@@ -61,9 +61,9 @@ class FactorySpecTest {
         val value=FactorySpec.parse(spec().put("capabilities",JSONArray()))
         assertTrue(value.capabilities.isEmpty())
     }
-    @Test fun all131072SelectionsUseImmutableCatalogWithoutImpliedCapabilities() {
-        assertEquals(17, FactorySpec.CAPABILITIES.size)
-        for (mask in 0 until 131072) {
+    @Test fun all262144SelectionsUseImmutableCatalogWithoutImpliedCapabilities() {
+        assertEquals(18, FactorySpec.CAPABILITIES.size)
+        for (mask in 0 until 262144) {
             val selected = FactorySpec.CAPABILITIES.filterIndexed { bit, _ -> mask and (1 shl bit) != 0 }
             val value = FactorySpec.parse(spec().put("capabilities", JSONArray(selected.reversed())))
             assertEquals(selected.sorted(), value.capabilities)
@@ -108,6 +108,15 @@ class FactorySpecTest {
         assertEquals("com.jarvys.agent",config.getJSONObject("documentBroker").getString("packageName"))
         assertThrows(Exception::class.java) { FactorySpec.parse(spec()).runtimeConfig(broker()) }
         assertThrows(Exception::class.java) { docs.runtimeConfig(broker().put("packageName","org.example.untrusted")) }
+    }
+
+
+    @Test fun standalonePresentationConfigDoesNotRequireOrImplyHostCapabilities() {
+        val presentation = FactorySpec.parse(spec().put("capabilities", JSONArray(listOf("presentation"))))
+        val config = com.jarvys.factory.runtime.FactoryConfig.parse(String(presentation.runtimeConfig()), presentation.appId)
+        assertEquals(setOf("presentation"), config.capabilities)
+        assertNull(config.documentBroker)
+        assertThrows(Exception::class.java) { presentation.runtimeConfig(broker()) }
     }
 
 }

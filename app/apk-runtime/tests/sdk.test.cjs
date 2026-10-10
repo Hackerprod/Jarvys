@@ -105,7 +105,7 @@ test('all SDK calls exactly match the catalog and explicit native validator/disp
   const path = require('node:path');
   const catalog = fs.readFileSync(path.join(__dirname, '../../factory-contract/src/main/java/com/jarvys/factory/contract/CapabilityCatalog.java'), 'utf8');
   const rows = [...catalog.matchAll(/\b([A-Z][A-Z_]+)\("([a-z]+\.[a-z]+)", (?:"[a-z]+"|null)\)/g)];
-  assert.equal(rows.length, 33);
+  assert.equal(rows.length, 36);
   const env = environment();
   const args = { 'storage.get': ['key'], 'storage.set': ['key', 'value'], 'storage.remove': ['key'],
     'export.text': [{ filename: 'test.txt', text: 'hello' }], 'share.text': [{ text: 'hello' }],
@@ -370,6 +370,59 @@ test('database timeout, pagehide, and missing bridge are terminal for every meth
     for (const event of ['timeout', 'pagehide']) {
       const env = environment();
       const pending = env.api.database[method]({});
+      const rejected = assert.rejects(pending, {code: event === 'timeout' ? 'TIMEOUT' : 'PAGE_CLOSED'});
+      assert.equal(env.delays.at(-1), 30000);
+      if (event === 'timeout') env.timers.values().next().value(); else env.handlers.get('pagehide')();
+      await rejected;
+      env.reply(env.sent.at(-1), {late: true});
+      if (event === 'pagehide') assert.equal(env.timers.size, 0);
+    }
+  }
+});
+
+test('presentation exposes exactly three frozen methods with lossless options and ordinary timeouts', async () => {
+  const env = environment();
+  assert.equal(Object.isFrozen(env.api.presentation), true);
+  assert.deepEqual(Object.keys(env.api.presentation), ['get', 'set', 'reset']);
+  for (const method of ['get', 'set', 'reset']) {
+    for (const options of [undefined, {}, null, false, [], 'dark',
+      {theme: 'dark', orientation: 'portrait'}, {extra: 'native exact-key validation must see this'}]) {
+      const pending = env.api.presentation[method](options);
+      assert.equal(typeof pending.then, 'function');
+      const request = env.sent.at(-1);
+      assert.equal(request.v, 1);
+      assert.equal(request.method, 'presentation.' + method);
+      assert.deepEqual(request.args, method !== 'set' && options === undefined ? {} : options);
+      assert.equal(env.delays.at(-1), 30000);
+      env.reply(request, {synthetic: true});
+      assert.equal((await pending).synthetic, true);
+      assert.equal(env.timers.size, 0);
+    }
+  }
+});
+
+test('presentation native errors remain terminal and are never masked by late success', async () => {
+  for (const method of ['get', 'set', 'reset']) {
+    for (const code of ['CAPABILITY_DENIED', 'INVALID_ARGUMENT', 'UNAVAILABLE', 'CANCELLED', 'NATIVE_ERROR', 'PRESENTATION_STORAGE_ERROR']) {
+      const env = environment();
+      const pending = env.api.presentation[method]({theme: 'light', orientation: 'landscape'});
+      const request = env.sent.at(-1);
+      const rejected = assert.rejects(pending, {name: 'JarvysError', code, message: 'Synthetic rejection'});
+      env.window.JarvysNative.onmessage({data: JSON.stringify({v: 1, id: request.id, ok: false,
+        error: {code, message: 'Synthetic rejection'}})});
+      await rejected;
+      env.reply(request, {late: true});
+      assert.equal(env.timers.size, 0);
+    }
+  }
+});
+
+test('presentation timeout, pagehide, and absent bridge reject each method', async () => {
+  for (const method of ['get', 'set', 'reset']) {
+    await assert.rejects(environment(false).api.presentation[method]({}), {code: 'BRIDGE_UNAVAILABLE'});
+    for (const event of ['timeout', 'pagehide']) {
+      const env = environment();
+      const pending = env.api.presentation[method]({});
       const rejected = assert.rejects(pending, {code: event === 'timeout' ? 'TIMEOUT' : 'PAGE_CLOSED'});
       assert.equal(env.delays.at(-1), 30000);
       if (event === 'timeout') env.timers.values().next().value(); else env.handlers.get('pagehide')();

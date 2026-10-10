@@ -65,6 +65,12 @@ public class FactoryWindowPolicyTest {
         controllers.clear();
     }
 
+    private static void assertLightThemeAttribute(FactoryActivity activity, boolean expected) {
+        android.content.res.TypedArray attrs=activity.obtainStyledAttributes(new int[]{android.R.attr.isLightTheme});
+        try { assertEquals(expected,attrs.getBoolean(0,!expected)); } finally { attrs.recycle(); }
+        assertTrue(FactoryPresentation.DEFAULT.same(activity.appliedPresentation()));
+    }
+
     @Test public void manifestHasNoActionBarAndLaterErrorKeepsTheProtectedRoot() throws Exception {
         FactoryActivity activity = activity();
         ActivityInfo info = activity.getPackageManager().getActivityInfo(
@@ -112,6 +118,7 @@ public class FactoryWindowPolicyTest {
     @Test public void lightPolicyHasContrastingVisibleBarsAndOneEdgeToEdgeOwner() {
         FactoryActivity activity = activity();
         assertFalse(FactoryWindowPolicy.isDark(activity));
+        assertLightThemeAttribute(activity, true);
         assertWindowPolicy(activity, false);
     }
 
@@ -119,6 +126,7 @@ public class FactoryWindowPolicyTest {
     public void darkPolicyHasContrastingVisibleBarsAndDarkErrorText() {
         FactoryActivity activity = activity();
         assertTrue(FactoryWindowPolicy.isDark(activity));
+        assertLightThemeAttribute(activity, false);
         assertWindowPolicy(activity, true);
         FrameLayout root = root(activity);
         assertEquals(1, root.getChildCount());

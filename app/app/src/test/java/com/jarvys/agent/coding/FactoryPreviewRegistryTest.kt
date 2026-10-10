@@ -151,11 +151,11 @@ class FactoryPreviewRegistryTest {
         assertEquals(1, results.size); results.single().close()
     }
     @Test fun realSharedHandlerAssertionsPassForAllAndNoCapabilitiesAndNeverExecuteJavascript() {
-        for (capabilities in listOf(emptyList(), listOf("share"), listOf("documents"), listOf("audio"), listOf("audio", "documents"), listOf("browser"), listOf("browser", "documents"), listOf("maps"), listOf("phone"), listOf("maps", "phone"), listOf("email"), listOf("sms"), listOf("email", "sms"), listOf("contacts"), listOf("calendar"), listOf("database"), com.jarvys.factory.contract.CapabilityCatalog.NAMES)) {
+        for (capabilities in listOf(emptyList(), listOf("share"), listOf("documents"), listOf("audio"), listOf("audio", "documents"), listOf("browser"), listOf("browser", "documents"), listOf("maps"), listOf("phone"), listOf("maps", "phone"), listOf("email"), listOf("sms"), listOf("email", "sms"), listOf("contacts"), listOf("calendar"), listOf("database"), listOf("presentation"), com.jarvys.factory.contract.CapabilityCatalog.NAMES)) {
             val result = FactoryRuntimeContractTests.run(snapshot(capabilities), "com.jarvys.host", 34, 34) {}
             assertEquals("passed", result.getString("state"))
             val observations = result.getJSONArray("observations")
-            assertEquals(36, observations.length())
+            assertEquals(39, observations.length())
             val documentAssertions = (0 until observations.length()).map { observations.getJSONObject(it) }
                 .filter { it.getString("operation").startsWith("documents.") }
             assertEquals(6, documentAssertions.size)
@@ -178,6 +178,9 @@ class FactoryPreviewRegistryTest {
             val databaseChecks=(0 until observations.length()).map { observations.getJSONObject(it) }.filter { it.getString("operation").startsWith("database.") }
             assertEquals(6,databaseChecks.size)
             assertTrue(databaseChecks.all { it.getString("operation").endsWith(if("database" in capabilities) ":shared_handler" else ":undeclared_denied") && it.getString("outcome")=="passed" })
+            val presentationChecks = (0 until observations.length()).map { observations.getJSONObject(it) }.filter { it.getString("operation").startsWith("presentation.") }
+            assertEquals(3, presentationChecks.size)
+            assertTrue(presentationChecks.all { it.getString("operation").endsWith(if ("presentation" in capabilities) ":preview_unavailable" else ":undeclared_denied") && it.getString("outcome") == "passed" })
             assertFalse(result.toString().contains("Synthetic map fixture"))
             assertFalse(result.toString().contains("+15550100"))
             assertEquals("shared_core_test", result.getString("mode"))

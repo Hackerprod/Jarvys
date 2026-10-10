@@ -73,4 +73,17 @@ public class FactoryConfigTest {
     private void reject(String text, String installed) throws Exception {
         try { FactoryConfig.parse(text, installed); fail("Invalid config accepted"); } catch (FactoryException expected) { }
     }
+
+    @Test public void presentationIsStandaloneAndCannotPinAnUnneededHostBroker() throws Exception {
+        String base = text("com.example.app", "www/index.html", "[\"presentation\"]");
+        FactoryConfig installed = FactoryConfig.parse(base, "com.example.app");
+        assertEquals(java.util.Collections.singleton("presentation"), installed.capabilities);
+        assertNull(installed.documentBroker);
+        assertNull(FactoryConfig.parsePreview(base).documentBroker);
+        org.json.JSONObject broker = new org.json.JSONObject().put("packageName", "com.jarvys.agent")
+                .put("certificateSha256", new String(new char[64]).replace('\0', 'a'));
+        reject(new org.json.JSONObject(base).put("documentBroker", broker).toString(), "com.example.app");
+        reject(text("com.example.app", "www/index.html", "[\"presentation\",\"presentation\"]"), "com.example.app");
+    }
+
 }

@@ -40,6 +40,8 @@ public final class BridgeProtocol {
             if (operation == null) throw new FactoryException("UNKNOWN_METHOD", "Native method is not implemented.");
             String capability = operation.capability;
             switch (operation) {
+                case PRESENTATION_GET: case PRESENTATION_RESET: FactoryConfig.exactKeys(args); break;
+                case PRESENTATION_SET: FactoryPresentation.parse(args); break;
                 case DATABASE_INFO: case DATABASE_MIGRATE: case DATABASE_TRANSACT: case DATABASE_SELECT: case DATABASE_CLOSE: case DATABASE_CANCEL:
                     DatabaseRequest.validate(method,args); break;
                 case RUNTIME_INFO: FactoryConfig.exactKeys(args); break;

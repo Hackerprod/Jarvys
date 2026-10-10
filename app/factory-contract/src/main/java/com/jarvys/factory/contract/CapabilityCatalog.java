@@ -30,7 +30,9 @@ public final class CapabilityCatalog {
         EMAIL_COMPOSE("email.compose", "email"), SMS_COMPOSE("sms.compose", "sms"), CONTACTS_PICK("contacts.pick", "contacts"), CALENDAR_INSERT("calendar.insert", "calendar"),
         DATABASE_INFO("database.info", "database"), DATABASE_MIGRATE("database.migrate", "database"),
         DATABASE_TRANSACT("database.transact", "database"), DATABASE_SELECT("database.select", "database"),
-        DATABASE_CLOSE("database.close", "database"), DATABASE_CANCEL("database.cancel", "database");
+        DATABASE_CLOSE("database.close", "database"), DATABASE_CANCEL("database.cancel", "database"),
+        PRESENTATION_GET("presentation.get", "presentation"), PRESENTATION_SET("presentation.set", "presentation"),
+        PRESENTATION_RESET("presentation.reset", "presentation");
         public final String wireName;
         public final String capability;
         Method(String wireName, String capability) { this.wireName = wireName; this.capability = capability; }
@@ -64,7 +66,7 @@ public final class CapabilityCatalog {
     static final ManifestNodes.Element DOCUMENT_QUERIES = ManifestNodes.queries(Arrays.asList(
             ManifestNodes.queryPackage("com.jarvys.agent"), ManifestNodes.queryPackage("com.jarvys.agent.recoverytest")));
     public static final List<String> NAMES = Collections.unmodifiableList(Arrays.asList(
-            "storage", "export", "share", "clipboard", "haptics", "device", "documents", "photos", "audio", "browser", "maps", "phone", "email", "sms", "contacts", "calendar", "database"));
+            "storage", "export", "share", "clipboard", "haptics", "device", "documents", "photos", "audio", "browser", "maps", "phone", "email", "sms", "contacts", "calendar", "database", "presentation"));
     public static final Set<String> SUPPORTED = Collections.unmodifiableSet(new LinkedHashSet<>(NAMES));
     public static final Map<String, Capability> CAPABILITIES;
     public static final Map<String, Method> METHODS;

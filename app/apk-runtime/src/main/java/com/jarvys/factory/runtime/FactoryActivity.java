@@ -1,21 +1,30 @@
 package com.jarvys.factory.runtime;
 
 import android.app.Activity;
+import android.content.Context;
 import android.os.Bundle;
 import android.content.Intent;
 import android.widget.FrameLayout;
 import androidx.core.view.ViewCompat;
 
 /** Installed entry point. Identity always comes from this real Android Context. */
-public final class FactoryActivity extends Activity {
+public final class FactoryActivity extends Activity implements FactoryPresentation.Owner {
+    private FactoryPresentation.Bootstrap presentation;
+    @Override protected void attachBaseContext(Context base) {
+        presentation = FactoryPresentation.bootstrap(base);
+        super.attachBaseContext(presentation.context);
+    }
+    @Override public FactoryPresentation.State appliedPresentation() { return presentation.state; }
     private FactoryRuntime runtime;
     @Override public void onCreate(Bundle state) {
+        setTheme(FactoryWindowPolicy.isDark(this) ? android.R.style.Theme_Material_NoActionBar
+                : android.R.style.Theme_Material_Light_NoActionBar);
         super.onCreate(state);
         FrameLayout root = FactoryWindowPolicy.createRoot(this);
         setContentView(root);
         ViewCompat.requestApplyInsets(root);
         runtime = new FactoryRuntime(this, root, FactoryRuntime.installedHost(this));
-        runtime.start();
+        if (runtime.start() && presentation.enabled) FactoryPresentation.applyOrientation(this, presentation.state);
     }
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);

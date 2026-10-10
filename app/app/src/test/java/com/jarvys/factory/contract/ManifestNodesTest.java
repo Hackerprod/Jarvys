@@ -52,8 +52,8 @@ public class ManifestNodesTest {
         assertEquals(7, current.nodes.size()); assertEquals(-1,current.nodes.get(0).parentIndex);
         assertEquals(4,current.nodes.get(6).parentIndex);
     }
-    @Test public void all131072SelectionsEncodeOnlyTheApprovedDocumentQueries() throws Exception {
-        assertEquals(17, CapabilityCatalog.NAMES.size());
+    @Test public void all262144SelectionsEncodeOnlyTheApprovedDocumentQueries() throws Exception {
+        assertEquals(18, CapabilityCatalog.NAMES.size());
         byte[] first = ManifestXml.encode(plan(Collections.emptyList()));
         for (int mask=0; mask<(1 << CapabilityCatalog.NAMES.size()); mask++) {
             List<String> caps = new ArrayList<>();
@@ -239,4 +239,27 @@ public class ManifestNodesTest {
     private static int u16(byte[] b,int p) { return (b[p]&255)|((b[p+1]&255)<<8); }
     private static int i32(byte[] b,int p) { return u16(b,p)|(u16(b,p+2)<<16); }
     private static void put(byte[] b,int p,int value) { for(int i=0;i<4;i++) b[p+i]=(byte)(value>>>(8*i)); }
+
+    @Test public void presentationIsStandaloneImmutableAndAddsNoManifestSurface() throws Exception {
+        CapabilityCatalog.Capability presentation = CapabilityCatalog.CAPABILITIES.get("presentation");
+        assertNotNull(presentation);
+        assertEquals(1, CapabilityCatalog.SCHEMA_VERSION); assertEquals(2, CapabilityCatalog.SDK_VERSION);
+        assertEquals(list(CapabilityCatalog.Method.PRESENTATION_GET, CapabilityCatalog.Method.PRESENTATION_SET,
+                CapabilityCatalog.Method.PRESENTATION_RESET), presentation.methods);
+        assertTrue(presentation.permissions.isEmpty()); assertTrue(presentation.features.isEmpty());
+        assertTrue(presentation.components.isEmpty()); assertTrue(presentation.intentFilters.isEmpty());
+        assertTrue(presentation.queries.isEmpty()); assertTrue(presentation.metadata.isEmpty());
+        assertTrue(presentation.resources.isEmpty()); assertTrue(presentation.dependencies.isEmpty());
+        assertTrue(presentation.conflicts.isEmpty()); assertTrue(presentation.manifestNodes.isEmpty());
+        ManifestPlan standalone = plan(list("presentation"));
+        assertEquals(list("presentation"), standalone.capabilities);
+        assertTrue(standalone.hosts.isEmpty()); assertTrue(standalone.queries.isEmpty());
+        assertArrayEquals(ManifestXml.encode(plan(Collections.emptyList())), ManifestXml.encode(standalone));
+        for (CapabilityCatalog.Method method : presentation.methods) {
+            assertEquals("presentation", method.capability);
+            assertSame(method, CapabilityCatalog.METHODS.get(method.wireName));
+        }
+        assertThrows(UnsupportedOperationException.class, () -> presentation.methods.clear());
+    }
+
 }

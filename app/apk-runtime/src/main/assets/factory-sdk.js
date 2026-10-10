@@ -74,6 +74,11 @@
       remove: function (key) { return call('storage.remove', { key: key }); },
       list: function () { return call('storage.list', {}); }
     }),
+    presentation: Object.freeze({
+      get: function (options) { return call('presentation.get', options === undefined ? {} : options); },
+      set: function (options) { return call('presentation.set', options); },
+      reset: function (options) { return call('presentation.reset', options === undefined ? {} : options); }
+    }),
     database: Object.freeze({
       info: function (options) { return call('database.info', options === undefined ? {} : options); },
       migrate: function (options) { return call('database.migrate', options); },

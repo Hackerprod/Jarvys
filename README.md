@@ -112,6 +112,8 @@ This is semantic context isolation, separate from project/file boundaries. A cen
 
 ## APK Factory
 
+Development checkpoint v77 adds typed per-app theme and orientation requests. Host validation and signed delivery are still pending; it does not establish Android/WebView behavior on a device. See [the presentation contract](app/APK_FACTORY.md#presentation-preferences-ux42-f1-v77).
+
 **Turn a supported local web project into an Android APK through Coding.** Factory packages a reviewed native runtime and bounded HTML/CSS/JavaScript assets; it is not a general-purpose arbitrary Android source compiler.
 
 Building with Factory requires **Android 8/API 26 or newer** in either Jarvys flavor. Generated apps support **Android 7/API 24 or newer**. Factory packaging itself does not require PRoot.

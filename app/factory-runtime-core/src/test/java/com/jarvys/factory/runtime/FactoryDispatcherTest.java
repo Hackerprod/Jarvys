@@ -224,9 +224,9 @@ public class FactoryDispatcherTest {
         }
     }
 
-    @Test public void all131072CapabilityPlansKeepZeroPermissionsAndDeduplicateHostVisibility() {
-        assertEquals(17, CapabilityCatalog.NAMES.size()); assertEquals(33, CapabilityCatalog.METHODS.size());
-        for (int mask = 0; mask < 131072; mask++) {
+    @Test public void all262144CapabilityPlansKeepZeroPermissionsAndDeduplicateHostVisibility() {
+        assertEquals(18, CapabilityCatalog.NAMES.size()); assertEquals(36, CapabilityCatalog.METHODS.size());
+        for (int mask = 0; mask < 262144; mask++) {
             java.util.List<String> selected = new java.util.ArrayList<>();
             for (int bit = 0; bit < CapabilityCatalog.NAMES.size(); bit++) if ((mask & (1 << bit)) != 0) selected.add(CapabilityCatalog.NAMES.get(bit));
             com.jarvys.factory.contract.ManifestPlan plan = new com.jarvys.factory.contract.ManifestPlan(
@@ -274,6 +274,52 @@ public class FactoryDispatcherTest {
             call.args.put("flags",0);
             FactoryException mutated=assertThrows(FactoryException.class,()->FactoryDispatcher.dispatch(call,config,store,FactoryDispatcher.metadata("installed","app",35,35),(op,value)->{throw new AssertionError("effect called");}));
             assertEquals("INVALID_ARGUMENT",mutated.code);
+        }
+    }
+
+
+    @Test public void presentationPreviewIsUnavailableAndInstalledDispatchRevalidatesBeforeLocalAdapter() throws Exception {
+        FactoryConfig enabled = FactoryConfig.parse(configuration("[\"presentation\"]"), "com.example.generated");
+        FactoryConfig denied = FactoryConfig.parsePreview(configuration("[]"));
+        assertNull(enabled.documentBroker);
+        BoundedStore store = new BoundedStore(new MemoryBackend());
+        for (String method : Arrays.asList("presentation.get", "presentation.set", "presentation.reset")) {
+            JSONObject args = method.equals("presentation.set")
+                    ? new JSONObject().put("theme", "dark").put("orientation", "portrait") : new JSONObject();
+            BridgeProtocol.Request call = request(method, args, enabled);
+            FactoryException unavailable = assertThrows(FactoryException.class, () -> FactoryDispatcher.dispatch(call,
+                    enabled, store, FactoryDispatcher.previewMetadata("host", 35, 35), FactoryDispatcher.simulatedEffects()));
+            assertEquals("UNAVAILABLE", unavailable.code);
+            int[] invocations = {0};
+            assertEquals("local adapter", FactoryDispatcher.dispatch(call, enabled, store,
+                    FactoryDispatcher.metadata("installed", enabled.appId, 35, 35), (operation, value) -> {
+                        invocations[0]++;
+                        assertEquals(method, operation.wireName); assertEquals(args.toString(), value.toString());
+                        return "local adapter";
+                    }));
+            assertEquals(1, invocations[0]);
+            FactoryDispatcher.Effects forbidden = (operation, value) -> { throw new AssertionError("Adapter invoked"); };
+            FactoryException undeclared = assertThrows(FactoryException.class, () -> FactoryDispatcher.dispatch(call,
+                    denied, store, FactoryDispatcher.metadata("installed", enabled.appId, 35, 35), forbidden));
+            assertEquals("CAPABILITY_DENIED", undeclared.code);
+            call.args.put("appId", "com.example.other");
+            FactoryException mutated = assertThrows(FactoryException.class, () -> FactoryDispatcher.dispatch(call,
+                    enabled, store, FactoryDispatcher.metadata("installed", enabled.appId, 35, 35), forbidden));
+            assertEquals("INVALID_ARGUMENT", mutated.code);
+        }
+        for (String mode : Arrays.asList("preview", "installed")) {
+            JSONObject info = (JSONObject) FactoryDispatcher.dispatch(request("runtime.info", new JSONObject(), enabled),
+                    enabled, store, FactoryDispatcher.metadata(mode, enabled.appId, 35, 35), FactoryDispatcher.simulatedEffects());
+            assertEquals(1, info.getInt("presentationProtocolVersion"));
+            assertFalse(info.getBoolean("presentationBrokerRequired"));
+            assertEquals("[\"presentation\"]", info.getJSONArray("presentationRequires").toString());
+            assertEquals("[\"system\",\"light\",\"dark\"]", info.getJSONArray("presentationThemes").toString());
+            assertEquals("[\"system\",\"portrait\",\"landscape\"]", info.getJSONArray("presentationOrientations").toString());
+            assertFalse(info.getBoolean("presentationOrientationGuaranteed"));
+            assertTrue(info.getBoolean("presentationRecreatesActivity"));
+            assertEquals(mode.equals("preview"), info.getJSONArray("unavailableCapabilities").toString().contains("\"presentation\""));
+            for (String method : Arrays.asList("presentation.get", "presentation.set", "presentation.reset"))
+                assertEquals(mode.equals("preview"), info.getJSONArray("unavailableMethods").toString().contains("\"" + method + "\""));
         }
     }
 

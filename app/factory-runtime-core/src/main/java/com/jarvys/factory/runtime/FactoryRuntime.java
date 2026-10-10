@@ -81,6 +81,8 @@ public final class FactoryRuntime implements AutoCloseable {
     private volatile int generation;
     private volatile boolean destroyed;
     private Reply uiOwner;
+    private boolean presentationScheduled;
+    private Runnable presentationRecreate;
     private long rateWindow;
     private int rateCount;
     private Export export;
@@ -156,7 +158,7 @@ public final class FactoryRuntime implements AutoCloseable {
             public void resetStorage() { memory.clear(); }
         };
     }
-    private static String readConfiguration(InputStream input) throws IOException {
+    static String readConfiguration(InputStream input) throws IOException {
         try (InputStream source = input; ByteArrayOutputStream output = new ByteArrayOutputStream()) {
             byte[] buffer = new byte[1024]; int count;
             while ((count = source.read(buffer)) != -1) {
@@ -193,6 +195,7 @@ public final class FactoryRuntime implements AutoCloseable {
         return false;
     }
     private void invalidate() {
+        cancelPresentationRecreate();
         generation++; pending.clear(); uiOwner = null;
         retireDatabase();
         documents.revokeAll(); documents = new DocumentHandles();
@@ -430,6 +433,8 @@ public final class FactoryRuntime implements AutoCloseable {
     private void dispatchInstalledEffect(BridgeProtocol.Request request, Reply reply) throws Exception {
         if (!reply.current()) return;
         switch (request.operation) {
+            case PRESENTATION_GET: case PRESENTATION_SET: case PRESENTATION_RESET:
+                presentation(request,reply); break;
             case PHOTOS_PICK: case PHOTOS_CAPTURE:
                 openPhoto(request, reply); break;
             case MAPS_OPEN: case PHONE_DIAL: case EMAIL_COMPOSE: case SMS_COMPOSE: case CALENDAR_INSERT:
@@ -519,8 +524,48 @@ public final class FactoryRuntime implements AutoCloseable {
         }
     }
 
+    private void presentation(BridgeProtocol.Request request, Reply reply) throws Exception {
+        if (host.isPreview() || !(activity instanceof FactoryPresentation.Owner))
+            throw new FactoryException("UNAVAILABLE", "Presentation requires an installed generated Activity.");
+        FactoryPresentation.State current = FactoryPresentation.read(activity);
+        if (request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.PRESENTATION_GET) {
+            reply.ok(FactoryPresentation.result(activity,current,false)); return;
+        }
+        if (!documentForeground || activity.isDestroyed())
+            throw new FactoryException("UNAVAILABLE", "Presentation requires the foreground application.");
+        if (!claimUi(reply)) return;
+        try {
+            FactoryPresentation.State requested = request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.PRESENTATION_RESET
+                    ? FactoryPresentation.DEFAULT : FactoryPresentation.parse(request.args);
+            boolean write = !requested.same(current);
+            boolean recreate = write || !requested.same(((FactoryPresentation.Owner)activity).appliedPresentation());
+            if (write) FactoryPresentation.save(activity,requested);
+            JSONObject result = FactoryPresentation.result(activity,requested,recreate);
+            if (write) result.put("preferencesCommitted",true);
+            if (!recreate) { reply.ok(result); return; }
+            presentationScheduled=true;
+            final int page=generation;
+            presentationRecreate=() -> {
+                presentationRecreate=null;
+                if (!presentationScheduled) return;
+                if (!destroyed && host.isActive() && host.isSessionOpen() && documentForeground && page==generation
+                        && !activity.isFinishing() && !activity.isDestroyed() && activity.hasWindowFocus()) {
+                    try { activity.recreate(); } catch(RuntimeException unavailable) { presentationScheduled=false; host.onTrace("presentation","recreation_unconfirmed"); }
+                } else presentationScheduled=false;
+            };
+            // Native enqueue acknowledgement only. JS may lose its document before receiving it.
+            Runnable queued=presentationRecreate;
+            reply.ok(result);
+            if (presentationScheduled && presentationRecreate==queued) main.post(queued);
+        } finally { if (uiOwner==reply) uiOwner=null; }
+    }
+    private void cancelPresentationRecreate() {
+        presentationScheduled=false;
+        if (presentationRecreate!=null) { main.removeCallbacks(presentationRecreate); presentationRecreate=null; }
+    }
+
     private boolean claimUi(Reply reply) {
-        if (uiOwner != null || export != null || documentSelection != null || fileShare != null || photoSelection != null || audioPlayback != null || browserOpen != null || externalLaunch != null || contactPick != null || !activity.hasWindowFocus() || activity.isFinishing()) {
+        if (presentationScheduled || uiOwner != null || export != null || documentSelection != null || fileShare != null || photoSelection != null || audioPlayback != null || browserOpen != null || externalLaunch != null || contactPick != null || !activity.hasWindowFocus() || activity.isFinishing()) {
             reply.fail("BUSY", "Another native prompt is open, or the application is not in the foreground."); return false;
         }
         uiOwner = reply; return true;
@@ -610,6 +655,7 @@ public final class FactoryRuntime implements AutoCloseable {
 
     /** Pause always revokes existing handles. The external broker alone may retain a picker tombstone. */
     public void onPause() {
+        cancelPresentationRecreate();
         documentForeground = false;
         retireDatabase();
         for (Reply reply : new java.util.ArrayList<>(pending.values()))

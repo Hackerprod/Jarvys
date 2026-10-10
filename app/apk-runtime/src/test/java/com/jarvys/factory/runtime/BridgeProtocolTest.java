@@ -40,6 +40,9 @@ public class BridgeProtocolTest {
             {"sms.compose", "{\"number\":\"+15550100\",\"body\":\"Body\"}"},
             {"contacts.pick", "{\"kind\":\"phone\"}"},
             {"calendar.insert", "{\"title\":\"Synthetic event\",\"location\":\"\",\"description\":\"\",\"startTimeMillis\":0,\"endTimeMillis\":86400000,\"timeZone\":\"UTC\",\"allDay\":true}"},
+            {"presentation.get", "{}"},
+            {"presentation.set", "{\"theme\":\"dark\",\"orientation\":\"portrait\"}"},
+            {"presentation.reset", "{}"},
             {"database.info", "{}"},
             {"database.migrate", "{\"fromVersion\":0,\"toVersion\":1,\"steps\":[{\"kind\":\"createTable\",\"table\":\"notes\",\"columns\":{\"text\":{\"type\":\"text\",\"nullable\":false}}}]}"},
             {"database.transact", "{\"version\":1,\"operations\":[{\"kind\":\"insert\",\"table\":\"notes\",\"id\":\"one\",\"values\":{\"text\":\"fixture\"}}]}"},
@@ -105,6 +108,9 @@ public class BridgeProtocolTest {
             {"sms.compose", "{\"number\":\"+15550100\",\"body\":\"Body\"}"},
             {"contacts.pick", "{\"kind\":\"phone\"}"},
             {"calendar.insert", "{\"title\":\"Synthetic event\",\"location\":\"\",\"description\":\"\",\"startTimeMillis\":0,\"endTimeMillis\":86400000,\"timeZone\":\"UTC\",\"allDay\":true}"},
+            {"presentation.get", "{}"},
+            {"presentation.set", "{\"theme\":\"dark\",\"orientation\":\"portrait\"}"},
+            {"presentation.reset", "{}"},
             {"database.info", "{}"},
             {"database.migrate", "{\"fromVersion\":0,\"toVersion\":1,\"steps\":[{\"kind\":\"createTable\",\"table\":\"notes\",\"columns\":{\"text\":{\"type\":\"text\",\"nullable\":false}}}]}"},
             {"database.transact", "{\"version\":1,\"operations\":[{\"kind\":\"insert\",\"table\":\"notes\",\"id\":\"one\",\"values\":{\"text\":\"fixture\"}}]}"},
@@ -113,8 +119,8 @@ public class BridgeProtocolTest {
             {"database.cancel", "{}"},
             {"browser.open", "{\"url\":\"https://example.com/review?fixture=1\"}"},
             {"share.file", "{\"handle\":\""+HANDLE+"\",\"filename\":\"file.bin\",\"mimeType\":\"application/octet-stream\"}"}};
-        assertEquals(33, calls.length);
-        assertEquals(17, com.jarvys.factory.contract.CapabilityCatalog.NAMES.size());
+        assertEquals(36, calls.length);
+        assertEquals(18, com.jarvys.factory.contract.CapabilityCatalog.NAMES.size());
         assertEquals(com.jarvys.factory.contract.CapabilityCatalog.METHODS.size(), calls.length);
         for (int mask = 0; mask < (1 << com.jarvys.factory.contract.CapabilityCatalog.NAMES.size()); mask++) {
             org.json.JSONArray declared = new org.json.JSONArray();
@@ -218,6 +224,36 @@ public class BridgeProtocolTest {
         rejected("INVALID_REQUEST", BridgeProtocol.ORIGIN, true, request("browser.open", "{}"), browser);
         for (String url : new String[]{"http://example.com", "javascript:alert(1)", "https://user@example.com", "https://example.com/#private", "https://example.com/%0a", "https://EXAMPLE.com"})
             rejected("INVALID_ARGUMENT", BridgeProtocol.ORIGIN, true, request("browser.open", new JSONObject().put("url", url).toString()), browser);
+    }
+
+
+    @Test public void presentationRequiresExactEnumPairAndEmptyGetResetArguments() throws Exception {
+        FactoryConfig enabled = config("[\"presentation\"]");
+        for (String theme : new String[]{"system", "light", "dark"}) {
+            for (String orientation : new String[]{"system", "portrait", "landscape"}) {
+                JSONObject args = new JSONObject().put("theme", theme).put("orientation", orientation);
+                assertEquals("presentation.set", BridgeProtocol.validate(BridgeProtocol.ORIGIN, true,
+                        request("presentation.set", args.toString()), enabled).method);
+            }
+        }
+        for (String args : new String[]{"{}", "{\"theme\":\"dark\"}", "{\"orientation\":\"portrait\"}",
+                "{\"theme\":null,\"orientation\":\"portrait\"}", "{\"theme\":\"dark\",\"orientation\":null}",
+                "{\"theme\":1,\"orientation\":\"portrait\"}", "{\"theme\":\"dark\",\"orientation\":true}",
+                "{\"theme\":\"Dark\",\"orientation\":\"portrait\"}", "{\"theme\":\"dark\",\"orientation\":\"Portrait\"}",
+                "{\"theme\":\"auto\",\"orientation\":\"portrait\"}", "{\"theme\":\"dark\",\"orientation\":\"sensor\"}",
+                "{\"theme\":\" dark\",\"orientation\":\"portrait\"}", "{\"theme\":\"dark\",\"orientation\":\"portrait \"}",
+                "{\"theme\":\"dark\",\"orientation\":\"portrait\",\"appId\":\"other.app\"}"}) {
+            rejected("INVALID_ARGUMENT", BridgeProtocol.ORIGIN, true, request("presentation.set", args), enabled);
+            rejected("INVALID_ARGUMENT", BridgeProtocol.ORIGIN, true, request("presentation.set", args), config("[]"));
+        }
+        for (String method : new String[]{"presentation.get", "presentation.reset"}) {
+            assertEquals(method, BridgeProtocol.validate(BridgeProtocol.ORIGIN, true, request(method, "{}"), enabled).method);
+            for (String args : new String[]{"{\"theme\":\"system\"}", "{\"orientation\":\"system\"}", "{\"appId\":\"other.app\"}"})
+                rejected("INVALID_ARGUMENT", BridgeProtocol.ORIGIN, true, request(method, args), enabled);
+        }
+        for (String method : new String[]{"presentation.get", "presentation.set", "presentation.reset"})
+            for (String args : new String[]{"null", "[]", "true", "1", "\"dark\""})
+                rejected("INVALID_REQUEST", BridgeProtocol.ORIGIN, true, request(method, args), enabled);
     }
 
 }
