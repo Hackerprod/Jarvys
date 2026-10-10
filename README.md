@@ -31,7 +31,7 @@ This is an actively developed project with incremental, evidence-backed checkpoi
 | Physical Android acceptance | Still open for the relevant recent features. A host test, signed APK or accepted file delivery does not prove installation or phone behavior. |
 | **v74 · Contact selection** | Completed earlier delivery: 7,832 tests, SDK22 and independent three-APK audit passed; signed test APK attachment accepted. One human-selected phone/email with native exact-value approval. Calendar remains separate. [Scope](recovery/factory-contacts/README.md) |
 | **v75 · Factory calendar editor** | Latest completed delivery: 7,978 fresh tests, SDK24, exact lint and independent three-APK audit passed; signed ARM64 test APK attachment accepted. Strict ACTION_INSERT with native review; no calendar database access or automatic saving. [Scope and evidence](recovery/factory-calendar/README.md) |
-| **v76 · Private SQLite** | In development: bounded typed CRUD and atomic schema migrations, private installed persistence and ephemeral preview. SDK27, 70 native focused tests and 148+148 preflight pass. An inherited Compose fixture was corrected with 33+33 focused passes; repeated full gates and APK delivery still pending. No real-data migration or device acceptance. |
+| **v76 · Private SQLite** | Host validation complete: 8,122 fresh tests, SDK27, exact lint and independent three-APK audit passed. Typed CRUD, atomic bounded migrations, private installed storage and ephemeral preview; signed delivery pending. [Scope and evidence](recovery/factory-database/README.md) |
 | Broader Factory roadmap | Remaining F1 capabilities and F2/F3 are unfinished. Strict Factory TTS remains blocked on its recipient/consent design. |
 
 This status is a **2026-10-10 snapshot**, not a live build badge. [Pending.md](Pending.md) is the current work queue; feature-specific evidence records distinguish passing, failed, interrupted and unrun checks.
@@ -138,6 +138,8 @@ Inspect → Build unsigned APK → Review signing scope → Sign
 | Audio | Local bounded PCM16 WAV playback | Not synthesis, microphone recognition or cloud voice |
 | Browser, maps and dialer | Typed HTTPS, map and dialer launches with reviewed destinations | Dispatch does not prove page display, navigation, calling or external-task closure |
 | Contacts | One selected datum and second native approval | Host gates and independent APK audit passed; signed test APK delivered; no agenda enumeration or permission requests |
+| Calendar editor | Typed event prefill and native review | Opens an external editor; never saves automatically or grants calendar database access |
+| Private SQLite | Standalone typed CRUD, bounded atomic batches and adjacent create-table/add-nullable-column migrations | No broker or query-by-query consent; private no-backup data, ephemeral preview, no raw SQL/path/export API; physical persistence remains unverified |
 | Email/SMS editors | v73 adds typed editor launches with one recipient and reviewed fields | Host gates passed and signed test APK delivered; external apps may sync drafts; no automatic sending or delivery claim |
 
 **Not every generated app is standalone.** Local runtime features differ from brokered native capabilities. The latter require a compatible Jarvys host, exact caller/signing identity checks and native review. A generated APK's closed, zero-permission manifest does not make the host or selected third-party app permissionless or offline.
@@ -322,7 +324,8 @@ The in-app [Coding contract](app/CODING_AGENT.md) and [main-agent contract](app/
 | Provider cannot connect | Selected auth method/model, account access, endpoint compatibility and network/rate-limit errors; redact credentials from diagnostics |
 | Coding has no command tools | Full versus Play, prepared environment, effective bot tool set and per-command approval |
 | Connector exists but tools are unavailable | Enabled tools, granted service scopes, Android permissions and current account/connection state |
-| Factory native action is rejected | Declared capability, compatible host, exact latest-signed caller identity and native review state |
+| Private database operation is rejected | Declared database capability, foreground session, schema version, typed arguments and quotas; inspect state before retrying uncertain writes |
+| Brokered Factory native action is rejected | Declared capability, compatible host, exact latest-signed caller identity and native review state |
 | Interrupted action cannot be repeated | Inspect the durable receipt and actual external state; do not erase uncertainty or blindly replay |
 | HTML preview differs from expected | Authored responsive CSS/viewport, captured assets, WebView provider and the device acceptance checklist |
 | A note is absent in another chat | Memory is conversation-local unless its exact content was explicitly shared |
