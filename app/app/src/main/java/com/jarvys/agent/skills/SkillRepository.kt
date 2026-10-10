@@ -24,13 +24,14 @@ internal fun bundledSkillDirectoryNames(listing: Collection<String>): List<Strin
     .distinct()
     .sorted()
 
-data class SkillEntry(
+data class SkillEntry @JvmOverloads constructor(
     val metadata: SkillMetadata,
     val body: String,
     val source: SkillSource,
     val enabled: Boolean,
     val usageCount: Int,
     val validationError: String? = null,
+    val factoryGuidance: FactoryGuidanceBundle? = null,
 )
 
 /** Loads first-party assets and app-private Markdown skills; no remote fetch or code execution. */
@@ -193,7 +194,10 @@ class SkillRepository private constructor(context: Context) : WorkspaceStore.Ski
                     else appContext.assets.open(assetPath).use(::readBoundedUtf8)
                 val parsed = SkillMarkdownParser.parse(markdown)
                 require(directory == parsed.metadata.id) { "Bundled skill directory must match its frontmatter id" }
-                toEntry(parsed, SkillSource.BUNDLED)
+                val entry = toEntry(parsed, SkillSource.BUNDLED)
+                if (directory == SkillScopePolicy.APK_FACTORY_ID) entry.copy(
+                    factoryGuidance = FactoryGuidanceBundle.load(parsed.body) { appContext.assets.open(it) })
+                else entry
             }.getOrNull()
         }
         val creator = runCatching {

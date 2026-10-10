@@ -641,10 +641,14 @@ public final class CoreAgentLoop {
                     token.throwIfCancelled();
                     String content = rawContent;
                     boolean crewCompaction = compactor != null && compactor.isCrew();
-                    if (crewCompaction) content = compactor.retainToolOutput(rawContent, model.contextWindow(token), token);
+                    boolean completeTooLargeForCrew = crewCompaction && result.completeContentRequired
+                            && !CrewConversationCompaction.completeOutputFits(rawContent, model.contextWindow(token));
+                    if (crewCompaction && !result.completeContentRequired) {
+                        content = compactor.retainToolOutput(rawContent, model.contextWindow(token), token);
+                    }
                     transcript.remove(transcript.size() - 1);
-                    if (!crewCompaction && result.completeContentRequired && content.length() > remainingResultChars) {
-                        result = CoreToolResult.failure("Complete tool output exceeds the remaining per-turn context budget; request this large result by itself. No partial output was added.");
+                    if (result.completeContentRequired && (content.length() > remainingResultChars || completeTooLargeForCrew)) {
+                        result = CoreToolResult.failure("Complete tool output exceeds the remaining per-turn context budget or model whole-output budget; request this large result by itself. No partial output was added.");
                         content = result.content;
                     } else if (!crewCompaction && content.length() > remainingResultChars) {
                         content = remainingResultChars > 0 ? content.substring(0, remainingResultChars) + "…[truncated by per-turn budget]" : "Tool output omitted because the per-turn result budget is exhausted";

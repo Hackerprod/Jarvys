@@ -314,6 +314,126 @@ class ApkFactorySkillScopeTest {
         assertTrue(result.content.contains("not partially loaded"))
     }
 
+    @Test fun everyVersionedReferenceIsCompleteBoundedAndRetrievableThroughRealBotTools() {
+        val repo = repository()
+        val entry = factory()
+        val bundle = entry.factoryGuidance!!
+        assertEquals("factory-guidance-v78", bundle.version)
+        assertEquals(7, bundle.resources.size)
+        assertTrue(entry.body.toByteArray().size <= 8192)
+        assertTrue(bundle.resources.values.sumOf { it.toByteArray().size } <= 65536)
+        val session = "factory-references-${System.nanoTime()}"
+        val profile = CrewProfile.codingDefault()
+        val role = profile.resolveRole(profile.capabilities, profile.skillIds).withMissionAccess(com.jarvys.agent.crew.CrewMissionAccess.READ_ONLY)
+        val runtime = CoreAgentRuntime(context, session, repo.enabledForRun())
+        val empty = CoreToolRegistry(emptyList())
+        CrewManager(session, empty, { _, _ -> empty }, { _, _, _ -> error("No model") }, null).use { manager ->
+            assertEquals(com.jarvys.agent.crew.CrewMissionAccess.READ_ONLY, role.missionAccess)
+            assertTrue(role.tools.contains("read_skill"))
+            assertFalse(role.tools.contains("apk_factory"))
+            val bot = restored(manager, role)
+            val tools = runtime.createCrewBotTools(context, session, empty, bot, manager)
+            for ((name, body) in bundle.resources) {
+                assertTrue(entry.body.contains("- $name:"))
+                assertTrue(body.toByteArray().size <= 16384)
+                val result = tools.invoke("read_skill", mapOf("skill_id" to id, "resource" to name, "resource_version" to bundle.version), bot.token)
+                assertTrue(result.content, result.success)
+                assertTrue(result.completeContentRequired)
+                assertEquals("Skill $id — resource $name @ ${bundle.version}\n$body", result.content)
+            }
+            val core = CoreAgentRuntime.factoryGuidanceInstructions(role, tools, listOf(entry), 16384)
+            assertTrue(core.endsWith(entry.body))
+            assertTrue(core.contains("Read-only missions"))
+            assertFalse(tools.names().contains("apk_factory"))
+            assertThrows(IllegalStateException::class.java) {
+                CoreAgentRuntime.factoryGuidanceInstructions(role, tools, listOf(entry), 256)
+            }
+        }
+    }
+
+    @Test fun resourceArgumentsRejectUnknownPathsStaleVersionsAndWrongTypesWithoutPartialBodies() {
+        val tool = LoadSkillTool(listOf(factory()), 16384, { true }, "coding")
+        val base = mapOf<String, Any>("skill_id" to id, "resource" to "database", "resource_version" to "factory-guidance-v78")
+        val invalid = listOf(base - "resource", base - "resource_version",
+            base + ("resource_version" to "factory-guidance-v77"), base + ("resource_version" to 78),
+            base + ("resource" to 1)) + listOf("", "unknown", "../database", "/database", "references/database.md", "database\\other", "database%2fother").map { base + ("resource" to it) }
+        for (args in invalid) {
+            val result = tool.execute(args, CancellationToken.uncancellable())
+            assertFalse(args.toString(), result.success)
+            assertFalse(result.content.contains("private no-backup"))
+        }
+        val complete = tool.execute(base, CancellationToken.uncancellable())
+        val exact = LoadSkillTool(listOf(factory()), complete.content.length, { true }, "coding")
+        assertTrue(exact.execute(base, CancellationToken.uncancellable()).success)
+        val small = LoadSkillTool(listOf(factory()), complete.content.length - 1, { true }, "coding")
+        assertFalse(small.execute(base, CancellationToken.uncancellable()).success)
+        for (profile in listOf(null, "custom-coding", "Coding")) {
+            assertFalse(LoadSkillTool(listOf(factory()), 16384, { true }, profile).execute(base, CancellationToken.uncancellable()).success)
+        }
+        repository().setEnabled(id, false)
+        val revoked = LoadSkillTool(listOf(factory()), 16384, { repository().enabledForProfile("coding").any { it.metadata.id == id } }, "coding")
+        assertFalse(revoked.execute(base, CancellationToken.uncancellable()).success)
+    }
+
+    @Test fun upgradingBundledGuidancePreservesCustomizedFilesDisabledStateUsageAndProfile() {
+        val repo = repository()
+        repo.markUsed(listOf(id))
+        val count = factory().usageCount
+        repo.setEnabled(id, false)
+        val originalProfile = CrewProfileRepository(context).codingProfile().toJson().toString()
+        val customId = "custom.guidance.${System.nanoTime()}"
+        val custom = asset().replace(id, customId).replace("# APK Factory", "# PRIVATE CUSTOM GUIDANCE")
+        repo.importMarkdown(custom)
+        val override = File(context.filesDir, "skills/$id/SKILL.md")
+        override.parentFile!!.mkdirs()
+        override.writeText("PRIVATE LEGACY OVERRIDE")
+        try {
+            skillField.set(null, null)
+            val reopened = repository()
+            val updated = reopened.skills.value.single { it.metadata.id == id }
+            assertFalse(updated.enabled)
+            assertEquals(count, updated.usageCount)
+            assertEquals("factory-guidance-v78", updated.factoryGuidance!!.version)
+            assertEquals("PRIVATE LEGACY OVERRIDE", override.readText())
+            assertEquals(custom, File(context.filesDir, "skills/$customId/SKILL.md").readText())
+            assertEquals(originalProfile, CrewProfileRepository(context).codingProfile().toJson().toString())
+        } finally { override.delete(); override.parentFile!!.delete(); repository().deleteImported(customId) }
+    }
+
+    @Test fun alwaysPresentCoreDoesNotLeakIntoPrincipalCustomUnversionedOrUnselectedScopes() {
+        val entry = factory()
+        val tool = LoadSkillTool(listOf(entry), 16384, { true }, "coding")
+        val tools = CoreToolRegistry(listOf(tool))
+        val profile = CrewProfile.codingDefault()
+        val role = profile.resolveRole(profile.capabilities, profile.skillIds)
+        assertTrue(CoreAgentRuntime.factoryGuidanceInstructions(role, tools, listOf(entry), 16384).contains("Guidance version:"))
+        assertEquals("", CoreAgentRuntime.factoryGuidanceInstructions(role, tools, emptyList(), 16384))
+        assertEquals("", CoreAgentRuntime.factoryGuidanceInstructions(role, CoreToolRegistry(emptyList()), listOf(entry), 16384))
+        assertEquals("", CoreAgentRuntime.factoryGuidanceInstructions(role, tools, listOf(entry.copy(enabled = false)), 16384))
+        for (name in listOf("custom-coding", "android-use", "Coding")) {
+            val other = CrewRole(name, "Coding", "coding", "Review", listOf("read_skill"), null, "Review", 0, listOf(id), CrewProfile.WorkspaceMode.LEGACY_CHAT)
+            assertEquals("", CoreAgentRuntime.factoryGuidanceInstructions(other, tools, listOf(entry), 16384))
+        }
+        val unversioned = CrewRole("coding", "Coding", "coding", "Review", listOf("read_skill"), null, "Review", 0, listOf(id), CrewProfile.WorkspaceMode.LEGACY_CHAT)
+        assertEquals("", CoreAgentRuntime.factoryGuidanceInstructions(unversioned, tools, listOf(entry), 16384))
+        assertFalse(CoreAgentRuntime(listOf(entry), emptyList(), emptyList(), emptyList()).instructions().contains("factory-guidance-v78"))
+    }
+
+    @Test fun criticalFamilyContractsAndLanguageRemainDiscoverableWithoutDeadFilePointers() {
+        val entry = factory()
+        val modules = entry.factoryGuidance!!.resources
+        assertTrue(entry.body.contains("user's language"))
+        assertTrue(entry.body.contains("preserve exact API identifiers"))
+        assertFalse(entry.body.contains("APK_FACTORY.md"))
+        val expected = mapOf("documents-media" to listOf("providerCommitConfirmed:false", "rollbackConfirmed:false", "metadata", "audibilityConfirmed:false"),
+            "external-actions" to listOf("pageLoadConfirmed:false", "No normalization", "No secrets", "actionConfirmed:false"),
+            "contacts-calendar" to listOf("no minors/secrets", "Never press Save", "exclusive end date"),
+            "database" to listOf("rollbackConfirmed:false", "no total-disk/RAM cap", "No device durability/update proof"),
+            "presentation" to listOf("preferencesCommitted:true", "in-memory preferences", "queued", "orientationGuaranteed:false", "font scale"),
+            "lifecycle" to listOf("No step here installs", "never erase app data/keys", "unknown history blocks signing", "No installation/hardware/persistence/zero-network claims"))
+        for ((name, phrases) in expected) for (phrase in phrases) assertTrue("$name: $phrase", modules.getValue(name).contains(phrase, true))
+    }
+
     private fun restored(manager: CrewManager, role: CrewRole): CrewManager.Bot {
         val snapshot = CrewBotSnapshot("factory-skill-bot", role.id, role.name, role.name, role.colorKey,
             "Read the selected skill", "INTERRUPTED", "", "", "", role.tools, 1L, 0L)

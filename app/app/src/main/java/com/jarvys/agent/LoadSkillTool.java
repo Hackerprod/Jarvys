@@ -33,8 +33,13 @@ public final class LoadSkillTool implements CoreTool {
         this.maxBodyChars = maxBodyChars;
         Map<String, String> properties = new LinkedHashMap<>();
         properties.put("skill_id", "string");
+        if (skills.values().stream().anyMatch(skill -> skill.getFactoryGuidance() != null)) {
+            properties.put("resource", "string");
+            properties.put("resource_version", "string");
+        }
         declaration = new ToolSpec("read_skill", "jarvys/core",
-                "Load the complete body of one catalogued skill by id. Available ids: " + skills.keySet(),
+                "Load the complete body of one catalogued skill by id. Available ids: " + skills.keySet()
+                    + (properties.containsKey("resource") ? ". For Factory details, supply resource and resource_version together, exactly as listed in its core. No paths or external files." : ""),
                 "core", ToolSpec.Status.IMPLEMENTED, properties, Collections.singletonList("skill_id"));
     }
 
@@ -65,13 +70,29 @@ public final class LoadSkillTool implements CoreTool {
         if (!(rawId instanceof String)) return CoreToolResult.failure("skill_id must be a string from the available catalog");
         SkillEntry skill = skills.get(rawId);
         if (skill == null || !currentlyAvailable.test((String) rawId)) return CoreToolResult.failure("That skill is not available in this agent's scope or is no longer enabled");
-        if (skill.getBody().length() > maxBodyChars) {
+        boolean hasResource = arguments.containsKey("resource");
+        boolean hasVersion = arguments.containsKey("resource_version");
+        if (hasResource != hasVersion) return CoreToolResult.failure("resource and resource_version must be supplied together");
+        String content;
+        if (hasResource) {
+            Object resource = arguments.get("resource");
+            Object version = arguments.get("resource_version");
+            com.jarvys.agent.skills.FactoryGuidanceBundle bundle = skill.getFactoryGuidance();
+            if (!(resource instanceof String) || !(version instanceof String) || bundle == null
+                    || !bundle.getVersion().equals(version) || !bundle.getResources().containsKey(resource)) {
+                return CoreToolResult.failure("Unknown or unavailable skill resource/version; read the current core catalog. No partial resource was loaded.");
+            }
+            content = "Skill " + skill.getMetadata().getId() + " — resource " + resource
+                    + " @ " + bundle.getVersion() + "\n" + bundle.getResources().get(resource);
+        } else {
+            content = "Skill " + skill.getMetadata().getId() + " — " + skill.getMetadata().getName()
+                    + "\n" + skill.getBody();
+        }
+        if (content.length() > maxBodyChars) {
             return CoreToolResult.failure("Skill body exceeds this run's full-content budget (" + maxBodyChars
-                    + " characters); it was not partially loaded. Ask a narrower question or use another skill.");
+                    + " characters, including header); it was not partially loaded. Ask a narrower question or use another skill.");
         }
         token.throwIfCancelled();
-        String content = "Skill " + skill.getMetadata().getId() + " — " + skill.getMetadata().getName()
-                + "\n" + skill.getBody();
         return CoreToolResult.complete(content);
     }
 }

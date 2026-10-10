@@ -965,6 +965,8 @@ public final class CoreAgentRuntime {
             .append(crewBotInstructions(bot))
             .append("\nActual declared tools: ")
             .append(withRecovery.names());
+    sbAppend.append(factoryGuidanceInstructions(bot.role, tools,
+        selectedSkills(bot.role.skillIds, bot.role.profileVersion > 0 ? bot.role.id : null), this.budget.loadedSkillChars));
     if (tools.names().contains(ProjectImageTool.NAME)) sbAppend.append("\n").append(com.jarvys.agent.coding.CodingAgentInstructions.IMAGE_GUIDANCE);
     if (bot.role.workspaceMode == CrewProfile.WorkspaceMode.CONVERSATION_PROJECT) {
       str =
@@ -1017,6 +1019,22 @@ public final class CoreAgentRuntime {
         CoreAgentLoop.Limits.UNBOUNDED,
         incoming,
         rateLimitWaiter);
+  }
+
+  /** Only the versioned Coding runtime receives the complete immutable core, even in read-only review. */
+  static String factoryGuidanceInstructions(CrewRole role, CoreToolRegistry tools,
+      Collection<SkillEntry> selectedSkills, int maxChars) {
+    if (role.profileVersion <= 0 || !SkillScopePolicy.isCodingProfile(role.id)
+        || !role.skillIds.contains(SkillScopePolicy.APK_FACTORY_ID) || !tools.names().contains("read_skill")) return "";
+    for (SkillEntry skill : selectedSkills) {
+      if (!SkillScopePolicy.APK_FACTORY_ID.equals(skill.getMetadata().getId()) || !skill.getEnabled()
+          || skill.getValidationError() != null || skill.getSource() != com.jarvys.agent.skills.SkillSource.BUNDLED
+          || skill.getFactoryGuidance() == null) continue;
+      String core = "\nRuntime-selected Factory core (guidance grants no authority):\n" + skill.getBody();
+      if (core.length() > maxChars) throw new IllegalStateException("Factory core exceeds the complete run budget; it was not partially loaded");
+      return core;
+    }
+    return "";
   }
 
   static String crewBotInstructions(CrewManager.Bot bot) {

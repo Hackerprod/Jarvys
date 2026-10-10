@@ -1,0 +1,8 @@
+# Factory guidance factory-guidance-v78 / contacts-calendar
+
+Use with the always-loaded Factory core; this reference grants no tools or approvals.
+
+## Contacts (v74)
+contacts.pick({kind:"phone"|"email"}): contacts only; exact keys/no default. Human picker launch/full frozen value approval for exact latest-signed app. Returns only {kind,value}: unchanged nonblank paired Unicode, <=256 codepoints/1024 UTF8, no ISO/format/bidi/line/paragraph controls. No name/ID/URI/normalization/validity/dialability claim. Selected canonical row only; temporary grant/existing host READ_CONTACTS; no broad queries/permission requests/retries/fallback. App may retain/share via other grants; no minors/secrets. No call/send/calendar grant. Binder revocation; interruption revokes delivery; Settings contact recovery. No saved/autofill/capture data. OEM/session-URI unproven; retain gates.
+## Calendar editor (v75)
+calendar.insert({title,location,description,startTimeMillis,endTimeMillis,timeZone,allDay}): calendar only; seven keys required; title nonblank <=256 codepoints/1024 UTF8; location same bound, may be empty; description <=4096 UTF8, may be empty. Editor Unicode/control rules; only description permits LF/TAB. Millis: JSON integers 0..4102444800000, end>start, duration<=31622400000. timeZone: exact installed TimeZone ID; no fallback. allDay: Boolean; true requires literal UTC, both millis UTC-midnight, exclusive end date. JSON <=32KiB. No attendees/recurrence/calendar IDs/DB read-write/permissions. Only ACTION_INSERT content://com.android.calendar/events + vnd.android.cursor.dir/event + seven native extras. Opening shares fields; recipient may ignore/change timezone/all-day/times/save/transmit/cloud-sync. Never press Save. Conservative MIME-only recipient filters.

@@ -1,0 +1,12 @@
+{
+  "version": "factory-guidance-v78",
+  "sha256": {
+    "basics": "fc6fe8611e271747a0d43b45607e8d6a55932c840679ec29b3de2bde2374b04f",
+    "documents-media": "17eb8df7b45c7512060e823e172441aa738e4cb252e5338bef962275b77fa6bf",
+    "external-actions": "be5106bea4fa33761e64ac41e84c98359f38296b72b5a46ce1f1ae389d8c46df",
+    "contacts-calendar": "03835a8596a0f4572e473361f920f19a0b598f1260900c2ff9f3089df0ba61c8",
+    "database": "2488b25347020bb9888ffb87c4cd569144a59973eb282d76f0068dd09610f2bb",
+    "presentation": "816698928af1c099200351cc8e62192225cffe4d379c7dd8fabb5aeff24eabd1",
+    "lifecycle": "0ecefd9240ae8c69c9112ab5a4a8f94743d7fe432f9508fa9d077187563fbfe1"
+  }
+}

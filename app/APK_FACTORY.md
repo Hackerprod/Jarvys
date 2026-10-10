@@ -770,3 +770,14 @@ rotation, physical preference durability or ARM64 acceptance.
 
 Adaptive icons/resources, TTS/voice, sensors, biometrics, backup, local UI and F2/F3 remain
 pending. This bounded API does not complete those roadmaps or relax their acceptance gates.
+
+## Versioned agent guidance (v78 maintenance)
+
+The reserved Factory skill is delivered as an always-present Coding core plus seven immutable
+APK references. `read_skill` keeps its `skill_id` form and accepts the optional paired
+`resource`/`resource_version` for complete, bounded reference retrieval. Read the core's exact
+catalog first; files are not assumed to exist in the project workspace. Unknown/stale names,
+invalid resource assets or insufficient whole-content budget fail without a partial load.
+The core remains present through transcript compaction and respects read-only missions.
+Installed custom skills, disabled/usage state and profile migration are unchanged.
+This changes guidance delivery only; the capability/method catalog above remains v77.

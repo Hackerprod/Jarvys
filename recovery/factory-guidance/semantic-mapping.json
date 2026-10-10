@@ -1,0 +1,113 @@
+{
+  "baseline": "7dafa84f820845df654583fc8cf9ae3ebfcb95cf",
+  "sections": [
+    {
+      "v77_section": "# APK Factory",
+      "module": "basics",
+      "v77_sha256": "b72fb3dafe178f0ee2491ee2e540ce0a37223e0b2af776a3dab0f26406258fae",
+      "change": "verbatim"
+    },
+    {
+      "v77_section": "## Contract",
+      "module": "basics",
+      "v77_sha256": "6a35b37672bfcd32a53cb49b03852a1072128f770c43fbdc1779ade21e67204d",
+      "change": "verbatim"
+    },
+    {
+      "v77_section": "## Capabilities",
+      "module": "basics",
+      "v77_sha256": "f9d7d640a930876e7701906c12dcfcbe50f2599e02d57bf84f407135ca10b79a",
+      "change": "verbatim"
+    },
+    {
+      "v77_section": "## Documents (v67)",
+      "module": "documents-media",
+      "v77_sha256": "6256e36af756a2c9823ac68ae7e1919981e636ffa882c8a32d9670b1097270a1",
+      "change": "verbatim"
+    },
+    {
+      "v77_section": "## Photos (v69)",
+      "module": "documents-media",
+      "v77_sha256": "54e80a98e0d380e01ab6da1e8768232bfa58bedd4ae189b51062cc334da2c271",
+      "change": "verbatim"
+    },
+    {
+      "v77_section": "## External v71\u2013v75",
+      "module": "external-actions",
+      "v77_sha256": "b9b96091dcbce22f124fcc5428c0c143786b796b4098219e066f42d2d589e30d",
+      "change": "verbatim"
+    },
+    {
+      "v77_section": "## Browser (v71)",
+      "module": "external-actions",
+      "v77_sha256": "b676280e089b73e97cefce49b5684b9e13449c5062b1cc5b52750da4a9aa14c5",
+      "change": "verbatim"
+    },
+    {
+      "v77_section": "## Maps/dialer (v72)",
+      "module": "external-actions",
+      "v77_sha256": "238190a359895ddcafe32c2b67f15fea961c21c5bf33ddf2712087e38113944b",
+      "change": "verbatim"
+    },
+    {
+      "v77_section": "## Editors (v73)",
+      "module": "external-actions",
+      "v77_sha256": "4fef03470449672dc897d4216900f27ad27672fb8d29ff3f283307f07364f7ac",
+      "change": "F2/F3 remain pending and unavailable wording clarified"
+    },
+    {
+      "v77_section": "## Contacts (v74)",
+      "module": "contacts-calendar",
+      "v77_sha256": "95757a9c454abbbdc6efe6d843845c819092251789cac89358be1c2782e1adb3",
+      "change": "verbatim"
+    },
+    {
+      "v77_section": "## Calendar editor (v75)",
+      "module": "contacts-calendar",
+      "v77_sha256": "e0860f570400897e287e793d82dfa88a53d26cbcccb90b100c26c97ecd013cbc",
+      "change": "verbatim"
+    },
+    {
+      "v77_section": "## Database (v76)",
+      "module": "database",
+      "v77_sha256": "21d2dd0eccf1f69f64822796e3e76a5d247a8601c66ffe87aa8eeaff7dcd43e7",
+      "change": "verbatim"
+    },
+    {
+      "v77_section": "## Presentation v77",
+      "module": "presentation",
+      "v77_sha256": "e3c89a4d83db542e3e8a7356fcb96c5bf8725aca0e70d7b5101604dad4ff4a21",
+      "change": "replace inaccessible pointer with complete v77 presentation contract"
+    },
+    {
+      "v77_section": "## Project/build/sign",
+      "module": "lifecycle",
+      "v77_sha256": "febc9c1e90601eed492960886381c7f63350d8bef8fb13bc338e09325144b1a2",
+      "change": "verbatim"
+    },
+    {
+      "v77_section": "## Handoff/manifest",
+      "module": "lifecycle",
+      "v77_sha256": "2ba8be1560622b12fbbde07a3e4db380337752c9b3f590ef788dca07ecca49d0",
+      "change": "verbatim"
+    },
+    {
+      "v77_section": "## Recoverable keys (F0b)",
+      "module": "lifecycle",
+      "v77_sha256": "4ce6d43131384e3c234effcb6649416492451ab75d710ea4f3328057b29ad038",
+      "change": "verbatim"
+    },
+    {
+      "v77_section": "## Preview/tests (F0c)",
+      "module": "lifecycle",
+      "v77_sha256": "006f5c276eb59a4e8606ff0532a19a6db74237f85d97b34749ff821558f1e425",
+      "change": "verbatim"
+    },
+    {
+      "v77_section": "## Installation (F0c)",
+      "module": "lifecycle",
+      "v77_sha256": "83cc8479b8afcc89bb1559844715d3705e91d01e55c0642a48827fec9ef9f4c5",
+      "change": "verbatim"
+    }
+  ]
+}

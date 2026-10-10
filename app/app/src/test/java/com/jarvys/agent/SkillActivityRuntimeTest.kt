@@ -33,7 +33,7 @@ class SkillActivityRuntimeTest {
         val events=run(cancel=true);assertEquals("tool_interrupted",events.last().stage);assertFalse(events.any { it.stage=="tool_result" })
     }
     @Test fun secondCompleteSkillExceedingRemainingContextBudgetIsNotLoaded() {
-        val events=run(skill=skill("x".repeat(16000)),calls=2)
+        val events=run(skill=skill("x".repeat(16000)),max=CorePromptBudget.standard().loadedSkillChars,calls=2)
         assertEquals(listOf("tool_call","tool_result","tool_call","tool_error"),events.map { it.stage })
         assertTrue(events.last().detail.contains("remaining per-turn context budget"))
     }

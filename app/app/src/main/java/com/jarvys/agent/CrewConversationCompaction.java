@@ -43,9 +43,13 @@ final class CrewConversationCompaction {
         this.artifacts = artifacts;
     }
 
+    static boolean completeOutputFits(String content, int window) {
+        return ConversationCompactionPolicy.estimateTokens(content) <= Math.max(1, CrewContextArtifacts.pageChars(window) / 4);
+    }
+
     String retainToolOutput(String content, int window, CancellationToken token) {
         int chars = CrewContextArtifacts.pageChars(window);
-        if (ConversationCompactionPolicy.estimateTokens(content) <= Math.max(1, chars / 4)) {
+        if (completeOutputFits(content, window)) {
             return content;
         }
         String id = this.artifacts.save(content, token);
