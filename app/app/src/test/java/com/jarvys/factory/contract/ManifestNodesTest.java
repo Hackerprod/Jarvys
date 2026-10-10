@@ -52,13 +52,14 @@ public class ManifestNodesTest {
         assertEquals(7, current.nodes.size()); assertEquals(-1,current.nodes.get(0).parentIndex);
         assertEquals(4,current.nodes.get(6).parentIndex);
     }
-    @Test public void all32768SelectionsEncodeOnlyTheApprovedDocumentQueries() throws Exception {
+    @Test public void all65536SelectionsEncodeOnlyTheApprovedDocumentQueries() throws Exception {
+        assertEquals(16, CapabilityCatalog.NAMES.size());
         byte[] first = ManifestXml.encode(plan(Collections.emptyList()));
         for (int mask=0; mask<(1 << CapabilityCatalog.NAMES.size()); mask++) {
             List<String> caps = new ArrayList<>();
             for (int bit=0; bit<CapabilityCatalog.NAMES.size(); bit++) if ((mask & (1<<bit)) != 0) caps.add(CapabilityCatalog.NAMES.get(bit));
             ManifestPlan p = plan(caps);
-            boolean documents = caps.contains("documents") || caps.contains("browser") || caps.contains("maps") || caps.contains("phone") || caps.contains("email") || caps.contains("sms") || caps.contains("contacts");
+            boolean documents = caps.contains("documents") || caps.contains("browser") || caps.contains("maps") || caps.contains("phone") || caps.contains("email") || caps.contains("sms") || caps.contains("contacts") || caps.contains("calendar");
             if (!documents) assertArrayEquals(first, ManifestXml.encode(p));
             ManifestAudit.read(ManifestXml.encode(p)).verify(p);
             assertEquals(documents ? 1 : 0, CapabilityCatalog.manifestContributions(caps).size());
