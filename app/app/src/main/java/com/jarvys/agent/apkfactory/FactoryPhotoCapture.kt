@@ -62,13 +62,14 @@ internal object FactoryPhotoCapture {
         var bytes: ByteArray? = null
         try {
             val fd = read.fileDescriptor
-            Os.fcntlInt(fd, OsConstants.F_SETFL, Os.fcntlInt(fd, OsConstants.F_GETFL, 0) or OsConstants.O_NONBLOCK)
+            prepareDescriptor(fd, privatePipe = true)
             val output = ByteArrayOutputStream()
             val buffer = ByteArray(32 * 1024)
             while (true) {
                 check(!capture.cancelled && SystemClock.elapsedRealtime() < capture.deadline) { "Camera output expired" }
                 val poll = StructPollfd().apply { this.fd = fd; events = OsConstants.POLLIN.toShort() }
                 if (Os.poll(arrayOf(poll), 100) == 0) continue
+                check(poll.revents.toInt() and (OsConstants.POLLERR or OsConstants.POLLNVAL) == 0) { "Photo descriptor failed" }
                 val count = try { Os.read(fd, buffer, 0, minOf(buffer.size, MAX_BYTES - output.size() + 1)) }
                     catch (error: android.system.ErrnoException) { if (error.errno == OsConstants.EAGAIN) continue else throw error }
                 if (count == 0) break
@@ -112,14 +113,26 @@ internal object FactoryPhotoCapture {
         }
         if (now) action()
     }
+    /** Public fcntl is API30+. Older camera pipes have exactly one private reader, so no
+     * other reader can consume poll readiness. Never apply that assumption to provider pipes.
+     * Even modern provider FDs can share mutable status flags; their I/O is not forcibly timed out.
+     */
+    internal fun prepareDescriptor(fd: java.io.FileDescriptor, privatePipe: Boolean) {
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            Os.fcntlInt(fd, OsConstants.F_SETFL, Os.fcntlInt(fd, OsConstants.F_GETFL, 0) or OsConstants.O_NONBLOCK)
+        } else if (!privatePipe) {
+            check(OsConstants.S_ISREG(Os.fstat(fd).st_mode)) { "Streaming photo providers require Android 11 or newer" }
+        }
+    }
     fun readDescriptor(descriptor: ParcelFileDescriptor, deadline: Long, allowed: () -> Unit): Image {
         val fd = descriptor.fileDescriptor
-        Os.fcntlInt(fd, OsConstants.F_SETFL, Os.fcntlInt(fd, OsConstants.F_GETFL, 0) or OsConstants.O_NONBLOCK)
+        prepareDescriptor(fd, privatePipe = false)
         val output = ByteArrayOutputStream(); val buffer = ByteArray(32 * 1024)
         while (true) {
             allowed(); check(SystemClock.elapsedRealtime() < deadline) { "Photo selection expired" }
             val poll = StructPollfd().apply { this.fd = fd; events = OsConstants.POLLIN.toShort() }
             if (Os.poll(arrayOf(poll), 100) == 0) continue
+            check(poll.revents.toInt() and (OsConstants.POLLERR or OsConstants.POLLNVAL) == 0) { "Photo descriptor failed" }
             val count = try { Os.read(fd, buffer, 0, minOf(buffer.size, MAX_BYTES - output.size() + 1)) }
                 catch (error: android.system.ErrnoException) { if (error.errno == OsConstants.EAGAIN) continue else throw error }
             allowed()

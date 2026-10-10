@@ -13,7 +13,7 @@ import java.security.MessageDigest
 import java.util.UUID
 
 /** One human-owned photo interaction. The journal never contains a photo URI or photo bytes. */
-internal class FactoryPhotoCoordinator(private val context: Context, private val verify: (String) -> FactoryDocumentCoordinator.Proof = { FactoryDocumentCoordinator.verifyInstalled(context, it, setOf("documents", "photos")) }) {
+internal class FactoryPhotoCoordinator(context: Context, private val verify: (String) -> FactoryDocumentCoordinator.Proof = { FactoryDocumentCoordinator.verifyInstalled(context.applicationContext, it, setOf("documents", "photos")) }) {
     data class Request(val operation: String, val nonce: String) {
         companion object {
             fun parse(intent: Intent): Request {
@@ -29,6 +29,7 @@ internal class FactoryPhotoCoordinator(private val context: Context, private val
             }
         }
     }
+    private val packageManager = context.applicationContext.packageManager
     private val journal = AtomicFile(File(context.noBackupFilesDir, "factory-photos/interaction.json"))
     private var lease: MemoryUiAutomationGuard.Lease? = null
     private var owner: String? = null
@@ -108,7 +109,7 @@ internal class FactoryPhotoCoordinator(private val context: Context, private val
     }
     fun transferVerifier(token: String, human: () -> Unit): (Int) -> Boolean {
         val pinned = verified(token, human)
-        val pm = context.packageManager
+        val pm = packageManager
         val uid = pm.getApplicationInfo(pinned.appId, 0).uid
         return { caller ->
             caller == uid && pm.getPackagesForUid(uid)?.toList() == listOf(pinned.appId) &&

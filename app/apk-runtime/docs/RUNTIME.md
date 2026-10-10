@@ -221,3 +221,9 @@ seekable file: incompatible camera handlers fail and no thumbnail fallback occur
 photo picker or SAF fallback must exist. Jarvys does not autosend or save to gallery, but the
 external camera/cloud provider can keep or transfer its own copies. No broad camera/gallery
 permission is added. Physical acceptance and interrupted external UI recovery remain required.
+
+Android 24–29 accepts only regular file descriptors from photo providers; shared streaming
+providers require Android 11/API30+. The private camera pipe remains supported from API24
+with its sole host-owned reader. Provider I/O may remain blocked despite cancellation or
+nonblocking setup (a provider may share descriptor flags). Worker and cross-broker admission
+stay held until actual cleanup; no forced provider-read termination is promised.

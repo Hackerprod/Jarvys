@@ -226,10 +226,13 @@ No user photo, real camera or device is accessed during synthetic host validatio
 
 Full encoded input is frozen and bounded to 8 MiB before validation. JPEG/PNG only, at most
 4096 pixels per side and 12 megapixels; decoded allocation is bounded and validated. Camera
-output requires both RESULT_OK and clean reliable-pipe EOF. Deadline-aware nonblocking
-read/poll prevents an endless pipe from retaining authority. Some provider-open Binder calls
-or storage/kernel operations may be uninterruptible; their single worker and admission stay
-occupied until actual termination instead of spawning retries. This is an availability limit.
+output requires both RESULT_OK and clean reliable-pipe EOF. The private camera pipe has one host-owned reader; timed polling enforces its deadline without
+relying on API30-only descriptor controls on older Android. On API24–29, selected provider
+descriptors must be regular files; shared streaming descriptors are explicitly unavailable.
+API30+ uses public nonblocking controls, but a provider may share and change descriptor status
+flags. Provider-open/read Binder, storage/proxy or kernel operations may be uninterruptible;
+the single worker and cross-broker admission remain occupied until actual termination instead
+of spawning retries. No forced provider-read timeout is promised. This is an availability limit.
 
 Native Binder transports immutable chunks with length/hash/EOF checks into opaque temporary
 document read handles. Snapshot acquisition is charged to the cumulative session quota;

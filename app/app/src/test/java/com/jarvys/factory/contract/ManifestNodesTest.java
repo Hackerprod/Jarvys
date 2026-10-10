@@ -52,11 +52,11 @@ public class ManifestNodesTest {
         assertEquals(7, current.nodes.size()); assertEquals(-1,current.nodes.get(0).parentIndex);
         assertEquals(4,current.nodes.get(6).parentIndex);
     }
-    @Test public void all128SelectionsEncodeOnlyTheApprovedDocumentQueries() throws Exception {
+    @Test public void all256SelectionsEncodeOnlyTheApprovedDocumentQueries() throws Exception {
         byte[] first = ManifestXml.encode(plan(Collections.emptyList()));
-        for (int mask=0; mask<128; mask++) {
+        for (int mask=0; mask<256; mask++) {
             List<String> caps = new ArrayList<>();
-            for (int bit=0; bit<7; bit++) if ((mask & (1<<bit)) != 0) caps.add(CapabilityCatalog.NAMES.get(bit));
+            for (int bit=0; bit<8; bit++) if ((mask & (1<<bit)) != 0) caps.add(CapabilityCatalog.NAMES.get(bit));
             ManifestPlan p = plan(caps);
             boolean documents = caps.contains("documents");
             if (!documents) assertArrayEquals(first, ManifestXml.encode(p));

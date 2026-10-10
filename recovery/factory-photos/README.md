@@ -35,3 +35,17 @@ recovery and final ownership paths. These are not physical pipe/camera acceptanc
 Full six-module aggregate, exact lint comparison, three-APK audit and separate existing-D7
 signing/native delivery remain pending. Code and Pending are backed up before these longer
 gates. Detailed host reports, synthetic execution logs and artifacts stay outside this repository.
+
+Initial lint is retained as a failed release gate: Full 318/Play 305, each with four new API30
+fcntl diagnostics and one Context-singleton warning; runtime 3/core 2 remained unchanged.
+The repair guards public fcntl behind API30, uses the private camera pipe's sole-reader
+poll/read invariant on API24–29, and restricts older selected-provider descriptors to regular
+files. Shared descriptor flags and uninterruptible provider I/O remain explicitly disclosed.
+The singleton now retains application PackageManager instead of a Context field. No lint or
+deprecation suppression was added.
+
+The repaired host source passes 81 focused tests, including 19 API24/29/30 compatibility cases
+and cross-broker pending ownership. Seven guarded JVMs report zero blocked network attempts.
+The missing API30 Robolectric SDK was prewarmed from pinned Maven Central bytes with published
+SHA-512 verification; test JVMs remain offline. The fourth manifest/catalog exhaustive test
+now covers all 256 subsets. Fresh full aggregate/lint/build/APK audit still remain pending.
