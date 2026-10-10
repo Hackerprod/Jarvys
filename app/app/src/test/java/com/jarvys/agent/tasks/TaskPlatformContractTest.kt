@@ -70,7 +70,15 @@ class TaskPlatformContractTest {
         assertEquals(1, Regex("TaskScheduler\\.rearm").findAll(receiveBody).count())
         assertFalse(receiveBody.contains("TaskTickEngine"))
         val fullManifest = File(root, "app/src/full/AndroidManifest.xml").readText()
-        assertEquals(3, Regex("<uses-permission").findAll(fullManifest).count())
+        val fullPermissions = DocumentBuilderFactory.newInstance().newDocumentBuilder()
+            .parse(fullManifest.byteInputStream()).getElementsByTagName("uses-permission")
+        assertEquals(setOf("android.permission.READ_SMS", "android.permission.SEND_SMS",
+            "android.permission.READ_CALL_LOG", "android.permission.REQUEST_INSTALL_PACKAGES"),
+            (0 until fullPermissions.length).map { fullPermissions.item(it).attributes.getNamedItem("android:name").nodeValue }.toSet())
+        val installReceiver = (0 until receivers.length).map { receivers.item(it) }
+            .single { it.attributes.getNamedItem("android:name")?.nodeValue == "com.jarvys.agent.apkfactory.FactoryInstallReceiver" }
+        assertEquals("false", installReceiver.attributes.getNamedItem("android:exported")?.nodeValue)
+        assertEquals(0, (installReceiver as org.w3c.dom.Element).getElementsByTagName("intent-filter").length)
     }
 
     @Test fun scheduledTaskPromptAndNotificationResourcesHaveSpanishParity() {

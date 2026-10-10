@@ -246,6 +246,18 @@ class FactoryInstallCoordinatorTest {
         assertEquals("failed_before_commit", fixture.state())
     }
 
+    @Test fun foregroundLostDuringFinalValidationCannotDispatchCommit() {
+        fixture.signed()
+        var foreground = true
+        fixture.coordinator.prepare(fixture.binding, fixture.bytes, {}, fixture.token, finalCheck = {
+            foreground = false
+        })
+        fails { fixture.coordinator.install { check(foreground) } }
+        assertEquals(0, fixture.backend.commits)
+        assertEquals(1, fixture.backend.abandons)
+        assertEquals("failed_before_commit", fixture.state())
+    }
+
     @Test fun sourcePermissionRevokedWhileStagingNeverCommits() {
         fixture.signed(); fixture.prepare()
         fixture.backend.afterWrite = { fixture.backend.allowed = false }

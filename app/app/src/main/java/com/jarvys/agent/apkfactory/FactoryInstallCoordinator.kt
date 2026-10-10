@@ -176,6 +176,7 @@ internal class FactoryInstallCoordinator(
                 record.put("state", "committing"); save(record)
                 humanCheck()
                 finalValidation?.invoke() ?: error("Installation authorization expired")
+                humanCheck()
                 commitInvoked = true
                 backend.commit(id, record.getString("nonce"))
                 validation = null; finalValidation = null

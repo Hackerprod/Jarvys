@@ -74,6 +74,7 @@ class ConnectorManifestTest {
             "android.permission.ACCESS_FINE_LOCATION",
         )
         val fullOnly = setOf(
+            "android.permission.REQUEST_INSTALL_PACKAGES",
             "android.permission.READ_SMS",
             "android.permission.SEND_SMS",
             "android.permission.READ_CALL_LOG",
@@ -82,6 +83,7 @@ class ConnectorManifestTest {
         assertEquals("Unexpected uses-permission for ${BuildConfig.FLAVOR}", expected, declared)
 
         val forbidden = setOf(
+            "android.permission.INSTALL_PACKAGES",
             "android.permission.RECEIVE_SMS", "android.permission.RECEIVE_MMS",
             "android.permission.RECEIVE_WAP_PUSH", "android.permission.WRITE_SMS",
             "android.permission.WRITE_CALL_LOG", "android.permission.PROCESS_OUTGOING_CALLS",
