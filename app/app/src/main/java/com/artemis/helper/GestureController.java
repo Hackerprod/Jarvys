@@ -1,5 +1,7 @@
 package com.artemis.helper;
 
+import com.jarvys.agent.MemoryUiAutomationGuard;
+
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.GestureDescription;
 import android.content.ClipData;
@@ -47,11 +49,13 @@ public final class GestureController {
     }
 
     public static boolean doubleTap(AccessibilityService service, float x, float y, long timeoutMs) {
-        if (!tap(service, x, y, timeoutMs)) return false;
+        final long epoch = MemoryUiAutomationGuard.captureAutomationEpoch();
+        ActionGate gate = action -> MemoryUiAutomationGuard.runAutomated(epoch, action);
+        if (!tap(service, x, y, 60L, timeoutMs, gate)) return false;
         try {
             Thread.sleep(100L);
         } catch (InterruptedException ignored) {}
-        return tap(service, x, y, timeoutMs);
+        return tap(service, x, y, 60L, timeoutMs, gate);
     }
 
     public static boolean longPress(AccessibilityService service, float x, float y, long durationMs, long timeoutMs) {
@@ -100,6 +104,7 @@ public final class GestureController {
      * IME does, which is the contract the host's send_text has always had.
      */
     public static boolean setText(AccessibilityService service, String text, boolean append) {
+        final long automationEpoch = MemoryUiAutomationGuard.captureAutomationEpoch();
         AccessibilityNodeInfo inputNode = HierarchyDumper.findInputNode(service);
         if (inputNode == null) {
             Log.w(TAG, "No editable/focused input node found for setText");
@@ -121,7 +126,10 @@ public final class GestureController {
             }
             Bundle args = new Bundle();
             args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value);
-            return inputNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
+            final boolean[] result = {false};
+            boolean allowed = MemoryUiAutomationGuard.runAutomated(automationEpoch,
+                    () -> result[0] = inputNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args));
+            return allowed && result[0];
         } catch (Throwable t) {
             Log.w(TAG, "performAction ACTION_SET_TEXT failed", t);
             return false;
@@ -135,6 +143,7 @@ public final class GestureController {
     }
 
     public static boolean performGlobalAction(AccessibilityService service, String actionName) {
+        final long automationEpoch = MemoryUiAutomationGuard.captureAutomationEpoch();
         if (actionName == null) return false;
         int actionId;
         String lower = actionName.toLowerCase();
@@ -177,7 +186,10 @@ public final class GestureController {
             default:
                 return false;
         }
-        return service.performGlobalAction(actionId);
+        final boolean[] result = {false};
+        boolean allowed = MemoryUiAutomationGuard.runAutomated(automationEpoch,
+                () -> result[0] = service.performGlobalAction(actionId));
+        return allowed && result[0];
     }
 
     private static boolean dispatchSynchronous(
@@ -194,6 +206,7 @@ public final class GestureController {
             long timeoutMs,
             final ActionGate gate
     ) {
+        final long automationEpoch = MemoryUiAutomationGuard.captureAutomationEpoch();
         final CountDownLatch latch = new CountDownLatch(1);
         final AtomicBoolean result = new AtomicBoolean(false);
 
@@ -203,25 +216,30 @@ public final class GestureController {
                 Runnable dispatch = new Runnable() {
                     @Override
                     public void run() {
+                        MemoryUiAutomationGuard.Action active = MemoryUiAutomationGuard.beginAsyncAction(automationEpoch);
                         try {
                             boolean accepted = service.dispatchGesture(gesture, new AccessibilityService.GestureResultCallback() {
                         @Override
                         public void onCompleted(GestureDescription gestureDescription) {
-                            result.set(true);
+                            active.close();
+                            result.set(MemoryUiAutomationGuard.isAutomationEpochValid(automationEpoch));
                             latch.countDown();
                         }
 
                         @Override
                         public void onCancelled(GestureDescription gestureDescription) {
+                            active.close();
                             result.set(false);
                             latch.countDown();
                         }
                             }, null);
                             if (!accepted) {
+                                active.close();
                                 result.set(false);
                                 latch.countDown();
                             }
                         } catch (Throwable t) {
+                            active.close();
                             Log.w(TAG, "dispatchGesture threw exception", t);
                             result.set(false);
                             latch.countDown();
@@ -229,7 +247,10 @@ public final class GestureController {
                     }
                 };
                 try {
-                    boolean allowed = gate == null ? runUngated(dispatch) : gate.runIfAllowed(dispatch);
+                    final AtomicBoolean guardAllowed = new AtomicBoolean(false);
+                    Runnable guarded = () -> guardAllowed.set(MemoryUiAutomationGuard.runAutomated(automationEpoch, dispatch));
+                    boolean allowed = (gate == null ? runUngated(guarded) : gate.runIfAllowed(guarded))
+                            && guardAllowed.get();
                     if (!allowed) {
                         result.set(false);
                         latch.countDown();
@@ -261,17 +282,20 @@ public final class GestureController {
      * set the clip here, then KEYCODE_PASTE over adb.
      */
     public static boolean setClipboard(final AccessibilityService service, final String text) {
+        final long automationEpoch = MemoryUiAutomationGuard.captureAutomationEpoch();
         final CountDownLatch latch = new CountDownLatch(1);
         final AtomicBoolean ok = new AtomicBoolean(false);
         MAIN_HANDLER.post(new Runnable() {
             @Override
             public void run() {
                 try {
-                    ClipboardManager cm = (ClipboardManager) service.getSystemService(Context.CLIPBOARD_SERVICE);
-                    if (cm != null) {
-                        cm.setPrimaryClip(ClipData.newPlainText("artemis", text == null ? "" : text));
-                        ok.set(true);
-                    }
+                    MemoryUiAutomationGuard.runAutomated(automationEpoch, () -> {
+                        ClipboardManager cm = (ClipboardManager) service.getSystemService(Context.CLIPBOARD_SERVICE);
+                        if (cm != null) {
+                            cm.setPrimaryClip(ClipData.newPlainText("artemis", text == null ? "" : text));
+                            ok.set(true);
+                        }
+                    });
                 } catch (Throwable t) {
                     Log.w(TAG, "setClipboard failed: " + t.getMessage());
                 } finally {

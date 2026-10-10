@@ -39,7 +39,7 @@ public final class MemoryReflectionCoordinator {
         if (MemoryReflectionRuntime.isAnyRunning()) return false;
         MemoryReflectionPreferences preferences = new MemoryReflectionPreferences(app);
         LocalRunStore conversation = new LocalRunStore(app);
-        MemoryStore memory = new MemoryStore(app);
+        MemoryStore memory = new MemoryStore(app).forConversation(sessionId);
         boolean chatWithoutMemory = app.getSharedPreferences("jarvys_chat", Context.MODE_PRIVATE)
                 .getBoolean(MemoryUiLogic.INSTANCE.sessionMemoryDisabledKey(sessionId), false);
         if (!memory.isEnabled() || chatWithoutMemory || !preferences.enabled()) {
@@ -78,7 +78,7 @@ public final class MemoryReflectionCoordinator {
         Context app = context.getApplicationContext();
         MemoryReflectionPreferences preferences = new MemoryReflectionPreferences(app);
         LocalRunStore conversation = new LocalRunStore(app);
-        MemoryStore memory = new MemoryStore(app);
+        MemoryStore memory = new MemoryStore(app).forConversation(sessionId);
         token.throwIfCancelled();
         if (!memory.isEnabled()) {
             if (!manual) conversation.advanceReflectionCheckpoint(sessionId, "memory disabled", throughMessageId);

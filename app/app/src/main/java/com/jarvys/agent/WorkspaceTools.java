@@ -702,8 +702,8 @@ public final class WorkspaceTools {
 
   public static String memoryZoneNote(WorkspaceStore workspace) {
     if (workspace.memoryEnabled()) {
-      return " The global user memory is available at absolute path /memory/ through these file"
-          + " tools; use its indexes to discover details.";
+      return " This conversation’s private memory is available at absolute path /memory/ through these file"
+          + " tools; use its indexes to discover details. Shared personal notes are read-only and require native user approval. Never infer permission to share project or task context.";
     }
     return "";
   }

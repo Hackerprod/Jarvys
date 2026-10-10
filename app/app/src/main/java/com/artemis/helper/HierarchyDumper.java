@@ -1,5 +1,7 @@
 package com.artemis.helper;
 
+import com.jarvys.agent.MemoryUiAutomationGuard;
+
 import android.accessibilityservice.AccessibilityService;
 import android.graphics.Bitmap;
 import android.graphics.ColorSpace;
@@ -27,6 +29,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -114,6 +117,13 @@ public final class HierarchyDumper {
      * Dumps the hierarchy as a JSON response containing the requested representations.
      */
     public static JSONObject dump(AccessibilityService service, DumpOptions options) {
+        long epoch = MemoryUiAutomationGuard.captureAutomationEpoch();
+        JSONObject result = dumpUnchecked(service, options);
+        MemoryUiAutomationGuard.requireAutomationEpoch(epoch);
+        return result;
+    }
+
+    private static JSONObject dumpUnchecked(AccessibilityService service, DumpOptions options) {
         long startTime = System.currentTimeMillis();
         JSONObject result = new JSONObject();
 
@@ -191,7 +201,11 @@ public final class HierarchyDumper {
             final AtomicReference<Bitmap> bitmapRef,
             final AtomicInteger errorRef,
             final CountDownLatch latch,
-            final boolean allowRetry) {
+            final boolean allowRetry, final long epoch, final AtomicBoolean accepting) {
+        if (!accepting.get() || !MemoryUiAutomationGuard.isAutomationEpochValid(epoch)) {
+            latch.countDown();
+            return;
+        }
         try {
             service.takeScreenshot(
                     Display.DEFAULT_DISPLAY,
@@ -199,19 +213,27 @@ public final class HierarchyDumper {
                     new AccessibilityService.TakeScreenshotCallback() {
                         @Override
                         public void onSuccess(AccessibilityService.ScreenshotResult screenshotResult) {
+                            HardwareBuffer buffer = screenshotResult.getHardwareBuffer();
+                            Bitmap software = null;
                             try {
-                                HardwareBuffer buffer = screenshotResult.getHardwareBuffer();
+                                if (!accepting.get() || !MemoryUiAutomationGuard.isAutomationEpochValid(epoch)) return;
                                 ColorSpace colorSpace = screenshotResult.getColorSpace();
-                                Bitmap hwBitmap = Bitmap.wrapHardwareBuffer(buffer, colorSpace);
-                                if (hwBitmap != null) {
-                                    Bitmap swBitmap = hwBitmap.copy(Bitmap.Config.ARGB_8888, false);
-                                    hwBitmap.recycle();
-                                    buffer.close();
-                                    bitmapRef.set(swBitmap);
+                                Bitmap hardware = Bitmap.wrapHardwareBuffer(buffer, colorSpace);
+                                if (hardware != null) {
+                                    try { software = hardware.copy(Bitmap.Config.ARGB_8888, false); }
+                                    finally { hardware.recycle(); }
+                                }
+                                synchronized (bitmapRef) {
+                                    if (accepting.get() && MemoryUiAutomationGuard.isAutomationEpochValid(epoch)) {
+                                        bitmapRef.set(software);
+                                        software = null;
+                                    }
                                 }
                             } catch (Throwable t) {
                                 Log.w(TAG, "Error copying screenshot buffer", t);
                             } finally {
+                                if (software != null) software.recycle();
+                                buffer.close();
                                 latch.countDown();
                             }
                         }
@@ -229,7 +251,7 @@ public final class HierarchyDumper {
                                         } catch (InterruptedException e) {
                                             Thread.currentThread().interrupt();
                                         }
-                                        requestScreenshot(service, bitmapRef, errorRef, latch, false);
+                                        requestScreenshot(service, bitmapRef, errorRef, latch, false, epoch, accepting);
                                     }
                                 });
                                 return;
@@ -256,64 +278,58 @@ public final class HierarchyDumper {
      * normalizes coordinates against the very image it is looking at.
      */
     public static JSONObject dumpAtomicSnapshot(AccessibilityService service, DumpOptions options) {
+        final long epoch = MemoryUiAutomationGuard.captureAutomationEpoch();
         long startTime = System.currentTimeMillis();
-
-        // 1. Trigger hardware screenshot asynchronously. The framework rate-limits
-        //    takeScreenshot to one call per ~333 ms (ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT = 3);
-        //    back-to-back observations therefore wait out the interval and retry once
-        //    here, which is far cheaper than the host falling back to adb screencap.
         final AtomicReference<Bitmap> bitmapRef = new AtomicReference<>(null);
         final AtomicInteger errorRef = new AtomicInteger(0);
+        final AtomicBoolean accepting = new AtomicBoolean(true);
         final CountDownLatch screenshotLatch = new CountDownLatch(1);
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            requestScreenshot(service, bitmapRef, errorRef, screenshotLatch, true);
-        } else {
-            screenshotLatch.countDown();
-        }
-
-        // 2. Concurrently capture the UI hierarchy
-        JSONObject dumpData = dump(service, options);
-
-        // 3. Wait for the screenshot (one retry after the rate-limit interval fits inside)
+        Bitmap bitmap = null;
         try {
-            screenshotLatch.await(2500L, TimeUnit.MILLISECONDS);
-        } catch (InterruptedException ignored) {}
-
-        Bitmap bitmap = bitmapRef.get();
-        if (bitmap != null) {
-            try {
-                ByteArrayOutputStream baos = new ByteArrayOutputStream(bitmap.getWidth() * bitmap.getHeight() / 4);
-                bitmap.compress(Bitmap.CompressFormat.JPEG, 80, baos);
-                byte[] jpegBytes = baos.toByteArray();
-                String base64Str = Base64.encodeToString(jpegBytes, Base64.NO_WRAP);
-                dumpData.put("screenshot_base64", base64Str);
-                dumpData.put("has_screenshot", true);
-                dumpData.put("width", bitmap.getWidth());
-                dumpData.put("height", bitmap.getHeight());
-            } catch (Throwable t) {
-                Log.w(TAG, "Failed to compress screenshot to JPEG Base64", t);
-                try { dumpData.put("has_screenshot", false); } catch (Throwable ignored) {}
-            } finally {
-                bitmap.recycle();
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                requestScreenshot(service, bitmapRef, errorRef, screenshotLatch, true, epoch, accepting);
+            } else screenshotLatch.countDown();
+            JSONObject dumpData = dump(service, options);
+            try { screenshotLatch.await(2500L, TimeUnit.MILLISECONDS); }
+            catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
+            synchronized (bitmapRef) {
+                accepting.set(false);
+                bitmap = bitmapRef.getAndSet(null);
             }
-        } else {
-            try {
-                dumpData.put("has_screenshot", false);
-                dumpData.put("screenshot_error_code", errorRef.get());
-                dumpData.put("screenshot_error", Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
-                        ? (errorRef.get() != 0
-                            ? "takeScreenshot failed with errorCode " + errorRef.get()
-                            : "Screenshot capture timed out")
-                        : "takeScreenshot not supported on Android < 11");
-            } catch (Throwable ignored) {}
+            MemoryUiAutomationGuard.requireAutomationEpoch(epoch);
+            if (bitmap != null) {
+                try {
+                    ByteArrayOutputStream bytes = new ByteArrayOutputStream(bitmap.getWidth() * bitmap.getHeight() / 4);
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 80, bytes);
+                    dumpData.put("screenshot_base64", Base64.encodeToString(bytes.toByteArray(), Base64.NO_WRAP));
+                    dumpData.put("has_screenshot", true);
+                    dumpData.put("width", bitmap.getWidth());
+                    dumpData.put("height", bitmap.getHeight());
+                } catch (org.json.JSONException invalid) {
+                    throw new IllegalStateException("Could not encode screenshot result", invalid);
+                }
+            } else {
+                try {
+                    dumpData.put("has_screenshot", false);
+                    dumpData.put("screenshot_error_code", errorRef.get());
+                    dumpData.put("screenshot_error", Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+                            ? (errorRef.get() != 0 ? "takeScreenshot failed with errorCode " + errorRef.get()
+                                    : "Screenshot capture timed out")
+                            : "takeScreenshot not supported on Android < 11");
+                } catch (org.json.JSONException invalid) { throw new IllegalStateException(invalid); }
+            }
+            try { dumpData.put("atomic_elapsed_ms", System.currentTimeMillis() - startTime); }
+            catch (org.json.JSONException invalid) { throw new IllegalStateException(invalid); }
+            MemoryUiAutomationGuard.requireAutomationEpoch(epoch);
+            return dumpData;
+        } finally {
+            synchronized (bitmapRef) {
+                accepting.set(false);
+                Bitmap late = bitmapRef.getAndSet(null);
+                if (late != null) late.recycle();
+            }
+            if (bitmap != null) bitmap.recycle();
         }
-
-        try {
-            dumpData.put("atomic_elapsed_ms", System.currentTimeMillis() - startTime);
-        } catch (Throwable ignored) {}
-
-        return dumpData;
     }
 
     public static String dumpXml(AccessibilityService service) {
@@ -324,6 +340,13 @@ public final class HierarchyDumper {
      * Dumps the hierarchy directly as a raw standard UIAutomator XML string.
      */
     public static String dumpXml(AccessibilityService service, DumpOptions options) {
+        long epoch = MemoryUiAutomationGuard.captureAutomationEpoch();
+        String result = dumpXmlUnchecked(service, options);
+        MemoryUiAutomationGuard.requireAutomationEpoch(epoch);
+        return result;
+    }
+
+    private static String dumpXmlUnchecked(AccessibilityService service, DumpOptions options) {
         DisplayUtils.DisplayInfo displayInfo = DisplayUtils.getDisplayInfo(service);
         List<A11yNode> rootSnapshots = captureRootSnapshots(service, displayInfo, options, new DumpStats());
         if (rootSnapshots.isEmpty()) {
@@ -381,8 +404,11 @@ public final class HierarchyDumper {
     }
 
     public static List<A11yNode> captureRootSnapshots(AccessibilityService service) {
-        return captureRootSnapshots(
+        long epoch = MemoryUiAutomationGuard.captureAutomationEpoch();
+        List<A11yNode> result = captureRootSnapshots(
                 service, DisplayUtils.getDisplayInfo(service), DumpOptions.forSnapshot(), new DumpStats());
+        MemoryUiAutomationGuard.requireAutomationEpoch(epoch);
+        return result;
     }
 
     /**
@@ -782,6 +808,16 @@ public final class HierarchyDumper {
      * Window roots are enumerated once and recycled; only the returned node stays alive.
      */
     public static AccessibilityNodeInfo findInputNode(AccessibilityService service) {
+        long epoch = MemoryUiAutomationGuard.captureAutomationEpoch();
+        AccessibilityNodeInfo result = findInputNodeUnchecked(service);
+        if (!MemoryUiAutomationGuard.isAutomationEpochValid(epoch)) {
+            safeRecycle(result);
+            MemoryUiAutomationGuard.requireAutomationEpoch(epoch);
+        }
+        return result;
+    }
+
+    private static AccessibilityNodeInfo findInputNodeUnchecked(AccessibilityService service) {
         List<RawRootEntry> roots = getActiveRawRoots(service);
         AccessibilityNodeInfo found = null;
         try {

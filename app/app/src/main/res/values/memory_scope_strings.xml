@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="memory_scope_manage">Review sharing and older notes</string>
+    <string name="memory_scope_title">Memory scope</string>
+    <string name="memory_scope_close">Close</string>
+    <string name="memory_scope_back">Back to notes</string>
+    <string name="memory_scope_current_chat">This chat</string>
+    <string name="memory_scope_legacy">Older notes</string>
+    <string name="memory_scope_shared">Personal shared</string>
+    <string name="memory_scope_local_explanation">These notes belong to the current chat. They are not available to other chats unless you review and approve an exact version below.</string>
+    <string name="memory_scope_legacy_explanation">Legacy, unclassified originals. Jarvys cannot use them in any chat by default. They remain unchanged and read-only here. Opening a note does not copy, migrate or share it.</string>
+    <string name="memory_scope_shared_explanation">Only explicitly approved versions are available to all current and future chats. If the original changes or disappears, sharing stops until you review and approve again. Revocation stops future retrieval; it cannot remove content already sent or included in conversation history.</string>
+    <string name="memory_scope_review">Read exact note and review sharing</string>
+    <string name="memory_scope_review_title">Review this exact version</string>
+    <string name="memory_scope_share_explanation">Approval makes the complete content below available as personal memory to ALL current and future chats, including unrelated projects. It may be sent to your configured AI providers when retrieved. Only you can approve here. Edits require a fresh review. The original is preserved.</string>
+    <string name="memory_scope_exact_content">Exact content to share</string>
+    <string name="memory_scope_consent">I reviewed this exact content and approve sharing it with ALL current and future chats.</string>
+    <string name="memory_scope_approve">Approve this version for all chats</string>
+    <string name="memory_scope_source_legacy">Source: legacy, unclassified original</string>
+    <string name="memory_scope_source_chat">Source: conversation-local note</string>
+    <string name="memory_scope_conversation">Conversation: %1$s</string>
+    <string name="memory_scope_revision">Source revision: %1$d</string>
+    <string name="memory_scope_hash">SHA-256: %1$s</string>
+    <string name="memory_scope_approved_at">Approved: %1$s</string>
+    <string name="memory_scope_status_active">Active · all current and future chats</string>
+    <string name="memory_scope_status_stale">Stopped · source changed; fresh review required</string>
+    <string name="memory_scope_status_revoked">Revoked · unavailable to chats</string>
+    <string name="memory_scope_revoke">Revoke sharing</string>
+    <string name="memory_scope_view_approved">Read approved snapshot</string>
+    <string name="memory_scope_no_shared">No personal notes have been approved for sharing.</string>
+    <string name="memory_scope_load_failed">Memory could not be loaded. Close and reopen to try again. No approval was added.</string>
+    <string name="memory_scope_review_failed">This note could not be reviewed. No sharing was approved. Reload and review the source again.</string>
+    <string name="memory_scope_approval_failed">This review is no longer valid or could not be saved. No new sharing is active. Review the current source again before approving.</string>
+    <string name="memory_scope_revoke_failed">Revocation could not be confirmed. Reload the list and check its status before retrying.</string>
+    <string name="memory_scope_shared_success">This exact version is approved for all current and future chats.</string>
+    <string name="memory_scope_revoked_success">Sharing revoked. Future chat retrieval is blocked. Previously sent content is unchanged.</string>
+    <string name="memory_scope_read_legacy">Read original (read-only)</string>
+    <string name="memory_scope_legacy_read_only">This is the unchanged original. Viewing it does not share it or approve access from any chat.</string>
+    <string name="memory_scope_revision_unavailable">Revision history unavailable; this review is bound to the exact content hash.</string>
+    <string name="memory_ui_user_only_title">Memory is for you to review</string>
+    <string name="memory_ui_reopen_manually">Wait for the automated device action to finish. Then close this screen and reopen Memory yourself. If it remains blocked, restart Jarvys. Device control stays paused while Memory is open.</string>
+</resources>

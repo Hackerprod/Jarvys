@@ -71,12 +71,14 @@ class CodexImageGenerationToolScopeTest {
         assertTrue(imageTool.declaration().description.contains("quota"))
 
         val memory = MemoryStore(File(temporaryFolder.root, "reflection-memory"), true, testMemorySeedProvider())
+            .forConversation("reflection-session")
         memory.ensureInitialized()
         val reflectionWorkspace = WorkspaceStore(File(temporaryFolder.root, "reflection-workspaces"),
             "a".repeat(24), null, null, memory, "reflection-session", true,
             MemoryStore.Actor.REFLECTION, "reflection-group", true)
-        assertFalse(WorkspaceTools.createReflectionMemoryOnly(reflectionWorkspace)
-            .any { it.declaration().name == CodexImageGenerationTool.NAME })
+        val reflectionTools = WorkspaceTools.createReflectionMemoryOnly(reflectionWorkspace)
+        assertEquals(listOf("ls", "read", "write", "edit", "delete"), reflectionTools.map { it.declaration().name })
+        assertFalse(reflectionTools.any { it.declaration().name == CodexImageGenerationTool.NAME })
         assertFalse(WorkspaceTools.names().contains(CodexImageGenerationTool.NAME))
     }
 

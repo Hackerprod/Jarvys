@@ -53,7 +53,7 @@ public final class MemoryReflectionWorker {
         this.sessionId = sessionId;
         this.reflectionId = reflectionId;
         this.model = model;
-        this.memoryStore = new MemoryStore(this.context);
+        this.memoryStore = new MemoryStore(this.context).forConversation(sessionId);
         this.injectedTools = null;
     }
 
@@ -63,7 +63,7 @@ public final class MemoryReflectionWorker {
         this.sessionId = sessionId;
         this.reflectionId = reflectionId;
         this.model = model;
-        this.memoryStore = memoryStore;
+        this.memoryStore = memoryStore.forConversation(sessionId);
         this.injectedTools = new ArrayList<>(injectedTools);
     }
 

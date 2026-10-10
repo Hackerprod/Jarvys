@@ -54,7 +54,7 @@ class MemoryLanguageQ2Test {
                 .forEach { (choice, locale) ->
                     AppLanguageRuntime.select(context, choice)
                     val store = MemoryStore(Files.createTempDirectory("q2-seed-${choice.storedValue}").toFile(), true,
-                        MemorySeedTextProvider.fromAppLanguage(context))
+                        MemorySeedTextProvider.fromAppLanguage(context)).forConversation("q2-seed-session")
                     store.ensureInitialized()
                     val localized = context.createConfigurationContext(
                         android.content.res.Configuration(context.resources.configuration).apply { setLocale(locale) })
@@ -77,13 +77,13 @@ class MemoryLanguageQ2Test {
     @Test
     fun onlyExactUneditedSeedFilesMigrateAndSeedRevisionsStayInMemoryHistory() {
         val root = Files.createTempDirectory("q2-seed-migration").toFile()
-        val spanish = MemoryStore(root, true, testMemorySeedProvider(AppLanguageChoice.SPANISH))
+        val spanish = MemoryStore(root, true, testMemorySeedProvider(AppLanguageChoice.SPANISH)).forConversation("q2-migration-session")
         spanish.ensureInitialized()
         val originalHuman = spanish.readUserFile("human.md")
         val editedPersona = spanish.readUserFile("persona.md") + "\nUser-authored note: keep this unchanged.\n"
         spanish.write("persona.md", editedPersona, MemoryStore.Actor.USER, null)
 
-        val english = MemoryStore(root, true, testMemorySeedProvider(AppLanguageChoice.ENGLISH))
+        val english = MemoryStore(root, true, testMemorySeedProvider(AppLanguageChoice.ENGLISH)).forConversation("q2-migration-session")
         english.setEnabled(false)
         english.ensureInitialized()
         val seeds = testMemorySeedProvider(AppLanguageChoice.ENGLISH).english()
@@ -99,7 +99,7 @@ class MemoryLanguageQ2Test {
         assertEquals("SEED", humanRevisions.last().operation)
         assertEquals(originalHuman, humanRevisions.first().previousContent)
         assertEquals(seeds.human, humanRevisions.first().newContent)
-        assertNull(humanRevisions.first().conversationId)
+        assertTrue(humanRevisions.all { it.conversationId == "q2-migration-session" })
         assertEquals(MemoryStore.Actor.USER, english.listRevisions("persona.md", null).first().actor)
     }
 
@@ -179,7 +179,7 @@ class MemoryLanguageQ2Test {
     fun fullMemoryScreenOpensInNavigationForEnglishAndSpanishWithoutNestedScrollCrash() {
         val base = ApplicationProvider.getApplicationContext<android.content.Context>()
         val store = MemoryStore(Files.createTempDirectory("q2-memory-screen").toFile(), true,
-            testMemorySeedProvider(AppLanguageChoice.ENGLISH)).also { it.ensureInitialized() }
+            testMemorySeedProvider(AppLanguageChoice.ENGLISH)).forConversation("q2-session").also { it.ensureInitialized() }
         var language by mutableStateOf("en")
         compose.setContent {
             val config = android.content.res.Configuration(base.resources.configuration).apply { setLocale(Locale(language)) }

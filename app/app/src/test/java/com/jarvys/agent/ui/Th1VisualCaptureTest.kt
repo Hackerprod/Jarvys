@@ -282,7 +282,7 @@ class Th1VisualCaptureTest {
 
     @Composable private fun MemoryGallery(context: android.content.Context) {
         val memory = remember {
-            MemoryStore(context).also { it.ensureInitialized() }
+            MemoryStore(context).forConversation("th1-memory").also { it.ensureInitialized() }
         }
         val registryOwner = rememberMemoryActivityResultOwner()
         CompositionLocalProvider(LocalActivityResultRegistryOwner provides registryOwner) {

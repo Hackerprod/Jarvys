@@ -707,7 +707,10 @@ class CrewC0Test {
     fun botWorkspaceToolsCannotWriteMemoryEvenWhenTheConversationMemoryIsEnabled() {
         val parent = Files.createTempDirectory("crew-memory-off")
         val memory = MemoryStore(Files.createTempDirectory("crew-memory-store").toFile(), true, testMemorySeedProvider())
+            .forConversation("crew-no-memory")
         memory.ensureInitialized()
+        assertTrue(memory.isEnabled())
+        assertTrue(Files.exists(memory.rootDirectory().toPath().resolve("human.md")))
         val workspace = WorkspaceStore(parent.toFile(), WorkspaceStore.projectIdForSession("crew-no-memory"),
             Files.createTempDirectory("crew-skills").toFile(), null, memory, "crew-no-memory", false)
         val tools = WorkspaceTools.create(workspace)

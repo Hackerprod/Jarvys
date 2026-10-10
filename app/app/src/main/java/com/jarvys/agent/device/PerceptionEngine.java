@@ -5,6 +5,7 @@ import android.util.Base64;
 import com.artemis.helper.ArtemisAccessibilityService;
 import com.artemis.helper.HierarchyDumper;
 import com.jarvys.agent.CancellationToken;
+import com.jarvys.agent.MemoryUiAutomationGuard;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -25,6 +26,7 @@ public final class PerceptionEngine {
     }
 
     public ScreenData getScreenData(boolean skipSettling, CancellationToken token) {
+        final long epoch = MemoryUiAutomationGuard.captureAutomationEpoch();
         token.throwIfCancelled();
         if (!skipSettling) cancellableDelay(400L, token);
 
@@ -65,6 +67,7 @@ public final class PerceptionEngine {
             throw new IllegalStateException("Screenshot capture returned invalid dimensions: "
                     + width + "x" + height);
         }
+        MemoryUiAutomationGuard.requireAutomationEpoch(epoch);
         return new ScreenData(jpeg, base64, xml, elements, width, height,
                 System.currentTimeMillis() / 1000.0, "android");
     }

@@ -1,5 +1,7 @@
 package com.jarvys.agent.memory
 
+import androidx.compose.runtime.key
+import androidx.compose.runtime.remember
 import androidx.navigation.NavController
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.NavType
@@ -28,27 +30,37 @@ fun NavGraphBuilder.memoryDestinations(
     onReflectionDisclosure: () -> Unit,
 ) {
     composable(AppNavigationBackPolicy.MEMORY) {
-        MemorySettingsScreen(
-            store = store,
-            enabled = enabled,
-            onEnabledChange = onEnabledChange,
-            conversationId = conversationId,
-            onShowDisclosure = onShowDisclosure,
-            onMemoryChanged = onMemoryChanged,
-            reflectionEnabled = reflectionEnabled,
-            reflectionStatus = reflectionStatus,
-            lastReflectionMillis = lastReflectionMillis,
-            reflecting = reflecting,
-            onReflectionEnabledChange = onReflectionEnabledChange,
-            onReflectionDisclosure = onReflectionDisclosure,
-            onOpenHistory = { navController.navigate(AppNavigationBackPolicy.MEMORY_HISTORY) },
-            onOpenFile = { path, isNew -> navController.navigate(AppNavigationBackPolicy.memoryFile(path, isNew)) },
-        )
+        val conversationStore = remember(store, conversationId) { store.forConversation(conversationId) }
+        key(conversationId) {
+            MemorySettingsScreen(
+                store = conversationStore,
+                legacyStore = store.takeUnless { it.isConversationScoped },
+                onCloseMemory = {
+                    if (!navController.popBackStack()) navController.navigate(AppNavigationBackPolicy.SETTINGS_PREFERENCES)
+                },
+                enabled = enabled,
+                onEnabledChange = onEnabledChange,
+                conversationId = conversationId,
+                onShowDisclosure = onShowDisclosure,
+                onMemoryChanged = onMemoryChanged,
+                reflectionEnabled = reflectionEnabled,
+                reflectionStatus = reflectionStatus,
+                lastReflectionMillis = lastReflectionMillis,
+                reflecting = reflecting,
+                onReflectionEnabledChange = onReflectionEnabledChange,
+                onReflectionDisclosure = onReflectionDisclosure,
+                onOpenHistory = { navController.navigate(AppNavigationBackPolicy.MEMORY_HISTORY) },
+                onOpenFile = { path, isNew -> navController.navigate(AppNavigationBackPolicy.memoryFile(path, isNew)) },
+            )
+        }
     }
     composable(AppNavigationBackPolicy.MEMORY_HISTORY) {
-        MemoryHistoryDestination(store, conversationId, onMemoryChanged) {
-            if (!navController.popBackStack(AppNavigationBackPolicy.MEMORY, false)) {
-                navController.navigate(AppNavigationBackPolicy.MEMORY) { launchSingleTop = true }
+        val conversationStore = remember(store, conversationId) { store.forConversation(conversationId) }
+        key(conversationId) {
+            MemoryHistoryDestination(conversationStore, conversationId, onMemoryChanged) {
+                if (!navController.popBackStack(AppNavigationBackPolicy.MEMORY, false)) {
+                    navController.navigate(AppNavigationBackPolicy.MEMORY) { launchSingleTop = true }
+                }
             }
         }
     }
@@ -61,18 +73,21 @@ fun NavGraphBuilder.memoryDestinations(
     ) { entry ->
         val path = entry.arguments?.getString("path").orEmpty()
         val isNew = entry.arguments?.getBoolean("new") ?: false
-        MemoryEditorDestination(
-            store = store,
-            conversationId = conversationId,
-            path = path,
-            isNew = isNew,
-            onMemoryChanged = onMemoryChanged,
-            onBack = { navController.popBackStack() },
-            onMissingFile = {
-                if (!navController.popBackStack(AppNavigationBackPolicy.MEMORY, false)) {
-                    navController.navigate(AppNavigationBackPolicy.MEMORY) { launchSingleTop = true }
-                }
-            },
-        )
+        val conversationStore = remember(store, conversationId) { store.forConversation(conversationId) }
+        key(conversationId) {
+            MemoryEditorDestination(
+                store = conversationStore,
+                conversationId = conversationId,
+                path = path,
+                isNew = isNew,
+                onMemoryChanged = onMemoryChanged,
+                onBack = { navController.popBackStack() },
+                onMissingFile = {
+                    if (!navController.popBackStack(AppNavigationBackPolicy.MEMORY, false)) {
+                        navController.navigate(AppNavigationBackPolicy.MEMORY) { launchSingleTop = true }
+                    }
+                },
+            )
+        }
     }
 }

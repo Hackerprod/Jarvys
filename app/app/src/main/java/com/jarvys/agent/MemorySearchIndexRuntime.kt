@@ -2,10 +2,6 @@ package com.jarvys.agent
 
 import android.content.Context
 import java.io.File
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import java.util.TimeZone
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -30,17 +26,20 @@ class MemorySearchIndexCoordinator internal constructor(
 
     fun search(workspace: WorkspaceStore, query: String, zones: Set<String>, limit: Int?): List<SearchHit> {
         lastWorkspace = workspace
-        if (!index.ready || needsRebuild.get()) {
-            scheduleRebuild(workspace, availableZones(workspace))
-            // Tool invocations run off the UI thread; this source scan gives a correct first result while
-            // the durable index is reconstructed in the background.
-            return Bm25SearchRanker().rank(query, workspace.searchDocuments(zones), limit)
-        }
-        return index.search(query, zones, limit)
+        val nonMemoryZones = zones - "memory"
+        val localDocuments = if (!index.ready || needsRebuild.get()) {
+            scheduleRebuild(workspace, availableZones(workspace) - "memory")
+            workspace.searchDocuments(nonMemoryZones)
+        } else index.snapshot().filter { it.zone in nonMemoryZones }
+        // Memory permissions are checked against current source bytes on EVERY query. A persisted
+        // index, in-flight rebuild or late callback can never restore a revoked or foreign grant.
+        val memoryDocuments = if ("memory" in zones && memoryAllowed && workspace.memoryEnabled())
+            workspace.searchDocuments(setOf("memory")) else emptyList()
+        return Bm25SearchRanker().rank(query, localDocuments + memoryDocuments, limit)
     }
 
     fun refreshZone(workspace: WorkspaceStore, zone: String) {
-        if (zone == "memory") return // MemoryStore's revision listener is authoritative for this zone.
+        if (zone == "memory") return // Memory is always read from the current scoped source.
         generation.incrementAndGet()
         index.replaceZone(zone, workspace.searchDocuments(setOf(zone)))
     }
@@ -54,12 +53,16 @@ class MemorySearchIndexCoordinator internal constructor(
             normalized.startsWith("/skills/") -> { zone = "skills"; path = normalized.removePrefix("/skills/") }
             else -> { zone = "workspace"; path = normalized }
         }
+        if (zone == "memory") {
+            onMemoryCleared()
+            return
+        }
         generation.incrementAndGet()
         val document = runCatching { workspace.searchDocumentForPath(suppliedPath) }.getOrNull()
         if (document == null) index.remove(zone, path) else index.upsert(document)
     }
 
-    fun snapshot(): List<SearchDocument> = index.snapshot()
+    fun snapshot(): List<SearchDocument> = index.snapshot().filter { it.zone != "memory" }
 
     internal fun lastRebuildThreadForTests(): String? = lastRebuildThread
     internal fun rebuildFinishedForTests(): Boolean = lastRebuildFinished
@@ -71,16 +74,18 @@ class MemorySearchIndexCoordinator internal constructor(
     }
 
     internal fun onMemoryChanged(revision: MemoryStore.Revision) {
-        generation.incrementAndGet()
-        if (revision.newExists) {
-            index.upsert(SearchDocument("memory", revision.path, revision.newContent.orEmpty(),
-                parseTimestamp(revision.timestamp), revision.id))
-        } else index.remove("memory", revision.path)
+        // Events are invalidation only. Never broadcast revision payloads into other chats.
+        synchronized(rebuildLock) {
+            generation.incrementAndGet()
+            index.clearZone("memory")
+        }
     }
 
     internal fun onMemoryCleared() {
-        generation.incrementAndGet()
-        index.clearZone("memory")
+        synchronized(rebuildLock) {
+            generation.incrementAndGet()
+            index.clearZone("memory")
+        }
     }
 
     private fun scheduleRebuild(workspace: WorkspaceStore, zones: Set<String>) {
@@ -105,7 +110,7 @@ class MemorySearchIndexCoordinator internal constructor(
                 rebuilding.set(false)
                 lastRebuildFinished = true
             }
-            if (retry) scheduleRebuild(workspace, zones)
+            if (retry) scheduleRebuild(workspace, zones - "memory")
         }
     }
 
@@ -114,12 +119,6 @@ class MemorySearchIndexCoordinator internal constructor(
         add("skills")
         if (memoryAllowed && workspace.memoryEnabled()) add("memory")
     }
-
-    private fun parseTimestamp(value: String): Long = runCatching {
-        SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.ROOT).apply {
-            timeZone = TimeZone.getTimeZone("UTC")
-        }.parse(value)?.time ?: System.currentTimeMillis()
-    }.getOrDefault(System.currentTimeMillis())
 
     companion object {
         private val coordinators = ConcurrentHashMap<String, MemorySearchIndexCoordinator>()
@@ -143,7 +142,7 @@ class MemorySearchIndexCoordinator internal constructor(
             val filesRoot = File(app.filesDir, "jarvys")
             val key = filesRoot.absolutePath + "/" + projectId + if (memoryAllowed) "-memory" else "-no-memory"
             return coordinators.computeIfAbsent(key) {
-                val indexFile = File(File(filesRoot, "index"), "workspace-$projectId-${if (memoryAllowed) "m" else "n"}.bin")
+                val indexFile = File(File(filesRoot, "index"), "workspace-scope-v64-$projectId-${if (memoryAllowed) "m" else "n"}.bin")
                 MemorySearchIndexCoordinator(FileMemorySearchIndex(indexFile), memoryAllowed)
             }
         }

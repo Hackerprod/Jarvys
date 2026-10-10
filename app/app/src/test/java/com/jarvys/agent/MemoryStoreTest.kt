@@ -24,8 +24,9 @@ import java.util.Collections
 class MemoryStoreTest {
     @get:Rule val temporaryFolder = TemporaryFolder()
 
-    private fun store(name: String = "memory"): MemoryStore =
-        MemoryStore(temporaryFolder.newFolder(name), true, testMemorySeedProvider()).also { it.ensureInitialized() }
+    private fun store(name: String = "memory", conversationId: String = "conv"): MemoryStore =
+        MemoryStore(temporaryFolder.newFolder(name), true, testMemorySeedProvider())
+            .forConversation(conversationId).also { it.ensureInitialized() }
 
     private fun frontmatter(name: String, description: String = "A test note.", body: String = "body") =
         "---\nname: $name\ndescription: $description\n---\n$body\n"
@@ -49,19 +50,21 @@ class MemoryStoreTest {
         Files.createSymbolicLink(alias.toPath(), real.toPath())
         val app = FilesDirContext(base, File(alias, "files"))
 
-        val memory = MemoryStore(app, testMemorySeedProvider())
+        val memory = MemoryStore(app, testMemorySeedProvider()).forConversation("symlink-session")
         memory.ensureInitialized()
         val note = frontmatter("Symlinked filesDir", body = "Production context path stays private.")
         memory.write("platform.md", note, MemoryStore.Actor.USER, "symlink-session")
 
-        val expectedRoot = File(realFiles, "jarvys/memory").canonicalFile
-        assertEquals(expectedRoot.path, memory.rootDirectory().canonicalPath)
+        val expectedRoot = File(realFiles, "jarvys/memory/.scopes").canonicalFile
+        assertEquals(expectedRoot.path, memory.rootDirectory().canonicalFile.parentFile!!.path)
+        assertEquals(64, memory.rootDirectory().name.length)
+        assertFalse(File(realFiles, "jarvys/memory/platform.md").exists())
         assertTrue(memory.read("platform.md").contains("Production context path stays private."))
     }
 
     @Test
     fun userEditsAreRevisionCheckedAndUndoCreatesAReversibleRevision() {
-        val memory = store()
+        val memory = store(conversationId = "session-a")
         val first = memory.writeUserFile("choice.md", frontmatter("Choice", body = "Tea"), 0L, false, "session-a")
         assertEquals(MemoryStore.Actor.USER, first.actor)
         assertEquals("session-a", first.conversationId)
@@ -146,20 +149,30 @@ class MemoryStoreTest {
     }
 
     @Test
-    fun revisionsTrackActorConversationAndSupportUndoAndRestore() {
-        val memory = store()
+    fun revisionsTrackActorConversationAndSupportUndoAndRestoreWithinTheBoundConversation() {
+        val memory = store(conversationId = "chat-1")
         val create = memory.write("fact.md", frontmatter("Fact", body = "old"), MemoryStore.Actor.USER, "chat-1")
-        val edit = memory.edit("fact.md", "old", "new", MemoryStore.Actor.REFLECTION, "chat-2")
+        val edit = memory.edit("fact.md", "old", "new", MemoryStore.Actor.REFLECTION, "chat-1")
         assertEquals(MemoryStore.Actor.REFLECTION, edit.actor)
-        assertEquals("chat-2", edit.conversationId)
+        assertEquals("chat-1", edit.conversationId)
         assertTrue(memory.read("fact.md").contains("new"))
-        memory.undoLast(MemoryStore.Actor.USER, "chat-3")
+        memory.undoLast(MemoryStore.Actor.USER, "chat-1")
         assertTrue(memory.read("fact.md").contains("old"))
-        memory.restoreRevision(edit.id, MemoryStore.Actor.USER, "chat-4")
+        memory.restoreRevision(edit.id, MemoryStore.Actor.USER, "chat-1")
         assertTrue(memory.read("fact.md").contains("new"))
         assertTrue(memory.listRevisions("fact.md", MemoryStore.Actor.USER).size >= 2)
         assertNotEquals(create.id, edit.id)
         assertTrue(memory.getRevision(edit.id).previousContent.contains("old"))
+        val beforeForeignActions = memory.listRevisions(null, null).map { it.id }
+        listOf<() -> Unit>(
+            { memory.edit("fact.md", "new", "foreign", MemoryStore.Actor.REFLECTION, "chat-2") },
+            { memory.undoLast(MemoryStore.Actor.USER, "chat-3") },
+            { memory.restoreRevision(create.id, MemoryStore.Actor.USER, "chat-4") },
+        ).forEach { action ->
+            runCatching { action() }.onSuccess { error("A foreign conversation mutated scoped memory") }
+        }
+        assertEquals(beforeForeignActions, memory.listRevisions(null, null).map { it.id })
+        assertTrue(memory.read("fact.md").contains("new"))
     }
 
     @Test

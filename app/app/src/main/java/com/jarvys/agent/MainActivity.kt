@@ -326,6 +326,7 @@ class MainActivity : ComponentActivity() {
     private var chatWithoutMemory by mutableStateOf(false)
     private var pendingTaskId: String? = null
     private var memoryChangeListener: MemoryStore.MemoryChangeListener? = null
+    private var observedMemoryStore: MemoryStore? = null
     private val historyExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "JarvysRunHistory").apply { isDaemon = true }
     }
@@ -388,18 +389,11 @@ class MainActivity : ComponentActivity() {
             onUnavailable = { runOnUiThread { toast(getString(R.string.chat_footer_tts_unavailable), Toast.LENGTH_LONG) } },
         )
         memoryStore = MemoryStore(this)
-        migrateMemorySeedsAsync()
         reflectionPreferences = MemoryReflectionPreferences(this)
         memoryEnabled = memoryStore.isEnabled()
         showMemoryDisclosure = memoryEnabled && !memoryStore.hasShownDisclosure()
         refreshReflectionUiState(conversationSessionId)
         showReflectionDisclosure = memoryEnabled && reflectionEnabled && !reflectionPreferences.disclosureShown()
-        memoryChangeListener = MemoryStore.MemoryChangeListener { revision ->
-            runOnUiThread {
-                AgentRunUiState.memoryChanged(revision)
-                refreshMemoryStatus()
-            }
-        }.also(memoryStore::addChangeListener)
         uiPreferences = JarvysUiPreferences(this)
         proactivePreferences = ProactivePreferences(this)
         // The default-off upgrade path purges P0-era pending notification payloads before they can be consumed.
@@ -440,6 +434,7 @@ class MainActivity : ComponentActivity() {
         conversationTitle = if (openingProactiveThread) ProactiveConversation.title(this)
             else savedInstanceState?.getString(STATE_SESSION_TITLE)
         persistConversationSession(conversationSessionId)
+        migrateMemorySeedsAsync()
         showingNewChat = if (openingProactiveThread) false else savedInstanceState?.getBoolean(STATE_NEW_CHAT, false) ?: false
         selectedSkillIds = if (openingProactiveThread) emptySet()
             else savedInstanceState?.getStringArrayList(STATE_SELECTED_SKILLS)?.toSet().orEmpty()
@@ -667,7 +662,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        memoryChangeListener?.let(memoryStore::removeChangeListener)
+        memoryChangeListener?.let { observedMemoryStore?.removeChangeListener(it) }
+        observedMemoryStore = null
         memoryChangeListener = null
         if (::assistantSpeechController.isInitialized) assistantSpeechController.shutdown()
         translationFuture?.cancel(true)
@@ -715,7 +711,7 @@ class MainActivity : ComponentActivity() {
 
     private fun migrateMemorySeedsAsync() {
         if (!::memoryStore.isInitialized) return
-        val store = memoryStore
+        val store = memoryStore.forConversation(conversationSessionId)
         lifecycleScope.launch(Dispatchers.IO) {
             runCatching { store.ensureInitialized() }
                 .onFailure { android.util.Log.w("JarvysMemory", "Could not migrate starter memory seeds", it) }
@@ -823,12 +819,33 @@ class MainActivity : ComponentActivity() {
 
     private fun getChatPreferences() = getSharedPreferences("jarvys_chat", MODE_PRIVATE)
 
+    private fun bindMemoryObserver(sessionId: String) {
+        if (!::memoryStore.isInitialized || observedMemoryStore?.conversationId() == sessionId) return
+        memoryChangeListener?.let { observedMemoryStore?.removeChangeListener(it) }
+        val scoped = memoryStore.forConversation(sessionId)
+        observedMemoryStore = scoped
+        memoryChangeListener = object : MemoryStore.MemoryChangeListener {
+            override fun onMemoryChanged(revision: MemoryStore.Revision) {
+                runOnUiThread {
+                    if (conversationSessionId == sessionId) {
+                        AgentRunUiState.memoryChanged(revision)
+                        refreshMemoryStatus()
+                    }
+                }
+            }
+            override fun onMemoryCleared() {
+                runOnUiThread { if (conversationSessionId == sessionId) refreshMemoryStatus() }
+            }
+        }.also(scoped::addChangeListener)
+    }
+
     private fun refreshMemoryStatus() {
         if (!::memoryStore.isInitialized) return
         memoryEnabled = memoryStore.isEnabled()
+        val sessionId = conversationSessionId
         memoryExecutor.execute {
-            val used = runCatching { memoryStore.coreCharactersUsed() }.getOrDefault(0)
-            runOnUiThread { memoryCoreCharacters = used }
+            val used = runCatching { memoryStore.forConversation(sessionId).coreCharactersUsed() }.getOrDefault(0)
+            runOnUiThread { if (conversationSessionId == sessionId) memoryCoreCharacters = used }
         }
     }
 
@@ -1040,7 +1057,7 @@ ${event.text}
     private fun undoMemoryRevisionFromChat(revisionId: Long) {
         val sessionId = conversationSessionId
         memoryExecutor.execute {
-            val result = runCatching { memoryStore.undoRevision(revisionId, MemoryStore.Actor.USER, sessionId) }
+            val result = runCatching { memoryStore.forConversation(sessionId).undoRevision(revisionId, MemoryStore.Actor.USER, sessionId) }
             runOnUiThread {
                 result.onSuccess {
                     toast(getString(R.string.memory_chat_undo_done))
@@ -1056,7 +1073,7 @@ ${event.text}
         val sessionId = conversationSessionId
         memoryExecutor.execute {
             val result = runCatching {
-                val revisions = memoryStore.undoReflectionGroup(reflectionId, sessionId)
+                val revisions = memoryStore.forConversation(sessionId).undoReflectionGroup(reflectionId, sessionId)
                 localRunStore.appendReflectionUndoEvent(sessionId, reflectionId)
                 revisions
             }
@@ -1327,6 +1344,7 @@ ${event.text}
 
     private fun persistConversationSession(sessionId: String) {
         conversationSessionId = sessionId
+        bindMemoryObserver(sessionId)
         if (::attachmentDrafts.isInitialized) attachmentDrafts.switchSession(sessionId)
         getSharedPreferences("jarvys_chat", MODE_PRIVATE).edit()
             .putString("active_session_id", sessionId)

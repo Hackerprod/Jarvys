@@ -207,11 +207,13 @@ Read and verify the project files.
     }
 
     @Test
-    fun memoryZoneUsesGlobalStoreAndDeleteCannotTouchWorkspaceOrSkills() {
+    fun memoryZoneUsesConversationStoreAndDeleteCannotTouchOtherChatsWorkspaceOrSkills() {
         val projectRoot = temporaryFolder.newFolder("project-memory-zone")
         val skillsRoot = temporaryFolder.newFolder("skills-memory-zone")
-        val memoryRoot = temporaryFolder.newFolder("global-memory-zone")
-        val memory = MemoryStore(memoryRoot, true, testMemorySeedProvider()).also { it.ensureInitialized() }
+        val memoryRoot = temporaryFolder.newFolder("scoped-memory-zone")
+        val memoryOwner = MemoryStore(memoryRoot, true, testMemorySeedProvider())
+        val memory = memoryOwner.forConversation("conversation-a").also { it.ensureInitialized() }
+        val otherMemory = memoryOwner.forConversation("conversation-b").also { it.ensureInitialized() }
         val projectId = WorkspaceStore.projectIdForSession("project-a")
         val observer = object : WorkspaceStore.SkillWorkspaceObserver {
             override fun commitSkillWorkspaceWrite(skillId: String, skillMarkdown: String?, writeFile: Runnable) = writeFile.run()
@@ -223,9 +225,13 @@ Read and verify the project files.
         val written = tools.invoke("write", mapOf("path" to "/memory/person.md", "content" to content), CancellationToken.uncancellable())
         assertTrue(written.success)
         assertTrue(written.content.contains("revision"))
-        assertEquals(content, File(memoryRoot, "person.md").readText())
+        assertEquals(content, File(memory.rootDirectory(), "person.md").readText())
         assertFalse(File(projectRoot, "memory/person.md").exists())
         assertTrue(workspace.list("/memory").any { it.startsWith("FILE person.md") })
+        assertFalse(File(memoryRoot, "person.md").exists())
+        assertFalse(otherMemory.list("").any { it.startsWith("FILE person.md") })
+        val otherContent = content.replace("Name shared by the user.", "A separate chat's note.")
+        otherMemory.write("person.md", otherContent, MemoryStore.Actor.USER, "conversation-b")
 
         workspace.write("project.txt", "project")
         workspace.write("/skills/com.jarvys.test/guide.md", "skill")
@@ -235,7 +241,8 @@ Read and verify the project files.
 
         val deleted = tools.invoke("delete", mapOf("path" to "/memory/person.md"), CancellationToken.uncancellable())
         assertTrue(deleted.success)
-        assertFalse(File(memoryRoot, "person.md").exists())
+        assertFalse(File(memory.rootDirectory(), "person.md").exists())
+        assertEquals(otherContent, otherMemory.read("person.md"))
         assertEquals("project", workspace.read("project.txt"))
         assertEquals("skill", workspace.read("/skills/com.jarvys.test/guide.md"))
         runCatching { workspace.deleteMemoryFile("/skills/com.jarvys.test/guide.md") }
@@ -248,7 +255,8 @@ Read and verify the project files.
     fun disabledMemoryIsNotAnnouncedAndRejectsAgentWrites() {
         val projectRoot = temporaryFolder.newFolder("project-memory-disabled")
         val skillsRoot = temporaryFolder.newFolder("skills-memory-disabled")
-        val memory = MemoryStore(temporaryFolder.newFolder("memory-disabled"), true, testMemorySeedProvider()).also { it.ensureInitialized() }
+        val memory = MemoryStore(temporaryFolder.newFolder("memory-disabled"), true, testMemorySeedProvider())
+            .forConversation("conversation").also { it.ensureInitialized() }
         memory.setEnabled(false)
         val workspace = WorkspaceStore(projectRoot, WorkspaceStore.projectIdForSession("disabled"),
             skillsRoot, null, memory, "conversation")

@@ -210,7 +210,8 @@ public final class CoreAgentRuntime {
     this.connectorRegistry = connectorRegistry;
     this.depth = depth;
     this.budget = budget;
-    this.memoryStore = this.context != null ? new MemoryStore(this.context) : null;
+    this.memoryStore = this.context != null && sessionId != null && !sessionId.trim().isEmpty()
+        ? new MemoryStore(this.context).forConversation(sessionId) : null;
     this.memoryDisabledForConversation = memoryDisabledForConversation;
     this.webSearchEnabledForConversation = webSearchEnabledForConversation;
   }
@@ -305,36 +306,9 @@ public final class CoreAgentRuntime {
           depth == 0 && context != null
               ? new ConversationCompactor(sessionId, model, new LocalRunStore(context), mainChat)
               : null;
-      final String runInstructions = instructions(toolRegistry, mainChat) + (reactionTool == null ? "" : "\n\n" + MessageReactionTool.GUIDANCE);
-      CoreAgentLoop.Model scopedModel =
-          new CoreAgentLoop.Model() {
-            @Override
-            public ModelReply complete(
-                List<ConversationTurn> transcript,
-                String prompt,
-                List<ToolSpec> declarations,
-                CancellationToken runToken) {
-              String requestInstructions = runInstructions + (reactionTool == null ? ""
-                  : reactionTool.prepareModelMetadata(transcript, prompt));
-              ModelReply reply;
-              if (mainChat && context != null
-                  && new LocalRunStore(context).conversationHasPrivateImagesOrAttachments(sessionId)) {
-                try (AgentErrorReporter.AttachmentScope ignored = AgentErrorReporter.suppressForAttachments()) {
-                  reply = model.completeMainChat(requestInstructions, transcript, prompt, declarations, runToken);
-                }
-              } else {
-                reply = mainChat ? model.completeMainChat(requestInstructions, transcript, prompt, declarations, runToken)
-                    : model.complete(requestInstructions, transcript, prompt, declarations, runToken);
-              }
-              if (reactionTool != null) reactionTool.modelRequestCompleted();
-              return reply;
-            }
-
-            @Override
-            public int contextWindow(CancellationToken runToken) {
-              return model.contextWindow(runToken);
-            }
-          };
+      final CoreToolRegistry runToolRegistry = toolRegistry;
+      final String runInstructions = instructions(runToolRegistry, mainChat) + (reactionTool == null ? "" : "\n\n" + MessageReactionTool.GUIDANCE);
+      CoreAgentLoop.Model scopedModel = requestModel(model, runToolRegistry, mainChat, reactionTool);
       CoreAgentLoop loop =
           new CoreAgentLoop(
               scopedModel, toolRegistry, runInstructions, sessionId, budget, compactor);
@@ -359,6 +333,45 @@ public final class CoreAgentRuntime {
     } finally {
       for (ConnectorRegistry registry : registries) registry.endAgentRun(token.generation());
     }
+  }
+
+  /** One run-bound provider adapter; scoped memory is evaluated at each actual model request. */
+  CoreAgentLoop.Model requestModel(
+      final CoreAgentModel model,
+      final CoreToolRegistry runToolRegistry,
+      final boolean mainChat,
+      final MessageReactionTool reactionTool) {
+    return new CoreAgentLoop.Model() {
+      @Override
+      public ModelReply complete(
+          List<ConversationTurn> transcript,
+          String prompt,
+          List<ToolSpec> declarations,
+          CancellationToken runToken) {
+        // Recompile scoped memory for each request so a native revocation or source edit
+        // cannot survive in a run-cached system prompt. Previously sent text cannot be recalled.
+        String requestInstructions = instructions(runToolRegistry, mainChat)
+            + (reactionTool == null ? "" : "\n\n" + MessageReactionTool.GUIDANCE
+            + reactionTool.prepareModelMetadata(transcript, prompt));
+        ModelReply reply;
+        if (mainChat && context != null
+            && new LocalRunStore(context).conversationHasPrivateImagesOrAttachments(sessionId)) {
+          try (AgentErrorReporter.AttachmentScope ignored = AgentErrorReporter.suppressForAttachments()) {
+            reply = model.completeMainChat(requestInstructions, transcript, prompt, declarations, runToken);
+          }
+        } else {
+          reply = mainChat ? model.completeMainChat(requestInstructions, transcript, prompt, declarations, runToken)
+              : model.complete(requestInstructions, transcript, prompt, declarations, runToken);
+        }
+        if (reactionTool != null) reactionTool.modelRequestCompleted();
+        return reply;
+      }
+
+      @Override
+      public int contextWindow(CancellationToken runToken) {
+        return model.contextWindow(runToken);
+      }
+    };
   }
 
   static boolean lambda$runInternal$0(String name) {

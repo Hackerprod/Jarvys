@@ -150,12 +150,12 @@ class MemoryReflectionTest {
     @Test
     fun memoryReflectionGroupIsJournaledAndUndoneAsAWholeWithConflictProtection() {
         val root = temporaryFolder.newFolder("reflection-memory")
-        val store = MemoryStore(root, true, testMemorySeedProvider()).also { it.ensureInitialized() }
-        val legacyRevision = store.write("persona.md", note("Interaction", "Legacy preference."),
-            MemoryStore.Actor.AGENT, "old-session")
-        assertNull(legacyRevision.reflectionGroupId)
-        val oldPersona = File(root, "persona.md").readText()
-        val oldHuman = File(root, "human.md").readText()
+        val store = MemoryStore(root, true, testMemorySeedProvider()).forConversation("session").also { it.ensureInitialized() }
+        val precedingRevision = store.write("persona.md", note("Interaction", "Earlier preference."),
+            MemoryStore.Actor.AGENT, "session")
+        assertNull(precedingRevision.reflectionGroupId)
+        val oldPersona = File(store.rootDirectory(), "persona.md").readText()
+        val oldHuman = File(store.rootDirectory(), "human.md").readText()
         val group = "reflection-group-1"
         store.beginReflectionGroup(group, "session")
         store.write("persona.md", note("Interaction", "User prefers concise, direct answers."),
@@ -170,8 +170,8 @@ class MemoryReflectionTest {
         val undone = store.undoReflectionGroup(group, "session")
         assertEquals(2, undone.size)
         assertTrue(undone.all { it.actor == MemoryStore.Actor.USER })
-        assertEquals(oldPersona, File(root, "persona.md").readText())
-        assertEquals(oldHuman, File(root, "human.md").readText())
+        assertEquals(oldPersona, File(store.rootDirectory(), "persona.md").readText())
+        assertEquals(oldHuman, File(store.rootDirectory(), "human.md").readText())
 
         val conflictGroup = "reflection-group-2"
         store.beginReflectionGroup(conflictGroup, "session")
@@ -179,17 +179,17 @@ class MemoryReflectionTest {
             MemoryStore.Actor.REFLECTION, "session", conflictGroup)
         store.finishReflectionGroup(conflictGroup, "completed")
         store.write("persona.md", note("Interaction", "User likes examples and brevity."), MemoryStore.Actor.USER, "session")
-        val before = File(root, "persona.md").readText()
+        val before = File(store.rootDirectory(), "persona.md").readText()
         runCatching { store.undoReflectionGroup(conflictGroup, "session") }
             .onSuccess { error("Group undo must not overwrite a newer user edit") }
-        assertEquals(before, File(root, "persona.md").readText())
+        assertEquals(before, File(store.rootDirectory(), "persona.md").readText())
     }
 
     @Test
     fun reflectionWorkerOnlyHasMemoryToolsAndRejectsConnectorMcpAndOutsidePaths() {
         val files = temporaryFolder.newFolder("worker-files")
         val memoryRoot = File(files, "memory")
-        val memory = MemoryStore(memoryRoot, true, testMemorySeedProvider()).also { it.ensureInitialized() }
+        val memory = MemoryStore(memoryRoot, true, testMemorySeedProvider()).forConversation("reflection-test").also { it.ensureInitialized() }
         val workspace = WorkspaceStore(File(files, "workspaces"), "a".repeat(24), null, null,
             memory, "reflection-test", true, MemoryStore.Actor.REFLECTION, "worker-group", true)
         val tools = WorkspaceTools.createReflectionMemoryOnly(workspace)
@@ -228,16 +228,16 @@ class MemoryReflectionTest {
         assertEquals(MemoryStore.Actor.REFLECTION, result.revisions.single().actor)
         assertEquals("worker-group", result.revisions.single().reflectionGroupId)
         assertEquals("User prefers short responses and examples.", MemoryUiLogic.parseDocument(
-            "persona.md", File(memoryRoot, "persona.md").readText()).body.trim())
+            "persona.md", File(memory.rootDirectory(), "persona.md").readText()).body.trim())
         assertFalse(File(files, "workspace/outside.md").exists())
         assertFalse(File(files, "skills/secret.md").exists())
-        assertFalse(File(memoryRoot, "human.md").readText().contains("37.7749"))
+        assertFalse(File(memory.rootDirectory(), "human.md").readText().contains("37.7749"))
     }
 
     @Test
-    fun fakeReflectionWritesDatedEvidenceToPreferencesAndTheIncrementalIndexFindsIt() {
+    fun fakeReflectionWritesDatedEvidenceAndFreshScopedSearchFindsItWithoutCachingMemory() {
         val root = temporaryFolder.newFolder("dated-evidence-memory")
-        val memory = MemoryStore(root, true, testMemorySeedProvider()).also { it.ensureInitialized() }
+        val memory = MemoryStore(root, true, testMemorySeedProvider()).forConversation("dated-evidence-session").also { it.ensureInitialized() }
         val coordinator = MemorySearchIndexCoordinator(
             FileMemorySearchIndex(File(temporaryFolder.root, "dated-evidence-index.bin")), true)
         val group = "dated-evidence-group"
@@ -271,9 +271,10 @@ description: Stable preferences shared by the user.
                 CoreAgentModel(provider, "dated-evidence-session")).run(payload, CancellationToken.uncancellable())
             assertEquals(1, result.revisions.size)
             assertEquals(datedPage, memory.readUserFile("preferences.md"))
-            val indexed = coordinator.snapshot().single { it.zone == "memory" && it.path == "preferences.md" }
-            assertEquals("preferences.md", Bm25SearchRanker().rank("concise 2026-10-05",
-                listOf(indexed)).single().document.path)
+            val hit = coordinator.search(workspace, "concise 2026-10-05", setOf("memory"), null).single()
+            assertEquals("preferences.md", hit.document.path)
+            assertEquals(datedPage, hit.document.content)
+            assertFalse(coordinator.snapshot().any { it.zone == "memory" })
             memory.finishReflectionGroup(group, "completed")
         } finally { coordinator.disposeForTests() }
     }
@@ -282,7 +283,7 @@ description: Stable preferences shared by the user.
     fun cancellationAfterAWriteLeavesAnExplicitPartialGroupThatCanBeUndone() {
         val files = temporaryFolder.newFolder("cancel-worker-files")
         val memoryRoot = File(files, "memory")
-        val memory = MemoryStore(memoryRoot, true, testMemorySeedProvider()).also { it.ensureInitialized() }
+        val memory = MemoryStore(memoryRoot, true, testMemorySeedProvider()).forConversation("cancel-worker").also { it.ensureInitialized() }
         val workspace = WorkspaceStore(File(files, "workspaces"), "b".repeat(24), null, null,
             memory, "cancel-worker", true, MemoryStore.Actor.REFLECTION, "cancel-group", true)
         val tools = WorkspaceTools.createReflectionMemoryOnly(workspace)
@@ -303,21 +304,21 @@ description: Stable preferences shared by the user.
         }.exceptionOrNull()
         assertTrue(failure is MemoryReflectionWorker.Failure)
         assertTrue((failure as MemoryReflectionWorker.Failure).partial)
-        assertTrue(File(memoryRoot, "persona.md").readText().contains("User likes short answers"))
+        assertTrue(File(memory.rootDirectory(), "persona.md").readText().contains("User likes short answers"))
         assertEquals(1, memory.reflectionGroupRevisions("cancel-group").size)
         memory.undoReflectionGroup("cancel-group", "cancel-worker")
-        assertFalse(File(memoryRoot, "persona.md").readText().contains("User likes short answers"))
+        assertFalse(File(memory.rootDirectory(), "persona.md").readText().contains("User likes short answers"))
     }
 
     @Test
     fun providerInterruptionBeforeAnyWriteFailsAndLeavesARolledBackGroupWithoutRetry() {
         val files = temporaryFolder.newFolder("provider-before-write-files")
         val root = File(files, "memory")
-        val memory = MemoryStore(root, true, testMemorySeedProvider()).also { it.ensureInitialized() }
+        val memory = MemoryStore(root, true, testMemorySeedProvider()).forConversation("provider-before-write").also { it.ensureInitialized() }
         val session = "provider-before-write"
         val group = "provider-before-write-group"
-        val originalPersona = File(root, "persona.md").readText()
-        val originalHuman = File(root, "human.md").readText()
+        val originalPersona = File(memory.rootDirectory(), "persona.md").readText()
+        val originalHuman = File(memory.rootDirectory(), "human.md").readText()
         val originalRevisionIds = memory.listRevisions(null, null).map { it.id }.sorted()
         val workspace = WorkspaceStore(File(files, "workspaces"), "e".repeat(24), null, null,
             memory, session, true, MemoryStore.Actor.REFLECTION, group, true)
@@ -348,15 +349,15 @@ description: Stable preferences shared by the user.
         assertEquals("rolled_back", memory.reflectionGroupStatus(group))
         assertTrue(memory.reflectionGroupRevisions(group).isEmpty())
         assertEquals(originalRevisionIds, memory.listRevisions(null, null).map { it.id }.sorted())
-        assertEquals(originalPersona, File(root, "persona.md").readText())
-        assertEquals(originalHuman, File(root, "human.md").readText())
+        assertEquals(originalPersona, File(memory.rootDirectory(), "persona.md").readText())
+        assertEquals(originalHuman, File(memory.rootDirectory(), "human.md").readText())
         assertEquals(1, requests)
         assertEquals(0, writes)
         assertEquals(0, cancellations)
         assertFalse(token.isCancellationRequested)
         assertFalse(token.isTimedOut)
 
-        val reopened = MemoryStore(root, true, testMemorySeedProvider()).also { it.ensureInitialized() }
+        val reopened = MemoryStore(root, true, testMemorySeedProvider()).forConversation("provider-before-write").also { it.ensureInitialized() }
         assertEquals("rolled_back", reopened.reflectionGroupStatus(group))
         assertTrue(reopened.reflectionGroupRevisions(group).isEmpty())
         assertEquals(originalRevisionIds, reopened.listRevisions(null, null).map { it.id }.sorted())
@@ -366,11 +367,11 @@ description: Stable preferences shared by the user.
     fun providerInterruptionAfterOneWriteFailsAndRetainsExactlyOnePartialRevisionWithoutReplay() {
         val files = temporaryFolder.newFolder("provider-after-write-files")
         val root = File(files, "memory")
-        val memory = MemoryStore(root, true, testMemorySeedProvider()).also { it.ensureInitialized() }
+        val memory = MemoryStore(root, true, testMemorySeedProvider()).forConversation("provider-after-write").also { it.ensureInitialized() }
         val session = "provider-after-write"
         val group = "provider-after-write-group"
-        val originalPersona = File(root, "persona.md").readText()
-        val originalHuman = File(root, "human.md").readText()
+        val originalPersona = File(memory.rootDirectory(), "persona.md").readText()
+        val originalHuman = File(memory.rootDirectory(), "human.md").readText()
         val originalRevisionIds = memory.listRevisions(null, null).map { it.id }.sorted()
         val updatedPersona = note("Interaction", "User prefers concise answers and examples.")
         val workspace = WorkspaceStore(File(files, "workspaces"), "f".repeat(24), null, null,
@@ -421,18 +422,18 @@ description: Stable preferences shared by the user.
         assertEquals(originalPersona, revision.previousContent)
         assertEquals(updatedPersona, revision.newContent)
         assertEquals((originalRevisionIds + revision.id).sorted(), memory.listRevisions(null, null).map { it.id }.sorted())
-        assertEquals(updatedPersona, File(root, "persona.md").readText())
-        assertEquals(originalHuman, File(root, "human.md").readText())
+        assertEquals(updatedPersona, File(memory.rootDirectory(), "persona.md").readText())
+        assertEquals(originalHuman, File(memory.rootDirectory(), "human.md").readText())
         assertEquals(2, requests)
         assertEquals(1, writes)
         assertEquals(0, cancellations)
         assertFalse(token.isCancellationRequested)
         assertFalse(token.isTimedOut)
 
-        val reopened = MemoryStore(root, true, testMemorySeedProvider()).also { it.ensureInitialized() }
+        val reopened = MemoryStore(root, true, testMemorySeedProvider()).forConversation("provider-after-write").also { it.ensureInitialized() }
         assertEquals("partial", reopened.reflectionGroupStatus(group))
         assertEquals(listOf(revision.id), reopened.reflectionGroupRevisions(group).map { it.id })
-        assertEquals(updatedPersona, File(root, "persona.md").readText())
+        assertEquals(updatedPersona, File(memory.rootDirectory(), "persona.md").readText())
         assertEquals((originalRevisionIds + revision.id).sorted(), reopened.listRevisions(null, null).map { it.id }.sorted())
         assertEquals(1, writes)
         assertEquals(2, requests)
@@ -441,18 +442,18 @@ description: Stable preferences shared by the user.
     @Test
     fun abandonedInProgressReflectionRecoversAsPartialAfterProcessRestart() {
         val root = temporaryFolder.newFolder("abandoned-group")
-        val activeStore = MemoryStore(root, true, testMemorySeedProvider()).also { it.ensureInitialized() }
+        val activeStore = MemoryStore(root, true, testMemorySeedProvider()).forConversation("session").also { it.ensureInitialized() }
         val group = "abandoned-reflection"
         activeStore.beginReflectionGroup(group, "session")
         activeStore.write("persona.md", note("Interaction", "User prefers brief replies."),
             MemoryStore.Actor.REFLECTION, "session", group)
         activeStore.releaseReflectionGroup(group)
 
-        val restartedStore = MemoryStore(root, true, testMemorySeedProvider())
+        val restartedStore = MemoryStore(root, true, testMemorySeedProvider()).forConversation("session")
         restartedStore.ensureInitialized()
         assertEquals("partial", restartedStore.reflectionGroupStatus(group))
         assertEquals(1, restartedStore.reflectionGroupRevisions(group).size)
-        assertTrue(File(root, "persona.md").readText().contains("brief replies"))
+        assertTrue(File(restartedStore.rootDirectory(), "persona.md").readText().contains("brief replies"))
         restartedStore.undoReflectionGroup(group, "session")
     }
 
@@ -460,7 +461,7 @@ description: Stable preferences shared by the user.
     fun reflectionWorkerHasFiniteModelTurnLimitAndDoesNotLoopRetryingTools() {
         val files = temporaryFolder.newFolder("turn-limit-files")
         val memoryRoot = File(files, "memory")
-        val memory = MemoryStore(memoryRoot, true, testMemorySeedProvider()).also { it.ensureInitialized() }
+        val memory = MemoryStore(memoryRoot, true, testMemorySeedProvider()).forConversation("turn-limit").also { it.ensureInitialized() }
         val workspace = WorkspaceStore(File(files, "workspaces"), "c".repeat(24), null, null,
             memory, "turn-limit", true, MemoryStore.Actor.REFLECTION, "turn-limit-group", true)
         val tools = WorkspaceTools.createReflectionMemoryOnly(workspace)

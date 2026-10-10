@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="memory_scope_manage">Revisar permisos y notas antiguas</string>
+    <string name="memory_scope_title">Ámbito de la memoria</string>
+    <string name="memory_scope_close">Cerrar</string>
+    <string name="memory_scope_back">Volver a las notas</string>
+    <string name="memory_scope_current_chat">Este chat</string>
+    <string name="memory_scope_legacy">Notas antiguas</string>
+    <string name="memory_scope_shared">Personal compartida</string>
+    <string name="memory_scope_local_explanation">Estas notas pertenecen al chat actual. Los demás chats no pueden consultarlas salvo que revises y apruebes una versión exacta aquí.</string>
+    <string name="memory_scope_legacy_explanation">Originales antiguos sin clasificar. Jarvys no puede usarlos en ningún chat de forma predeterminada. Aquí permanecen intactos y en modo de solo lectura. Abrir una nota no la copia, migra ni comparte.</string>
+    <string name="memory_scope_shared_explanation">Solo las versiones aprobadas expresamente están disponibles para todos los chats actuales y futuros. Si el original cambia o desaparece, deja de compartirse hasta una nueva revisión y aprobación. Revocar impide futuras consultas; no elimina contenido ya enviado o incluido en el historial.</string>
+    <string name="memory_scope_review">Leer nota exacta y revisar permiso</string>
+    <string name="memory_scope_review_title">Revisar esta versión exacta</string>
+    <string name="memory_scope_share_explanation">Al aprobar, todo el contenido siguiente estará disponible como memoria personal para TODOS los chats actuales y futuros, incluidos proyectos distintos. Puede enviarse a tus proveedores de IA configurados cuando se consulte. Solo tú puedes aprobar aquí. Cualquier cambio requiere una nueva revisión. El original se conserva.</string>
+    <string name="memory_scope_exact_content">Contenido exacto que se compartirá</string>
+    <string name="memory_scope_consent">He revisado este contenido exacto y autorizo compartirlo con TODOS los chats actuales y futuros.</string>
+    <string name="memory_scope_approve">Aprobar esta versión para todos los chats</string>
+    <string name="memory_scope_source_legacy">Origen: original antiguo sin clasificar</string>
+    <string name="memory_scope_source_chat">Origen: nota local de una conversación</string>
+    <string name="memory_scope_conversation">Conversación: %1$s</string>
+    <string name="memory_scope_revision">Revisión original: %1$d</string>
+    <string name="memory_scope_hash">SHA-256: %1$s</string>
+    <string name="memory_scope_approved_at">Aprobado: %1$s</string>
+    <string name="memory_scope_status_active">Activo · todos los chats actuales y futuros</string>
+    <string name="memory_scope_status_stale">Detenido · cambió el original; requiere nueva revisión</string>
+    <string name="memory_scope_status_revoked">Revocado · no disponible para los chats</string>
+    <string name="memory_scope_revoke">Revocar permiso</string>
+    <string name="memory_scope_view_approved">Leer versión aprobada</string>
+    <string name="memory_scope_no_shared">No hay notas personales aprobadas para compartir.</string>
+    <string name="memory_scope_load_failed">No se pudo cargar la memoria. Cierra y vuelve a abrir para reintentar. No se añadió ningún permiso.</string>
+    <string name="memory_scope_review_failed">No se pudo revisar esta nota. No se autorizó compartirla. Vuelve a cargar y revisar el original.</string>
+    <string name="memory_scope_approval_failed">Esta revisión ya no es válida o no se pudo guardar. No hay ningún permiso nuevo activo. Revisa de nuevo el original actual antes de aprobar.</string>
+    <string name="memory_scope_revoke_failed">No se pudo confirmar la revocación. Vuelve a cargar la lista y comprueba su estado antes de reintentar.</string>
+    <string name="memory_scope_shared_success">Esta versión exacta está aprobada para todos los chats actuales y futuros.</string>
+    <string name="memory_scope_revoked_success">Permiso revocado. Se impiden futuras consultas desde los chats. El contenido ya enviado no cambia.</string>
+    <string name="memory_scope_read_legacy">Leer original (solo lectura)</string>
+    <string name="memory_scope_legacy_read_only">Este es el original intacto. Consultarlo no lo comparte ni autoriza el acceso desde ningún chat.</string>
+    <string name="memory_scope_revision_unavailable">Historial de revisiones no disponible; esta revisión queda vinculada al hash del contenido exacto.</string>
+    <string name="memory_ui_user_only_title">La memoria la revisas tú</string>
+    <string name="memory_ui_reopen_manually">Espera a que termine la acción automática del dispositivo. Después cierra esta pantalla y vuelve a abrir Memoria tú. Si sigue bloqueada, reinicia Jarvys. El control del dispositivo permanece pausado mientras Memoria está abierta.</string>
+</resources>

@@ -93,7 +93,8 @@ class MemorySearchToolTest {
     @Test
     fun aChatWithoutMemoryCannotSearchTheMemoryZone() {
         val files = temporaryFolder.newFolder("no-memory-files")
-        val memory = MemoryStore(File(files, "memory"), true, testMemorySeedProvider()).also { it.ensureInitialized() }
+        val memory = MemoryStore(File(files, "memory"), true, testMemorySeedProvider())
+            .forConversation("no-memory-session").also { it.ensureInitialized() }
         val workspace = WorkspaceStore(File(files, "workspaces"), "f".repeat(24), File(files, "skills"), null,
             memory, "no-memory-session", false)
         val coordinator = MemorySearchIndexCoordinator(
@@ -121,7 +122,7 @@ class MemorySearchToolTest {
             assertFalse(WorkspaceTools.create(crewWorkspace).any { it.declaration().name == "search_files" })
 
             val reflectionWorkspace = WorkspaceStore(temporaryFolder.newFolder("reflection-workspace"),
-                "e".repeat(24), null, null, memory, "reflection-session", true,
+                "e".repeat(24), null, null, memory, "search-scopes", true,
                 MemoryStore.Actor.REFLECTION, "reflection-group", true)
             assertFalse(WorkspaceTools.createReflectionMemoryOnly(reflectionWorkspace)
                 .any { it.declaration().name == "search_files" })
@@ -134,7 +135,7 @@ class MemorySearchToolTest {
         val projectRoot = File(temporaryFolder.root, "$name-project")
         val skillsRoot = File(temporaryFolder.root, "$name-skills").apply { mkdirs() }
         val memoryRoot = File(temporaryFolder.root, "$name-memory")
-        val memory = MemoryStore(memoryRoot, true, testMemorySeedProvider())
+        val memory = MemoryStore(memoryRoot, true, testMemorySeedProvider()).forConversation(name)
         val workspace = WorkspaceStore(projectRoot, WorkspaceStore.projectIdForSession(name), skillsRoot,
             object : WorkspaceStore.SkillWorkspaceObserver {
                 override fun commitSkillWorkspaceWrite(skillId: String, skillMarkdown: String?, writeFile: Runnable) {

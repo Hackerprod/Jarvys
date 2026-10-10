@@ -15,6 +15,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsDisplayed
@@ -303,7 +304,7 @@ class MemoryNavigationComposeTest {
         }
         compose.onNodeWithTag("memory-editor-name").assertTextContains("Conflict title")
         val originalRevision = store.latestRevisionId("conflicted.md")
-        store.write("conflicted.md", document("Agent title", "Agent's update"), MemoryStore.Actor.AGENT, "agent-session")
+        store.write("conflicted.md", document("Agent title", "Agent's update"), MemoryStore.Actor.AGENT, SESSION)
         assertTrue(store.latestRevisionId("conflicted.md") > originalRevision)
         compose.onNodeWithTag("memory-editor-body").performScrollTo().performTextClearance()
         compose.onNodeWithTag("memory-editor-body").performTextInput("My competing edit")
@@ -326,6 +327,32 @@ class MemoryNavigationComposeTest {
         compose.onNodeWithTag("memory-shared-title").assertTextContains(context.getString(R.string.memory_history))
         nav.controller.navigate(AppNavigationBackPolicy.memoryFile("human.md", false))
         compose.onNodeWithTag("memory-shared-title").assertTextContains(context.getString(R.string.memory_title))
+    }
+
+    @Test fun leavingNativeShareReviewForChatDiscardsConsentAndReentryStartsAtHome() {
+        val store = newStore()
+        val nav = showMemory(store)
+        compose.onNodeWithTag("memory-home-list").performScrollToIndex(4)
+        compose.onNodeWithTag("memory-scope-open").performClick()
+        compose.waitUntil(10_000) {
+            runCatching {
+                compose.onNodeWithTag("memory-scope-list").performScrollToNode(
+                    androidx.compose.ui.test.hasTestTag("memory-scope-review-human.md"))
+                true
+            }.getOrDefault(false)
+        }
+        compose.onNodeWithTag("memory-scope-review-human.md").performClick()
+        compose.waitUntil(10_000) {
+            runCatching { compose.onNodeWithTag("memory-scope-consent").fetchSemanticsNode(); true }.getOrDefault(false)
+        }
+        compose.onNodeWithTag("memory-scope-consent").performScrollTo().performClick()
+        compose.onNodeWithTag("memory-scope-approve").assertIsEnabled()
+        compose.runOnIdle { nav.controller.navigate(AppNavigationBackPolicy.CHAT_ROOT) }
+        compose.onNodeWithTag("memory-test-enter").assertIsDisplayed().performClick()
+        awaitRoute(nav, AppNavigationBackPolicy.MEMORY)
+        compose.onNodeWithTag("memory-home-list").assertIsDisplayed()
+        compose.onNodeWithTag("memory-scope-dialog").assertDoesNotExist()
+        assertTrue(store.listSharedPersonalForUser().isEmpty())
     }
 
     @Test fun memoryFileRouteEncodesPathAndRetainsNewFlag() {
@@ -483,7 +510,7 @@ class MemoryNavigationComposeTest {
     private fun newStore(): MemoryStore = MemoryStore(
         Files.createTempDirectory("n1c-memory-route").toFile(), true,
         testMemorySeedProvider(AppLanguageChoice.ENGLISH),
-    ).also { it.ensureInitialized() }
+    ).forConversation(SESSION).also { it.ensureInitialized() }
 
     private fun document(name: String, body: String) =
         "---\nname: $name\ndescription: navigation test file\n---\n$body"

@@ -26,7 +26,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.regex.Pattern;
 
-/** Routes per-conversation project files, app-wide skills, and the separate global memory root. */
+/** Routes per-conversation project files and memory, plus app-wide installed skills. */
 public final class WorkspaceStore {
     public static final int MAX_FILE_BYTES = 256 * 1024;
     private static final long MAX_WORKSPACE_BYTES = 16L * 1024L * 1024L;
@@ -125,7 +125,9 @@ public final class WorkspaceStore {
         root = new File(workspacesRoot, projectId);
         this.skillsRoot = skillsRoot;
         this.skillWorkspaceObserver = skillWorkspaceObserver;
-        this.memoryStore = memoryStore;
+        this.memoryStore = memoryStore != null
+                && conversationId != null && !conversationId.trim().isEmpty()
+                ? memoryStore.forConversation(conversationId) : null;
         this.conversationId = conversationId;
         this.memoryAccessAllowed = memoryAccessAllowed;
         this.memoryActor = memoryActor == null ? MemoryStore.Actor.AGENT : memoryActor;
@@ -816,8 +818,8 @@ public final class WorkspaceStore {
     }
 
     private MemoryStore requireMemoryStore() {
-        if (memoryStore == null) throw new IllegalArgumentException("The /memory/ zone is unavailable in this workspace");
         if (!memoryAccessAllowed) throw new IllegalStateException("Memory is disabled for this conversation");
+        if (memoryStore == null) throw new IllegalArgumentException("The /memory/ zone is unavailable in this workspace");
         if (!memoryStore.isEnabled()) throw new IllegalStateException("User memory is disabled in Settings");
         memoryStore.ensureInitialized();
         return memoryStore;
