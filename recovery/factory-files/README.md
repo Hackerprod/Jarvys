@@ -1,6 +1,6 @@
 # v68 / 1.2.61-FACTORY-FILES
 
-Status: implementation, final host gates and independent three-APK audit passed; signing/delivery pending.
+Status: implementation, final host gates and independent three-APK audit passed; signed native send accepted.
 
 Bounded `share.file` consumes an untouched read handle, maximum 8 MiB, into an immutable
 snapshot. A native 32 KiB Binder protocol transfers it to the exactly authenticated
@@ -23,8 +23,8 @@ six-module aggregate passed against 1,015 frozen app inputs: Full 2,984, Play 2,
 runtime 68+68, core 204+204, with zero failures/errors/skips; fresh SDK TAP passed 12.
 All 17 test JVMs have verified offline-guard install/shutdown records; attempted network
 access was blocked (8 Full, 8 Play). Exact lint multisets remain 313/300/3/2. All three
-unsigned APK builds and independent artifact audit passed. D7 signing and native delivery
-remain pending. Final implementation source is backed up in commit `6ede7f9`.
+unsigned APK builds and independent artifact audit passed. The existing D7 ARM64 test-signing workflow and native send completed
+(acceptance recorded below). Final implementation source is backed up in commit `6ede7f9`.
 A cold-start admission race found by independent review was fixed with one bounded
 startup waiter; both sharing and existing SAF have explicit interrupted-startup tests.
 No real device, user document or third-party share has been used. Other F1/F2/F3 and
@@ -39,3 +39,11 @@ API 27 public-field references. These checks do not establish physical FD semant
 Delivery input is exclusively the immutable Full Release unsigned APK, SHA-256
 `a516501df1a6b4cbae8e79aed20766c2420de2ada88431e55a4053c8bc5d2bba`,
 for the existing ARM64 D7 test-signing workflow. Debug artifacts are audit inputs only.
+
+Signed native send accepted on 2026-10-10 at 07:00:23 UTC:
+`Jarvys-Factory-files-full-v68-arm64-test.apk`, 19,088,955 bytes, SHA-256
+`71f1080eaf4a0f86327726475745ae2e56a00bfe52977467e394f0991f3932d7`.
+Existing D7 signature v2/v3, CRC and 16 KiB alignment verified. The manifest and all
+239 retained entries match the reviewed release; only nine non-ARM64 libraries were
+omitted. Native-send acceptance does not establish download, installation, update
+compatibility, data preservation or physical feature acceptance.
