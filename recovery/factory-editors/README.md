@@ -1,6 +1,6 @@
 # UX42 F1 v73: typed email and SMS editors
 
-Preparation version 73 / `1.2.66-FACTORY-EDITORS`. Implementation and host validation in progress.
+Preparation version 73 / `1.2.66-FACTORY-EDITORS`. Host implementation, validation and independent release audit passed; signed delivery still pending.
 This is a bounded capability slice, not completion of Factory or physical Android acceptance.
 
 ## Scope
@@ -49,3 +49,32 @@ unattached Robolectric accessibility node omitted contentDescription. Those fixt
 full node.text accessibility assertion and now check the initialized view description directly.
 No failed run is a final gate. The final 1,074 app inputs are frozen for fresh lint, six-suite
 aggregate, SDK and three APK builds. Independent source review finds no production blocker so far.
+
+## Final frozen-source host receipt
+
+Implementation checkpoint `5bdc9d5`; fixture correction `6980fc0`; app tree
+`8a16b5d2ba3bfff9f0c2271a6e987010c6c8f7c3`. Root README publication `6ce216e` is
+documentation-only. All 1,074 app inputs were identical for final lint, aggregate and builds.
+
+Fresh aggregate: Full 3,329; Play 2,947; runtime 72+72; shared core 485+485, total 7,390,
+zero failures/errors/skips. SDK 20/20. All 17 test JVMs have matching offline-guard evidence;
+16 external HTTP(S) attempts were blocked, eight per host flavor, matching the previous baseline,
+zero in core/runtime. No individual test attribution. Fresh lint preserves the exact diagnostic
+multisets 313/300/3/2, with no additions/removals or new suppressions. Independent source,
+history, v63–v72 test preservation, gate freshness and actual three-APK audit passed.
+
+Actual unsigned APKs, version 73 / `1.2.66-FACTORY-EDITORS`:
+- FullDebug: 35,153,288 bytes; SHA-256 `2161ed8dae3fa57255b0b5bc3f064edd12d180b57510f55e63d8cd0a36b03241`.
+- PlayDebug: 33,541,582 bytes; SHA-256 `73c26063d23f7163656329cbe59a7ba48c2893d0f2853c91a688ef58cfe34ae0`.
+- FullRelease: 27,449,609 bytes; SHA-256 `2156f046de30e46af955c6bfcd53cf9e6fb36792d4c66daf9fbb35c59ef9e5c9`.
+
+The first binary audit stopped on generated-class name shifts. Its failure evidence is retained.
+A strict symbolic comparison verified the native-review anonymous classes and all 39 release
+IdentityActivity lambdas, including every parent field/method/callsite after explicit simultaneous
+mapping. The full audit was repeated; no production/build change or blanket equivalence allowance.
+
+Audit checks actual ZIP/DEX/manifests/resources, unchanged permissions/native assets, and embedded
+permissionless runtime templates. No real composer, contact lookup, email/SMS sending, installation
+or user-data transmission was executed. Physical Binder/UI behavior, update/data preservation,
+recipient behavior and actual external-task closure remain unverified. Signature and native
+delivery receipts are recorded separately after confirmation.
