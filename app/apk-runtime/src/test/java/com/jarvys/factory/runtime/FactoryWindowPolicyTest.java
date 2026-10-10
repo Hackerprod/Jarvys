@@ -66,8 +66,20 @@ public class FactoryWindowPolicyTest {
     }
 
     private static void assertLightThemeAttribute(FactoryActivity activity, boolean expected) {
-        android.content.res.TypedArray attrs=activity.obtainStyledAttributes(new int[]{android.R.attr.isLightTheme});
-        try { assertEquals(expected,attrs.getBoolean(0,!expected)); } finally { attrs.recycle(); }
+        // isLightTheme is a public framework attribute only from API 29. Earlier framework
+        // themes are verified through their native surface, not a missing attribute fallback.
+        if (Build.VERSION.SDK_INT >= 29) {
+            TypedArray attrs=activity.obtainStyledAttributes(new int[]{android.R.attr.isLightTheme});
+            try { assertTrue(attrs.hasValue(0)); assertEquals(expected,attrs.getBoolean(0,!expected)); }
+            finally { attrs.recycle(); }
+        } else {
+            TypedArray attrs=activity.obtainStyledAttributes(new int[]{android.R.attr.colorBackground});
+            try {
+                assertTrue(attrs.hasValue(0));
+                int color=attrs.getColor(0,Color.MAGENTA);
+                assertEquals(expected,(Color.red(color)+Color.green(color)+Color.blue(color))>384);
+            } finally { attrs.recycle(); }
+        }
         assertTrue(FactoryPresentation.DEFAULT.same(activity.appliedPresentation()));
     }
 

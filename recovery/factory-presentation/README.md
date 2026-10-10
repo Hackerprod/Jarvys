@@ -24,3 +24,11 @@ Detailed methods, lifecycle semantics and Android source links: [APK_FACTORY](..
 
 TTS/voice, sensors/biometrics, backup/restore, local UI libraries and other F1/F2/F3 work remain open.
 UX34 keeps its gates, UX44 remains documentary, and UX43 remains last.
+
+## Preliminary validation attempts
+
+SDK30 and core731 passed. The first full runtime attempt had 74 cases with six failures in a
+new test assertion that queried the public `isLightTheme` attribute on API24/26/28, before that
+attribute existed publicly. All original UX35 assertions stayed intact. The reviewed test-only
+correction checks native background contrast on those APIs and the theme attribute on API29+;
+all 74 runtime cases then passed. Failed evidence is retained. Complete release gates are pending.
