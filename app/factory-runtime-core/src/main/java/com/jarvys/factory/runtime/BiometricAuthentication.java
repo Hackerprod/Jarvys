@@ -38,7 +38,18 @@ public final class BiometricAuthentication {
                 int cp=value.codePointAt(i); int type=Character.getType(cp);
                 if(Character.isISOControl(cp)||type==Character.FORMAT||type==Character.SURROGATE||type==Character.LINE_SEPARATOR||type==Character.PARAGRAPH_SEPARATOR)
                     throw new FactoryException("INVALID_ARGUMENT","Authentication reason must be bounded plain text.");
-                if(!Character.isWhitespace(cp)&&!Character.isSpaceChar(cp))visible=true;
+                // Marks may decorate visible text, but selectors/combining marks alone are not a reason.
+                switch(type) {
+                    case Character.UPPERCASE_LETTER: case Character.LOWERCASE_LETTER:
+                    case Character.TITLECASE_LETTER: case Character.MODIFIER_LETTER: case Character.OTHER_LETTER:
+                    case Character.DECIMAL_DIGIT_NUMBER: case Character.LETTER_NUMBER: case Character.OTHER_NUMBER:
+                    case Character.CONNECTOR_PUNCTUATION: case Character.DASH_PUNCTUATION:
+                    case Character.START_PUNCTUATION: case Character.END_PUNCTUATION:
+                    case Character.INITIAL_QUOTE_PUNCTUATION: case Character.FINAL_QUOTE_PUNCTUATION:
+                    case Character.OTHER_PUNCTUATION: case Character.MATH_SYMBOL: case Character.CURRENCY_SYMBOL:
+                    case Character.MODIFIER_SYMBOL: case Character.OTHER_SYMBOL: visible=true; break;
+                    default: break;
+                }
                 i+=Character.charCount(cp);
             }
             if(!visible)throw new FactoryException("INVALID_ARGUMENT","Authentication reason must contain visible text.");

@@ -36,9 +36,10 @@ public class BiometricAuthenticationTest {
     void advance(long ms){while(ms>0){long step=Math.min(ms,100);now+=step;Shadows.shadowOf(Looper.getMainLooper()).idleFor(step,TimeUnit.MILLISECONDS);ms-=step;}}
     @Test public void validationRejectsMissingTypesUnknownAndSpoofingText()throws Exception{
         for(String raw:new String[]{"{}","{\"reason\":null}","{\"reason\":1}","{\"reason\":true}","{\"reason\":\"ok\",\"fallback\":true}"})assertThrows(Exception.class,()->BiometricAuthentication.Request.parse(new JSONObject(raw)));
-        for(String bad:new String[]{"","   ","\u00a0\u2003","\n","x\u202eabc","x\u200b","x\u2066","x\u2028","x\u2029","x\ud800","x\udfff",new String(new char[161]).replace('\0','x')})
+        for(String bad:new String[]{"","   ","\u00a0\u2003","\ufe0f","\u0301\ufe0f"," \u0301 ","\n","x\u202eabc","x\u200b","x\u2066","x\u2028","x\u2029","x\ud800","x\udfff",new String(new char[161]).replace('\0','x')})
             assertThrows(FactoryException.class,()->BiometricAuthentication.Request.parse(new JSONObject().put("reason",bad)));
         assertEquals("Verificación 🔐",BiometricAuthentication.Request.parse(new JSONObject().put("reason","Verificación 🔐")).reason);
+        assertEquals("e\u0301 \u2764\ufe0f",BiometricAuthentication.Request.parse(new JSONObject().put("reason","e\u0301 \u2764\ufe0f")).reason);
         assertEquals(160,BiometricAuthentication.Request.parse(new JSONObject().put("reason",new String(new char[160]).replace('\0','x'))).reason.length());
     }
     @Test public void availabilityIsCoarseAndNeverAnAuthenticationReceipt()throws Exception{
