@@ -1,6 +1,6 @@
 # v70 / 1.2.63-FACTORY-AUDIO
 
-Status: implementation and synthetic tests in progress. No completed validation or APK delivery claim.
+Status: final host validation and independent three-APK audit passed. Existing-D7 signing and native delivery pending. Physical/device acceptance remains unverified.
 
 Independent design review and current official Android documentation preceded edits. Local
 binary playback replaces the blocked strict-TTS proposal; TTS/recognition remain pending.
@@ -10,8 +10,8 @@ native human one-shot Play, protected durable recovery, authenticated terminal c
 audio focus and lifecycle teardown. No external engine, codec, URI/path API or network addition.
 
 Source tests are synthetic. No actual sound, device, user file or third-party data transmission.
-Full fresh aggregate, exact lint multiset baseline 313/300/3/2, three actual APK audits and
-separate existing-D7 ARM64 signing/native delivery remain release gates. Detailed host reports
+Full fresh aggregate, exact lint multiset baseline 313/300/3/2 and three actual APK audits
+passed. Separate existing-D7 ARM64 signing/native delivery remain release gates. Detailed host reports
 stay outside the repository. Preserve v63–v69, all other family gates, UX34 and UX43-last.
 
 Current contract and official references are in app/APK_FACTORY.md. Native callbacks/IPC are
@@ -53,3 +53,40 @@ The restored skill is 16,365 UTF-8 bytes and passes 18 focused unchanged skill-c
 cases. One wrong-working-directory retry failed before any tests and is retained as a setup
 failure, not validation; the corrected invocation passed. Final pipeline restarts from the
 repaired frozen source.
+
+## Final host validation
+
+This completed run supersedes the historical pending stages above. Source checkpoint
+`6869187f7234de305d9cdeab8b1d723e246c8268`, app tree
+`d299749fd85e233d23409f844df7e722c33f7841`, all 1,040 frozen inputs unchanged
+before/after tests, lint, build and independent audit. Freeze SHA-256:
+`2bdf30f3ec389f0f6b9180ea69744cec6967c7d5f183f16ea2e65863ce3d04c3`.
+
+Fresh aggregate: Full 3,104; Play 2,722; APK runtime 70 + 70; core 282 + 282.
+All 6,530 cases passed with zero failures/errors/skips. SDK: 14 passed.
+All 17 test JVMs have independently verified matching offline-guard launch/install/shutdown
+evidence. Sixteen external attempts were blocked (eight per host flavor); runtime/core had
+zero blocked attempts. This is not a claim that no network was attempted globally.
+Final lint matches exact diagnostic multisets 313/300/3/2, zero additions/removals and no
+new suppressions. All three APKs passed actual ZIP/DEX, manifest/permission, resources,
+assets, native-library and generated-template audit.
+
+| Unsigned artifact | Bytes | SHA-256 |
+| --- | ---: | --- |
+| Full Debug | 35,064,664 | `b35c1bccf7ee2e4471877cca16e6ea0191c03d896720ebebf7d594d7bb790cc7` |
+| Play Debug | 33,452,770 | `2a209deb6163afb9e6d89758209f5be7d21217e33ff8ea939831615fb234189f` |
+| Full Release | 27,378,249 | `85a7e1bb7b63e70b93341ecdc9bff16b3df89bd27fa3186629760d49bf5379f7` |
+
+Shared generated template SHA-256:
+`7bf7d5351e7029b3586cf4e88814a2bba82b393910cfc5ec5f30c55f10c3943c`.
+Historical tests are retained with three exhaustive-profile renames in v70; prior v64
+memory-name migrations and the strengthened v66 installer-permission case remain recorded
+in their normal history. No failed exploratory evidence is replaced by the passing run.
+
+Native Play uses Android's current output and volume: other people or connected devices
+may hear the sound. Playback is one-shot, never automatic resume. `playbackAttempted` does
+not establish audibility; `audibilityConfirmed` remains false. Cancellation is requested,
+not a hard realtime physical-stop guarantee. Focus, routing, Binder, playback, cleanup and
+restart were exercised with synthetic host fixtures only. No actual sound, user media,
+installation or physical acceptance was performed. TTS/recognition, other families,
+F2/F3 and UX34 gates remain pending; UX43 stays last.
