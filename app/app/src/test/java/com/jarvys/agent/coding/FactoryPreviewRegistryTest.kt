@@ -154,7 +154,13 @@ class FactoryPreviewRegistryTest {
         for (capabilities in listOf(emptyList(), com.jarvys.factory.contract.CapabilityCatalog.NAMES)) {
             val result = FactoryRuntimeContractTests.run(snapshot(capabilities), "com.jarvys.host", 34, 34) {}
             assertEquals("passed", result.getString("state"))
-            assertEquals(13, result.getJSONArray("observations").length())
+            val observations = result.getJSONArray("observations")
+            assertEquals(19, observations.length())
+            val documentAssertions = (0 until observations.length()).map { observations.getJSONObject(it) }
+                .filter { it.getString("operation").startsWith("documents.") }
+            assertEquals(6, documentAssertions.size)
+            val suffix = if ("documents" in capabilities) ":preview_unavailable" else ":undeclared_denied"
+            assertTrue(documentAssertions.all { it.getString("operation").endsWith(suffix) && it.getString("outcome") == "passed" })
             assertEquals("shared_core_test", result.getString("mode"))
             assertTrue(result.getString("evidence_limit").contains("were not tested"))
             assertFalse(result.toString().contains("factory-test"))

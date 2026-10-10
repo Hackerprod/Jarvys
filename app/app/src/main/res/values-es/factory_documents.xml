@@ -3,7 +3,7 @@
     <string name="factory_documents_settings_summary">Revisar y cerrar el acceso a documentos interrumpido</string>
     <string name="factory_documents_use">Usar este documento</string>
     <string name="factory_documents_title">Documentos de Factory</string>
-    <string name="factory_documents_disclosure">Solo tú puedes elegir un documento en el selector de Android. La automatización del dispositivo permanece bloqueada hasta que cierres esta interacción explícitamente. Jarvys no lee el documento. La app verificada recibe acceso temporal únicamente a tu selección. Solo se admite el último APK firmado exactamente.</string>
+    <string name="factory_documents_disclosure">Elige tú el documento en el selector de Android. La automatización del dispositivo mediante Jarvys permanece bloqueada hasta que cierres esta interacción explícitamente. Jarvys no lee el documento. La app verificada recibe acceso temporal únicamente a tu selección. Solo se admite el último APK firmado exactamente.</string>
     <string name="factory_documents_choose">Revisar en el selector de Android</string>
     <string name="factory_documents_close">Cancelar / cerrar</string>
     <string name="factory_documents_recover">Cerré el selector y la tarea anteriores; confirmar y cerrar</string>

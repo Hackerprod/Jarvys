@@ -301,12 +301,13 @@ public class FactoryRuntimeDocumentsTest {
     }
     @Test public void saturatedOpenQueueReleasesReservationAndGrant() throws Exception {
         CountDownLatch release = blockIo();
-        for (int i = 0; i < 16; i++) executor().execute(() -> { });
+        CountDownLatch drained = new CountDownLatch(16);
+        for (int i = 0; i < 16; i++) executor().execute(drained::countDown);
         Response response = open(); runtime.onActivityResult(42, Activity.RESULT_OK, result());
         assertEquals("BUSY", response.error()); assertEquals(0, provider.opens.get());
         awaitCleanup(); assertNull(field("documentSelection").get(runtime));
         for (int i = 0; i < DocumentHandles.MAX_HANDLES; i++) handles().reserveRead().cancel();
-        release.countDown(); idleIo();
+        release.countDown(); assertTrue(drained.await(5, TimeUnit.SECONDS)); idleIo();
     }
     @Test public void delayedGrantCleanupBlocksSameUriSelectionAcrossRuntimeInstances() throws Exception {
         open(); Intent old = result();

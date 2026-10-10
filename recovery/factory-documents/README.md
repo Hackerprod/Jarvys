@@ -31,3 +31,16 @@ Sources consulted 2026-10-10:
 - https://developer.android.com/reference/android/app/Activity#finishActivity(int)
 
 This checkpoint is unfinished source, not a claim that tests/builds/security review passed.
+
+## Staged validation checkpoint
+
+The initial aggregate completed Full 2,932, Play 2,550 and runtime Debug/Release 67 each
+with zero failures/errors/skips. The overall run failed: three API variants of the core
+saturation test submitted a drain sentinel while its deliberately full queue remained full.
+The reviewed fixture fix waits for all 16 queued fillers, preserving every production assertion.
+A separate reviewed native test-receipt delta adds all six document methods to Coding test,
+asserting preview UNAVAILABLE or undeclared CAPABILITY_DENIED (19 observations total).
+Exactly those three source/test files differ from the aggregate freeze. Final focused
+Full/Play, complete core Debug/Release, fresh lint and three APK builds are still pending.
+Earlier full app/runtime results will be reported as staged coverage, never as a successful
+full aggregate on the final delta. No physical provider or device acceptance is claimed.

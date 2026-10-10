@@ -1,6 +1,7 @@
 # Pendientes de Jarvys
 
 - **UX42 / F1 v67 en implementación:** primer corte SAF/binarios con broker nativo de Jarvys, autenticación recíproca, protección humana durable y handles opacos efímeros. Solo código/pruebas sintéticas; todavía sin validación final, firma ni entrega. FileProvider y las otras familias F1/F2/F3 permanecen abiertas. La recuperación incierta exige intervención humana explícita; la convivencia de los dos hosts conocidos se rechaza. UX34 fases 1–4 conserva sus gates y UX43 permanece último.
+  - Validación por etapas en curso: módulos completos Full 2.932, Play 2.550 y runtime 67+67 sin fallos; la ejecución agregada completa falló en tres variantes de una espera del fixture de saturación del núcleo (119 pruebas). Se conserva ese fallo. Revisión independiente aprueba esperar el vaciado de la cola sin relajar assertions y añadir seis comprobaciones reales de documentos al recibo Coding test (19 resultados). Las focalizadas finales, núcleo completo Debug/Release, lint, tres APK, firma y entrega siguen pendientes.
 
 Actualizado: 2026-10-10 (UTC).
 

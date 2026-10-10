@@ -3,7 +3,7 @@
     <string name="factory_documents_settings_summary">Review and close interrupted document access</string>
     <string name="factory_documents_use">Use this document</string>
     <string name="factory_documents_title">Factory documents</string>
-    <string name="factory_documents_disclosure">Only you can choose a document in Android’s picker. Automated device access stays blocked until this interaction is explicitly closed. Jarvys does not read the document. The verified app receives only temporary access to your selection. Only the latest exactly signed APK is supported.</string>
+    <string name="factory_documents_disclosure">Choose the document yourself in Android’s picker. Jarvys’s automated device access stays blocked until this interaction is explicitly closed. Jarvys does not read the document. The verified app receives only temporary access to your selection. Only the latest exactly signed APK is supported.</string>
     <string name="factory_documents_choose">Review in Android picker</string>
     <string name="factory_documents_close">Cancel / close</string>
     <string name="factory_documents_recover">I closed the old picker and task; acknowledge and close</string>

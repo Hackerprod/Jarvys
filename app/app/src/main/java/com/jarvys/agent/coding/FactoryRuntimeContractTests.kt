@@ -24,7 +24,9 @@ internal object FactoryRuntimeContractTests {
             BridgeProtocol.validate(BridgeProtocol.ORIGIN, true, request(method, args), config), config, store,
             FactoryDispatcher.previewMetadata(hostAppId, api, targetSdk), FactoryDispatcher.simulatedEffects())
         try {
-            val ordered = listOf("runtime.info", "storage.set", "storage.get", "storage.list", "storage.remove", "export.text", "share.text", "clipboard.write", "haptics.perform", "device.info")
+            val ordered = listOf("runtime.info", "storage.set", "storage.get", "storage.list", "storage.remove", "export.text", "share.text", "clipboard.write", "haptics.perform", "device.info",
+                "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel")
+            check(ordered.toSet() == CapabilityCatalog.METHODS.keys) { "Synthetic contract cases must cover the compiled catalog" }
             for (method in ordered) {
                 val args = when (method) {
                     "storage.set" -> JSONObject().put("key", "factory-test").put("value", "synthetic")
@@ -32,12 +34,21 @@ internal object FactoryRuntimeContractTests {
                     "export.text" -> JSONObject().put("filename", "factory-test.txt").put("text", "synthetic")
                     "share.text", "clipboard.write" -> JSONObject().put("text", "synthetic")
                     "haptics.perform" -> JSONObject().put("kind", "tap")
+                    "documents.open" -> JSONObject().put("mimeType", "application/octet-stream")
+                    "documents.create" -> JSONObject().put("mimeType", "application/octet-stream").put("filename", "synthetic.bin")
+                    "documents.read" -> JSONObject().put("handle", "0".repeat(64)).put("offset", 0).put("length", 1)
+                    "documents.write" -> JSONObject().put("handle", "0".repeat(64)).put("offset", 0).put("data", "AA==")
+                    "documents.close" -> JSONObject().put("handle", "0".repeat(64))
                     else -> JSONObject()
                 }
                 val capability = CapabilityCatalog.METHODS.getValue(method).capability
                 if (capability != null && capability !in config.capabilities) {
                     assertion("$method:undeclared_denied") {
                         try { dispatch(method, args); false } catch (failure: FactoryException) { failure.code == "CAPABILITY_DENIED" }
+                    }
+                } else if (capability == "documents") {
+                    assertion("$method:preview_unavailable") {
+                        try { dispatch(method, args); false } catch (failure: FactoryException) { failure.code == "UNAVAILABLE" }
                     }
                 } else assertion("$method:shared_handler") {
                     val result = dispatch(method, args)
