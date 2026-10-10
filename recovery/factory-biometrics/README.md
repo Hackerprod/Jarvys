@@ -1,7 +1,7 @@
 # Factory local strong biometrics v80: implementation and evidence status
 
 Version 80 / `1.2.73-FACTORY-BIOMETRICS` is in progress from published v79 baseline `5c177d3`.
-This record claims no completed v80 final host aggregate, lint, independent APK audit, signed
+This record claims no completed v80 final host aggregate, independent APK audit, signed
 artifact or delivery. Do not reuse earlier evidence as if it validated the final v80 source.
 SDK 2/schema/protocol 1; 20 capabilities/42 methods. v79 remains the latest completed delivery.
 
@@ -76,3 +76,16 @@ Materialize these tools into the documented external layout before use; rebuildi
 requires fresh checks and independent approval before any exact hash re-pin. The portable
 launcher is a reviewed recovery source, not a claim that it ran the current final gates.
 No generated APK, guard JAR, signing material, private data or raw host report is included.
+
+### Fresh controlled lint after recovery
+
+Fresh offline lint completed against reconstructed v79 and frozen v80 source on 2026-10-10.
+Independent review verified identical complete diagnostic multisets for Full/Play/runtime/core:
+321/311/5/4, with zero diagnostics added or removed by v80. Both runs used the same 66 pinned
+metadata and version-marker inputs; their bytes and inventory were verified before and after.
+Historical 313/300/3/2 counts remain historical and were not reproduced: the original XML and
+metadata cache were lost at reset. No diagnostic was suppressed to match those old counts.
+The candidate Gradle lint run succeeded; its wrapper initially rejected the historical fixed
+counts. After independent approval, only those four reference constants were calibrated and
+the exact-multiset comparator was rerun successfully. This was not another Gradle lint run.
+Full aggregate tests, three-APK comparison, signing and delivery remain open.

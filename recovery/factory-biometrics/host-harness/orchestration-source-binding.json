@@ -1,8 +1,8 @@
 {
   "compare_lint.py": {
     "source_relative_path": "FACTORY-BIOMETRICS-v80-validation/compare_lint.py",
-    "source_sha256": "31519f79f442499c731a1cb23ef554da9805a46e897b13ea98d4c76ded72100e",
-    "packaged_sha256": "31519f79f442499c731a1cb23ef554da9805a46e897b13ea98d4c76ded72100e",
+    "source_sha256": "0957db766a176faed6306ccbdffc29360cb7ceaaff404c0e338a3ee10e680115",
+    "packaged_sha256": "0957db766a176faed6306ccbdffc29360cb7ceaaff404c0e338a3ee10e680115",
     "unchanged_logic": true
   },
   "factory-evidence.init.gradle": {

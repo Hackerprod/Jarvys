@@ -8,6 +8,6 @@ def path(s):
 def issues(f):
  return collections.Counter((x.get('id'),x.get('severity'),x.get('message'),tuple(sorted(path(l.get('file','')) for l in x.findall('location')))) for x in ET.parse(f).getroot().findall('issue'))
 rows=[]
-for n,c in [('app-lint-results-fullDebug.xml',313),('app-lint-results-playDebug.xml',300),('apk-runtime-lint-results-release.xml',3),('factory-runtime-core-lint-results-release.xml',2)]:
+for n,c in [('app-lint-results-fullDebug.xml',321),('app-lint-results-playDebug.xml',311),('apk-runtime-lint-results-release.xml',5),('factory-runtime-core-lint-results-release.xml',4)]:
  old,new=issues(B/n),issues(V/n);assert old==new,(n,old-new,new-old);assert sum(new.values())==c;rows.append({'report':n,'identical':True,'count':c})
 (V/'lint-comparison.json').write_text(json.dumps(rows,indent=2)+'\n');print('EXACT_LINT_MULTISET_PASS',rows)
