@@ -1,7 +1,7 @@
 # UX42 F1 v77: per-app presentation preferences
 
 Version 77 / `1.2.70-FACTORY-PRESENTATION`: final host aggregate, exact lint, three APK builds and independent
-source/binary audit passed. Signing and native delivery are pending.
+source/binary audit passed. Signed ARM64 native delivery was accepted and Library bytes independently verified.
 No physical Android, window-manager, Chromium CSS, rotation or installation acceptance is claimed.
 
 The zero-permission standalone `presentation` capability adds get/set/reset. Theme choices are
@@ -59,4 +59,23 @@ under 16 KiB, with earlier limits and required contract phrases retained.
 
 FullRelease unsigned: 27,519,137 bytes, SHA-256
 `a23f541ae425ad4d50e42d5332d2c99eeaf8c9eb5a78d10ca30b1989df2e7da8`.
-This is not a signed installable delivery or physical Android acceptance.
+The unsigned artifact alone is not a signed installable delivery; see the signed receipt below.
+Neither artifact establishes physical Android acceptance.
+
+## Signed native delivery
+
+`Jarvys-Factory-presentation-full-v77-arm64-test.apk`, 19,314,235 bytes, SHA-256
+`550636d8f4c36f2e278932bced3c0eb5e32d374d5209af1515782a75358ca59e`.
+The existing D7 test identity is retained; v2/v3 signatures, ZIP CRC, 16 KiB ZIP alignment,
+package/version/ARM64 and manifest scope were independently verified. All 239 retained entries
+match the audited unsigned release byte for byte. Exactly nine non-ARM64 libraries were omitted;
+only three signing metadata entries were added. Freshly retrieved Library bytes match the local
+signed APK exactly.
+
+The delivery acknowledgement records native attachment acceptance at **2026-10-10 18:08:36 UTC**.
+Artifact and Library bytes were independently verified; the acknowledgement was not independently
+reread during that artifact audit. Accepted
+attachment is not confirmed download, installation, update, UI behavior or data preservation.
+This retains a test signing identity and does not claim production readiness. ZIP alignment is
+not proof of ELF compatibility with a 16 KiB-page Android kernel. No real device settings or
+user data were exercised by the synthetic checks. Remaining F1/F2/F3 gates stay open.

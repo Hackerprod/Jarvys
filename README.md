@@ -31,8 +31,8 @@ This is an actively developed project with incremental, evidence-backed checkpoi
 | Physical Android acceptance | Still open for the relevant recent features. A host test, signed APK or accepted file delivery does not prove installation or phone behavior. |
 | **v74 · Contact selection** | Completed earlier delivery: 7,832 tests, SDK22 and independent three-APK audit passed; signed test APK attachment accepted. One human-selected phone/email with native exact-value approval. Calendar remains separate. [Scope](recovery/factory-contacts/README.md) |
 | **v75 · Factory calendar editor** | Completed earlier delivery: 7,978 fresh tests, SDK24, exact lint and independent three-APK audit passed; signed ARM64 test APK attachment accepted. Strict ACTION_INSERT with native review; no calendar database access or automatic saving. [Scope and evidence](recovery/factory-calendar/README.md) |
-| **v76 · Private SQLite** | Latest completed delivery: 8,122 fresh tests, SDK27, exact lint and independent three-APK audit passed. Typed CRUD, atomic bounded migrations, private installed storage and ephemeral preview; signed ARM64 test APK attachment accepted and Library bytes independently verified. [Scope and evidence](recovery/factory-database/README.md) |
-| **v77 · Local presentation** | Host validation complete: 8,234 fresh tests, SDK30, exact lint and independent three-APK audit passed. Per-app theme and advisory orientation, no host broker/permissions. Signing and native delivery pending. [Scope and evidence](recovery/factory-presentation/README.md) |
+| **v76 · Private SQLite** | Completed earlier delivery: 8,122 fresh tests, SDK27, exact lint and independent three-APK audit passed. Typed CRUD, atomic bounded migrations, private installed storage and ephemeral preview; signed ARM64 test APK attachment accepted and Library bytes independently verified. [Scope and evidence](recovery/factory-database/README.md) |
+| **v77 · Local presentation** | Latest completed delivery: 8,234 fresh tests, SDK30, exact lint and independent three-APK audit passed. Per-app theme and advisory orientation, no host broker/permissions. Signed ARM64 test APK attachment accepted; Library bytes independently verified. [Scope and evidence](recovery/factory-presentation/README.md) |
 | Broader Factory roadmap | Remaining F1 capabilities and F2/F3 are unfinished. Strict Factory TTS remains blocked on its recipient/consent design. |
 
 This status is a **2026-10-10 snapshot**, not a live build badge. [Pending.md](Pending.md) is the current work queue; feature-specific evidence records distinguish passing, failed, interrupted and unrun checks.
@@ -113,7 +113,7 @@ This is semantic context isolation, separate from project/file boundaries. A cen
 
 ## APK Factory
 
-v77 adds typed per-app theme and orientation requests. Fresh host validation and independent three-APK audit passed; signed delivery is pending. Android may ignore orientation requests; no device/WebView behavior is established. See [the presentation contract](app/APK_FACTORY.md#presentation-preferences-ux42-f1-v77).
+v77 adds typed per-app theme and orientation requests. Fresh host validation and independent three-APK audit passed; the signed ARM64 test APK attachment was accepted and Library bytes independently verified. Android may ignore orientation requests; no device/WebView behavior is established. See [the presentation contract](app/APK_FACTORY.md#presentation-preferences-ux42-f1-v77).
 
 **Turn a supported local web project into an Android APK through Coding.** Factory packages a reviewed native runtime and bounded HTML/CSS/JavaScript assets; it is not a general-purpose arbitrary Android source compiler.
 
