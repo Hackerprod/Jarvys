@@ -1,7 +1,7 @@
 # UX42 F1 v77: per-app presentation preferences
 
-Version 77 / `1.2.70-FACTORY-PRESENTATION`: implementation and synthetic fixtures are under
-independent review. Final host aggregate, exact lint, APK audit, signing and delivery are pending.
+Version 77 / `1.2.70-FACTORY-PRESENTATION`: final host aggregate, exact lint, three APK builds and independent
+source/binary audit passed. Signing and native delivery are pending.
 No physical Android, window-manager, Chromium CSS, rotation or installation acceptance is claimed.
 
 The zero-permission standalone `presentation` capability adds get/set/reset. Theme choices are
@@ -31,9 +31,32 @@ SDK30 and core731 passed. The first full runtime attempt had 74 cases with six f
 new test assertion that queried the public `isLightTheme` attribute on API24/26/28, before that
 attribute existed publicly. All original UX35 assertions stayed intact. The reviewed test-only
 correction checks native background contrast on those APIs and the theme attribute on API29+;
-all 74 runtime cases then passed. Failed evidence is retained. Complete release gates are pending.
+all 74 runtime cases then passed. Failed evidence is retained. At that checkpoint, complete release gates were pending.
 
 A later pre-freeze review also bounded failures from Android's orientation getter/setter: rejected
 window-policy requests no longer abort an otherwise valid Activity. A synthetic rejecting window
-keeps preferences and the bridge usable. This delta receives fresh focused native tests and the
-entire final aggregate; earlier passes are not presented as checks of this later delta.
+keeps preferences and the bridge usable. This delta passed fresh native tests and the entire final
+aggregate; earlier passes are not presented as checks of this later delta.
+
+## Final frozen-source host receipt
+
+Implementation checkpoint `d32dad6`, API-aware theme fixture `f96b52f`, orientation rejection fix
+`0fd7ac8`. App tree `467ffa90002dda3211fbf8afaa4ffe6193b944ac`. All 1,101 app inputs remain
+identical across fresh lint, aggregate, build and after-build freezes.
+
+Complete fresh aggregate: Full 3,500; Play 3,118; runtime 74+74; shared core 734+734.
+Total 8,234, zero failures/errors/skips. SDK30/30. All 17 test JVMs have verified paired offline-
+guard installation/shutdown evidence. Sixteen HTTP(S) attempts were blocked, eight per host
+flavor and zero runtime/core; these are per-JVM totals, not attribution to individual tests.
+Fresh lint preserves exact inherited diagnostic multisets 313/300/3/2, without additions,
+removals or new suppressions. Independent source/history/preservation and three-APK audit passed.
+
+All 18 capability bits are covered by 262,144 manifest profiles; the closed catalog has 36
+methods. Full 3,500 and Play 173 preflight checks include every skill/docs test; this earlier
+stage is not described as symmetric or frozen across its entire run. The final post-freeze
+orientation robustness gate passed core734 and focused runtime47. The skill is 16,377 bytes,
+under 16 KiB, with earlier limits and required contract phrases retained.
+
+FullRelease unsigned: 27,519,137 bytes, SHA-256
+`a23f541ae425ad4d50e42d5332d2c99eeaf8c9eb5a78d10ca30b1989df2e7da8`.
+This is not a signed installable delivery or physical Android acceptance.

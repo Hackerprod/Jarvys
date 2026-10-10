@@ -32,6 +32,7 @@ This is an actively developed project with incremental, evidence-backed checkpoi
 | **v74 · Contact selection** | Completed earlier delivery: 7,832 tests, SDK22 and independent three-APK audit passed; signed test APK attachment accepted. One human-selected phone/email with native exact-value approval. Calendar remains separate. [Scope](recovery/factory-contacts/README.md) |
 | **v75 · Factory calendar editor** | Completed earlier delivery: 7,978 fresh tests, SDK24, exact lint and independent three-APK audit passed; signed ARM64 test APK attachment accepted. Strict ACTION_INSERT with native review; no calendar database access or automatic saving. [Scope and evidence](recovery/factory-calendar/README.md) |
 | **v76 · Private SQLite** | Latest completed delivery: 8,122 fresh tests, SDK27, exact lint and independent three-APK audit passed. Typed CRUD, atomic bounded migrations, private installed storage and ephemeral preview; signed ARM64 test APK attachment accepted and Library bytes independently verified. [Scope and evidence](recovery/factory-database/README.md) |
+| **v77 · Local presentation** | Host validation complete: 8,234 fresh tests, SDK30, exact lint and independent three-APK audit passed. Per-app theme and advisory orientation, no host broker/permissions. Signing and native delivery pending. [Scope and evidence](recovery/factory-presentation/README.md) |
 | Broader Factory roadmap | Remaining F1 capabilities and F2/F3 are unfinished. Strict Factory TTS remains blocked on its recipient/consent design. |
 
 This status is a **2026-10-10 snapshot**, not a live build badge. [Pending.md](Pending.md) is the current work queue; feature-specific evidence records distinguish passing, failed, interrupted and unrun checks.
@@ -112,7 +113,7 @@ This is semantic context isolation, separate from project/file boundaries. A cen
 
 ## APK Factory
 
-Development checkpoint v77 adds typed per-app theme and orientation requests. Host validation and signed delivery are still pending; it does not establish Android/WebView behavior on a device. See [the presentation contract](app/APK_FACTORY.md#presentation-preferences-ux42-f1-v77).
+v77 adds typed per-app theme and orientation requests. Fresh host validation and independent three-APK audit passed; signed delivery is pending. Android may ignore orientation requests; no device/WebView behavior is established. See [the presentation contract](app/APK_FACTORY.md#presentation-preferences-ux42-f1-v77).
 
 **Turn a supported local web project into an Android APK through Coding.** Factory packages a reviewed native runtime and bounded HTML/CSS/JavaScript assets; it is not a general-purpose arbitrary Android source compiler.
 
@@ -142,6 +143,7 @@ Inspect → Build unsigned APK → Review signing scope → Sign
 | Contacts | One selected datum and second native approval | Host gates and independent APK audit passed; signed test APK delivered; no agenda enumeration or permission requests |
 | Calendar editor | Typed event prefill and native review | Opens an external editor; never saves automatically or grants calendar database access |
 | Private SQLite | Standalone typed CRUD, bounded atomic batches and adjacent create-table/add-nullable-column migrations | No broker or query-by-query consent; private no-backup data, ephemeral preview, no raw SQL/path/export API; physical persistence remains unverified |
+| Local presentation | Per-app system/light/dark theme and system/portrait/landscape orientation requests | Private preferences, controlled Activity recreation, preview unavailable; orientation and WebView CSS require physical acceptance |
 | Email/SMS editors | v73 adds typed editor launches with one recipient and reviewed fields | Host gates passed and signed test APK delivered; external apps may sync drafts; no automatic sending or delivery claim |
 
 **Not every generated app is standalone.** Local runtime features differ from brokered native capabilities. The latter require a compatible Jarvys host, exact caller/signing identity checks and native review. A generated APK's closed, zero-permission manifest does not make the host or selected third-party app permissionless or offline.
