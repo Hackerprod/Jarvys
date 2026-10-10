@@ -40,3 +40,11 @@ preview-denial/unavailability assertion were corrected; all original cases remai
 review permits reusing the exact pre-correction lint report because the sole app delta is this
 assertion-only fixture. Original lint source freeze/timestamps are retained; equal final lint/test
 input freezes are not claimed. A fresh complete six-suite aggregate and three builds will follow.
+
+The second aggregate passed all 3,458 Full cases but failed two unchanged Play Compose cases:
+concurrent measure/layout and a wrong-thread view update. Their default unconfined Compose test
+dispatcher permitted IO completion to resume layout inline, matching an already corrected fixture
+pattern elsewhere in this repository. Only the two rules now use `StandardTestDispatcher` with
+its required opt-in/imports; every test body and assertion is unchanged. Both failed runs are
+retained. Independent review approved this bounded test-only lint reuse; focused checks in both
+flavors and a fresh complete aggregate remain required before release.

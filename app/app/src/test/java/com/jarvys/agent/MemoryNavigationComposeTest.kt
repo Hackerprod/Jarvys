@@ -14,6 +14,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.ExperimentalTestApi
+import kotlinx.coroutines.test.StandardTestDispatcher
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.assertCountEquals
@@ -60,7 +62,8 @@ import java.util.concurrent.atomic.AtomicInteger
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class MemoryNavigationComposeTest {
-    @get:Rule val compose = createComposeRule()
+    @OptIn(ExperimentalTestApi::class)
+    @get:Rule val compose = createComposeRule(effectContext = StandardTestDispatcher())
 
     @Test fun dirtyEditorArrowRequiresConfirmAndCancelKeepsEditorOpen() {
         val store = newStore()

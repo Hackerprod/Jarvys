@@ -8,6 +8,8 @@ import androidx.activity.ComponentActivity
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.ExperimentalTestApi
+import kotlinx.coroutines.test.StandardTestDispatcher
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.isRoot
@@ -26,7 +28,8 @@ import org.robolectric.shadow.api.Shadow
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], shadows = [WorkspacePreviewRecordingShadow::class])
 class WorkspacePreviewRecompositionTest {
-    @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
+    @OptIn(ExperimentalTestApi::class)
+    @get:Rule val compose = createAndroidComposeRule<ComponentActivity>(effectContext = StandardTestDispatcher())
     private val context: Context get() = ApplicationProvider.getApplicationContext()
 
     @Test fun changingModifierRecomposesAndroidViewWithoutResettingInternalNavigationHistoryOrScroll() {
