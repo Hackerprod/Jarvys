@@ -20,12 +20,12 @@ object ApkFactoryTools {
         override fun canDelegate() = false
         override fun declaration(): ToolSpec {
             val properties = linkedMapOf<String, Any>(
-                "action" to mapOf("type" to "string", "enum" to listOf("inspect", "build", "sign", "preview", "preview_status", "test")),
+                "action" to mapOf("type" to "string", "enum" to listOf("inspect", "build", "sign", "preview", "preview_status", "test", "install", "install_status", "install_cancel")),
                 "spec_path" to mapOf("type" to "string"), "input_path" to mapOf("type" to "string"),
                 "output_path" to mapOf("type" to "string"), "expected_sha256" to mapOf("type" to "string"),
                 "expected_scope_version" to mapOf("type" to "integer"))
             return ToolSpec(NAME, "coding_apk_factory",
-                "Inspect the bundled APK factory, build an unsigned separate Android app from factory.json/HTML/CSS/JS/icon in this project, or explicitly approve signing its exact verified artifact with a per-app device key. Read com.jarvys.apk-factory first. Preview opens one isolated shared-runtime harness with RAM app storage and a separate disposable browser profile for an exact verified build; preview_status reports bounded observed events. Test exercises shared native handlers, not website JavaScript or installed APK behavior. No per-app Gradle, network capability, installation, universal key or arbitrary native code. Preview policies do not certify zero traffic. Outputs never overwrite existing files. Signing always requires approval and key loss may prevent future updates.",
+                "Inspect the bundled APK factory, build an unsigned separate Android app from factory.json/HTML/CSS/JS/icon in this project, or explicitly approve signing its exact verified artifact with a per-app device key. Read com.jarvys.apk-factory first. Preview opens one isolated shared-runtime harness with RAM app storage and a separate disposable browser profile for an exact verified build; preview_status reports bounded observed events. Test exercises shared native handlers, not website JavaScript or installed APK behavior. Full install opens separate human-only review of an exact signed receipt; Android confirmation is mandatory. install_status reads durable outcomes; install_cancel requests cancellation without promising rollback. Play does not offer integrated installation. No per-app Gradle, network capability, universal key or arbitrary native code. Preview policies do not certify zero traffic. Outputs never overwrite existing files. Signing always requires approval and key loss may prevent future updates.",
                 "project", ToolSpec.Status.IMPLEMENTED, emptyMap(), listOf("action"),
                 mapOf("type" to "object", "properties" to properties, "required" to listOf("action"), "additionalProperties" to false))
         }
@@ -35,7 +35,7 @@ object ApkFactoryTools {
             val expected = when (action) {
                 "inspect" -> setOf("action")
                 "build" -> setOf("action", "spec_path", "output_path", "expected_scope_version")
-                "preview", "preview_status", "test" -> setOf("action", "input_path", "expected_sha256", "expected_scope_version")
+                "preview", "preview_status", "test", "install", "install_status", "install_cancel" -> setOf("action", "input_path", "expected_sha256", "expected_scope_version")
                 "sign" -> setOf("action", "input_path", "expected_sha256", "output_path", "expected_scope_version")
                 else -> error("Unsupported factory action")
             }
@@ -44,6 +44,7 @@ object ApkFactoryTools {
                 "inspect" -> service.inspect(token)
                 "build" -> service.build(string(arguments,"spec_path"), string(arguments,"output_path"), version(arguments), token)
                 "preview", "preview_status", "test" -> service.harness(action, string(arguments,"input_path"), string(arguments,"expected_sha256"), version(arguments), token)
+                "install", "install_status", "install_cancel" -> service.installation(action, string(arguments,"input_path"), string(arguments,"expected_sha256"), version(arguments), token)
                 else -> service.sign(string(arguments,"input_path"), string(arguments,"expected_sha256"), string(arguments,"output_path"), version(arguments), token)
             }
             CoreToolResult.success(result.toString())

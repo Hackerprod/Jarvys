@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="factory_install_title">Factory installations</string>
+    <string name="factory_install_settings_summary">Review or cancel the latest installation session</string>
+    <string name="factory_install_approve">Approve this exact APK</string>
+    <string name="factory_install_system">Open Android confirmation</string>
+    <string name="factory_install_cancel">Request cancellation</string>
+    <string name="factory_install_close">Close reviewed session</string>
+    <string name="factory_install_disclosure">Human-only installation review. This APK can replace an existing app with the same ID and signing identity. Android decides compatibility; updating can change app behavior or data. Signing is not installation approval. You must also approve Android’s installer yourself. Jarvys does not grant per-source permissions or accept security warnings. Automated device access stays blocked until this interaction is safely closed.</string>
+    <string name="factory_install_state">Recorded session state</string>
+    <string name="factory_install_success">Android reported success for this exact session. App behavior and preservation of data have not been tested.</string>
+    <string name="factory_install_not_success">Installation success is not established by this state. Cancellation after commit does not prove rollback. After interruption, review or cancel; never replay commit.</string>
+    <string name="factory_install_interrupted">The operation could not complete. Review the state, per-source permission and artifact validity. Cancel if needed; nothing is retried automatically.</string>
+    <string name="factory_install_cancel_first">Cancel the outstanding session first or wait for its outcome. Unknown or damaged records cannot silently release protection.</string>
+    <string name="factory_install_reopen">An automated action was already in flight. Leave this screen and reopen it manually when the action ends; approval is disabled.</string>
+</resources>

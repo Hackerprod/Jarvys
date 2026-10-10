@@ -230,6 +230,65 @@ internal class FactoryProjectService(
             }
         }
     }
+    /** Installation is a distinct user-only native approval, never inherited from signing. */
+    fun installation(action: String, inputPath: String, expectedSha: String, expectedVersion: Long, token: CancellationToken): JSONObject {
+        require(action in setOf("install", "install_status", "install_cancel"))
+        require(expectedSha.matches(Regex("[a-f0-9]{64}")))
+        FactorySpec.relativePath(inputPath)
+        val projectIdentity = scope.durableIdentity()
+        fun validate() {
+            checkActive(token)
+            scope.require(ProjectScope.Capability.READ)
+            check(scope.durableIdentity() == projectIdentity) { "Project identity changed" }
+            check(scope.version() == expectedVersion) { "Project scope changed; review the artifact again" }
+        }
+        validate()
+        val receipt = loadReceipt(expectedSha, inputPath)
+        check(receipt.getString("state") == "published" && receipt.getBoolean("signed") &&
+            receipt.getString("projectIdentity") == projectIdentity && receipt.getString("projectId") == scope.id() && receipt.getString("outputPath") == inputPath &&
+            receipt.getString("apkSha256") == expectedSha) { "This exact signed APK has no completed receipt in this project" }
+        val receiptDigest = ProjectScope.sha256(receipt.toString().toByteArray(Charsets.UTF_8))
+        val spec = FactorySpec.parse(receipt.getJSONObject("spec"))
+        val binding = JSONObject().put("project_id", scope.id())
+            .put("project_identity_sha256", ProjectScope.sha256(scope.durableIdentity().toByteArray(Charsets.UTF_8)))
+            .put("scope_version", expectedVersion).put("build_id", receipt.getString("buildId"))
+            .put("receipt_sha256", receiptDigest).put("input_path", inputPath)
+            .put("apk_sha256", expectedSha).put("certificate_sha256", receipt.getString("certificateSha256"))
+            .put("app_id", spec.appId).put("app_name", spec.name).put("version_code", spec.versionCode).put("version_name", spec.versionName)
+            .put("template_sha256", receipt.getString("templateSha256"))
+        val coordinator = com.jarvys.agent.apkfactory.FactoryInstallCoordinator.get(context)
+        // Status/cancellation bind durable receipt without depending on the APK still being readable.
+        if (action == "install_status") return coordinator.status(binding)
+        if (action == "install_cancel") return coordinator.cancel(binding)
+        if (com.jarvys.agent.BuildConfig.FLAVOR != "full") return binding.put("state", "unavailable_in_play")
+            .put("notice", "Integrated installation is not offered by Play. The signed artifact remains in this project; no permission, installer or bypass was invoked.")
+        val bytes = FactoryProjectFiles.read(scope, inputPath, MAX_APK_BYTES, token)
+        check(bytes.size.toLong() == receipt.getLong("apkBytes") && ProjectScope.sha256(bytes) == expectedSha) { "Signed APK changed" }
+        val plan = TemplateApk.Spec(spec.appId, spec.name, spec.versionCode, spec.versionName, spec.capabilities)
+        val manifest = if (receipt.has("manifestContract")) {
+            check(receipt.getString("manifestContract") == "closed-v1-current")
+            TemplateApk.verify(bytes, plan)
+        } else TemplateApk.verifyExistingV1(bytes, plan)
+        if (receipt.has("dexSha256")) {
+            val inventory = receipt.getJSONObject("dexSha256")
+            check(inventory.keys().asSequence().toSet() == manifest.dexSha256.keys && manifest.dexSha256.all { (name, hash) -> inventory.getString(name) == hash })
+        }
+        val temp = File.createTempFile("factory-install-verify-", ".apk", context.cacheDir)
+        try { temp.writeBytes(bytes); check(FactoryApkSigner.verify(temp) == binding.getString("certificate_sha256")) }
+        finally { temp.delete() }
+        val result = coordinator.prepare(binding, bytes, {
+            validate()
+            check(ProjectScope.sha256(loadReceipt(expectedSha, inputPath).toString().toByteArray(Charsets.UTF_8)) == receiptDigest) { "Signed receipt changed" }
+            check(FactoryProjectFiles.sha(scope, inputPath, MAX_APK_BYTES, token) == expectedSha) { "Signed artifact changed after request" }
+        }, token, ::validate)
+        val launch = result.getString("launch_token")
+        result.remove("launch_token")
+        try {
+            context.startActivity(android.content.Intent(context, com.jarvys.agent.apkfactory.FactoryInstallActivity::class.java)
+                .putExtra("launch_token", launch).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (failure: Exception) { coordinator.revokeBeforeCommit(); throw failure }
+        return result.put("notice", "Native installation review requested. A human must approve this exact APK, then separately approve Android's installer. Nothing is installed by opening this screen. Settings > Factory installations retains recovery/status.")
+    }
     /** Read-only evidence actions: no signing identities, permission changes, install or project mutation. */
     fun harness(action: String, inputPath: String, expectedSha: String, expectedVersion: Long, token: CancellationToken): JSONObject {
         require(action in setOf("preview", "preview_status", "test"))

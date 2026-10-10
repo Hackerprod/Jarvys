@@ -91,6 +91,41 @@ class FactoryProjectServiceTest {
             .put("webDir","web").put("icon","icon.json").toString())}
         fun build(path:String="notes.apk")=service.build("factory.json",path,scope.version(),CancellationToken.cancellable())
     }
+    @Test fun installationRejectsUnsignedBuildWithoutApprovalOrSession() {
+        val f = Fixture(); val built = f.build()
+        assertThrows(Exception::class.java) { f.service.installation("install", "notes.apk", built.getString("sha256"), f.scope.version(), CancellationToken.cancellable()) }
+        assertEquals(0, f.requested); assertEquals(0, f.obtained)
+    }
+    @Test fun signedInstallationRoutesToHumanReviewOrExplicitPlayLimitation() {
+        val install = com.jarvys.agent.apkfactory.InstallTestFixture()
+        try {
+            val f = Fixture(true); val built = f.build(); f.decision = ApprovalDecision.APPROVED
+            val signed = f.service.sign("notes.apk", built.getString("sha256"), "signed.apk", f.scope.version(), CancellationToken.cancellable())
+            val result = f.service.installation("install", "signed.apk", signed.getString("sha256"), f.scope.version(), CancellationToken.cancellable())
+            assertEquals(if (com.jarvys.agent.BuildConfig.FLAVOR == "full") "awaiting_user" else "unavailable_in_play", result.getString("state"))
+            assertEquals(signed.getString("sha256"), result.getString("apk_sha256"))
+            assertEquals(signed.getString("certificate_sha256"), result.getString("certificate_sha256"))
+            assertEquals(0, install.backend.creates); assertEquals(0, install.backend.commits)
+            assertEquals(1, f.requested)
+            if (com.jarvys.agent.BuildConfig.FLAVOR == "full") {
+                File(f.root, "signed.apk").delete()
+                val status = f.service.installation("install_status", "signed.apk", signed.getString("sha256"), f.scope.version(), CancellationToken.cancellable())
+                assertEquals("awaiting_user", status.getString("state"))
+                val cancelled = f.service.installation("install_cancel", "signed.apk", signed.getString("sha256"), f.scope.version(), CancellationToken.cancellable())
+                assertEquals("cancelled_before_commit", cancelled.getString("state"))
+            }
+        } finally { install.close() }
+    }
+    @Test fun installationRechecksProjectScopeAndDoesNotAcceptCopiedSignedPath() {
+        val f = Fixture(true); val built = f.build(); f.decision = ApprovalDecision.APPROVED
+        val signed = f.service.sign("notes.apk", built.getString("sha256"), "signed.apk", f.scope.version(), CancellationToken.cancellable())
+        File(f.root, "signed.apk").copyTo(File(f.root, "copy.apk"))
+        assertThrows(Exception::class.java) { f.service.installation("install", "copy.apk", signed.getString("sha256"), f.scope.version(), CancellationToken.cancellable()) }
+        assertThrows(Exception::class.java) { f.service.installation("install", "signed.apk", signed.getString("sha256"), 0, CancellationToken.cancellable()) }
+        f.active = false
+        assertThrows(Exception::class.java) { f.service.installation("install_status", "signed.apk", signed.getString("sha256"), f.scope.version(), CancellationToken.cancellable()) }
+        assertEquals(1, f.requested)
+    }
     @Test fun factoryTestBindsActualBuildWithoutKeysWritesOrInstalledClaims() {
         val f=Fixture(); val built=f.build(); val version=f.scope.version()
         val result=f.service.harness("test","notes.apk",built.getString("sha256"),version,CancellationToken.cancellable())

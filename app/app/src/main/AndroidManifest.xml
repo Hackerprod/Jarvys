@@ -32,6 +32,7 @@
     </queries>
 
     <application
+        android:name="com.jarvys.agent.apkfactory.FactoryInstallApplication"
         android:allowBackup="false"
         android:usesCleartextTraffic="true"
         android:label="${jarvysApplicationLabel}"
@@ -59,6 +60,14 @@
             android:name="com.jarvys.agent.apkfactory.FactoryPreviewActivity"
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />
+
+        <activity
+            android:name="com.jarvys.agent.apkfactory.FactoryInstallActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+        <receiver
+            android:name="com.jarvys.agent.apkfactory.FactoryInstallReceiver"
+            android:exported="false" />
 
         <service
             android:name="com.artemis.helper.ArtemisAccessibilityService"

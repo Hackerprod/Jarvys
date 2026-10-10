@@ -838,6 +838,9 @@ Entrega: `Jarvys-UX42-F0b-full-v62-arm64-test.apk`, 18.793.902 bytes, SHA-256 `9
 
 #### F0c. Preview y pruebas del runtime auténtico; instalación separada
 
+**v66 en implementación, no entregada:** acción separada de instalación con revisión nativa exclusiva para la persona, recibo/hash/certificado exactos y sesiones durables de PackageInstaller. Full declara el permiso por origen; Play informa no disponible sin rodeos. No se ejecutan instalaciones ni cambios de seguridad reales. Se están validando reinicios, estados inciertos, revocación y protección frente a la propia automatización de Jarvys. No se da por superado ningún gate ni se cierra F0c antes de completar pruebas, revisión, firma autorizada y entrega. UX34 fase 0 y UX43 último se conservan.
+
+
 **Corte v65 validado:** núcleo compartido, preview privada y pruebas sintéticas con recibos vinculados al build exacto. Ver [alcance y evidencia](recovery/ux42-f0c/README.md). Este corte no cierra instalación ni aceptación real de WebView/UID/permisos/provider. Capturas/consola arbitraria no se exponen; la evidencia disponible es metadato y conteo saneado de operaciones, con modo y límites explícitos. Los criterios siguientes siguen rigiendo las ampliaciones pendientes.
 
 - Extraer un núcleo común del runtime para reutilizar validadores, protocolo, handlers, política de assets y lifecycle mediante adaptadores explícitos. Evitar una segunda implementación del bridge para la preview. Mantener en producción la vinculación de la configuración con `Context.getPackageName()` y la identidad real instalada.

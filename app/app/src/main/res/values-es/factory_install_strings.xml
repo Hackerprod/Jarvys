@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="factory_install_title">Instalaciones de Factory</string>
+    <string name="factory_install_settings_summary">Revisar o cancelar la última sesión de instalación</string>
+    <string name="factory_install_approve">Aprobar este APK exacto</string>
+    <string name="factory_install_system">Abrir confirmación de Android</string>
+    <string name="factory_install_cancel">Solicitar cancelación</string>
+    <string name="factory_install_close">Cerrar sesión revisada</string>
+    <string name="factory_install_disclosure">Revisión de instalación exclusiva para ti. Este APK puede reemplazar una app existente con el mismo ID e identidad de firma. Android decide la compatibilidad; actualizar puede cambiar el comportamiento o los datos. Firmar no autoriza instalar. También debes aprobar personalmente el instalador de Android. Jarvys no concede permisos por origen ni acepta avisos de seguridad. La automatización del dispositivo permanece bloqueada hasta cerrar esta interacción de forma segura.</string>
+    <string name="factory_install_state">Estado registrado de la sesión</string>
+    <string name="factory_install_success">Android informó éxito para esta sesión exacta. No se han probado el funcionamiento de la app ni la conservación de datos.</string>
+    <string name="factory_install_not_success">Este estado no acredita una instalación exitosa. Cancelar después del envío no demuestra reversión. Tras una interrupción, revisa o cancela; nunca se repite automáticamente el envío.</string>
+    <string name="factory_install_interrupted">La operación no pudo completarse. Revisa el estado, el permiso por origen y la vigencia del artefacto. Cancela si corresponde; no se reintentará automáticamente.</string>
+    <string name="factory_install_cancel_first">Primero cancela la sesión pendiente o espera su resultado. Un registro desconocido o dañado no puede liberar silenciosamente la protección.</string>
+    <string name="factory_install_reopen">Ya había una acción automatizada en curso. Sal de esta pantalla y vuelve a abrirla manualmente cuando termine; la aprobación está deshabilitada.</string>
+</resources>

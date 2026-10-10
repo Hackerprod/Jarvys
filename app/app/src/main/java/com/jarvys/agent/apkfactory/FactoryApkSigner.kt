@@ -9,6 +9,13 @@ import java.security.cert.X509Certificate
 
 /** apksig is AOSP's Apache-2.0 verifier/signer. Signing is followed by independent verification. */
 internal object FactoryApkSigner {
+    fun verify(file: File): String {
+        val result = ApkVerifier.Builder(file).setMinCheckedPlatformVersion(24).build().verify()
+        check(result.isVerified && result.isVerifiedUsingV2Scheme && result.signerCertificates.size == 1) {
+            "Generated APK signature did not verify"
+        }
+        return ProjectScope.sha256(result.signerCertificates.single().encoded)
+    }
     fun sign(input: File, output: File, key: PrivateKey, certificate: X509Certificate): String {
         val signer = ApkSigner.SignerConfig.Builder("generated-app", key, listOf(certificate)).build()
         ApkSigner.Builder(listOf(signer)).setInputApk(input).setOutputApk(output)
