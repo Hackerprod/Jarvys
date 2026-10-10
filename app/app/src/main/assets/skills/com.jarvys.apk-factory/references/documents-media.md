@@ -1,6 +1,8 @@
-# Factory guidance factory-guidance-v78 / documents-media
+# Factory guidance factory-guidance-v79 / documents-media
 
 Use with the always-loaded Factory core; this reference grants no tools or approvals.
+Historical v77 contract text below is preserved. Current v79 totals are 19 capabilities/39 methods;
+foreground sensors extend it in the sensors reference, with all sensor methods UNAVAILABLE in preview.
 
 ## Documents (v67)
 Jarvys.documents needs documents. open({mimeType}): {handle,mode:"read",expiresAfterMs:300000,maximumBytes:16777216,providerCommitConfirmed:false}; create({filename,mimeType}): same, mode:"write". MIME required: <=127 chars, one type/no parameters; open */* or image/* allowed, create concrete. filename: [a-zA-Z0-9][a-zA-Z0-9 _.-]{0,119}; no .. or final dot.

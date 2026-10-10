@@ -77,6 +77,7 @@ public final class FactoryRuntime implements AutoCloseable {
     private FrameLayout root;
     private FactoryConfig config;
     private BoundedStore store;
+    private SensorCapture sensors;
     private volatile PrivateDatabase database;
     private volatile int generation;
     private volatile boolean destroyed;
@@ -197,6 +198,7 @@ public final class FactoryRuntime implements AutoCloseable {
     private void invalidate() {
         cancelPresentationRecreate();
         generation++; pending.clear(); uiOwner = null;
+        if(sensors!=null) sensors.cancel();
         retireDatabase();
         documents.revokeAll(); documents = new DocumentHandles();
         cancelDocumentSelection(); cancelFileShare(); cancelPhotoSelection(); cancelAudioPlayback();
@@ -325,15 +327,34 @@ public final class FactoryRuntime implements AutoCloseable {
         headers.put("X-Content-Type-Options", "nosniff");
         headers.put("Cache-Control", "no-store");
         headers.put("Referrer-Policy", "no-referrer");
-        headers.put("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()");
+        headers.put("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=(), accelerometer=(), gyroscope=(), magnetometer=(), ambient-light-sensor=()");
         try {
             if (path != null) return new WebResourceResponse(AssetPolicy.mimeType(path), "UTF-8", 200, "OK", headers, host.open(path));
         } catch (IOException ignored) { }
         return new WebResourceResponse("text/plain", "UTF-8", 403, "Blocked", headers, new ByteArrayInputStream(new byte[0]));
     }
 
+    /** Bounded validated cancellation control; never consumes a normal pending slot. */
+    private boolean trySensorCancellation(String raw,JavaScriptReplyProxy proxy) {
+        if(raw==null||raw.length()>1024) return false;
+        final BridgeProtocol.Request control;
+        try { control=BridgeProtocol.validate(BridgeProtocol.ORIGIN,true,raw,config); }
+        catch(FactoryException invalid) { return false; }
+        if(control.operation!=com.jarvys.factory.contract.CapabilityCatalog.Method.SENSORS_CANCEL) return false;
+        if(pending.containsKey(control.id)) { safePost(proxy,BridgeProtocol.failure(control.id,"BUSY","Duplicate request ID."));return true; }
+        if(host.isPreview()) { safePost(proxy,BridgeProtocol.failure(control.id,"UNAVAILABLE","Sensors are unavailable in preview."));return true; }
+        if(!sensorAuthority()) { safePost(proxy,BridgeProtocol.failure(control.id,"CANCELLED","Sensors require the active foreground page."));return true; }
+        try {
+            JSONObject result=sensors==null?new JSONObject().put("cancelled",false):sensors.cancellation();
+            safePost(proxy,BridgeProtocol.success(control.id,result));
+        } catch(FactoryException failed) { safePost(proxy,BridgeProtocol.failure(control.id,failed.code,failed.getMessage())); }
+        catch(Exception failed) { safePost(proxy,BridgeProtocol.failure(control.id,"NATIVE_ERROR","Sensor cancellation failed.")); }
+        return true;
+    }
+
     private void receive(String raw, JavaScriptReplyProxy proxy) {
         if (destroyed || !host.isActive()) return;
+        if(trySensorCancellation(raw,proxy)) return;
         long now = SystemClock.elapsedRealtime();
         if (now - rateWindow >= 10000) { rateWindow = now; rateCount = 0; }
         if (++rateCount > 80) {
@@ -433,6 +454,8 @@ public final class FactoryRuntime implements AutoCloseable {
     private void dispatchInstalledEffect(BridgeProtocol.Request request, Reply reply) throws Exception {
         if (!reply.current()) return;
         switch (request.operation) {
+            case SENSORS_LIST: case SENSORS_CAPTURE: case SENSORS_CANCEL:
+                sensorRequest(request,reply);break;
             case PRESENTATION_GET: case PRESENTATION_SET: case PRESENTATION_RESET:
                 presentation(request,reply); break;
             case PHOTOS_PICK: case PHOTOS_CAPTURE:
@@ -521,6 +544,26 @@ public final class FactoryRuntime implements AutoCloseable {
                 } catch (ActivityNotFoundException e) { export = null; if (uiOwner == reply) uiOwner = null; reply.fail("UNAVAILABLE", "No system document picker is available."); }
                 break;
             default: reply.fail("UNKNOWN_METHOD", "Native method is not implemented.");
+        }
+    }
+
+    private boolean sensorAuthority() {
+        return !destroyed && documentForeground && host.isSessionOpen() && host.isActive()
+                && !activity.isFinishing() && !activity.isDestroyed() && activity.hasWindowFocus();
+    }
+    private void sensorRequest(BridgeProtocol.Request request,Reply reply)throws Exception {
+        if(host.isPreview()) throw new FactoryException("UNAVAILABLE","Sensors are unavailable in preview.");
+        if(!sensorAuthority() || !reply.current()) throw new FactoryException("CANCELLED","Sensors require the active foreground page.");
+        if(sensors==null) sensors=SensorCapture.installed(activity,main);
+        switch(request.operation) {
+            case SENSORS_LIST: reply.ok(sensors.list());break;
+            case SENSORS_CANCEL: reply.ok(sensors.cancellation());break;
+            case SENSORS_CAPTURE:
+                sensors.capture(SensorCapture.Request.parse(request.args),()->sensorAuthority()&&reply.current(),new SensorCapture.Sink() {
+                    public void ok(JSONObject result) { reply.ok(result); }
+                    public void fail(String code,String message) { reply.fail(code,message); }
+                });break;
+            default: throw new FactoryException("UNKNOWN_METHOD","Unknown sensor method.");
         }
     }
 
@@ -655,6 +698,7 @@ public final class FactoryRuntime implements AutoCloseable {
 
     /** Pause always revokes existing handles. The external broker alone may retain a picker tombstone. */
     public void onPause() {
+        if(sensors!=null) sensors.cancel();
         cancelPresentationRecreate();
         documentForeground = false;
         retireDatabase();

@@ -40,6 +40,15 @@ public final class BridgeProtocol {
             if (operation == null) throw new FactoryException("UNKNOWN_METHOD", "Native method is not implemented.");
             String capability = operation.capability;
             switch (operation) {
+                case SENSORS_CAPTURE:
+                    try { SensorCapture.Request.parse(args); }
+                    catch(FactoryException e) { throw e; }
+                    catch(Exception e) { throw new FactoryException("INVALID_ARGUMENT","Invalid sensor capture arguments."); }
+                    break;
+                case SENSORS_CANCEL:
+                    if(raw.getBytes(StandardCharsets.UTF_8).length>1024) throw new FactoryException("INVALID_ARGUMENT","Sensor cancellation envelope exceeds 1 KiB.");
+                    FactoryConfig.exactKeys(args);break;
+                case SENSORS_LIST:
                 case PRESENTATION_GET: case PRESENTATION_RESET: FactoryConfig.exactKeys(args); break;
                 case PRESENTATION_SET: FactoryPresentation.parse(args); break;
                 case DATABASE_INFO: case DATABASE_MIGRATE: case DATABASE_TRANSACT: case DATABASE_SELECT: case DATABASE_CLOSE: case DATABASE_CANCEL:

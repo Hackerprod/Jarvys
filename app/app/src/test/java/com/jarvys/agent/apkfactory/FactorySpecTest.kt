@@ -61,9 +61,9 @@ class FactorySpecTest {
         val value=FactorySpec.parse(spec().put("capabilities",JSONArray()))
         assertTrue(value.capabilities.isEmpty())
     }
-    @Test fun all262144SelectionsUseImmutableCatalogWithoutImpliedCapabilities() {
-        assertEquals(18, FactorySpec.CAPABILITIES.size)
-        for (mask in 0 until 262144) {
+    @Test fun all524288SelectionsUseImmutableCatalogWithoutImpliedCapabilities() {
+        assertEquals(19, FactorySpec.CAPABILITIES.size)
+        for (mask in 0 until 524288) {
             val selected = FactorySpec.CAPABILITIES.filterIndexed { bit, _ -> mask and (1 shl bit) != 0 }
             val value = FactorySpec.parse(spec().put("capabilities", JSONArray(selected.reversed())))
             assertEquals(selected.sorted(), value.capabilities)

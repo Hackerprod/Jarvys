@@ -40,6 +40,9 @@ public class BridgeProtocolTest {
             {"sms.compose", "{\"number\":\"+15550100\",\"body\":\"Body\"}"},
             {"contacts.pick", "{\"kind\":\"phone\"}"},
             {"calendar.insert", "{\"title\":\"Synthetic event\",\"location\":\"\",\"description\":\"\",\"startTimeMillis\":0,\"endTimeMillis\":86400000,\"timeZone\":\"UTC\",\"allDay\":true}"},
+            {"sensors.list", "{}"},
+            {"sensors.capture", "{\"kind\":\"light\",\"durationMs\":100,\"intervalMs\":100,\"maxSamples\":1}"},
+            {"sensors.cancel", "{}"},
             {"presentation.get", "{}"},
             {"presentation.set", "{\"theme\":\"dark\",\"orientation\":\"portrait\"}"},
             {"presentation.reset", "{}"},
@@ -108,6 +111,9 @@ public class BridgeProtocolTest {
             {"sms.compose", "{\"number\":\"+15550100\",\"body\":\"Body\"}"},
             {"contacts.pick", "{\"kind\":\"phone\"}"},
             {"calendar.insert", "{\"title\":\"Synthetic event\",\"location\":\"\",\"description\":\"\",\"startTimeMillis\":0,\"endTimeMillis\":86400000,\"timeZone\":\"UTC\",\"allDay\":true}"},
+            {"sensors.list", "{}"},
+            {"sensors.capture", "{\"kind\":\"light\",\"durationMs\":100,\"intervalMs\":100,\"maxSamples\":1}"},
+            {"sensors.cancel", "{}"},
             {"presentation.get", "{}"},
             {"presentation.set", "{\"theme\":\"dark\",\"orientation\":\"portrait\"}"},
             {"presentation.reset", "{}"},
@@ -119,8 +125,8 @@ public class BridgeProtocolTest {
             {"database.cancel", "{}"},
             {"browser.open", "{\"url\":\"https://example.com/review?fixture=1\"}"},
             {"share.file", "{\"handle\":\""+HANDLE+"\",\"filename\":\"file.bin\",\"mimeType\":\"application/octet-stream\"}"}};
-        assertEquals(36, calls.length);
-        assertEquals(18, com.jarvys.factory.contract.CapabilityCatalog.NAMES.size());
+        assertEquals(39, calls.length);
+        assertEquals(19, com.jarvys.factory.contract.CapabilityCatalog.NAMES.size());
         assertEquals(com.jarvys.factory.contract.CapabilityCatalog.METHODS.size(), calls.length);
         for (int mask = 0; mask < (1 << com.jarvys.factory.contract.CapabilityCatalog.NAMES.size()); mask++) {
             org.json.JSONArray declared = new org.json.JSONArray();
@@ -254,6 +260,32 @@ public class BridgeProtocolTest {
         for (String method : new String[]{"presentation.get", "presentation.set", "presentation.reset"})
             for (String args : new String[]{"null", "[]", "true", "1", "\"dark\""})
                 rejected("INVALID_REQUEST", BridgeProtocol.ORIGIN, true, request(method, args), enabled);
+    }
+
+    @Test public void sensorWireArgumentsAreStrictBoundedAndNeverGrantBackgroundAuthority() throws Exception {
+        FactoryConfig enabled=config("[\"sensors\"]");
+        JSONObject valid=new JSONObject().put("kind","light").put("durationMs",100).put("intervalMs",100).put("maxSamples",1);
+        for(String key:new String[]{"durationMs","intervalMs","maxSamples"}){
+            for(String bad:new String[]{"null","true","\"100\"","100.0","1e2","-1","2147483648"}){
+                String args=valid.toString().replace("\""+key+"\":"+valid.get(key),"\""+key+"\":"+bad);
+                rejected("INVALID_ARGUMENT",BridgeProtocol.ORIGIN,true,request("sensors.capture",args),enabled);
+            }
+            JSONObject missing=new JSONObject(valid.toString());missing.remove(key);rejected("INVALID_ARGUMENT",BridgeProtocol.ORIGIN,true,request("sensors.capture",missing.toString()),enabled);
+        }
+        for(String kind:new String[]{"gyroscope","magnetometer","step_counter","location","LIGHT"})rejected("INVALID_ARGUMENT",BridgeProtocol.ORIGIN,true,request("sensors.capture",new JSONObject(valid.toString()).put("kind",kind).toString()),enabled);
+        for(String method:new String[]{"sensors.list","sensors.cancel"})for(String extra:new String[]{"background","persist","sensorId","vendor"})rejected("INVALID_ARGUMENT",BridgeProtocol.ORIGIN,true,request(method,new JSONObject().put(extra,true).toString()),enabled);
+    }
+
+    @Test public void sensorCancellationEnvelopeHasExactUtf8ControlBudget() throws Exception {
+        FactoryConfig enabled=config("[\"sensors\"]");
+        String escaped="{\"v\":1,\"id\":\"boundary\",\"method\":\"sensors."+"\\"+"u0063ancel\",\"args\":{}}";
+        String padded=escaped+new String(new char[1024-escaped.getBytes(java.nio.charset.StandardCharsets.UTF_8).length]).replace('\0',' ');
+        assertEquals(1024,padded.getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
+        assertEquals("sensors.cancel",BridgeProtocol.validate(BridgeProtocol.ORIGIN,true,padded,enabled).method);
+        rejected("INVALID_ARGUMENT",BridgeProtocol.ORIGIN,true,padded+" ",enabled);
+        String unicode=request("sensors.cancel","{\"界\":true}");
+        rejected("INVALID_ARGUMENT",BridgeProtocol.ORIGIN,true,unicode,enabled);
+        rejected("INVALID_REQUEST",BridgeProtocol.ORIGIN,true,escaped+"\u00a0",enabled);
     }
 
 }

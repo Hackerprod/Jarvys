@@ -1,6 +1,8 @@
-# Factory guidance factory-guidance-v78 / database
+# Factory guidance factory-guidance-v79 / database
 
 Use with the always-loaded Factory core; this reference grants no tools or approvals.
+Historical v77 contract text below is preserved. Current v79 totals are 19 capabilities/39 methods;
+foreground sensors extend it in the sensors reference, with all sensor methods UNAVAILABLE in preview.
 
 ## Database (v76)
 database requires database only; no host/permissions/per-query confirmation. info/close/cancel: {} optional. Fixed private no-backup unencrypted SQLite: installed persists/close retains; preview RAM loses data on close/reset/pause. No SQL/path/ATTACH/extensions/network/import/export.

@@ -45,7 +45,7 @@
       if (!bridge || typeof bridge.postMessage !== 'function') {
         reject(failure('BRIDGE_UNAVAILABLE', 'Open this application in its generated Android APK.')); return;
       }
-      if (pending.size >= 16) { reject(failure('BUSY', 'Too many pending native requests.')); return; }
+      if (pending.size >= (method === 'sensors.cancel' ? 17 : 16)) { reject(failure('BUSY', 'Too many pending native requests.')); return; }
       var id = prefix + (++sequence).toString(36);
       var payload;
       try {
@@ -73,6 +73,11 @@
       set: function (key, value) { return call('storage.set', { key: key, value: value }); },
       remove: function (key) { return call('storage.remove', { key: key }); },
       list: function () { return call('storage.list', {}); }
+    }),
+    sensors: Object.freeze({
+      list: function (options) { return call('sensors.list', options === undefined ? {} : options); },
+      capture: function (options) { return call('sensors.capture', options); },
+      cancel: function (options) { return call('sensors.cancel', options === undefined ? {} : options); }
     }),
     presentation: Object.freeze({
       get: function (options) { return call('presentation.get', options === undefined ? {} : options); },

@@ -224,9 +224,9 @@ public class FactoryDispatcherTest {
         }
     }
 
-    @Test public void all262144CapabilityPlansKeepZeroPermissionsAndDeduplicateHostVisibility() {
-        assertEquals(18, CapabilityCatalog.NAMES.size()); assertEquals(36, CapabilityCatalog.METHODS.size());
-        for (int mask = 0; mask < 262144; mask++) {
+    @Test public void all524288CapabilityPlansKeepZeroPermissionsAndDeduplicateHostVisibility() {
+        assertEquals(19, CapabilityCatalog.NAMES.size()); assertEquals(39, CapabilityCatalog.METHODS.size());
+        for (int mask = 0; mask < 524288; mask++) {
             java.util.List<String> selected = new java.util.ArrayList<>();
             for (int bit = 0; bit < CapabilityCatalog.NAMES.size(); bit++) if ((mask & (1 << bit)) != 0) selected.add(CapabilityCatalog.NAMES.get(bit));
             com.jarvys.factory.contract.ManifestPlan plan = new com.jarvys.factory.contract.ManifestPlan(

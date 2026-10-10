@@ -32,9 +32,10 @@ public final class FactoryDispatcher {
     public static Effects simulatedEffects() {
         return (method, args) -> {
             switch (method) {
+                case SENSORS_LIST: case SENSORS_CAPTURE: case SENSORS_CANCEL:
                 case PRESENTATION_GET: case PRESENTATION_SET: case PRESENTATION_RESET:
                 case CALENDAR_INSERT: case CONTACTS_PICK: case MAPS_OPEN: case PHONE_DIAL: case EMAIL_COMPOSE: case SMS_COMPOSE: case BROWSER_OPEN: case AUDIO_PLAY: case PHOTOS_PICK: case PHOTOS_CAPTURE: case SHARE_FILE: case DOCUMENTS_OPEN: case DOCUMENTS_CREATE: case DOCUMENTS_READ: case DOCUMENTS_WRITE: case DOCUMENTS_CLOSE: case DOCUMENTS_CANCEL:
-                    throw new FactoryException("UNAVAILABLE", "Presentation requires an installed generated Activity; preview cannot change host theme/orientation. Documents, photos, audio, browser, maps, phone, email, SMS, contacts and calendar require an installed generated app and the matching human-only Jarvys broker; preview never opens files, camera, audio, external URLs, maps, dialers, message editors, contact pickers or calendar editors.");
+                    throw new FactoryException("UNAVAILABLE", "Presentation and sensors require an installed generated Activity; preview cannot change host theme/orientation or read hardware sensors. Documents, photos, audio, browser, maps, phone, email, SMS, contacts and calendar require an installed generated app and the matching human-only Jarvys broker; preview never opens files, camera, audio, external URLs, maps, dialers, message editors, contact pickers or calendar editors.");
                 case HAPTICS_PERFORM: case SHARE_TEXT: case CLIPBOARD_WRITE: case EXPORT_TEXT:
                     return new JSONObject().put("simulated", true).put("performed", false).put("mode", "preview")
                             .put("operation", method.wireName);
@@ -48,6 +49,8 @@ public final class FactoryDispatcher {
     }
     public static Object dispatch(BridgeProtocol.Request request, FactoryConfig config, BoundedStore store,
                                   Metadata metadata, Effects effects, Database database) throws Exception {
+        // Preserve sensor integer types before defensive JSON serialization.
+        if(request.operation==CapabilityCatalog.Method.SENSORS_CAPTURE) SensorCapture.Request.parse(request.args);
         // Preserve database numeric types before the defensive envelope serialization.
         if ("database".equals(request.operation.capability)) DatabaseRequest.validate(request.method,request.args);
         // Preserve integer types before the defensive envelope serialization.
@@ -72,10 +75,14 @@ public final class FactoryDispatcher {
                         .put("simulatedCapabilities", new JSONArray("preview".equals(metadata.mode())
                                 ? java.util.Arrays.asList("export", "share", "clipboard", "haptics") : java.util.Collections.emptyList()))
                         .put("unavailableCapabilities", new JSONArray("preview".equals(metadata.mode())
-                                ? java.util.Arrays.asList("documents", "photos", "audio", "browser", "maps", "phone", "email", "sms", "contacts", "calendar", "presentation") : java.util.Collections.emptyList()))
+                                ? java.util.Arrays.asList("documents", "photos", "audio", "browser", "maps", "phone", "email", "sms", "contacts", "calendar", "presentation", "sensors") : java.util.Collections.emptyList()))
                         .put("unavailableMethods", new JSONArray("preview".equals(metadata.mode())
-                                ? java.util.Arrays.asList("share.file", "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture", "audio.play", "browser.open", "maps.open", "phone.dial", "email.compose", "sms.compose", "contacts.pick", "calendar.insert", "presentation.get", "presentation.set", "presentation.reset")
+                                ? java.util.Arrays.asList("share.file", "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture", "audio.play", "browser.open", "maps.open", "phone.dial", "email.compose", "sms.compose", "contacts.pick", "calendar.insert", "presentation.get", "presentation.set", "presentation.reset", "sensors.list", "sensors.capture", "sensors.cancel")
                                 : java.util.Collections.emptyList()))
+                        .put("sensorsProtocolVersion", 1).put("sensorsBrokerRequired", false)
+                        .put("sensorsKinds",new JSONArray(java.util.Arrays.asList("light","accelerometer")))
+                        .put("sensorsForegroundOnly",true).put("sensorsMaxRateHz",10)
+                        .put("sensorsMaxDurationMs",5000).put("sensorsMaxSamples",50).put("sensorsResultBytes",16384)
                         .put("presentationProtocolVersion", 1).put("presentationBrokerRequired", false)
                         .put("presentationRequires", new JSONArray(java.util.Collections.singletonList("presentation")))
                         .put("presentationThemes", new JSONArray(java.util.Arrays.asList("system", "light", "dark")))
@@ -152,7 +159,8 @@ public final class FactoryDispatcher {
                                 .put("audioSampleRateMin", 8000).put("audioSampleRateMax", 48000)
                                 .put("documentHandleLifetimeMs", 300000));
             case DEVICE_INFO: return metadata.deviceInfo().put("declaredAppId", config.appId);
-            case PRESENTATION_GET: case PRESENTATION_SET: case PRESENTATION_RESET:
+            case SENSORS_LIST: case SENSORS_CAPTURE: case SENSORS_CANCEL:
+                case PRESENTATION_GET: case PRESENTATION_SET: case PRESENTATION_RESET:
                 case CALENDAR_INSERT: case CONTACTS_PICK: case MAPS_OPEN: case PHONE_DIAL: case EMAIL_COMPOSE: case SMS_COMPOSE: case BROWSER_OPEN: case AUDIO_PLAY: case PHOTOS_PICK: case PHOTOS_CAPTURE: case SHARE_FILE: case DOCUMENTS_OPEN: case DOCUMENTS_CREATE: case DOCUMENTS_READ: case DOCUMENTS_WRITE: case DOCUMENTS_CLOSE: case DOCUMENTS_CANCEL:
             case HAPTICS_PERFORM: case SHARE_TEXT: case CLIPBOARD_WRITE: case EXPORT_TEXT:
                 return effects.perform(request.operation, request.args);

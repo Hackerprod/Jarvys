@@ -52,8 +52,8 @@ public class ManifestNodesTest {
         assertEquals(7, current.nodes.size()); assertEquals(-1,current.nodes.get(0).parentIndex);
         assertEquals(4,current.nodes.get(6).parentIndex);
     }
-    @Test public void all262144SelectionsEncodeOnlyTheApprovedDocumentQueries() throws Exception {
-        assertEquals(18, CapabilityCatalog.NAMES.size());
+    @Test public void all524288SelectionsEncodeOnlyTheApprovedDocumentQueries() throws Exception {
+        assertEquals(19, CapabilityCatalog.NAMES.size());
         byte[] first = ManifestXml.encode(plan(Collections.emptyList()));
         for (int mask=0; mask<(1 << CapabilityCatalog.NAMES.size()); mask++) {
             List<String> caps = new ArrayList<>();
@@ -260,6 +260,16 @@ public class ManifestNodesTest {
             assertSame(method, CapabilityCatalog.METHODS.get(method.wireName));
         }
         assertThrows(UnsupportedOperationException.class, () -> presentation.methods.clear());
+    }
+
+    @Test public void sensorsAreStandaloneImmutableAndAddNoPermissionsFeaturesOrQueries() throws Exception {
+        CapabilityCatalog.Capability sensors=CapabilityCatalog.CAPABILITIES.get("sensors");assertNotNull(sensors);
+        assertEquals(list(CapabilityCatalog.Method.SENSORS_LIST,CapabilityCatalog.Method.SENSORS_CAPTURE,CapabilityCatalog.Method.SENSORS_CANCEL),sensors.methods);
+        assertTrue(sensors.permissions.isEmpty());assertTrue(sensors.features.isEmpty());assertTrue(sensors.components.isEmpty());assertTrue(sensors.queries.isEmpty());
+        assertTrue(sensors.intentFilters.isEmpty());assertTrue(sensors.metadata.isEmpty());assertTrue(sensors.resources.isEmpty());assertTrue(sensors.dependencies.isEmpty());assertTrue(sensors.conflicts.isEmpty());assertTrue(sensors.manifestNodes.isEmpty());
+        ManifestPlan standalone=plan(list("sensors"));assertEquals(list("sensors"),standalone.capabilities);assertArrayEquals(ManifestXml.encode(plan(Collections.emptyList())),ManifestXml.encode(standalone));
+        for(CapabilityCatalog.Method method:sensors.methods){assertEquals("sensors",method.capability);assertSame(method,CapabilityCatalog.METHODS.get(method.wireName));}
+        assertThrows(UnsupportedOperationException.class,()->sensors.methods.clear());
     }
 
 }

@@ -318,8 +318,8 @@ class ApkFactorySkillScopeTest {
         val repo = repository()
         val entry = factory()
         val bundle = entry.factoryGuidance!!
-        assertEquals("factory-guidance-v78", bundle.version)
-        assertEquals(7, bundle.resources.size)
+        assertEquals("factory-guidance-v79", bundle.version)
+        assertEquals(8, bundle.resources.size)
         assertTrue(entry.body.toByteArray().size <= 8192)
         assertTrue(bundle.resources.values.sumOf { it.toByteArray().size } <= 65536)
         val session = "factory-references-${System.nanoTime()}"
@@ -353,9 +353,9 @@ class ApkFactorySkillScopeTest {
 
     @Test fun resourceArgumentsRejectUnknownPathsStaleVersionsAndWrongTypesWithoutPartialBodies() {
         val tool = LoadSkillTool(listOf(factory()), 16384, { true }, "coding")
-        val base = mapOf<String, Any>("skill_id" to id, "resource" to "database", "resource_version" to "factory-guidance-v78")
+        val base = mapOf<String, Any>("skill_id" to id, "resource" to "database", "resource_version" to "factory-guidance-v79")
         val invalid = listOf(base - "resource", base - "resource_version",
-            base + ("resource_version" to "factory-guidance-v77"), base + ("resource_version" to 78),
+            base + ("resource_version" to "factory-guidance-v77"), base + ("resource_version" to 79),
             base + ("resource" to 1)) + listOf("", "unknown", "../database", "/database", "references/database.md", "database\\other", "database%2fother").map { base + ("resource" to it) }
         for (args in invalid) {
             val result = tool.execute(args, CancellationToken.uncancellable())
@@ -393,7 +393,7 @@ class ApkFactorySkillScopeTest {
             val updated = reopened.skills.value.single { it.metadata.id == id }
             assertFalse(updated.enabled)
             assertEquals(count, updated.usageCount)
-            assertEquals("factory-guidance-v78", updated.factoryGuidance!!.version)
+            assertEquals("factory-guidance-v79", updated.factoryGuidance!!.version)
             assertEquals("PRIVATE LEGACY OVERRIDE", override.readText())
             assertEquals(custom, File(context.filesDir, "skills/$customId/SKILL.md").readText())
             assertEquals(originalProfile, CrewProfileRepository(context).codingProfile().toJson().toString())
@@ -416,7 +416,7 @@ class ApkFactorySkillScopeTest {
         }
         val unversioned = CrewRole("coding", "Coding", "coding", "Review", listOf("read_skill"), null, "Review", 0, listOf(id), CrewProfile.WorkspaceMode.LEGACY_CHAT)
         assertEquals("", CoreAgentRuntime.factoryGuidanceInstructions(unversioned, tools, listOf(entry), 16384))
-        assertFalse(CoreAgentRuntime(listOf(entry), emptyList(), emptyList(), emptyList()).instructions().contains("factory-guidance-v78"))
+        assertFalse(CoreAgentRuntime(listOf(entry), emptyList(), emptyList(), emptyList()).instructions().contains("factory-guidance-v79"))
     }
 
     @Test fun criticalFamilyContractsAndLanguageRemainDiscoverableWithoutDeadFilePointers() {
@@ -430,6 +430,7 @@ class ApkFactorySkillScopeTest {
             "contacts-calendar" to listOf("no minors/secrets", "Never press Save", "exclusive end date"),
             "database" to listOf("rollbackConfirmed:false", "no total-disk/RAM cap", "No device durability/update proof"),
             "presentation" to listOf("preferencesCommitted:true", "in-memory preferences", "queued", "orientationGuaranteed:false", "font scale"),
+            "sensors" to listOf("device-natural", "includesGravity", "16 KiB", "CANCELLED", "UNAVAILABLE", "no automatic restart"),
             "lifecycle" to listOf("No step here installs", "never erase app data/keys", "unknown history blocks signing", "No installation/hardware/persistence/zero-network claims"))
         for ((name, phrases) in expected) for (phrase in phrases) assertTrue("$name: $phrase", modules.getValue(name).contains(phrase, true))
     }

@@ -1,6 +1,8 @@
-# Factory guidance factory-guidance-v78 / basics
+# Factory guidance factory-guidance-v79 / basics
 
 Use with the always-loaded Factory core; this reference grants no tools or approvals.
+Historical v77 contract text below is preserved. Current v79 totals are 19 capabilities/39 methods;
+foreground sensors extend it in the sensors reference, with all sensor methods UNAVAILABLE in preview.
 
 # APK Factory
 HTML/CSS/JS, not a fixed notes application.
