@@ -1,8 +1,9 @@
 # Factory foreground sensors v79: design and evidence status
 
 Version 79 / `1.2.72-FACTORY-SENSORS` passed the independently reviewed staged host checks
-below. Three fresh APKs passed final independent binary/control-flow audit; signing and native
-delivery are pending. No physical sensor capture, installation or device acceptance is claimed.
+below. Three fresh APKs passed final independent binary/control-flow audit. Signed ARM64 native
+delivery was accepted; signed and retrieved Library bytes were independently verified. No physical
+sensor capture, installation or device acceptance is claimed.
 SDK 2/schema 1; 19 capabilities/39 methods.
 
 ## Reviewed bounded design
@@ -67,6 +68,17 @@ change. All three builds completed against the final freeze.
 FullRelease unsigned: 27,545,966 bytes, SHA-256
 `0a713a5d880cb0e190aa8872adf6c67594ed4762605b72c6e6712182735fa943`.
 No signed installable delivery is claimed by this unsigned artifact.
+
+## Signed delivery receipt
+
+Native attachment accepted October 10, 2026 at 20:46:42 UTC:
+`Jarvys-Factory-sensors-full-v79-arm64-test.apk`, 19,339,784 bytes, SHA-256
+`a79969819f9616a6261d19e0a91318add7f35de7d0aa1a742d032cd6f280896f`.
+Independent verification checked D7 test-identity v2/v3 signatures, CRC, 16 KiB ZIP alignment,
+exact manifest and all 248 retained payload entries against the audited unsigned release;
+only nine expected non-ARM64 libraries were omitted. Independently retrieved Library bytes
+match the signed artifact byte for byte. Acceptance does not establish user download,
+installation/update, physical sensor behavior or ELF 16 KiB page compatibility.
 
 ## Acceptance still open
 
