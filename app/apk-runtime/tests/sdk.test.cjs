@@ -105,7 +105,7 @@ test('all SDK calls exactly match the catalog and explicit native validator/disp
   const path = require('node:path');
   const catalog = fs.readFileSync(path.join(__dirname, '../../factory-contract/src/main/java/com/jarvys/factory/contract/CapabilityCatalog.java'), 'utf8');
   const rows = [...catalog.matchAll(/\b([A-Z][A-Z_]+)\("([a-z]+\.[a-z]+)", (?:"[a-z]+"|null)\)/g)];
-  assert.equal(rows.length, 25);
+  assert.equal(rows.length, 26);
   const env = environment();
   const args = { 'storage.get': ['key'], 'storage.set': ['key', 'value'], 'storage.remove': ['key'],
     'export.text': [{ filename: 'test.txt', text: 'hello' }], 'share.text': [{ text: 'hello' }],
@@ -276,5 +276,26 @@ test('editor timeout and pagehide never become sending or delivery confirmation'
     const rejected = assert.rejects(pending, {code: event === 'timeout' ? 'TIMEOUT' : 'PAGE_CLOSED'});
     if (event === 'timeout') env.timers.values().next().value(); else env.handlers.get('pagehide')();
     await rejected; env.reply(env.sent.at(-1), {launchRequested: true, actionConfirmed: false});
+  }
+});
+
+
+test('contact picker exposes only frozen pick and preserves explicit kind/options without defaults', async () => {
+  const env = environment();
+  assert.equal(Object.isFrozen(env.api.contacts), true); assert.deepEqual(Object.keys(env.api.contacts), ['pick']);
+  for (const options of [{kind: 'phone'}, {kind: 'email'}, {}, {kind: 'phone', uri: 'content://forbidden'}, {kind: 'all'}, null, undefined]) {
+    const pending = env.api.contacts.pick(options); const request = env.sent.at(-1);
+    assert.equal(request.method, 'contacts.pick'); assert.deepEqual(request.args, options);
+    assert.equal(env.delays.at(-1), 600000);
+    env.reply(request, {kind: 'phone', value: ' +1 (555) 0100 ext. 42 '});
+    const result = await pending; assert.equal(result.value, ' +1 (555) 0100 ext. 42 '); assert.deepEqual(Object.keys(result), ['kind', 'value']);
+  }
+});
+test('contact selection timeout and pagehide cannot release a late selected value', async () => {
+  for (const event of ['timeout', 'pagehide']) {
+    const env = environment(); const pending = env.api.contacts.pick({kind: 'email'});
+    const rejected = assert.rejects(pending, {code: event === 'timeout' ? 'TIMEOUT' : 'PAGE_CLOSED'});
+    if (event === 'timeout') env.timers.values().next().value(); else env.handlers.get('pagehide')();
+    await rejected; env.reply(env.sent.at(-1), {kind: 'email', value: 'fixture@example.invalid'});
   }
 });

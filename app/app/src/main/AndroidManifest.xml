@@ -25,6 +25,9 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 
     <queries>
+        <intent><action android:name="android.intent.action.PICK" /><data android:mimeType="vnd.android.cursor.dir/phone_v2" /></intent>
+        <intent><action android:name="android.intent.action.PICK" /><data android:mimeType="vnd.android.cursor.dir/email_v2" /></intent>
+        <provider android:authorities="com.android.contacts" />
         <intent><action android:name="android.intent.action.SENDTO" /><category android:name="android.intent.category.DEFAULT" /><data android:scheme="mailto" /></intent>
         <intent><action android:name="android.intent.action.SENDTO" /><category android:name="android.intent.category.DEFAULT" /><data android:scheme="smsto" /></intent>
         <intent><action android:name="android.intent.action.VIEW" /><category android:name="android.intent.category.DEFAULT" /><data android:scheme="geo" /></intent>
@@ -103,6 +106,7 @@
         <activity android:name="com.jarvys.agent.apkfactory.FactoryExternalActionActivity" android:exported="true" android:windowSoftInputMode="adjustResize" />
         <activity android:name="com.jarvys.agent.apkfactory.FactoryBrowserActivity" android:exported="true" android:windowSoftInputMode="adjustResize" />
         <activity android:name="com.jarvys.agent.apkfactory.FactoryAudioActivity" android:exported="true" android:windowSoftInputMode="adjustResize" />
+        <activity android:name="com.jarvys.agent.apkfactory.FactoryContactActivity" android:exported="true" android:windowSoftInputMode="adjustResize" />
         <activity android:name="com.jarvys.agent.apkfactory.FactoryPhotoActivity" android:exported="true" android:windowSoftInputMode="adjustResize" />
         <provider android:name="com.jarvys.agent.apkfactory.FactoryPhotoProvider" android:authorities="${applicationId}.factory.camera" android:exported="false" android:grantUriPermissions="true" />
         <receiver

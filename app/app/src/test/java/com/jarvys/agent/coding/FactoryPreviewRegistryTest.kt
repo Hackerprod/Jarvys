@@ -151,7 +151,7 @@ class FactoryPreviewRegistryTest {
         assertEquals(1, results.size); results.single().close()
     }
     @Test fun realSharedHandlerAssertionsPassForAllAndNoCapabilitiesAndNeverExecuteJavascript() {
-        for (capabilities in listOf(emptyList(), listOf("share"), listOf("documents"), listOf("audio"), listOf("audio", "documents"), listOf("browser"), listOf("browser", "documents"), listOf("maps"), listOf("phone"), listOf("maps", "phone"), listOf("email"), listOf("sms"), listOf("email", "sms"), com.jarvys.factory.contract.CapabilityCatalog.NAMES)) {
+        for (capabilities in listOf(emptyList(), listOf("share"), listOf("documents"), listOf("audio"), listOf("audio", "documents"), listOf("browser"), listOf("browser", "documents"), listOf("maps"), listOf("phone"), listOf("maps", "phone"), listOf("email"), listOf("sms"), listOf("email", "sms"), listOf("contacts"), com.jarvys.factory.contract.CapabilityCatalog.NAMES)) {
             val result = FactoryRuntimeContractTests.run(snapshot(capabilities), "com.jarvys.host", 34, 34) {}
             assertEquals("passed", result.getString("state"))
             val observations = result.getJSONArray("observations")

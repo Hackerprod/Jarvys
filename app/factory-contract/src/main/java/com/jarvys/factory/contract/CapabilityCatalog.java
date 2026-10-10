@@ -27,7 +27,7 @@ public final class CapabilityCatalog {
         DOCUMENTS_CLOSE("documents.close", "documents"), DOCUMENTS_CANCEL("documents.cancel", "documents"),
         PHOTOS_PICK("photos.pick", "photos"), PHOTOS_CAPTURE("photos.capture", "photos"), AUDIO_PLAY("audio.play", "audio"),
         BROWSER_OPEN("browser.open", "browser"), MAPS_OPEN("maps.open", "maps"), PHONE_DIAL("phone.dial", "phone"),
-        EMAIL_COMPOSE("email.compose", "email"), SMS_COMPOSE("sms.compose", "sms");
+        EMAIL_COMPOSE("email.compose", "email"), SMS_COMPOSE("sms.compose", "sms"), CONTACTS_PICK("contacts.pick", "contacts");
         public final String wireName;
         public final String capability;
         Method(String wireName, String capability) { this.wireName = wireName; this.capability = capability; }
@@ -49,8 +49,8 @@ public final class CapabilityCatalog {
         public final Set<String> conflicts = Collections.emptySet();
         private Capability(String name) {
             this.name = name;
-            manifestNodes = (name.equals("documents") || name.equals("browser") || name.equals("maps") || name.equals("phone") || name.equals("email") || name.equals("sms")) ? Collections.singletonList(DOCUMENT_QUERIES) : Collections.emptyList();
-            queries = (name.equals("documents") || name.equals("browser") || name.equals("maps") || name.equals("phone") || name.equals("email") || name.equals("sms")) ? DOCUMENT_BROKER_PACKAGES : Collections.emptySet();
+            manifestNodes = (name.equals("documents") || name.equals("browser") || name.equals("maps") || name.equals("phone") || name.equals("email") || name.equals("sms") || name.equals("contacts")) ? Collections.singletonList(DOCUMENT_QUERIES) : Collections.emptyList();
+            queries = (name.equals("documents") || name.equals("browser") || name.equals("maps") || name.equals("phone") || name.equals("email") || name.equals("sms") || name.equals("contacts")) ? DOCUMENT_BROKER_PACKAGES : Collections.emptySet();
             List<Method> selected = new ArrayList<>();
             for (Method method : Method.values()) if (name.equals(method.capability)) selected.add(method);
             methods = Collections.unmodifiableList(selected);
@@ -61,7 +61,7 @@ public final class CapabilityCatalog {
     static final ManifestNodes.Element DOCUMENT_QUERIES = ManifestNodes.queries(Arrays.asList(
             ManifestNodes.queryPackage("com.jarvys.agent"), ManifestNodes.queryPackage("com.jarvys.agent.recoverytest")));
     public static final List<String> NAMES = Collections.unmodifiableList(Arrays.asList(
-            "storage", "export", "share", "clipboard", "haptics", "device", "documents", "photos", "audio", "browser", "maps", "phone", "email", "sms"));
+            "storage", "export", "share", "clipboard", "haptics", "device", "documents", "photos", "audio", "browser", "maps", "phone", "email", "sms", "contacts"));
     public static final Set<String> SUPPORTED = Collections.unmodifiableSet(new LinkedHashSet<>(NAMES));
     public static final Map<String, Capability> CAPABILITIES;
     public static final Map<String, Method> METHODS;

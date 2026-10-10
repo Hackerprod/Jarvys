@@ -224,14 +224,14 @@ public class FactoryDispatcherTest {
         }
     }
 
-    @Test public void all16384CapabilityPlansKeepZeroPermissionsAndDeduplicateHostVisibility() {
-        assertEquals(14, CapabilityCatalog.NAMES.size()); assertEquals(25, CapabilityCatalog.METHODS.size());
-        for (int mask = 0; mask < 16384; mask++) {
+    @Test public void all32768CapabilityPlansKeepZeroPermissionsAndDeduplicateHostVisibility() {
+        assertEquals(15, CapabilityCatalog.NAMES.size()); assertEquals(26, CapabilityCatalog.METHODS.size());
+        for (int mask = 0; mask < 32768; mask++) {
             java.util.List<String> selected = new java.util.ArrayList<>();
-            for (int bit = 0; bit < 14; bit++) if ((mask & (1 << bit)) != 0) selected.add(CapabilityCatalog.NAMES.get(bit));
+            for (int bit = 0; bit < 15; bit++) if ((mask & (1 << bit)) != 0) selected.add(CapabilityCatalog.NAMES.get(bit));
             com.jarvys.factory.contract.ManifestPlan plan = new com.jarvys.factory.contract.ManifestPlan(
                     "com.example.browser", "Browser fixture", 1, "1.0", 0x7f010001, 0x7f020001, selected);
-            boolean host = selected.contains("browser") || selected.contains("documents") || selected.contains("maps") || selected.contains("phone") || selected.contains("email") || selected.contains("sms");
+            boolean host = selected.contains("browser") || selected.contains("documents") || selected.contains("maps") || selected.contains("phone") || selected.contains("email") || selected.contains("sms") || selected.contains("contacts");
             assertTrue(plan.permissions.isEmpty()); assertTrue(plan.features.isEmpty()); assertTrue(plan.hosts.isEmpty());
             assertEquals(java.util.Collections.singletonList(com.jarvys.factory.contract.ManifestPlan.ACTIVITY), plan.exportedComponents);
             assertEquals(host ? 2 : 0, plan.queries.size());

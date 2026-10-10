@@ -212,6 +212,11 @@ private fun SettingsIndex(
             { context.startActivity(com.jarvys.agent.apkfactory.FactoryFileShareCoordinator.recoveryIntent(context)) },
             testTag = "settings-factory-file-sharing-row")
         SettingsRule()
+        SettingsIndexRow(LucideIcons.Boxes, stringResource(R.string.factory_contacts_title),
+            stringResource(R.string.factory_contacts_settings_summary),
+            { context.startActivity(com.jarvys.agent.apkfactory.FactoryContactCoordinator.recoveryIntent(context)) },
+            testTag = "settings-factory-contacts-row")
+        SettingsRule()
         SettingsIndexRow(LucideIcons.Boxes, stringResource(R.string.factory_photos_title),
             stringResource(R.string.factory_photos_settings_summary),
             { context.startActivity(com.jarvys.agent.apkfactory.FactoryPhotoCoordinator.recoveryIntent(context)) },

@@ -61,9 +61,9 @@ class FactorySpecTest {
         val value=FactorySpec.parse(spec().put("capabilities",JSONArray()))
         assertTrue(value.capabilities.isEmpty())
     }
-    @Test fun all16384SelectionsUseImmutableCatalogWithoutImpliedCapabilities() {
-        assertEquals(14, FactorySpec.CAPABILITIES.size)
-        for (mask in 0 until 16384) {
+    @Test fun all32768SelectionsUseImmutableCatalogWithoutImpliedCapabilities() {
+        assertEquals(15, FactorySpec.CAPABILITIES.size)
+        for (mask in 0 until 32768) {
             val selected = FactorySpec.CAPABILITIES.filterIndexed { bit, _ -> mask and (1 shl bit) != 0 }
             val value = FactorySpec.parse(spec().put("capabilities", JSONArray(selected.reversed())))
             assertEquals(selected.sorted(), value.capabilities)
@@ -83,7 +83,7 @@ class FactorySpecTest {
     }
 
     @Test fun mapsAndPhoneOnlyGeneratedConfigPinsHostAndKeepsCapabilitiesIndependent() {
-        for (capability in listOf("maps", "phone", "email", "sms")) {
+        for (capability in listOf("maps", "phone", "email", "sms", "contacts")) {
             val typed = FactorySpec.parse(spec().put("capabilities", JSONArray(listOf(capability))))
             assertThrows(Exception::class.java) { typed.runtimeConfig() }
             val configBytes = typed.runtimeConfig(broker())

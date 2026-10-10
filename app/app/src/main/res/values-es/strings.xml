@@ -1407,4 +1407,13 @@ Se desconoce cómo terminaron. No se repiten automáticamente. Revisa los cambio
     <string name="factory_external_editor_subject">Asunto</string>
     <string name="factory_external_editor_body">Cuerpo</string>
     <string name="factory_external_editor_empty">(vacío)</string>
+    <string name="factory_contacts_title">Revisión de contacto seleccionado</string>
+    <string name="factory_contacts_value">Valor seleccionado para compartir</string>
+    <string name="factory_contacts_choose">Elegir un teléfono o correo</string>
+    <string name="factory_contacts_use">Compartir este valor exacto con la app</string>
+    <string name="factory_contacts_none">Ningún valor seleccionado</string>
+    <string name="factory_contacts_destination">App generada que recibe el dato</string>
+    <string name="factory_contacts_settings_summary">Recuperar o cerrar una selección de contacto protegida</string>
+    <string name="factory_contacts_unavailable">La selección no está disponible o fue revocada. No se devolverá ningún valor. Cierra el selector antes de reconocer un resultado incierto.</string>
+    <string name="factory_contacts_disclosure">Elige un teléfono o correo en el selector de Android verificado. Jarvys lee solo esa fila y muestra el valor completo aquí. Compartir devuelve ese valor exacto a la app generada indicada; puede conservarlo o compartirlo después mediante otras capacidades. No devuelve nombre, identificador, URI ni agenda. No autoriza llamadas ni envíos. No selecciones secretos ni datos de menores. Compatibilidad limitada; cancelar no demuestra que se cerró el selector externo.</string>
 </resources>

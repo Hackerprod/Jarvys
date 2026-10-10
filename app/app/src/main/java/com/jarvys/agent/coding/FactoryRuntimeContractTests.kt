@@ -25,11 +25,12 @@ internal object FactoryRuntimeContractTests {
             FactoryDispatcher.previewMetadata(hostAppId, api, targetSdk), FactoryDispatcher.simulatedEffects())
         try {
             val ordered = listOf("runtime.info", "storage.set", "storage.get", "storage.list", "storage.remove", "export.text", "share.text", "share.file", "clipboard.write", "haptics.perform", "device.info",
-                "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture", "audio.play", "browser.open", "maps.open", "phone.dial", "email.compose", "sms.compose")
+                "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture", "audio.play", "browser.open", "maps.open", "phone.dial", "email.compose", "sms.compose", "contacts.pick")
             check(ordered.toSet() == CapabilityCatalog.METHODS.keys) { "Synthetic contract cases must cover the compiled catalog" }
             for (method in ordered) {
                 val args = when (method) {
                     "email.compose" -> JSONObject().put("to", "fixture@example.invalid").put("subject", "Fixture").put("body", "Body")
+                    "contacts.pick" -> JSONObject().put("kind", "phone")
                     "sms.compose" -> JSONObject().put("number", "+15550100").put("body", "Body")
                     "maps.open" -> JSONObject().put("query", "Synthetic map fixture")
                     "phone.dial" -> JSONObject().put("number", "+15550100")
@@ -52,7 +53,7 @@ internal object FactoryRuntimeContractTests {
                     assertion("$method:undeclared_denied") {
                         try { dispatch(method, args); false } catch (failure: FactoryException) { failure.code == "CAPABILITY_DENIED" }
                     }
-                } else if (capability == "maps" || capability == "phone" || capability == "email" || capability == "sms" || capability == "browser" || capability == "documents" || (capability == "photos" || capability == "audio") || method == "share.file") {
+                } else if (capability == "maps" || capability == "phone" || capability == "email" || capability == "sms" || capability == "contacts" || capability == "browser" || capability == "documents" || (capability == "photos" || capability == "audio") || method == "share.file") {
                     assertion("$method:preview_unavailable") {
                         try { dispatch(method, args); false } catch (failure: FactoryException) { failure.code == "UNAVAILABLE" }
                     }

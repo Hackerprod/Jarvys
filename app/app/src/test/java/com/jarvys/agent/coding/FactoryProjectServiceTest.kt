@@ -92,7 +92,7 @@ class FactoryProjectServiceTest {
         fun build(path:String="notes.apk")=service.build("factory.json",path,scope.version(),CancellationToken.cancellable())
     }
     @Test fun mapsAndPhoneOnlyBuildsEmbedVerifiedHostPinsAndNoPermissions() {
-        for (capability in listOf("maps", "phone", "email", "sms")) {
+        for (capability in listOf("maps", "phone", "email", "sms", "contacts")) {
             val f = Fixture()
             val packageManager = f.context.packageManager
             val own = packageManager.getPackageInfo(f.context.packageName, android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES)

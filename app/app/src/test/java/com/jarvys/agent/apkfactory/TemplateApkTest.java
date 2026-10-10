@@ -84,18 +84,18 @@ public class TemplateApkTest {
     }
 
 
-    @Test public void all16384SelectionsHaveOnlyApprovedZeroPermissionProfiles() throws Exception {
+    @Test public void all32768SelectionsHaveOnlyApprovedZeroPermissionProfiles() throws Exception {
         byte[] apk=build();
         com.jarvys.factory.contract.ManifestPlan base=TemplateApk.inspect(apk).plan;
         com.jarvys.factory.contract.ManifestAudit.Document decoded=com.jarvys.factory.contract.ManifestAudit.read(unzip(apk).get("AndroidManifest.xml"));
         byte[] docs=TemplateApk.build(template,new TemplateApk.Spec(spec.appId,spec.label,spec.versionCode,spec.versionName,Collections.singletonList("documents")),icon,assets);
         com.jarvys.factory.contract.ManifestAudit.Document documentDecoded=com.jarvys.factory.contract.ManifestAudit.read(unzip(docs).get("AndroidManifest.xml"));
-        for(int mask=0;mask<16384;mask++) {
+        for(int mask=0;mask<32768;mask++) {
             List<String> requested=new ArrayList<>();
             for(int bit=0;bit<14;bit++) if((mask&(1<<bit))!=0) requested.add(com.jarvys.factory.contract.CapabilityCatalog.NAMES.get(bit));
             com.jarvys.factory.contract.ManifestPlan plan=new com.jarvys.factory.contract.ManifestPlan(spec.appId,spec.label,spec.versionCode,spec.versionName,base.iconResourceId,base.backupResourceId,requested);
-            ((requested.contains("documents") || requested.contains("browser") || requested.contains("maps") || requested.contains("phone") || requested.contains("email") || requested.contains("sms")) ? documentDecoded : decoded).verify(plan); assertTrue(plan.permissions.isEmpty()); assertTrue(plan.features.isEmpty());
-            assertEquals((requested.contains("documents") || requested.contains("browser") || requested.contains("maps") || requested.contains("phone") || requested.contains("email") || requested.contains("sms")) ? 2 : 0,plan.queries.size()); assertTrue(plan.hosts.isEmpty()); assertEquals(1,plan.exportedComponents.size());
+            ((requested.contains("documents") || requested.contains("browser") || requested.contains("maps") || requested.contains("phone") || requested.contains("email") || requested.contains("sms") || requested.contains("contacts")) ? documentDecoded : decoded).verify(plan); assertTrue(plan.permissions.isEmpty()); assertTrue(plan.features.isEmpty());
+            assertEquals((requested.contains("documents") || requested.contains("browser") || requested.contains("maps") || requested.contains("phone") || requested.contains("email") || requested.contains("sms") || requested.contains("contacts")) ? 2 : 0,plan.queries.size()); assertTrue(plan.hosts.isEmpty()); assertEquals(1,plan.exportedComponents.size());
             List<String> snapshot=new ArrayList<>(plan.capabilities); requested.clear(); assertEquals(snapshot,plan.capabilities);
             assertThrows(UnsupportedOperationException.class,()->plan.nodes.clear());
             assertThrows(UnsupportedOperationException.class,()->plan.nodes.get(0).attributes.clear());

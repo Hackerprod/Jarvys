@@ -513,3 +513,74 @@ closed, UX34 gated, UX44 documentation-only future defaults and UX43 last.
 References checked October 10, 2026: [Android common intents](https://developer.android.com/guide/components/intents-common)
 and [RFC 6068](https://www.rfc-editor.org/rfc/rfc6068). The address subset above is intentionally
 narrower than RFC 6068; subject/body use fixed Android extras, not arbitrary mailto headers.
+
+## Single contact datum selection (UX42 F1, v74)
+
+`Jarvys.contacts.pick({kind:"phone"})` or `{kind:"email"}` requires only `contacts`.
+Exact keys and required strings; no default, URI, query, row ID, projection, component,
+permission or intent extras can be supplied by JavaScript. SDK 2/schema/protocol 1 remain.
+The capability contributes only the same two exact host-package visibility queries and
+factory-owned `documentBroker` binding. Generated APKs remain permissionless.
+
+The generated app authenticates its pinned host; the host verifies the exact latest signed
+installed generated APK, version, certificate, hash and signing scope. Source/host shared-UID
+ambiguity and two installed Jarvys hosts fail closed. A separate bounded control endpoint
+handles cancellation and source death; no document handle or photo transfer is used.
+
+Native human approval opens one verified system `ACTION_PICK` component using only the
+Phone or Email `CONTENT_TYPE`. Picker and canonical contacts-provider package/component,
+UID, certificate set, version and update time are pinned and rechecked. A legitimate platform
+contacts provider may have a shared UID. System provenance is not universal OEM compatibility.
+The host adds two narrow ACTION_PICK MIME queries and one canonical provider visibility query;
+its pre-existing permissions are unchanged, and this flow requests no permissions.
+
+Only one owned `RESULT_OK` callback from the original live picker interaction can authorize
+reading. Unsolicited, canceled, duplicate, expired, restarted and stale results do not create
+selection authority. There is no `createPendingResult`, deep-link, Binder-URI or recovery-data
+read entry point. The raw URI must be exactly
+`content://com.android.contacts/data/<positive signed-64-bit integer>` without leading zeroes,
+encoding, query, fragment, user/profile prefix or trailing slash. Typed/lookup/collection,
+enterprise and Android 17 session URI shapes are intentionally unsupported; no URI rewriting.
+Result metadata, grant flags and ClipData are strictly checked. No write/prefix/persistable grant.
+
+Android access must be supplied by an explicit read URI grant or already-granted host
+`READ_CONTACTS`. Existing permission is never selection provenance or consent. AOSP may omit
+a redundant basic URI grant when this permission already exists; the same exact-row reader
+handles either access condition. No permission request/change, bulk query, retry or fallback.
+Before querying, the host rechecks source proof/control/deadline and picker/provider identity.
+The one query uses the unmodified selected URI, exactly `[mimetype,data1]`, null selection and
+sort, and a CancellationSignal. Exactly one row with expected phone/email item MIME is accepted.
+No names, labels, contact IDs, photos or enrichment are requested. The accepted value is limited
+to 256 Unicode code points/1,024 UTF-8 bytes; malformed surrogates, blank-only text, ISO controls,
+format/bidi and line/paragraph separators fail. Cursor/provider allocation is outside this
+accepted-value bound. Provider Binder cancellation is best effort, not a hard I/O timeout.
+
+The frozen accepted string is shown completely in a separate native value view, alongside the
+exact receiving generated app/version/APK hash, for a second human approval. Delivery rechecks
+the latest source proof/control and consumes authority durably before returning exactly
+`{kind,value}`. The returned value is unchanged: no normalization, dialability, mailbox validity,
+contact ownership or external action claim. No URI/ID/name/permissions are returned. A generated
+app can retain this approved value or use other separately granted capabilities to share it.
+
+Review uses FLAG_SECURE, disabled saved state/autofill descendants/content capture and obscured
+and partially obscured touch filtering; human accessibility remains. These protections do not
+erase immutable JVM strings or control another app. Journals contain state/open/nonce only.
+Five-minute expiry, background/focus loss after return, cancellation and restart revoke delivery.
+The durable automation guard and shared admission remain while provider work is blocked.
+Settings → Contact selection review provides native-only uncertain-outcome recovery. The user
+must close any old picker themselves; acknowledgment is not OS closure proof. Recovery never
+returns data or replays selection. Cancellation cannot erase copies already received.
+
+Preview returns UNAVAILABLE. `documents.cancel` is unrelated. `runtime.info` exposes
+`contactsRequires:["contacts"]`, `contactsBrokerRequired:true`, allowed kinds, protocol and
+bounds, with no normalization or syntax-validation claim. All host tests use synthetic rows,
+intercepted system dispatch and an offline guard; actual device/OEM grants, Binder/UI lifecycle,
+installation/update and contact selection remain unverified until authorized physical testing.
+Calendar insertion remains a separate pending slice; TTS/voice, remaining F1/F2/F3, UX34 gates,
+UX44 documentation-only defaults and UX43-last are preserved.
+
+References checked October 10, 2026: [Android common intents](https://developer.android.com/guide/components/intents-common),
+[explicit URI permission API](https://developer.android.com/reference/android/content/Context#checkUriPermission(android.net.Uri,%20int,%20int,%20int)),
+[AOSP URI grant handling](https://android.googlesource.com/platform/frameworks/base/+/master/services/core/java/com/android/server/uri/UriGrantsManagerService.java),
+[AOSP contacts provider](https://android.googlesource.com/platform/packages/providers/ContactsProvider/+/master/AndroidManifest.xml),
+and [Android 17 contact picker](https://developer.android.com/about/versions/17/features/contact-picker).

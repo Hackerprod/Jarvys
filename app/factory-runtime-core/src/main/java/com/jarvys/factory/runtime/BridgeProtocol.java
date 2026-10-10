@@ -60,6 +60,9 @@ public final class BridgeProtocol {
                 case MAPS_OPEN: case PHONE_DIAL: case EMAIL_COMPOSE: case SMS_COMPOSE:
                     ExternalLaunchRequest.parse(method, args.toString());
                     break;
+                case CONTACTS_PICK:
+                    ContactPickRequest.parse(args.toString());
+                    break;
                 case BROWSER_OPEN:
                     FactoryConfig.exactKeys(args, "url");
                     try { BrowserUrl.parse(FactoryConfig.string(args, "url")); }

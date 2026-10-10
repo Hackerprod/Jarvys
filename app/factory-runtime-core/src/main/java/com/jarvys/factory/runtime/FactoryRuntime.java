@@ -60,6 +60,8 @@ public final class FactoryRuntime implements AutoCloseable {
     private static final int AUDIO_REQUEST = 45;
     private static final int BROWSER_REQUEST = 46;
     private static final int EXTERNAL_REQUEST = 47;
+    private static final int CONTACT_REQUEST = 48;
+    private static final long CONTACT_LIFETIME_MS = 300000;
     private static final long EXTERNAL_LIFETIME_MS = 300000;
     private static final long BROWSER_LIFETIME_MS = 300000;
     private static final int MAX_PENDING = 16;
@@ -84,6 +86,7 @@ public final class FactoryRuntime implements AutoCloseable {
     private volatile AudioPlayback audioPlayback;
     private volatile BrowserOpen browserOpen;
     private volatile ExternalLaunch externalLaunch;
+    private volatile ContactPick contactPick;
     private volatile PhotoSelection photoSelection;
     private static final java.util.concurrent.Semaphore PHOTO_ADMISSION = new java.util.concurrent.Semaphore(1);
     private static final ThreadPoolExecutor PHOTO_IO = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
@@ -189,6 +192,7 @@ public final class FactoryRuntime implements AutoCloseable {
         cancelDocumentSelection(); cancelFileShare(); cancelPhotoSelection(); cancelAudioPlayback();
         cancelBrowserOpen(browserOpen, "CANCELLED", "Browser launch authority ended. A browser already opened may remain open.");
         cancelExternalLaunch(externalLaunch, "CANCELLED", "External launch authority ended. An external application already opened may remain open.");
+        cancelContactPick(contactPick, "CANCELLED", "Contact selection authority ended.");
         // Keep an outstanding picker tombstone until its callback: request code 41 must never
         // attach an old result to a new page's export request.
         if (export != null) export.text = null;
@@ -377,6 +381,8 @@ public final class FactoryRuntime implements AutoCloseable {
                 openPhoto(request, reply); break;
             case MAPS_OPEN: case PHONE_DIAL: case EMAIL_COMPOSE: case SMS_COMPOSE:
                 openExternalLaunch(request, reply); break;
+            case CONTACTS_PICK:
+                openContactPick(request, reply); break;
             case BROWSER_OPEN:
                 openBrowser(request, reply); break;
             case AUDIO_PLAY:
@@ -461,13 +467,22 @@ public final class FactoryRuntime implements AutoCloseable {
     }
 
     private boolean claimUi(Reply reply) {
-        if (uiOwner != null || export != null || documentSelection != null || fileShare != null || photoSelection != null || audioPlayback != null || browserOpen != null || externalLaunch != null || !activity.hasWindowFocus() || activity.isFinishing()) {
+        if (uiOwner != null || export != null || documentSelection != null || fileShare != null || photoSelection != null || audioPlayback != null || browserOpen != null || externalLaunch != null || contactPick != null || !activity.hasWindowFocus() || activity.isFinishing()) {
             reply.fail("BUSY", "Another native prompt is open, or the application is not in the foreground."); return false;
         }
         uiOwner = reply; return true;
     }
 
     public void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == CONTACT_REQUEST) {
+            ContactPick work = contactPick;
+            if (work == null || work.returned) return;
+            work.returned = true; work.resultCode = resultCode;
+            // A cancelled or stale source must never retain selected personal data.
+            if (!work.cancelled && work.reply.current()) work.result = data;
+            if (documentForeground || work.cancelled || !work.reply.current()) finishContactPick(work);
+            return;
+        }
         if (requestCode == EXTERNAL_REQUEST) {
             ExternalLaunch work = externalLaunch;
             if (work == null || work.returned) return;
@@ -543,6 +558,9 @@ public final class FactoryRuntime implements AutoCloseable {
     /** Pause always revokes existing handles. The external broker alone may retain a picker tombstone. */
     public void onPause() {
         documentForeground = false;
+        ContactPick contact = contactPick;
+        if (contact != null && (!contact.launched || contact.returned))
+            cancelContactPick(contact, "CANCELLED", "Contact selection authority ended in background.");
         ExternalLaunch external = externalLaunch;
         if (external != null && (!external.launched || external.returned))
             cancelExternalLaunch(external, "CANCELLED", "External launch authority ended in background. An external application already opened may remain open.");
@@ -565,6 +583,8 @@ public final class FactoryRuntime implements AutoCloseable {
     }
     public void onResume() {
         documentForeground = true;
+        ContactPick contact = contactPick;
+        if (contact != null && contact.returned) finishContactPick(contact);
         ExternalLaunch external = externalLaunch;
         if (external != null && external.returned) finishExternalLaunch(external);
         BrowserOpen browser = browserOpen;
@@ -1035,6 +1055,117 @@ public final class FactoryRuntime implements AutoCloseable {
             work.reply.ok(new JSONObject().put("launchRequested", extras.getBoolean("launchRequested")).put("actionConfirmed", false));
         } catch (Exception denied) {
             work.reply.fail("EXTERNAL_UNAVAILABLE", "The external action outcome is unavailable. A launch request never proves action completion.");
+        }
+    }
+
+    private static final class ContactPick {
+        final Reply reply;
+        final String nonce, kind;
+        ExternalLaunchControl.HostVerifier verifiedHost;
+        int hostUid;
+        final long expiresAt;
+        ExternalLaunchControl control;
+        Runnable expiration;
+        boolean cancelled, launched, returned;
+        int resultCode;
+        Intent result;
+        ContactPick(Reply reply, String nonce, String kind) {
+            this.reply = reply; this.nonce = nonce; this.kind = kind;
+            this.expiresAt = SystemClock.elapsedRealtime() + CONTACT_LIFETIME_MS;
+        }
+    }
+    private void openContactPick(BridgeProtocol.Request request, Reply reply) throws Exception {
+        if (!documentForeground || destroyed || activity.isFinishing() || !host.isActive())
+            throw new FactoryException("UNAVAILABLE", "Contact selection requires the foreground application.");
+        final String kind = ContactPickRequest.parse(request.args.toString());
+        DocumentBrokerIdentity.verify(activity, config.documentBroker);
+        final int hostUid = activity.getPackageManager().getApplicationInfo(config.documentBroker.packageName, 0).uid;
+        String[] packages = activity.getPackageManager().getPackagesForUid(hostUid);
+        if (packages == null || packages.length != 1 || !packages[0].equals(config.documentBroker.packageName))
+            throw new FactoryException("UNAVAILABLE", "The contact selection host has an ambiguous UID.");
+        ExternalLaunchControl.HostVerifier verifiedHost = uid -> {
+            if (uid != hostUid) return false;
+            try {
+                DocumentBrokerIdentity.verify(activity, config.documentBroker);
+                String[] current = activity.getPackageManager().getPackagesForUid(uid);
+                return current != null && current.length == 1 && current[0].equals(config.documentBroker.packageName)
+                        && activity.getPackageManager().getApplicationInfo(config.documentBroker.packageName, 0).uid == uid;
+            } catch (Exception denied) { return false; }
+        };
+        byte[] random = new byte[32]; new java.security.SecureRandom().nextBytes(random);
+        StringBuilder nonce = new StringBuilder();
+        for (byte b : random) nonce.append(String.format(java.util.Locale.ROOT, "%02x", b & 255));
+        if (!claimUi(reply)) return;
+        ContactPick work = new ContactPick(reply, nonce.toString(), kind);
+        work.verifiedHost = verifiedHost; work.hostUid = hostUid;
+        work.control = new ExternalLaunchControl(work.nonce, verifiedHost);
+        work.expiration = () -> cancelContactPick(work, "TIMEOUT",
+                "Contact selection expired. Close the native contact flow yourself.");
+        contactPick = work;
+        main.postDelayed(work.expiration, CONTACT_LIFETIME_MS);
+        // A queued handoff has no authority after pause/reload/expiry, even before host registration.
+        main.post(() -> {
+            if (contactPick != work) return;
+            if (work.cancelled || !documentForeground || !reply.current() || SystemClock.elapsedRealtime() >= work.expiresAt) {
+                cancelContactPick(work, "CANCELLED", "Contact selection authority ended before native review."); return;
+            }
+            try {
+                if (!verifiedHost.allowed(hostUid)) throw new FactoryException("UNAVAILABLE", "The matching contact selection host changed.");
+                android.os.Bundle extras = new android.os.Bundle();
+                extras.putInt("protocolVersion", 1); extras.putString("nonce", work.nonce); extras.putString("kind", work.kind);
+                extras.putBinder("control", work.control);
+                Intent intent = new Intent().setComponent(new android.content.ComponentName(config.documentBroker.packageName,
+                        "com.jarvys.agent.apkfactory.FactoryContactActivity")).putExtras(extras);
+                work.launched = true;
+                activity.startActivityForResult(intent, CONTACT_REQUEST);
+            } catch (Exception unavailable) {
+                work.launched = false;
+                cancelContactPick(work, "CONTACT_UNAVAILABLE", "The matching native contact selection could not open.");
+            }
+        });
+    }
+    private void cancelContactPick(ContactPick work, String code, String message) {
+        if (work == null || contactPick != work) return;
+        work.cancelled = true; work.result = null;
+        work.control.cancel();
+        main.removeCallbacks(work.expiration);
+        work.reply.fail(code, message);
+        // Keep launched ownership as a tombstone until the host actually returns.
+        // Revocation does not claim that the system picker or native host is closed.
+        if (!work.launched) {
+            contactPick = null;
+            if (uiOwner == work.reply) uiOwner = null;
+        }
+    }
+    private void finishContactPick(ContactPick work) {
+        if (contactPick != work) return;
+        if (SystemClock.elapsedRealtime() >= work.expiresAt)
+            cancelContactPick(work, "TIMEOUT", "Contact selection expired without releasing data.");
+        contactPick = null; main.removeCallbacks(work.expiration); work.control.close();
+        if (uiOwner == work.reply) uiOwner = null;
+        Intent result = work.result; work.result = null;
+        if (work.cancelled || !work.reply.current()) return;
+        try {
+            if (!work.verifiedHost.allowed(work.hostUid)) throw new IllegalArgumentException();
+            if (work.resultCode == Activity.RESULT_CANCELED && result == null) {
+                work.reply.fail("CANCELLED", "Contact selection ended without releasing data."); return;
+            }
+            if (work.resultCode != Activity.RESULT_OK || result == null || result.getData() != null || result.getClipData() != null
+                    || result.getSelector() != null || result.getFlags() != 0 || result.getAction() != null
+                    || result.getComponent() != null || result.getPackage() != null || result.getType() != null
+                    || result.getCategories() != null || result.getSourceBounds() != null
+                    || (Build.VERSION.SDK_INT >= 29 && result.getIdentifier() != null)) throw new IllegalArgumentException();
+            android.os.Bundle extras = result.getExtras();
+            if (extras == null || extras.hasFileDescriptors()
+                    || !extras.keySet().equals(new java.util.HashSet<>(java.util.Arrays.asList("nonce", "kind", "value")))
+                    || !(extras.get("nonce") instanceof String) || !work.nonce.equals(extras.get("nonce"))
+                    || !(extras.get("kind") instanceof String) || !work.kind.equals(extras.get("kind"))
+                    || !(extras.get("value") instanceof String)) throw new IllegalArgumentException();
+            String kind = com.jarvys.factory.contract.ContactPickSpec.kind((String) extras.get("kind"));
+            String value = com.jarvys.factory.contract.ContactPickSpec.value((String) extras.get("value"));
+            work.reply.ok(new JSONObject().put("kind", kind).put("value", value));
+        } catch (Exception denied) {
+            work.reply.fail("CONTACT_UNAVAILABLE", "The selected contact value is unavailable.");
         }
     }
 

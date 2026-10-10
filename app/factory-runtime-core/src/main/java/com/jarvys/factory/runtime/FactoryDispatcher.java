@@ -31,8 +31,8 @@ public final class FactoryDispatcher {
     public static Effects simulatedEffects() {
         return (method, args) -> {
             switch (method) {
-                case MAPS_OPEN: case PHONE_DIAL: case EMAIL_COMPOSE: case SMS_COMPOSE: case BROWSER_OPEN: case AUDIO_PLAY: case PHOTOS_PICK: case PHOTOS_CAPTURE: case SHARE_FILE: case DOCUMENTS_OPEN: case DOCUMENTS_CREATE: case DOCUMENTS_READ: case DOCUMENTS_WRITE: case DOCUMENTS_CLOSE: case DOCUMENTS_CANCEL:
-                    throw new FactoryException("UNAVAILABLE", "Documents, photos, audio, browser, maps, phone, email and SMS require an installed generated app and the matching human-only Jarvys broker; preview never opens files, camera, audio, external URLs, maps, dialers or message editors.");
+                case CONTACTS_PICK: case MAPS_OPEN: case PHONE_DIAL: case EMAIL_COMPOSE: case SMS_COMPOSE: case BROWSER_OPEN: case AUDIO_PLAY: case PHOTOS_PICK: case PHOTOS_CAPTURE: case SHARE_FILE: case DOCUMENTS_OPEN: case DOCUMENTS_CREATE: case DOCUMENTS_READ: case DOCUMENTS_WRITE: case DOCUMENTS_CLOSE: case DOCUMENTS_CANCEL:
+                    throw new FactoryException("UNAVAILABLE", "Documents, photos, audio, browser, maps, phone, email, SMS and contacts require an installed generated app and the matching human-only Jarvys broker; preview never opens files, camera, audio, external URLs, maps, dialers, message editors or contact pickers.");
                 case HAPTICS_PERFORM: case SHARE_TEXT: case CLIPBOARD_WRITE: case EXPORT_TEXT:
                     return new JSONObject().put("simulated", true).put("performed", false).put("mode", "preview")
                             .put("operation", method.wireName);
@@ -59,10 +59,16 @@ public final class FactoryDispatcher {
                         .put("simulatedCapabilities", new JSONArray("preview".equals(metadata.mode())
                                 ? java.util.Arrays.asList("export", "share", "clipboard", "haptics") : java.util.Collections.emptyList()))
                         .put("unavailableCapabilities", new JSONArray("preview".equals(metadata.mode())
-                                ? java.util.Arrays.asList("documents", "photos", "audio", "browser", "maps", "phone", "email", "sms") : java.util.Collections.emptyList()))
+                                ? java.util.Arrays.asList("documents", "photos", "audio", "browser", "maps", "phone", "email", "sms", "contacts") : java.util.Collections.emptyList()))
                         .put("unavailableMethods", new JSONArray("preview".equals(metadata.mode())
-                                ? java.util.Arrays.asList("share.file", "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture", "audio.play", "browser.open", "maps.open", "phone.dial", "email.compose", "sms.compose")
+                                ? java.util.Arrays.asList("share.file", "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture", "audio.play", "browser.open", "maps.open", "phone.dial", "email.compose", "sms.compose", "contacts.pick")
                                 : java.util.Collections.emptyList()))
+                        .put("contactPickProtocolVersion", 1)
+                        .put("contactsRequires", new JSONArray(java.util.Collections.singletonList("contacts")))
+                        .put("contactsBrokerRequired", true)
+                        .put("contactsKinds", new JSONArray(java.util.Arrays.asList("phone", "email")))
+                        .put("contactsValueNormalized", false)
+                        .put("contactsValueSyntaxValidated", false)
                         .put("externalLaunchProtocolVersion", 1)
                         .put("mapsRequires", new JSONArray(java.util.Collections.singletonList("maps")))
                         .put("phoneRequires", new JSONArray(java.util.Collections.singletonList("phone")))
@@ -92,6 +98,10 @@ public final class FactoryDispatcher {
                                 .put("browserUrlLength", com.jarvys.factory.contract.BrowserUrl.MAX_LENGTH)
                                 .put("browserLifetimeMs", 300000)
                                 .put("externalLaunchLifetimeMs", 300000)
+                                .put("contactPickLifetimeMs", 300000)
+                                .put("contactArgumentsBytes", ContactPickRequest.MAX_ARGS_BYTES)
+                                .put("contactValueCodePoints", com.jarvys.factory.contract.ContactPickSpec.MAX_VALUE_CODE_POINTS)
+                                .put("contactValueBytes", com.jarvys.factory.contract.ContactPickSpec.MAX_VALUE_BYTES)
                                 .put("emailAddressCharacters", ExternalLaunchSpec.MAX_EMAIL_ADDRESS)
                                 .put("editorSubjectCodePoints", ExternalLaunchSpec.MAX_SUBJECT_CODE_POINTS)
                                 .put("editorSubjectBytes", ExternalLaunchSpec.MAX_SUBJECT_BYTES)
@@ -108,7 +118,7 @@ public final class FactoryDispatcher {
                                 .put("audioSampleRateMin", 8000).put("audioSampleRateMax", 48000)
                                 .put("documentHandleLifetimeMs", 300000));
             case DEVICE_INFO: return metadata.deviceInfo().put("declaredAppId", config.appId);
-            case MAPS_OPEN: case PHONE_DIAL: case EMAIL_COMPOSE: case SMS_COMPOSE: case BROWSER_OPEN: case AUDIO_PLAY: case PHOTOS_PICK: case PHOTOS_CAPTURE: case SHARE_FILE: case DOCUMENTS_OPEN: case DOCUMENTS_CREATE: case DOCUMENTS_READ: case DOCUMENTS_WRITE: case DOCUMENTS_CLOSE: case DOCUMENTS_CANCEL:
+            case CONTACTS_PICK: case MAPS_OPEN: case PHONE_DIAL: case EMAIL_COMPOSE: case SMS_COMPOSE: case BROWSER_OPEN: case AUDIO_PLAY: case PHOTOS_PICK: case PHOTOS_CAPTURE: case SHARE_FILE: case DOCUMENTS_OPEN: case DOCUMENTS_CREATE: case DOCUMENTS_READ: case DOCUMENTS_WRITE: case DOCUMENTS_CLOSE: case DOCUMENTS_CANCEL:
             case HAPTICS_PERFORM: case SHARE_TEXT: case CLIPBOARD_WRITE: case EXPORT_TEXT:
                 return effects.perform(request.operation, request.args);
             default: throw new FactoryException("UNKNOWN_METHOD", "Unknown operation.");

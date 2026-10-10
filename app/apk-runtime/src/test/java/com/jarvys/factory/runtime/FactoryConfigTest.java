@@ -52,7 +52,7 @@ public class FactoryConfigTest {
 
     @Test public void externalCapabilitiesAloneRequireAndAcceptTheSameBuildOwnedBrokerWithoutDocuments() throws Exception {
         String digest = new String(new char[64]).replace('\0', 'a');
-        for (String caps : new String[]{"[\"browser\"]", "[\"maps\"]", "[\"phone\"]", "[\"browser\",\"documents\",\"maps\",\"phone\"]"}) {
+        for (String caps : new String[]{"[\"browser\"]", "[\"maps\"]", "[\"phone\"]", "[\"email\"]", "[\"sms\"]", "[\"contacts\"]", "[\"browser\",\"documents\",\"maps\",\"phone\"]"}) {
             String base = text("com.example.app", "www/index.html", caps);
             reject(base, "com.example.app");
             assertNull(FactoryConfig.parsePreview(base).documentBroker);

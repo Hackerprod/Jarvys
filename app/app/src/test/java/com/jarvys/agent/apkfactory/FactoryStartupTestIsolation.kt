@@ -9,6 +9,11 @@ import java.util.concurrent.TimeUnit
  */
 internal object FactoryStartupTestIsolation {
     fun awaitSharingWorkerCompletion() {
+        val contacts = FactoryContactCoordinator.WORKER
+        check(!contacts.isShutdown); contacts.prestartCoreThread()
+        val contactBarrier = java.util.concurrent.FutureTask(java.util.concurrent.Callable { Unit })
+        check(contacts.queue.offer(contactBarrier, 10, TimeUnit.SECONDS)) { "Synthetic contact worker remained occupied" }
+        contactBarrier.get(10, TimeUnit.SECONDS)
         val worker = FactoryFileShareCoordinator.WORKER
         check(!worker.isShutdown)
         worker.prestartCoreThread()
@@ -35,6 +40,13 @@ internal object FactoryStartupTestIsolation {
     }
     fun releaseCompletedSharingStartup() {
         awaitSharingWorkerCompletion()
+        val contactSingleton = FactoryContactCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }
+        (contactSingleton.get(null) as? FactoryContactCoordinator)?.let { contact ->
+            check(!contact.isBusy() && !contact.needsRecovery() && contact.session() == null) { "Cannot reset a live synthetic contact interaction" }
+            val contactLease = FactoryContactCoordinator::class.java.getDeclaredField("lease").apply { isAccessible = true }
+            check(contactLease.get(contact) == null) { "Cannot erase live contact protection" }
+            FactoryInteractionAdmission.release(contact); contactSingleton.set(null, null)
+        }
         val externalSingleton = FactoryExternalLaunchCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }
         (externalSingleton.get(null) as? FactoryExternalLaunchCoordinator)?.let { external ->
             check(!external.isBusy() && !external.needsRecovery() && external.session() == null) { "Cannot reset a live synthetic external interaction" }
