@@ -1,6 +1,6 @@
 # v69 / 1.2.62-FACTORY-PHOTOS
 
-Status: host validation and independent three-APK audit passed. Existing-D7 signing and native delivery pending. Not a delivery receipt.
+Status: host validation and independent three-APK audit passed. Existing-D7 ARM64 signing verified; native attachment send accepted. Download, installation and physical acceptance unverified.
 
 Photos are a separate declared capability requiring documents. The exact latest signed APK
 and unique compatible host are authenticated. Only native human actions launch a trusted
@@ -84,3 +84,21 @@ worker and cross-broker admission remain held until actual completion. Five-minu
 and synthetic tests do not prove physical camera/provider behavior. Real Binder/pipe, picker,
 camera, grants, lifecycle, install/update and data preservation remain unverified. No real photo
 or user data was accessed, captured, shared or automatically sent during this implementation.
+
+## Signed delivery receipt
+
+The parent delivery flow verified and sent `Jarvys-Factory-photos-full-v69-arm64-test.apk`.
+Native attachment send was accepted on 2026-10-10 at 08:24:14 UTC; acceptance does not prove
+recipient download, installation, update compatibility or physical behavior.
+
+- Signed ARM64 artifact: 19,134,011 bytes.
+- SHA-256: `24ad394e295170e024409e260b08c6c4dce3ce27623807a4241de0153ccb2181`.
+- Existing D7 test identity, certificate SHA-1 `d7c01f597978323e32caaf22e9f6009ab72f32b8`;
+  certificate SHA-256 `d2de47ccf48e02f58ecf4633392ff3f119e925aad1abaa7921c7ce163cfcec4e`.
+- APK v2/v3 signatures, ZIP CRC and 16 KiB alignment verified; 239 retained entries identical
+  to the audited unsigned source, with only nine non-ARM64 libraries removed. Manifest exact;
+  package `com.jarvys.agent`, version69 / `1.2.62-FACTORY-PHOTOS`, minimum API24.
+
+This receipt supersedes earlier signing/delivery-pending statements while preserving their
+historical validation sequence. The next F1 family is Audio/TTS/voice; it remains closed until
+its own coherent design, implementation and validation. UX34 gates and UX43-last are unchanged.
