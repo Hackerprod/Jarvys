@@ -40,6 +40,16 @@ public final class BridgeProtocol {
             if (operation == null) throw new FactoryException("UNKNOWN_METHOD", "Native method is not implemented.");
             String capability = operation.capability;
             switch (operation) {
+                case BIOMETRICS_AUTHENTICATE:
+                    try { BiometricAuthentication.Request.parse(args); }
+                    catch(FactoryException e) { throw e; }
+                    catch(Exception e) { throw new FactoryException("INVALID_ARGUMENT","Invalid biometric authentication arguments."); }
+                    break;
+                case BIOMETRICS_CANCEL:
+                    if(raw.getBytes(StandardCharsets.UTF_8).length>1024) throw new FactoryException("INVALID_ARGUMENT","Biometric cancellation envelope exceeds 1 KiB.");
+                    FactoryConfig.exactKeys(args);break;
+                case BIOMETRICS_AVAILABILITY:
+                    FactoryConfig.exactKeys(args);break;
                 case SENSORS_CAPTURE:
                     try { SensorCapture.Request.parse(args); }
                     catch(FactoryException e) { throw e; }

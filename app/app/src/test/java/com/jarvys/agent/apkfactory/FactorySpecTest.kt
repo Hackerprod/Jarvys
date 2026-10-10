@@ -61,16 +61,19 @@ class FactorySpecTest {
         val value=FactorySpec.parse(spec().put("capabilities",JSONArray()))
         assertTrue(value.capabilities.isEmpty())
     }
-    @Test fun all524288SelectionsUseImmutableCatalogWithoutImpliedCapabilities() {
-        assertEquals(19, FactorySpec.CAPABILITIES.size)
-        for (mask in 0 until 524288) {
+    @Test fun all1048576SelectionsUseImmutableCatalogWithOnlyTheSelectiveBiometricPermission() {
+        assertEquals(20, FactorySpec.CAPABILITIES.size)
+        var checked = 0
+        for (mask in 0 until 1048576) {
             val selected = FactorySpec.CAPABILITIES.filterIndexed { bit, _ -> mask and (1 shl bit) != 0 }
             val value = FactorySpec.parse(spec().put("capabilities", JSONArray(selected.reversed())))
             assertEquals(selected.sorted(), value.capabilities)
             assertEquals(1, JSONObject(String(value.runtimeConfig(if ("documents" in selected || "browser" in selected || "maps" in selected || "phone" in selected || "email" in selected || "sms" in selected || "contacts" in selected || "calendar" in selected) broker() else null))).getInt("schemaVersion"))
             for (name in selected) {
                 val capability = com.jarvys.factory.contract.CapabilityCatalog.CAPABILITIES[name]!!
-                assertTrue(capability.permissions.isEmpty())
+                assertEquals(if (name == "biometrics") setOf("android.permission.USE_BIOMETRIC") else emptySet<String>(), capability.permissions)
+                assertEquals(if (name == "biometrics") 30 else 24, capability.minimumApi)
+                assertTrue(capability.features.isEmpty())
                 assertTrue(capability.components.isEmpty())
                 assertTrue(capability.dependencies.isEmpty())
                 assertTrue(capability.conflicts.isEmpty())
@@ -79,7 +82,20 @@ class FactorySpecTest {
             assertThrows(UnsupportedOperationException::class.java) {
                 (value.capabilities as MutableList<String>).add("camera")
             }
+            checked++
         }
+        assertEquals(1048576, checked)
+    }
+
+    @Test fun standaloneBiometricsConfigDeclaresOnlyItsCapabilityWithoutAnyHostPin() {
+        val biometrics = FactorySpec.parse(spec().put("capabilities", JSONArray(listOf("biometrics"))))
+        val config = com.jarvys.factory.runtime.FactoryConfig.parse(String(biometrics.runtimeConfig()), biometrics.appId)
+        assertEquals(setOf("biometrics"), config.capabilities)
+        assertNull(config.documentBroker)
+        assertThrows(Exception::class.java) { biometrics.runtimeConfig(broker()) }
+        rejects { it.put("permissions", JSONArray(listOf("android.permission.USE_BIOMETRIC"))) }
+        rejects { it.put("features", JSONArray(listOf("android.hardware.fingerprint"))) }
+        rejects { it.put("minSdkVersion", 30) }
     }
 
     @Test fun mapsAndPhoneOnlyGeneratedConfigPinsHostAndKeepsCapabilitiesIndependent() {

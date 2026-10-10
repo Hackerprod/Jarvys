@@ -2,6 +2,10 @@ package com.jarvys.agent.apkfactory;
 
 import static org.junit.Assert.*;
 
+import com.jarvys.factory.contract.CapabilityCatalog;
+import com.jarvys.factory.contract.ManifestAudit;
+import com.jarvys.factory.contract.ManifestPlan;
+import com.jarvys.factory.contract.ManifestXml;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
@@ -84,24 +88,55 @@ public class TemplateApkTest {
     }
 
 
-    @Test public void all524288SelectionsHaveOnlyApprovedZeroPermissionProfiles() throws Exception {
+    @Test public void all1048576SelectionsHaveOnlyTheExactSelectivePermissionAndQueryProfiles() throws Exception {
         byte[] apk=build();
         com.jarvys.factory.contract.ManifestPlan base=TemplateApk.inspect(apk).plan;
         com.jarvys.factory.contract.ManifestAudit.Document decoded=com.jarvys.factory.contract.ManifestAudit.read(unzip(apk).get("AndroidManifest.xml"));
         byte[] docs=TemplateApk.build(template,new TemplateApk.Spec(spec.appId,spec.label,spec.versionCode,spec.versionName,Collections.singletonList("documents")),icon,assets);
         com.jarvys.factory.contract.ManifestAudit.Document documentDecoded=com.jarvys.factory.contract.ManifestAudit.read(unzip(docs).get("AndroidManifest.xml"));
-        assertEquals(19, com.jarvys.factory.contract.CapabilityCatalog.NAMES.size());
-        for(int mask=0;mask<524288;mask++) {
+        byte[] biometric=TemplateApk.build(template,new TemplateApk.Spec(spec.appId,spec.label,spec.versionCode,spec.versionName,Collections.singletonList("biometrics")),icon,assets);
+        ManifestAudit.Document biometricDecoded=ManifestAudit.read(unzip(biometric).get("AndroidManifest.xml"));
+        byte[] combined=TemplateApk.build(template,new TemplateApk.Spec(spec.appId,spec.label,spec.versionCode,spec.versionName,Arrays.asList("biometrics","documents")),icon,assets);
+        ManifestAudit.Document combinedDecoded=ManifestAudit.read(unzip(combined).get("AndroidManifest.xml"));
+        assertEquals(20, com.jarvys.factory.contract.CapabilityCatalog.NAMES.size());
+        int checked=0;
+        for(int mask=0;mask<1048576;mask++) {
             List<String> requested=new ArrayList<>();
             for(int bit=0;bit<com.jarvys.factory.contract.CapabilityCatalog.NAMES.size();bit++) if((mask&(1<<bit))!=0) requested.add(com.jarvys.factory.contract.CapabilityCatalog.NAMES.get(bit));
             com.jarvys.factory.contract.ManifestPlan plan=new com.jarvys.factory.contract.ManifestPlan(spec.appId,spec.label,spec.versionCode,spec.versionName,base.iconResourceId,base.backupResourceId,requested);
-            ((requested.contains("documents") || requested.contains("browser") || requested.contains("maps") || requested.contains("phone") || requested.contains("email") || requested.contains("sms") || requested.contains("contacts") || requested.contains("calendar")) ? documentDecoded : decoded).verify(plan); assertTrue(plan.permissions.isEmpty()); assertTrue(plan.features.isEmpty());
-            assertEquals((requested.contains("documents") || requested.contains("browser") || requested.contains("maps") || requested.contains("phone") || requested.contains("email") || requested.contains("sms") || requested.contains("contacts") || requested.contains("calendar")) ? 2 : 0,plan.queries.size()); assertTrue(plan.hosts.isEmpty()); assertEquals(1,plan.exportedComponents.size());
+            boolean hasQueries=requested.contains("documents") || requested.contains("browser") || requested.contains("maps") || requested.contains("phone") || requested.contains("email") || requested.contains("sms") || requested.contains("contacts") || requested.contains("calendar");
+            boolean hasBiometrics=requested.contains("biometrics");
+            (hasBiometrics ? (hasQueries ? combinedDecoded : biometricDecoded) : (hasQueries ? documentDecoded : decoded)).verify(plan);
+            assertEquals(hasBiometrics ? Collections.singletonList(CapabilityCatalog.BIOMETRIC_PERMISSION) : Collections.emptyList(),plan.permissions);
+            assertEquals(hasQueries ? Arrays.asList("com.jarvys.agent","com.jarvys.agent.recoverytest") : Collections.emptyList(),plan.queries);
+            assertEquals(7+(hasQueries?3:0)+(hasBiometrics?1:0),plan.nodes.size());
+            assertTrue(plan.features.isEmpty()); assertTrue(plan.hosts.isEmpty()); assertEquals(Collections.singletonList(ManifestPlan.ACTIVITY),plan.exportedComponents);
             List<String> snapshot=new ArrayList<>(plan.capabilities); requested.clear(); assertEquals(snapshot,plan.capabilities);
             assertThrows(UnsupportedOperationException.class,()->plan.nodes.clear());
             assertThrows(UnsupportedOperationException.class,()->plan.nodes.get(0).attributes.clear());
             assertThrows(UnsupportedOperationException.class,()->plan.capabilities.clear());
+            checked++;
         }
+        assertEquals(1048576,checked);
+        FactoryApkEvidence.write("profile-zero-unsigned.apk",apk);
+        FactoryApkEvidence.write("profile-queries-unsigned.apk",docs);
+        FactoryApkEvidence.write("profile-biometrics-unsigned.apk",biometric);
+        FactoryApkEvidence.write("profile-biometrics-queries-unsigned.apk",combined);
+        org.json.JSONArray profiles=new org.json.JSONArray();
+        String[] names={"zero","queries","biometrics","biometrics-queries"};
+        byte[][] artifacts={apk,docs,biometric,combined};
+        for(int index=0;index<names.length;index++) {
+            TemplateApk.ManifestInfo evidence=TemplateApk.inspect(artifacts[index]);
+            profiles.put(new org.json.JSONObject().put("name",names[index]).put("file","profile-"+names[index]+"-unsigned.apk")
+                    .put("appId",evidence.appId).put("versionCode",evidence.versionCode)
+                    .put("capabilities",new org.json.JSONArray(evidence.plan.capabilities))
+                    .put("permissions",new org.json.JSONArray(evidence.permissions))
+                    .put("queries",new org.json.JSONArray(evidence.plan.queries))
+                    .put("features",new org.json.JSONArray(evidence.plan.features)).put("nodeCount",evidence.plan.nodes.size())
+                    .put("sha256",com.jarvys.agent.coding.ProjectScope.sha256(artifacts[index])));
+        }
+        FactoryApkEvidence.write("manifest-profiles.json",utf8(new org.json.JSONObject().put("schemaVersion",1)
+                .put("testFixtureOnly",true).put("exhaustiveSelections",checked).put("profiles",profiles).toString()));
     }
     @Test public void typedExternalOnlyAndCombinedAppsBuildWithOneSharedZeroPermissionQueryProfile() throws Exception {
         byte[] browserManifest = null;
@@ -118,7 +153,7 @@ public class TemplateApkTest {
             assertStoredEntriesAligned(generated);
         }
     }
-    @Test public void documentQueriesAreTheOnlyAdditiveManifestProfile() throws Exception {
+    @Test public void documentQueriesRemainAnExactZeroPermissionAdditiveProfile() throws Exception {
         TemplateApk.Spec docs = new TemplateApk.Spec(spec.appId,spec.label,1,"1.0",Collections.singletonList("documents"));
         byte[] apk = TemplateApk.build(template,docs,icon,assets);
         TemplateApk.ManifestInfo info = TemplateApk.inspect(apk);
@@ -158,6 +193,105 @@ public class TemplateApkTest {
         set32(extra,queries+4,56);set16(extra,queries+28,1);
         Map<String,byte[]> attrs=unzip(apk);attrs.put("AndroidManifest.xml",extra);
         rejects(() -> TemplateApk.inspect(zip(attrs,false)));
+    }
+
+    @Test public void selectiveBiometricsBuildsWithOrWithoutBrokerQueriesAndRetainsEveryDexByte() throws Exception {
+        TemplateApk.ManifestInfo compiled=TemplateApk.inspect(template);
+        assertTrue(compiled.permissions.isEmpty()); assertTrue(compiled.plan.features.isEmpty());
+        Map<String,byte[]> original=unzip(template);
+        for(List<String> capabilities:Arrays.asList(Collections.singletonList("biometrics"),
+                Arrays.asList("biometrics","documents"),Arrays.asList("biometrics","browser","sensors"))) {
+            TemplateApk.Spec selected=new TemplateApk.Spec(spec.appId,spec.label,1,"1.0",capabilities);
+            byte[] generated=TemplateApk.build(template,selected,icon,assets);
+            TemplateApk.ManifestInfo verified=TemplateApk.verify(generated,selected),inferred=TemplateApk.inspect(generated);
+            boolean broker=capabilities.contains("documents") || capabilities.contains("browser");
+            assertEquals(selected.capabilities,verified.plan.capabilities);
+            assertEquals(Collections.singletonList(CapabilityCatalog.BIOMETRIC_PERMISSION),verified.permissions);
+            assertEquals(verified.permissions,inferred.permissions);
+            assertEquals(broker?Arrays.asList("biometrics","documents"):Collections.singletonList("biometrics"),inferred.plan.capabilities);
+            assertEquals(broker?Arrays.asList("com.jarvys.agent","com.jarvys.agent.recoverytest"):Collections.emptyList(),verified.plan.queries);
+            assertEquals(broker?11:8,verified.plan.nodes.size());
+            assertTrue(verified.plan.features.isEmpty()); assertTrue(verified.plan.hosts.isEmpty());
+            assertEquals(Collections.singletonList(ManifestPlan.ACTIVITY),verified.plan.exportedComponents);
+            assertEquals(compiled.dexSha256,verified.dexSha256);
+            Map<String,byte[]> output=unzip(generated);
+            for(String name:compiled.dexSha256.keySet()) assertArrayEquals(original.get(name),output.get(name));
+            assertStoredEntriesAligned(generated);
+            TemplateApk.Spec withoutPermission=new TemplateApk.Spec(spec.appId,spec.label,1,"1.0",broker?Collections.singletonList("documents"):Collections.emptyList());
+            // Inspection may infer a closed profile, but cannot override an explicit caller plan.
+            rejects(()->TemplateApk.verify(generated,withoutPermission));
+            ManifestPlan mismatched=new ManifestPlan(spec.appId,spec.label,1,"1.0",verified.plan.iconResourceId,verified.plan.backupResourceId,withoutPermission.capabilities);
+            rejects(()->TemplateApk.verifyAgainstPlan(generated,mismatched));
+            byte[] absent=TemplateApk.build(template,withoutPermission,icon,assets);
+            assertTrue(TemplateApk.inspect(absent).permissions.isEmpty());
+            rejects(()->TemplateApk.verify(absent,selected));
+            rejects(()->TemplateApk.verifyAgainstPlan(absent,verified.plan));
+        }
+    }
+
+    @Test public void trustedTemplateCannotAcquireTheSelectiveBiometricPermission() throws Exception {
+        ManifestPlan compiled=TemplateApk.inspect(template).plan;
+        ManifestPlan altered=new ManifestPlan(compiled.appId,compiled.label,compiled.versionCode,compiled.versionName,
+                compiled.iconResourceId,compiled.backupResourceId,Collections.singletonList("biometrics"));
+        Map<String,byte[]> files=unzip(template); files.put("AndroidManifest.xml",ManifestXml.encode(altered));
+        rejects(()->TemplateApk.build(alignedZip(files),spec,icon,assets));
+    }
+
+    @Test public void biometricPermissionTamperingFailsClosedWithAndWithoutBrokerQueries() throws Exception {
+        for(List<String> capabilities:Arrays.asList(Collections.singletonList("biometrics"),Arrays.asList("biometrics","documents"))) {
+            TemplateApk.Spec selected=new TemplateApk.Spec(spec.appId,spec.label,1,"1.0",capabilities);
+            byte[] generated=TemplateApk.build(template,selected,icon,assets);
+            ManifestPlan approved=TemplateApk.verify(generated,selected).plan;
+            byte[] original=unzip(generated).get("AndroidManifest.xml");
+            int permission=elementStart(original,"manifest/uses-permission");
+            int permissionEnd=permission+int32(original,permission+4)+24;
+            assertEquals(56,int32(original,permission+4));
+            List<byte[]> rejected=new ArrayList<>();
+            rejected.add(renamePoolString(original,CapabilityCatalog.BIOMETRIC_PERMISSION,"android.permission.INTERNET"));
+            rejected.add(renamePoolString(original,"uses-permission","uses-permission-sdk-23"));
+            rejected.add(insert(original,permission,Arrays.copyOfRange(original,permission,permissionEnd)));
+            byte[] missingName=removeRange(original,permission+36,permission+56);
+            set32(missingName,permission+4,36);set16(missingName,permission+28,0);rejected.add(missingName);
+            byte[] duplicateName=insert(original,permission+36,Arrays.copyOfRange(original,permission+36,permission+56));
+            set32(duplicateName,permission+4,76);set16(duplicateName,permission+28,2);rejected.add(duplicateName);
+            int application=elementStart(original,"manifest/application");
+            byte[] extra=insert(original,permission+36,Arrays.copyOfRange(original,application+36,application+56));
+            set32(extra,permission+4,76);set16(extra,permission+28,2);rejected.add(extra);
+            for(int field:new int[]{0,4,8,16}) {
+                byte[] mutated=original.clone();set32(mutated,permission+36+field,0x7fffffff);rejected.add(mutated);
+            }
+            byte[] wrongType=original.clone();wrongType[permission+51]=16;rejected.add(wrongType);
+            for(byte[] candidate:rejected) {
+                rejects(()->ManifestAudit.read(candidate).verify(approved));
+                Map<String,byte[]> files=unzip(generated);files.put("AndroidManifest.xml",candidate);
+                byte[] tampered=alignedZip(files);
+                rejects(()->TemplateApk.inspect(tampered));
+                rejects(()->TemplateApk.verify(tampered,selected));
+            }
+            // Removing the whole permission gives a different valid profile only when no
+            // external expectation is supplied; signing verification must still reject it.
+            Map<String,byte[]> missing=unzip(generated);
+            missing.put("AndroidManifest.xml",removeRange(original,permission,permissionEnd));
+            byte[] absent=alignedZip(missing);
+            assertTrue(TemplateApk.inspect(absent).permissions.isEmpty());
+            rejects(()->TemplateApk.verify(absent,selected));
+            rejects(()->TemplateApk.verifyAgainstPlan(absent,approved));
+            byte[] historical=removeAttributeById(original,0x0101022b);
+            Map<String,byte[]> old=unzip(generated);old.put("AndroidManifest.xml",historical);
+            rejects(()->TemplateApk.verifyExistingV1(alignedZip(old),selected));
+        }
+    }
+
+    private static int elementStart(byte[] xml,String path) throws IOException {
+        ManifestAudit.Document decoded=ManifestAudit.read(xml);int index=0;
+        for(int at=8;at<xml.length;at+=int32(xml,at+4)) if(u16(xml,at)==0x102)
+            if(decoded.nodes.get(index++).path.equals(path)) return at;
+        throw new AssertionError("Missing test element: "+path);
+    }
+    private static byte[] removeRange(byte[] bytes,int start,int end) {
+        byte[] result=new byte[bytes.length-(end-start)];
+        System.arraycopy(bytes,0,result,0,start);System.arraycopy(bytes,end,result,start,bytes.length-end);
+        set32(result,4,result.length);return result;
     }
 
     @Test public void callerIdentityVersionAndResourcePlanCannotBeSubstituted() throws Exception {

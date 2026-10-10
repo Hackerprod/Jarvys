@@ -224,23 +224,25 @@ public class FactoryDispatcherTest {
         }
     }
 
-    @Test public void all524288CapabilityPlansKeepZeroPermissionsAndDeduplicateHostVisibility() {
-        assertEquals(19, CapabilityCatalog.NAMES.size()); assertEquals(39, CapabilityCatalog.METHODS.size());
-        for (int mask = 0; mask < 524288; mask++) {
+    @Test public void all1048576CapabilityPlansSelectOnlyBiometricPermissionAndDeduplicateHostVisibility() {
+        assertEquals(20, CapabilityCatalog.NAMES.size()); assertEquals(42, CapabilityCatalog.METHODS.size());
+        for (int mask = 0; mask < 1048576; mask++) {
             java.util.List<String> selected = new java.util.ArrayList<>();
             for (int bit = 0; bit < CapabilityCatalog.NAMES.size(); bit++) if ((mask & (1 << bit)) != 0) selected.add(CapabilityCatalog.NAMES.get(bit));
             com.jarvys.factory.contract.ManifestPlan plan = new com.jarvys.factory.contract.ManifestPlan(
                     "com.example.browser", "Browser fixture", 1, "1.0", 0x7f010001, 0x7f020001, selected);
             boolean host = selected.contains("browser") || selected.contains("documents") || selected.contains("maps") || selected.contains("phone") || selected.contains("email") || selected.contains("sms") || selected.contains("contacts") || selected.contains("calendar");
-            assertTrue(plan.permissions.isEmpty()); assertTrue(plan.features.isEmpty()); assertTrue(plan.hosts.isEmpty());
+            boolean biometric=selected.contains("biometrics");
+            assertEquals(biometric?java.util.Collections.singletonList(CapabilityCatalog.BIOMETRIC_PERMISSION):java.util.Collections.emptyList(),plan.permissions);
+            assertTrue(plan.features.isEmpty()); assertTrue(plan.hosts.isEmpty());
             assertEquals(java.util.Collections.singletonList(com.jarvys.factory.contract.ManifestPlan.ACTIVITY), plan.exportedComponents);
             assertEquals(host ? 2 : 0, plan.queries.size());
-            assertEquals(host ? 1 : 0, CapabilityCatalog.manifestContributions(selected).size());
-            assertEquals(host ? 10 : 7, plan.nodes.size());
+            assertEquals((host ? 1 : 0)+(biometric ? 1 : 0), CapabilityCatalog.manifestContributions(selected).size());
+            assertEquals((host ? 10 : 7)+(biometric ? 1 : 0), plan.nodes.size());
             if (host) assertEquals(CapabilityCatalog.DOCUMENT_BROKER_PACKAGES, new java.util.LinkedHashSet<>(plan.queries));
             for (String name : selected) {
                 CapabilityCatalog.Capability capability = CapabilityCatalog.CAPABILITIES.get(name);
-                assertTrue(capability.permissions.isEmpty()); assertTrue(capability.components.isEmpty());
+                assertEquals(name.equals("biometrics")?java.util.Collections.singleton(CapabilityCatalog.BIOMETRIC_PERMISSION):java.util.Collections.emptySet(),capability.permissions); assertTrue(capability.components.isEmpty());
                 assertTrue(capability.dependencies.isEmpty()); assertTrue(capability.features.isEmpty());
             }
         }
@@ -323,4 +325,45 @@ public class FactoryDispatcherTest {
         }
     }
 
+
+    @Test public void biometricPreviewNeverAuthenticatesAndDispatcherRevalidatesBeforeLocalAdapter() throws Exception {
+        FactoryConfig enabled=FactoryConfig.parse(configuration("[\"biometrics\"]"),"com.example.generated");
+        FactoryConfig denied=FactoryConfig.parsePreview(configuration("[]"));
+        assertNull(enabled.documentBroker);
+        BoundedStore store=new BoundedStore(new MemoryBackend());
+        for(String method:Arrays.asList("biometrics.availability","biometrics.authenticate","biometrics.cancel")) {
+            JSONObject args=method.endsWith("authenticate")?new JSONObject().put("reason","Confirm this local action"):new JSONObject();
+            BridgeProtocol.Request call=request(method,args,enabled);
+            assertEquals("UNAVAILABLE",assertThrows(FactoryException.class,()->FactoryDispatcher.dispatch(call,enabled,store,
+                    FactoryDispatcher.previewMetadata("host",35,35),FactoryDispatcher.simulatedEffects())).code);
+            int[] invocations={0};
+            assertEquals("local adapter",FactoryDispatcher.dispatch(call,enabled,store,
+                    FactoryDispatcher.metadata("installed",enabled.appId,35,35),(operation,value)->{
+                        invocations[0]++;assertEquals(method,operation.wireName);assertEquals(args.toString(),value.toString());return "local adapter";
+                    }));
+            assertEquals(1,invocations[0]);
+            FactoryDispatcher.Effects forbidden=(operation,value)->{throw new AssertionError("Adapter invoked");};
+            assertEquals("CAPABILITY_DENIED",assertThrows(FactoryException.class,()->FactoryDispatcher.dispatch(call,denied,store,
+                    FactoryDispatcher.metadata("installed",enabled.appId,35,35),forbidden)).code);
+            call.args.put("credentialFallback",true);
+            assertEquals("INVALID_ARGUMENT",assertThrows(FactoryException.class,()->FactoryDispatcher.dispatch(call,enabled,store,
+                    FactoryDispatcher.metadata("installed",enabled.appId,35,35),forbidden)).code);
+        }
+        for(String mode:Arrays.asList("preview","installed")) {
+            JSONObject info=(JSONObject)FactoryDispatcher.dispatch(request("runtime.info",new JSONObject(),enabled),enabled,store,
+                    FactoryDispatcher.metadata(mode,enabled.appId,35,35),FactoryDispatcher.simulatedEffects());
+            assertEquals(1,info.getInt("biometricsProtocolVersion"));assertFalse(info.getBoolean("biometricsBrokerRequired"));
+            assertEquals("[\"biometrics\"]",info.getJSONArray("biometricsRequires").toString());
+            assertEquals(30,info.getInt("biometricsMinimumApi"));assertEquals("strong",info.getString("biometricsClass"));
+            assertFalse(info.getBoolean("biometricsDeviceCredentialAllowed"));assertTrue(info.getBoolean("biometricsForegroundOnly"));
+            assertTrue(info.getBoolean("biometricsLocalOnly"));assertFalse(info.getBoolean("biometricsAuthorizesOtherActions"));
+            assertEquals(60000,info.getJSONObject("limits").getInt("biometricsAuthenticationMs"));
+            assertEquals(160,info.getJSONObject("limits").getInt("biometricsReasonCharacters"));
+            assertEquals(512,info.getJSONObject("limits").getInt("biometricsReasonBytes"));
+            assertEquals(1024,info.getJSONObject("limits").getInt("biometricsCancelEnvelopeBytes"));
+            assertEquals(mode.equals("preview"),info.getJSONArray("unavailableCapabilities").toString().contains("\"biometrics\""));
+            for(String method:Arrays.asList("biometrics.availability","biometrics.authenticate","biometrics.cancel"))
+                assertEquals(mode.equals("preview"),info.getJSONArray("unavailableMethods").toString().contains("\""+method+"\""));
+        }
+    }
 }

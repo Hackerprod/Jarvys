@@ -32,10 +32,11 @@ public final class FactoryDispatcher {
     public static Effects simulatedEffects() {
         return (method, args) -> {
             switch (method) {
+                case BIOMETRICS_AVAILABILITY: case BIOMETRICS_AUTHENTICATE: case BIOMETRICS_CANCEL:
                 case SENSORS_LIST: case SENSORS_CAPTURE: case SENSORS_CANCEL:
                 case PRESENTATION_GET: case PRESENTATION_SET: case PRESENTATION_RESET:
                 case CALENDAR_INSERT: case CONTACTS_PICK: case MAPS_OPEN: case PHONE_DIAL: case EMAIL_COMPOSE: case SMS_COMPOSE: case BROWSER_OPEN: case AUDIO_PLAY: case PHOTOS_PICK: case PHOTOS_CAPTURE: case SHARE_FILE: case DOCUMENTS_OPEN: case DOCUMENTS_CREATE: case DOCUMENTS_READ: case DOCUMENTS_WRITE: case DOCUMENTS_CLOSE: case DOCUMENTS_CANCEL:
-                    throw new FactoryException("UNAVAILABLE", "Presentation and sensors require an installed generated Activity; preview cannot change host theme/orientation or read hardware sensors. Documents, photos, audio, browser, maps, phone, email, SMS, contacts and calendar require an installed generated app and the matching human-only Jarvys broker; preview never opens files, camera, audio, external URLs, maps, dialers, message editors, contact pickers or calendar editors.");
+                    throw new FactoryException("UNAVAILABLE", "Biometrics requires an installed generated Activity and is never simulated. Presentation and sensors require an installed generated Activity; preview cannot change host theme/orientation or read hardware sensors. Documents, photos, audio, browser, maps, phone, email, SMS, contacts and calendar require an installed generated app and the matching human-only Jarvys broker; preview never opens files, camera, audio, external URLs, maps, dialers, message editors, contact pickers or calendar editors.");
                 case HAPTICS_PERFORM: case SHARE_TEXT: case CLIPBOARD_WRITE: case EXPORT_TEXT:
                     return new JSONObject().put("simulated", true).put("performed", false).put("mode", "preview")
                             .put("operation", method.wireName);
@@ -75,10 +76,15 @@ public final class FactoryDispatcher {
                         .put("simulatedCapabilities", new JSONArray("preview".equals(metadata.mode())
                                 ? java.util.Arrays.asList("export", "share", "clipboard", "haptics") : java.util.Collections.emptyList()))
                         .put("unavailableCapabilities", new JSONArray("preview".equals(metadata.mode())
-                                ? java.util.Arrays.asList("documents", "photos", "audio", "browser", "maps", "phone", "email", "sms", "contacts", "calendar", "presentation", "sensors") : java.util.Collections.emptyList()))
+                                ? java.util.Arrays.asList("documents", "photos", "audio", "browser", "maps", "phone", "email", "sms", "contacts", "calendar", "presentation", "sensors", "biometrics") : java.util.Collections.emptyList()))
                         .put("unavailableMethods", new JSONArray("preview".equals(metadata.mode())
-                                ? java.util.Arrays.asList("share.file", "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture", "audio.play", "browser.open", "maps.open", "phone.dial", "email.compose", "sms.compose", "contacts.pick", "calendar.insert", "presentation.get", "presentation.set", "presentation.reset", "sensors.list", "sensors.capture", "sensors.cancel")
+                                ? java.util.Arrays.asList("share.file", "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture", "audio.play", "browser.open", "maps.open", "phone.dial", "email.compose", "sms.compose", "contacts.pick", "calendar.insert", "presentation.get", "presentation.set", "presentation.reset", "sensors.list", "sensors.capture", "sensors.cancel", "biometrics.availability", "biometrics.authenticate", "biometrics.cancel")
                                 : java.util.Collections.emptyList()))
+                        .put("biometricsProtocolVersion", 1).put("biometricsBrokerRequired", false)
+                        .put("biometricsRequires", new JSONArray(java.util.Collections.singletonList("biometrics")))
+                        .put("biometricsMinimumApi", 30).put("biometricsClass", "strong")
+                        .put("biometricsDeviceCredentialAllowed", false).put("biometricsForegroundOnly", true)
+                        .put("biometricsLocalOnly", true).put("biometricsAuthorizesOtherActions", false)
                         .put("sensorsProtocolVersion", 1).put("sensorsBrokerRequired", false)
                         .put("sensorsKinds",new JSONArray(java.util.Arrays.asList("light","accelerometer")))
                         .put("sensorsForegroundOnly",true).put("sensorsMaxRateHz",10)
@@ -128,6 +134,10 @@ public final class FactoryDispatcher {
                         .put("limits", new JSONObject().put("messageBytes", BridgeProtocol.MAX_MESSAGE_BYTES)
                                 .put("textBytes", BridgeProtocol.MAX_TEXT_BYTES).put("storageValueBytes", BridgeProtocol.MAX_VALUE_BYTES)
                                 .put("storageBytes", BoundedStore.MAX_TOTAL_BYTES).put("storageEntries", BoundedStore.MAX_ENTRIES)
+                                .put("biometricsReasonCharacters", 160).put("biometricsReasonBytes", 512)
+                                .put("biometricsAuthenticationMs", 60000).put("biometricsAdmissionCount", 3)
+                                .put("biometricsAdmissionWindowMs", 60000).put("biometricsCancelEnvelopeBytes", 1024)
+                                .put("biometricsNoopCancelCount", 8).put("biometricsNoopCancelWindowMs", 10000)
                                 .put("browserUrlLength", com.jarvys.factory.contract.BrowserUrl.MAX_LENGTH)
                                 .put("browserLifetimeMs", 300000)
                                 .put("externalLaunchLifetimeMs", 300000)
@@ -159,7 +169,8 @@ public final class FactoryDispatcher {
                                 .put("audioSampleRateMin", 8000).put("audioSampleRateMax", 48000)
                                 .put("documentHandleLifetimeMs", 300000));
             case DEVICE_INFO: return metadata.deviceInfo().put("declaredAppId", config.appId);
-            case SENSORS_LIST: case SENSORS_CAPTURE: case SENSORS_CANCEL:
+            case BIOMETRICS_AVAILABILITY: case BIOMETRICS_AUTHENTICATE: case BIOMETRICS_CANCEL:
+                case SENSORS_LIST: case SENSORS_CAPTURE: case SENSORS_CANCEL:
                 case PRESENTATION_GET: case PRESENTATION_SET: case PRESENTATION_RESET:
                 case CALENDAR_INSERT: case CONTACTS_PICK: case MAPS_OPEN: case PHONE_DIAL: case EMAIL_COMPOSE: case SMS_COMPOSE: case BROWSER_OPEN: case AUDIO_PLAY: case PHOTOS_PICK: case PHOTOS_CAPTURE: case SHARE_FILE: case DOCUMENTS_OPEN: case DOCUMENTS_CREATE: case DOCUMENTS_READ: case DOCUMENTS_WRITE: case DOCUMENTS_CLOSE: case DOCUMENTS_CANCEL:
             case HAPTICS_PERFORM: case SHARE_TEXT: case CLIPBOARD_WRITE: case EXPORT_TEXT:

@@ -27,10 +27,11 @@ internal object FactoryRuntimeContractTests {
             FactoryDispatcher.Database { method, args -> database.execute(method, args, database.ticket()) { validate(); true } })
         try {
             val ordered = listOf("runtime.info", "storage.set", "storage.get", "storage.list", "storage.remove", "export.text", "share.text", "share.file", "clipboard.write", "haptics.perform", "device.info",
-                "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture", "audio.play", "browser.open", "maps.open", "phone.dial", "email.compose", "sms.compose", "contacts.pick", "calendar.insert", "database.info", "database.migrate", "database.transact", "database.select", "database.close", "database.cancel", "presentation.get", "presentation.set", "presentation.reset", "sensors.list", "sensors.capture", "sensors.cancel")
+                "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture", "audio.play", "browser.open", "maps.open", "phone.dial", "email.compose", "sms.compose", "contacts.pick", "calendar.insert", "database.info", "database.migrate", "database.transact", "database.select", "database.close", "database.cancel", "presentation.get", "presentation.set", "presentation.reset", "sensors.list", "sensors.capture", "sensors.cancel", "biometrics.availability", "biometrics.authenticate", "biometrics.cancel")
             check(ordered.toSet() == CapabilityCatalog.METHODS.keys) { "Synthetic contract cases must cover the compiled catalog" }
             for (method in ordered) {
                 val args = when (method) {
+                    "biometrics.authenticate" -> JSONObject().put("reason", "Confirm this local action")
                     "sensors.capture" -> JSONObject().put("kind","light").put("durationMs",100).put("intervalMs",100).put("maxSamples",1)
                     "presentation.set" -> JSONObject().put("theme", "dark").put("orientation", "portrait")
                     "database.migrate" -> JSONObject("""{"fromVersion":0,"toVersion":1,"steps":[{"kind":"createTable","table":"notes","columns":{"text":{"type":"text","nullable":false}}}]}""")
@@ -61,7 +62,7 @@ internal object FactoryRuntimeContractTests {
                     assertion("$method:undeclared_denied") {
                         try { dispatch(method, args); false } catch (failure: FactoryException) { failure.code == "CAPABILITY_DENIED" }
                     }
-                } else if (capability == "sensors" || capability == "presentation" || capability == "maps" || capability == "phone" || capability == "email" || capability == "sms" || capability == "contacts" || capability == "calendar" || capability == "browser" || capability == "documents" || (capability == "photos" || capability == "audio") || method == "share.file") {
+                } else if (capability == "biometrics" || capability == "sensors" || capability == "presentation" || capability == "maps" || capability == "phone" || capability == "email" || capability == "sms" || capability == "contacts" || capability == "calendar" || capability == "browser" || capability == "documents" || (capability == "photos" || capability == "audio") || method == "share.file") {
                     assertion("$method:preview_unavailable") {
                         try { dispatch(method, args); false } catch (failure: FactoryException) { failure.code == "UNAVAILABLE" }
                     }

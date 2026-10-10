@@ -40,6 +40,9 @@ public class BridgeProtocolTest {
             {"sms.compose", "{\"number\":\"+15550100\",\"body\":\"Body\"}"},
             {"contacts.pick", "{\"kind\":\"phone\"}"},
             {"calendar.insert", "{\"title\":\"Synthetic event\",\"location\":\"\",\"description\":\"\",\"startTimeMillis\":0,\"endTimeMillis\":86400000,\"timeZone\":\"UTC\",\"allDay\":true}"},
+            {"biometrics.availability", "{}"},
+            {"biometrics.authenticate", "{\"reason\":\"Confirm this local action\"}"},
+            {"biometrics.cancel", "{}"},
             {"sensors.list", "{}"},
             {"sensors.capture", "{\"kind\":\"light\",\"durationMs\":100,\"intervalMs\":100,\"maxSamples\":1}"},
             {"sensors.cancel", "{}"},
@@ -111,6 +114,9 @@ public class BridgeProtocolTest {
             {"sms.compose", "{\"number\":\"+15550100\",\"body\":\"Body\"}"},
             {"contacts.pick", "{\"kind\":\"phone\"}"},
             {"calendar.insert", "{\"title\":\"Synthetic event\",\"location\":\"\",\"description\":\"\",\"startTimeMillis\":0,\"endTimeMillis\":86400000,\"timeZone\":\"UTC\",\"allDay\":true}"},
+            {"biometrics.availability", "{}"},
+            {"biometrics.authenticate", "{\"reason\":\"Confirm this local action\"}"},
+            {"biometrics.cancel", "{}"},
             {"sensors.list", "{}"},
             {"sensors.capture", "{\"kind\":\"light\",\"durationMs\":100,\"intervalMs\":100,\"maxSamples\":1}"},
             {"sensors.cancel", "{}"},
@@ -125,8 +131,8 @@ public class BridgeProtocolTest {
             {"database.cancel", "{}"},
             {"browser.open", "{\"url\":\"https://example.com/review?fixture=1\"}"},
             {"share.file", "{\"handle\":\""+HANDLE+"\",\"filename\":\"file.bin\",\"mimeType\":\"application/octet-stream\"}"}};
-        assertEquals(39, calls.length);
-        assertEquals(19, com.jarvys.factory.contract.CapabilityCatalog.NAMES.size());
+        assertEquals(42, calls.length);
+        assertEquals(20, com.jarvys.factory.contract.CapabilityCatalog.NAMES.size());
         assertEquals(com.jarvys.factory.contract.CapabilityCatalog.METHODS.size(), calls.length);
         for (int mask = 0; mask < (1 << com.jarvys.factory.contract.CapabilityCatalog.NAMES.size()); mask++) {
             org.json.JSONArray declared = new org.json.JSONArray();
@@ -288,4 +294,37 @@ public class BridgeProtocolTest {
         rejected("INVALID_REQUEST",BridgeProtocol.ORIGIN,true,escaped+"\u00a0",enabled);
     }
 
+
+    @Test public void biometricsRequiresExactSafeReasonAndIndependentCapability() throws Exception {
+        FactoryConfig enabled=config("[\"biometrics\"]");
+        for(String method:new String[]{"biometrics.availability","biometrics.authenticate","biometrics.cancel"}) {
+            String args=method.endsWith("authenticate")?"{\"reason\":\"Confirm this local action\"}":"{}";
+            assertEquals(method,BridgeProtocol.validate(BridgeProtocol.ORIGIN,true,request(method,args),enabled).method);
+            rejected("CAPABILITY_DENIED",BridgeProtocol.ORIGIN,true,request(method,args),config("[]"));
+            rejected("UNTRUSTED_SOURCE","https://evil.invalid",true,request(method,args),enabled);
+            rejected("UNTRUSTED_SOURCE",BridgeProtocol.ORIGIN,false,request(method,args),enabled);
+            for(String extra:new String[]{"credential","fallback","cryptoObject","token","appId","title","background","timeoutMs","challenge","nonce"}) {
+                JSONObject altered=new JSONObject(args).put(extra,true);
+                rejected("INVALID_ARGUMENT",BridgeProtocol.ORIGIN,true,request(method,altered.toString()),enabled);
+            }
+            for(String invalid:new String[]{"null","[]","true","1","\"reason\""})
+                rejected("INVALID_REQUEST",BridgeProtocol.ORIGIN,true,request(method,invalid),enabled);
+        }
+        for(Object reason:new Object[]{JSONObject.NULL,true,1,new JSONObject(),new org.json.JSONArray(),"","   ","line\nline","tab\tvalue","bad\u0000value","bidi\u202evalue","line\u2028value","bad\ud800",new String(new char[161]).replace('\0','a')})
+            rejected("INVALID_ARGUMENT",BridgeProtocol.ORIGIN,true,request("biometrics.authenticate",new JSONObject().put("reason",reason).toString()),enabled);
+        rejected("INVALID_ARGUMENT",BridgeProtocol.ORIGIN,true,request("biometrics.authenticate","{}"),enabled);
+        for(String reason:new String[]{"Confirm this local action","Confirmación local 東京",new String(new char[160]).replace('\0','a')})
+            assertEquals(reason,BridgeProtocol.validate(BridgeProtocol.ORIGIN,true,request("biometrics.authenticate",new JSONObject().put("reason",reason).toString()),enabled).args.getString("reason"));
+    }
+
+    @Test public void biometricCancellationHasExactUtf8BudgetAndNoCallerOptions() throws Exception {
+        FactoryConfig enabled=config("[\"biometrics\"]");
+        String escaped="{\"v\":1,\"id\":\"boundary\",\"method\":\"biometrics."+"\\"+"u0063ancel\",\"args\":{}}";
+        String padded=escaped+new String(new char[1024-escaped.getBytes(java.nio.charset.StandardCharsets.UTF_8).length]).replace('\0',' ');
+        assertEquals(1024,padded.getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
+        assertEquals("biometrics.cancel",BridgeProtocol.validate(BridgeProtocol.ORIGIN,true,padded,enabled).method);
+        rejected("INVALID_ARGUMENT",BridgeProtocol.ORIGIN,true,padded+" ",enabled);
+        rejected("INVALID_ARGUMENT",BridgeProtocol.ORIGIN,true,request("biometrics.cancel","{\"reason\":\"x\"}"),enabled);
+        rejected("INVALID_REQUEST",BridgeProtocol.ORIGIN,true,escaped+"\u00a0",enabled);
+    }
 }

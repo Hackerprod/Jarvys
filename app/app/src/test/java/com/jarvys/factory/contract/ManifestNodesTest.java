@@ -10,7 +10,7 @@ import java.util.Collections;
 import java.util.List;
 import org.junit.Test;
 
-/** Host-only construction fixtures. These nodes cannot be selected by factory.json or the bridge. */
+/** Closed production profiles plus host-only construction fixtures beyond the activated catalog. */
 public class ManifestNodesTest {
     private static <T> List<T> list(T... values) { return Arrays.asList(values); }
     private static ManifestPlan plan(List<String> caps) {
@@ -52,28 +52,95 @@ public class ManifestNodesTest {
         assertEquals(7, current.nodes.size()); assertEquals(-1,current.nodes.get(0).parentIndex);
         assertEquals(4,current.nodes.get(6).parentIndex);
     }
-    @Test public void all524288SelectionsEncodeOnlyTheApprovedDocumentQueries() throws Exception {
-        assertEquals(19, CapabilityCatalog.NAMES.size());
-        byte[] first = ManifestXml.encode(plan(Collections.emptyList()));
+    @Test public void all1048576SelectionsEncodeOnlyTheExactSelectivePermissionAndQueryProfiles() throws Exception {
+        assertEquals(20, CapabilityCatalog.NAMES.size());
+        byte[][] profiles = {
+            ManifestXml.encode(plan(Collections.emptyList())), ManifestXml.encode(plan(list("biometrics"))),
+            ManifestXml.encode(plan(list("documents"))), ManifestXml.encode(plan(list("biometrics", "documents")))
+        };
+        int checked = 0;
         for (int mask=0; mask<(1 << CapabilityCatalog.NAMES.size()); mask++) {
             List<String> caps = new ArrayList<>();
             for (int bit=0; bit<CapabilityCatalog.NAMES.size(); bit++) if ((mask & (1<<bit)) != 0) caps.add(CapabilityCatalog.NAMES.get(bit));
             ManifestPlan p = plan(caps);
             boolean documents = caps.contains("documents") || caps.contains("browser") || caps.contains("maps") || caps.contains("phone") || caps.contains("email") || caps.contains("sms") || caps.contains("contacts") || caps.contains("calendar");
-            if (!documents) assertArrayEquals(first, ManifestXml.encode(p));
-            ManifestAudit.read(ManifestXml.encode(p)).verify(p);
-            assertEquals(documents ? 1 : 0, CapabilityCatalog.manifestContributions(caps).size());
-            assertEquals(documents ? 10 : 7, p.nodes.size());
-            assertTrue(p.permissions.isEmpty()); assertTrue(p.features.isEmpty());
+            boolean biometrics = caps.contains("biometrics");
+            byte[] encoded = ManifestXml.encode(p);
+            assertArrayEquals(profiles[(biometrics ? 1 : 0) + (documents ? 2 : 0)], encoded);
+            ManifestAudit.Document decoded = ManifestAudit.read(encoded);
+            decoded.verify(p);
+            assertEquals((documents ? 1 : 0) + (biometrics ? 1 : 0), CapabilityCatalog.manifestContributions(caps).size());
+            assertEquals(7 + (documents ? 3 : 0) + (biometrics ? 1 : 0), p.nodes.size());
+            assertEquals(biometrics ? list(CapabilityCatalog.BIOMETRIC_PERMISSION) : Collections.emptyList(), p.permissions);
+            assertTrue(p.features.isEmpty()); assertTrue(p.hosts.isEmpty());
+            assertEquals(list(ManifestPlan.ACTIVITY), p.exportedComponents);
+            assertEquals(24, decoded.attribute("manifest/uses-sdk", ManifestPlan.ANDROID, "minSdkVersion").value);
             assertEquals(documents ? 2 : 0, p.queries.size());
+            if (biometrics) {
+                ManifestPlan.Node permission = p.nodes.get(7);
+                assertEquals("manifest/uses-permission", permission.path); assertEquals(0, permission.parentIndex);
+                assertEquals(1, permission.attributes.size());
+                ManifestPlan.Attribute name = permission.attributes.get(ManifestPlan.ANDROID + "|name");
+                assertEquals(0x01010003, name.resourceId); assertEquals(3, name.type);
+                assertEquals(CapabilityCatalog.BIOMETRIC_PERMISSION, name.value);
+                assertThrows(IOException.class, () -> decoded.verify(plan(documents ? list("documents") : Collections.emptyList())));
+            }
             if (documents) {
                 assertEquals(new ArrayList<>(CapabilityCatalog.DOCUMENT_BROKER_PACKAGES), p.queries);
-                assertEquals(7, p.nodes.get(8).parentIndex); assertEquals(7, p.nodes.get(9).parentIndex);
-                assertThrows(IOException.class, () -> ManifestAudit.read(ManifestXml.encode(p)).verify(plan(Collections.emptyList())));
+                int queries = biometrics ? 8 : 7;
+                assertEquals("manifest/queries", p.nodes.get(queries).path);
+                assertEquals(queries, p.nodes.get(queries + 1).parentIndex); assertEquals(queries, p.nodes.get(queries + 2).parentIndex);
+                assertThrows(IOException.class, () -> decoded.verify(plan(biometrics ? list("biometrics") : Collections.emptyList())));
             }
+            checked++;
         }
+        assertEquals(1048576, checked);
         for (CapabilityCatalog.Capability c : CapabilityCatalog.CAPABILITIES.values()) assertThrows(UnsupportedOperationException.class, () -> c.manifestNodes.add(ManifestNodes.feature("android.hardware.camera", false)));
         assertThrows(IllegalArgumentException.class, () -> plan(list("camera")));
+    }
+    @Test public void biometricsHasOnlyTheExactNormalPermissionAndFunctionalApi30Floor() throws Exception {
+        CapabilityCatalog.Capability biometrics = CapabilityCatalog.CAPABILITIES.get("biometrics");
+        assertNotNull(biometrics); assertEquals(30, biometrics.minimumApi);
+        assertEquals(24, CapabilityCatalog.MIN_APP_API);
+        assertEquals(1, CapabilityCatalog.SCHEMA_VERSION); assertEquals(2, CapabilityCatalog.SDK_VERSION);
+        assertEquals(42, CapabilityCatalog.METHODS.size());
+        assertEquals(list(CapabilityCatalog.Method.BIOMETRICS_AVAILABILITY,
+                CapabilityCatalog.Method.BIOMETRICS_AUTHENTICATE, CapabilityCatalog.Method.BIOMETRICS_CANCEL), biometrics.methods);
+        assertEquals(Collections.singleton(CapabilityCatalog.BIOMETRIC_PERMISSION), biometrics.permissions);
+        assertTrue(biometrics.features.isEmpty()); assertTrue(biometrics.components.isEmpty());
+        assertTrue(biometrics.intentFilters.isEmpty()); assertTrue(biometrics.queries.isEmpty());
+        assertTrue(biometrics.metadata.isEmpty()); assertTrue(biometrics.resources.isEmpty());
+        assertTrue(biometrics.dependencies.isEmpty()); assertTrue(biometrics.conflicts.isEmpty());
+        assertEquals(1, biometrics.manifestNodes.size());
+        assertEquals("uses-permission", biometrics.manifestNodes.get(0).name);
+        for (CapabilityCatalog.Method method : biometrics.methods) {
+            assertEquals("biometrics", method.capability); assertSame(method, CapabilityCatalog.METHODS.get(method.wireName));
+        }
+        assertThrows(UnsupportedOperationException.class, () -> biometrics.permissions.clear());
+        assertThrows(UnsupportedOperationException.class, () -> biometrics.methods.clear());
+        ManifestPlan current = plan(list("biometrics"));
+        assertThrows(UnsupportedOperationException.class, () -> current.permissions.clear());
+        assertThrows(IllegalArgumentException.class, () -> new ManifestPlan(current.appId, current.label,
+                current.versionCode, current.versionName, current.iconResourceId, current.backupResourceId,
+                current.capabilities, ManifestPlan.Profile.V1_BEFORE_SAFE_AREA));
+        for (CapabilityCatalog.Capability capability : CapabilityCatalog.CAPABILITIES.values()) if (capability != biometrics) {
+            assertEquals(24, capability.minimumApi); assertTrue(capability.permissions.isEmpty());
+        }
+    }
+    @Test public void biometricPermissionConstructionRejectsAllBroaderOrDifferentProductionDeclarations() throws Exception {
+        ManifestPlan selected = plan(list("biometrics"));
+        for (ManifestNodes.Element permission : list(
+                ManifestNodes.permission("android.permission.INTERNET", ManifestNodes.PermissionVariant.STANDARD, null),
+                ManifestNodes.permission(CapabilityCatalog.BIOMETRIC_PERMISSION, ManifestNodes.PermissionVariant.SDK_23, null),
+                ManifestNodes.permission(CapabilityCatalog.BIOMETRIC_PERMISSION, ManifestNodes.PermissionVariant.STANDARD, 30))) {
+            List<ManifestNodes.Element> children = new ArrayList<>(selected.root.children);
+            children.set(children.size() - 1, permission);
+            ManifestNodes.Element changed = ManifestNodes.base("manifest", children, selected.root.attributes.toArray(new ManifestPlan.Attribute[0]));
+            ManifestAudit.Document decoded = ManifestAudit.read(ManifestXml.encodeTree(changed));
+            assertThrows(IOException.class, () -> decoded.verify(selected));
+        }
+        ManifestAudit.Document absent = ManifestAudit.read(ManifestXml.encode(plan(Collections.emptyList())));
+        assertThrows(IOException.class, () -> absent.verify(selected));
     }
     @Test public void databaseIsStandaloneAndAddsNoManifestSurface() throws Exception {
         CapabilityCatalog.Capability database = CapabilityCatalog.CAPABILITIES.get("database");

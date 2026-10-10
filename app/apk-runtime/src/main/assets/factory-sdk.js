@@ -45,7 +45,12 @@
       if (!bridge || typeof bridge.postMessage !== 'function') {
         reject(failure('BRIDGE_UNAVAILABLE', 'Open this application in its generated Android APK.')); return;
       }
-      if (pending.size >= (method === 'sensors.cancel' ? 17 : 16)) { reject(failure('BUSY', 'Too many pending native requests.')); return; }
+      var cancellation = method === 'sensors.cancel' || method === 'biometrics.cancel';
+      var controlPending = false;
+      if (cancellation) pending.forEach(function (entry) { if (entry.method === method) controlPending = true; });
+      if (pending.size >= (cancellation ? 18 : 16) || controlPending) {
+        reject(failure('BUSY', 'Too many pending native requests.')); return;
+      }
       var id = prefix + (++sequence).toString(36);
       var payload;
       try {
@@ -53,12 +58,13 @@
         if (new TextEncoder().encode(payload).length > MAX_MESSAGE_BYTES) throw failure('TOO_LARGE', 'Native request exceeds 512 KiB.');
       } catch (error) { reject(error.code ? error : failure('INVALID_ARGUMENT', 'Arguments must be serializable JSON.')); return; }
       var timeout = /^(export|clipboard|share)\./.test(method) || /^(documents\.(open|create)|photos\.(pick|capture)|audio\.play|browser\.open|maps\.open|phone\.dial|email\.compose|sms\.compose|contacts\.pick|calendar\.insert)$/.test(method) ? 600000 : 30000;
+      if (method === 'biometrics.authenticate') timeout = 90000;
       var timer = global.setTimeout(function () {
         if (!pending.has(id)) return;
         pending.delete(id);
         reject(failure('TIMEOUT', 'Native response timed out. A system action already chosen may still finish.'));
       }, timeout);
-      pending.set(id, { resolve: resolve, reject: reject, timer: timer });
+      pending.set(id, { resolve: resolve, reject: reject, timer: timer, method: method });
       try { bridge.postMessage(payload); }
       catch (_) {
         pending.delete(id); global.clearTimeout(timer);
@@ -73,6 +79,11 @@
       set: function (key, value) { return call('storage.set', { key: key, value: value }); },
       remove: function (key) { return call('storage.remove', { key: key }); },
       list: function () { return call('storage.list', {}); }
+    }),
+    biometrics: Object.freeze({
+      availability: function (options) { return call('biometrics.availability', options === undefined ? {} : options); },
+      authenticate: function (options) { return call('biometrics.authenticate', options); },
+      cancel: function (options) { return call('biometrics.cancel', options === undefined ? {} : options); }
     }),
     sensors: Object.freeze({
       list: function (options) { return call('sensors.list', options === undefined ? {} : options); },

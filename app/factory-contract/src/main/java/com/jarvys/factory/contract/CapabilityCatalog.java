@@ -15,6 +15,7 @@ public final class CapabilityCatalog {
     public static final int SCHEMA_VERSION = 1;
     public static final int SDK_VERSION = 2;
     public static final int MIN_APP_API = 24;
+    public static final String BIOMETRIC_PERMISSION = "android.permission.USE_BIOMETRIC";
     public enum Method {
         RUNTIME_INFO("runtime.info", null),
         STORAGE_GET("storage.get", "storage"), STORAGE_SET("storage.set", "storage"),
@@ -33,18 +34,20 @@ public final class CapabilityCatalog {
         DATABASE_CLOSE("database.close", "database"), DATABASE_CANCEL("database.cancel", "database"),
         PRESENTATION_GET("presentation.get", "presentation"), PRESENTATION_SET("presentation.set", "presentation"),
         PRESENTATION_RESET("presentation.reset", "presentation"),
-        SENSORS_LIST("sensors.list", "sensors"), SENSORS_CAPTURE("sensors.capture", "sensors"), SENSORS_CANCEL("sensors.cancel", "sensors");
+        SENSORS_LIST("sensors.list", "sensors"), SENSORS_CAPTURE("sensors.capture", "sensors"), SENSORS_CANCEL("sensors.cancel", "sensors"),
+        BIOMETRICS_AVAILABILITY("biometrics.availability", "biometrics"),
+        BIOMETRICS_AUTHENTICATE("biometrics.authenticate", "biometrics"), BIOMETRICS_CANCEL("biometrics.cancel", "biometrics");
         public final String wireName;
         public final String capability;
         Method(String wireName, String capability) { this.wireName = wireName; this.capability = capability; }
     }
     public static final class Capability {
         public final String name;
-        public final int minimumApi = MIN_APP_API;
+        public final int minimumApi;
         public final List<Method> methods;
-        // Documents and typed external actions share the exact reviewed host-package visibility queries.
+        // Closed compiled contributions: the biometric permission or exact shared broker queries.
         public final List<ManifestNodes.Element> manifestNodes;
-        public final Set<String> permissions = Collections.emptySet();
+        public final Set<String> permissions;
         public final Set<String> features = Collections.emptySet();
         public final Set<String> components = Collections.emptySet();
         public final Set<String> intentFilters = Collections.emptySet();
@@ -55,8 +58,12 @@ public final class CapabilityCatalog {
         public final Set<String> conflicts = Collections.emptySet();
         private Capability(String name) {
             this.name = name;
-            manifestNodes = (name.equals("documents") || name.equals("browser") || name.equals("maps") || name.equals("phone") || name.equals("email") || name.equals("sms") || name.equals("contacts") || name.equals("calendar")) ? Collections.singletonList(DOCUMENT_QUERIES) : Collections.emptyList();
-            queries = (name.equals("documents") || name.equals("browser") || name.equals("maps") || name.equals("phone") || name.equals("email") || name.equals("sms") || name.equals("contacts") || name.equals("calendar")) ? DOCUMENT_BROKER_PACKAGES : Collections.emptySet();
+            boolean biometric = name.equals("biometrics");
+            boolean broker = name.equals("documents") || name.equals("browser") || name.equals("maps") || name.equals("phone") || name.equals("email") || name.equals("sms") || name.equals("contacts") || name.equals("calendar");
+            minimumApi = biometric ? 30 : MIN_APP_API;
+            permissions = biometric ? Collections.singleton(BIOMETRIC_PERMISSION) : Collections.emptySet();
+            manifestNodes = biometric ? Collections.singletonList(BIOMETRIC_DECLARATION) : broker ? Collections.singletonList(DOCUMENT_QUERIES) : Collections.emptyList();
+            queries = broker ? DOCUMENT_BROKER_PACKAGES : Collections.emptySet();
             List<Method> selected = new ArrayList<>();
             for (Method method : Method.values()) if (name.equals(method.capability)) selected.add(method);
             methods = Collections.unmodifiableList(selected);
@@ -66,8 +73,10 @@ public final class CapabilityCatalog {
             Arrays.asList("com.jarvys.agent", "com.jarvys.agent.recoverytest")));
     static final ManifestNodes.Element DOCUMENT_QUERIES = ManifestNodes.queries(Arrays.asList(
             ManifestNodes.queryPackage("com.jarvys.agent"), ManifestNodes.queryPackage("com.jarvys.agent.recoverytest")));
+    static final ManifestNodes.Element BIOMETRIC_DECLARATION = ManifestNodes.permission(
+            BIOMETRIC_PERMISSION, ManifestNodes.PermissionVariant.STANDARD, null);
     public static final List<String> NAMES = Collections.unmodifiableList(Arrays.asList(
-            "storage", "export", "share", "clipboard", "haptics", "device", "documents", "photos", "audio", "browser", "maps", "phone", "email", "sms", "contacts", "calendar", "database", "presentation", "sensors"));
+            "storage", "export", "share", "clipboard", "haptics", "device", "documents", "photos", "audio", "browser", "maps", "phone", "email", "sms", "contacts", "calendar", "database", "presentation", "sensors", "biometrics"));
     public static final Set<String> SUPPORTED = Collections.unmodifiableSet(new LinkedHashSet<>(NAMES));
     public static final Map<String, Capability> CAPABILITIES;
     public static final Map<String, Method> METHODS;

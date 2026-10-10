@@ -129,11 +129,22 @@ public final class TemplateApk {
         // normalized RGB/RGBA by FactoryIcon and must retain that checked representation.
         if(!TEMPLATE_PACKAGE.equals(info.appId)) checkPng(required(zip,iconPath));
         check(info.appId.equals(resourcePackageName(resources)),"Manifest/resource package names differ");
+        // Without caller expectations, infer only the closed declaration profile, not the full
+        // capabilities of the APK. Explicit expectations always override this inspection hint.
+        List<String> inferredCapabilities=new ArrayList<>();
+        if(expected==null) {
+            if(!info.permissions.isEmpty()) {
+                check(info.permissions.equals(Collections.singletonList(CapabilityCatalog.BIOMETRIC_PERMISSION)),
+                        "Unapproved factory permission profile");
+                inferredCapabilities.add("biometrics");
+            }
+            if(!baseXml.queryPackages.isEmpty()) inferredCapabilities.add("documents");
+        }
         ManifestPlan plan;
         try {
             plan=new ManifestPlan(expected==null?info.appId:expected.appId, expected==null?info.label:expected.label,
                 expected==null?info.versionCode:expected.versionCode, expected==null?info.versionName:expected.versionName,
-                info.iconResourceId,backupId,expected==null?(baseXml.queryPackages.isEmpty()?Collections.<String>emptyList():Collections.singletonList("documents")):expected.capabilities,profile);
+                info.iconResourceId,backupId,expected==null?inferredCapabilities:expected.capabilities,profile);
         } catch(IllegalArgumentException error) { throw new IOException("Invalid manifest plan identity",error); }
         decoded.verify(plan);
         Map<String,ResourceBinding> bindings=new TreeMap<>();

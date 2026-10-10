@@ -19,15 +19,15 @@ class FactoryGuidanceBundleTest {
     }
     @Test fun foregroundSensorsExtendTheVersionedCatalogWithoutChangingOriginalBudgets() {
         val bundle = load()
-        assertEquals("factory-guidance-v79", bundle.version)
+        assertEquals("factory-guidance-v80", bundle.version)
         assertEquals(listOf("basics", "documents-media", "external-actions", "contacts-calendar",
-            "database", "presentation", "lifecycle", "sensors"), FactoryGuidanceBundle.NAMES)
-        assertEquals(8, bundle.resources.size)
+            "database", "presentation", "lifecycle", "sensors", "biometrics"), FactoryGuidanceBundle.NAMES)
+        assertEquals(9, bundle.resources.size)
         assertEquals(8192, FactoryGuidanceBundle.MAX_CORE_BYTES)
         assertEquals(16384, FactoryGuidanceBundle.MAX_RESOURCE_BYTES)
         assertEquals(65536, FactoryGuidanceBundle.MAX_TOTAL_BYTES)
         assertTrue("Keep headroom below the complete core limit", core().toByteArray().size <= 7680)
-        assertTrue(core().contains("19 capabilities / 39 methods"))
+        assertTrue(core().contains("20 capabilities / 42 methods"))
         assertTrue(core().contains("- sensors:"))
         val sensors = bundle.resources.getValue("sensors")
         for (required in listOf("sensors.list()", "sensors.capture({kind,durationMs,intervalMs,maxSamples})",
@@ -37,12 +37,36 @@ class FactoryGuidanceBundleTest {
             assertTrue("Missing sensor contract: $required", sensors.contains(required))
         }
     }
+    @Test fun localBiometricsExposeExactLimitsSelectivePermissionAndNoReusableAuthority() {
+        val bundle = load()
+        val biometric = bundle.resources.getValue("biometrics")
+        assertTrue(core().contains("- biometrics:"))
+        assertTrue(core().contains("USE_BIOMETRIC"))
+        assertTrue(core().contains("biometrics: UNAVAILABLE"))
+        for (required in listOf("biometrics.availability({})", "biometrics.authenticate({reason})",
+            "biometrics.cancel({})", "API30+", "API24–29", "BIOMETRIC_STRONG", "Confirmation is a system hint", "1–160 UTF-16",
+            "512 UTF-8", "unpaired surrogates", "available,status,minimumApi:30", "credentialFallback:false",
+            "authenticated:true", "authorizesOtherActions:false", "simulated:false",
+            "cancelRequested:boolean,cancellationAcknowledged:false", "60-second", "90 seconds",
+            "Mismatch/help", "2 seconds", "process restart", "3 admitted", "8 no-op",
+            "1 KiB", "invalid cancel", "Oversized/unparseable", "global limiter", "USE_BIOMETRIC",
+            "retain zero permissions", "not full Runtime2", "Human", "physical matching")) {
+            assertTrue("Missing biometric contract: $required", biometric.contains(required, true))
+        }
+        val documented = File("../APK_FACTORY.md").readText()
+            .substringAfter("## Local strong biometrics (UX42 F1 v80)")
+            .substringBefore("## Versioned agent guidance (v80 extension)").trim()
+        assertEquals(biometric.substringAfter("## Local strong biometric authentication (v80)\n\n").trim(), documented)
+        assertThrows(IllegalArgumentException::class.java) {
+            load { path, bytes -> if (path.endsWith("biometrics.md")) bytes + "changed".toByteArray() else bytes }
+        }
+    }
     @Test fun corruptedMissingOversizedOrMalformedAssetsFailClosed() {
         assertThrows(IllegalArgumentException::class.java) { load { path, bytes -> if (path.endsWith("database.md")) bytes + "changed".toByteArray() else bytes } }
         assertThrows(IllegalArgumentException::class.java) { load { path, bytes -> if (path.endsWith("database.md")) ByteArray(16385) { 65 } else bytes } }
         assertThrows(IllegalArgumentException::class.java) { load { path, bytes -> if (path.endsWith("database.md")) byteArrayOf(0xc3.toByte()) else bytes } }
         assertThrows(java.io.IOException::class.java) { FactoryGuidanceBundle.load(core()) { throw java.io.IOException("missing") } }
-        assertThrows(IllegalArgumentException::class.java) { FactoryGuidanceBundle.load(core().replace("factory-guidance-v79", "factory-guidance-v77")) { File(root, it).inputStream() } }
+        assertThrows(IllegalArgumentException::class.java) { FactoryGuidanceBundle.load(core().replace("factory-guidance-v80", "factory-guidance-v77")) { File(root, it).inputStream() } }
         assertThrows(IllegalArgumentException::class.java) { FactoryGuidanceBundle.load(core() + "x".repeat(8192)) { File(root, it).inputStream() } }
     }
     @Test fun exactResourceBudgetWorksButAggregateBudgetCannotBeBypassedWithValidHashes() {
@@ -85,7 +109,7 @@ class FactoryGuidanceBundleTest {
 
     @Test fun unknownOrMissingManifestEntriesAndVersionMismatchAreRejected() {
         for (mutate in listOf<(String) -> String>(
-            { it.replace("factory-guidance-v79", "stale") },
+            { it.replace("factory-guidance-v80", "stale") },
             { it.replace("\"basics\":", "\"../basics\":") },
             { it.replace("\"version\":", "\"unknown\":") })) {
             assertThrows(Exception::class.java) { load { path, bytes -> if (path.endsWith("manifest.json")) mutate(bytes.toString(Charsets.UTF_8)).toByteArray() else bytes } }

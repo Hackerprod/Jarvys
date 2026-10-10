@@ -78,6 +78,7 @@ public final class FactoryRuntime implements AutoCloseable {
     private FactoryConfig config;
     private BoundedStore store;
     private SensorCapture sensors;
+    private BiometricAuthentication biometrics;
     private volatile PrivateDatabase database;
     private volatile int generation;
     private volatile boolean destroyed;
@@ -199,6 +200,7 @@ public final class FactoryRuntime implements AutoCloseable {
         cancelPresentationRecreate();
         generation++; pending.clear(); uiOwner = null;
         if(sensors!=null) sensors.cancel();
+        if(biometrics!=null) biometrics.cancel();
         retireDatabase();
         documents.revokeAll(); documents = new DocumentHandles();
         cancelDocumentSelection(); cancelFileShare(); cancelPhotoSelection(); cancelAudioPlayback();
@@ -352,15 +354,55 @@ public final class FactoryRuntime implements AutoCloseable {
         return true;
     }
 
+    /** A recognized, bounded control is rejected per ID before normal global admission. */
+    private boolean tryBiometricCancellation(String raw, JavaScriptReplyProxy proxy) {
+        if(raw==null || raw.length()>1024 || raw.getBytes(StandardCharsets.UTF_8).length>1024) return false;
+        final JSONObject envelope;
+        try { envelope=StrictJson.object(raw,1024); }
+        catch(FactoryException malformed) { return false; }
+        if(!"biometrics.cancel".equals(envelope.opt("method"))) return false;
+        final BridgeProtocol.Request control;
+        try { control=BridgeProtocol.validate(BridgeProtocol.ORIGIN,true,raw,config); }
+        catch(FactoryException invalid) {
+            rejectBiometricControl(BridgeProtocol.requestId(raw),invalid.code,invalid.getMessage(),proxy);return true;
+        }
+        if(pending.containsKey(control.id)) { rejectBiometricControl(control.id,"BUSY","Duplicate request ID.",proxy);return true; }
+        if(host.isPreview()) { rejectBiometricControl(control.id,"UNAVAILABLE","Biometrics is unavailable in preview.",proxy);return true; }
+        if(!biometricPageAuthority()) { rejectBiometricControl(control.id,"CANCELLED","Biometrics requires the active foreground page.",proxy);return true; }
+        try {
+            if(biometrics==null) biometrics=BiometricAuthentication.installed(activity,main);
+            safePost(proxy,BridgeProtocol.success(control.id,biometrics.cancellation()));
+        } catch(FactoryException failed) { safePost(proxy,BridgeProtocol.failure(control.id,failed.code,failed.getMessage())); }
+        catch(Exception failed) { safePost(proxy,BridgeProtocol.failure(control.id,"NATIVE_ERROR","Biometric cancellation failed.")); }
+        return true;
+    }
+
+    /** Rejected recognized controls share the no-op quota without revoking an active prompt. */
+    private void rejectBiometricControl(String id,String code,String message,JavaScriptReplyProxy proxy) {
+        try {
+            // Constructing the controller never queries hardware, including in preview.
+            if(biometrics==null) biometrics=BiometricAuthentication.installed(activity,main);
+            biometrics.rejectedControl();
+        } catch(FactoryException limited) {
+            // Invalid IDs cannot target a Promise. Never turn their failure into SDK failAll.
+            if(id==null && "RATE_LIMITED".equals(limited.code)) {
+                code="INVALID_REQUEST";message="Invalid request identifier; control request was rejected.";
+            } else { code=limited.code;message=limited.getMessage(); }
+        }
+        safePost(proxy,BridgeProtocol.failure(id,code,message));
+    }
+
     private void receive(String raw, JavaScriptReplyProxy proxy) {
         if (destroyed || !host.isActive()) return;
-        if(trySensorCancellation(raw,proxy)) return;
+        if(tryBiometricCancellation(raw,proxy) || trySensorCancellation(raw,proxy)) return;
         long now = SystemClock.elapsedRealtime();
         if (now - rateWindow >= 10000) { rateWindow = now; rateCount = 0; }
         if (++rateCount > 80) {
             // The SDK rejects every pending Promise for this global failure. Revoke its
-            // capture immediately instead of leaving a known orphan until the deadline.
+            // capture/authentication immediately instead of leaving an orphan until its deadline.
+            // Unparseable/oversized traffic retains this global failAll contract, never cancel authority.
             if(sensors!=null) sensors.cancel();
+            if(biometrics!=null) biometrics.cancel();
             safePost(proxy, BridgeProtocol.failure(null, "RATE_LIMITED", "Too many native requests; try again shortly.")); return;
         }
         final BridgeProtocol.Request request;
@@ -457,6 +499,8 @@ public final class FactoryRuntime implements AutoCloseable {
     private void dispatchInstalledEffect(BridgeProtocol.Request request, Reply reply) throws Exception {
         if (!reply.current()) return;
         switch (request.operation) {
+            case BIOMETRICS_AVAILABILITY: case BIOMETRICS_AUTHENTICATE: case BIOMETRICS_CANCEL:
+                biometricRequest(request,reply);break;
             case SENSORS_LIST: case SENSORS_CAPTURE: case SENSORS_CANCEL:
                 sensorRequest(request,reply);break;
             case PRESENTATION_GET: case PRESENTATION_SET: case PRESENTATION_RESET:
@@ -550,6 +594,32 @@ public final class FactoryRuntime implements AutoCloseable {
         }
     }
 
+    // The system biometric prompt may own window focus. Only admission requires focus;
+    // ongoing authority remains bound to the resumed page/session, Reply and UI owner.
+    private boolean biometricPageAuthority() {
+        return !destroyed && documentForeground && host.isSessionOpen() && host.isActive()
+                && !activity.isFinishing() && !activity.isDestroyed();
+    }
+    private void biometricRequest(BridgeProtocol.Request request, Reply reply) throws Exception {
+        if(host.isPreview()) throw new FactoryException("UNAVAILABLE","Biometrics is unavailable in preview.");
+        if(!biometricPageAuthority() || !reply.current())
+            throw new FactoryException("CANCELLED","Biometrics requires the active foreground page.");
+        if(biometrics==null) biometrics=BiometricAuthentication.installed(activity,main);
+        switch(request.operation) {
+            case BIOMETRICS_AVAILABILITY: reply.ok(biometrics.availability());break;
+            case BIOMETRICS_CANCEL: reply.ok(biometrics.cancellation());break;
+            case BIOMETRICS_AUTHENTICATE:
+                BiometricAuthentication.Request arguments=BiometricAuthentication.Request.parse(request.args);
+                if(!claimUi(reply)) return;
+                biometrics.authenticate(arguments,()->biometricPageAuthority() && reply.current() && uiOwner==reply,
+                        new BiometricAuthentication.Sink() {
+                            public void ok(JSONObject result) { if(uiOwner==reply) uiOwner=null; reply.ok(result); }
+                            public void fail(String code,String message) { if(uiOwner==reply) uiOwner=null; reply.fail(code,message); }
+                        });break;
+            default: throw new FactoryException("UNKNOWN_METHOD","Unknown biometric method.");
+        }
+    }
+
     private boolean sensorAuthority() {
         return !destroyed && documentForeground && host.isSessionOpen() && host.isActive()
                 && !activity.isFinishing() && !activity.isDestroyed() && activity.hasWindowFocus();
@@ -611,7 +681,7 @@ public final class FactoryRuntime implements AutoCloseable {
     }
 
     private boolean claimUi(Reply reply) {
-        if (presentationScheduled || uiOwner != null || export != null || documentSelection != null || fileShare != null || photoSelection != null || audioPlayback != null || browserOpen != null || externalLaunch != null || contactPick != null || !activity.hasWindowFocus() || activity.isFinishing()) {
+        if (BiometricAuthentication.processUiBusy() || (biometrics!=null && biometrics.isUiBusy()) || presentationScheduled || uiOwner != null || export != null || documentSelection != null || fileShare != null || photoSelection != null || audioPlayback != null || browserOpen != null || externalLaunch != null || contactPick != null || !activity.hasWindowFocus() || activity.isFinishing()) {
             reply.fail("BUSY", "Another native prompt is open, or the application is not in the foreground."); return false;
         }
         uiOwner = reply; return true;
@@ -702,6 +772,7 @@ public final class FactoryRuntime implements AutoCloseable {
     /** Pause always revokes existing handles. The external broker alone may retain a picker tombstone. */
     public void onPause() {
         if(sensors!=null) sensors.cancel();
+        if(biometrics!=null) biometrics.cancel();
         cancelPresentationRecreate();
         documentForeground = false;
         retireDatabase();

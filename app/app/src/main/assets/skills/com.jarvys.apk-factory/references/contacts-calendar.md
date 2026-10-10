@@ -1,8 +1,10 @@
-# Factory guidance factory-guidance-v79 / contacts-calendar
+# Factory guidance factory-guidance-v80 / contacts-calendar
 
 Use with the always-loaded Factory core; this reference grants no tools or approvals.
-Historical v77 contract text below is preserved. Current v79 totals are 19 capabilities/39 methods;
-foreground sensors extend it in the sensors reference, with all sensor methods UNAVAILABLE in preview.
+Historical v77 contract text below is preserved. Current v80: 20 capabilities/42 methods;
+sensors and biometrics extend it in their references, with all six methods UNAVAILABLE in preview.
+Only selected biometric profiles add USE_BIOMETRIC; template/nonbiometric profiles stay zero-permission.
+Historical totals/permission and pending-family statements below describe their original versions.
 
 ## Contacts (v74)
 contacts.pick({kind:"phone"|"email"}): contacts only; exact keys/no default. Human picker launch/full frozen value approval for exact latest-signed app. Returns only {kind,value}: unchanged nonblank paired Unicode, <=256 codepoints/1024 UTF8, no ISO/format/bidi/line/paragraph controls. No name/ID/URI/normalization/validity/dialability claim. Selected canonical row only; temporary grant/existing host READ_CONTACTS; no broad queries/permission requests/retries/fallback. App may retain/share via other grants; no minors/secrets. No call/send/calendar grant. Binder revocation; interruption revokes delivery; Settings contact recovery. No saved/autofill/capture data. OEM/session-URI unproven; retain gates.

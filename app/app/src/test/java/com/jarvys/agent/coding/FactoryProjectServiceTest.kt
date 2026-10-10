@@ -122,6 +122,25 @@ class FactoryProjectServiceTest {
             }
         }
     }
+    @Test fun biometricPermissionIsSelectedPerGeneratedProjectWithoutFeaturesOrBrokerAccess() {
+        for (capabilities in listOf(emptyList(), listOf("sensors"), listOf("biometrics"), listOf("biometrics", "sensors"))) {
+            val f = Fixture()
+            f.spec("org.example.selective", 1, capabilities)
+            f.build()
+            val manifest = TemplateApk.inspect(File(f.root, "notes.apk").readBytes())
+            assertEquals(if ("biometrics" in capabilities) listOf("android.permission.USE_BIOMETRIC") else emptyList<String>(), manifest.permissions)
+            assertTrue(manifest.plan.features.isEmpty())
+            assertTrue(manifest.plan.queries.isEmpty())
+            assertEquals(listOf(com.jarvys.factory.contract.ManifestPlan.ACTIVITY), manifest.plan.exportedComponents)
+            ZipFile(File(f.root, "notes.apk")).use { zip ->
+                val text = zip.getInputStream(zip.getEntry("assets/factory-app.json")).bufferedReader().use { it.readText() }
+                val config = com.jarvys.factory.runtime.FactoryConfig.parse(text, "org.example.selective")
+                assertEquals(capabilities.toSet(), config.capabilities)
+                assertNull(config.documentBroker)
+            }
+            assertEquals(0, f.requested); assertEquals(0, f.obtained)
+        }
+    }
     @Test fun installationRejectsUnsignedBuildWithoutApprovalOrSession() {
         val f = Fixture(); val built = f.build()
         assertThrows(Exception::class.java) { f.service.installation("install", "notes.apk", built.getString("sha256"), f.scope.version(), CancellationToken.cancellable()) }
@@ -312,6 +331,26 @@ class FactoryProjectServiceTest {
         assertTrue(f.lastSummary!!.lines.any{it.contains("Effective scope unchanged")})
         assertEquals(firstFingerprint,f.identityState.fingerprint)
         assertEquals(4,f.identityState.lastVersion)
+    }
+    @Test fun signedBiometricUpdatesDisclosePermissionAdditionAndRemovalWithTheSameIdentity() {
+        val f = Fixture(enableEphemeralSigning = true); f.decision = ApprovalDecision.APPROVED
+        fun signVersion(version: Int, capabilities: List<String>) {
+            f.spec("org.example.notebook", version, capabilities)
+            val path = "biometric-v$version.apk"; val build = f.build(path)
+            f.service.sign(path, build.getString("sha256"), "biometric-signed-v$version.apk", f.scope.version(), CancellationToken.cancellable())
+        }
+        signVersion(1, listOf("storage"))
+        val fingerprint = f.identityState.fingerprint
+        signVersion(2, listOf("storage", "biometrics"))
+        assertTrue(f.lastSummary!!.lines.any { it == "Decoded Android permissions: android.permission.USE_BIOMETRIC" })
+        assertTrue(f.lastSummary!!.lines.any { it == "Scope additions (capabilities): biometrics" })
+        assertTrue(f.lastSummary!!.lines.any { it == "Scope additions (permissions): android.permission.USE_BIOMETRIC" })
+        signVersion(3, listOf("storage"))
+        assertTrue(f.lastSummary!!.lines.any { it == "Decoded Android permissions: none" })
+        assertTrue(f.lastSummary!!.lines.any { it == "Scope removals (capabilities): biometrics" })
+        assertTrue(f.lastSummary!!.lines.any { it == "Scope removals (permissions): android.permission.USE_BIOMETRIC" })
+        assertEquals(fingerprint, f.identityState.fingerprint)
+        assertEquals(3, f.identityState.lastVersion)
     }
     @Test fun unresolvedRestoredHistoryBlocksBeforeApprovalAndKeyAccess() {
         val f=Fixture(); f.identityState=FactorySigningIdentity.State(true,"a".repeat(64),1,

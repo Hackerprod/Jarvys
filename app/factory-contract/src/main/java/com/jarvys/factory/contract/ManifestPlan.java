@@ -17,7 +17,7 @@ public final class ManifestPlan {
     public final List<String> capabilities;
     public final List<Node> nodes;
     public final ManifestNodes.Element root;
-    public final List<String> permissions = Collections.emptyList();
+    public final List<String> permissions;
     public final List<String> features = Collections.emptyList();
     public final List<String> queries;
     public final List<String> hosts = Collections.emptyList();
@@ -89,17 +89,24 @@ public final class ManifestPlan {
             result.set(3, without(result.get(3), "windowSoftInputMode"));
         }
         List<ManifestNodes.Element> contributions = CapabilityCatalog.manifestContributions(this.capabilities);
-        if (contributions.isEmpty()) queries = Collections.emptyList();
-        else {
-            if (profile != Profile.CURRENT || contributions.size() != 1 ||
-                    contributions.get(0) != CapabilityCatalog.DOCUMENT_QUERIES)
+        List<String> selectedPermissions = new ArrayList<>(), selectedQueries = new ArrayList<>();
+        for (ManifestNodes.Element contribution : contributions) {
+            if (profile != Profile.CURRENT)
                 throw new IllegalArgumentException("Additional manifest declarations are not activated");
-            queries = Collections.unmodifiableList(new ArrayList<>(CapabilityCatalog.DOCUMENT_BROKER_PACKAGES));
-            int queryIndex = result.size();
-            result.add(new Node("manifest/queries", 0));
-            for (String host : queries) result.add(new Node("manifest/queries/package", queryIndex,
-                    a("name", 0x01010003, 3, host)));
+            if (contribution == CapabilityCatalog.BIOMETRIC_DECLARATION) {
+                selectedPermissions.add(CapabilityCatalog.BIOMETRIC_PERMISSION);
+                result.add(new Node("manifest/uses-permission", 0,
+                        a("name", 0x01010003, 3, CapabilityCatalog.BIOMETRIC_PERMISSION)));
+            } else if (contribution == CapabilityCatalog.DOCUMENT_QUERIES) {
+                selectedQueries.addAll(CapabilityCatalog.DOCUMENT_BROKER_PACKAGES);
+                int queryIndex = result.size();
+                result.add(new Node("manifest/queries", 0));
+                for (String host : selectedQueries) result.add(new Node("manifest/queries/package", queryIndex,
+                        a("name", 0x01010003, 3, host)));
+            } else throw new IllegalArgumentException("Additional manifest declarations are not activated");
         }
+        permissions = Collections.unmodifiableList(selectedPermissions);
+        queries = Collections.unmodifiableList(selectedQueries);
         nodes = Collections.unmodifiableList(result);
         root = tree(result, 0);
     }
@@ -112,6 +119,8 @@ public final class ManifestPlan {
         Node node = nodes.get(index); List<ManifestNodes.Element> children = new ArrayList<>();
         for (int i = index + 1; i < nodes.size(); i++) if (nodes.get(i).parentIndex == index) children.add(tree(nodes, i));
         String name = node.path.substring(node.path.lastIndexOf('/') + 1);
+        if (name.equals("uses-permission")) return ManifestNodes.permission(
+                (String)node.attributes.get(ANDROID + "|name").value, ManifestNodes.PermissionVariant.STANDARD, null);
         if (name.equals("queries")) return ManifestNodes.queries(children);
         if (name.equals("package")) return ManifestNodes.queryPackage((String)node.attributes.values().iterator().next().value);
         return ManifestNodes.base(name, children, node.attributes.values().toArray(new Attribute[0]));

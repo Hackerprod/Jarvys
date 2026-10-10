@@ -105,7 +105,7 @@ test('all SDK calls exactly match the catalog and explicit native validator/disp
   const path = require('node:path');
   const catalog = fs.readFileSync(path.join(__dirname, '../../factory-contract/src/main/java/com/jarvys/factory/contract/CapabilityCatalog.java'), 'utf8');
   const rows = [...catalog.matchAll(/\b([A-Z][A-Z_]+)\("([a-z]+\.[a-z]+)", (?:"[a-z]+"|null)\)/g)];
-  assert.equal(rows.length, 39);
+  assert.equal(rows.length, 42);
   const env = environment();
   const args = { 'storage.get': ['key'], 'storage.set': ['key', 'value'], 'storage.remove': ['key'],
     'export.text': [{ filename: 'test.txt', text: 'hello' }], 'share.text': [{ text: 'hello' }],
@@ -529,5 +529,118 @@ test('sensors cancellation has one bounded reserved slot when ordinary admission
   await secondCancel;
   env.handlers.get('pagehide')();
   await Promise.all(closed);
+  assert.equal(env.timers.size, 0);
+});
+
+test('biometrics exposes three frozen methods with exact options and a bounded authentication timeout', async () => {
+  const env = environment();
+  assert.equal(Object.isFrozen(env.api.biometrics), true);
+  assert.deepEqual(Object.keys(env.api.biometrics), ['availability', 'authenticate', 'cancel']);
+  for (const method of ['availability', 'authenticate', 'cancel']) {
+    for (const options of [undefined, {}, null, false, [], 'confirm',
+      {reason: 'Confirm this local action'}, {reason: 'Confirmación 東京'},
+      {reason: 1, credentialFallback: true, extra: 'native validation must see this'}]) {
+      const pending = env.api.biometrics[method](options);
+      assert.equal(typeof pending.then, 'function');
+      const request = env.sent.at(-1);
+      assert.equal(request.v, 1);
+      assert.equal(request.method, 'biometrics.' + method);
+      assert.deepEqual(request.args, method !== 'authenticate' && options === undefined ? {} : options);
+      assert.equal(env.delays.at(-1), method === 'authenticate' ? 90000 : 30000);
+      env.reply(request, {synthetic: true});
+      assert.equal((await pending).synthetic, true);
+      assert.equal(env.timers.size, 0);
+    }
+  }
+});
+
+test('biometrics native rejections never become authentication from a late reply', async () => {
+  for (const method of ['availability', 'authenticate', 'cancel']) {
+    for (const code of ['CAPABILITY_DENIED', 'INVALID_ARGUMENT', 'UNAVAILABLE', 'BUSY', 'CANCELLED', 'TIMEOUT', 'RATE_LIMITED', 'AUTHENTICATION_FAILED', 'NATIVE_ERROR']) {
+      const env = environment();
+      const pending = env.api.biometrics[method]({reason: 'Confirm this local action'});
+      const request = env.sent.at(-1);
+      const rejected = assert.rejects(pending, {name: 'JarvysError', code, message: 'Synthetic rejection'});
+      env.window.JarvysNative.onmessage({data: JSON.stringify({v: 1, id: request.id, ok: false,
+        error: {code, message: 'Synthetic rejection'}})});
+      await rejected;
+      env.reply(request, {authenticated: true, late: true});
+      assert.equal(env.timers.size, 0);
+    }
+  }
+});
+
+test('biometrics missing bridge, timeout, and page closure never invent success', async () => {
+  for (const method of ['availability', 'authenticate', 'cancel']) {
+    await assert.rejects(environment(false).api.biometrics[method]({}), {code: 'BRIDGE_UNAVAILABLE'});
+    for (const event of ['timeout', 'pagehide']) {
+      const env = environment();
+      const pending = env.api.biometrics[method]({reason: 'Confirm this local action'});
+      const rejected = assert.rejects(pending, {code: event === 'timeout' ? 'TIMEOUT' : 'PAGE_CLOSED'});
+      assert.equal(env.delays.at(-1), method === 'authenticate' ? 90000 : 30000);
+      if (event === 'timeout') env.timers.values().next().value(); else env.handlers.get('pagehide')();
+      await rejected;
+      env.reply(env.sent.at(-1), {authenticated: true});
+      if (event === 'pagehide') assert.equal(env.timers.size, 0);
+    }
+  }
+});
+
+test('biometrics cancel receipt is independent and cannot claim prompt closure or authentication', async () => {
+  const env = environment();
+  const authenticate = env.api.biometrics.authenticate({reason: 'Confirm this local action'});
+  const authRequest = env.sent.at(-1);
+  const rejected = assert.rejects(authenticate, {code: 'CANCELLED'});
+  const cancel = env.api.biometrics.cancel();
+  const cancelRequest = env.sent.at(-1);
+  assert.notEqual(authRequest.id, cancelRequest.id);
+  env.reply(cancelRequest, {cancelRequested: true, cancellationAcknowledged: false});
+  assert.deepEqual(JSON.parse(JSON.stringify(await cancel)), {cancelRequested: true, cancellationAcknowledged: false});
+  env.window.JarvysNative.onmessage({data: JSON.stringify({v: 1, id: authRequest.id, ok: false,
+    error: {code: 'CANCELLED', message: 'Authentication canceled'}})});
+  await rejected;
+  env.reply(authRequest, {authenticated: true, simulated: false});
+  assert.equal(env.timers.size, 0);
+});
+
+test('biometrics cancellation has its own bounded reserve alongside saturated sensor cancellation', async () => {
+  const env = environment();
+  const ordinary = Array.from({length: 16}, () => env.api.runtime.info());
+  const closed = ordinary.map(promise => assert.rejects(promise, {code: 'PAGE_CLOSED'}));
+  const sensorCancel = env.api.sensors.cancel();
+  const sensorRequest = env.sent.at(-1);
+  const biometricCancel = env.api.biometrics.cancel();
+  const biometricRequest = env.sent.at(-1);
+  assert.equal(env.sent.length, 18);
+  assert.equal(env.timers.size, 18);
+  await assert.rejects(env.api.runtime.info(), {code: 'BUSY'});
+  await assert.rejects(env.api.biometrics.authenticate({reason: 'Confirm'}), {code: 'BUSY'});
+  await assert.rejects(env.api.sensors.cancel(), {code: 'BUSY'});
+  await assert.rejects(env.api.biometrics.cancel(), {code: 'BUSY'});
+  env.reply(biometricRequest, {cancelRequested: false, cancellationAcknowledged: false});
+  assert.deepEqual(JSON.parse(JSON.stringify(await biometricCancel)), {cancelRequested: false, cancellationAcknowledged: false});
+  env.reply(sensorRequest, {cancelled: false});
+  await sensorCancel;
+  env.handlers.get('pagehide')();
+  await Promise.all(closed);
+  assert.equal(env.timers.size, 0);
+});
+
+test('per-ID biometric control rate limit preserves auth while global rate limit rejects everything', async () => {
+  const env = environment();
+  const auth = env.api.biometrics.authenticate({reason: 'Confirm this local action'});
+  const authRequest = env.sent.at(-1);
+  const cancel = env.api.biometrics.cancel();
+  const cancelRequest = env.sent.at(-1);
+  const cancelRejected = assert.rejects(cancel, {code: 'RATE_LIMITED'});
+  env.window.JarvysNative.onmessage({data: JSON.stringify({v: 1, id: cancelRequest.id, ok: false,
+    error: {code: 'RATE_LIMITED', message: 'Control quota reached'}})});
+  await cancelRejected;
+  assert.equal(env.timers.size, 1);
+  const authRejected = assert.rejects(auth, {code: 'RATE_LIMITED'});
+  env.window.JarvysNative.onmessage({data: JSON.stringify({v: 1, id: null, ok: false,
+    error: {code: 'RATE_LIMITED', message: 'Global quota reached'}})});
+  await authRejected;
+  env.reply(authRequest, {authenticated: true});
   assert.equal(env.timers.size, 0);
 });

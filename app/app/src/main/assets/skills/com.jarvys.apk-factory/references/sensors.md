@@ -1,11 +1,13 @@
-# Factory guidance factory-guidance-v79 / sensors
+# Factory guidance factory-guidance-v80 / sensors
 
 Use with the always-loaded Factory core; this reference grants no tools or approvals.
+Historical v79 sensor contract below is preserved. Current v80 totals: 20 capabilities/42 methods;
+the biometrics reference adds local authentication and its one selective normal permission.
 
 ## Bounded foreground sensors (v79)
 
-`sensors` is the nineteenth capability; SDK 2/schema/protocol 1 stay unchanged. Current totals
-are 19 capabilities/39 methods. Only installed generated apps with this declared capability
+`sensors` is the nineteenth capability; SDK 2/schema/protocol 1 stay unchanged. Its v79 totals
+were 19 capabilities/39 methods. Only installed generated apps with this declared capability
 can use `Jarvys.sensors`. No broker, new Android permission, native per-read confirmation,
 network, background service, GPS/location, health, microphone or arbitrary sensor enumeration.
 No other grant implies `sensors`. Preview rejects all three methods with `UNAVAILABLE`, even

@@ -63,4 +63,17 @@ class FactorySigningScopeTest {
         val scope=scope();scope.toJson().put("permissions",JSONArray(listOf("injected")))
         assertEquals(0,scope.toJson().getJSONArray("permissions").length())
     }
+    @Test fun biometricSigningAddsAndRemovesTheExactPermissionWithoutImplyingFeaturesOrQueries() {
+        val baseline = scope()
+        val biometrics = FactorySigningScope.fromPlan(ManifestPlan(appId,"Notebook",2,"2.0",0x7f010001,0x7f020001,listOf("storage","biometrics")))
+        assertEquals(listOf("Scope additions (capabilities): biometrics", "Scope additions (permissions): android.permission.USE_BIOMETRIC"), biometrics.disclosure(baseline))
+        assertEquals(listOf("Scope removals (capabilities): biometrics", "Scope removals (permissions): android.permission.USE_BIOMETRIC"), baseline.disclosure(biometrics))
+        val permissions = biometrics.toJson().getJSONArray("permissions")
+        assertEquals(listOf("android.permission.USE_BIOMETRIC"), (0 until permissions.length()).map { permissions.getString(it) })
+        for (field in listOf("features", "queries", "allowedHosts")) assertEquals(0, biometrics.toJson().getJSONArray(field).length())
+        assertTrue(biometrics.disclosure(biometrics).single().contains("Effective scope unchanged"))
+        val anchored = record().put("lastSignedScope", biometrics.anchored(appId,fingerprint,1,sha))
+        assertEquals(biometrics, read(anchored))
+        assertEquals(biometrics.disclosure(baseline), read(anchored)!!.disclosure(baseline))
+    }
 }

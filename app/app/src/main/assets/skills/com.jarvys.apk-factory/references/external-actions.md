@@ -1,8 +1,10 @@
-# Factory guidance factory-guidance-v79 / external-actions
+# Factory guidance factory-guidance-v80 / external-actions
 
 Use with the always-loaded Factory core; this reference grants no tools or approvals.
-Historical v77 contract text below is preserved. Current v79 totals are 19 capabilities/39 methods;
-foreground sensors extend it in the sensors reference, with all sensor methods UNAVAILABLE in preview.
+Historical v77 contract text below is preserved. Current v80: 20 capabilities/42 methods;
+sensors and biometrics extend it in their references, with all six methods UNAVAILABLE in preview.
+Only selected biometric profiles add USE_BIOMETRIC; template/nonbiometric profiles stay zero-permission.
+Historical totals/permission and pending-family statements below describe their original versions.
 
 ## External v71–v75
 Named grants + authenticated pinned host/latest signed APK/recipient checks; no documents grant. Human-only full labelled data/recipient review; never automate. 5min durable guards/no replay; cancel cannot recall data/close tasks. Close external task then native/Settings acknowledgment; declared closure, not OS-verified. documents.cancel is unrelated. Preview UNAVAILABLE; physical/OEM unproven. v72–v75 receipts {launchRequested,actionConfirmed:false} prove only dispatch, not display/navigation/call/draft/event creation/saving/sending/delivery. Contacts: approved datum only.
