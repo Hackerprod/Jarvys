@@ -1,6 +1,6 @@
 # v70 / 1.2.63-FACTORY-AUDIO
 
-Status: final host validation and independent three-APK audit passed. Existing-D7 signing and native delivery pending. Physical/device acceptance remains unverified.
+Status: final host validation and independent three-APK audit passed. Existing-D7 ARM64 signing verified and native attachment accepted on 2026-10-10 at 09:38:18 UTC. Physical/device acceptance remains unverified.
 
 Independent design review and current official Android documentation preceded edits. Local
 binary playback replaces the blocked strict-TTS proposal; TTS/recognition remain pending.
@@ -11,7 +11,7 @@ audio focus and lifecycle teardown. No external engine, codec, URI/path API or n
 
 Source tests are synthetic. No actual sound, device, user file or third-party data transmission.
 Full fresh aggregate, exact lint multiset baseline 313/300/3/2 and three actual APK audits
-passed. Separate existing-D7 ARM64 signing/native delivery remain release gates. Detailed host reports
+passed. Separate existing-D7 ARM64 signing and native attachment acceptance also completed. Detailed host reports
 stay outside the repository. Preserve v63–v69, all other family gates, UX34 and UX43-last.
 
 Current contract and official references are in app/APK_FACTORY.md. Native callbacks/IPC are
@@ -90,3 +90,14 @@ not a hard realtime physical-stop guarantee. Focus, routing, Binder, playback, c
 restart were exercised with synthetic host fixtures only. No actual sound, user media,
 installation or physical acceptance was performed. TTS/recognition, other families,
 F2/F3 and UX34 gates remain pending; UX43 stays last.
+
+## Signed ARM64 delivery
+
+`Jarvys-Factory-audio-full-v70-arm64-test.apk`: 19,174,971 bytes, SHA-256
+`5b96ec210225ef4c7b77b343f438f57cbe989716de5e4d6f071fd7a84887d9be`.
+Derived from the audited Full Release hash above. Existing D7 signer verified v2/v3;
+ZIP CRC and 16 KiB alignment passed. Exact manifest retained, 239 retained entries byte
+identical, only nine non-ARM64 native-library entries omitted (plus signature metadata).
+Native attachment send was accepted on 2026-10-10 at 09:38:18 UTC. This establishes neither
+download nor installation, device compatibility, audibility or physical acceptance.
+Code and host-validation checkpoint: `fcae7f7dea3c819e17769ef325e8bb65902907ff`.
