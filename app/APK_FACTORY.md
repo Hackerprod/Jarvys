@@ -576,7 +576,7 @@ Preview returns UNAVAILABLE. `documents.cancel` is unrelated. `runtime.info` exp
 bounds, with no normalization or syntax-validation claim. All host tests use synthetic rows,
 intercepted system dispatch and an offline guard; actual device/OEM grants, Binder/UI lifecycle,
 installation/update and contact selection remain unverified until authorized physical testing.
-Calendar insertion remains a separate pending slice; TTS/voice, remaining F1/F2/F3, UX34 gates,
+Calendar insertion is described separately below; TTS/voice, remaining F1/F2/F3, UX34 gates,
 UX44 documentation-only defaults and UX43-last are preserved.
 
 References checked October 10, 2026: [Android common intents](https://developer.android.com/guide/components/intents-common),
@@ -584,3 +584,65 @@ References checked October 10, 2026: [Android common intents](https://developer.
 [AOSP URI grant handling](https://android.googlesource.com/platform/frameworks/base/+/master/services/core/java/com/android/server/uri/UriGrantsManagerService.java),
 [AOSP contacts provider](https://android.googlesource.com/platform/packages/providers/ContactsProvider/+/master/AndroidManifest.xml),
 and [Android 17 contact picker](https://developer.android.com/about/versions/17/features/contact-picker).
+
+## Calendar event editor (UX42 F1, v75)
+
+`Jarvys.calendar.insert({title,location,description,startTimeMillis,endTimeMillis,timeZone,allDay})`
+requires only `calendar`. All seven keys are required with no defaults. Title is nonblank,
+paired Unicode, at most 256 code points/1,024 UTF-8 bytes. Location has the same bounds but may
+be empty. Description may be empty and is at most 4,096 UTF-8 bytes. Text is unchanged;
+ISO controls, format/bidi and line/paragraph separators fail, except description LF and TAB.
+CR and malformed surrogates fail. Argument JSON is limited to 32 KiB, including escaped text.
+
+Times must be JSON integers, not strings, decimals, exponent forms or coercible values.
+They are absolute Unix milliseconds in `[0,4102444800000]` (1970-01-01 through the boundary
+2100-01-01T00:00:00Z), with end strictly greater than start and duration at most 366 days.
+No local-time parsing, DST guessing or current-time default. `timeZone` must exactly match
+an ID in the installed runtime's timezone data (or literal `UTC`); aliases depend on that data.
+Unknown IDs never silently become GMT. `allDay` is a JSON Boolean. When true, timezone must
+be literal `UTC`, both times must be exact UTC midnights, and the end date is exclusive.
+
+This is an editor request only: fixed `ACTION_INSERT`, fixed
+`content://com.android.calendar/events`, literal MIME `vnd.android.cursor.dir/event`, and only
+TITLE, EVENT_LOCATION, DESCRIPTION, EXTRA_EVENT_BEGIN_TIME, EXTRA_EVENT_END_TIME,
+EVENT_TIMEZONE and EXTRA_EVENT_ALL_DAY. The time extras are native longs and all-day is Boolean.
+EVENT_TIMEZONE is a requested prefill; recipient behavior is not guaranteed. There is no
+calendar/provider query, insert, update, deletion, event ID, attendees, invitations, recurrence,
+reminders, arbitrary URI/component/extra/flags, permission request or automatic saving.
+No `READ_CALENDAR`/`WRITE_CALENDAR` permission is added. Existing host permissions are unchanged;
+generated APKs remain permissionless and acquire only the two reviewed host-package queries.
+
+The v72–v74 exact latest signed source APK, authenticated pinned host, bounded discovery and
+recipient component/certificate/UID/version/update-time revalidation apply unchanged. The host
+adds one narrow ACTION_INSERT/DEFAULT/event-MIME visibility query. Recipient filters must have
+exactly that sole MIME, no scheme/authority/path/scheme-specific-part/relative-URI restrictions,
+and the matching action/default category. Wildcards and item-event MIME fail. This conservative
+subset can reject otherwise legitimate OEM or content-scheme handlers; no generic fallback.
+
+Human-only native review shows source app/version/APK hash/certificate, every field in separate
+labelled views, exact epochs and readable timezone offsets (UTC dates for all-day), and the exact
+selected recipient. Description is last and never interpreted as labels or links. Opening itself
+shares all fields with the app. It may ignore/change times, timezone, all-day or other values,
+save or transmit data, and cloud-sync a draft using its own accounts/network/permissions. Jarvys
+never presses Save. Inspect all fields again in the external editor; never submit secrets.
+
+FLAG_SECURE, disabled saved state/autofill descendant export/content capture, obscured-touch
+filtering and durable Jarvys automation guards remain; they do not erase JVM copies or control
+external-app behavior. Five-minute expiry, cancellation/source death, lifecycle loss, consumed
+launch authority and native user-declared closure/recovery prohibit replay. Journals retain only
+state/open/nonce, never event content. Cancellation cannot recall content or close another app.
+Settings → External action review recovers uncertainty without dispatching or returning event data.
+`{launchRequested,actionConfirmed:false}` proves only accepted startActivity dispatch, never that
+a screen appeared, an event was created/saved, or the external task actually closed.
+
+SDK 2/schema/protocol 1 remain. Preview reports UNAVAILABLE; `documents.cancel` is unrelated.
+`runtime.info` exposes calendar requirements, exact bounds and advisory-editor status. Synthetic
+host tests intercept dispatch and use no real calendar/event/user data. Physical Android/Binder,
+OEM recipient handling, timezone/all-day interpretation, installation/update and saved-event
+behavior remain unverified until separately authorized device testing. TTS/voice and remaining
+F1/F2/F3 stay pending, UX34 gated, UX44 documentation-only future defaults and UX43 last.
+
+References reviewed October 10, 2026: [Android common calendar intents](https://developer.android.com/guide/components/intents-common#Calendar),
+[Calendar provider intents](https://developer.android.com/identity/providers/calendar-provider#intents),
+[EVENT_TIMEZONE](https://developer.android.com/reference/android/provider/CalendarContract.EventsColumns#EVENT_TIMEZONE),
+and [IntentFilter](https://developer.android.com/reference/android/content/IntentFilter).

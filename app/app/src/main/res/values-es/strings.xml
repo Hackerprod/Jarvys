@@ -1416,4 +1416,13 @@ Se desconoce cómo terminaron. No se repiten automáticamente. Revisa los cambio
     <string name="factory_contacts_settings_summary">Recuperar o cerrar una selección de contacto protegida</string>
     <string name="factory_contacts_unavailable">La selección no está disponible o fue revocada. No se devolverá ningún valor. Cierra el selector antes de reconocer un resultado incierto.</string>
     <string name="factory_contacts_disclosure">Elige un teléfono o correo en el selector de Android verificado. Jarvys lee solo esa fila y muestra el valor completo aquí. Compartir devuelve ese valor exacto a la app generada indicada; puede conservarlo o compartirlo después mediante otras capacidades. No devuelve nombre, identificador, URI ni agenda. No autoriza llamadas ni envíos. No selecciones secretos ni datos de menores. Compatibilidad limitada; cancelar no demuestra que se cerró el selector externo.</string>
+    <string name="factory_calendar_disclosure">Calendario solicita solo un editor de eventos (ACTION_INSERT). Jarvys no lee ni escribe la base de datos del calendario y nunca pulsa Guardar. Abrir comparte todos los campos mostrados con la aplicación elegida; esta puede guardar, transmitir o sincronizar un borrador en la nube. Puede ignorar o cambiar la zona horaria, la opción de día completo, las horas u otros valores solicitados. Revísalos de nuevo en esa aplicación. Los límites de día completo son fechas UTC y la fecha final es exclusiva. Solicitar la apertura no demuestra que apareciera el editor ni que se creara o guardara un evento.</string>
+    <string name="factory_calendar_source">Aplicación de origen, versión e identidad del APK firmado</string>
+    <string name="factory_calendar_title">Título</string>
+    <string name="factory_calendar_location">Ubicación</string>
+    <string name="factory_calendar_start">Inicio solicitado</string>
+    <string name="factory_calendar_end">Fin (exclusivo para día completo)</string>
+    <string name="factory_calendar_timezone">Zona horaria solicitada</string>
+    <string name="factory_calendar_all_day">Día completo solicitado</string>
+    <string name="factory_calendar_description">Descripción</string>
 </resources>

@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.content.pm.ResolveInfo
 import androidx.core.net.toUri
 import android.os.Build
+import android.provider.CalendarContract
 import android.os.Process
 import android.os.UserHandle
 import com.jarvys.factory.contract.ExternalLaunchSpec
@@ -59,23 +60,42 @@ internal class FactoryExternalLaunchTargets(private val context: Context) {
         return Target(ComponentName(activity.packageName, activity.name), certificate, version, installed.lastUpdateTime, activity.applicationInfo.uid)
     }
     companion object {
+        private const val EVENTS_MIME = "vnd.android.cursor.dir/event"
         private fun action(spec: ExternalLaunchSpec) = when (spec.kind) {
             ExternalLaunchSpec.Kind.MAPS_COORDINATES, ExternalLaunchSpec.Kind.MAPS_QUERY -> Intent.ACTION_VIEW
             ExternalLaunchSpec.Kind.PHONE_DIAL -> Intent.ACTION_DIAL
             ExternalLaunchSpec.Kind.EMAIL_COMPOSE, ExternalLaunchSpec.Kind.SMS_COMPOSE -> Intent.ACTION_SENDTO
+            ExternalLaunchSpec.Kind.CALENDAR_INSERT -> Intent.ACTION_INSERT
         }
         private fun scheme(spec: ExternalLaunchSpec) = when (spec.kind) {
             ExternalLaunchSpec.Kind.MAPS_COORDINATES, ExternalLaunchSpec.Kind.MAPS_QUERY -> "geo"
             ExternalLaunchSpec.Kind.PHONE_DIAL -> "tel"
             ExternalLaunchSpec.Kind.EMAIL_COMPOSE -> "mailto"
             ExternalLaunchSpec.Kind.SMS_COMPOSE -> "smsto"
+            ExternalLaunchSpec.Kind.CALENDAR_INSERT -> error("Calendar uses a fixed MIME type")
         }
         private fun view(spec: ExternalLaunchSpec, discovery: Boolean = false): Intent {
+            if (spec.kind == ExternalLaunchSpec.Kind.CALENDAR_INSERT) {
+                return Intent(Intent.ACTION_INSERT).setDataAndType(CalendarContract.Events.CONTENT_URI, EVENTS_MIME)
+                    .addCategory(Intent.CATEGORY_DEFAULT).apply {
+                        if (!discovery) {
+                            val event = spec.calendar
+                            putExtra(CalendarContract.Events.TITLE, event.title)
+                            putExtra(CalendarContract.Events.EVENT_LOCATION, event.location)
+                            putExtra(CalendarContract.Events.DESCRIPTION, event.description)
+                            putExtra(CalendarContract.EXTRA_EVENT_BEGIN_TIME, event.startTimeMillis)
+                            putExtra(CalendarContract.EXTRA_EVENT_END_TIME, event.endTimeMillis)
+                            putExtra(CalendarContract.Events.EVENT_TIMEZONE, event.timeZone)
+                            putExtra(CalendarContract.EXTRA_EVENT_ALL_DAY, event.allDay)
+                        }
+                    }
+            }
             val uri = if (!discovery) spec.uri else when (spec.kind) {
                 ExternalLaunchSpec.Kind.MAPS_COORDINATES, ExternalLaunchSpec.Kind.MAPS_QUERY -> "geo:0,0"
                 ExternalLaunchSpec.Kind.PHONE_DIAL -> "tel:0"
                 ExternalLaunchSpec.Kind.EMAIL_COMPOSE -> "mailto:fixture@example.invalid"
                 ExternalLaunchSpec.Kind.SMS_COMPOSE -> "smsto:0"
+                ExternalLaunchSpec.Kind.CALENDAR_INSERT -> error("Calendar handled above")
             }
             return Intent(action(spec), uri.toUri()).addCategory(Intent.CATEGORY_DEFAULT).apply {
                 if (!discovery) when (spec.kind) {
@@ -84,14 +104,16 @@ internal class FactoryExternalLaunchTargets(private val context: Context) {
                         putExtra(Intent.EXTRA_TEXT, spec.body)
                     }
                     ExternalLaunchSpec.Kind.SMS_COMPOSE -> putExtra("sms_body", spec.body)
-                    ExternalLaunchSpec.Kind.MAPS_COORDINATES, ExternalLaunchSpec.Kind.MAPS_QUERY, ExternalLaunchSpec.Kind.PHONE_DIAL -> Unit
+                    ExternalLaunchSpec.Kind.MAPS_COORDINATES, ExternalLaunchSpec.Kind.MAPS_QUERY, ExternalLaunchSpec.Kind.PHONE_DIAL, ExternalLaunchSpec.Kind.CALENDAR_INSERT -> Unit
                 }
             }
         }
         internal fun broadTypedFilter(filter: IntentFilter?, spec: ExternalLaunchSpec): Boolean = filter != null &&
             filter.hasAction(action(spec)) && filter.hasCategory(Intent.CATEGORY_DEFAULT) &&
-            filter.hasDataScheme(scheme(spec)) && filter.countDataAuthorities() == 0 && filter.countDataPaths() == 0 &&
-            filter.countDataSchemeSpecificParts() == 0 && filter.countDataTypes() == 0 &&
+            (if (spec.kind == ExternalLaunchSpec.Kind.CALENDAR_INSERT)
+                filter.countDataSchemes() == 0 && filter.countDataTypes() == 1 && filter.getDataType(0) == EVENTS_MIME
+             else filter.hasDataScheme(scheme(spec)) && filter.countDataTypes() == 0) &&
+            filter.countDataAuthorities() == 0 && filter.countDataPaths() == 0 && filter.countDataSchemeSpecificParts() == 0 &&
             (Build.VERSION.SDK_INT < 35 || filter.countUriRelativeFilterGroups() == 0)
     }
 }

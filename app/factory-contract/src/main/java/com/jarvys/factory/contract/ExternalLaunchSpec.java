@@ -2,6 +2,11 @@ package com.jarvys.factory.contract;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.TimeZone;
 
 /** Closed typed external action values. No caller-supplied URI, component, flag or intent extra. */
 public final class ExternalLaunchSpec {
@@ -12,17 +17,71 @@ public final class ExternalLaunchSpec {
     public static final int MAX_SUBJECT_CODE_POINTS = 256;
     public static final int MAX_SUBJECT_BYTES = 1024;
     public static final int MAX_BODY_BYTES = 4096;
-    public enum Kind { MAPS_COORDINATES, MAPS_QUERY, PHONE_DIAL, EMAIL_COMPOSE, SMS_COMPOSE }
+    public enum Kind { MAPS_COORDINATES, MAPS_QUERY, PHONE_DIAL, EMAIL_COMPOSE, SMS_COMPOSE, CALENDAR_INSERT }
     public final Kind kind;
     public final String uri, display, capability;
     public final String recipient, subject, body;
+    public final CalendarInsertSpec calendar;
+
+    /** Event-editor prefills only. Times are absolute epoch milliseconds, never local-time inference. */
+    public static final class CalendarInsertSpec {
+        public static final int MAX_TITLE_CODE_POINTS = 256;
+        public static final int MAX_TITLE_BYTES = 1024;
+        public static final int MAX_LOCATION_CODE_POINTS = 256;
+        public static final int MAX_LOCATION_BYTES = 1024;
+        public static final int MAX_DESCRIPTION_BYTES = 4096;
+        public static final long MIN_TIME_MILLIS = 0L;
+        public static final long MAX_TIME_MILLIS = 4102444800000L; // 2100-01-01T00:00:00Z; end inclusive.
+        public static final long DAY_MILLIS = 86400000L;
+        public static final long MAX_DURATION_MILLIS = 366L * DAY_MILLIS;
+        private static final Set<String> TIME_ZONE_IDS = Collections.unmodifiableSet(
+                new HashSet<>(Arrays.asList(TimeZone.getAvailableIDs())));
+        public final String title, location, description, timeZone;
+        public final long startTimeMillis, endTimeMillis;
+        public final boolean allDay;
+
+        private CalendarInsertSpec(String title, String location, String description, long startTimeMillis,
+                                   long endTimeMillis, String timeZone, boolean allDay) {
+            editorText(title, MAX_TITLE_CODE_POINTS, MAX_TITLE_BYTES, false);
+            boolean nonblank = false;
+            for (int i = 0; i < title.length();) {
+                int point = title.codePointAt(i);
+                if (!Character.isWhitespace(point) && !Character.isSpaceChar(point)) nonblank = true;
+                i += Character.charCount(point);
+            }
+            if (!nonblank) throw new IllegalArgumentException("Calendar title must not be blank");
+            editorText(location, MAX_LOCATION_CODE_POINTS, MAX_LOCATION_BYTES, false);
+            editorText(description, MAX_DESCRIPTION_BYTES, MAX_DESCRIPTION_BYTES, true);
+            if (startTimeMillis < MIN_TIME_MILLIS || endTimeMillis > MAX_TIME_MILLIS
+                    || endTimeMillis <= startTimeMillis || endTimeMillis - startTimeMillis > MAX_DURATION_MILLIS)
+                throw new IllegalArgumentException("Calendar times exceed the supported range or duration");
+            // Exact runtime tzdata IDs; never TimeZone.getTimeZone's silent unknown-ID GMT fallback.
+            if (timeZone == null || !("UTC".equals(timeZone) || TIME_ZONE_IDS.contains(timeZone)))
+                throw new IllegalArgumentException("Use an exact available timezone ID");
+            if (allDay && (!"UTC".equals(timeZone) || startTimeMillis % DAY_MILLIS != 0 || endTimeMillis % DAY_MILLIS != 0))
+                throw new IllegalArgumentException("All-day events require UTC midnight and an exclusive end date");
+            this.title = title; this.location = location; this.description = description;
+            this.startTimeMillis = startTimeMillis; this.endTimeMillis = endTimeMillis;
+            this.timeZone = timeZone; this.allDay = allDay;
+        }
+    }
 
     private ExternalLaunchSpec(Kind kind, String uri, String display, String capability) {
         this(kind, uri, display, capability, null, null, null);
     }
     private ExternalLaunchSpec(Kind kind, String uri, String display, String capability, String recipient, String subject, String body) {
+        this(kind, uri, display, capability, recipient, subject, body, null);
+    }
+    private ExternalLaunchSpec(Kind kind, String uri, String display, String capability, String recipient,
+                               String subject, String body, CalendarInsertSpec calendar) {
         this.kind = kind; this.uri = uri; this.display = display; this.capability = capability;
-        this.recipient = recipient; this.subject = subject; this.body = body;
+        this.recipient = recipient; this.subject = subject; this.body = body; this.calendar = calendar;
+    }
+    public static ExternalLaunchSpec calendar(String title, String location, String description, long startTimeMillis,
+                                               long endTimeMillis, String timeZone, boolean allDay) {
+        CalendarInsertSpec calendar = new CalendarInsertSpec(title, location, description, startTimeMillis,
+                endTimeMillis, timeZone, allDay);
+        return new ExternalLaunchSpec(Kind.CALENDAR_INSERT, null, title, "calendar", null, null, null, calendar);
     }
     public static ExternalLaunchSpec coordinates(double latitude, double longitude) {
         if (Double.isNaN(latitude) || Double.isInfinite(latitude) || latitude < -90 || latitude > 90

@@ -25,6 +25,7 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 
     <queries>
+        <intent><action android:name="android.intent.action.INSERT" /><category android:name="android.intent.category.DEFAULT" /><data android:mimeType="vnd.android.cursor.dir/event" /></intent>
         <intent><action android:name="android.intent.action.PICK" /><data android:mimeType="vnd.android.cursor.dir/phone_v2" /></intent>
         <intent><action android:name="android.intent.action.PICK" /><data android:mimeType="vnd.android.cursor.dir/email_v2" /></intent>
         <provider android:authorities="com.android.contacts" />

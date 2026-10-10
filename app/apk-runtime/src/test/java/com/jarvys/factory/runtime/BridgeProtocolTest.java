@@ -39,6 +39,7 @@ public class BridgeProtocolTest {
             {"email.compose", "{\"to\":\"fixture@example.invalid\",\"subject\":\"Fixture\",\"body\":\"Body\"}"},
             {"sms.compose", "{\"number\":\"+15550100\",\"body\":\"Body\"}"},
             {"contacts.pick", "{\"kind\":\"phone\"}"},
+            {"calendar.insert", "{\"title\":\"Synthetic event\",\"location\":\"\",\"description\":\"\",\"startTimeMillis\":0,\"endTimeMillis\":86400000,\"timeZone\":\"UTC\",\"allDay\":true}"},
             {"browser.open", "{\"url\":\"https://example.com/review?fixture=1\"}"},
             {"share.file", "{\"handle\":\""+HANDLE+"\",\"filename\":\"file.bin\",\"mimeType\":\"application/octet-stream\"}"}};
         for (String[] call : methods) rejected("CAPABILITY_DENIED", BridgeProtocol.ORIGIN, true, request(call[0], call[1]), empty);
@@ -97,10 +98,11 @@ public class BridgeProtocolTest {
             {"email.compose", "{\"to\":\"fixture@example.invalid\",\"subject\":\"Fixture\",\"body\":\"Body\"}"},
             {"sms.compose", "{\"number\":\"+15550100\",\"body\":\"Body\"}"},
             {"contacts.pick", "{\"kind\":\"phone\"}"},
+            {"calendar.insert", "{\"title\":\"Synthetic event\",\"location\":\"\",\"description\":\"\",\"startTimeMillis\":0,\"endTimeMillis\":86400000,\"timeZone\":\"UTC\",\"allDay\":true}"},
             {"browser.open", "{\"url\":\"https://example.com/review?fixture=1\"}"},
             {"share.file", "{\"handle\":\""+HANDLE+"\",\"filename\":\"file.bin\",\"mimeType\":\"application/octet-stream\"}"}};
-        assertEquals(26, calls.length);
-        assertEquals(15, com.jarvys.factory.contract.CapabilityCatalog.NAMES.size());
+        assertEquals(27, calls.length);
+        assertEquals(16, com.jarvys.factory.contract.CapabilityCatalog.NAMES.size());
         assertEquals(com.jarvys.factory.contract.CapabilityCatalog.METHODS.size(), calls.length);
         for (int mask = 0; mask < (1 << com.jarvys.factory.contract.CapabilityCatalog.NAMES.size()); mask++) {
             org.json.JSONArray declared = new org.json.JSONArray();

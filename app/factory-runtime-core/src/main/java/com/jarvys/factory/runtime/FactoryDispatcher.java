@@ -31,8 +31,8 @@ public final class FactoryDispatcher {
     public static Effects simulatedEffects() {
         return (method, args) -> {
             switch (method) {
-                case CONTACTS_PICK: case MAPS_OPEN: case PHONE_DIAL: case EMAIL_COMPOSE: case SMS_COMPOSE: case BROWSER_OPEN: case AUDIO_PLAY: case PHOTOS_PICK: case PHOTOS_CAPTURE: case SHARE_FILE: case DOCUMENTS_OPEN: case DOCUMENTS_CREATE: case DOCUMENTS_READ: case DOCUMENTS_WRITE: case DOCUMENTS_CLOSE: case DOCUMENTS_CANCEL:
-                    throw new FactoryException("UNAVAILABLE", "Documents, photos, audio, browser, maps, phone, email, SMS and contacts require an installed generated app and the matching human-only Jarvys broker; preview never opens files, camera, audio, external URLs, maps, dialers, message editors or contact pickers.");
+                case CALENDAR_INSERT: case CONTACTS_PICK: case MAPS_OPEN: case PHONE_DIAL: case EMAIL_COMPOSE: case SMS_COMPOSE: case BROWSER_OPEN: case AUDIO_PLAY: case PHOTOS_PICK: case PHOTOS_CAPTURE: case SHARE_FILE: case DOCUMENTS_OPEN: case DOCUMENTS_CREATE: case DOCUMENTS_READ: case DOCUMENTS_WRITE: case DOCUMENTS_CLOSE: case DOCUMENTS_CANCEL:
+                    throw new FactoryException("UNAVAILABLE", "Documents, photos, audio, browser, maps, phone, email, SMS, contacts and calendar require an installed generated app and the matching human-only Jarvys broker; preview never opens files, camera, audio, external URLs, maps, dialers, message editors, contact pickers or calendar editors.");
                 case HAPTICS_PERFORM: case SHARE_TEXT: case CLIPBOARD_WRITE: case EXPORT_TEXT:
                     return new JSONObject().put("simulated", true).put("performed", false).put("mode", "preview")
                             .put("operation", method.wireName);
@@ -42,6 +42,8 @@ public final class FactoryDispatcher {
     }
     public static Object dispatch(BridgeProtocol.Request request, FactoryConfig config, BoundedStore store,
                                   Metadata metadata, Effects effects) throws Exception {
+        // Preserve integer types before the defensive envelope serialization.
+        if (request.operation == CapabilityCatalog.Method.CALENDAR_INSERT) ExternalLaunchRequest.parseCalendar(request.args);
         // Defense in depth for callers outside the WebView bridge, using the exact same validator.
         BridgeProtocol.validate(BridgeProtocol.ORIGIN, true,
                 new JSONObject().put("v", 1).put("id", request.id).put("method", request.method).put("args", request.args).toString(), config);
@@ -59,9 +61,9 @@ public final class FactoryDispatcher {
                         .put("simulatedCapabilities", new JSONArray("preview".equals(metadata.mode())
                                 ? java.util.Arrays.asList("export", "share", "clipboard", "haptics") : java.util.Collections.emptyList()))
                         .put("unavailableCapabilities", new JSONArray("preview".equals(metadata.mode())
-                                ? java.util.Arrays.asList("documents", "photos", "audio", "browser", "maps", "phone", "email", "sms", "contacts") : java.util.Collections.emptyList()))
+                                ? java.util.Arrays.asList("documents", "photos", "audio", "browser", "maps", "phone", "email", "sms", "contacts", "calendar") : java.util.Collections.emptyList()))
                         .put("unavailableMethods", new JSONArray("preview".equals(metadata.mode())
-                                ? java.util.Arrays.asList("share.file", "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture", "audio.play", "browser.open", "maps.open", "phone.dial", "email.compose", "sms.compose", "contacts.pick")
+                                ? java.util.Arrays.asList("share.file", "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture", "audio.play", "browser.open", "maps.open", "phone.dial", "email.compose", "sms.compose", "contacts.pick", "calendar.insert")
                                 : java.util.Collections.emptyList()))
                         .put("contactPickProtocolVersion", 1)
                         .put("contactsRequires", new JSONArray(java.util.Collections.singletonList("contacts")))
@@ -74,6 +76,11 @@ public final class FactoryDispatcher {
                         .put("phoneRequires", new JSONArray(java.util.Collections.singletonList("phone")))
                         .put("emailRequires", new JSONArray(java.util.Collections.singletonList("email")))
                         .put("smsRequires", new JSONArray(java.util.Collections.singletonList("sms")))
+                        .put("calendarRequires", new JSONArray(java.util.Collections.singletonList("calendar")))
+                        .put("calendarBrokerRequired", true)
+                        .put("calendarTimeZoneAdvisory", true)
+                        .put("calendarTimeZoneIdsRuntimeSpecific", true)
+                        .put("calendarAllDayEndExclusive", true)
                         .put("externalEditorsMaySyncDrafts", true)
                         .put("externalLaunchBrokerRequired", true)
                         .put("browserProtocolVersion", 1)
@@ -107,6 +114,14 @@ public final class FactoryDispatcher {
                                 .put("editorSubjectBytes", ExternalLaunchSpec.MAX_SUBJECT_BYTES)
                                 .put("editorBodyBytes", ExternalLaunchSpec.MAX_BODY_BYTES)
                                 .put("editorArgumentsBytes", ExternalLaunchRequest.MAX_EDITOR_ARGS_BYTES)
+                                .put("calendarTitleCodePoints", ExternalLaunchSpec.CalendarInsertSpec.MAX_TITLE_CODE_POINTS)
+                                .put("calendarTitleBytes", ExternalLaunchSpec.CalendarInsertSpec.MAX_TITLE_BYTES)
+                                .put("calendarLocationCodePoints", ExternalLaunchSpec.CalendarInsertSpec.MAX_LOCATION_CODE_POINTS)
+                                .put("calendarLocationBytes", ExternalLaunchSpec.CalendarInsertSpec.MAX_LOCATION_BYTES)
+                                .put("calendarDescriptionBytes", ExternalLaunchSpec.CalendarInsertSpec.MAX_DESCRIPTION_BYTES)
+                                .put("calendarMinTimeMillis", ExternalLaunchSpec.CalendarInsertSpec.MIN_TIME_MILLIS)
+                                .put("calendarMaxTimeMillis", ExternalLaunchSpec.CalendarInsertSpec.MAX_TIME_MILLIS)
+                                .put("calendarMaxDurationMillis", ExternalLaunchSpec.CalendarInsertSpec.MAX_DURATION_MILLIS)
                                 .put("mapsQueryCodePoints", com.jarvys.factory.contract.ExternalLaunchSpec.MAX_QUERY_CODE_POINTS)
                                 .put("mapsQueryBytes", com.jarvys.factory.contract.ExternalLaunchSpec.MAX_QUERY_BYTES)
                                 .put("phoneDigits", com.jarvys.factory.contract.ExternalLaunchSpec.MAX_PHONE_DIGITS)
@@ -118,7 +133,7 @@ public final class FactoryDispatcher {
                                 .put("audioSampleRateMin", 8000).put("audioSampleRateMax", 48000)
                                 .put("documentHandleLifetimeMs", 300000));
             case DEVICE_INFO: return metadata.deviceInfo().put("declaredAppId", config.appId);
-            case CONTACTS_PICK: case MAPS_OPEN: case PHONE_DIAL: case EMAIL_COMPOSE: case SMS_COMPOSE: case BROWSER_OPEN: case AUDIO_PLAY: case PHOTOS_PICK: case PHOTOS_CAPTURE: case SHARE_FILE: case DOCUMENTS_OPEN: case DOCUMENTS_CREATE: case DOCUMENTS_READ: case DOCUMENTS_WRITE: case DOCUMENTS_CLOSE: case DOCUMENTS_CANCEL:
+            case CALENDAR_INSERT: case CONTACTS_PICK: case MAPS_OPEN: case PHONE_DIAL: case EMAIL_COMPOSE: case SMS_COMPOSE: case BROWSER_OPEN: case AUDIO_PLAY: case PHOTOS_PICK: case PHOTOS_CAPTURE: case SHARE_FILE: case DOCUMENTS_OPEN: case DOCUMENTS_CREATE: case DOCUMENTS_READ: case DOCUMENTS_WRITE: case DOCUMENTS_CLOSE: case DOCUMENTS_CANCEL:
             case HAPTICS_PERFORM: case SHARE_TEXT: case CLIPBOARD_WRITE: case EXPORT_TEXT:
                 return effects.perform(request.operation, request.args);
             default: throw new FactoryException("UNKNOWN_METHOD", "Unknown operation.");

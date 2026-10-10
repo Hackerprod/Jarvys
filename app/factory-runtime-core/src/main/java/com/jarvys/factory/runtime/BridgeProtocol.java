@@ -60,6 +60,9 @@ public final class BridgeProtocol {
                 case MAPS_OPEN: case PHONE_DIAL: case EMAIL_COMPOSE: case SMS_COMPOSE:
                     ExternalLaunchRequest.parse(method, args.toString());
                     break;
+                case CALENDAR_INSERT:
+                    ExternalLaunchRequest.parseCalendar(args);
+                    break;
                 case CONTACTS_PICK:
                     ContactPickRequest.parse(args.toString());
                     break;

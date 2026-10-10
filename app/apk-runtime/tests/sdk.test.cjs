@@ -105,7 +105,7 @@ test('all SDK calls exactly match the catalog and explicit native validator/disp
   const path = require('node:path');
   const catalog = fs.readFileSync(path.join(__dirname, '../../factory-contract/src/main/java/com/jarvys/factory/contract/CapabilityCatalog.java'), 'utf8');
   const rows = [...catalog.matchAll(/\b([A-Z][A-Z_]+)\("([a-z]+\.[a-z]+)", (?:"[a-z]+"|null)\)/g)];
-  assert.equal(rows.length, 26);
+  assert.equal(rows.length, 27);
   const env = environment();
   const args = { 'storage.get': ['key'], 'storage.set': ['key', 'value'], 'storage.remove': ['key'],
     'export.text': [{ filename: 'test.txt', text: 'hello' }], 'share.text': [{ text: 'hello' }],
@@ -297,5 +297,31 @@ test('contact selection timeout and pagehide cannot release a late selected valu
     const rejected = assert.rejects(pending, {code: event === 'timeout' ? 'TIMEOUT' : 'PAGE_CLOSED'});
     if (event === 'timeout') env.timers.values().next().value(); else env.handlers.get('pagehide')();
     await rejected; env.reply(env.sent.at(-1), {kind: 'email', value: 'fixture@example.invalid'});
+  }
+});
+
+
+test('calendar insert exposes one frozen method and preserves all prefills without hidden defaults', async () => {
+  const env = environment();
+  assert.equal(Object.isFrozen(env.api.calendar), true); assert.deepEqual(Object.keys(env.api.calendar), ['insert']);
+  for (const options of [
+    {title: 'Synthetic event', location: '', description: 'Line 1\nLine 2', startTimeMillis: 0, endTimeMillis: 86400000, timeZone: 'UTC', allDay: true},
+    {title: 'Timed event', location: 'Room &url=content://forbidden', description: '', startTimeMillis: 1234, endTimeMillis: 5678, timeZone: 'America/New_York', allDay: false},
+    {title: 'Forbidden extra', attendees: ['fixture@example.invalid']}, {}, null, undefined
+  ]) {
+    const pending = env.api.calendar.insert(options); const request = env.sent.at(-1);
+    assert.equal(request.method, 'calendar.insert'); assert.deepEqual(request.args, options); assert.equal(env.delays.at(-1), 600000);
+    env.reply(request, {launchRequested: true, actionConfirmed: false});
+    const result = await pending; assert.equal(result.launchRequested, true); assert.equal(result.actionConfirmed, false); assert.deepEqual(Object.keys(result), ['launchRequested', 'actionConfirmed']);
+  }
+});
+test('calendar timeout and pagehide cannot become event saving or sync confirmation', async () => {
+  for (const event of ['timeout', 'pagehide']) {
+    const env = environment();
+    const pending = env.api.calendar.insert({title: 'Fixture', location: '', description: '', startTimeMillis: 0, endTimeMillis: 86400000, timeZone: 'UTC', allDay: true});
+    const rejected = assert.rejects(pending, {code: event === 'timeout' ? 'TIMEOUT' : 'PAGE_CLOSED'});
+    if (event === 'timeout') env.timers.values().next().value(); else env.handlers.get('pagehide')();
+    await rejected; env.reply(env.sent.at(-1), {launchRequested: true, actionConfirmed: false});
+    if (event === 'pagehide') assert.equal(env.timers.size, 0);
   }
 });

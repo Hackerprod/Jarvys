@@ -379,7 +379,7 @@ public final class FactoryRuntime implements AutoCloseable {
         switch (request.operation) {
             case PHOTOS_PICK: case PHOTOS_CAPTURE:
                 openPhoto(request, reply); break;
-            case MAPS_OPEN: case PHONE_DIAL: case EMAIL_COMPOSE: case SMS_COMPOSE:
+            case MAPS_OPEN: case PHONE_DIAL: case EMAIL_COMPOSE: case SMS_COMPOSE: case CALENDAR_INSERT:
                 openExternalLaunch(request, reply); break;
             case CONTACTS_PICK:
                 openContactPick(request, reply); break;

@@ -61,13 +61,13 @@ class FactorySpecTest {
         val value=FactorySpec.parse(spec().put("capabilities",JSONArray()))
         assertTrue(value.capabilities.isEmpty())
     }
-    @Test fun all32768SelectionsUseImmutableCatalogWithoutImpliedCapabilities() {
-        assertEquals(15, FactorySpec.CAPABILITIES.size)
-        for (mask in 0 until 32768) {
+    @Test fun all65536SelectionsUseImmutableCatalogWithoutImpliedCapabilities() {
+        assertEquals(16, FactorySpec.CAPABILITIES.size)
+        for (mask in 0 until 65536) {
             val selected = FactorySpec.CAPABILITIES.filterIndexed { bit, _ -> mask and (1 shl bit) != 0 }
             val value = FactorySpec.parse(spec().put("capabilities", JSONArray(selected.reversed())))
             assertEquals(selected.sorted(), value.capabilities)
-            assertEquals(1, JSONObject(String(value.runtimeConfig(if ("documents" in selected || "browser" in selected || "maps" in selected || "phone" in selected || "email" in selected || "sms" in selected || "contacts" in selected) broker() else null))).getInt("schemaVersion"))
+            assertEquals(1, JSONObject(String(value.runtimeConfig(if ("documents" in selected || "browser" in selected || "maps" in selected || "phone" in selected || "email" in selected || "sms" in selected || "contacts" in selected || "calendar" in selected) broker() else null))).getInt("schemaVersion"))
             for (name in selected) {
                 val capability = com.jarvys.factory.contract.CapabilityCatalog.CAPABILITIES[name]!!
                 assertTrue(capability.permissions.isEmpty())
@@ -83,7 +83,7 @@ class FactorySpecTest {
     }
 
     @Test fun mapsAndPhoneOnlyGeneratedConfigPinsHostAndKeepsCapabilitiesIndependent() {
-        for (capability in listOf("maps", "phone", "email", "sms", "contacts")) {
+        for (capability in listOf("maps", "phone", "email", "sms", "contacts", "calendar")) {
             val typed = FactorySpec.parse(spec().put("capabilities", JSONArray(listOf(capability))))
             assertThrows(Exception::class.java) { typed.runtimeConfig() }
             val configBytes = typed.runtimeConfig(broker())

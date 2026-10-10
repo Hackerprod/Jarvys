@@ -1416,4 +1416,13 @@ Their exit results are unknown. Do not repeat them automatically. Review project
     <string name="factory_contacts_settings_summary">Recover or close a protected contact selection</string>
     <string name="factory_contacts_unavailable">Contact selection is unavailable or revoked. No value will be returned. Close the picker yourself before acknowledging an uncertain outcome.</string>
     <string name="factory_contacts_disclosure">Choose one phone number or email address in the trusted Android picker. Jarvys reads only that selected row, then shows the complete value here. Share returns this exact value to the generated app below; it can retain it or use other capabilities to share it later. No name, contact ID, URI or address book is returned. This does not grant permission to call or send a message. Never select secrets or a minor’s information. Android/provider compatibility is limited; cancellation does not prove an external picker has closed.</string>
+    <string name="factory_calendar_disclosure">Calendar requests only an event editor (ACTION_INSERT). Jarvys does not read or write the calendar database and never presses Save. Opening shares every displayed field with the selected app; it may save, transmit or cloud-sync a draft. It may ignore or change the requested timezone, all-day setting, times or other values. Review them again in that app. All-day boundaries are UTC dates with an exclusive end date. A launch request does not prove an editor appeared or an event was created or saved.</string>
+    <string name="factory_calendar_source">Source app, version and signed APK identity</string>
+    <string name="factory_calendar_title">Title</string>
+    <string name="factory_calendar_location">Location</string>
+    <string name="factory_calendar_start">Start (requested)</string>
+    <string name="factory_calendar_end">End (exclusive for all-day)</string>
+    <string name="factory_calendar_timezone">Timezone (requested)</string>
+    <string name="factory_calendar_all_day">All day (requested)</string>
+    <string name="factory_calendar_description">Description</string>
 </resources>

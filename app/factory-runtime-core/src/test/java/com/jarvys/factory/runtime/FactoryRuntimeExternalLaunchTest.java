@@ -260,4 +260,84 @@ public class FactoryRuntimeExternalLaunchTest {
         assertNull(response.value); assertNull(work()); registration.close();
     }
 
+    @Test public void calendarOnlyUsesExactPinnedHostAndReturnsNoEventIdentityOrSavingClaim() throws Exception {
+        setCapabilities("[\"calendar\"]");
+        JSONObject args = CalendarInsertRequestTest.args(); Response response = request("calendar.insert", args);
+        assertNull(screen.launched); idle(); assertNotNull(screen.launched); assertNull(response.value);
+        assertEquals("calendar.insert", screen.launched.getStringExtra("method"));
+        assertEquals(args.toString(), screen.launched.getStringExtra("args"));
+        assertEquals("com.jarvys.agent", screen.launched.getComponent().getPackageName());
+        assertEquals("com.jarvys.agent.apkfactory.FactoryExternalActionActivity", screen.launched.getComponent().getClassName());
+        assertEquals(new java.util.HashSet<>(java.util.Arrays.asList("protocolVersion", "nonce", "method", "args", "control")), screen.launched.getExtras().keySet());
+        assertNotNull(screen.launched.getExtras().getBinder("control")); assertEquals(1, screen.launched.getIntExtra("protocolVersion", 0));
+        assertNull(screen.launched.getAction()); assertNull(screen.launched.getData()); assertNull(screen.launched.getType());
+        assertNull(screen.launched.getClipData()); assertNull(screen.launched.getSelector()); assertEquals(0, screen.launched.getFlags());
+        assertEquals(java.util.Collections.singleton("calendar"), ((FactoryConfig) field("config").get(runtime)).capabilities);
+        FileShareTransfer.reserve().close();
+        runtime.onPause(); runtime.onActivityResult(47, Activity.RESULT_OK, result()); assertNull(response.value); runtime.onResume();
+        JSONObject receipt = response.value.getJSONObject("result");
+        assertEquals(2, receipt.length()); assertTrue(receipt.getBoolean("launchRequested")); assertFalse(receipt.getBoolean("actionConfirmed"));
+        assertFalse(receipt.has("eventId")); assertFalse(receipt.has("saved")); assertFalse(receipt.has("synced"));
+        assertEquals(1, response.count); assertNull(work());
+    }
+    @Test public void calendarQueuedLaunchCannotSurvivePauseReloadOrInactiveHost() throws Exception {
+        setCapabilities("[\"calendar\"]");
+        Response paused = request("calendar.insert", CalendarInsertRequestTest.args()); runtime.onPause(); idle();
+        assertEquals("CANCELLED", paused.error()); assertNull(screen.launched); assertNull(work()); runtime.onResume();
+        Response reset = request("calendar.insert", CalendarInsertRequestTest.args()); runtime.reset(); idle();
+        assertNull(reset.value); assertNull(screen.launched); assertNull(work());
+        Response inactive = request("calendar.insert", CalendarInsertRequestTest.args()); host.active = false; idle();
+        assertNull(inactive.value); assertNull(screen.launched); assertNull(work());
+    }
+    @Test public void calendarReloadRevokesAuthenticatedControlAndRetainsLaunchedAdmissionUntilReturn() throws Exception {
+        setCapabilities("[\"calendar\",\"maps\"]");
+        Response response = request("calendar.insert", CalendarInsertRequestTest.args()); idle();
+        CountDownLatch cancelled = new CountDownLatch(1); ExternalLaunchControl.Registration registration = register(cancelled);
+        runtime.reset(); assertTrue(cancelled.await(5, TimeUnit.SECONDS)); assertTrue(registration.isRevoked());
+        assertNotNull(work()); assertNull(response.value);
+        assertEquals("BUSY", request("calendar.insert", CalendarInsertRequestTest.args()).error()); assertEquals("BUSY", open().error());
+        runtime.onActivityResult(47, Activity.RESULT_OK, result().putExtra("saved", true)); assertNull(work()); assertNull(response.value);
+        registration.close();
+        request("calendar.insert", CalendarInsertRequestTest.args()); idle(); assertNotNull(work());
+    }
+    @Test public void calendarExpiryRevokesControlButCannotClaimExternalEditorClosedOrSaved() throws Exception {
+        setCapabilities("[\"calendar\"]");
+        Response response = request("calendar.insert", CalendarInsertRequestTest.args()); idle();
+        CountDownLatch cancelled = new CountDownLatch(1); ExternalLaunchControl.Registration registration = register(cancelled);
+        runtime.onPause(); Shadows.shadowOf(Looper.getMainLooper()).idleFor(300000, TimeUnit.MILLISECONDS);
+        assertEquals("TIMEOUT", response.error()); assertTrue(cancelled.await(5, TimeUnit.SECONDS)); assertTrue(registration.isRevoked());
+        assertNotNull(work()); runtime.onResume(); assertEquals("BUSY", request("calendar.insert", CalendarInsertRequestTest.args()).error());
+        runtime.onActivityResult(47, Activity.RESULT_OK, result()); assertNull(work()); assertEquals(1, response.count); registration.close();
+    }
+    @Test public void calendarForgeryAndSavingOverclaimsAreNeverAccepted() throws Exception {
+        setCapabilities("[\"calendar\"]");
+        for (int variant = 0; variant < 9; variant++) {
+            Response response = request("calendar.insert", CalendarInsertRequestTest.args()); idle(); Intent output = result();
+            switch (variant) {
+                case 0: output.putExtra("saved", true); break;
+                case 1: output.putExtra("created", true); break;
+                case 2: output.putExtra("synced", true); break;
+                case 3: output.putExtra("eventId", 42L); break;
+                case 4: output.putExtra("actionConfirmed", true); break;
+                case 5: output.setData(android.net.Uri.parse("content://com.android.calendar/events/42")); break;
+                case 6: output.putExtra("nonce", "forged"); break;
+                case 7: output.putExtra("launchRequested", "true"); break;
+                case 8: output.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION); break;
+            }
+            runtime.onActivityResult(47, Activity.RESULT_OK, output); assertEquals("EXTERNAL_UNAVAILABLE", response.error()); assertNull(work());
+            runtime.onActivityResult(47, Activity.RESULT_OK, result()); assertEquals(1, response.count);
+        }
+    }
+    @Test public void calendarPreviewMissingCapabilityExtraAuthorityAndAmbiguousBrokerFailBeforeLaunch() throws Exception {
+        assertEquals("CAPABILITY_DENIED", request("calendar.insert", CalendarInsertRequestTest.args()).error()); assertNull(screen.launched);
+        setCapabilities("[\"calendar\"]"); host.preview = true;
+        assertEquals("UNAVAILABLE", request("calendar.insert", CalendarInsertRequestTest.args()).error()); assertNull(screen.launched); host.preview = false;
+        for (String extra : new String[]{"uri", "calendarId", "attendees", "recurrence", "extras", "flags", "save"}) {
+            assertEquals("INVALID_ARGUMENT", request("calendar.insert", CalendarInsertRequestTest.args().put(extra, "forbidden")).error());
+            assertNull(screen.launched); assertNull(work());
+        }
+        Shadows.shadowOf(screen.getPackageManager()).setPackagesForUid(hostUid(), DocumentBrokerIdentity.PRIMARY, "com.other.app");
+        assertEquals("UNAVAILABLE", request("calendar.insert", CalendarInsertRequestTest.args()).error()); assertNull(screen.launched);
+    }
+
 }

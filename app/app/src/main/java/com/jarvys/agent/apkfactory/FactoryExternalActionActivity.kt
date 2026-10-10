@@ -203,7 +203,8 @@ open class FactoryExternalActionActivity : ComponentActivity() {
             append(getString(R.string.factory_external_launch_disclosure))
             if (value != null && ::guard.isInitialized) {
                 append("\n\n").append(value.proof.appId).append("\n\n").append(value.request.method)
-                if (value.request.spec.recipient == null) append("\n\n").append(value.request.spec.display)
+                if (value.request.spec.recipient == null && value.request.spec.calendar == null) append("\n\n").append(value.request.spec.display)
+                if (value.request.spec.calendar != null) append("\n\n").append(getString(R.string.factory_calendar_disclosure))
                 selected?.let { append("\n\n").append(it.component.flattenToString()) }
             }
             if (working || coordinator.isBusy()) append("\n\n").append(getString(R.string.factory_external_launch_checking))
@@ -212,7 +213,7 @@ open class FactoryExternalActionActivity : ComponentActivity() {
             if (rejected || (value != null && candidates.isEmpty() && !value.attempted)) append("\n\n").append(getString(R.string.factory_external_launch_unavailable))
         }
         details.removeAllViews()
-        if (value != null && ::guard.isInitialized && value.request.spec.recipient != null) {
+        if (value != null && ::guard.isInitialized && (value.request.spec.recipient != null || value.request.spec.calendar != null)) {
             val spec = value.request.spec
             fun field(label: Int, name: String, content: String) {
                 details.addView(TextView(this).apply {
@@ -228,9 +229,28 @@ open class FactoryExternalActionActivity : ComponentActivity() {
                     }
                 })
             }
-            field(R.string.factory_external_editor_recipient, "recipient", spec.recipient)
-            if (spec.kind == ExternalLaunchSpec.Kind.EMAIL_COMPOSE) field(R.string.factory_external_editor_subject, "subject", spec.subject)
-            field(R.string.factory_external_editor_body, "body", spec.body)
+            val event = spec.calendar
+            if (event != null) {
+                field(R.string.factory_calendar_source, "calendar-source", "${value.proof.appId}\n${value.proof.version}\nAPK SHA-256: ${value.proof.apk}\nCertificate SHA-256: ${value.proof.certificate}")
+                field(R.string.factory_calendar_title, "calendar-title", event.title)
+                field(R.string.factory_calendar_location, "calendar-location", event.location)
+                fun time(millis: Long): String {
+                    val pattern = if (event.allDay) "yyyy-MM-dd 'UTC'" else "yyyy-MM-dd HH:mm:ss.SSS XXX"
+                    val formatted = java.text.SimpleDateFormat(pattern, java.util.Locale.ROOT).apply {
+                        timeZone = java.util.TimeZone.getTimeZone(event.timeZone)
+                    }.format(java.util.Date(millis))
+                    return "$formatted\n$millis ms (Unix)"
+                }
+                field(R.string.factory_calendar_start, "calendar-start", time(event.startTimeMillis))
+                field(R.string.factory_calendar_end, "calendar-end", time(event.endTimeMillis))
+                field(R.string.factory_calendar_timezone, "calendar-timezone", event.timeZone)
+                field(R.string.factory_calendar_all_day, "calendar-all-day", event.allDay.toString())
+                field(R.string.factory_calendar_description, "calendar-description", event.description)
+            } else {
+                field(R.string.factory_external_editor_recipient, "recipient", spec.recipient)
+                if (spec.kind == ExternalLaunchSpec.Kind.EMAIL_COMPOSE) field(R.string.factory_external_editor_subject, "subject", spec.subject)
+                field(R.string.factory_external_editor_body, "body", spec.body)
+            }
         }
         val ready = humanReady() && !working && !rejected && value != null && !value.attempted && !value.revoked.get() && value.registration?.isRevoked == false && coordinator.status() == "review"
         open.isEnabled = ready && selected != null
