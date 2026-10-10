@@ -3,6 +3,8 @@ package com.jarvys.agent.apkfactory
 import android.content.ClipData
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageInfo
+import android.content.pm.ApplicationInfo
 import android.net.Uri
 import androidx.test.core.app.ApplicationProvider
 import com.jarvys.agent.MemoryUiAutomationGuard
@@ -28,7 +30,7 @@ class FactoryDocumentCoordinatorTest {
     private lateinit var coordinator: FactoryDocumentCoordinator
     private fun fail(block: () -> Unit) { assertTrue("Expected fail-closed rejection", runCatching(block).isFailure) }
     private fun intent(op: String = "open", nonce: String = "d".repeat(64)) = Intent().putExtra("operation", op).putExtra("mimeType", "text/plain").putExtra("nonce", nonce)
-    private fun request(op: String = "open", nonce: String = "d".repeat(64)) = FactoryDocumentCoordinator.Request.parse(intent(op, nonce))
+    private fun request(op: String = "open", nonce: String = "d".repeat(64)) = FactoryDocumentCoordinator.Request.parse(intent(op, nonce).apply { if (op == "create") putExtra("filename", "document.txt") })
     private fun begin(op: String = "open") = coordinator.begin(proof.appId, request(op))
     @Before fun setup() { root.deleteRecursively(); coordinator = FactoryDocumentCoordinator(context) { proof } }
     @After fun cleanup() {
@@ -45,7 +47,7 @@ class FactoryDocumentCoordinatorTest {
         fail { FactoryDocumentCoordinator.Request.parse(intent().putExtra("operation", 1)) }
     }
     @Test fun filenameAndMimeAreBounded() {
-        for (name in listOf("../x", "x/y", "x\\y", "..", "a\nb", "x".repeat(97))) fail { FactoryDocumentCoordinator.Request.parse(intent("create").putExtra("filename", name)) }
+        for (name in listOf("../x", "x/y", "x\\y", "..", "a\nb", "x".repeat(121))) fail { FactoryDocumentCoordinator.Request.parse(intent("create").putExtra("filename", name)) }
         fail { FactoryDocumentCoordinator.Request.parse(intent().putExtra("filename", "x")) }
         fail { FactoryDocumentCoordinator.Request.parse(intent().putExtra("mimeType", "text/plain\n")) }
         assertEquals("*/*", FactoryDocumentCoordinator.Request.parse(intent().putExtra("mimeType", "*/*")).mimeType)
@@ -160,4 +162,37 @@ class FactoryDocumentCoordinatorTest {
             fail { FactoryDocumentCoordinator.verifyEvidence(proof.appId,proof.certificate,proof.apk,2,bad) }
         }
     }
+    @Test fun splitPackagesSharedUidUnknownUidAndSpoofedPackageAreRejected() {
+        val info = PackageInfo().apply { packageName = proof.appId; applicationInfo = ApplicationInfo().apply { packageName = proof.appId } }
+        FactoryDocumentCoordinator.verifyPackageShape(proof.appId, info, setOf(proof.appId))
+        fail { FactoryDocumentCoordinator.verifyPackageShape(proof.appId, info, null) }
+        fail { FactoryDocumentCoordinator.verifyPackageShape(proof.appId, info, setOf(proof.appId, "evil.app")) }
+        info.sharedUserId = "shared"
+        fail { FactoryDocumentCoordinator.verifyPackageShape(proof.appId, info, setOf(proof.appId)) }
+        info.sharedUserId = null
+        info.splitNames = arrayOf("feature")
+        fail { FactoryDocumentCoordinator.verifyPackageShape(proof.appId, info, setOf(proof.appId)) }
+        info.splitNames = emptyArray(); info.applicationInfo!!.splitSourceDirs = arrayOf("split.apk")
+        fail { FactoryDocumentCoordinator.verifyPackageShape(proof.appId, info, setOf(proof.appId)) }
+        info.applicationInfo!!.splitSourceDirs = null; info.packageName = "evil.app"
+        fail { FactoryDocumentCoordinator.verifyPackageShape(proof.appId, info, setOf(proof.appId)) }
+    }
+
+    @Test fun createRequiresNameAndOpenNeverAcceptsOne() {
+        fail { FactoryDocumentCoordinator.Request.parse(intent("create")) }
+        fail { FactoryDocumentCoordinator.Request.parse(intent("open").putExtra("filename", "document.txt")) }
+        fail { FactoryDocumentCoordinator.Request.parse(intent("create").putExtra("filename", "document.txt").putExtra("mimeType", "*/*")) }
+        assertEquals("document.txt", request("create").filename)
+    }
+    @Test fun apkHashBoundsActualStreamBytesIncludingGrowthAndEmptyStreams() {
+        val bytes = "apk".toByteArray()
+        assertEquals(com.jarvys.agent.coding.ProjectScope.sha256(bytes), FactoryDocumentCoordinator.hashApk(bytes.inputStream(), 3))
+        fail { FactoryDocumentCoordinator.hashApk("apkgrown".byteInputStream(), 3) }
+        fail { FactoryDocumentCoordinator.hashApk(byteArrayOf().inputStream(), 3) }
+        fail { FactoryDocumentCoordinator.hashApk(object : java.io.InputStream() {
+            override fun read() = 0
+            override fun read(buffer: ByteArray, offset: Int, length: Int) = 0
+        }, 3) }
+    }
+
 }

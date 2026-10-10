@@ -3,6 +3,7 @@ package com.jarvys.agent.apkfactory
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.pm.PackageInfo
 import android.os.Build
 import android.util.AtomicFile
 import com.jarvys.agent.MemoryUiAutomationGuard
@@ -22,9 +23,12 @@ internal class FactoryDocumentCoordinator(context: Context, private val verify: 
                 require(extras.keySet() == setOf("operation", "mimeType", "nonce") || extras.keySet() == setOf("operation", "mimeType", "filename", "nonce"))
                 fun string(key: String): String { @Suppress("DEPRECATION") val value = extras.get(key); require(value is String); return value }
                 val operation = string("operation"); require(operation == "open" || operation == "create")
-                val mime = string("mimeType"); require(mime.length <= 127 && (mime == "*/*" || mime.matches(Regex("[a-zA-Z0-9!#$&^_.+-]+/[a-zA-Z0-9!#$&^_.+*-]+"))))
+                val mime = string("mimeType")
+                val plain = mime.matches(Regex("[a-zA-Z0-9][a-zA-Z0-9!#$&^_.+-]*/[a-zA-Z0-9][a-zA-Z0-9!#$&^_.+-]*"))
+                val wildcard = mime == "*/*" || mime.matches(Regex("[a-zA-Z0-9][a-zA-Z0-9!#$&^_.+-]*/\\*"))
+                require(mime.length <= 127 && (plain || (operation == "open" && wildcard)))
                 val filename = if (extras.containsKey("filename")) string("filename") else null
-                require(filename == null || (operation == "create" && filename.length in 1..96 && filename !in setOf(".", "..") && filename.none { it.isISOControl() || it in "/\\:" }))
+                require(if (operation == "open") filename == null else filename != null && filename.matches(Regex("[a-zA-Z0-9][a-zA-Z0-9 _.-]{0,119}")) && !filename.endsWith(".") && !filename.contains(".."))
                 val nonce = string("nonce"); require(nonce.matches(Regex("[a-f0-9]{64}")))
                 return Request(operation, mime, filename, nonce)
             }
@@ -37,6 +41,7 @@ internal class FactoryDocumentCoordinator(context: Context, private val verify: 
     private var proof: Proof? = null
     private var request: Request? = null
     private var broken = false
+    private var verifying = false
     private var state = "idle"
     private var open = false
     private var previousNonce: String? = null
@@ -70,20 +75,26 @@ internal class FactoryDocumentCoordinator(context: Context, private val verify: 
             check(journal.readFully().contentEquals(bytes))
         } catch (e: Exception) { broken = true; open = true; state = "outcome_unknown"; protect(); throw e }
     }
+    @Synchronized fun canBegin() = !open && !broken && !verifying
     fun begin(callingPackage: String?, value: Request): String {
-        require(!callingPackage.isNullOrBlank())
-        val identity = verify(callingPackage)
-        return synchronized(this) {
-        check(!open && !broken) { "An unresolved document interaction requires native recovery" }
         require(!callingPackage.isNullOrBlank()) { "Android calling package is required" }
-        require(value.nonce != previousNonce) { "Replayed document request" }
-        require(identity.appId == callingPackage)
-        protect()
-        if (lease?.isReadyForUser != true) { lease?.close(); lease = null; error("Automated action in flight") }
-        owner = UUID.randomUUID().toString(); proof = identity; request = value
-        previousNonce = value.nonce; state = "review"; open = true; save()
-        owner!!
+        synchronized(this) {
+            check(!open && !broken && !verifying) { "A document interaction is already in progress" }
+            require(value.nonce != previousNonce) { "Replayed document request" }
+            verifying = true
         }
+        try {
+            val identity = verify(callingPackage)
+            return synchronized(this) {
+                check(!open && !broken)
+                require(identity.appId == callingPackage)
+                protect()
+                if (lease?.isReadyForUser != true) { lease?.close(); lease = null; error("Automated action in flight") }
+                owner = UUID.randomUUID().toString(); proof = identity; request = value
+                previousNonce = value.nonce; state = "review"; open = true; save()
+                owner!!
+            }
+        } finally { synchronized(this) { verifying = false } }
     }
     @Synchronized fun status() = state
     @Synchronized fun needsRecovery() = open && (owner == null || broken)
@@ -135,6 +146,17 @@ internal class FactoryDocumentCoordinator(context: Context, private val verify: 
     companion object {
         private val STATES = setOf("idle", "review", "picker", "cancelling", "selected", "cancelled", "returned", "outcome_unknown", "closed_outcome_unknown")
         private val HOSTS = setOf("com.jarvys.agent", "com.jarvys.agent.recoverytest")
+        private var recoveryToken: String? = null
+        @Synchronized fun recoveryIntent(context: Context): Intent {
+            recoveryToken = UUID.randomUUID().toString()
+            return Intent(context, FactoryDocumentActivity::class.java).putExtra("nativeRecoveryToken", recoveryToken)
+        }
+        @Synchronized fun consumeRecoveryToken(intent: Intent): Boolean {
+            val token = intent.getStringExtra("nativeRecoveryToken")
+            if (token == null || token != recoveryToken || intent.extras?.keySet() != setOf("nativeRecoveryToken")) return false
+            recoveryToken = null
+            return true
+        }
         @Volatile private var instance: FactoryDocumentCoordinator? = null
         fun get(context: Context): FactoryDocumentCoordinator = instance ?: synchronized(this) {
             instance ?: FactoryDocumentCoordinator(context.applicationContext).also { it.restore(); instance = it }
@@ -142,23 +164,57 @@ internal class FactoryDocumentCoordinator(context: Context, private val verify: 
         internal fun verifyInstalled(context: Context, appId: String): Proof {
             require(context.packageName in HOSTS && appId !in HOSTS)
             val pm = context.packageManager
-            for (host in HOSTS - context.packageName) {
-                val absent = try { pm.getApplicationInfo(host, 0); false } catch (_: PackageManager.NameNotFoundException) { true }
-                check(absent) { "Both Jarvys hosts are installed; document access is disabled" }
+            fun requireOnlyHost() {
+                for (host in HOSTS - context.packageName) {
+                    val absent = try { pm.getApplicationInfo(host, 0); false } catch (_: PackageManager.NameNotFoundException) { true }
+                    check(absent) { "Both Jarvys hosts are installed; document access is disabled" }
+                }
             }
+            requireOnlyHost()
+            val before = installedSnapshot(pm, appId)
+            // Reject unknown/unsigned callers before spending I/O on their installed APK.
+            val evidence = FactorySigningIdentity(context).state(appId)
+            verifyEvidence(appId, before.certificate, evidence.lastApkSha256 ?: error("Unknown signed APK"), before.version, evidence)
+            val file = File(before.sourceDir)
+            val originalLength = file.length()
+            require(file.isFile && originalLength in 1..MAX_APK_BYTES)
+            val apk = file.inputStream().use { hashApk(it) }
+            require(file.length() == originalLength) { "Installed APK changed during verification" }
+            require(evidence == FactorySigningIdentity(context).state(appId)) { "Signing evidence changed during verification" }
+            requireOnlyHost()
+            require(before == installedSnapshot(pm, appId)) { "Installed package changed during verification" }
+            return verifyEvidence(appId, before.certificate, apk, before.version, evidence)
+        }
+        private const val MAX_APK_BYTES = 256L * 1024 * 1024
+        private data class InstalledSnapshot(val sourceDir: String, val certificate: String, val version: Long, val uid: Int, val updated: Long)
+        private fun installedSnapshot(pm: PackageManager, appId: String): InstalledSnapshot {
             @Suppress("DEPRECATION") val info = pm.getPackageInfo(appId, if (Build.VERSION.SDK_INT >= 28) PackageManager.GET_SIGNING_CERTIFICATES else PackageManager.GET_SIGNATURES)
             val app = info.applicationInfo ?: error("Missing installed application")
-            require(pm.getPackagesForUid(app.uid)?.toSet() == setOf(appId))
-            require(info.packageName == appId && app.packageName == appId && app.splitSourceDirs.isNullOrEmpty() && info.splitNames.isNullOrEmpty())
+            verifyPackageShape(appId, info, pm.getPackagesForUid(app.uid)?.toSet())
             @Suppress("DEPRECATION") val signatures = if (Build.VERSION.SDK_INT >= 28) info.signingInfo?.apkContentsSigners else info.signatures
             require(signatures?.size == 1)
-            val cert = digest(signatures!![0].toByteArray())
-            val file = File(app.sourceDir); require(file.isFile && file.length() in 1..256L * 1024 * 1024)
-            val md = MessageDigest.getInstance("SHA-256")
-            file.inputStream().use { input -> val buffer = ByteArray(32768); while (true) { val n = input.read(buffer); if (n < 0) break; md.update(buffer, 0, n) } }
-            val apk = md.digest().joinToString("") { "%02x".format(it) }
             @Suppress("DEPRECATION") val version = if (Build.VERSION.SDK_INT >= 28) info.longVersionCode else info.versionCode.toLong()
-            return verifyEvidence(appId, cert, apk, version, FactorySigningIdentity(context).state(appId))
+            return InstalledSnapshot(app.sourceDir, digest(signatures!![0].toByteArray()), version, app.uid, info.lastUpdateTime)
+        }
+        internal fun hashApk(input: java.io.InputStream, limit: Long = MAX_APK_BYTES): String {
+            require(limit in 1..MAX_APK_BYTES)
+            val md = MessageDigest.getInstance("SHA-256")
+            val buffer = ByteArray(32768)
+            var count = 0L
+            while (true) {
+                val n = input.read(buffer)
+                if (n < 0) break
+                require(n > 0 && n <= limit - count) { "Installed APK exceeds the verification limit" }
+                count += n; md.update(buffer, 0, n)
+            }
+            require(count > 0)
+            return md.digest().joinToString("") { "%02x".format(it) }
+        }
+        internal fun verifyPackageShape(appId: String, info: PackageInfo, uidPackages: Set<String>?) {
+            val app = info.applicationInfo ?: error("Missing installed application")
+            @Suppress("DEPRECATION")
+            require(info.sharedUserId == null && uidPackages == setOf(appId)) { "Shared or unknown caller UID" }
+            require(info.packageName == appId && app.packageName == appId && app.splitSourceDirs.isNullOrEmpty() && info.splitNames.isNullOrEmpty())
         }
         internal fun verifyEvidence(appId: String, cert: String, apk: String, version: Long, evidence: FactorySigningIdentity.State): Proof {
             require(evidence.existing && evidence.continuityKnown && evidence.fingerprint == cert && evidence.lastApkSha256 == apk && evidence.lastVersion.toLong() == version)

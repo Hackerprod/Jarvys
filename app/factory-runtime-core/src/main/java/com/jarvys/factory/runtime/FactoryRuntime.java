@@ -443,7 +443,7 @@ public final class FactoryRuntime implements AutoCloseable {
                 releaseDocumentGrant(data); finishDocumentSelection(work); return;
             }
             if (resultCode != Activity.RESULT_OK || data == null) {
-                finishDocumentSelection(work); work.reply.fail("CANCELLED", "Document selection ended without access. An empty file may remain."); return;
+                releaseDocumentGrant(data); finishDocumentSelection(work); work.reply.fail("CANCELLED", "Document selection ended without access. An empty file may remain."); return;
             }
             work.result = data;
             if (documentForeground) acceptDocumentSelection(work);
@@ -539,11 +539,14 @@ public final class FactoryRuntime implements AutoCloseable {
             requireDocumentForeground(); DocumentBrokerIdentity.verify(activity, config.documentBroker);
             if (work.cancelled || !work.reply.current() || !work.nonce.equals(result.getStringExtra("nonce"))
                     || uri == null || !"content".equals(uri.getScheme()) || uri.getAuthority() == null
-                    || uri.getAuthority().isEmpty() || uri.getAuthority().contains("@")
-                    || (result.getFlags() & Intent.FLAG_GRANT_PREFIX_URI_PERMISSION) != 0
+                    || uri.getAuthority().isEmpty() || uri.getAuthority().contains("@") || uri.toString().length() > 8192
+                    || result.getSelector() != null || result.getExtras() == null
+                    || !result.getExtras().keySet().equals(java.util.Collections.singleton("nonce"))
+                    || (result.getFlags() & (Intent.FLAG_GRANT_PREFIX_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)) != 0
                     || (result.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION)) != mode
                     || (result.getClipData() != null && (result.getClipData().getItemCount() != 1
-                    || !uri.equals(result.getClipData().getItemAt(0).getUri())))
+                    || !uri.equals(result.getClipData().getItemAt(0).getUri())
+                    || result.getClipData().getItemAt(0).getIntent() != null || result.getClipData().getItemAt(0).getText() != null))
                     || activity.checkUriPermission(uri, Process.myPid(), Process.myUid(), mode) != PackageManager.PERMISSION_GRANTED)
                 throw new FactoryException("PERMISSION_DENIED", "The verified broker did not return one scoped document grant.");
             work.opening = true;

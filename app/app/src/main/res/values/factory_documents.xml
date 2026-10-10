@@ -1,4 +1,5 @@
 <resources>
+    <string name="factory_documents_checking">Checking the requesting app. No document access has been authorized.</string>
     <string name="factory_documents_settings_summary">Review and close interrupted document access</string>
     <string name="factory_documents_use">Use this document</string>
     <string name="factory_documents_title">Factory documents</string>

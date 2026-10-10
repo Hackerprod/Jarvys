@@ -1,4 +1,5 @@
 <resources>
+    <string name="factory_documents_checking">Comprobando la app solicitante. No se ha autorizado acceso a documentos.</string>
     <string name="factory_documents_settings_summary">Revisar y cerrar el acceso a documentos interrumpido</string>
     <string name="factory_documents_use">Usar este documento</string>
     <string name="factory_documents_title">Documentos de Factory</string>

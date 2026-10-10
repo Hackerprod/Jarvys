@@ -1,4 +1,4 @@
-# Reusable Jarvys APK runtime v1
+# Reusable Jarvys APK runtime: SDK 2, schema/protocol 1
 
 This Android application is a **build-time template**, not a shared-identity production APK. Build its release variant once; the on-device factory retains its compiled DEX/resources and replaces package metadata, `factory_icon.png`, web assets, and per-app configuration. No generated Kotlin/Java is compiled on the phone. There is no bundled production signing key. Every distributed app needs its own stable signing identity managed outside this module.
 
@@ -35,15 +35,17 @@ assets/www/style.css          # optional
 }
 ```
 
+For a documents-enabled installed app, factory-owned configuration also requires `documentBroker: {packageName, certificateSha256}`. The package is exactly `com.jarvys.agent` or `com.jarvys.agent.recoverytest`, and the certificate is a lowercase 64-hex SHA-256. The factory pins its own host at build time; project JSON/JS cannot supply a broker. Configuration rejects this field without `documents`; installed documents startup rejects a missing pin. Preview may parse without a pin but cannot perform documents operations.
+
 The default `src/main/assets/www` is a runnable offline-notes acceptance fixture. Replace those assets for other apps; the native runtime contains no notes-specific behavior. The fixture provides explicit save, reopen, delete, and export flows. It limits notes to 20, each 60 title characters and 600 body characters, to fit native storage quotas. It does not silently fall back to temporary browser memory if native storage fails.
 
-## Shared v1 contract (UX42 F0a-1)
+## Shared contract (UX42 F0a and v67)
 
-`:factory-contract` is a dependency-free Java library shared with the factory. Its immutable CapabilityCatalog contains exactly six implemented capabilities and ten methods. FactoryConfig, BridgeProtocol and explicit FactoryDispatcher dispatch use it, and SDK parity tests compare the actual JS calls with catalog/validator/handler cases. No reflection, new bridge API, schema v2 or SDK v2 is introduced.
+`:factory-contract` is a dependency-free Java library shared with the factory. Its immutable CapabilityCatalog contains seven capabilities and sixteen methods. FactoryConfig, BridgeProtocol and explicit FactoryDispatcher dispatch use it, and SDK parity tests compare the actual JS calls with catalog/validator/handler cases. SDK 2 adds six `documents` methods; schema and bridge protocol remain 1, without reflection.
 
-The factory uses a closed immutable ManifestPlan and a separate read-only AXML auditor to validate the actual compiled tree, typed attributes, resource bindings and backup rules before/after packaging and signing. All 64 selections still request zero Android permissions; only the existing launcher is exported. Every classes*.dex name/hash and all signed payload entries are checked. F0a-2 adds typed construction primitives and a deterministic AXML encoder with explicit parent identity. Additional nodes are host fixtures only: every current catalog contribution stays empty and the production plan rejects nonempty contributions. New selectable nodes/resources/native capabilities and complete F0a remain gated. See [the packaging contract](../../APK_FACTORY.md#closed-capability-and-manifest-contract-ux42-f0a-1).
+The factory uses a closed immutable ManifestPlan and a separate read-only AXML auditor to validate the actual compiled tree, typed attributes, resource bindings and backup rules before/after packaging and signing. All 128 selections request zero Android permissions; only the existing launcher is exported. Every classes*.dex name/hash and all signed payload entries are checked. F0a-2 adds typed construction primitives and a deterministic AXML encoder with explicit parent identity. Only `documents` contributes the exact package queries `com.jarvys.agent` and `com.jarvys.agent.recoverytest`; all other extra construction nodes remain host fixtures. No generated-app components or permissions are added; arbitrary nodes/resources and complete F0a remain gated. See [the packaging contract](../../APK_FACTORY.md#closed-capability-and-manifest-contract-ux42-f0a-1).
 
-F0a-3 additionally verifies the complete resource-table structure and symbol identities, required compiled icon/backup files, and actual public concrete launcher/component-factory DEX class definitions with their superclass and constructor. Immutable inspect evidence identifies the verified bindings. DEX metadata integrity checks do not replace template authentication or Android bytecode/launch acceptance. Signing discloses additions/removals against an anchored last-signed scope snapshot, or explicitly says the baseline is unavailable for older records. No runtime schema/SDK/capability change occurs.
+F0a-3 additionally verifies the complete resource-table structure and symbol identities, required compiled icon/backup files, and actual public concrete launcher/component-factory DEX class definitions with their superclass and constructor. Immutable inspect evidence identifies the verified bindings. DEX metadata integrity checks do not replace template authentication or Android bytecode/launch acceptance. Signing discloses additions/removals against an anchored last-signed scope snapshot, or explicitly says the baseline is unavailable for older records. Those F0a-3 checks do not themselves change runtime capabilities; the additive v67 SDK is described below.
 
 The historical pre-UX35 manifest remains accepted only through the receipt-bound v1 compatibility path. It lacks the newer windowSoftInputMode but does not acquire new capabilities; new builds use the current profile. Updating this shared compiled code changes the template DEX, so already generated apps still need their own same-ID/same-key, higher-version rebuild.
 
@@ -78,6 +80,43 @@ Exports are UTF-8 text, up to 256 KiB (and always subject to the encoded message
 
 Sharing uses a fixed `ACTION_SEND` text/plain system chooser. Clipboard is write-only and requires a visible native confirmation; on Android 13+ it is marked sensitive to suppress the system preview. No arbitrary intent, package, class, component, shell command, file URI, network URL, reflection invocation, or permission grant can be supplied.
 
+## Temporary binary documents (v67)
+
+Every `Jarvys.documents` method below returns a Promise and requires the `documents` capability. Options are exact objects: unknown keys, paths, URIs, invalid types and malformed handles reject. `open` and `create` require a compatible installed build-pinned Jarvys host, human native review, Android picker selection and **Use this document**. The generated app has no document Activity/provider or storage permission. The host's exported broker checks actual caller UID/package, certificate, version, APK SHA-256 and latest signed scope/identity evidence. Signing a newer version disables document access for the previous installed version until the exact new signed APK is installed. Both known host packages installed together blocks access; missing or uncertain evidence fails closed.
+
+| Promise call | Resolved object |
+|---|---|
+| `Jarvys.documents.open({mimeType})` | `{handle,mode:"read",expiresAfterMs:300000,maximumBytes:16777216,providerCommitConfirmed:false}` |
+| `Jarvys.documents.create({filename,mimeType})` | Same fields with `mode:"write"` |
+| `Jarvys.documents.read({handle,offset,length})` | `{data,offset,nextOffset,eof}`; `data` is canonical base64, empty on observed EOF |
+| `Jarvys.documents.write({handle,offset,data})` | `{offset,nextOffset,bytesWritten,providerCommitConfirmed:false}` |
+| `Jarvys.documents.close({handle})` | `{status:"close_requested",providerCommitConfirmed:false}` |
+| `Jarvys.documents.cancel()` or `cancel({})` | `{cancelled:true,rollbackConfirmed:false,pickerMayRemainOpen}` |
+
+Both MIME arguments are required, at most 127 characters, without parameters or lists. `open` also accepts `*/*` or a type wildcard such as `image/*`; `create` requires a concrete type such as `application/octet-stream`. `filename` is a simple 1–120 ASCII-character suggestion matching `[a-zA-Z0-9][a-zA-Z0-9 _.-]{0,119}`, without `..` or a final dot. It is not a path. No filename or provider URI is returned. Treat the random 64-lowercase-hex handle as opaque authority, never as a durable ID.
+
+Offsets are integers, start at zero and must equal the last `nextOffset`; no seeking, overlap, parallel I/O or mode changes. `length` is 1–32768 bytes. `data` is nonempty canonical padded standard base64 for at most 32768 decoded bytes: no whitespace, URL-safe alphabet, data-URL prefix or nonzero unused bits. Handle quota is 16 MiB; page/session quota is 32 MiB cumulative across handles, including conservatively charged failed/cancelled I/O. Requests must fit the remaining quota. A short positive read is not EOF: only `eof:true` confirms EOF. At exact quota do not probe one more byte; close with EOF unconfirmed. Four admission slots include outstanding provider opening/cleanup, not a guarantee of four simultaneously usable picker results. Handles expire after five minutes and are never persisted; cancellation/close does not restore quota.
+
+Minimal external-script usage (catch rejections in the UI):
+
+```js
+const {handle} = await Jarvys.documents.create({filename:"sample.bin",mimeType:"application/octet-stream"});
+try {
+  const part = await Jarvys.documents.write({handle,offset:0,data:"AAEC"});
+  // The next write must use part.nextOffset. This is not a durable-save receipt.
+} finally {
+  await Jarvys.documents.close({handle});
+}
+```
+
+For reads, call `open({mimeType:"*/*"})`, then `read({handle,offset:0,length:32768})`; consume `data`, advance to `nextOffset` and stop at `eof` or the remaining quota, then close. Shrink each request to remaining handle/session budget. Keep handles in current-page memory only. Installed selection is effectively one at a time: opening another document revokes/closes the previous one and may reject `BUSY` across runtime instances until provider cleanup completes. Backgrounding, reset/navigation, rotation and destruction revoke existing authority; no restart can restore it. `cancel()` calls native cancelAll, invalidates current work and retains cumulative quota. A picker may remain open; cancellation does not prove its dismissal.
+
+Handle errors include `INVALID_HANDLE` (missing/expired/revoked), `WRONG_MODE`, `HANDLE_BUSY`, `INVALID_OFFSET`, `INVALID_CHUNK`, `DOCUMENT_QUOTA`, `HANDLE_LIMIT`, `SESSION_REVOKED` and `DOCUMENT_IO`. Bridge validation may instead reject malformed options as `INVALID_ARGUMENT` or `INVALID_REQUEST`. Also handle `CAPABILITY_DENIED`, `UNAVAILABLE`, `BUSY`, `CANCELLED`, `PERMISSION_DENIED`, `RATE_LIMITED`, `TIMEOUT` and `NATIVE_ERROR`; never retry writes blindly. Preview always rejects documents with `UNAVAILABLE`, without a fake handle or real picker.
+
+`close_requested` schedules best-effort provider close; it does not prove flush, durable commit, cloud upload or rollback. A started write may partially finish after cancellation. Create can leave empty/partial files even when no handle is granted. A selected cloud provider can use its own network despite the generated app's zero-permission offline WebView. JavaScript never receives/chooses a path or URI; there are no persistent grants. Jarvys automation is blocked throughout the human interaction. **Settings → Factory documents** handles interrupted-picker recovery: the human closes the old picker/task and acknowledges closure. This is explicitly user-reported, not OS-verified; the old outcome stays unknown and no authority is recovered.
+
+This slice does not implement FileProvider binary sharing or the remaining F1/F2/F3 roadmap. Current v67 test artifacts and device acceptance remain pending until independently recorded; synthetic tests cannot establish picker/provider, lifecycle or physical-device behavior.
+
 ## Security boundary
 
 - `WebViewCompat.addWebMessageListener` registers only exact origin `https://app.jarvys.invalid`, with no wildcard.
@@ -89,7 +128,7 @@ Sharing uses a fixed `ACTION_SEND` text/plain system chooser. Clipboard is write
 - File/content access, universal file access, mixed content, cookies, DOM storage, network loads, JavaScript popups, downloads, file uploads, browser permissions, geolocation, and SSL-error bypass are disabled.
 - CSP blocks remote scripts, inline JavaScript, eval, connections, frames, workers, plugins, forms, and base-URL changes. Only packaged assets can load. Styles may be inline; image `data:` sources are permitted.
 - Native pending queue at most 16; incoming bridge limited to 80 calls per 10 seconds; all file persistence runs on a single bounded background executor.
-- No location, camera, microphone, notifications, contacts, alarms, Bluetooth, network, filesystem reads, arbitrary intents, or runtime permission grants in v1. Adding these requires a separately reviewed reusable-runtime release, manifest changes, typed policy, denial-path tests, and explicit capability declaration.
+- No location, camera, microphone, notifications, contacts, alarms, Bluetooth, network, filesystem reads, arbitrary intents, or runtime permission grants. Documents permits only native-selected temporary streams, never arbitrary filesystem reads. Adding these requires a separately reviewed reusable-runtime release, manifest changes, typed policy, denial-path tests, and explicit capability declaration.
 
 ## Verification
 
@@ -107,7 +146,7 @@ Also validate real WebView fields/scroll with repeated keyboard open/close, port
 
 ## Shared controller and preview adapters (F0c)
 
-The generated launcher delegates to `FactoryRuntime` in the resource-ID-independent `:factory-runtime-core` library. Installed startup still parses configuration against `Activity.getPackageName()`. The core owns WebView security setup, asset serving, strict bridge validation, dispatch, queues and page-generation reply cancellation. `FactoryDispatcher` shares native method behavior with the bounded synthetic test harness; installed effects are explicit Android adapters, while preview effects return declared simulation metadata without performing them. No new capability or schema/SDK version is enabled.
+The generated launcher delegates to `FactoryRuntime` in the resource-ID-independent `:factory-runtime-core` library. Installed startup still parses configuration against `Activity.getPackageName()`. The core owns WebView security setup, asset serving, strict bridge validation, dispatch, queues and page-generation reply cancellation. `FactoryDispatcher` shares native method behavior with the bounded synthetic test harness; installed effects are explicit Android adapters, while preview effects return declared simulation metadata without performing them. The v67 documents methods explicitly reject `UNAVAILABLE` in preview, with no fake handle or real picker; schema/protocol remain 1.
 
 A separate private Jarvys Activity uses verified immutable build assets and an isolated native RAM backend. Its explicit preview metadata reports the real host package separately from declared appId. A provider-specific isolated profile is mandatory; there is no default-profile fallback. The controller does not change process-global cookies or debugging in preview mode. Profile cleanup is best effort and profiles may be disk-backed. Native UI/host tests do not establish actual provider cleanup, installed UID isolation, hardware, device rendering or absence of traffic.
 

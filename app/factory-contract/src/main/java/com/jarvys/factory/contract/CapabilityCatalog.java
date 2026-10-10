@@ -9,7 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/** The implemented v1 ceiling. Pure Java data, shared by factory and runtime; never reflection. */
+/** Implemented schema-v1 capabilities. Pure Java data shared by factory and runtime; never reflection. */
 public final class CapabilityCatalog {
     private CapabilityCatalog() {}
     public static final int SCHEMA_VERSION = 1;
@@ -33,7 +33,7 @@ public final class CapabilityCatalog {
         public final String name;
         public final int minimumApi = MIN_APP_API;
         public final List<Method> methods;
-        // v1 has no per-capability additions. The closed base launcher is in ManifestPlan.
+        // Only documents contributes the exact reviewed host-package visibility queries.
         public final List<ManifestNodes.Element> manifestNodes;
         public final Set<String> permissions = Collections.emptySet();
         public final Set<String> features = Collections.emptySet();
