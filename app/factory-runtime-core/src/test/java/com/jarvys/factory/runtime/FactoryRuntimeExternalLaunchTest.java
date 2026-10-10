@@ -23,8 +23,8 @@ import static org.junit.Assert.*;
 @LooperMode(LooperMode.Mode.PAUSED)
 public class FactoryRuntimeExternalLaunchTest {
     public static class Screen extends Activity {
-        Intent launched; boolean reject;
-        @Override public boolean hasWindowFocus(){return true;}
+        Intent launched; boolean reject; boolean focused=true;
+        @Override public boolean hasWindowFocus(){return focused;}
         @Override public void startActivityForResult(Intent intent,int request){assertEquals(47,request);if(reject)throw new android.content.ActivityNotFoundException();launched=intent;}
     }
     private static class Host implements FactoryRuntime.Host {
@@ -196,4 +196,31 @@ public class FactoryRuntimeExternalLaunchTest {
         Response response=open();idle();runtime.onActivityResult(47,Activity.RESULT_OK,result().putExtra("launchRequested",false));
         assertFalse(response.value.getJSONObject("result").getBoolean("launchRequested"));assertFalse(response.value.getJSONObject("result").getBoolean("actionConfirmed"));
     }
+    @Test public void coordinatesUseNumericWireAndMapUriNeverOriginatedFromJavascript()throws Exception{
+        Response reply=request("maps.open",new JSONObject().put("latitude",-0.0).put("longitude",1e-7));idle();
+        assertEquals("maps.open",screen.launched.getStringExtra("method"));
+        JSONObject args=new JSONObject(screen.launched.getStringExtra("args"));
+        assertTrue(args.get("latitude") instanceof Number);assertTrue(args.get("longitude") instanceof Number);
+        assertEquals("geo:0,0.0000001",ExternalLaunchRequest.parse("maps.open",screen.launched.getStringExtra("args")).uri);
+        assertNull(screen.launched.getData());assertFalse(screen.launched.hasExtra("uri"));
+        runtime.onActivityResult(47,Activity.RESULT_OK,result());assertEquals(1,reply.count);
+    }
+    @Test public void malformedTypedRequestsAndBackgroundCannotGainNativeOwnership()throws Exception{
+        for(JSONObject args:new JSONObject[]{new JSONObject().put("query","q").put("latitude",0),new JSONObject().put("latitude","1").put("longitude",2),new JSONObject().put("query","\u202equery"),new JSONObject().put("query","q").put("uri","geo:1,2")}) {
+            assertEquals("INVALID_ARGUMENT",request("maps.open",args).error());assertNull(work());assertNull(screen.launched);
+        }
+        runtime.onPause();assertEquals("UNAVAILABLE",open().error());assertNull(work());runtime.onResume();
+        screen.focused=false;assertEquals("BUSY",open().error());assertNull(work());screen.focused=true;
+        setCapabilities("[\"phone\"]");
+        for(Object number:new Object[]{123,"*123#","+1 23","tel:123"}) {
+            assertEquals("INVALID_ARGUMENT",request("phone.dial",new JSONObject().put("number",number)).error());assertNull(work());assertNull(screen.launched);
+        }
+    }
+    @Test public void browserResultProtocolCannotSettleTypedExternalRequestAsSuccessful()throws Exception{
+        Response reply=open();idle();
+        Intent browserResult=new Intent().putExtra("nonce",screen.launched.getStringExtra("nonce")).putExtra("launchRequested",true).putExtra("pageLoadConfirmed",false);
+        runtime.onActivityResult(47,Activity.RESULT_OK,browserResult);
+        assertEquals("EXTERNAL_UNAVAILABLE",reply.error());assertEquals(1,reply.count);
+    }
+
 }

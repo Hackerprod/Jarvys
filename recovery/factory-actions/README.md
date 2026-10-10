@@ -39,6 +39,13 @@ JSONObject after the validator had copied it. The test now mutates the actual re
 production validation was not weakened. That run recorded zero guarded external HTTP(S) attempts.
 The failing evidence is retained on the validation host, not published here.
 
+Checkpoint `865b119` is backed up with normal history. Focused host validation passed 224 cases,
+including 96 new native external-action cases; the single guarded worker blocked one external
+HTTP(S) attempt, whose cause is not attributed. Corrected core/runtime validation passed 462+72
+cases with zero failures/errors/skips and zero blocked external attempts across two guarded workers.
+SDK passed 18 cases. Five actual-Application startup tests are included in the 1,066 frozen app inputs and await the full aggregate.
+None of these focused results substitutes for final aggregate, lint, APK audits or physical acceptance.
+
 Full contract and current official sources: [APK_FACTORY](../../app/APK_FACTORY.md#typed-maps-and-dialer-launch-ux42-f1-v72).
 Preserve v63–v71. Rich editors, TTS/voice and remaining F1 work stay pending; F2/F3 remain closed,
 UX34 retains its gates and UX43 remains last.
