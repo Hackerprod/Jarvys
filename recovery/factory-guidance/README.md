@@ -1,9 +1,10 @@
 # Factory guidance maintenance v78
 
 Version 78 / `1.2.71-FACTORY-GUIDANCE` passed final host validation and independent
-source/three-APK audit. Signing and native delivery remain pending.
+source/three-APK audit. Signed native ARM64 test-APK delivery was accepted on
+2026-10-10 at 19:14:09 UTC.
 It adds no Factory runtime capability: v77 remains 18 capabilities, 36 methods, SDK 2/schema 1.
-No signed delivery, installation, physical-device or real-model acceptance is claimed yet.
+Accepted delivery does not prove download, installation, physical-device or real-model behavior.
 
 ## Contract
 
@@ -75,3 +76,17 @@ FullRelease unsigned: 27,530,502 bytes, SHA-256
 This receipt is not a signed installable delivery or evidence of installation. Real-model
 behavior, physical Android acceptance and earlier device/update/data-retention gates remain
 unverified. TTS/voice, remaining F1/F2/F3, UX34/UX44/UX43 status is unchanged.
+
+## Signed native delivery
+
+The native send of `Jarvys-Factory-guidance-full-v78-arm64-test.apk` was accepted on
+2026-10-10 at 19:14:09 UTC. It contains 19,327,392 bytes, SHA-256
+`08bd8461b9a72e7d723efded22b53d6079e144fee6caa40b524c7425cb0712df`.
+The existing approved D7 test identity signs APK v2/v3. CRC and 16 KiB ZIP alignment pass;
+247 retained entries match the approved unsigned APK, with only nine non-ARM64 native
+libraries omitted and signing metadata added. The manifest is unchanged by signing. Independent verification reproduced the signature,
+payload and alignment checks and fetched the owned Library file through the supported flow;
+its bytes are identical to the signed artifact.
+ZIP alignment alone does not establish ELF 16 KiB-page compatibility. No installation or
+physical acceptance was performed. The host/unsigned receipt above describes the earlier
+validation artifact; it does not contradict this later signed delivery.
