@@ -1,6 +1,6 @@
 # Pendientes de Jarvys
 
-Actualizado: 2026-10-09 (UTC).
+Actualizado: 2026-10-10 (UTC).
 
 Este archivo mantiene la cola vigente y el estado de cada etapa. Debe actualizarse con cada avance y publicarse en GitHub junto con los cambios. No sustituye las comprobaciones de código, pruebas y APK.
 
@@ -8,7 +8,7 @@ Modo de ejecución: continuar la cola completa. Al cerrar cada pendiente o corre
 
 ## Estado actual
 
-- **v63 / corrección en curso, sin entregar:** implementados cierre incremental y validación terminal de respuestas Codex, rechazo de herramientas parciales y fases visibles de Crew con último evento/tiempo transcurrido. Se conservan razonamientos largos, STOP y límites de conexión/inactividad, sin nuevo plazo total ni replay. Las regresiones del protocolo pasan; suites completas, lint y revisión de APK siguen pendientes. La entrega queda retenida mientras se revisa un reporte de posible mezcla de contexto entre sesiones, aún sin causa confirmada. La pausa de ejecución observada continuó después y no demuestra un bloqueo. F0c permanece preservado y pausado para retomar en v64 o posterior.
+- **v63 / corrección validada y entregada:** cierre incremental y validación terminal de Codex; respuestas fallidas, incompletas o malformadas no ejecutan herramientas parciales. Crew muestra espera del modelo, compactación y tiempo desde la última actividad, con protección de callbacks antiguos. Se conservan razonamientos largos, STOP y límites de conexión/inactividad, sin nuevo plazo total ni replay. Pruebas: 103 focalizadas, 2.723 Full/2.341 Play/65+65 runtime y 10 SDK; tras una anotación de lint exclusiva del reloj, 31+31 focalizadas frescas y equivalencia de todos los contenidos de APK, recursos de pruebas y clases comprobada. Lint sin incidencias nuevas. Tres APK sin firma construidos y revisión independiente final aprobada. Entrega nativa del APK ARM64 de pruebas con firma D7 aceptada el 10 de octubre a las 00:29:59 UTC: 18.806.190 bytes; firma v2/v3, CRC, alineación de 16 KiB y contenido retenido comprobados. La instalación y aceptación físicas siguen pendientes. No se atribuye la pausa observada al protocolo ni se considera resuelto el arrastre semántico de contexto. Siguiente prioridad: MEMORYSCOPE en v64; F0c permanece preservado para v65 o posterior.
 - **UX43 / Jarvys central y espacios duraderos:** idea añadida como último pendiente, después de UX42; identidad independiente, recuperación, comunicación durable, memoria por espacio, vistas de consulta y proactividad por etapas. Solo registro documental, implementación no iniciada.
 - **UX42 / v62 enviada:** F0b incorpora identidades recuperables nuevas, respaldo cifrado e importación mediante interacción explícita; conserva las claves antiguas no exportables. Gates host: 197 focalizadas, 2.690 Full/2.308 Play/65+65 runtime, lint sin diferencias y revisión independiente aprobada. Envío nativo del APK ARM64 con firma D7 de pruebas aceptado el 9 de octubre a las 23:22:12 UTC. Restauración e instalación físicas pendientes; F0a condicionado a futuras capacidades, F0c/F1–F3 y aceptación física siguen abiertos. No es Runtime2 completo.
 - **v31 completada:** reacciones locales del modelo, Markdown del usuario y lista de chats sin subtítulos restaurados. Pruebas: 994 Full y 910 Play. APK con identidad original entregado.
