@@ -11,6 +11,7 @@ import android.os.CancellationSignal;
 import android.os.Handler;
 import android.os.SystemClock;
 import androidx.annotation.RequiresApi;
+import androidx.annotation.RequiresPermission;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import org.json.JSONObject;
@@ -187,11 +188,15 @@ public final class BiometricAuthentication {
     private static final class Api30Driver implements Driver {
         final Activity activity;final Handler handler;CancellationSignal signal;
         Api30Driver(Activity activity,Handler handler){this.activity=activity;this.handler=handler;}
+        // This library also ships in zero-permission templates/preview. The permission is
+        // required only for the selected installed profile; the guard returns before any API call.
+        @RequiresPermission(value=Manifest.permission.USE_BIOMETRIC,conditional=true)
         public Availability status() {
             if(activity.checkSelfPermission(Manifest.permission.USE_BIOMETRIC)!=PackageManager.PERMISSION_GRANTED)return Availability.UNAVAILABLE;
             BiometricManager manager=(BiometricManager)activity.getSystemService(Context.BIOMETRIC_SERVICE);
             return manager!=null&&manager.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG)==BiometricManager.BIOMETRIC_SUCCESS?Availability.READY:Availability.UNAVAILABLE;
         }
+        @RequiresPermission(value=Manifest.permission.USE_BIOMETRIC,conditional=true)
         public void start(Request request,Events events) {
             if(activity.checkSelfPermission(Manifest.permission.USE_BIOMETRIC)!=PackageManager.PERMISSION_GRANTED||status()!=Availability.READY)
                 throw new IllegalStateException("Biometrics unavailable");
