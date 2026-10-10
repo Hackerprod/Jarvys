@@ -23,11 +23,69 @@ import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.time.Duration
 
-/** Native bitmap decoding and synthetic one-use pipes only; never opens real media or a camera. */
+/** Native bitmap decoding and explicitly synthetic syscall pipes. Robolectric does not implement
+ * Os.poll/read/fcntlInt, so the syscall boundary is simulated; production worker loops and limits
+ * run unchanged. This does not claim real-kernel pipe or real-camera validation. */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34], application = Application::class)
+@Config(sdk = [34], application = Application::class, shadows = [FactoryPhotoCaptureTest.PipeDescriptor::class, FactoryPhotoCaptureTest.PipeOs::class])
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class FactoryPhotoCaptureTest {
+    class PipeState {
+        var bytes = ByteArray(0)
+        var offset = 0
+        @Volatile var eof = false
+        @Volatile var readClosed = false
+        @Volatile var reliableError = false
+        @Volatile var pollEntered: java.util.concurrent.CountDownLatch? = null
+        @Volatile var pollRelease: java.util.concurrent.CountDownLatch? = null
+    }
+    @org.robolectric.annotation.Implements(ParcelFileDescriptor::class)
+    class PipeDescriptor {
+        lateinit var state: PipeState
+        lateinit var descriptor: java.io.FileDescriptor
+        var reading = false
+        @org.robolectric.annotation.Implementation fun getFileDescriptor() = descriptor
+        @org.robolectric.annotation.Implementation fun close() { if (reading) state.readClosed = true else state.eof = true }
+        @org.robolectric.annotation.Implementation fun checkError() { check(!state.reliableError) { "Synthetic reliable pipe error" } }
+        companion object {
+            val descriptors = java.util.Collections.synchronizedMap(java.util.IdentityHashMap<java.io.FileDescriptor, PipeState>())
+            @JvmStatic @org.robolectric.annotation.Implementation fun createReliablePipe(): Array<ParcelFileDescriptor> {
+                val shared = PipeState()
+                return Array(2) { index ->
+                    org.robolectric.shadow.api.Shadow.newInstanceOf(ParcelFileDescriptor::class.java).also { pfd ->
+                        val shadow = org.robolectric.shadow.api.Shadow.extract<PipeDescriptor>(pfd)
+                        shadow.state = shared; shadow.reading = index == 0; shadow.descriptor = java.io.FileDescriptor()
+                        descriptors[shadow.descriptor] = shared
+                    }
+                }
+            }
+            fun supply(pfd: ParcelFileDescriptor, bytes: ByteArray) {
+                val state = org.robolectric.shadow.api.Shadow.extract<PipeDescriptor>(pfd).state
+                synchronized(state) { state.bytes = bytes.copyOf(); state.offset = 0 }
+            }
+        }
+    }
+    @org.robolectric.annotation.Implements(android.system.Os::class)
+    class PipeOs {
+        companion object {
+            @JvmStatic @org.robolectric.annotation.Implementation fun fcntlInt(fd: java.io.FileDescriptor, cmd: Int, arg: Int) = 0
+            @JvmStatic @org.robolectric.annotation.Implementation fun poll(fds: Array<android.system.StructPollfd>, timeout: Int): Int {
+                val state = PipeDescriptor.descriptors[fds.single().fd] ?: error("Unknown synthetic descriptor")
+                state.pollEntered?.countDown(); state.pollRelease?.let { check(it.await(5, java.util.concurrent.TimeUnit.SECONDS)) }
+                synchronized(state) { if (state.offset < state.bytes.size || state.eof) return 1 }
+                Thread.sleep(minOf(timeout.toLong(), 10L)); return 0
+            }
+            @JvmStatic @org.robolectric.annotation.Implementation fun read(fd: java.io.FileDescriptor, bytes: ByteArray, offset: Int, count: Int): Int {
+                val state = PipeDescriptor.descriptors[fd] ?: error("Unknown synthetic descriptor")
+                return synchronized(state) {
+                    check(!state.readClosed)
+                    val size = minOf(count, state.bytes.size - state.offset)
+                    if (size == 0 && !state.eof) throw android.system.ErrnoException("read", android.system.OsConstants.EAGAIN)
+                    state.bytes.copyInto(bytes, offset, state.offset, state.offset + size); state.offset += size; size
+                }
+            }
+        }
+    }
     private val context: Context get() = ApplicationProvider.getApplicationContext()
     private var capture: FactoryPhotoCapture.Capture? = null
     private val descriptors = mutableListOf<ParcelFileDescriptor>()
@@ -36,6 +94,7 @@ class FactoryPhotoCaptureTest {
     @After fun cleanup() {
         descriptors.forEach { runCatching { it.close() } }
         capture?.let { FactoryPhotoCapture.cancel(it); if (it.opened) await(it) }
+        PipeDescriptor.descriptors.clear()
     }
     private fun reserve(verify: () -> Boolean = { true }): FactoryPhotoCapture.Capture =
         FactoryPhotoCapture.reserve(context, "example.camera", Process.myUid(), verify).also { capture = it }
@@ -75,14 +134,14 @@ class FactoryPhotoCaptureTest {
     }
     @Test fun cleanEofCannotCreateAnImageFromEmptyOrCorruptCameraBytes() {
         val value = reserve(); val write = FactoryPhotoCapture.open(value.uri, "w", value.uid)
-        ParcelFileDescriptor.AutoCloseOutputStream(write).use { it.write(byteArrayOf(1, 2, 3)) }
+        PipeDescriptor.supply(write, byteArrayOf(1, 2, 3)); write.close()
         await(value); assertTrue(value.failure); rejects { FactoryPhotoCapture.take(value) }
     }
     @Test fun cameraPipeProducesExactValidatedBytesOnlyAfterEofAndConsumesOnce() {
         val bytes = image(); val value = reserve()
         val write = FactoryPhotoCapture.open(value.uri, "w", value.uid)
         rejects { FactoryPhotoCapture.take(value) }
-        ParcelFileDescriptor.AutoCloseOutputStream(write).use { it.write(bytes) }
+        PipeDescriptor.supply(write, bytes); write.close()
         await(value)
         val result = FactoryPhotoCapture.take(value)
         assertArrayEquals(bytes, result.bytes); assertEquals("image/png", result.mimeType)
@@ -92,18 +151,9 @@ class FactoryPhotoCaptureTest {
     @Test fun oversizedCameraPipeTerminatesWithoutPublishingPartialBytes() {
         val value = reserve(); val write = FactoryPhotoCapture.open(value.uri, "w", value.uid)
         descriptors += write
-        val writer = java.util.concurrent.Executors.newSingleThreadExecutor()
-        try {
-            val task = writer.submit { runCatching {
-                ParcelFileDescriptor.AutoCloseOutputStream(write).use { output ->
-                    val chunk = ByteArray(32 * 1024)
-                    repeat(FactoryPhotoCapture.MAX_BYTES / chunk.size + 1) { output.write(chunk) }
-                }
-            }; Unit }
-            task.get(10, java.util.concurrent.TimeUnit.SECONDS)
-            await(value); assertTrue(value.failure); assertNull(value.image)
-            rejects { FactoryPhotoCapture.take(value) }
-        } finally { runCatching { write.close() }; writer.shutdownNow() }
+        PipeDescriptor.supply(write, ByteArray(FactoryPhotoCapture.MAX_BYTES + 1)); write.close()
+        await(value); assertTrue(value.failure); assertNull(value.image)
+        rejects { FactoryPhotoCapture.take(value) }
     }
     @Test fun providerRejectsExportedWrongAuthorityAndMissingGrantConfiguration() {
         for (which in 0..2) {
@@ -156,4 +206,63 @@ class FactoryPhotoCaptureTest {
         assertEquals(2, calls)
         rejects { FactoryPhotoCapture.read(object : InputStream() { override fun read() = 0; override fun read(b: ByteArray, o: Int, n: Int) = 0 }) {} }
     }
+    @Test fun pendingCameraKeepsAdmissionUntilWorkerFinishesThenReleasesExactlyOnce() {
+        val pending = com.jarvys.factory.runtime.FileShareTransfer.reserve()
+        val value = reserve(); descriptors += FactoryPhotoCapture.open(value.uri, "w", value.uid)
+        val finished = java.util.concurrent.CountDownLatch(1)
+        val calls = java.util.concurrent.atomic.AtomicInteger()
+        FactoryPhotoCapture.afterCompletion(value) { calls.incrementAndGet(); pending.close(); finished.countDown() }
+        assertEquals(0, calls.get())
+        rejects { com.jarvys.factory.runtime.FileShareTransfer.reserve() }
+        FactoryPhotoCapture.cancel(value)
+        assertTrue(finished.await(5, java.util.concurrent.TimeUnit.SECONDS))
+        assertTrue(value.completed); assertEquals(1, calls.get())
+        com.jarvys.factory.runtime.FileShareTransfer.reserve().close()
+    }
+    @Test fun reliablePipeFailureNeverPublishesEvenValidImageBytes() {
+        val value = reserve(); val write = FactoryPhotoCapture.open(value.uri, "w", value.uid)
+        val state = org.robolectric.shadow.api.Shadow.extract<PipeDescriptor>(write).state
+        state.reliableError = true; PipeDescriptor.supply(write, image()); write.close()
+        await(value); assertTrue(value.failure); assertNull(value.image)
+        rejects { FactoryPhotoCapture.take(value) }
+    }
+    @Test fun idleDescriptorReadStopsOnForegroundRevocationWithoutWaitingForEof() {
+        val pipe = ParcelFileDescriptor.createReliablePipe(); descriptors.addAll(pipe)
+        val foreground = java.util.concurrent.atomic.AtomicBoolean(true)
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
+        try {
+            val result = executor.submit<FactoryPhotoCapture.Image> {
+                FactoryPhotoCapture.readDescriptor(pipe[0], SystemClock.elapsedRealtime() + FactoryPhotoCapture.LIFETIME) {
+                    entered.countDown(); check(foreground.get()) { "Foreground revoked" }
+                }
+            }
+            assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS)); foreground.set(false)
+            try { result.get(5, java.util.concurrent.TimeUnit.SECONDS); fail("Revoked read succeeded") }
+            catch (failure: java.util.concurrent.ExecutionException) { assertEquals("Foreground revoked", failure.cause?.message) }
+        } finally { executor.shutdownNow() }
+    }
+    @Test fun idleCameraExpiresAndNeverMakesBytesAvailable() {
+        val value = reserve(); descriptors += FactoryPhotoCapture.open(value.uri, "w", value.uid)
+        ShadowSystemClock.advanceBy(Duration.ofMillis(FactoryPhotoCapture.LIFETIME))
+        await(value); assertTrue(value.failure); rejects { FactoryPhotoCapture.take(value) }
+    }
+
+    @Test fun pickerDescriptorReadValidatesExactBytesAndExpiredDeadlineBeforeRead() {
+        val bytes = image(); val pipe = ParcelFileDescriptor.createReliablePipe(); descriptors.addAll(pipe)
+        PipeDescriptor.supply(pipe[1], bytes); pipe[1].close()
+        var checks = 0
+        val selected = FactoryPhotoCapture.readDescriptor(pipe[0], SystemClock.elapsedRealtime() + FactoryPhotoCapture.LIFETIME) { checks++ }
+        assertArrayEquals(bytes, selected.bytes); assertTrue(checks >= 3)
+        rejects { FactoryPhotoCapture.readDescriptor(pipe[0], SystemClock.elapsedRealtime()) {} }
+    }
+
+    @Test fun pickerDescriptorRejectsByteLimitPlusOneWithoutReadingBeyondSentinel() {
+        val pipe = ParcelFileDescriptor.createReliablePipe(); descriptors.addAll(pipe)
+        val state = org.robolectric.shadow.api.Shadow.extract<PipeDescriptor>(pipe[1]).state
+        PipeDescriptor.supply(pipe[1], ByteArray(FactoryPhotoCapture.MAX_BYTES + 100)); pipe[1].close()
+        rejects { FactoryPhotoCapture.readDescriptor(pipe[0], SystemClock.elapsedRealtime() + FactoryPhotoCapture.LIFETIME) {} }
+        assertEquals(FactoryPhotoCapture.MAX_BYTES + 1, state.offset)
+    }
+
 }

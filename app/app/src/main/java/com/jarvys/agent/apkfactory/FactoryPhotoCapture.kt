@@ -25,7 +25,7 @@ internal object FactoryPhotoCapture {
     data class Image(val bytes: ByteArray, val mimeType: String, val width: Int, val height: Int)
     class Capture internal constructor(val uri: Uri, val uid: Int, val packageName: String, val deadline: Long,
                                        internal val verify: () -> Boolean) {
-        internal var opened = false
+        @Volatile internal var opened = false
         @Volatile internal var cancelled = false
         @Volatile internal var completed = false
         internal var image: Image? = null

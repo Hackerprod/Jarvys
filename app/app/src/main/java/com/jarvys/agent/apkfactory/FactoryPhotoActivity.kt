@@ -128,7 +128,7 @@ open class FactoryPhotoActivity : ComponentActivity() {
         working = true; render()
         execute {
             val outcome = runCatching {
-                val pending = FileShareTransfer.reserve(); admission = pending
+                val pending = FileShareTransfer.reserve(); FactoryInteractionAdmission.restore(pending); admission = pending
                 selectionDeadline = SystemClock.elapsedRealtime() + FactoryPhotoCapture.LIFETIME
                 expiryHandler.postDelayed(expireSelection, FactoryPhotoCapture.LIFETIME)
                 coordinator.launch(owner) { requireHuman(approved) }
@@ -196,6 +196,7 @@ open class FactoryPhotoActivity : ComponentActivity() {
                 allowed()
                 if (request?.operation == "capture") {
                     val photo = capture ?: error("No camera output")
+                    check(photo.opened) { "Camera did not open its streaming output" }
                     while (!photo.completed) { allowed(); check(SystemClock.elapsedRealtime() < photo.deadline); Thread.sleep(50) }
                     allowed(); FactoryPhotoCapture.take(photo)
                 } else {
@@ -221,9 +222,12 @@ open class FactoryPhotoActivity : ComponentActivity() {
         val value = request!!; val approved = generation; working = true; render()
         execute {
             var transfer: FileShareTransfer? = null
+            val pending = admission
+            var transferred = false
             val outcome = runCatching {
                 val verifier = coordinator.transferVerifier(owner) { requireHuman(approved) }
-                transfer = admission!!.complete(image.bytes, value.nonce, verifier)
+                transfer = pending!!.complete(image.bytes, value.nonce, verifier)
+                transferred = true
                 selected = null; admission = null; admissionCapture = null
                 coordinator.close(owner, true) { requireHuman(approved) }
                 val endpoint = transfer!!
@@ -233,6 +237,7 @@ open class FactoryPhotoActivity : ComponentActivity() {
                     putInt("width", image.width); putInt("height", image.height)
                 })
             }
+            if (transferred && pending != null) FactoryInteractionAdmission.release(pending)
             runOnUiThread {
                 working = false
                 outcome.onSuccess { result ->
@@ -244,6 +249,10 @@ open class FactoryPhotoActivity : ComponentActivity() {
     }
     private fun closeNative() {
         requireHuman(); val owner = token
+        if (working) {
+            generation++; cancelInput(); cleanup(); owner?.let { runCatching { coordinator.revoke(it) } }
+            token = null; rejected = true; render(); return
+        }
         if (externalOwned && owner != null) {
             runCatching { coordinator.cancelPicker(owner) }; cleanup(); finishActivity(EXTERNAL); render(); return
         }
@@ -263,7 +272,7 @@ open class FactoryPhotoActivity : ComponentActivity() {
         val pending = if (!working) admission.also { admission = null } else null
         val camera = admissionCapture
         releaseCamera(); releaseInput()
-        if (pending != null) { admissionCapture = null; FactoryPhotoCapture.afterCompletion(camera) { pending.close() } }
+        if (pending != null) { admissionCapture = null; FactoryPhotoCapture.afterCompletion(camera) { try { pending.close() } finally { FactoryInteractionAdmission.release(pending) } } }
     }
     private fun render() {
         if (!::status.isInitialized) return
@@ -280,7 +289,7 @@ open class FactoryPhotoActivity : ComponentActivity() {
         }
         choose.isEnabled = humanReady() && !working && !rejected && token != null && coordinator.status() == "review"
         use.isEnabled = humanReady() && !working && !rejected && selected != null
-        close.isEnabled = humanReady() && !working
+        close.isEnabled = humanReady()
         recover.visibility = if (recovery) View.VISIBLE else View.GONE
         recover.isEnabled = humanReady() && !working && recovery
     }
@@ -308,7 +317,7 @@ open class FactoryPhotoActivity : ComponentActivity() {
         private const val EXTERNAL = 6901
         private val CANCELLATION = ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS, SynchronousQueue<Runnable>()).apply { allowCoreThreadTimeOut(true) }
         private val WORKER = ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS, SynchronousQueue<Runnable>()).apply { allowCoreThreadTimeOut(true) }
-        @Suppress("DEPRECATION") private fun android.content.pm.PackageInfo.longVersionCompat() = if (android.os.Build.VERSION.SDK_INT >= 28) longVersionCode else versionCode.toLong()
+        private fun android.content.pm.PackageInfo.longVersionCompat() = if (android.os.Build.VERSION.SDK_INT >= 28) longVersionCode else versionCode.toLong()
         internal fun photoPicker(context: Context): Intent {
             if (android.os.Build.VERSION.SDK_INT >= 33) {
                 val picker = runCatching { FactoryDocumentActivity.trustedPicker(context, Intent(MediaStore.ACTION_PICK_IMAGES).setType("image/*")) }.getOrNull()

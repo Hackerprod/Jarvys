@@ -18,6 +18,20 @@ read handles. Preview is unavailable. URI/path/Binder authority is never exposed
 Physical camera/picker/Binder interoperability, grants, installation and data preservation
 remain unverified. Other F1/F2/F3 families, gated UX34 phases and UX43-last remain unchanged.
 
-Runtime initial validation passed 232 core tests, 69 APK-runtime tests, 13 Node SDK tests.
-Host tests, aggregate, exact lint comparison, final three-APK audit and separate existing-D7
-signing/native delivery are pending. Detailed host evidence stays outside this repository.
+Runtime focused validation passed 232 core tests, 69 APK-runtime tests and 13 Node SDK tests.
+The initial core run had six new test-helper queue failures; the corrected helper passed.
+The first host focused run had 45 tests with four fixture failures (unmodeled Robolectric pipe
+syscalls and a missing fixture deadline). A subsequent fixture-shadow compile collision was
+retained as failed. Explicit synthetic syscall shadows now exercise unchanged production loops;
+bitmap decoding is native. Later focused runs passed 53, 55, 58 and 61 tests respectively.
+The last adds native Close/Back cancellation and never-opened camera-output coverage. All
+seven final focused JVMs have offline guard install/shutdown evidence, zero blocked attempts.
+
+Final source additionally makes camera-open visibility volatile and retains cross-broker
+admission until actual cancelled materialization cleanup; its 62nd ownership regression awaits
+the full aggregate. Independent static reviews approve bounded output, expiry, stale callback,
+recovery and final ownership paths. These are not physical pipe/camera acceptance claims.
+
+Full six-module aggregate, exact lint comparison, three-APK audit and separate existing-D7
+signing/native delivery remain pending. Code and Pending are backed up before these longer
+gates. Detailed host reports, synthetic execution logs and artifacts stay outside this repository.
