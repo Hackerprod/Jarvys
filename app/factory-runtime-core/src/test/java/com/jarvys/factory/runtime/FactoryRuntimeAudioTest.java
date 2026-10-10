@@ -119,8 +119,8 @@ public class FactoryRuntimeAudioTest {
     }
 
     @Test public void cancelReachesRegisteredHostAfterSnapshotWasConsumed()throws Exception {
-        int uid=android.os.Binder.getCallingUid();
-        screen.getPackageManager().getApplicationInfo(DocumentBrokerIdentity.PRIMARY,0).uid=uid;
+        int uid=screen.getPackageManager().getApplicationInfo(DocumentBrokerIdentity.PRIMARY,0).uid;
+        org.robolectric.shadows.ShadowBinder.setCallingUid(uid);
         Shadows.shadowOf(screen.getPackageManager()).setPackagesForUid(uid,DocumentBrokerIdentity.PRIMARY);
         Response response=share(new byte[]{1,2,3});idle();
         String nonce=screen.launched.getStringExtra("nonce");
@@ -129,6 +129,9 @@ public class FactoryRuntimeAudioTest {
         CountDownLatch cancelled=new CountDownLatch(1);ExecutorService thread=Executors.newSingleThreadExecutor();
         try {
             AudioPlaybackControl.Registration registration=thread.submit(()->{
+                assertEquals(uid,android.os.Binder.getCallingUid());
+                java.lang.reflect.Field verifier=FileShareTransfer.class.getDeclaredField("verifier");verifier.setAccessible(true);
+                assertTrue("Synthetic host must pass the actual runtime UID/session verifier",((FileShareTransfer.HostVerifier)verifier.get(transfer)).allowed(uid));
                 FileShareTransfer.copy(transfer,nonce,3,screen.launched.getStringExtra("sha256"),new ByteArrayOutputStream(),()->{});
                 return AudioPlaybackControl.register(control,nonce,caller->true,cancelled::countDown);
             }).get(5,TimeUnit.SECONDS);
@@ -136,6 +139,17 @@ public class FactoryRuntimeAudioTest {
             assertEquals("CANCELLED",response.error());assertTrue(cancelled.await(5,TimeUnit.SECONDS));
             assertTrue(registration.isRevoked());assertNotNull(field("audioPlayback").get(runtime));
             runtime.onActivityResult(45,Activity.RESULT_CANCELED,null);assertNull(field("audioPlayback").get(runtime));registration.close();
-        }finally{thread.shutdownNow();}
+        }finally{thread.shutdownNow();org.robolectric.shadows.ShadowBinder.reset();}
+    }
+    @Test public void occupiedTransferAdmissionNeverLeavesAudioUiClaimed()throws Exception {
+        FileShareTransfer.Admission held=FileShareTransfer.reserve();
+        try {
+            assertEquals("SHARE_BUSY",share(new byte[]{1,2}).error());
+            assertNull(field("uiOwner").get(runtime));assertNull(field("audioPlayback").get(runtime));assertNull(screen.launched);
+        }finally{held.close();}
+        Response fresh=share(new byte[]{3,4});idle();assertNotNull(screen.launched);assertNull(fresh.value);
+        runtime.onActivityResult(45,Activity.RESULT_OK,result());
+        assertTrue(fresh.value.getJSONObject("result").getBoolean("playbackAttempted"));
+        assertNull(field("uiOwner").get(runtime));assertNull(field("audioPlayback").get(runtime));
     }
 }

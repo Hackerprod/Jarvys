@@ -816,11 +816,17 @@ public final class FactoryRuntime implements AutoCloseable {
     private void playAudio(BridgeProtocol.Request request, Reply reply) throws Exception {
         requireDocumentForeground();
         DocumentBrokerIdentity.verify(activity, config.documentBroker);
-        if (!claimUi(reply)) return;
-        final FileShareTransfer.Admission admission = FileShareTransfer.reserve();
+        // Random generation owns neither UI nor transfer admission if it fails.
         byte[] random = new byte[32]; new java.security.SecureRandom().nextBytes(random);
         StringBuilder nonce = new StringBuilder();
         for (byte b:random) nonce.append(String.format(java.util.Locale.ROOT,"%02x",b & 255));
+        if (!claimUi(reply)) return;
+        final FileShareTransfer.Admission admission;
+        try { admission = FileShareTransfer.reserve(); }
+        catch (FactoryException | RuntimeException unavailable) {
+            if (uiOwner == reply) uiOwner = null;
+            throw unavailable;
+        }
         AudioPlayback work = new AudioPlayback(reply,nonce.toString()); audioPlayback=work;
         final DocumentHandles source=documents;
         try { io.execute(() -> {

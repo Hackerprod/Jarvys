@@ -37,7 +37,8 @@ class FactoryAudioActivityTest {
     private val controllers = mutableListOf<ActivityController<FactoryAudioActivity>>()
     private val io = Executors.newSingleThreadExecutor()
     private class FakeAudio : FactoryAudioPlayer.Platform, FactoryAudioPlayer.Track {
-        var stops = 0; var releases = 0; var plays = 0; var releaseFails = false
+        var stops = 0; var releases = 0; var plays = 0; var writes = 0; var releaseFails = false
+        var beforeWrite: (() -> Unit)? = null
         override fun requireMain() { }
         override fun requireWorker() { }
         override fun create(pcm: FactoryAudioPcm): FactoryAudioPlayer.Track = this
@@ -48,7 +49,7 @@ class FactoryAudioActivityTest {
         override fun now() = 0L
         override fun schedule(delayMs: Long, callback: () -> Unit): Any = callback
         override fun cancel(token: Any) { }
-        override fun write(pcm: FactoryAudioPcm) = pcm.pcmBytes
+        override fun write(pcm: FactoryAudioPcm): Int { writes++; beforeWrite?.invoke(); return pcm.pcmBytes }
         override fun marker(frames: Int, callback: () -> Unit) { }
         override fun play() { plays++ }
         override fun stop() { stops++ }
@@ -91,6 +92,79 @@ class FactoryAudioActivityTest {
         val prepared = player.prepare(value.pcm!!)
         value.playerClean.set(false); assertTrue(player.start(prepared, { true }) { value.playerClean.set(it.cleanupConfirmed) })
         return backend
+    }
+    private fun register(value: FactoryAudioCoordinator.Session) {
+        val type = com.jarvys.factory.runtime.AudioPlaybackControl.Registration::class.java
+        val constructor = type.getDeclaredConstructor(android.os.IBinder::class.java, Runnable::class.java).apply { isAccessible = true }
+        value.registration = constructor.newInstance(Binder(), Runnable { value.revoke() })
+    }
+    @Test fun actualWorkerPreparationMustReturnAndDiscardBeforeNewRecoveryCanClose() {
+        val value = session(); register(value)
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val backend = FakeAudio().apply { beforeWrite = {
+            check(Looper.myLooper() != Looper.getMainLooper())
+            entered.countDown(); check(release.await(10, TimeUnit.SECONDS))
+        } }
+        value.player = FactoryAudioPlayer(backend)
+        val original = launch(); val activity = original.get()
+        assertTrue(button(activity, "play").isEnabled)
+        var recovery: FactoryAudioActivity? = null
+        try {
+            button(activity, "play").performClick()
+            assertTrue("Native preparation did not reach worker", entered.await(5, TimeUnit.SECONDS))
+            assertTrue(value.preparing.get()); assertFalse(value.playerClean.get())
+            original.pause()
+            recovery = launch().get()
+            assertTrue(value.revoked.get()); assertFalse(button(recovery, "close").isEnabled)
+            button(recovery, "close").performClick()
+            assertTrue(coordinator.needsRecovery()); assertFalse(FactoryInteractionAdmission.available())
+            assertEquals(0, backend.releases); assertEquals(0, backend.plays)
+        } finally { release.countDown() }
+        drain()
+        assertFalse(value.preparing.get()); assertTrue(value.playerClean.get())
+        assertEquals(1, backend.writes); assertEquals(1, backend.releases); assertEquals(0, backend.plays)
+        assertFalse(FactoryInteractionAdmission.available())
+        val current = recovery!!; render(current); assertTrue(button(current, "close").isEnabled)
+        button(current, "close").performClick(); drain()
+        assertEquals("closed_outcome_unknown", coordinator.status()); assertTrue(FactoryInteractionAdmission.available())
+        assertEquals(Activity.RESULT_CANCELED, shadowOf(current).resultCode)
+    }
+    @Test fun saturatedWorkerRejectsOnlyUnstartedPreparationAndPreservesCleanState() = rejectedPreparation(false)
+    @Test fun saturatedWorkerRejectionCannotErasePreviouslyUnconfirmedNativeCleanup() = rejectedPreparation(true)
+    private fun rejectedPreparation(retainUnclean: Boolean) {
+        val value = session(); register(value)
+        val backend = FakeAudio(); val player = FactoryAudioPlayer(backend); value.player = player
+        if (retainUnclean) {
+            val prepared = player.prepare(value.pcm!!); backend.releaseFails = true
+            assertFalse(player.discard(prepared).cleanupConfirmed); value.playerClean.set(false)
+        }
+        val activity = launch().get(); assertTrue(button(activity, "play").isEnabled)
+        drain()
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val queuedRan = java.util.concurrent.atomic.AtomicBoolean(false)
+        val worker = FactoryAudioCoordinator.WORKER
+        worker.execute { entered.countDown(); check(release.await(10, TimeUnit.SECONDS)) }
+        try {
+            assertTrue(entered.await(5, TimeUnit.SECONDS))
+            worker.execute { queuedRan.set(true) }
+            assertEquals(1, worker.queue.size)
+            button(activity, "play").performClick()
+            assertFalse(value.preparing.get()); assertEquals(!retainUnclean, value.playerClean.get())
+            assertTrue(value.revoked.get()); assertFalse(value.attempted)
+            assertEquals(if (retainUnclean) 1 else 0, backend.writes); assertEquals(0, backend.plays)
+            assertEquals(1, worker.queue.size); assertFalse(queuedRan.get())
+            assertFalse(FactoryInteractionAdmission.available())
+        } finally { release.countDown() }
+        drain(); assertTrue(queuedRan.get())
+        if (retainUnclean) {
+            button(activity, "close").performClick(); drain()
+            assertTrue(coordinator.needsRecovery()); assertFalse(FactoryInteractionAdmission.available())
+            backend.releaseFails = false
+        }
+        button(activity, "close").performClick(); drain()
+        assertEquals("closed_outcome_unknown", coordinator.status()); assertTrue(FactoryInteractionAdmission.available())
     }
     @Test fun missingCallerOrRecreatedRequestHasNoAuthority() {
         for (saved in listOf<Bundle?>(null, Bundle())) {

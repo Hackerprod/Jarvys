@@ -76,4 +76,23 @@ public class AudioPlaybackControlTest {
         }
         death[0].binderDied();assertTrue(registration.isRevoked());assertEquals(1,count.get());registration.close();assertEquals(1,count.get());
     }
+    @Test public void cancellationDuringActiveRegistrationReplyCannotResurrectAuthority()throws Exception {
+        AudioPlaybackControl source=new AudioPlaybackControl(NONCE,uid->true);
+        CountDownLatch activeReplyWritten=new CountDownLatch(1),releaseReply=new CountDownLatch(1),cancelled=new CountDownLatch(1);
+        AtomicInteger notifications=new AtomicInteger();
+        Binder delayed=new Binder(){@Override protected boolean onTransact(int code,Parcel data,Parcel reply,int flags){
+            boolean accepted=source.onTransact(code,data,reply,flags);
+            assertTrue(accepted);reply.setDataPosition(0);reply.readException();assertEquals(0,reply.readInt());
+            activeReplyWritten.countDown();
+            try{assertTrue(releaseReply.await(5,TimeUnit.SECONDS));}catch(InterruptedException failure){throw new AssertionError(failure);}
+            return accepted;
+        }};
+        ExecutorService worker=Executors.newSingleThreadExecutor();
+        try{
+            Future<AudioPlaybackControl.Registration> pending=worker.submit(()->AudioPlaybackControl.register(delayed,NONCE,uid->true,()->{notifications.incrementAndGet();cancelled.countDown();}));
+            assertTrue(activeReplyWritten.await(5,TimeUnit.SECONDS));source.cancel();assertTrue(cancelled.await(5,TimeUnit.SECONDS));
+            releaseReply.countDown();AudioPlaybackControl.Registration registration=pending.get(5,TimeUnit.SECONDS);
+            assertTrue(registration.isRevoked());assertEquals(1,notifications.get());source.cancel();registration.close();assertEquals(1,notifications.get());
+        }finally{releaseReply.countDown();worker.shutdownNow();source.close();}
+    }
 }

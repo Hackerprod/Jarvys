@@ -16,3 +16,28 @@ stay outside the repository. Preserve v63–v69, all other family gates, UX34 an
 
 Current contract and official references are in app/APK_FACTORY.md. Native callbacks/IPC are
 not hard realtime guarantees; cancellation is requested, not confirmed audibility or stop.
+
+## Validation sequence before final release gates
+
+The first runtime/core check passed 270 core and 70 APK-runtime tests, plus 14 SDK tests.
+Host Kotlin compilation passed. The initial combined focused run passed 36 host cases but
+failed three newly added staged-cancellation cases (one per API24/28/32): the synthetic
+Binder caller UID did not represent the installed host. The fixture now asserts the real
+runtime verifier accepts the explicit synthetic host UID, without bypassing authentication.
+The failure and original logs remain retained outside the repository.
+
+The strengthened repeat passed 53 host tests and 279 core tests, with zero failures/errors/
+skips. All eight JVMs have installed/shutdown offline-guard evidence, zero blocked attempts.
+Coverage includes actual blocked fake native preparation across Activity replacement,
+executor saturation, real Application startup over open/corrupt journals, control death,
+and cancellation while REGISTER returns ACTIVE. These remain synthetic, never actual sound.
+
+Initial fresh lint matches the exact v69 diagnostic multisets: 313/300/3/2, zero additions
+or removals and no new suppression. Tests were strengthened during that preliminary lint,
+so it is not the final frozen-source gate. A final audio-only nonce/admission cleanup ordering
+change and its regression still require the next test run. Full fresh aggregate, final
+frozen lint, three binaries, independent audit, signing and native delivery remain pending.
+
+The final nonce/admission ordering delta passed 282 fresh guarded core tests, with zero
+failures/errors/skips and zero blocked network attempts. Source is ready for the final freeze;
+the aggregate, lint, APK audit and delivery gates remain pending.
