@@ -1,9 +1,9 @@
-# Factory local strong biometrics v80: implementation and evidence status
+# Factory local strong biometrics v80: scope and evidence
 
-Version 80 / `1.2.73-FACTORY-BIOMETRICS` is in progress from published v79 baseline `5c177d3`.
-This record claims no completed v80 final host aggregate, independent APK audit, signed
-artifact or delivery. Do not reuse earlier evidence as if it validated the final v80 source.
-SDK 2/schema/protocol 1; 20 capabilities/42 methods. v79 remains the latest completed delivery.
+Version 80 / `1.2.73-FACTORY-BIOMETRICS` has passed the complete final host aggregate, SDK
+and controlled-baseline lint comparison. Independent review approved all three final host APKs
+and the signed delivery bytes. No physical authentication, installation or device acceptance is claimed.
+SDK 2/schema/protocol 1; 20 capabilities/42 methods.
 
 ## Bounded native contract
 
@@ -36,71 +36,108 @@ Valid bounded 1 KiB cancel envelopes bypass ordinary saturation; invalid recogni
 cannot revoke authentication. Oversized/unparseable traffic exhausting the global limiter closes
 pending requests and requests cancellation. No effect or authentication is automatically replayed.
 
-## Required verification, still open
+## Final host evidence
 
-- Validate strict argument/receipt shape, grant/preview denial, API24/28/29 unsupported paths,
-  API30+ strong-only adapter, deadlines, quotas and the reserved validated cancel control.
-- Exercise synthetic success/error/mismatch/help, late callback, native launch failure,
-  foreground authority loss, recreation, concurrent native UI and drain/poison behavior, including
-  missing acknowledgment, cleanup throw and synchronous callback-then-throw. These are synthetic
-  cases; their existence does not establish execution or pass status.
-- Verify selective manifest permission addition/removal, no duplicate/foreign permission,
-  unchanged no-biometric and legacy profiles, template authentication, complete DEX/resource
-  bindings, latest-signed scope review and payload identity before/after signing.
-- Run final fresh host checks, SDK tests, exact lint and independent three-APK audit against frozen
-  final inputs; preserve failed, interrupted and unrun attempts separately. No Gradle/test result,
-  independent-review outcome or delivery receipt is asserted by this documentation checkpoint.
-- Real read_skill must retrieve all nine factory-guidance-v80 references, including biometrics,
-  with version headers and manifest SHA-256 verified, 18 v77 sections retained, read-only scope,
-  and unchanged custom-skill/disabled/usage/profile boundaries. Budgets stay 8 KiB parsed core,
-  16 KiB per reference and 64 KiB total references; no enlarged read budget.
-- Authorized physical checks remain required for matching, modality/strength interpretation,
-  OEM focus/confirmation/cancel behavior, lifecycle closure, installation/update/data retention
-  and ARM64 behavior. Host/Robolectric/adapter fixtures cannot establish these outcomes.
+Validated checkpoint `d815b19b27f2f0b18a8d9325924ef7225790bb0e`; app tree
+`119dac1fee793fa306656438447f491cad0a7cb0`. All 1,123 inputs are frozen. The two final
+corrections affect tests only; production inputs are unchanged from `99b9f34`.
 
-All v63–v79 consent, lifecycle, manifest, signing and recovery boundaries remain. TTS/voice,
-backup, local UI, remaining F1 and F2/F3 remain pending. UX34 retains its gates, UX44 is documentary,
-and UX43 remains last. This work neither enables them nor closes their acceptance criteria.
+- One complete fresh six-task aggregate: Full 3,528, Play 3,146, runtime Debug/Release 78+78,
+  shared core Debug/Release 973+973, total 8,776. Zero failures/errors/skips.
+- All 41 SDK cases passed with exact names/order checked against source.
+- All 17 Test JVMs have paired reviewed guard installation/shutdown receipts. Sixteen HTTP(S)
+  attempts were blocked; this does not establish general OS-level or device network isolation.
+- API24/28/29 unsupported behavior and API30/35 strong-only adapters, success/error/mismatch,
+  stale callbacks, deadline, origin/session/lifecycle cancellation, drain/poison, concurrency and
+  reserved cancel controls use synthetic fixtures and shadows, never real biometric data.
+- Fresh complete lint diagnostic multisets match reconstructed v79 exactly: 321/311/5/4, with
+  zero additions/removals. Both sides used the same 66 pinned metadata/version-marker inputs,
+  verified before and after. Historical 313/300/3/2 counts remain historical and unreproduced
+  after the executor reset; their original XML/cache was lost. No diagnostic was suppressed.
+- Real read_skill retrieval covers nine version/hash-bound guidance references and all 18
+  historical v77 sections. Parsed core 7,673 UTF-8 bytes (raw 8,007); unchanged 8 KiB core,
+  16 KiB per-reference and 64 KiB total-reference bounds, with read-only Coding/customization
+  and disabled/usage/profile boundaries retained.
+
+Both Full/Play generated fixture groups passed independent binary review: the exact four closed
+permission/query trees, biometric-only and biometric-plus-query signed pairs, legacy permissionless
+pairs, unchanged template DEX/payloads, certificate binding, v2/v3 signatures and ZIP alignment.
+Only selected biometric profiles declare USE_BIOMETRIC; the bare template remains permissionless.
+
+All eight exhaustive matrix instances remain enabled at 1,048,576 selections. Their summed case
+time was 4,630.130 seconds; aggregate wall time was 7,267.273 seconds. The two bridge matrices
+alone took 2,067.081 and 2,112.006 seconds. These are measurements on the restored executor,
+not a direct performance comparison with the previous machine. Future factoring requires
+independent compositional proof; this release made no coverage reduction.
+
+## Retained failures and recovery boundaries
+
+The executor reset interrupted earlier validation. Pinned official tooling and the reviewed
+HTTP(S) guard were restored, and final evidence was run afresh rather than claimed recovered.
+Two later FullDebug attempts each completed 3,528 cases with one failure; remaining aggregate
+tasks were not run after those failures. First, a preview test expected 42 observations although
+42 wire methods plus three host checks produce 45. Its correction also requires exact biometric
+preview-denial observations and the biometric-only subset; focused Full/Play checks passed 14+14.
+Second, an unchanged memory-review test could observe persisted approval before UI completion
+and click a disabled tab. The reviewed two-line strengthening waits for the existing success
+indicator and enabled tab, retaining the original 10-second bound and duplicate-grant assertions.
+The timeout alone does not prove that exact interleaving. Focused checks of both corrected classes
+passed 29+29. The final complete aggregate above passed; it uses `--continue` only for discovery
+when dependencies permit, and still rejects any failed or incomplete task.
+
+The reconstructed build-order helper adds the release-template producer dependency only to the
+two proven FullRelease vital-model/analysis consumers. Normal build lint tasks remain enabled.
+Complete four-report lint separately excludes only the redundant runtime lintVitalRelease task
+affected by the reviewed AGP report-order defect; full runtime lint analysis/report still runs.
+Failed build attempts remain separate. No heap, assertion, timeout or guard protection was weakened.
+Binary-audit helpers also stopped on unsafe ordinal-map collisions and a UTF-16/JSON representation
+mismatch before approval. Their narrow, independently controlled corrections preserve complete
+values, incoming references and collision rejection; no application payload was exempted.
+
+The delivered v79 APK was recovered and independently bound to the reconstructed baseline.
+Compiler switch-tail/trampoline and profile-index differences received exact bounded control-flow
+and profile-semantic proofs; this is not a claim of byte-reproducible builds. All other common
+payloads and the known ARM64/signature packaging boundary were checked explicitly.
+
+## Final APK and delivery
+
+Independent complete binary review approved FullDebug, PlayDebug and FullRelease, including
+complete changed-DEX/class coverage and explicit bounded compiler/source correspondences.
+Redundant generic ordinal-discovery runs were stopped without a passing verdict; the final
+strict complete-delta and incoming-reference proofs supplied the approved coverage instead.
+
+Unsigned final APKs:
+- FullDebug: 35,281,828 bytes, SHA-256 `93d617874fcf13fab4bd30fcc2f2d039bf7274421915a6bf5b18e1297fd5c6fb`.
+- PlayDebug: 33,670,318 bytes, SHA-256 `573347a6e26d248124d3fb3ff01b87b212154d5e86bc32083f9b2f3a26f1f3d4`.
+- FullRelease: 27,560,581 bytes, SHA-256 `d79f0fa0f7bdb12a04120799daf0fff67ffa7ba9ec6bfe38e4adaa002837a850`.
+
+Native delivery of `Jarvys-Factory-biometrics-full-v80-arm64-test.apk` was accepted on
+2026-10-11 at 03:34:08.595109 UTC: 19,364,467 bytes, SHA-256
+`d9339b80f892194e1e17626ed82554be26b88c90fef385f0e455423bd2fea987`.
+The existing D7 test certificate, v2/v3 signatures, ZIP CRC, absence of duplicate entries,
+16 KiB ZIP alignment, identity/version and manifest/permissions were independently verified.
+All 249 retained payload entries match the approved FullRelease input exactly; only nine
+non-ARM64 libraries were omitted and three signing metadata entries added. Independently
+retrieved persisted Library bytes match the delivered file exactly. This verifies upload
+persistence, not download, installation or device receipt. ZIP alignment does not prove
+ELF compatibility with 16 KiB device pages.
+
+## Acceptance still open
+
+Only the user operates the real OS biometric prompt. Host evidence does not establish physical
+matching, actual enrollment/hardware availability, OEM strength/modality/confirmation behavior,
+focus transfer, prompt closure, cancellation timing, installation/update/data retention or ARM64
+device behavior. No enrollment/settings or actual device biometric tests were performed.
+Availability is coarse and local; a success receipt is not remote identity, a token or authority
+for an unrelated action. Signature/delivery acceptance does not establish download or installation.
+
+TTS/voice, backup, adaptive resources/local UI, remaining F1 and F2/F3 stay pending. UX34 retains
+its separate gates, UX44 is documentary and UX43 remains last. v63–v79 boundaries remain intact.
 
 ## Recoverable validation sources
 
-The executor reset interrupted final validation on 2026-10-10. The implementation and two
-reviewed corrections were preserved through normal-history source checkpoint `99b9f34`.
-Final v80 gates must be rerun against that frozen source; pre-reset checks are not final evidence.
-
-[host-harness](host-harness/README.md) preserves source-only restoration, exact guard-hash gates,
-SDK30/toolchain checksum pins, fresh gate orchestration and fail-closed archive helpers.
-[reviewer-tools](reviewer-tools/README-REBUILT-HELPERS.md) preserves independent binary/manifest,
-fresh-evidence and semantic DEX audit sources, with synthetic probe regeneration controls.
-Materialize these tools into the documented external layout before use; rebuilding a guard
-requires fresh checks and independent approval before any exact hash re-pin. The portable
-launcher is a reviewed recovery source, not a claim that it ran the current final gates.
-No generated APK, guard JAR, signing material, private data or raw host report is included.
-
-### Fresh controlled lint after recovery
-
-Fresh offline lint completed against reconstructed v79 and frozen v80 source on 2026-10-10.
-Independent review verified identical complete diagnostic multisets for Full/Play/runtime/core:
-321/311/5/4, with zero diagnostics added or removed by v80. Both runs used the same 66 pinned
-metadata and version-marker inputs; their bytes and inventory were verified before and after.
-Historical 313/300/3/2 counts remain historical and were not reproduced: the original XML and
-metadata cache were lost at reset. No diagnostic was suppressed to match those old counts.
-The candidate Gradle lint run succeeded; its wrapper initially rejected the historical fixed
-counts. After independent approval, only those four reference constants were calibrated and
-the exact-multiset comparator was rerun successfully. This was not another Gradle lint run.
-Full aggregate tests, three-APK comparison, signing and delivery remain open.
-
-### Test corrections before the final aggregate
-
-Two complete FullDebug attempts each ran 3,528 tests with one failure; the remaining five
-aggregate tasks did not run after those failures. The first exposed a stale preview expectation:
-42 wire methods plus three host checks produce 45 observations. The corrected test also requires
-the exact three biometric preview-denial observations and a biometric-only capability subset.
-Its focused Full/Play checks passed 14+14 cases. The second exposed a possible IO-to-UI
-synchronization race in an unchanged memory-review test: persisted approval could be observed
-before the UI completed approval and re-enabled navigation. The reviewed test now waits for the
-existing success indicator and enabled tab before continuing, retaining the same 10-second
-bound and every duplicate-grant assertion. The timeout does not prove its precise interleaving.
-Both changes affect tests only; production inputs remain identical. The next aggregate uses
-`--continue` solely to collect results from all six independent tasks when dependencies permit; any failure still rejects
-the gate. A complete all-green aggregate, fresh final-source lint and APK audits remain required.
+[host-harness](host-harness/README.md) preserves source-only restoration, pinned tools/SDK/guard,
+fresh gate orchestration and fail-closed archive checks. [reviewer-tools](reviewer-tools/README-REBUILT-HELPERS.md)
+preserves binary/manifest/DEX/profile and fresh-evidence audit sources and synthetic controls.
+Materialize outside Git as documented. Generated APKs/probes/JARs, signing material, credentials
+and raw host reports are not published in the repository.
