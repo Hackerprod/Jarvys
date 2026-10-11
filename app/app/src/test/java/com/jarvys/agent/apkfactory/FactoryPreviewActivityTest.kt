@@ -42,7 +42,7 @@ class FactoryPreviewActivityTest {
     private fun snapshot() = FactoryPreviewRegistry.Snapshot(JSONObject()
         .put("project_id", "fixture").put("scope_version", 1).put("apk_sha256", "a".repeat(64))
         .put("app_id", "com.example.preview").put("version_code", 1),
-        "{}".toByteArray(), mapOf("www/index.html" to "<html></html>".toByteArray()))
+        "{}".toByteArray(), com.jarvys.agent.coding.FactoryUiTestAssets.withUi(mapOf("www/index.html" to "<html></html>".toByteArray())))
     private fun launch(key: String? = null, state: Bundle? = null): TestActivity {
         val intent = Intent().apply { key?.let { putExtra(FactoryPreviewActivity.EXTRA_TOKEN, it) } }
         controller = Robolectric.buildActivity(TestActivity::class.java, intent).create(state).start().resume().visible()

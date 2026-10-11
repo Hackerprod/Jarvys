@@ -3,6 +3,7 @@ package com.jarvys.agent.coding
 import com.jarvys.agent.CancellationToken
 import com.jarvys.agent.apkfactory.FactorySpec
 import com.jarvys.factory.contract.CapabilityCatalog
+import com.jarvys.factory.runtime.FactoryUiAssets
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
@@ -47,19 +48,23 @@ internal object FactoryPreviewRegistry {
     private val NUMERIC_BINDING_FIELDS = setOf("scope_version", "version_code")
     private val BINDING_FIELDS = setOf("project_id", "project_identity_sha256", "scope_version", "build_id", "apk_sha256", "project_sha256", "template_sha256", "app_id", "version_code")
     class Snapshot(metadata: JSONObject, config: ByteArray, assets: Map<String, ByteArray>) {
+        private val metadataText = metadata.toString()
+        private val config = config.copyOf()
+        private val assets = assets.mapValues { it.value.copyOf() }
         init {
+            // Validate the retained copies, not caller-owned mutable byte arrays.
+            val config = this.config
+            val assets = this.assets
             require(config.size <= FactorySpec.MAX_SPEC_BYTES)
-            require(assets.keys.all { it == "factory-sdk.js" || it.startsWith("www/") })
+            require(assets.keys.all { it == "factory-sdk.js" || it.startsWith("www/") || FactoryUiAssets.contains(it) })
             assets.keys.forEach { FactorySpec.relativePath(it) }
             val web = assets.filterKeys { it.startsWith("www/") }
             require(web.size <= FactorySpec.MAX_WEB_FILES)
             require(assets.values.all { it.size <= FactorySpec.MAX_FILE_BYTES })
             require(web.values.sumOf { it.size.toLong() } <= FactorySpec.MAX_WEB_BYTES.toLong())
             require("www/index.html" in assets)
+            FactoryUiAssets.verifyComplete(assets.filterKeys { FactoryUiAssets.isNamespace(it) })
         }
-        private val metadataText = metadata.toString()
-        private val config = config.copyOf()
-        private val assets = assets.mapValues { it.value.copyOf() }
         fun metadata() = JSONObject(metadataText)
         fun configBytes() = config.copyOf()
         fun asset(path: String): ByteArray? = assets[path]?.copyOf()

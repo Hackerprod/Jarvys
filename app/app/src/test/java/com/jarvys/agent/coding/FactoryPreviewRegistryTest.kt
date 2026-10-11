@@ -17,7 +17,24 @@ class FactoryPreviewRegistryTest {
             .put("entryPoint", "www/index.html").put("capabilities", JSONArray(capabilities))
         return FactoryPreviewRegistry.Snapshot(JSONObject().put("project_id", "project").put("apk_sha256", "a".repeat(64))
             .put("scope_version", 1).put("project_identity_sha256", "identity").put("build_id", "build")
-            .put("project_sha256", "sources").put("template_sha256", "template").put("app_id", "org.example.test").put("version_code", 1), config.toString().toByteArray(), mapOf("www/index.html" to "<title>Test</title>".toByteArray()))
+            .put("project_sha256", "sources").put("template_sha256", "template").put("app_id", "org.example.test").put("version_code", 1), config.toString().toByteArray(), com.jarvys.agent.coding.FactoryUiTestAssets.withUi(mapOf("www/index.html" to "<title>Test</title>".toByteArray())))
+    }
+    @Test fun runtimeUiIsCompletePinnedAndRetainedImmutablyWithoutReducingWebQuotas() {
+        val library = com.jarvys.factory.runtime.FactoryUiAssets.paths().first()
+        val assets = FactoryUiTestAssets.withUi(mapOf("www/index.html" to byteArrayOf(1))).toMutableMap()
+        val expected = assets.getValue(library).copyOf()
+        val retained = FactoryPreviewRegistry.Snapshot(JSONObject(), byteArrayOf(), assets)
+        assets.getValue(library)[0] = 0
+        retained.asset(library)!![0] = 0
+        assertArrayEquals(expected, retained.asset(library))
+        assertThrows(IllegalArgumentException::class.java) { FactoryPreviewRegistry.Snapshot(JSONObject(), byteArrayOf(), assets) }
+        val fresh = FactoryUiTestAssets.withUi(mapOf("www/index.html" to byteArrayOf(1)))
+        assertThrows(IllegalArgumentException::class.java) { FactoryPreviewRegistry.Snapshot(JSONObject(), byteArrayOf(), fresh - library) }
+        assertThrows(IllegalArgumentException::class.java) { FactoryPreviewRegistry.Snapshot(JSONObject(), byteArrayOf(), fresh + ("factory-ui/evil.css" to byteArrayOf())) }
+        val web = (0 until 128).associate { (if (it == 0) "www/index.html" else "www/$it.css") to ByteArray(65536) }
+        FactoryPreviewRegistry.Snapshot(JSONObject(), byteArrayOf(), FactoryUiTestAssets.withUi(web))
+        assertThrows(IllegalArgumentException::class.java) { FactoryPreviewRegistry.Snapshot(JSONObject(), byteArrayOf(), FactoryUiTestAssets.withUi(web + ("www/extra.css" to byteArrayOf()))) }
+        assertThrows(IllegalArgumentException::class.java) { FactoryPreviewRegistry.Snapshot(JSONObject(), byteArrayOf(), FactoryUiTestAssets.withUi(web + ("www/1.css" to ByteArray(65537)))) }
     }
     @Test fun launchTokenIsOpaqueOneShotAndCancellationRevokesConsumedSession() {
         val token = CancellationToken.cancellable()
@@ -44,7 +61,7 @@ class FactoryPreviewRegistryTest {
         val metadata = JSONObject().put("project_id", "original")
         val config = "config".toByteArray()
         val asset = "original".toByteArray()
-        val snapshot = FactoryPreviewRegistry.Snapshot(metadata, config, mapOf("www/index.html" to asset))
+        val snapshot = FactoryPreviewRegistry.Snapshot(metadata, config, FactoryUiTestAssets.withUi(mapOf("www/index.html" to asset)))
         metadata.put("project_id", "changed"); config[0] = 0; asset[0] = 0
         snapshot.asset("www/index.html")!![0] = 0
         snapshot.configBytes()[0] = 0
@@ -133,7 +150,7 @@ class FactoryPreviewRegistryTest {
         assertEquals("closed", session.receipt().getString("state"))
     }
     @Test fun snapshotRejectsTraversalExtraAssetsAndBuildLimitOverflow() {
-        fun create(assets: Map<String, ByteArray>) = FactoryPreviewRegistry.Snapshot(JSONObject(), byteArrayOf(), assets)
+        fun create(assets: Map<String, ByteArray>) = FactoryPreviewRegistry.Snapshot(JSONObject(), byteArrayOf(), FactoryUiTestAssets.withUi(assets))
         assertThrows(Exception::class.java) { create(mapOf("www/index.html" to byteArrayOf(), "www/../private" to byteArrayOf())) }
         assertThrows(Exception::class.java) { create(mapOf("www/index.html" to byteArrayOf(), "private.json" to byteArrayOf())) }
         assertThrows(Exception::class.java) { create(mapOf("www/index.html" to ByteArray(com.jarvys.agent.apkfactory.FactorySpec.MAX_FILE_BYTES + 1))) }

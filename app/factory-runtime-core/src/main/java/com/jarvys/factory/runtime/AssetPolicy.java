@@ -16,7 +16,7 @@ public final class AssetPolicy {
             if (rawPath == null || !rawPath.startsWith("/")) return null;
             String path = rawPath.substring(1);
             if (!FactoryConfig.safeAssetPath(path)) return null;
-            if (path.equals("factory-sdk.js")) return path;
+            if (path.equals("factory-sdk.js") || FactoryUiAssets.contains(path)) return path;
             if (!path.startsWith("www/") || mimeType(path) == null) return null;
             return path;
         } catch (URISyntaxException | NullPointerException e) { return null; }

@@ -953,3 +953,36 @@ at most 16 KiB, total references at most 64 KiB; the original 16 KiB read budget
 Real read_skill retrieval must cover all nine modules, read-only Coding access and unchanged
 custom-skill/disabled/usage/profile preservation. These are test requirements, not claims that a
 particular test run or physical acceptance completed.
+
+## Packaged local UI library (UX42 F1 v81)
+
+Every new generated APK contains the exact Pure.css 3.0.0 distribution stylesheets plus
+BSD-3-Clause and embedded normalize MIT notices and provenance. This is fixed-inclusion
+runtime data, not a capability: 20 capabilities/42 methods, SDK2/schema1 and permissions
+are unchanged. `apk_factory inspect` exposes `localUiLibraries` with exact paths, bytes,
+SHA-256, licenses and inclusion policy. Public build provenance repeats this inventory;
+project-source hashes continue to describe only actual project inputs.
+
+Link `/factory-ui/pure-3.0.0/pure-min.css` and
+`/factory-ui/pure-3.0.0/grids-responsive-min.css`, then a project stylesheet. The usable
+[local UI example](examples/factory-local-ui/README.md) demonstrates responsive columns,
+labeled forms, buttons and a table with separate JavaScript and session-only state.
+CSS loads only when linked, although all five library resources are always packaged.
+The notices are `LICENSE.txt`, `normalize-LICENSE.txt` and `PROVENANCE.json` at the same
+root. These runtime-owned exact paths cannot be replaced by project web files.
+
+The finite path/length/hash catalog rejects missing, modified, duplicate, unexpected and
+wrong-version runtime UI resources at template/preview validation. No arbitrary directory
+is exposed. Both CSS payloads contain no external imports, URL dependencies, scripts or
+source-map references; upstream comment links remain provenance, not network requests.
+No package scripts, compiler or dependency download runs during APK construction.
+Project limits remain 128 files, 1 MiB each, 8 MiB total, with existing traversal/symlink
+rules. Runtime library overhead is independently bounded at 32 KiB per file / 64 KiB total.
+Preview copies and verifies the same catalog without consuming project quotas.
+
+CSP, same-origin/frame policy, runtime network restrictions and navigation are unchanged.
+Project styling owns dark themes, contrast, targets and custom-widget accessibility.
+Use native safe-area/IME insets once. A library is no promise of Android WebView/provider
+compatibility or a physical rendering test. Existing device/OEM/installation gates remain.
+Exact archive integrity, licenses and extraction are in the bundled provenance and
+`recovery/factory-local-ui/README.md`; Pure includes normalize CSS and its full MIT notice.

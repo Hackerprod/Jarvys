@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Local UI demo</title>
+<link rel="stylesheet" href="/factory-ui/pure-3.0.0/pure-min.css">
+<link rel="stylesheet" href="/factory-ui/pure-3.0.0/grids-responsive-min.css">
+<link rel="stylesheet" href="/www/app.css"><script src="/www/app.js" defer></script>
+</head><body><main class="container"><header><p class="eyebrow">FACTORY · OFFLINE UI</p><h1>A little space to plan</h1>
+<p>Pure.css forms, buttons, tables and responsive columns. This demo keeps entries only while the page is open.</p></header>
+<div class="pure-g"><section class="pure-u-1 pure-u-md-1-2"><div class="panel"><h2>Add a small task</h2>
+<form id="entry-form" class="pure-form pure-form-stacked"><label for="task">Task name</label>
+<input id="task" name="task" maxlength="80" required aria-describedby="help" autocomplete="off">
+<p id="help">Up to 80 characters. No accounts, uploads or permanent storage.</p>
+<button type="submit" class="pure-button pure-button-primary">Add task</button></form>
+<p id="status" role="status" aria-live="polite">Ready when you are.</p></div></section>
+<section class="pure-u-1 pure-u-md-1-2"><div class="panel"><h2>For this session</h2><p id="empty">Your list is empty.</p>
+<div class="table-scroll"><table class="pure-table pure-table-horizontal" id="tasks" hidden><caption>Tasks added in this session</caption>
+<thead><tr><th scope="col">Task</th><th scope="col">Status</th></tr></thead><tbody id="rows"></tbody></table></div>
+<button type="button" id="clear" class="pure-button" disabled>Clear session list</button>
+<p class="credits">Pure.css 3.0.0 (BSD-3-Clause), embedded normalize (MIT). Full notices and provenance travel inside this APK.</p>
+</div></section></div></main></body></html>

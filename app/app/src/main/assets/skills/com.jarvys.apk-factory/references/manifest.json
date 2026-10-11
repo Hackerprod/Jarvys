@@ -1,14 +1,15 @@
 {
-  "version": "factory-guidance-v80",
+  "version": "factory-guidance-v81",
   "sha256": {
-    "basics": "60d0beb7906f5deba0c24bb2bab5c6657c29c26d8a0073b86e96e931b178360c",
-    "biometrics": "5ccfe0e510fc6c1833c491218371dd9f6b7909078023a36be173c912b6a3eb8c",
-    "contacts-calendar": "e6b28bdea402f7813091fa4b075829d58798ce31d4a1e69834661be3828312c0",
-    "database": "141bc1e619d6101e45472752d73bebec16bb86fbb0d937e5fc028a3d4e3958f0",
-    "documents-media": "927113f72de340b5dc73448823180ea1fa2a1f24775f93885d07c3ad28357bca",
-    "external-actions": "bdfe9b15dae52ab8308075c359ee64bc4791f61b97da0387249d51d97df1cce4",
-    "lifecycle": "4b046a1e874ac42ed5dfb0ba376e1ce9941f8fea3aee1e5a66cb2f5177761360",
-    "presentation": "16850479c7aad41504746fc6dd8188333d165a758c8d1a58b5e860dc73696fa6",
-    "sensors": "c24ca98d1f46f3559420edd3fedd731e93642bf71335a03382fa1fbcc664d800"
+    "basics": "c2b05cd0a1e8962b8e0c7a0efb6146b35f02d4bf24d9f9b2d890099e2ff19a46",
+    "biometrics": "c28dff33715e6f5a7e259469dd5f3f8585cca29ed8289e71b9f878990ec21251",
+    "contacts-calendar": "9024cf4d722abcf238f805d2518c4cb33b67095f19542a94d6a12d2cc041d43a",
+    "database": "71f8659760f142f72b4ab4935d7412d44c582d9c1d0cc8a3755bf91e14029333",
+    "documents-media": "ec0a9e7d2377d6ef67d24b0bca00cb291e1667dba6239e2ae6a89b3e9bf44fda",
+    "external-actions": "c897f9dc48dba550d1cd6ecd5fea15cbb671ceef154173f092007ca2fd0b43d8",
+    "lifecycle": "dc32381e87b32bd9324630ec89e624c9c138250810df2cab2297a714c26881d7",
+    "local-ui": "4a4c6351ea8084bfc73dc0ef7f5aab343196ef33387d3f548eb55a3c04f9cb00",
+    "presentation": "28381951aa26b61320ef5c291b98a6183726f8802af76246abe28ac9069b8fb7",
+    "sensors": "5c3685e79066bd092644d825238994a6a418e42da913e6be5fdd3fabe41231d0"
   }
 }

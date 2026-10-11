@@ -53,6 +53,16 @@ public class TemplateApkTest {
         assets.put("assets/factory-provenance.json", utf8("{\"testFixture\":true}"));
     }
 
+    @Test public void runtimeUiCatalogSurvivesButCannotBeReplacedByProjectAssets() throws Exception {
+        Map<String,byte[]> original = com.jarvys.factory.runtime.FactoryUiAssets.fromApk(template);
+        Map<String,byte[]> output = com.jarvys.factory.runtime.FactoryUiAssets.fromApk(build());
+        for (String path : original.keySet()) {
+            assertArrayEquals(original.get(path), output.get(path));
+            Map<String,byte[]> replacement = new LinkedHashMap<>(assets);
+            replacement.put("assets/" + path, original.get(path));
+            rejects(() -> TemplateApk.build(template,spec,icon,replacement));
+        }
+    }
     @Test public void realRuntimeBuildsTwoPackagesAndAnUpdateWithoutChangingDex() throws Exception {
         Map<String, byte[]> original = unzip(template);
         TemplateApk.Spec[] specs = {
@@ -548,6 +558,8 @@ public class TemplateApkTest {
     }
     public static byte[] legacyArtifactFixture(byte[] current) throws IOException {
         Map<String,byte[]> files=unzip(current);
+        // Historical apps did not bundle the v81 library. Signing must not require it.
+        files.keySet().removeIf(name -> name.startsWith("assets/factory-ui/"));
         files.put("AndroidManifest.xml",removeAttributeById(files.get("AndroidManifest.xml"),0x0101022b));
         return alignedZip(files);
     }

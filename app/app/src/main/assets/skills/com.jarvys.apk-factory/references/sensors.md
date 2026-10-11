@@ -1,4 +1,4 @@
-# Factory guidance factory-guidance-v80 / sensors
+# Factory guidance factory-guidance-v81 / sensors
 
 Use with the always-loaded Factory core; this reference grants no tools or approvals.
 Historical v79 sensor contract below is preserved. Current v80 totals: 20 capabilities/42 methods;

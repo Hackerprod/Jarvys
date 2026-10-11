@@ -91,6 +91,39 @@ class FactoryProjectServiceTest {
             .put("webDir","web").put("icon","icon.json").toString())}
         fun build(path:String="notes.apk")=service.build("factory.json",path,scope.version(),CancellationToken.cancellable())
     }
+    @Test fun localUiIsRuntimeOwnedDeterministicAndAvailableInPreviewWithProvenance() {
+        val f = Fixture()
+        f.spec("org.example.localui", 1, emptyList())
+        val catalog = f.service.inspect(CancellationToken.cancellable()).getJSONObject("localUiLibraries")
+        assertEquals("3.0.0", catalog.getString("version"))
+        assertFalse(catalog.getBoolean("capabilityRequired"))
+        val example = File("../examples/factory-local-ui")
+        assertTrue(example.isDirectory)
+        example.walkTopDown().filter { it.isFile && it.name != "README.md" }.forEach { source ->
+            File(f.root, source.relativeTo(example).path).apply { parentFile!!.mkdirs(); writeBytes(source.readBytes()) }
+        }
+        val first = f.build("first.apk")
+        f.build("second.apk")
+        assertArrayEquals(File(f.root,"first.apk").readBytes(),File(f.root,"second.apk").readBytes())
+        val ui = com.jarvys.factory.runtime.FactoryUiAssets.fromApk(File(f.root,"first.apk").readBytes())
+        assertEquals(5, ui.size)
+        val result = f.service.harness("preview", "first.apk", first.getString("sha256"), f.scope.version(), CancellationToken.cancellable())
+        assertEquals("launch_requested", result.getString("state"))
+        ZipFile(File(f.root,"first.apk")).use { zip ->
+            val html = zip.getInputStream(zip.getEntry("assets/www/index.html")).bufferedReader().use { it.readText() }
+            val linked = Regex("(?:src|href)=\"([^\"]+)\"").findAll(html).map { it.groupValues[1] }.toList()
+            assertEquals(4, linked.size)
+            linked.forEach { path ->
+                assertNotNull(com.jarvys.factory.runtime.AssetPolicy.assetPath("https://app.jarvys.invalid$path"))
+                assertNotNull(zip.getEntry("assets$path"))
+            }
+            val provenance = JSONObject(zip.getInputStream(zip.getEntry("assets/factory-provenance.json")).bufferedReader().use { it.readText() })
+            assertEquals(catalog.toString(), provenance.getJSONObject("localUiLibraries").toString())
+            val sources = provenance.getJSONObject("sourceSha256")
+            assertFalse(sources.keys().asSequence().any { it.startsWith("factory-ui/") })
+        }
+        assertTrue(TemplateApk.inspect(File(f.root,"first.apk").readBytes()).permissions.isEmpty())
+    }
     @Test fun mapsAndPhoneOnlyBuildsEmbedVerifiedHostPinsAndNoPermissions() {
         for (capability in listOf("maps", "phone", "email", "sms", "contacts", "calendar")) {
             val f = Fixture()
@@ -291,6 +324,9 @@ class FactoryProjectServiceTest {
         val f=Fixture(enableEphemeralSigning=true)
         val sha=if(legacy) legacyReceipt(f,false) else f.build().getString("sha256")
         val unsigned=File(f.root,"notes.apk").readBytes();val version=f.scope.version()
+        if (legacy) ZipFile(File(f.root,"notes.apk")).use { zip ->
+            assertFalse(zip.entries().asSequence().any { it.name.startsWith("assets/factory-ui/") })
+        }
         f.decision=ApprovalDecision.APPROVED
         val result=f.service.sign("notes.apk",sha,"signed.apk",version,CancellationToken.cancellable())
         val output=File(f.root,"signed.apk");val signed=output.readBytes()

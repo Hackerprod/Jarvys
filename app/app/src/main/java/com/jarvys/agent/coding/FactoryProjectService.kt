@@ -9,6 +9,7 @@ import com.jarvys.agent.apkfactory.FactoryIcon
 import com.jarvys.agent.apkfactory.FactoryApkSigner
 import com.jarvys.agent.apkfactory.FactorySigningScope
 import com.jarvys.agent.apkfactory.FactorySigningIdentity
+import com.jarvys.factory.runtime.FactoryUiAssets
 import com.jarvys.agent.apkfactory.FactorySpec
 import com.jarvys.agent.apkfactory.TemplateApk
 import com.jarvys.agent.connectors.ApprovalDecision
@@ -40,8 +41,17 @@ internal class FactoryProjectService(
         check(expected.matches(Regex("[a-f0-9]{64}"))) { "Invalid bundled template provenance" }
         val bytes = context.assets.open("apk_factory/template.apk").use { readBounded(it, MAX_APK_BYTES) }
         check(ProjectScope.sha256(bytes) == expected) { "Bundled runtime template hash mismatch" }
+        FactoryUiAssets.fromApk(bytes)
         return bytes
     }
+    private fun localUiLibraries(): JSONObject = JSONObject()
+        .put("library", FactoryUiAssets.LIBRARY).put("version", FactoryUiAssets.VERSION)
+        .put("licenses", JSONArray(listOf("BSD-3-Clause", "MIT")))
+        .put("inclusionPolicy", "fixed-runtime-assets; styles load only when linked")
+        .put("bytes", FactoryUiAssets.TOTAL_BYTES).put("capabilityRequired", false)
+        .put("files", JSONArray(FactoryUiAssets.paths().map { path -> JSONObject()
+            .put("path", "/$path").put("bytes", FactoryUiAssets.size(path)).put("sha256", FactoryUiAssets.sha256(path)) }))
+
     fun inspect(token: CancellationToken): JSONObject {
         checkActive(token)
         val bytes = template()
@@ -60,6 +70,7 @@ internal class FactoryProjectService(
             .put("factoryMinimumApi", 26).put("factoryAvailable", Build.VERSION.SDK_INT >= 26).put("generatedAppMinimumApi", 24)
             .put("supportedAbis", "Architecture-neutral JVM/Android code; physical device validation is still required")
             .put("scope_version", scope.version()).put("project_id", scope.id())
+            .put("localUiLibraries", localUiLibraries())
             .put("specFields", JSONArray(listOf("schemaVersion", "appId", "name", "versionCode", "versionName", "capabilities", "webDir", "icon")))
             .put("limits", JSONObject().put("websiteFiles", FactorySpec.MAX_WEB_FILES).put("websiteBytes", FactorySpec.MAX_WEB_BYTES)
                 .put("fileBytes", FactorySpec.MAX_FILE_BYTES).put("icon", "PNG, 48–1024 pixels per side, at most 1 MiB; or 192px geometric vector JSON"))
@@ -89,10 +100,11 @@ internal class FactoryProjectService(
             )
             replacements["assets/factory-provenance.json"] = JSONObject().put("schemaVersion", 1).put("runtimeVersion", 1)
                 .put("templateSha256", ProjectScope.sha256(template)).put("sourceSha256", JSONObject(sources))
-                .put("renderedIconSha256", ProjectScope.sha256(icon)).toString().toByteArray(Charsets.UTF_8)
+                .put("renderedIconSha256", ProjectScope.sha256(icon)).put("localUiLibraries", localUiLibraries()).toString().toByteArray(Charsets.UTF_8)
             val bytes = TemplateApk.build(template, TemplateApk.Spec(spec.appId, spec.name, spec.versionCode, spec.versionName, spec.capabilities), icon, replacements)
             val manifest = TemplateApk.verify(bytes, TemplateApk.Spec(spec.appId, spec.name, spec.versionCode, spec.versionName, spec.capabilities))
             require(bytes.size <= MAX_APK_BYTES) { "Generated APK exceeds factory size limit" }
+            FactoryUiAssets.fromApk(bytes)
             checkActive(token)
             sources.forEach { (path, sha) -> check(FactoryProjectFiles.sha(scope, path, if (path == specPath) FactorySpec.MAX_SPEC_BYTES else FactorySpec.MAX_FILE_BYTES, token) == sha) { "Factory source changed before publication: $path" } }
             val id = UUID.randomUUID().toString()
@@ -317,18 +329,27 @@ internal class FactoryProjectService(
         check(savedDex.keys().asSequence().toSet() == manifest.dexSha256.keys && manifest.dexSha256.all { (name, hash) -> savedDex.getString(name) == hash }) { "Runtime inventory differs from receipt" }
         val assets = sortedMapOf<String, ByteArray>()
         var config: ByteArray? = null
-        var total = 0L
+        var webBytes = 0L
+        var webFiles = 0
         java.util.zip.ZipInputStream(bytes.inputStream()).use { zip ->
             while (true) {
                 token.throwIfCancelled()
                 val entry = zip.nextEntry ?: break
                 if (entry.name == "assets/factory-app.json") config = readBounded(zip, FactorySpec.MAX_SPEC_BYTES)
-                else if (entry.name.startsWith("assets/www/") || entry.name == "assets/factory-sdk.js") {
-                    check(assets.size < FactorySpec.MAX_WEB_FILES + 1) { "Preview asset count exceeds build limit" }
-                    val data = readBounded(zip, FactorySpec.MAX_FILE_BYTES)
-                    total += data.size
-                    check(total <= FactorySpec.MAX_WEB_BYTES.toLong() + FactorySpec.MAX_FILE_BYTES) { "Preview assets exceed build limit" }
-                    check(assets.put(entry.name.removePrefix("assets/"), data) == null) { "Duplicate preview asset" }
+                else if (entry.name.startsWith("assets/www/") || entry.name == "assets/factory-sdk.js" ||
+                    (entry.name.startsWith("assets/") && FactoryUiAssets.isNamespace(entry.name.removePrefix("assets/")))) {
+                    val path = entry.name.removePrefix("assets/")
+                    check(!entry.isDirectory && !assets.containsKey(path)) { "Duplicate or directory preview asset" }
+                    val data = if (FactoryUiAssets.isNamespace(path)) FactoryUiAssets.read(path, zip)
+                        else readBounded(zip, FactorySpec.MAX_FILE_BYTES)
+                    if (path.startsWith("www/")) {
+                        webFiles++
+                        webBytes += data.size
+                        check(webFiles <= FactorySpec.MAX_WEB_FILES && webBytes <= FactorySpec.MAX_WEB_BYTES) {
+                            "Preview website exceeds build limit"
+                        }
+                    }
+                    assets[path] = data
                 }
                 zip.closeEntry()
             }

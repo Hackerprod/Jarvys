@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "library": "purecss",
+  "version": "3.0.0",
+  "policy": "fixed-inclusion; load styles explicitly; unmodified distribution bytes",
+  "licenses": [
+    "BSD-3-Clause",
+    "MIT"
+  ],
+  "upstream": "https://github.com/pure-css/pure/tree/v3.0.0",
+  "archives": [
+    {
+      "name": "purecss",
+      "version": "3.0.0",
+      "url": "https://registry.npmjs.org/purecss/-/purecss-3.0.0.tgz",
+      "integrity": "sha512-IdYbGwbmuA7Hy9ACIO1q7ks4xGLcJSVHxJT2BXIz2c4Ve1aSrNU5bAzA1ILT4Gmdy5K59ruWoRPf9WvJZU5fbA==",
+      "sha256": "5528ad3bff7af7d1d67608ac5ee0ca7621da7aff7ce189acf3cd1c9a89d827d4"
+    },
+    {
+      "name": "normalize.css",
+      "version": "8.0.1",
+      "url": "https://registry.npmjs.org/normalize.css/-/normalize.css-8.0.1.tgz",
+      "integrity": "sha512-qizSNPO93t1YUuUhP22btGOo3chcvDFqFaj2TRybP0DMxkHOCTYwp3n34fel4a31ORXy4m1Xq0Gyqpb5m33qIg==",
+      "sha256": "5cc172e0d5d062bc2a1a4bf85443e2eb260d3720e16527a0c1ac03b642f1de39"
+    }
+  ],
+  "files": [
+    {
+      "path": "pure-min.css",
+      "archiveMember": "package/build/pure-min.css",
+      "bytes": 15721,
+      "sha256": "01757dff5e174cd963090a7bbb79f4d95222600202abca1c5e4735d6bbcc952c",
+      "archive": "purecss-3.0.0"
+    },
+    {
+      "path": "grids-responsive-min.css",
+      "archiveMember": "package/build/grids-responsive-min.css",
+      "bytes": 14282,
+      "sha256": "e980b19ca1e76eb125e894643fa43503b966933d2184df8b7d57de32c29ab441",
+      "archive": "purecss-3.0.0"
+    },
+    {
+      "path": "LICENSE.txt",
+      "archiveMember": "package/build/LICENSE",
+      "bytes": 1548,
+      "sha256": "66fe80191874ef13229c0f0f87d28ac25f0942b32c002a1fe49d9cd331e6b3dc",
+      "archive": "purecss-3.0.0"
+    },
+    {
+      "path": "normalize-LICENSE.txt",
+      "archiveMember": "package/LICENSE.md",
+      "bytes": 1098,
+      "sha256": "89a9a9ace8be9e79bdc962823479bf980e4a14777ebe51b37e669f658e6f25ef",
+      "archive": "normalize.css-8.0.1"
+    }
+  ],
+  "notes": "Pure embeds normalize.css with its original banner. The normalize 8.0.1 package supplies the full MIT notice; no separate normalize stylesheet is loaded. Registry integrity was checked; no package lifecycle scripts or compilers were executed. This file excludes its own hash; the compiled runtime catalog pins it."
+}
