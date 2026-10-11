@@ -15,12 +15,13 @@ data class FactorySpec(
     val webDir: String,
     val icon: String,
     val dataBackupTables: List<String> = emptyList(),
+    val dataBackupKeys: List<String> = emptyList(),
 ) {
     fun runtimeConfig(documentBroker: JSONObject? = null): ByteArray {
         val config = JSONObject().put("schemaVersion", 1).put("appId", appId)
             .put("name", name).put("entryPoint", "www/index.html")
             .put("capabilities", JSONArray(capabilities))
-        if (dataBackupTables.isNotEmpty()) config.put("dataBackup", JSONObject().put("tables", JSONArray(dataBackupTables)))
+        backupPolicy()?.let { config.put("dataBackup", it) }
         if (documentBroker != null) config.put("documentBroker", documentBroker)
         val text = config.toString()
         FactoryConfig.parse(text, appId)
@@ -30,7 +31,15 @@ data class FactorySpec(
     fun toJson(): JSONObject = JSONObject().put("schemaVersion", 1).put("appId", appId).put("name", name)
         .put("versionCode", versionCode).put("versionName", versionName)
         .put("capabilities", JSONArray(capabilities)).put("webDir", webDir).put("icon", icon)
-        .also { if (dataBackupTables.isNotEmpty()) it.put("dataBackup", JSONObject().put("tables", JSONArray(dataBackupTables))) }
+        .also { json -> backupPolicy()?.let { json.put("dataBackup", it) } }
+
+    private fun backupPolicy(): JSONObject? {
+        if (dataBackupTables.isEmpty() && dataBackupKeys.isEmpty()) return null
+        return JSONObject().also {
+            if (dataBackupTables.isNotEmpty()) it.put("tables", JSONArray(dataBackupTables))
+            if (dataBackupKeys.isNotEmpty()) it.put("keys", JSONArray(dataBackupKeys))
+        }
+    }
 
     companion object {
         val CAPABILITIES: List<String> = CapabilityCatalog.NAMES
@@ -60,9 +69,13 @@ data class FactorySpec(
                 value
             }
             require(caps.distinct().size == caps.size) { "Duplicate capability" }
-            val backupTables = if (json.has("dataBackup")) {
-                val policy = json.opt("dataBackup")
-                require(policy is JSONObject && policy.keys().asSequence().toSet() == setOf("tables")) { "dataBackup must contain exactly tables" }
+            val policy = if (json.has("dataBackup")) {
+                val value = json.opt("dataBackup")
+                require(value is JSONObject && value.length() > 0 &&
+                    value.keys().asSequence().all { it == "tables" || it == "keys" }) { "dataBackup requires tables or keys and no other fields" }
+                value
+            } else null
+            val backupTables = if (policy?.has("tables") == true) {
                 val tables = policy.opt("tables")
                 require(tables is JSONArray && tables.length() <= 8) { "dataBackup.tables must be an array of at most 8 tables" }
                 val selected = (0 until tables.length()).map { index ->
@@ -75,10 +88,22 @@ data class FactorySpec(
                 require(selected.isEmpty() || ("database" in caps && "documents" in caps)) { "Data backup requires database and documents capabilities" }
                 java.util.Collections.unmodifiableList(selected)
             } else emptyList()
+            val backupKeys = if (policy?.has("keys") == true) {
+                val keys = policy.opt("keys")
+                require(keys is JSONArray && keys.length() <= 32) { "dataBackup.keys must be an array of at most 32 keys" }
+                val selected = (0 until keys.length()).map { index ->
+                    val key = keys.opt(index)
+                    require(key is String && key.matches(Regex("[a-zA-Z0-9_.:-]{1,96}"))) { "Invalid backup key identifier" }
+                    key
+                }
+                require(selected == selected.distinct().sorted()) { "Backup keys must be sorted and unique" }
+                require(selected.isEmpty() || ("storage" in caps && "documents" in caps)) { "Key backup requires storage and documents capabilities" }
+                java.util.Collections.unmodifiableList(selected)
+            } else emptyList()
             val webDir = relativePath(string(json, "webDir"))
             val icon = relativePath(string(json, "icon"))
             require(icon.endsWith(".png", true) || icon.endsWith(".json", true)) { "Icon must be PNG or vector JSON" }
-            return FactorySpec(appId, name, version, versionName, CapabilityCatalog.select(caps), webDir, icon, backupTables)
+            return FactorySpec(appId, name, version, versionName, CapabilityCatalog.select(caps), webDir, icon, backupTables, backupKeys)
         }
         fun relativePath(value: String): String {
             require(value.isNotBlank() && value.length <= 240 && !value.startsWith('/') && '\\' !in value &&

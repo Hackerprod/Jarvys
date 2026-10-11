@@ -318,7 +318,7 @@ class ApkFactorySkillScopeTest {
         val repo = repository()
         val entry = factory()
         val bundle = entry.factoryGuidance!!
-        assertEquals("factory-guidance-v83", bundle.version)
+        assertEquals("factory-guidance-v84", bundle.version)
         assertEquals(10, bundle.resources.size)
         assertTrue(entry.body.toByteArray().size <= 8192)
         assertTrue(bundle.resources.values.sumOf { it.toByteArray().size } <= 65536)
@@ -353,7 +353,7 @@ class ApkFactorySkillScopeTest {
 
     @Test fun resourceArgumentsRejectUnknownPathsStaleVersionsAndWrongTypesWithoutPartialBodies() {
         val tool = LoadSkillTool(listOf(factory()), 16384, { true }, "coding")
-        val base = mapOf<String, Any>("skill_id" to id, "resource" to "database", "resource_version" to "factory-guidance-v83")
+        val base = mapOf<String, Any>("skill_id" to id, "resource" to "database", "resource_version" to "factory-guidance-v84")
         val invalid = listOf(base - "resource", base - "resource_version",
             base + ("resource_version" to "factory-guidance-v77"), base + ("resource_version" to "factory-guidance-v79"), base + ("resource_version" to 80),
             base + ("resource" to 1)) + listOf("", "unknown", "../database", "/database", "references/database.md", "database\\other", "database%2fother").map { base + ("resource" to it) }
@@ -393,7 +393,7 @@ class ApkFactorySkillScopeTest {
             val updated = reopened.skills.value.single { it.metadata.id == id }
             assertFalse(updated.enabled)
             assertEquals(count, updated.usageCount)
-            assertEquals("factory-guidance-v83", updated.factoryGuidance!!.version)
+            assertEquals("factory-guidance-v84", updated.factoryGuidance!!.version)
             assertEquals("PRIVATE LEGACY OVERRIDE", override.readText())
             assertEquals(custom, File(context.filesDir, "skills/$customId/SKILL.md").readText())
             assertEquals(originalProfile, CrewProfileRepository(context).codingProfile().toJson().toString())
@@ -416,7 +416,7 @@ class ApkFactorySkillScopeTest {
         }
         val unversioned = CrewRole("coding", "Coding", "coding", "Review", listOf("read_skill"), null, "Review", 0, listOf(id), CrewProfile.WorkspaceMode.LEGACY_CHAT)
         assertEquals("", CoreAgentRuntime.factoryGuidanceInstructions(unversioned, tools, listOf(entry), 16384))
-        assertFalse(CoreAgentRuntime(listOf(entry), emptyList(), emptyList(), emptyList()).instructions().contains("factory-guidance-v83"))
+        assertFalse(CoreAgentRuntime(listOf(entry), emptyList(), emptyList(), emptyList()).instructions().contains("factory-guidance-v84"))
     }
 
     @Test fun criticalFamilyContractsAndLanguageRemainDiscoverableWithoutDeadFilePointers() {

@@ -1,7 +1,7 @@
-# Factory guidance factory-guidance-v83 / documents-media
+# Factory guidance factory-guidance-v84 / documents-media
 
 Use with the always-loaded Factory core; this reference grants no tools or approvals.
-Historical v77 contract text below is preserved. Current v83: 20 capabilities/44 methods; selected SQLite backup is in the database reference.
+Historical v77 contract text below is preserved. Current v84: 20 capabilities/46 methods; selected string key-value backup is in basics and SQLite backup is in database.
 Sensors and biometrics extend the historical contract in their references, with all six methods UNAVAILABLE in preview.
 Only selected biometric profiles add USE_BIOMETRIC; template/nonbiometric profiles stay zero-permission.
 Historical totals/permission and pending-family statements below describe their original versions.
@@ -23,3 +23,7 @@ audio.play({handle}): audio+documents; consumes untouched read handle (6 MiB, ch
 Read the database reference for the full backup policy and grammar. database.backupExport({version,tables,filename}) and database.backupImport({version,handle,tables,mode}) require database+documents and a nonempty explicit dataBackup.tables policy; default empty disables them. Import consumes an untouched read handle for canonical plaintext JSON <=1 MiB; export uses its own human-selected write destination. Table selections must be explicit, sorted and unique. These methods carry selected SQLite schemas/rows only, never document contents, preferences or signing keys. Same-package/certificate labels check compatibility, not authenticity. Secrets cannot be detected reliably and are unsupported.
 
 The exact current signed receipt and pinned host must pass verification before human review of all values. Export additionally discloses the destination provider and possible cloud sync/retention. Do not automate review or picker. No provider or physical durability is proved: providerCommitConfirmed:false, partial files possible. insertOnly rolls back all on any collision; replaceSelectedTables replaces only selected tables atomically, preserving unselected tables. Exact version/schema are required, no migration; changed targets after review fail conflict. Cancel/lost reply may follow commit; no automatic retry. Both backup methods are UNAVAILABLE in preview. Existing documents quotas, handle/session ownership, lifecycle revocation and cleanup rules still apply.
+
+## String key-value backup integration (v84)
+
+Read basics for storage.backupExport({version:1,keys,filename}) and storage.backupImport({version:1,keys,handle,mode}). These require storage+documents and explicit dataBackup.keys; default empty disables them. They carry selected Jarvys.storage strings only, excluding presentation preferences and SQLite. Import consumes an untouched read handle for canonical plaintext JSON <=1 MiB; exact selected keys, native all-values approval and independent signed policy verification are mandatory. No combined SQLite/storage transaction exists. insertOnly rejects even equal-value collisions; replaceSelectedKeys preserves every unselected key. Commit false/exception is unknown, without rollback or replay. documents.cancel cancels storage backups through the authenticated fast path, sharing the native backup control rate budget with database.cancel. Both backup families remain UNAVAILABLE in preview before handles or databases are allocated. Provider/secret/uncertainty disclosures above still apply.

@@ -169,4 +169,50 @@ class FactorySpecTest {
         assertEquals(maximum, FactorySpec.parse(input.put("dataBackup", JSONObject().put("tables", JSONArray(maximum)))).dataBackupTables)
     }
 
+    @Test fun storageBackupPolicyIsIndependentAndPreservesLegacySerialization() {
+        val old = FactorySpec.parse(spec())
+        assertTrue(old.dataBackupKeys.isEmpty())
+        for (policy in listOf(JSONObject().put("keys", JSONArray()), JSONObject().put("tables", JSONArray()).put("keys", JSONArray()))) {
+            val empty = FactorySpec.parse(spec().put("dataBackup", policy))
+            assertEquals(old.toJson().toString(), empty.toJson().toString())
+            assertArrayEquals(old.runtimeConfig(), empty.runtimeConfig())
+        }
+        val legacy = FactorySpec.parse(spec().put("capabilities", JSONArray(listOf("database", "documents")))
+            .put("dataBackup", JSONObject().put("tables", JSONArray(listOf("notes")))))
+        assertEquals(setOf("tables"), legacy.toJson().getJSONObject("dataBackup").keys().asSequence().toSet())
+        assertEquals(legacy.toJson().toString(), FactorySpec.parse(legacy.toJson().apply {
+            getJSONObject("dataBackup").put("keys", JSONArray())
+        }).toJson().toString())
+        val keys = listOf("A.key:1-", "settings")
+        val input = spec().put("capabilities", JSONArray(listOf("storage", "documents")))
+            .put("dataBackup", JSONObject().put("keys", JSONArray(keys)))
+        val parsed = FactorySpec.parse(input)
+        assertEquals(keys, parsed.dataBackupKeys)
+        assertTrue(parsed.dataBackupTables.isEmpty())
+        assertEquals(setOf("keys"), parsed.toJson().getJSONObject("dataBackup").keys().asSequence().toSet())
+        val runtime = com.jarvys.factory.runtime.FactoryConfig.parse(String(parsed.runtimeConfig(broker())), parsed.appId)
+        assertEquals(keys.toSet(), runtime.dataBackupKeys)
+        assertTrue(runtime.dataBackupTables.isEmpty())
+        assertThrows(UnsupportedOperationException::class.java) { (parsed.dataBackupKeys as MutableList<String>).add("other") }
+        for (invalid in listOf<Any>(JSONObject.NULL, "settings", listOf<Any>(1), listOf("a", "a"), listOf("b", "a"),
+            listOf(""), listOf("a/b"), listOf("a b"), listOf("a".repeat(97)), (0..32).map { "key%02d".format(it) })) {
+            val value = if (invalid is List<*>) JSONArray(invalid) else invalid
+            rejects { it.put("capabilities", JSONArray(listOf("storage", "documents"))).put("dataBackup", JSONObject().put("keys", value)) }
+        }
+        for (caps in listOf(emptyList(), listOf("storage"), listOf("documents"), listOf("database", "documents"))) {
+            rejects { it.put("capabilities", JSONArray(caps)).put("dataBackup", JSONObject().put("keys", JSONArray(keys))) }
+        }
+        val maximum = (0..31).map { "key%02d".format(it) }
+        assertEquals(maximum, FactorySpec.parse(input.put("dataBackup", JSONObject().put("keys", JSONArray(maximum)))).dataBackupKeys)
+        assertEquals(listOf("a".repeat(96)), FactorySpec.parse(input.put("dataBackup", JSONObject().put("keys", JSONArray(listOf("a".repeat(96)))))).dataBackupKeys)
+        val combined = input.put("capabilities", JSONArray(listOf("storage", "database", "documents")))
+            .put("dataBackup", JSONObject().put("keys", JSONArray(keys)).put("tables", JSONArray(listOf("notes"))))
+        val both = FactorySpec.parse(combined)
+        assertEquals(keys, both.dataBackupKeys)
+        assertEquals(listOf("notes"), both.dataBackupTables)
+        assertEquals(setOf("tables", "keys"), both.toJson().getJSONObject("dataBackup").keys().asSequence().toSet())
+        for (caps in listOf(listOf("storage", "documents"), listOf("database", "documents")))
+            assertThrows(IllegalArgumentException::class.java) { FactorySpec.parse(combined.put("capabilities", JSONArray(caps))) }
+    }
+
 }

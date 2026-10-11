@@ -68,4 +68,44 @@ class FactoryDataBackupPolicyTest {
         }.use { opened -> assertTrue(runCatching { FactoryDataBackupPolicy.readVerifiedConfig(opened, expected) }.isFailure) }
         file.delete()
     }
+    @Test fun storagePlanRequiresItsOwnTypedKeyPolicyAndCannotReuseDatabaseProof() {
+        val hex = "a".repeat(64)
+        val archive = com.jarvys.factory.runtime.StorageBackupFormat.create("example.app", hex, 1, org.json.JSONObject().put("theme", "dark"))
+        val plan = com.jarvys.factory.runtime.DataBackupPlan.of(com.jarvys.factory.runtime.StorageBackupPlan.create(hex, 300000, "export", archive, "export", "backup.json", "", org.json.JSONObject()))
+        val installed = FactoryDataBackupPolicy.Installed("synthetic.apk", hex, 1, 123, 1)
+        val verified = FactoryDataBackupPolicy.Verified(FactoryDocumentCoordinator.Proof("example.app", hex, hex, 1, hex), installed, installed, emptySet(), setOf("theme"), true)
+        FactoryDataBackupPolicy.validate(plan, verified)
+        for (invalid in listOf(verified.copy(storage = false, tables = setOf("theme")), verified.copy(keys = emptySet()),
+            verified.copy(proof = verified.proof.copy(certificate = "b".repeat(64))))) {
+            assertTrue(runCatching { FactoryDataBackupPolicy.validate(plan, invalid) }.isFailure)
+        }
+    }
+    @Test fun actualParsedPolicySelectsStorageAuthorityAndKeysIndependentlyOfTables() {
+        fun parsed(caps: List<String>, keys: List<String>, tables: List<String>): com.jarvys.factory.runtime.FactoryConfig {
+            val json = org.json.JSONObject().put("schemaVersion", 1).put("appId", "example.app").put("name", "Synthetic")
+                .put("entryPoint", "www/index.html").put("capabilities", org.json.JSONArray(caps))
+                .put("dataBackup", org.json.JSONObject().put("keys", org.json.JSONArray(keys)).put("tables", org.json.JSONArray(tables)))
+            return com.jarvys.factory.runtime.FactoryConfig.parsePreview(json.toString())
+        }
+        val storage = parsed(listOf("storage", "documents"), listOf("notes"), emptyList())
+        FactoryDataBackupPolicy.requireSelectedPolicy(storage, true, listOf("notes"))
+        assertEquals(setOf("storage", "documents"), FactoryDataBackupPolicy.requiredCapabilities(true))
+        assertTrue(runCatching { FactoryDataBackupPolicy.requireSelectedPolicy(storage, false, listOf("notes")) }.isFailure)
+        assertTrue(runCatching { FactoryDataBackupPolicy.requireSelectedPolicy(storage, true, listOf("other")) }.isFailure)
+        val database = parsed(listOf("database", "documents"), emptyList(), listOf("notes"))
+        FactoryDataBackupPolicy.requireSelectedPolicy(database, false, listOf("notes"))
+        assertEquals(setOf("database", "documents"), FactoryDataBackupPolicy.requiredCapabilities(false))
+        assertTrue(runCatching { FactoryDataBackupPolicy.requireSelectedPolicy(database, true, listOf("notes")) }.isFailure)
+        val both = parsed(listOf("storage", "database", "documents"), listOf("prefs"), listOf("notes"))
+        FactoryDataBackupPolicy.requireSelectedPolicy(both, true, listOf("prefs"))
+        FactoryDataBackupPolicy.requireSelectedPolicy(both, false, listOf("notes"))
+        assertTrue(runCatching { FactoryDataBackupPolicy.requireSelectedPolicy(both, true, listOf("notes")) }.isFailure)
+        assertTrue(runCatching { FactoryDataBackupPolicy.requireSelectedPolicy(both, false, listOf("prefs")) }.isFailure)
+        for (caps in listOf(listOf("storage"), listOf("documents"), emptyList())) {
+            val empty = parsed(caps, emptyList(), emptyList())
+            assertTrue(runCatching { FactoryDataBackupPolicy.requireSelectedPolicy(empty, true, listOf("notes")) }.isFailure)
+        }
+        for (selected in listOf(emptyList(), listOf("notes", "notes"), listOf("other", "notes")))
+            assertTrue(runCatching { FactoryDataBackupPolicy.requireSelectedPolicy(storage, true, selected) }.isFailure)
+    }
 }

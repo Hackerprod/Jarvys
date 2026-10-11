@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import com.jarvys.factory.runtime.DatabaseBackupFormat
 import com.jarvys.factory.runtime.DatabaseBackupPlan
+import com.jarvys.factory.runtime.DataBackupPlan
 import com.jarvys.factory.runtime.DocumentBrokerIdentity
 import com.jarvys.factory.runtime.FactoryConfig
 import java.io.ByteArrayOutputStream
@@ -23,9 +24,12 @@ internal object FactoryDataBackupPolicy {
     internal const val MAX_CONFIG_BYTES = 8192
     private val hosts = setOf(DocumentBrokerIdentity.PRIMARY, DocumentBrokerIdentity.RECOVERY)
     data class Installed(val sourceDir: String, val certificate: String, val version: Long, val uid: Int, val updated: Long)
-    data class Verified(val proof: FactoryDocumentCoordinator.Proof, val source: Installed, val host: Installed, val tables: Set<String>)
+    data class Verified(val proof: FactoryDocumentCoordinator.Proof, val source: Installed, val host: Installed, val tables: Set<String>, val keys: Set<String> = emptySet(), val storage: Boolean = false)
 
-    fun verify(context: Context, appId: String, selected: List<String>): Verified {
+    fun verify(context: Context, appId: String, selected: List<String>): Verified = verifySelected(context, appId, selected, false)
+    fun verify(context: Context, appId: String, plan: DataBackupPlan): Verified = verifySelected(context, appId, plan.selectedNames(), plan.isStorage)
+    private fun verifySelected(context: Context, appId: String, selected: List<String>, storage: Boolean): Verified {
+        val required = requiredCapabilities(storage)
         require(context.packageName in hosts && appId !in hosts)
         fun soleHost() {
             for (other in hosts - context.packageName) {
@@ -38,19 +42,26 @@ internal object FactoryDataBackupPolicy {
         val hostBefore = installed(context, context.packageName)
         val identity = FactorySigningIdentity(context)
         val receipt = identity.state(appId)
-        FactoryDocumentCoordinator.verifyEvidence(appId, before.certificate, receipt.lastApkSha256 ?: error("Unknown APK"), before.version, receipt, setOf("database", "documents"))
+        FactoryDocumentCoordinator.verifyEvidence(appId, before.certificate, receipt.lastApkSha256 ?: error("Unknown APK"), before.version, receipt, required)
         val (apk, config) = RandomAccessFile(before.sourceDir, "r").use { file ->
             readVerifiedConfig(file, receipt.lastApkSha256 ?: error("Unknown APK"))
         }
         val policy = FactoryConfig.parse(config, appId)
-        require(policy.capabilities.containsAll(setOf("database", "documents")))
         val broker = policy.documentBroker ?: error("Missing host binding")
         require(broker.packageName == context.packageName && broker.certificateSha256 == hostBefore.certificate)
-        require(selected.isNotEmpty() && selected.toSet().size == selected.size && policy.dataBackupTables.containsAll(selected))
+        requireSelectedPolicy(policy, storage, selected)
         require(receipt == identity.state(appId)); soleHost()
         require(before == installed(context, appId) && hostBefore == installed(context, context.packageName))
-        val proof = FactoryDocumentCoordinator.verifyEvidence(appId, before.certificate, apk, before.version, receipt, setOf("database", "documents"))
-        return Verified(proof, before, hostBefore, Collections.unmodifiableSet(policy.dataBackupTables.toSortedSet()))
+        val proof = FactoryDocumentCoordinator.verifyEvidence(appId, before.certificate, apk, before.version, receipt, required)
+        return Verified(proof, before, hostBefore, Collections.unmodifiableSet(policy.dataBackupTables.toSortedSet()),
+            Collections.unmodifiableSet(policy.dataBackupKeys.toSortedSet()), storage)
+    }
+    internal fun requiredCapabilities(storage: Boolean): Set<String> = setOf(if (storage) "storage" else "database", "documents")
+    /** Exactly the parsed same-descriptor policy; used by the installed verification path and pure decision tests. */
+    internal fun requireSelectedPolicy(policy: FactoryConfig, storage: Boolean, selected: List<String>) {
+        require(policy.capabilities.containsAll(requiredCapabilities(storage)))
+        val allowed = if (storage) policy.dataBackupKeys else policy.dataBackupTables
+        require(selected.isNotEmpty() && selected == selected.distinct().sorted() && allowed.containsAll(selected))
     }
     /** Lightweight checks for each IPC/chunk boundary. Full APK/config hashing remains at review boundaries. */
     fun requireCurrent(context: Context, verified: Verified) {
@@ -64,8 +75,9 @@ internal object FactoryDataBackupPolicy {
         soleHost()
         check(installed(context, verified.proof.appId) == verified.source && installed(context, context.packageName) == verified.host)
         val receipt = FactorySigningIdentity(context).state(verified.proof.appId)
+        val required = requiredCapabilities(verified.storage)
         check(FactoryDocumentCoordinator.verifyEvidence(verified.proof.appId, verified.source.certificate, verified.proof.apk,
-            verified.source.version, receipt, setOf("database", "documents")) == verified.proof)
+            verified.source.version, receipt, required) == verified.proof)
         soleHost()
         check(installed(context, verified.proof.appId) == verified.source && installed(context, context.packageName) == verified.host)
     }
@@ -84,8 +96,10 @@ internal object FactoryDataBackupPolicy {
         require(file.length() == length)
         return apk to config
     }
-    fun validate(plan: DatabaseBackupPlan, verified: Verified) {
-        require(plan.appId == verified.proof.appId && plan.certificateSha256 == verified.proof.certificate && verified.tables.containsAll(plan.tables))
+    fun validate(plan: DatabaseBackupPlan, verified: Verified) = validate(DataBackupPlan.of(plan), verified)
+    fun validate(plan: DataBackupPlan, verified: Verified) {
+        require(plan.isStorage == verified.storage && plan.appId == verified.proof.appId && plan.certificateSha256 == verified.proof.certificate &&
+            (if (plan.isStorage) verified.keys else verified.tables).containsAll(plan.selectedNames()))
     }
     private fun installed(context: Context, appId: String): Installed {
         val pm = context.packageManager

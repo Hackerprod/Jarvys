@@ -45,10 +45,10 @@
       if (!bridge || typeof bridge.postMessage !== 'function') {
         reject(failure('BRIDGE_UNAVAILABLE', 'Open this application in its generated Android APK.')); return;
       }
-      var cancellation = method === 'sensors.cancel' || method === 'biometrics.cancel' || method === 'database.cancel';
+      var cancellation = method === 'sensors.cancel' || method === 'biometrics.cancel' || method === 'database.cancel' || method === 'documents.cancel';
       var controlPending = false;
       if (cancellation) pending.forEach(function (entry) { if (entry.method === method) controlPending = true; });
-      if (pending.size >= (cancellation ? 19 : 16) || controlPending) {
+      if (pending.size >= (cancellation ? 20 : 16) || controlPending) {
         reject(failure('BUSY', 'Too many pending native requests.')); return;
       }
       var id = prefix + (++sequence).toString(36);
@@ -59,7 +59,8 @@
       } catch (error) { reject(error.code ? error : failure('INVALID_ARGUMENT', 'Arguments must be serializable JSON.')); return; }
       var timeout = /^(export|clipboard|share)\./.test(method) || /^(documents\.(open|create)|photos\.(pick|capture)|audio\.play|browser\.open|maps\.open|phone\.dial|email\.compose|sms\.compose|contacts\.pick|calendar\.insert)$/.test(method) ? 600000 : 30000;
       if (method === 'biometrics.authenticate') timeout = 90000;
-      var backup = method === 'database.backupExport' || method === 'database.backupImport';
+      var backup = method === 'database.backupExport' || method === 'database.backupImport' ||
+        method === 'storage.backupExport' || method === 'storage.backupImport';
       if (backup) timeout = 310000;
       var timer = global.setTimeout(function () {
         if (!pending.has(id)) return;
@@ -80,7 +81,9 @@
       get: function (key) { return call('storage.get', { key: key }); },
       set: function (key, value) { return call('storage.set', { key: key, value: value }); },
       remove: function (key) { return call('storage.remove', { key: key }); },
-      list: function () { return call('storage.list', {}); }
+      list: function () { return call('storage.list', {}); },
+      backupExport: function (options) { return call('storage.backupExport', options); },
+      backupImport: function (options) { return call('storage.backupImport', options); }
     }),
     biometrics: Object.freeze({
       availability: function (options) { return call('biometrics.availability', options === undefined ? {} : options); },

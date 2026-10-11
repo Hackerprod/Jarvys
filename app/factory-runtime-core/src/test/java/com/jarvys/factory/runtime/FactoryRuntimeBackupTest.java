@@ -166,7 +166,7 @@ public class FactoryRuntimeBackupTest {
         JSONObject schema=new JSONObject().put("notes",new JSONObject().put("text",new JSONObject().put("type","text").put("nullable",false)));
         DatabaseBackupFormat.Archive archive=DatabaseBackupFormat.create("example.test",new String(new char[64]).replace('\0','a'),1,schema,
                 new JSONObject().put("notes",new org.json.JSONArray().put(new JSONObject().put("id","one").put("text","synthetic private value"))));
-        member(work,"archive").set(work,archive);request("database.cancel","{}");
+        member(work,"archive").set(work,DataBackupArchive.of(archive));request("database.cancel","{}");
         assertNull(member(work,"archive").get(work));assertNull(member(work,"baseline").get(work));assertNull(member(work,"plan").get(work));
         assertSame(work,field("backup").get(runtime));
     }

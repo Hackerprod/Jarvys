@@ -105,7 +105,7 @@ test('all SDK calls exactly match the catalog and explicit native validator/disp
   const path = require('node:path');
   const catalog = fs.readFileSync(path.join(__dirname, '../../factory-contract/src/main/java/com/jarvys/factory/contract/CapabilityCatalog.java'), 'utf8');
   const rows = [...catalog.matchAll(/\b([A-Z][A-Z_]+)\("([a-z]+\.[a-zA-Z]+)", (?:"[a-z]+"|null)\)/g)];
-  assert.equal(rows.length, 44);
+  assert.equal(rows.length, 46);
   const env = environment();
   const args = { 'storage.get': ['key'], 'storage.set': ['key', 'value'], 'storage.remove': ['key'],
     'export.text': [{ filename: 'test.txt', text: 'hello' }], 'share.text': [{ text: 'hello' }],
@@ -687,17 +687,17 @@ test('database backup wrappers never silently drop malformed or extra options', 
   }
 });
 
-test('three cancellation methods retain one reserved control each beside sixteen ordinary requests', async () => {
+test('four cancellation methods retain one reserved control each beside sixteen ordinary requests', async () => {
   const env = environment();
   const ordinary = Array.from({length: 16}, () => env.api.runtime.info());
   const rejected = ordinary.map(promise => assert.rejects(promise, {code: 'PAGE_CLOSED'}));
   const controls = [];
-  for (const group of ['sensors', 'biometrics', 'database']) {
+  for (const group of ['sensors', 'biometrics', 'database', 'documents']) {
     controls.push(env.api[group].cancel());
     assert.equal(env.sent.at(-1).method, group + '.cancel');
     await assert.rejects(env.api[group].cancel(), {code: 'BUSY'});
   }
-  assert.equal(env.sent.length, 19); assert.equal(env.timers.size, 19);
+  assert.equal(env.sent.length, 20); assert.equal(env.timers.size, 20);
   await assert.rejects(env.api.database.backupExport({version: 1, tables: ['notes'], filename: 'backup.json'}), {code: 'BUSY'});
   for (let index = 0; index < controls.length; index++) {
     env.reply(env.sent[16 + index], {cancelRequested: true, rollbackConfirmed: false});
@@ -705,4 +705,71 @@ test('three cancellation methods retain one reserved control each beside sixteen
   }
   assert.equal(env.timers.size, 16);
   env.handlers.get('pagehide')(); await Promise.all(rejected);
+});
+
+
+test('storage backup API preserves exact options with five minute review and explicit uncertainty', async () => {
+  for (const method of ['backupExport', 'backupImport']) {
+    for (const options of [undefined, null, {}, {version: 1, keys: ['settings'], filename: 'backup.json'},
+      {version: 1, keys: ['settings'], handle: 'a'.repeat(64), mode: 'replaceSelectedKeys'},
+      {keys: ['settings'], extra: 'native exact-key validator must see this'}]) {
+      const env = environment();
+      assert.equal(Object.isFrozen(env.api.storage), true);
+      assert.deepEqual(Object.keys(env.api.storage), ['get', 'set', 'remove', 'list', 'backupExport', 'backupImport']);
+      const pending = env.api.storage[method](options);
+      const request = env.sent.at(-1);
+      assert.equal(request.method, 'storage.' + method);
+      assert.deepEqual(request.args, options);
+      assert.equal(env.delays.at(-1), 310000);
+      env.reply(request, {synthetic: true});
+      assert.equal((await pending).synthetic, true);
+    }
+    const env = environment();
+    const pending = env.api.storage[method]({version: 1, keys: ['settings']});
+    const rejected = assert.rejects(pending, error => error.code === 'TIMEOUT' &&
+      /may have completed/.test(error.message) && /do not automatically retry/.test(error.message));
+    env.timers.values().next().value();
+    await rejected;
+    env.reply(env.sent.at(-1), {committed: true});
+    assert.equal(env.sent.length, 1, 'timeout never replays a backup');
+  }
+});
+
+test('storage backup denials, page closure and missing bridge never become late success', async () => {
+  for (const method of ['backupExport', 'backupImport']) {
+    await assert.rejects(environment(false).api.storage[method]({}), {code: 'BRIDGE_UNAVAILABLE'});
+    for (const code of ['CAPABILITY_DENIED', 'BACKUP_DENIED', 'INVALID_ARGUMENT', 'UNAVAILABLE', 'CANCELLED', 'BACKUP_UNKNOWN', 'PAGE_CLOSED']) {
+      const env = environment();
+      const pending = env.api.storage[method]({version: 1, keys: ['settings']});
+      const request = env.sent.at(-1);
+      const rejected = assert.rejects(pending, {name: 'JarvysError', code});
+      if (code === 'PAGE_CLOSED') env.handlers.get('pagehide')();
+      else env.window.JarvysNative.onmessage({data: JSON.stringify({v: 1, id: request.id, ok: false,
+        error: {code, message: 'Synthetic backup rejection'}})});
+      await rejected;
+      env.reply(request, {committed: true});
+      assert.equal(env.timers.size, 0);
+      assert.equal(env.sent.length, 1);
+    }
+  }
+});
+
+test('documents cancel can accompany storage-only backup under saturated ordinary admission', async () => {
+  const env = environment();
+  const backup = env.api.storage.backupImport({version: 1, keys: ['settings'], handle: 'a'.repeat(64), mode: 'insertOnly'});
+  const backupRequest = env.sent.at(-1);
+  const ordinary = [backup, ...Array.from({length: 15}, () => env.api.runtime.info())];
+  const rejected = ordinary.map(promise => assert.rejects(promise, {code: 'PAGE_CLOSED'}));
+  const cancel = env.api.documents.cancel();
+  const cancelRequest = env.sent.at(-1);
+  assert.equal(cancelRequest.method, 'documents.cancel');
+  assert.notEqual(cancelRequest.id, backupRequest.id);
+  assert.equal(env.sent.length, 17);
+  await assert.rejects(env.api.documents.cancel(), {code: 'BUSY'});
+  await assert.rejects(env.api.storage.backupExport({version: 1, keys: ['settings'], filename: 'backup.json'}), {code: 'BUSY'});
+  env.reply(cancelRequest, {cancelRequested: true, rollbackConfirmed: false});
+  assert.equal((await cancel).rollbackConfirmed, false);
+  assert.equal(env.timers.size, 16, 'cancel receipt does not settle backup or invent rollback');
+  env.handlers.get('pagehide')();
+  await Promise.all(rejected);
 });

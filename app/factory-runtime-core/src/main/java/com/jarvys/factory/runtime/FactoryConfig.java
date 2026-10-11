@@ -18,6 +18,7 @@ public final class FactoryConfig {
     public final Set<String> capabilities;
     public final DocumentBroker documentBroker;
     public final Set<String> dataBackupTables;
+    public final Set<String> dataBackupKeys;
     public static final class DocumentBroker {
         public final String packageName, certificateSha256;
         private DocumentBroker(String packageName, String certificateSha256) {
@@ -26,10 +27,11 @@ public final class FactoryConfig {
     }
 
     private FactoryConfig(String appId, String name, String entryPoint, Set<String> capabilities, DocumentBroker documentBroker) {
-        this(appId, name, entryPoint, capabilities, documentBroker, Collections.emptySet());
+        this(appId, name, entryPoint, capabilities, documentBroker, Collections.emptySet(), Collections.emptySet());
     }
-    private FactoryConfig(String appId, String name, String entryPoint, Set<String> capabilities, DocumentBroker documentBroker, Set<String> dataBackupTables) {
+    private FactoryConfig(String appId, String name, String entryPoint, Set<String> capabilities, DocumentBroker documentBroker, Set<String> dataBackupTables, Set<String> dataBackupKeys) {
         this.dataBackupTables = Collections.unmodifiableSet(new LinkedHashSet<>(dataBackupTables));
+        this.dataBackupKeys = Collections.unmodifiableSet(new LinkedHashSet<>(dataBackupKeys));
         this.documentBroker = documentBroker;
         this.appId = appId; this.name = name; this.entryPoint = entryPoint;
         this.capabilities = Collections.unmodifiableSet(capabilities);
@@ -63,10 +65,12 @@ public final class FactoryConfig {
                     throw new FactoryException("INVALID_CONFIG", "Unknown or duplicate application capability.");
             }
             Set<String> backupTables = new LinkedHashSet<>();
+            Set<String> backupKeys = new LinkedHashSet<>();
             if (object.has("dataBackup")) {
                 JSONObject policy = object.getJSONObject("dataBackup");
-                exactKeys(policy, "tables");
-                JSONArray tables = policy.getJSONArray("tables");
+                exactKeys(policy, "tables", "keys");
+                if (policy.length() == 0) throw new FactoryException("INVALID_CONFIG", "Data backup must declare tables or keys.");
+                JSONArray tables = policy.has("tables") ? policy.getJSONArray("tables") : new JSONArray();
                 if (tables.length() > 8) throw new FactoryException("INVALID_CONFIG", "Too many backup tables.");
                 String previous = null;
                 for (int i = 0; i < tables.length(); i++) {
@@ -78,7 +82,21 @@ public final class FactoryConfig {
                     backupTables.add(table); previous = table;
                 }
                 if (!backupTables.isEmpty() && (!capabilities.contains("database") || !capabilities.contains("documents")))
-                    throw new FactoryException("INVALID_CONFIG", "Data backup requires database and documents capabilities.");
+                    throw new FactoryException("INVALID_CONFIG", "Table backup requires database and documents capabilities.");
+                JSONArray keys = policy.has("keys") ? policy.getJSONArray("keys") : new JSONArray();
+                if (keys.length() > 32) throw new FactoryException("INVALID_CONFIG", "Too many backup keys.");
+                previous = null;
+                for (int i = 0; i < keys.length(); i++) {
+                    Object raw = keys.get(i);
+                    if (!(raw instanceof String) || !((String) raw).matches("[a-zA-Z0-9_.:-]{1,96}"))
+                        throw new FactoryException("INVALID_CONFIG", "Invalid backup key identifier.");
+                    String key = (String) raw;
+                    if (previous != null && previous.compareTo(key) >= 0)
+                        throw new FactoryException("INVALID_CONFIG", "Backup key identifiers must be sorted and unique.");
+                    backupKeys.add(key); previous = key;
+                }
+                if (!backupKeys.isEmpty() && (!capabilities.contains("storage") || !capabilities.contains("documents")))
+                    throw new FactoryException("INVALID_CONFIG", "Key backup requires storage and documents capabilities.");
             }
             DocumentBroker broker = null;
             if (object.has("documentBroker")) {
@@ -92,7 +110,7 @@ public final class FactoryConfig {
             }
             if (installedPackage != null && (capabilities.contains("documents") || capabilities.contains("browser") || capabilities.contains("maps") || capabilities.contains("phone") || capabilities.contains("email") || capabilities.contains("sms") || capabilities.contains("contacts") || capabilities.contains("calendar")) && broker == null)
                 throw new FactoryException("INVALID_CONFIG", "Documents, browser, maps, phone, email, sms, contacts or calendar requires a pinned compatible Jarvys broker.");
-            return new FactoryConfig(appId, name, entry, capabilities, broker, backupTables);
+            return new FactoryConfig(appId, name, entry, capabilities, broker, backupTables, backupKeys);
         } catch (JSONException e) {
             throw new FactoryException("INVALID_CONFIG", "Invalid application configuration.");
         }

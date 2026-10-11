@@ -53,6 +53,8 @@ public class BridgeProtocolTest {
             {"database.migrate", "{\"fromVersion\":0,\"toVersion\":1,\"steps\":[{\"kind\":\"createTable\",\"table\":\"notes\",\"columns\":{\"text\":{\"type\":\"text\",\"nullable\":false}}}]}"},
             {"database.transact", "{\"version\":1,\"operations\":[{\"kind\":\"insert\",\"table\":\"notes\",\"id\":\"one\",\"values\":{\"text\":\"fixture\"}}]}"},
             {"database.select", "{\"version\":1,\"table\":\"notes\"}"},
+            {"storage.backupExport", "{\"version\":1,\"keys\":[\"settings\"],\"filename\":\"backup.json\"}"},
+            {"storage.backupImport", "{\"version\":1,\"keys\":[\"settings\"],\"handle\":\""+HANDLE+"\",\"mode\":\"insertOnly\"}"},
             {"database.backupExport", "{\"version\":1,\"tables\":[\"notes\"],\"filename\":\"backup.json\"}"},
             {"database.backupImport", "{\"version\":1,\"tables\":[\"notes\"],\"handle\":\""+HANDLE+"\",\"mode\":\"insertOnly\"}"},
             {"database.close", "{}"},
@@ -129,13 +131,15 @@ public class BridgeProtocolTest {
             {"database.migrate", "{\"fromVersion\":0,\"toVersion\":1,\"steps\":[{\"kind\":\"createTable\",\"table\":\"notes\",\"columns\":{\"text\":{\"type\":\"text\",\"nullable\":false}}}]}"},
             {"database.transact", "{\"version\":1,\"operations\":[{\"kind\":\"insert\",\"table\":\"notes\",\"id\":\"one\",\"values\":{\"text\":\"fixture\"}}]}"},
             {"database.select", "{\"version\":1,\"table\":\"notes\"}"},
+            {"storage.backupExport", "{\"version\":1,\"keys\":[\"settings\"],\"filename\":\"backup.json\"}"},
+            {"storage.backupImport", "{\"version\":1,\"keys\":[\"settings\"],\"handle\":\""+HANDLE+"\",\"mode\":\"insertOnly\"}"},
             {"database.backupExport", "{\"version\":1,\"tables\":[\"notes\"],\"filename\":\"backup.json\"}"},
             {"database.backupImport", "{\"version\":1,\"tables\":[\"notes\"],\"handle\":\""+HANDLE+"\",\"mode\":\"insertOnly\"}"},
             {"database.close", "{}"},
             {"database.cancel", "{}"},
             {"browser.open", "{\"url\":\"https://example.com/review?fixture=1\"}"},
             {"share.file", "{\"handle\":\""+HANDLE+"\",\"filename\":\"file.bin\",\"mimeType\":\"application/octet-stream\"}"}};
-        assertEquals(44, calls.length);
+        assertEquals(46, calls.length);
         assertEquals(20, com.jarvys.factory.contract.CapabilityCatalog.NAMES.size());
         assertEquals(com.jarvys.factory.contract.CapabilityCatalog.METHODS.size(), calls.length);
         CapabilityDecisionTree.requireReviewedProductionSources();
@@ -159,9 +163,9 @@ public class BridgeProtocolTest {
             }
         }
         // All reachable membership paths, not a hand-picked projection or cached test result.
-        assertEquals(93, validLeaves);
-        assertEquals(44, invalidLeaves);
-        assertEquals(186, wireInvocations[0]);
+        assertEquals(99, validLeaves);
+        assertEquals(46, invalidLeaves);
+        assertEquals(198, wireInvocations[0]);
         int checked = 0;
         long assertions = 0;
         for (int mask = 0; mask < (1 << com.jarvys.factory.contract.CapabilityCatalog.NAMES.size()); mask++) {
@@ -181,7 +185,7 @@ public class BridgeProtocolTest {
                 assertNotNull(method);
                 Object actual = validTrees.get(index).outcome(selected.capabilities);
                 if ((method.capability == null || selected.capabilities.contains(method.capability))
-                        && (!(call[0].equals("share.file") || call[0].startsWith("photos.") || call[0].equals("audio.play") || call[0].equals("database.backupExport") || call[0].equals("database.backupImport")) || selected.capabilities.contains("documents"))) {
+                        && (!(call[0].equals("share.file") || call[0].startsWith("photos.") || call[0].equals("audio.play") || call[0].equals("database.backupExport") || call[0].equals("database.backupImport") || call[0].equals("storage.backupExport") || call[0].equals("storage.backupImport")) || selected.capabilities.contains("documents"))) {
                     assertSame(method, actual);
                 } else assertEquals("CAPABILITY_DENIED", actual);
                 assertEquals("INVALID_ARGUMENT", invalidTrees.get(index).outcome(selected.capabilities));
@@ -190,7 +194,7 @@ public class BridgeProtocolTest {
             checked++;
         }
         assertEquals(1048576, checked);
-        assertEquals(92274688L, assertions);
+        assertEquals(96468992L, assertions);
     }
 
     @Test public void sharingRejectsUrisPathsMimeWildcardsAndExtraAuthority() throws Exception {
@@ -394,6 +398,52 @@ public class BridgeProtocolTest {
                     rejected("INVALID_ARGUMENT", BridgeProtocol.ORIGIN, true, request(method, new JSONObject(args.toString()).put("mode", mode).toString()), both);
                 rejected("INVALID_ARGUMENT", BridgeProtocol.ORIGIN, true, request(method, new JSONObject(args.toString()).put("handle", "content://private").toString()), both);
             } else rejected("INVALID_ARGUMENT", BridgeProtocol.ORIGIN, true, request(method, new JSONObject(args.toString()).put("filename", "../backup.json").toString()), both);
+        }
+    }
+
+    @Test public void storageBackupArgumentsArePureAndRequireStorageAndDocumentsWithoutPolicy() throws Exception {
+        FactoryConfig both = config("[\"storage\",\"documents\"]");
+        assertTrue(both.dataBackupKeys.isEmpty());
+        for (String method : new String[]{"storage.backupExport", "storage.backupImport"}) {
+            JSONObject args = new JSONObject().put("version", 1).put("keys", new org.json.JSONArray("[\"A.key:1-\",\"settings\"]"));
+            if (method.endsWith("Export")) args.put("filename", "backup.json");
+            else args.put("handle", HANDLE).put("mode", "insertOnly");
+            assertEquals(method, BridgeProtocol.validate(BridgeProtocol.ORIGIN, true, request(method, args.toString()), both).method);
+            for (String caps : new String[]{"[]", "[\"storage\"]", "[\"documents\"]", "[\"database\",\"documents\"]"})
+                rejected("CAPABILITY_DENIED", BridgeProtocol.ORIGIN, true, request(method, args.toString()), config(caps));
+            for (String extra : new String[]{"tables", "uri", "path", "all", "preferences", "certificate", "allowSecrets"})
+                rejected("INVALID_ARGUMENT", BridgeProtocol.ORIGIN, true, request(method, new JSONObject(args.toString()).put(extra, true).toString()), both);
+            for (String keys : new String[]{"[]", "[\"a\",\"a\"]", "[\"b\",\"a\"]", "[1]", "[null]", "[\"a/b\"]", "[\"a b\"]", "[\"\"]"})
+                rejected("INVALID_ARGUMENT", BridgeProtocol.ORIGIN, true, request(method, new JSONObject(args.toString()).put("keys", new org.json.JSONArray(keys)).toString()), both);
+            for (Object version : new Object[]{0, 2, "1", JSONObject.NULL, true})
+                rejected("INVALID_ARGUMENT", BridgeProtocol.ORIGIN, true, request(method, new JSONObject(args.toString()).put("version", version).toString()), both);
+            org.json.JSONArray maximum = new org.json.JSONArray();
+            for (int i = 0; i < 32; i++) maximum.put(String.format(java.util.Locale.ROOT, "key%02d", i));
+            assertEquals(method, BridgeProtocol.validate(BridgeProtocol.ORIGIN, true, request(method, new JSONObject(args.toString()).put("keys", maximum).toString()), both).method);
+            maximum.put("key32");
+            rejected("INVALID_ARGUMENT", BridgeProtocol.ORIGIN, true, request(method, new JSONObject(args.toString()).put("keys", maximum).toString()), both);
+            if (method.endsWith("Import")) {
+                assertEquals(method, BridgeProtocol.validate(BridgeProtocol.ORIGIN, true, request(method, new JSONObject(args.toString()).put("mode", "replaceSelectedKeys").toString()), both).method);
+                for (String mode : new String[]{"replace", "merge", "replaceSelectedTables", ""})
+                    rejected("INVALID_ARGUMENT", BridgeProtocol.ORIGIN, true, request(method, new JSONObject(args.toString()).put("mode", mode).toString()), both);
+                rejected("INVALID_ARGUMENT", BridgeProtocol.ORIGIN, true, request(method, new JSONObject(args.toString()).put("handle", "content://private").toString()), both);
+            } else rejected("INVALID_ARGUMENT", BridgeProtocol.ORIGIN, true, request(method, new JSONObject(args.toString()).put("filename", "../backup.json").toString()), both);
+        }
+    }
+
+    @Test public void documentAndDatabaseCancellationEnvelopesShareStrictOneKiBBoundary() throws Exception {
+        for (String method : new String[]{"documents.cancel", "database.cancel"}) {
+            FactoryConfig enabled = config("[\"" + method.substring(0, method.indexOf('.')) + "\"]");
+            String raw = request(method, "{}");
+            String maximum = raw + new String(new char[1024 - raw.getBytes(java.nio.charset.StandardCharsets.UTF_8).length]).replace('\0', ' ');
+            assertEquals(1024, maximum.getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
+            assertEquals(method, BridgeProtocol.validate(BridgeProtocol.ORIGIN, true, maximum, enabled).method);
+            rejected("INVALID_ARGUMENT", BridgeProtocol.ORIGIN, true, maximum + " ", enabled);
+            rejected("INVALID_ARGUMENT", BridgeProtocol.ORIGIN, true, maximum + " ", config("[]"));
+            rejected("CAPABILITY_DENIED", BridgeProtocol.ORIGIN, true, maximum, config("[]"));
+            rejected("UNTRUSTED_SOURCE", "https://example.invalid", true, maximum + " ", enabled);
+            rejected("UNTRUSTED_SOURCE", BridgeProtocol.ORIGIN, false, maximum + " ", enabled);
+            rejected("INVALID_ARGUMENT", BridgeProtocol.ORIGIN, true, request(method, "{\"all\":true}"), enabled);
         }
     }
 

@@ -11,6 +11,10 @@ import com.jarvys.agent.MemoryUiAutomationGuard
 import com.jarvys.factory.runtime.BackupReviewControl
 import com.jarvys.factory.runtime.DatabaseBackupFormat
 import com.jarvys.factory.runtime.DatabaseBackupPlan
+import com.jarvys.factory.runtime.DataBackupPlan
+import com.jarvys.factory.runtime.DataBackupArchive
+import com.jarvys.factory.runtime.StorageBackupFormat
+import com.jarvys.factory.runtime.StorageBackupPlan
 import com.jarvys.factory.runtime.FileShareTransfer
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -25,9 +29,11 @@ import java.util.concurrent.atomic.AtomicBoolean
 internal class FactoryDataBackupCoordinator(
     context: Context,
     private val currentIdentity: (FactoryDataBackupPolicy.Verified) -> Unit = { FactoryDataBackupPolicy.requireCurrent(context, it) },
-    private val verify: (String, List<String>) -> FactoryDataBackupPolicy.Verified = { appId, tables -> FactoryDataBackupPolicy.verify(context, appId, tables) },
+    private val verify: (String, DataBackupPlan) -> FactoryDataBackupPolicy.Verified = { appId, plan -> FactoryDataBackupPolicy.verify(context, appId, plan) },
 ) {
-    data class Request(val plan: DatabaseBackupPlan, val transfer: IBinder, val control: IBinder) {
+    data class Request(val plan: DataBackupPlan, val transfer: IBinder, val control: IBinder) {
+        constructor(plan: DatabaseBackupPlan, transfer: IBinder, control: IBinder) : this(DataBackupPlan.of(plan), transfer, control)
+        constructor(plan: StorageBackupPlan, transfer: IBinder, control: IBinder) : this(DataBackupPlan.of(plan), transfer, control)
         companion object {
             fun parse(intent: Intent): Request {
                 require(intent.component != null && intent.data == null && intent.clipData == null && intent.selector == null)
@@ -40,7 +46,7 @@ internal class FactoryDataBackupCoordinator(
                 @Suppress("DEPRECATION") val transfer = extras.get("transfer")
                 @Suppress("DEPRECATION") val control = extras.get("control")
                 require(plan is String && transfer is IBinder && control is IBinder)
-                return Request(DatabaseBackupPlan.parse(plan), transfer, control)
+                return Request(DataBackupPlan.parse(plan), transfer, control)
             }
         }
     }
@@ -50,11 +56,13 @@ internal class FactoryDataBackupCoordinator(
         @Volatile var pickerOutstanding = false
         @Volatile var abandoned = false
         @Volatile var registration: BackupReviewControl.Registration? = null
-        @Volatile var archive: DatabaseBackupFormat.Archive? = null
+        @Volatile var archive: DataBackupArchive? = null
             private set
         val plan get() = request.plan
         @Synchronized fun revoke() { revoked.set(true); archive = null }
-        @Synchronized fun installArchive(value: DatabaseBackupFormat.Archive) {
+        fun installArchive(value: DatabaseBackupFormat.Archive) = installArchive(DataBackupArchive.of(value))
+        fun installArchive(value: StorageBackupFormat.Archive) = installArchive(DataBackupArchive.of(value))
+        @Synchronized fun installArchive(value: DataBackupArchive) {
             check(!revoked.get()); archive = value
         }
     }
@@ -117,7 +125,7 @@ internal class FactoryDataBackupCoordinator(
         checkDeadline(request.plan); require(callingPackage == request.plan.appId)
         FactoryInteractionAdmission.acquire(this); busy = true
         try {
-            val verified = verify(callingPackage, request.plan.tables); FactoryDataBackupPolicy.validate(request.plan, verified); active(); checkDeadline(request.plan)
+            val verified = verify(callingPackage, request.plan); FactoryDataBackupPolicy.validate(request.plan, verified); active(); checkDeadline(request.plan)
             protect(); check(lease!!.isReadyForUser)
             val value = Session(verified, request)
             current = value; nonce = request.plan.nonce; open = true; state = "review"; save(); return value
@@ -142,7 +150,7 @@ internal class FactoryDataBackupCoordinator(
                 copied = true
                 val bytes = output.toByteArray()
                 try {
-                    val archive = DatabaseBackupFormat.parse(bytes); value.plan.validateArchive(archive)
+                    val archive = DataBackupArchive.parse(bytes); value.plan.validateArchive(archive)
                     requireActive(value); active(); revalidate(value); value.installArchive(archive); requireActive(value); active()
                 } finally { bytes.fill(0) }
             } finally { output.erase() }
@@ -158,7 +166,7 @@ internal class FactoryDataBackupCoordinator(
     }
     private fun revalidate(value: Session) {
         requireActive(value)
-        check(verify(value.plan.appId, value.plan.tables) == value.verified)
+        check(verify(value.plan.appId, value.plan) == value.verified)
         requireActive(value); check(value.registration?.isRevoked == false)
     }
     private fun human(value: Session, action: () -> Unit) {
@@ -209,7 +217,9 @@ internal class FactoryDataBackupCoordinator(
         private val OPEN_STATES = setOf("review", "picker", "cancelling", "selected", "cancelled", "outcome_unknown")
         private val CLOSED_STATES = setOf("approved", "closed", "closed_outcome_unknown")
         internal val WORKER = ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS, ArrayBlockingQueue(1)).apply { allowCoreThreadTimeOut(true) }
-        internal fun checkDeadline(plan: DatabaseBackupPlan) {
+        internal fun checkDeadline(plan: DatabaseBackupPlan) = checkDeadline(DataBackupPlan.of(plan))
+        internal fun checkDeadline(plan: StorageBackupPlan) = checkDeadline(DataBackupPlan.of(plan))
+        internal fun checkDeadline(plan: DataBackupPlan) {
             val now = SystemClock.elapsedRealtime(); check(now >= 0 && plan.deadline > now && plan.deadline - now <= DatabaseBackupPlan.LIFETIME_MILLIS)
         }
         private var recoveryToken: String? = null

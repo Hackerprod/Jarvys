@@ -103,7 +103,7 @@ public class ManifestNodesTest {
         assertNotNull(biometrics); assertEquals(30, biometrics.minimumApi);
         assertEquals(24, CapabilityCatalog.MIN_APP_API);
         assertEquals(1, CapabilityCatalog.SCHEMA_VERSION); assertEquals(2, CapabilityCatalog.SDK_VERSION);
-        assertEquals(44, CapabilityCatalog.METHODS.size());
+        assertEquals(46, CapabilityCatalog.METHODS.size());
         assertEquals(list(CapabilityCatalog.Method.BIOMETRICS_AVAILABILITY,
                 CapabilityCatalog.Method.BIOMETRICS_AUTHENTICATE, CapabilityCatalog.Method.BIOMETRICS_CANCEL), biometrics.methods);
         assertEquals(Collections.singleton(CapabilityCatalog.BIOMETRIC_PERMISSION), biometrics.permissions);
@@ -338,6 +338,21 @@ public class ManifestNodesTest {
         ManifestPlan standalone=plan(list("sensors"));assertEquals(list("sensors"),standalone.capabilities);assertArrayEquals(ManifestXml.encode(plan(Collections.emptyList())),ManifestXml.encode(standalone));
         for(CapabilityCatalog.Method method:sensors.methods){assertEquals("sensors",method.capability);assertSame(method,CapabilityCatalog.METHODS.get(method.wireName));}
         assertThrows(UnsupportedOperationException.class,()->sensors.methods.clear());
+    }
+
+    @Test public void storageBackupExtendsExistingCapabilityWithoutManifestAuthority() {
+        CapabilityCatalog.Capability storage = CapabilityCatalog.CAPABILITIES.get("storage");
+        assertEquals(20, CapabilityCatalog.NAMES.size());
+        assertEquals(46, CapabilityCatalog.METHODS.size());
+        assertEquals(list(CapabilityCatalog.Method.STORAGE_GET, CapabilityCatalog.Method.STORAGE_SET,
+                CapabilityCatalog.Method.STORAGE_REMOVE, CapabilityCatalog.Method.STORAGE_LIST,
+                CapabilityCatalog.Method.STORAGE_BACKUP_EXPORT, CapabilityCatalog.Method.STORAGE_BACKUP_IMPORT), storage.methods);
+        assertTrue(storage.permissions.isEmpty()); assertTrue(storage.manifestNodes.isEmpty());
+        assertTrue(storage.dependencies.isEmpty()); assertTrue(storage.queries.isEmpty());
+        assertFalse(CapabilityCatalog.METHODS.containsKey("storage.cancel"));
+        for (CapabilityCatalog.Method method : storage.methods) {
+            assertEquals("storage", method.capability); assertSame(method, CapabilityCatalog.METHODS.get(method.wireName));
+        }
     }
 
 }

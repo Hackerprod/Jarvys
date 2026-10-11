@@ -225,7 +225,7 @@ public class FactoryDispatcherTest {
     }
 
     @Test public void all1048576CapabilityPlansSelectOnlyBiometricPermissionAndDeduplicateHostVisibility() {
-        assertEquals(20, CapabilityCatalog.NAMES.size()); assertEquals(44, CapabilityCatalog.METHODS.size());
+        assertEquals(20, CapabilityCatalog.NAMES.size()); assertEquals(46, CapabilityCatalog.METHODS.size());
         for (int mask = 0; mask < 1048576; mask++) {
             java.util.List<String> selected = new java.util.ArrayList<>();
             for (int bit = 0; bit < CapabilityCatalog.NAMES.size(); bit++) if ((mask & (1 << bit)) != 0) selected.add(CapabilityCatalog.NAMES.get(bit));
@@ -407,6 +407,66 @@ public class FactoryDispatcherTest {
         assertTrue(info.getJSONArray("unavailableMethods").toString().contains("database.backupImport"));
         assertFalse(info.getJSONArray("unavailableMethods").toString().contains("database.select"));
         assertFalse(info.getJSONArray("unavailableCapabilities").toString().contains("database"));
+    }
+
+    @Test public void storageBackupsCheckPolicyAfterPreviewDenialAndNeverInvokeOrdinaryStoreOrEffects() throws Exception {
+        FactoryConfig empty = FactoryConfig.parsePreview(configuration("[\"storage\",\"documents\"]"));
+        JSONObject declared = new JSONObject(configuration("[\"storage\",\"documents\"]"))
+                .put("dataBackup", new JSONObject().put("keys", new JSONArray("[\"settings\",\"theme\"]")));
+        FactoryConfig allowed = FactoryConfig.parsePreview(declared.toString());
+        BoundedStore store = new BoundedStore(new BoundedStore.Backend() {
+            public java.util.Map<String, String> read() { throw new AssertionError("Ordinary storage read"); }
+            public boolean replace(java.util.Map<String, String> values) { throw new AssertionError("Ordinary storage write"); }
+        });
+        FactoryDispatcher.Database forbidden = (wire, value) -> { throw new AssertionError("Backup/database adapter invoked"); };
+        FactoryDispatcher.Effects effects = (operation, value) -> { throw new AssertionError("Effect/handle allocated"); };
+        for (String method : new String[]{"storage.backupExport", "storage.backupImport"}) {
+            JSONObject args = new JSONObject().put("version", 1).put("keys", new JSONArray("[\"settings\"]"));
+            if (method.endsWith("Export")) args.put("filename", "backup.json");
+            else args.put("handle", new String(new char[64]).replace('\0', 'a')).put("mode", "insertOnly");
+            for (FactoryConfig config : new FactoryConfig[]{empty, allowed}) {
+                try { FactoryDispatcher.dispatch(request(method, args, config), config, store,
+                        FactoryDispatcher.previewMetadata("host", 35, 35), effects, forbidden); fail(); }
+                catch (FactoryException denied) { assertEquals("UNAVAILABLE", denied.code); }
+            }
+            try { FactoryDispatcher.dispatch(request(method, args, empty), empty, store,
+                    FactoryDispatcher.metadata("installed", "app", 35, 35), effects, forbidden); fail(); }
+            catch (FactoryException denied) { assertEquals("BACKUP_DENIED", denied.code); }
+            try { FactoryDispatcher.dispatch(request(method, args, allowed), allowed, store,
+                    FactoryDispatcher.metadata("installed", "app", 35, 35), effects); fail(); }
+            catch (FactoryException denied) { assertEquals("UNAVAILABLE", denied.code); }
+            assertEquals("adapter", FactoryDispatcher.dispatch(request(method, args, allowed), allowed, store,
+                    FactoryDispatcher.metadata("installed", "app", 35, 35), effects,
+                    (wire, value) -> { assertEquals(method, wire); assertEquals(args.toString(), value.toString()); return "adapter"; }));
+            BridgeProtocol.Request mutation = request(method, args, allowed);
+            mutation.args.put("keys", new JSONArray("[\"secret\"]"));
+            try { FactoryDispatcher.dispatch(mutation, allowed, store,
+                    FactoryDispatcher.metadata("installed", "app", 35, 35), effects, forbidden); fail(); }
+            catch (FactoryException denied) { assertEquals("BACKUP_DENIED", denied.code); }
+            mutation.args.put("keys", new JSONArray("[\"settings\"]")).put("version", 1.0d);
+            try { FactoryDispatcher.dispatch(mutation, allowed, store,
+                    FactoryDispatcher.metadata("installed", "app", 35, 35), effects, forbidden); fail(); }
+            catch (FactoryException denied) { assertEquals("INVALID_ARGUMENT", denied.code); }
+        }
+        for (String mode : new String[]{"installed", "preview"}) {
+            JSONObject info = (JSONObject) FactoryDispatcher.dispatch(request("runtime.info", new JSONObject(), allowed), allowed, store,
+                    FactoryDispatcher.metadata(mode, "host", 35, 35), effects);
+            assertEquals(1, info.getInt("storageBackupProtocolVersion"));
+            assertTrue(info.getBoolean("storageBackupBrokerRequired"));
+            assertEquals("[\"storage\",\"documents\"]", info.getJSONArray("storageBackupRequires").toString());
+            assertEquals("[\"settings\",\"theme\"]", info.getJSONArray("storageBackupKeys").toString());
+            assertEquals("jarvys-preferences-data", info.getString("storageBackupFormat"));
+            assertEquals("string_key_value_store", info.getString("storageBackupScope"));
+            assertTrue(info.getBoolean("storageBackupPlaintext"));
+            assertFalse(info.getBoolean("storageBackupProviderDurabilityConfirmed"));
+            assertEquals(1048576, info.getJSONObject("limits").getInt("storageBackupBytes"));
+            assertEquals(32, info.getJSONObject("limits").getInt("storageBackupKeys"));
+            assertEquals(300000, info.getJSONObject("limits").getInt("storageBackupLifetimeMs"));
+            for (String method : new String[]{"storage.backupExport", "storage.backupImport"})
+                assertEquals(mode.equals("preview"), info.getJSONArray("unavailableMethods").toString().contains(method));
+            assertFalse(info.getJSONArray("unavailableMethods").toString().contains("storage.get"));
+            assertFalse(info.getJSONArray("unavailableCapabilities").toString().contains("storage"));
+        }
     }
 
 }

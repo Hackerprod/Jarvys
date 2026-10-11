@@ -168,11 +168,11 @@ class FactoryPreviewRegistryTest {
         assertEquals(1, results.size); results.single().close()
     }
     @Test fun realSharedHandlerAssertionsPassForAllAndNoCapabilitiesAndNeverExecuteJavascript() {
-        for (capabilities in listOf(emptyList(), listOf("share"), listOf("documents"), listOf("audio"), listOf("audio", "documents"), listOf("browser"), listOf("browser", "documents"), listOf("maps"), listOf("phone"), listOf("maps", "phone"), listOf("email"), listOf("sms"), listOf("email", "sms"), listOf("contacts"), listOf("calendar"), listOf("database"), listOf("database", "documents"), listOf("presentation"), listOf("sensors"), listOf("biometrics"), com.jarvys.factory.contract.CapabilityCatalog.NAMES)) {
+        for (capabilities in listOf(emptyList(), listOf("share"), listOf("documents"), listOf("audio"), listOf("audio", "documents"), listOf("browser"), listOf("browser", "documents"), listOf("maps"), listOf("phone"), listOf("maps", "phone"), listOf("email"), listOf("sms"), listOf("email", "sms"), listOf("contacts"), listOf("calendar"), listOf("database"), listOf("database", "documents"), listOf("storage"), listOf("storage", "documents"), listOf("storage", "database", "documents"), listOf("presentation"), listOf("sensors"), listOf("biometrics"), com.jarvys.factory.contract.CapabilityCatalog.NAMES)) {
             val result = FactoryRuntimeContractTests.run(snapshot(capabilities), "com.jarvys.host", 34, 34) {}
             assertEquals("passed", result.getString("state"))
             val observations = result.getJSONArray("observations")
-            assertEquals(47, observations.length())
+            assertEquals(49, observations.length())
             assertEquals(com.jarvys.factory.contract.CapabilityCatalog.METHODS.size + 3, observations.length())
             val documentAssertions = (0 until observations.length()).map { observations.getJSONObject(it) }
                 .filter { it.getString("operation").startsWith("documents.") }
@@ -208,6 +208,13 @@ class FactoryPreviewRegistryTest {
             val backupSuffix = if (capabilities.containsAll(listOf("database", "documents"))) ":preview_unavailable" else ":undeclared_denied"
             assertEquals(backupMethods.map { it + backupSuffix }.toSet(), backupChecks.map { it.getString("operation") }.toSet())
             assertTrue(backupChecks.all { it.getString("outcome") == "passed" })
+            val storageBackupMethods = setOf("storage.backupExport", "storage.backupImport")
+            val storageBackupChecks = (0 until observations.length()).map { observations.getJSONObject(it) }
+                .filter { it.getString("operation").substringBefore(':') in storageBackupMethods }
+            assertEquals(2, storageBackupChecks.size)
+            val storageBackupSuffix = if (capabilities.containsAll(listOf("storage", "documents"))) ":preview_unavailable" else ":undeclared_denied"
+            assertEquals(storageBackupMethods.map { it + storageBackupSuffix }.toSet(), storageBackupChecks.map { it.getString("operation") }.toSet())
+            assertTrue(storageBackupChecks.all { it.getString("outcome") == "passed" })
             val presentationChecks = (0 until observations.length()).map { observations.getJSONObject(it) }.filter { it.getString("operation").startsWith("presentation.") }
             assertEquals(3, presentationChecks.size)
             assertTrue(presentationChecks.all { it.getString("operation").endsWith(if ("presentation" in capabilities) ":preview_unavailable" else ":undeclared_denied") && it.getString("outcome") == "passed" })

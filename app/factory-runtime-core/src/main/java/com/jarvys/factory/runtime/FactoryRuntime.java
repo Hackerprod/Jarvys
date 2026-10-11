@@ -461,7 +461,8 @@ public final class FactoryRuntime implements AutoCloseable {
         }
     }
     private static boolean isBackupMethod(String method) {
-        return "database.backupExport".equals(method) || "database.backupImport".equals(method);
+        return "database.backupExport".equals(method) || "database.backupImport".equals(method)
+                || "storage.backupExport".equals(method) || "storage.backupImport".equals(method);
     }
     /** Authenticated, bounded cancellation bypasses normal request/pending admission. */
     private boolean tryDatabaseCancellation(String raw, JavaScriptReplyProxy proxy) {
@@ -469,15 +470,21 @@ public final class FactoryRuntime implements AutoCloseable {
         final BridgeProtocol.Request request;
         try { request=BridgeProtocol.validate(BridgeProtocol.ORIGIN,true,raw,config); }
         catch(FactoryException invalid) { return false; }
-        if(!"database.cancel".equals(request.method)) return false;
+        boolean documentsControl = "documents.cancel".equals(request.method);
+        if(!"database.cancel".equals(request.method) && !documentsControl) return false;
         if(pending.containsKey(request.id)) { safePost(proxy,BridgeProtocol.failure(request.id,"BUSY","Duplicate request ID.")); return true; }
         if(destroyed || !host.isSessionOpen() || !host.isActive()) return true;
         long now=SystemClock.elapsedRealtime();
         if(now-databaseControlWindow>=1000 || now<databaseControlWindow) { databaseControlWindow=now; databaseControlCount=0; }
         if(++databaseControlCount>8) { safePost(proxy,BridgeProtocol.failure(request.id,"RATE_LIMITED","Database cancellation control limit reached.")); return true; }
-        PrivateDatabase selected=database; if(selected!=null) selected.cancel();
+        if(documentsControl) {
+            documents.cancelAll(); cancelDocumentSelection(); cancelFileShare(); cancelPhotoSelection(); cancelAudioPlayback();
+        } else { PrivateDatabase selected=database; if(selected!=null) selected.cancel(); }
         cancelBackup("CANCELLED","Backup cancellation requested. A restore may have committed or a partial export may remain.");
-        try { safePost(proxy,BridgeProtocol.success(request.id,PrivateDatabase.cancellation())); }
+        try { safePost(proxy,BridgeProtocol.success(request.id,documentsControl
+                ? new JSONObject().put("cancelled",true).put("rollbackConfirmed",false)
+                    .put("pickerMayRemainOpen",documentSelection!=null || photoSelection!=null || (backup!=null && backup.launched && !backup.returned))
+                : PrivateDatabase.cancellation())); }
         catch(Exception failed) { safePost(proxy,BridgeProtocol.failure(request.id,"DATABASE_ERROR","Cancellation outcome is unknown; inspect data before retrying.")); }
         return true;
     }
@@ -510,33 +517,53 @@ public final class FactoryRuntime implements AutoCloseable {
             io.execute(()-> {
                 try {
                     requireBackup(work,true);
-                    PrivateDatabase selected=database;
-                    if(selected==null) { selected=PrivateDatabase.installed(activity,config.appId); database=selected; }
-                    final PrivateDatabase owner=selected; final long ticket=owner.ticket();
-                    java.util.List<String> tables=new java.util.ArrayList<>();
-                    org.json.JSONArray values=work.args.getJSONArray("tables");
-                    for(int i=0;i<values.length();i++) tables.add(values.getString(i));
+                    java.util.List<String> names=new java.util.ArrayList<>();
+                    org.json.JSONArray values=work.args.getJSONArray(work.storageBackup?"keys":"tables");
+                    for(int i=0;i<values.length();i++) names.add(values.getString(i));
                     String certificate=backupCertificate();
-                    if(work.exporting) {
-                        work.archive=owner.backupExport(config.appId,certificate,work.args.getInt("version"),tables,ticket,()->backupAuthority(work,true));
+                    if(work.storageBackup) {
+                        if(work.exporting) {
+                            work.archive=DataBackupArchive.of(store.backupExport(config.appId,certificate,work.args.getInt("version"),names,()->backupAuthority(work,true)));
+                            requireBackup(work,true); work.handles.chargeBackupSnapshot(work.archive.bytes().length);
+                        } else {
+                            byte[] bytes=work.handles.snapshotForBackup(work.args.getString("handle"));
+                            try { requireBackup(work,true); work.archive=DataBackupArchive.of(StorageBackupFormat.parse(bytes)); }
+                            finally { java.util.Arrays.fill(bytes,(byte)0); }
+                            work.handles.cancelAll();
+                            if(!config.appId.equals(work.archive.appId) || !certificate.equals(work.archive.certificateSha256)
+                                    || work.archive.version!=work.args.getInt("version") || !work.archive.selectedNames().equals(names))
+                                throw new FactoryException("BACKUP_MISMATCH","Backup identity, version or exact selected keys do not match.");
+                            work.storageBaseline=store.backupBaseline(work.archive.storage,()->backupAuthority(work,true));
+                        }
                         requireBackup(work,true);
-                        work.handles.chargeBackupSnapshot(work.archive.bytes().length);
+                        work.plan=DataBackupPlan.of(StorageBackupPlan.create(work.nonce,work.deadline,work.exporting?"export":"import",work.archive.storage,
+                                work.exporting?"export":work.args.getString("mode"),work.exporting?work.args.getString("filename"):"",
+                                work.storageBaseline==null?"":work.storageBaseline.preimageSha256,
+                                work.storageBaseline==null?new JSONObject():work.storageBaseline.present()));
                     } else {
-                        byte[] bytes=work.handles.snapshotForBackup(work.args.getString("handle"));
-                        try { requireBackup(work,true); work.archive=DatabaseBackupFormat.parse(bytes); }
-                        finally { java.util.Arrays.fill(bytes,(byte)0); }
-                        work.handles.cancelAll();
-                        if(!config.appId.equals(work.archive.appId) || !certificate.equals(work.archive.certificateSha256)
-                                || work.archive.version!=work.args.getInt("version") || !DatabaseBackupFormat.sameTables(work.archive,tables))
-                            throw new FactoryException("BACKUP_MISMATCH","Backup identity, version or exact selected tables do not match.");
-                        work.baseline=owner.backupBaseline(work.archive,ticket,()->backupAuthority(work,true));
+                        PrivateDatabase selected=database;
+                        if(selected==null) { selected=PrivateDatabase.installed(activity,config.appId); database=selected; }
+                        final PrivateDatabase owner=selected; final long ticket=owner.ticket();
+                        if(work.exporting) {
+                            work.archive=DataBackupArchive.of(owner.backupExport(config.appId,certificate,work.args.getInt("version"),names,ticket,()->backupAuthority(work,true)));
+                            requireBackup(work,true); work.handles.chargeBackupSnapshot(work.archive.bytes().length);
+                        } else {
+                            byte[] bytes=work.handles.snapshotForBackup(work.args.getString("handle"));
+                            try { requireBackup(work,true); work.archive=DataBackupArchive.of(DatabaseBackupFormat.parse(bytes)); }
+                            finally { java.util.Arrays.fill(bytes,(byte)0); }
+                            work.handles.cancelAll();
+                            if(!config.appId.equals(work.archive.appId) || !certificate.equals(work.archive.certificateSha256)
+                                    || work.archive.version!=work.args.getInt("version") || !work.archive.selectedNames().equals(names))
+                                throw new FactoryException("BACKUP_MISMATCH","Backup identity, version or exact selected tables do not match.");
+                            work.baseline=owner.backupBaseline(work.archive.database,ticket,()->backupAuthority(work,true));
+                        }
+                        requireBackup(work,true);
+                        String schema=DatabaseBackupFormat.sha256(DatabaseBackupFormat.canonical(work.archive.database.schema()));
+                        work.plan=DataBackupPlan.of(DatabaseBackupPlan.create(work.nonce,work.deadline,work.exporting?"export":"import",work.archive.database,
+                                work.exporting?"export":work.args.getString("mode"),work.exporting?work.args.getString("filename"):"",
+                                schema,work.baseline==null?"":work.baseline.preimageSha256,
+                                work.baseline==null?new JSONObject():work.baseline.counts()));
                     }
-                    requireBackup(work,true);
-                    String schema=DatabaseBackupFormat.sha256(DatabaseBackupFormat.canonical(work.archive.schema()));
-                    work.plan=DatabaseBackupPlan.create(work.nonce,work.deadline,work.exporting?"export":"import",work.archive,
-                            work.exporting?"export":work.args.getString("mode"),work.exporting?work.args.getString("filename"):"",
-                            schema,work.baseline==null?"":work.baseline.preimageSha256,
-                            work.baseline==null?new JSONObject():work.baseline.counts());
                     work.control=new BackupReviewControl(work.nonce,uid->backupHostAllowed(work,uid));
                     work.transfer=work.admission.complete(work.archive.bytes(),work.nonce,uid->backupHostAllowed(work,uid));
                     main.post(()-> { work.worker=false; launchBackupWhenClean(work); });
@@ -623,11 +650,12 @@ public final class FactoryRuntime implements AutoCloseable {
             requireBackup(work,true); DocumentBrokerIdentity.verify(activity,config.documentBroker);
             final JSONObject result;
             if(work.exporting) result=writeBackup(work);
+            else if(work.storageBackup) result=store.backupImport(work.archive.storage,work.plan.mode,work.storageBaseline,()->backupAuthority(work,true));
             else {
                 PrivateDatabase selected=database;
                 if(selected==null) { selected=PrivateDatabase.installed(activity,config.appId); database=selected; }
                 final PrivateDatabase owner=selected; final long ticket=owner.ticket();
-                result=owner.backupImport(work.archive,work.plan.mode,work.baseline,ticket,()->backupAuthority(work,true));
+                result=owner.backupImport(work.archive.database,work.plan.mode,work.baseline,ticket,()->backupAuthority(work,true));
             }
             main.post(()-> {
                 work.worker=false; work.terminal=true;
@@ -718,7 +746,7 @@ public final class FactoryRuntime implements AutoCloseable {
     private void finishBackup(BackupWork work) {
         if(backup!=work || work.worker || (!work.cancelled && !work.terminal)) return;
         // Discard private snapshots before retaining only the callback tombstone.
-        work.archive=null; work.baseline=null; work.plan=null;
+        work.archive=null; work.baseline=null; work.storageBaseline=null; work.plan=null;
         if(work.control!=null) { work.control.close(); work.control=null; }
         if(work.transfer!=null) { work.transfer.close(); work.transfer=null; }
         if(work.admission!=null) { work.admission.close(); work.admission=null; }
@@ -736,12 +764,13 @@ public final class FactoryRuntime implements AutoCloseable {
     private final class BackupWork {
         final Reply reply; final JSONObject args; final int page,requestCode;
         final DocumentHandles handles;
-        final String nonce; final long deadline; final boolean exporting;
+        final String nonce; final long deadline; final boolean exporting,storageBackup;
         final android.os.CancellationSignal signal=new android.os.CancellationSignal();
         volatile boolean cancelled,terminal,worker,launched,returned,applying,cancelScheduled;
-        volatile DatabaseBackupFormat.Archive archive;
+        volatile DataBackupArchive archive;
         volatile PrivateDatabase.Baseline baseline;
-        volatile DatabaseBackupPlan plan;
+        volatile BoundedStore.BackupBaseline storageBaseline;
+        volatile DataBackupPlan plan;
         volatile FileShareTransfer transfer; volatile FileShareTransfer.Admission admission;
         volatile BackupReviewControl control;
         Intent result; int resultCode; volatile Uri output; volatile String internalHandle;
@@ -757,7 +786,8 @@ public final class FactoryRuntime implements AutoCloseable {
             this.reply=reply; this.page=generation; this.handles=documents; this.args=new JSONObject(request.args.toString());
             requestCode=BACKUP_REQUEST_SEQUENCE.getAndIncrement();
             if(requestCode>BACKUP_REQUEST_MAX) throw new FactoryException("BUSY","Backup callback identifiers are exhausted; restart the app before retrying.");
-            exporting="database.backupExport".equals(request.method);
+            storageBackup=request.method.startsWith("storage.");
+            exporting="database.backupExport".equals(request.method) || "storage.backupExport".equals(request.method);
             byte[] bytes=new byte[32]; new java.security.SecureRandom().nextBytes(bytes);
             StringBuilder value=new StringBuilder(); for(byte b:bytes) value.append(String.format(java.util.Locale.ROOT,"%02x",b&255));
             nonce=value.toString(); deadline=SystemClock.elapsedRealtime()+300000;
@@ -853,6 +883,7 @@ public final class FactoryRuntime implements AutoCloseable {
                 documents.close(request.args.getString("handle"));
                 reply.ok(new JSONObject().put("status", "close_requested").put("providerCommitConfirmed", false)); break;
             case DOCUMENTS_CANCEL:
+                cancelBackup("CANCELLED","Backup cancellation requested. A restore may have committed or a partial export may remain.");
                 documents.cancelAll(); cancelDocumentSelection(); cancelFileShare(); cancelPhotoSelection(); cancelAudioPlayback();
                 reply.ok(new JSONObject().put("cancelled", true).put("rollbackConfirmed", false)
                         .put("pickerMayRemainOpen", documentSelection != null || photoSelection != null)); break;

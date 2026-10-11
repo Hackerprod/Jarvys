@@ -1,15 +1,15 @@
 {
-  "version": "factory-guidance-v83",
+  "version": "factory-guidance-v84",
   "sha256": {
-    "basics": "9c79637bb286f2959c6ba9a4161daeeead9e82dcbebb1a74f29b4e3f2863d631",
-    "biometrics": "e5a096ff9e8a42a35f870bfdf6a1fc518f7d4aa08514d63bc9ce5734765ba643",
-    "contacts-calendar": "d4855d56d5965d811790e3a9dd85ea02daf78fd99587a9da3991927e81dd6ddb",
-    "database": "c3066e5ca0b575352c53dff685e6fb7911a614df534b77e208ddf520d7e29d40",
-    "documents-media": "8a4efe59b55341522f178855386e034df761d4b3aaf71bc51a9ea05c61a7a0ff",
-    "external-actions": "db3c4ca6cb436b4742c17c0b5c7498d0ba970107f3e65d4dd6903c283c08c8ca",
-    "lifecycle": "d604c7fd06b146c5a9d956dba19f7fb044b3dc122ff1539ccee66805e8704c50",
-    "local-ui": "d6fad9d32d5f8d358fc603816efed88426e4ac943d707ffe281fd64897ed81fa",
-    "presentation": "76a4ba54693f3447b010a0e6fe930559a72d85fd0a04aa44a9f61eea6d6de82c",
-    "sensors": "da9c850a5de4080d3a68d79f85cdb2f410e6bbd641f16b1aced2ce0a67fb90cf"
+    "basics": "9ddde733b2ffa01b094aeba253ba9db7ddfa1c8d67e792f79a5546ce79fa552e",
+    "biometrics": "afd1bf710612108e9cf8d1094efa4e328f6f8ed49768fe2d9204b0b1124bef25",
+    "contacts-calendar": "b237ea02848bf8d0fab1ebf573504954cb8059f50428976dd850dd630dd2e297",
+    "database": "d66f58acad6c74cdf469130f16e8ae52306bf0bcbd11f75841bb80aba9959f5e",
+    "documents-media": "ce00b834b91180fbf6ffbc55ee392241494568273a4478eb8c84640696658216",
+    "external-actions": "c32fdc0b7d4b7a5a797da9dfa80ea26775bed310f8cf4055ae3ee0eaba837761",
+    "lifecycle": "abdfbc29aa48acfffd0e79a5e7c2464ffd9185e7e96b8e26999d12df1f7c814e",
+    "local-ui": "27e9f3de014e351c8c369e3cf44b2018ae27fac744f3bc62e0af9449f117c5be",
+    "presentation": "28d0dfef9a1aec891e73f53525406bbed68fb4f2d9edac9c6b75ae85415a0254",
+    "sensors": "28fa402b27246247b1875d88412e2b2b62e8a33ca7ff99ad5aaad7784f6c5fde"
   }
 }

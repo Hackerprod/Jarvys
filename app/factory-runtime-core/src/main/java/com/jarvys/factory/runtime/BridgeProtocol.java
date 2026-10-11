@@ -39,6 +39,9 @@ public final class BridgeProtocol {
             CapabilityCatalog.Method operation = CapabilityCatalog.METHODS.get(method);
             if (operation == null) throw new FactoryException("UNKNOWN_METHOD", "Native method is not implemented.");
             String capability = operation.capability;
+            if ((operation == CapabilityCatalog.Method.DOCUMENTS_CANCEL || operation == CapabilityCatalog.Method.DATABASE_CANCEL) &&
+                    raw.getBytes(StandardCharsets.UTF_8).length > 1024)
+                throw new FactoryException("INVALID_ARGUMENT", "Backup cancellation envelope exceeds 1 KiB.");
             switch (operation) {
                 case BIOMETRICS_AUTHENTICATE:
                     try { BiometricAuthentication.Request.parse(args); }
@@ -61,6 +64,11 @@ public final class BridgeProtocol {
                 case SENSORS_LIST:
                 case PRESENTATION_GET: case PRESENTATION_RESET: FactoryConfig.exactKeys(args); break;
                 case PRESENTATION_SET: FactoryPresentation.parse(args); break;
+                case STORAGE_BACKUP_EXPORT: case STORAGE_BACKUP_IMPORT:
+                    StorageBackupRequest.validate(method, args);
+                    if (!config.capabilities.contains("documents"))
+                        throw new FactoryException("CAPABILITY_DENIED", "Storage backup also requires documents capability.");
+                    break;
                 case DATABASE_BACKUP_EXPORT: case DATABASE_BACKUP_IMPORT:
                     DatabaseBackupRequest.validate(method, args);
                     if (!config.capabilities.contains("documents"))

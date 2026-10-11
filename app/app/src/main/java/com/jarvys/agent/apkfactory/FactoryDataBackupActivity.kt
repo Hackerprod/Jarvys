@@ -261,12 +261,21 @@ open class FactoryDataBackupActivity : ComponentActivity() {
         details.text = buildString {
             append(getString(R.string.factory_data_backup_exact_plan)).append('\n')
             append(inert(value.plan.json())).append("\n\n")
-            append(getString(R.string.factory_data_backup_row_counts)).append('\n')
+            if (value.plan.isStorage) {
+                append(getString(R.string.factory_data_backup_key_presence)).append('\n')
+                for (key in value.plan.keys) {
+                    append(key)
+                    if (value.plan.operation == "import") append(": ").append(value.plan.storage.targetPresent().getBoolean(key))
+                    append('\n')
+                }
+                append(getString(R.string.factory_data_backup_storage_warning)).append("\n\n")
+            } else append(getString(R.string.factory_data_backup_row_counts)).append('\n')
             for (table in value.plan.tables) {
                 append(table).append(": ").append(counts.getJSONArray(table).length())
                 if (value.plan.operation == "import") append(" / ").append(value.plan.targetRows().getLong(table))
                 append('\n')
             }
+            if (value.plan.mode == "replaceSelectedKeys") append(getString(R.string.factory_data_backup_keys_replace_warning)).append("\n\n")
             if (value.plan.mode == "replaceSelectedTables") append(getString(R.string.factory_data_backup_delete_warning)).append("\n\n")
             append(getString(R.string.factory_data_backup_archive_values)).append('\n')
             append(inert(String(archive.bytes(), Charsets.UTF_8)))
