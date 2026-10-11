@@ -134,26 +134,59 @@ public class BridgeProtocolTest {
         assertEquals(42, calls.length);
         assertEquals(20, com.jarvys.factory.contract.CapabilityCatalog.NAMES.size());
         assertEquals(com.jarvys.factory.contract.CapabilityCatalog.METHODS.size(), calls.length);
+        CapabilityDecisionTree.requireReviewedProductionSources();
+        java.util.List<CapabilityDecisionTree<Object>> validTrees = new java.util.ArrayList<>();
+        java.util.List<CapabilityDecisionTree<Object>> invalidTrees = new java.util.ArrayList<>();
+        int validLeaves = 0, invalidLeaves = 0;
+        final int[] wireInvocations = {0};
+        for (String[] call : calls) {
+            final String valid = request(call[0], call[1]);
+            final String invalid = request(call[0], new JSONObject(call[1]).put("undeclared", true).toString());
+            for (String raw : new String[]{valid, invalid}) {
+                CapabilityDecisionTree<Object> tree = CapabilityDecisionTree.explore(capabilities -> {
+                    wireInvocations[0]++;
+                    try {
+                        return BridgeProtocol.validate(BridgeProtocol.ORIGIN, true, raw,
+                                CapabilityDecisionTree.config(capabilities)).operation;
+                    } catch (FactoryException rejected) { return rejected.code; }
+                });
+                if (raw == valid) { validTrees.add(tree); validLeaves += tree.leaves(); }
+                else { invalidTrees.add(tree); invalidLeaves += tree.leaves(); }
+            }
+        }
+        // All reachable membership paths, not a hand-picked projection or cached test result.
+        assertEquals(87, validLeaves);
+        assertEquals(42, invalidLeaves);
+        assertEquals(174, wireInvocations[0]);
+        int checked = 0;
+        long assertions = 0;
         for (int mask = 0; mask < (1 << com.jarvys.factory.contract.CapabilityCatalog.NAMES.size()); mask++) {
             org.json.JSONArray declared = new org.json.JSONArray();
             for (int bit = 0; bit < com.jarvys.factory.contract.CapabilityCatalog.NAMES.size(); bit++) if ((mask & (1 << bit)) != 0)
                 declared.put(com.jarvys.factory.contract.CapabilityCatalog.NAMES.get(bit));
             FactoryConfig selected = config(declared.toString());
-            for (String[] call : calls) {
+            // Independently bind the parsed set used for replay to every bit of this subset.
+            assertEquals(Integer.bitCount(mask), selected.capabilities.size());
+            for (int bit = 0; bit < com.jarvys.factory.contract.CapabilityCatalog.NAMES.size(); bit++)
+                assertEquals((mask & (1 << bit)) != 0, selected.capabilities.contains(
+                        com.jarvys.factory.contract.CapabilityCatalog.NAMES.get(bit)));
+            for (int index = 0; index < calls.length; index++) {
+                String[] call = calls[index];
                 com.jarvys.factory.contract.CapabilityCatalog.Method method =
                     com.jarvys.factory.contract.CapabilityCatalog.METHODS.get(call[0]);
                 assertNotNull(method);
+                Object actual = validTrees.get(index).outcome(selected.capabilities);
                 if ((method.capability == null || selected.capabilities.contains(method.capability))
                         && (!(call[0].equals("share.file") || call[0].startsWith("photos.") || call[0].equals("audio.play")) || selected.capabilities.contains("documents"))) {
-                    assertSame(method, BridgeProtocol.validate(BridgeProtocol.ORIGIN, true,
-                        request(call[0], call[1]), selected).operation);
-                } else rejected("CAPABILITY_DENIED", BridgeProtocol.ORIGIN, true,
-                    request(call[0], call[1]), selected);
-                org.json.JSONObject invalid = new org.json.JSONObject(call[1]).put("undeclared", true);
-                rejected("INVALID_ARGUMENT", BridgeProtocol.ORIGIN, true,
-                    request(call[0], invalid.toString()), selected);
+                    assertSame(method, actual);
+                } else assertEquals("CAPABILITY_DENIED", actual);
+                assertEquals("INVALID_ARGUMENT", invalidTrees.get(index).outcome(selected.capabilities));
+                assertions += 2;
             }
+            checked++;
         }
+        assertEquals(1048576, checked);
+        assertEquals(88080384L, assertions);
     }
 
     @Test public void sharingRejectsUrisPathsMimeWildcardsAndExtraAuthority() throws Exception {
