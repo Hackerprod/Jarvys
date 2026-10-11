@@ -10,15 +10,15 @@
     <string name="full_google_granted_through">Available through %1$s</string>
     <string name="full_google_scope_deny_explanation">Deny on a Google permission disconnects both Gmail and Drive locally. To block only one action, use its tool policy below.</string>
     <string name="full_google_modify_explanation">gmail.modify permits reading, drafting and sending at Google, as well as labels, archive, read state, spam, trash and restore. It cannot permanently delete messages. These Google permissions do not authorize autonomous app actions.</string>
-    <string name="full_google_full_explanation">Full mail access includes reading, drafting, sending, mailbox management and permanent message deletion. Enable it only if needed. Each irreversible action requires review of the exact targets; it cannot use Allow. Deleting a label also permanently removes its label assignments and requires review.</string>
+    <string name="full_google_full_explanation">Full mail access includes reading, drafting, sending, mailbox management and permanent message deletion. Enable it only if needed. Each action follows its Ask, Allow or Deny policy and remains bound to exact targets. Deleting a label permanently removes its label assignments.</string>
     <string name="full_google_operation_scope_unavailable">Unavailable · Google permission needed</string>
-    <string name="full_google_irreversible_operation">Irreversible · Review every action</string>
+    <string name="full_google_irreversible_operation">Irreversible · Exact targets and configured action policy apply</string>
     <string name="full_google_legacy_send_unverified">This send-only Google token cannot verify its account. Sending is unavailable until you explicitly enable a profile-capable permission, such as drafts, or reconnect with Android authorization. No extra permission is requested automatically.</string>
     <string name="full_google_account_mismatch">Google permissions belong to different accounts or the account changed. No action was sent. Reconnect the intended account and review the action again.</string>
     <string name="full_google_account_unverified">Google did not return a verifiable Gmail account. No action was sent.</string>
     <string name="full_google_account_pin_failed">The verified Google account could not be saved. No action was sent.</string>
     <string name="full_google_scope_gmail_labels">Edit label definitions · Optional</string>
     <string name="full_google_section_labels">Label definitions</string>
-    <string name="full_google_labels_explanation">gmail.labels permits creating, reading, renaming and deleting label definitions. It does not read mail or apply labels to messages; message organization needs Manage mail. Deleting a label permanently removes its assignments and requires review for every action.</string>
+    <string name="full_google_labels_explanation">gmail.labels permits creating, reading, renaming and deleting label definitions. It does not read mail or apply labels to messages; message organization needs Manage mail. Deleting a label permanently removes its assignments and follows its configured action policy.</string>
     <string name="full_google_legacy_labels_unverified">This labels-only Google token cannot verify its account. Label edits are unavailable until you explicitly enable a profile-capable management permission or reconnect with Android authorization. No extra permission is requested automatically.</string>
 </resources>

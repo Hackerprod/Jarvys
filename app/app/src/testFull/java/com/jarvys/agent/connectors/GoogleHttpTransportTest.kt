@@ -45,6 +45,50 @@ class GoogleHttpTransportTest {
         override fun getHeaderFields(): Map<String, List<String>> = mapOf("ETag" to listOf("\"v1\""), "Set-Cookie" to listOf("private"))
     }
 
+    @Test fun policyAdmissionRunsAgainAfter401AndCanStopRefreshedMutation() {
+        val transport = FakeTransport().apply {
+            replies += GoogleBinaryResponse(401, byteArrayOf())
+            replies += GoogleBinaryResponse(200, byteArrayOf())
+        }
+        var allowed = true
+        var admissions = 0
+        val failure = runCatching {
+            GoogleRequestExecutor(transport).execute(scope, "PATCH", url, "{}".toByteArray(), "application/json",
+                CancellationToken.cancellable(), 1024, emptyMap(), { "test-token" }, { allowed = false },
+                beforeDispatch = { admissions++; check(allowed) { "policy revoked during refresh" } })
+        }.exceptionOrNull()
+        assertTrue(failure is GooglePreDispatchAuthorizationException)
+        assertEquals(2, admissions)
+        assertEquals(1, transport.calls.size)
+    }
+
+    @Test fun readRetryUsesFreshAdmissionAndLexicalHookDoesNotLeakAfterFailure() {
+        val transport = FakeTransport().apply {
+            replies += GoogleBinaryResponse(503, byteArrayOf())
+            replies += GoogleBinaryResponse(200, byteArrayOf())
+        }
+        var admissions = 0
+        GoogleRequestExecutor(transport, sleep = { _, _ -> }, jitter = { 0 }).execute(scope, "GET", url,
+            null, "application/json", CancellationToken.cancellable(), 1024, emptyMap(), { "test-token" }, {},
+            beforeDispatch = { admissions++ })
+        assertEquals(2, admissions)
+        var calls = 0
+        val wrapped = GoogleDispatchAuthorization(object : GoogleRestAuthorization {
+            override fun isScopeGranted(scope: String) = true
+            override fun request(scope: String, method: String, url: String, body: String?, contentType: String): GoogleHttpResponse {
+                calls++; return GoogleHttpResponse(200, "{}")
+            }
+        })
+        assertTrue(runCatching {
+            wrapped.withAdmission({ error("revoked") }) {
+                wrapped.requestCancellable(scope, "GET", url, token = CancellationToken.cancellable())
+            }
+        }.isFailure)
+        assertEquals(0, calls)
+        wrapped.requestCancellable(scope, "GET", url, token = CancellationToken.cancellable())
+        assertEquals(1, calls)
+    }
+
     @Test fun realConnectionContractKeepsBinaryMethodsHeadersBodyAndBounds() {
         val payload = byteArrayOf(0, 1, 127, -1, -32)
         val connection = Connection(URL(url), payload)

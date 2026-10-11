@@ -40,13 +40,13 @@ internal object GmailManagementCatalog {
         op(GmailManagement.MODIFY_THREADS, "Expand exact threads to their existing message IDs and add/remove labels on those fixed members. New arrivals are excluded; draft members are not eligible.", actionSchema(true, true), true),
         op(GmailManagement.TRASH_THREADS, "Expand exact threads and move only their fixed existing messages to Trash; new arrivals are excluded.", actionSchema(false, true), true),
         op(GmailManagement.UNTRASH_THREADS, "Expand exact threads and restore only their fixed existing messages from Trash; new arrivals are excluded.", actionSchema(false, true), true),
-        op(GmailManagement.DELETE, "Permanently delete an exact fixed set of messages currently in TRASH. Requires optional full Gmail scope and one explicit irreversible approval for this account/batch. Never automatic. New arrivals and concurrent changes detected before dispatch are excluded; Gmail offers no atomic precondition.", actionSchema(false, false), true),
+        op(GmailManagement.DELETE, "Permanently delete an exact fixed set of messages currently in TRASH. Requires optional full Gmail scope and the configured action policy for this exact account/batch. New arrivals and concurrent changes detected before dispatch are excluded; Gmail offers no atomic precondition.", actionSchema(false, false), true),
         op(GmailManagement.GET_LABEL, "Read one Gmail label's name, type, visibility and color using a verified label ID.", schema(JSONObject().put("id", text()), listOf("id"))),
         op(GmailManagement.CREATE_LABEL, "Create a user label with optional visibility and Gmail-supported colors. Does not label messages or send mail.", labelSchema(true), true),
         op(GmailManagement.UPDATE_LABEL, "Patch a user label's name, visibility or supported colors. Rechecks the exact label before applying the reviewed changes; reserved system labels cannot be edited.", labelSchema(false), true),
-        op(GmailManagement.DELETE_LABEL, "Permanently remove one user label and all of its assignments across the account, without deleting messages. Always requires explicit approval; no automatic mode.", schema(JSONObject().put("id", text()), listOf("id")), true),
+        op(GmailManagement.DELETE_LABEL, "Permanently remove one user label and all of its assignments across the account, without deleting messages. Follows the configured action policy and revalidates the exact account and label.", schema(JSONObject().put("id", text()), listOf("id")), true),
     )
     private fun op(name: String, description: String, schema: JSONObject, write: Boolean = false) = ConnectorOperation(
         name, description, schema, write, displayLabel = name.replace('_', ' '),
-        autonomyAllowed = name !in GmailManagement.IRREVERSIBLE, displayLabelResourceId = GmailManagement.labelResource(name))
+        displayLabelResourceId = GmailManagement.labelResource(name))
 }

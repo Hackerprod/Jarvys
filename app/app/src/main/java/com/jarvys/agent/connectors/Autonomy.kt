@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
@@ -33,6 +34,22 @@ interface ConnectorAutonomyStore {
     fun setPolicy(connectorId: String, operationName: String, policy: AutonomyPolicy)
     fun setPolicyChecked(connectorId: String, operationName: String, policy: AutonomyPolicy) =
         setPolicy(connectorId, operationName, policy)
+    /** Old/custom stores retain their effective policy, but cannot promise atomic admission. */
+    fun snapshot(connectorId: String, operationName: String): ActionPolicySnapshot = ActionPolicySnapshot(
+        connectorId, operationName, policy(connectorId, operationName), 0L, ActionPolicyOrigin.LEGACY_UNKNOWN, this, "unsupported",
+    )
+    fun snapshot(connectorId: String, operationName: String, fallbackPolicy: AutonomyPolicy): ActionPolicySnapshot =
+        snapshot(connectorId, operationName)
+    fun snapshotMatching(anchor: ActionPolicySnapshot): ActionPolicySnapshot {
+        throw IllegalStateException("This policy store does not support exact action snapshot matching")
+    }
+    fun setPolicyAndSnapshot(connectorId: String, operationName: String, policy: AutonomyPolicy): ActionPolicySnapshot {
+        throw IllegalStateException("This policy store does not support atomic policy write receipts")
+    }
+    /** approvedAsk may only represent the caller's exact request-bound approval of this ASK snapshot. */
+    fun admit(snapshot: ActionPolicySnapshot, approvedAsk: Boolean = false, validate: () -> Unit = {}) {
+        throw IllegalStateException("This policy store does not support atomic action admission")
+    }
     fun clearPolicies(connectorId: String) = Unit
     fun appendAudit(record: AutonomyAuditRecord)
     fun recentAudit(connectorId: String, limit: Int): List<AutonomyAuditRecord>
@@ -51,74 +68,110 @@ object NoopAutonomyActionNotifier : AutonomyActionNotifier {
 }
 
 class InMemoryConnectorAutonomyStore : ConnectorAutonomyStore {
+    private data class State(val policy: AutonomyPolicy?, val revision: Long, val token: String)
     private val lock = Any()
-    private val policies = mutableMapOf<Pair<String, String>, AutonomyPolicy>()
+    private val policies = mutableMapOf<Pair<String, String>, State>()
     private val audit = mutableListOf<AutonomyAuditRecord>()
 
-    override fun policy(connectorId: String, operationName: String): AutonomyPolicy = synchronized(lock) {
-        policies[connectorId to operationName] ?: AutonomyPolicy.ASK
-    }
+    override fun policy(connectorId: String, operationName: String): AutonomyPolicy =
+        snapshot(connectorId, operationName).policy
 
     override fun savedPolicy(connectorId: String, operationName: String): AutonomyPolicy? = synchronized(lock) {
-        policies[connectorId to operationName]
+        policies[connectorId to operationName]?.policy
     }
 
-    override fun setPolicy(connectorId: String, operationName: String, policy: AutonomyPolicy) = synchronized(lock) {
-        policies[connectorId to operationName] = policy
+    override fun setPolicy(connectorId: String, operationName: String, policy: AutonomyPolicy) =
+        setPolicyChecked(connectorId, operationName, policy)
+
+    override fun setPolicyChecked(connectorId: String, operationName: String, policy: AutonomyPolicy) = synchronized(lock) {
+        ActionPolicyDefaults.descriptor(connectorId, operationName)
+        val key = connectorId to operationName
+        val revision = policies[key]?.revision ?: 0L
+        check(revision < Long.MAX_VALUE) { "Action policy revision is exhausted" }
+        policies[key] = State(policy, revision + 1L, UUID.randomUUID().toString())
     }
 
-    override fun clearPolicies(connectorId: String) {
-        synchronized(lock) { policies.keys.removeAll { it.first == connectorId } }
+    override fun snapshot(connectorId: String, operationName: String): ActionPolicySnapshot = synchronized(lock) {
+        snapshotLocked(connectorId, operationName, null)
     }
 
-    override fun appendAudit(record: AutonomyAuditRecord) {
-        synchronized(lock) { audit.add(record.bounded()) }
+    override fun snapshot(connectorId: String, operationName: String, fallbackPolicy: AutonomyPolicy): ActionPolicySnapshot = synchronized(lock) {
+        snapshotLocked(connectorId, operationName, fallbackPolicy)
     }
 
+    private fun snapshotLocked(id: String, operation: String, fallback: AutonomyPolicy?): ActionPolicySnapshot {
+        val descriptor = ActionPolicyDefaults.descriptor(id, operation)
+        val state = policies.getOrPut(id to operation) { State(null, 0L, UUID.randomUUID().toString()) }
+        val origin = if (state.policy != null) ActionPolicyOrigin.USER else if (fallback != null)
+            ActionPolicyOrigin.INHERITED_SERVER_DEFAULT else ActionPolicyOrigin.CATALOG_DEFAULT
+        return ActionPolicySnapshot(id, operation, state.policy ?: fallback ?: descriptor.defaultPolicy,
+            state.revision, origin, this, state.token, fallback)
+    }
+
+    override fun snapshotMatching(anchor: ActionPolicySnapshot): ActionPolicySnapshot = synchronized(lock) {
+        check(anchor.owner === this) { "Action snapshot belongs to a different policy store" }
+        snapshotLocked(anchor.connectorId, anchor.operationName, anchor.fallbackPolicy).also {
+            check(anchor.sameAuthorizationAs(it)) { "Action policy changed; prepare and authorize a new action" }
+        }
+    }
+
+    override fun setPolicyAndSnapshot(connectorId: String, operationName: String, policy: AutonomyPolicy): ActionPolicySnapshot = synchronized(lock) {
+        setPolicyChecked(connectorId, operationName, policy)
+        snapshotLocked(connectorId, operationName, null)
+    }
+
+    override fun admit(snapshot: ActionPolicySnapshot, approvedAsk: Boolean, validate: () -> Unit) = synchronized(lock) {
+        check(snapshot.owner === this) { "Action snapshot belongs to a different policy store" }
+        snapshot.requireUnconsumed()
+        check(snapshot.sameAuthorizationAs(snapshotLocked(snapshot.connectorId, snapshot.operationName, snapshot.fallbackPolicy))) {
+            "Action policy changed; prepare and authorize a new action"
+        }
+        snapshot.requireDecision(approvedAsk)
+        validate()
+        check(snapshot.sameAuthorizationAs(snapshotLocked(snapshot.connectorId, snapshot.operationName, snapshot.fallbackPolicy))) {
+            "Action policy changed during admission"
+        }
+        snapshot.consume()
+    }
+
+    override fun clearPolicies(connectorId: String) = synchronized(lock) {
+        val affected = policies.filterKeys { it.first == connectorId }
+        check(affected.values.all { it.revision < Long.MAX_VALUE }) { "Action policy revision is exhausted" }
+        affected.forEach { (key, state) -> policies[key] = State(null, state.revision + 1L, UUID.randomUUID().toString()) }
+    }
+
+    override fun appendAudit(record: AutonomyAuditRecord) { synchronized(lock) { audit.add(record.bounded()) } }
     override fun recentAudit(connectorId: String, limit: Int): List<AutonomyAuditRecord> = synchronized(lock) {
-        audit.asReversed().filter { it.connectorId == connectorId }
-            .take(limit.coerceAtLeast(0))
+        audit.asReversed().filter { it.connectorId == connectorId }.take(limit.coerceAtLeast(0))
     }
 }
 
 /** User settings and the append-only audit share jarvys_connectors. */
-class SharedPreferencesConnectorAutonomyStore(context: Context) : ConnectorAutonomyStore {
-    private val preferences = context.applicationContext.getSharedPreferences(ConnectorStateStore.PREFERENCES, Context.MODE_PRIVATE)
-    private val lock = Any()
+class SharedPreferencesConnectorAutonomyStore internal constructor(
+    private val preferences: SharedPreferences,
+    authorityScope: String,
+) : ConnectorAutonomyStore {
+    constructor(context: Context) : this(
+        context.applicationContext.getSharedPreferences(ConnectorStateStore.PREFERENCES, Context.MODE_PRIVATE),
+        context.applicationContext.packageName + ":" + ConnectorStateStore.PREFERENCES,
+    )
+    private val actionPolicies = PersistedActionPolicies(preferences, authorityScope)
+    private val lock = actionPolicies.lock
 
-    init { preferences.edit().remove("autonomy_hourly_reservations").apply() }
+    init { synchronized(lock) { preferences.edit().remove("autonomy_hourly_reservations").apply() } }
 
-    override fun policy(connectorId: String, operationName: String): AutonomyPolicy =
-        savedPolicy(connectorId, operationName) ?: AutonomyPolicy.ASK
-
-    override fun savedPolicy(connectorId: String, operationName: String): AutonomyPolicy? = runCatching {
-        val key = policyKey(connectorId, operationName)
-        if (!preferences.contains(key)) null
-        else AutonomyPolicy.valueOf(preferences.getString(key, null) ?: "ASK")
-    }.getOrDefault(AutonomyPolicy.ASK)
-
-    override fun setPolicy(connectorId: String, operationName: String, policy: AutonomyPolicy) {
-        preferences.edit().putString(policyKey(connectorId, operationName), policy.name).apply()
-    }
-
-    override fun setPolicyChecked(connectorId: String, operationName: String, policy: AutonomyPolicy) {
-        synchronized(lock) {
-            val key = policyKey(connectorId, operationName)
-            val previous = preferences.getString(key, null)
-            if (!preferences.edit().putString(key, policy.name).commit()) {
-                // A failed commit can still alter the in-memory preferences map.
-                preferences.edit().apply { if (previous == null) remove(key) else putString(key, previous) }.commit()
-                throw IllegalStateException("Could not persist connector action policy")
-            }
-        }
-    }
-
-    override fun clearPolicies(connectorId: String) {
-        val prefix = "autonomy_${connectorId}_"
-        val editor = preferences.edit()
-        preferences.all.keys.filter { it.startsWith(prefix) }.forEach { editor.remove(it) }
-        check(editor.commit()) { "Could not remove saved connector action policies" }
-    }
+    override fun policy(connectorId: String, operationName: String): AutonomyPolicy = snapshot(connectorId, operationName).policy
+    override fun savedPolicy(connectorId: String, operationName: String): AutonomyPolicy? = actionPolicies.savedPolicy(connectorId, operationName)
+    override fun setPolicy(connectorId: String, operationName: String, policy: AutonomyPolicy) = setPolicyChecked(connectorId, operationName, policy)
+    override fun setPolicyChecked(connectorId: String, operationName: String, policy: AutonomyPolicy) = actionPolicies.setPolicy(connectorId, operationName, policy)
+    override fun snapshot(connectorId: String, operationName: String): ActionPolicySnapshot = actionPolicies.snapshot(connectorId, operationName)
+    override fun snapshot(connectorId: String, operationName: String, fallbackPolicy: AutonomyPolicy): ActionPolicySnapshot =
+        actionPolicies.snapshot(connectorId, operationName, fallbackPolicy)
+    override fun admit(snapshot: ActionPolicySnapshot, approvedAsk: Boolean, validate: () -> Unit) = actionPolicies.admit(snapshot, approvedAsk, validate)
+    override fun snapshotMatching(anchor: ActionPolicySnapshot): ActionPolicySnapshot = actionPolicies.snapshotMatching(anchor)
+    override fun setPolicyAndSnapshot(connectorId: String, operationName: String, policy: AutonomyPolicy): ActionPolicySnapshot =
+        actionPolicies.setPolicyAndSnapshot(connectorId, operationName, policy)
+    override fun clearPolicies(connectorId: String) = actionPolicies.clearPolicies(connectorId)
 
     override fun appendAudit(record: AutonomyAuditRecord) {
         synchronized(lock) {
@@ -139,8 +192,6 @@ class SharedPreferencesConnectorAutonomyStore(context: Context) : ConnectorAuton
         val array = JSONArray(preferences.getString(AUDIT_KEY, "[]"))
         (0 until array.length()).mapNotNull { index -> array.optJSONObject(index)?.toAuditRecord() }
     }.getOrDefault(emptyList())
-
-    private fun policyKey(id: String, operation: String) = "autonomy_${id}_$operation"
 
     private fun AutonomyAuditRecord.toJson() = JSONObject()
         .put("id", id).put("timestampMillis", timestampMillis).put("connectorId", connectorId)

@@ -427,16 +427,16 @@ class GoogleOAuthManager internal constructor(
 
     override fun requestCancellable(scope: String, method: String, url: String, body: String?, contentType: String,
                                     token: CancellationToken, requestHeaders: Map<String, String>,
-                                    expectedAuthorizationEpoch: Long?): GoogleHttpResponse {
+                                    expectedAuthorizationEpoch: Long?, beforeDispatch: (() -> Unit)?): GoogleHttpResponse {
         body?.let { GoogleHttpPolicy.requireSize(it.toByteArray(Charsets.UTF_8).size, GoogleApiLimits.MAX_TRANSFER_BYTES) }
         val response = requestBytes(scope, method, url, body?.toByteArray(Charsets.UTF_8), contentType, token,
-            GoogleApiLimits.MAX_RESPONSE_BYTES, requestHeaders, expectedAuthorizationEpoch)
+            GoogleApiLimits.MAX_RESPONSE_BYTES, requestHeaders, expectedAuthorizationEpoch, beforeDispatch)
         return GoogleHttpResponse(response.status, response.body.toString(Charsets.UTF_8), response.headers)
     }
 
     override fun requestBytes(scope: String, method: String, url: String, body: ByteArray?, contentType: String,
                               token: CancellationToken, maxResponseBytes: Int, requestHeaders: Map<String, String>,
-                              expectedAuthorizationEpoch: Long?): GoogleBinaryResponse {
+                              expectedAuthorizationEpoch: Long?, beforeDispatch: (() -> Unit)?): GoogleBinaryResponse {
         validateScope(scope)
         GoogleHttpPolicy.validateEndpoint(method, url, scope)
         token.throwIfCancelled()
@@ -463,7 +463,7 @@ class GoogleOAuthManager internal constructor(
                 refresh = {
                     refreshAccess(access, lease)
                     if (gmailWrite) proveGmailAccount(access, expectedAccount, lease)
-                }, repeatedUnauthorized = { clearAccess(access, lease) }).also { response ->
+                }, repeatedUnauthorized = { clearAccess(access, lease) }, beforeDispatch = beforeDispatch).also { response ->
                     session.withCurrent(lease) { Unit }
                     // Management's explicit profile reads also pin its exact selected token's identity.
                     if (scope in GMAIL_CAPABILITIES && method == "GET" && url == GMAIL_PROFILE_ENDPOINT && response.status in 200..299) {

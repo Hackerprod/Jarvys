@@ -48,6 +48,8 @@ data class ApprovalSummary(
     val compactSummary: ConnectorUiText? = null,
     val requester: String? = null,
     val requesterColorKey: String? = null,
+    /** Live callback bound to this request, never serialized into chat history. */
+    val enableAlways: (() -> Unit)? = null,
 )
 
 interface ApprovalPresenter {
@@ -60,7 +62,7 @@ class ApprovalGate(
     private val timeoutMillis: Long = DEFAULT_TIMEOUT_MILLIS,
     private val presenter: ApprovalPresenter,
 ) {
-    private class Pending(val id: String, val token: CancellationToken) {
+    private class Pending(val id: String, val token: CancellationToken, val enableAlways: (() -> Unit)?) {
         val latch = CountDownLatch(1)
         val decision = AtomicReference<ApprovalDecision?>(null)
         var uiActionStarted = false
@@ -71,7 +73,7 @@ class ApprovalGate(
 
     fun request(summary: ApprovalSummary, token: CancellationToken): ApprovalDecision {
         token.throwIfCancelled()
-        val request = Pending(UUID.randomUUID().toString(), token)
+        val request = Pending(UUID.randomUUID().toString(), token, summary.enableAlways)
         synchronized(lock) { pending[request.id] = request }
         try {
             presenter.show(request.id, summary)
@@ -95,6 +97,16 @@ class ApprovalGate(
         }
         token.throwIfCancelled()
         return request.decision.get() ?: ApprovalDecision.DENIED
+    }
+
+    /** Called only for the currently live card; its callback records the exact durable decision. */
+    fun enableAlwaysFromUi(id: String): Boolean = synchronized(lock) {
+        val request = pending[id] ?: error("Approval is no longer pending")
+        request.token.throwIfCancelled()
+        check(request.decision.get() == null) { "Approval already resolved" }
+        val enable = request.enableAlways ?: return@synchronized false
+        enable()
+        true
     }
 
     fun resolve(id: String, decision: ApprovalDecision): Boolean = complete(id, decision)

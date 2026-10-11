@@ -119,6 +119,7 @@ class CalendarConnector(
             it.id == draft.calendarId && it.visible && it.syncEvents && it.accessLevel >= MIN_WRITE_ACCESS
         }) { "El calendario aprobado ya no está disponible para escritura; revisá la acción e intentá de nuevo" }
         token.throwIfCancelled()
+        preparation.authorizeEffect?.invoke()
         val eventId = gateway.insert(draft)
         return JSONObject().put("untrusted_content", true).put("source", "android.calendar")
             .put("eventId", eventId).put("calendarName", draft.calendarName.take(200))

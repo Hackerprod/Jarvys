@@ -122,7 +122,6 @@ internal fun ConnectorsDeviceDetailScreen(
     val autonomyRevision by registry.autonomyRevision.collectAsState()
     val definition = definitions.firstOrNull { it.id == connectorId }
     var connectAfterPermission by remember(connectorId) { mutableStateOf<ConnectorDefinition?>(null) }
-    var autonomyAfterPermission by remember(connectorId) { mutableStateOf<Pair<ConnectorDefinition, ConnectorOperation>?>(null) }
     var permissionMessage by remember(connectorId) { mutableStateOf<ConnectorUiText?>(null) }
     var permissionMessageAction by remember(connectorId) { mutableStateOf(ConnectorNoticeAction.APP_SETTINGS) }
     fun showPermissionMessage(text: ConnectorUiText, action: ConnectorNoticeAction = ConnectorNoticeAction.APP_SETTINGS) {
@@ -142,38 +141,10 @@ internal fun ConnectorsDeviceDetailScreen(
                 listOf(pending.localizedNameText()), "${pending.name} access was denied. Jarvys cannot use this connector until you allow it."))
         }
     }
-    val autonomyPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
-        val pending = autonomyAfterPermission
-        autonomyAfterPermission = null
-        if (pending != null && grants.values.all { it }) {
-            runCatching { registry.setAutonomyPolicy(pending.first, pending.second, AutonomyPolicy.ALLOW) }
-                .onFailure { showPermissionMessage(ConnectorUiText(R.string.connector_allow_failed,
-                    fallback = "Could not enable autonomous actions.")) }
-        } else if (pending != null) {
-            val needsNotificationSettings = registry.autonomyPermissions(pending.first, pending.second)
-                .contains(android.Manifest.permission.POST_NOTIFICATIONS) || !registry.autonomyNotificationsAvailable()
-            showPermissionMessage(if (needsNotificationSettings) ConnectorUiText(R.string.connector_notifications_allow_required,
-                fallback = "Enable Jarvys app notifications to use Allow mode; the operation remains in Ask mode.")
-            else ConnectorUiText(R.string.connector_permission_allow_required,
-                fallback = "Required operation permission was denied; the operation remains in Ask mode."),
-                if (needsNotificationSettings) ConnectorNoticeAction.APP_NOTIFICATIONS else ConnectorNoticeAction.APP_SETTINGS)
-        }
-    }
     fun changePolicy(target: ConnectorDefinition, operation: ConnectorOperation, policy: AutonomyPolicy) {
-        if (policy != AutonomyPolicy.ALLOW) {
-            registry.setAutonomyPolicy(target, operation, policy)
-            return
-        }
-        val missing = registry.autonomyPermissions(target, operation)
-        if (missing.isNotEmpty()) {
-            autonomyAfterPermission = target to operation
-            autonomyPermissionLauncher.launch(missing.toTypedArray())
-        } else if (!registry.autonomyNotificationsAvailable()) {
-            showPermissionMessage(ConnectorUiText(R.string.connector_notifications_settings_required,
-                fallback = "Enable Jarvys app notifications in Android settings to use Allow mode."),
-                ConnectorNoticeAction.APP_NOTIFICATIONS)
-        } else runCatching { registry.setAutonomyPolicy(target, operation, policy) }
-            .onFailure { showPermissionMessage(ConnectorUiText(R.string.connector_allow_failed, fallback = "Could not enable Allow mode.")) }
+        runCatching { registry.setAutonomyPolicy(target, operation, policy) }
+            .onFailure { showPermissionMessage(ConnectorUiText(R.string.connector_allow_failed,
+                fallback = "Could not save action policy.")) }
     }
     if (definition != null) {
         Box(Modifier.fillMaxSize().testTag("connectors-detail-screen")) {
@@ -346,7 +317,13 @@ private fun ConnectorDeviceDetailPage(
             val writes = definition.operations.filter { it.write }
             if (reads.isNotEmpty()) ConnectorPermissionGroup(context.getString(R.string.remote_service_read_tool)) {
                 reads.forEach { operation ->
-                    ConnectorOperationPolicyRow(operation.name, operation.localizedDisplayText().resolve(context))
+                    AutonomyPolicyRow(
+                        connectorId = definition.id, operation = operation,
+                        configuredPolicy = registry.configuredAutonomyPolicy(definition, operation),
+                        effectivePolicy = registry.autonomyPolicy(definition, operation),
+                        effectiveReason = registry.autonomyPolicyUnavailableUiReason(definition, operation),
+                        onPolicy = { onPolicy(operation, it) },
+                    )
                 }
             }
             if (writes.isNotEmpty()) ConnectorPermissionGroup(context.getString(R.string.remote_service_write_tool)) {
@@ -371,7 +348,6 @@ private fun ConnectorDeviceDetailPage(
                 stringResource(R.string.connector_notification_access_disclosure)
             else stringResource(R.string.connector_connected_access_disclosure))
             if (definition.writePermissions.isNotEmpty()) Text(stringResource(R.string.connector_write_permission_disclosure))
-            if (definition.operations.any { it.write && !it.autonomyAllowed }) Text(stringResource(R.string.connector_system_app_confirmation))
         },
         advanced = {
             if (definition.configurationFields.isNotEmpty()) definition.configurationFields.forEach { field -> Text(field.label) }
@@ -428,21 +404,17 @@ private fun AutonomyPolicyRow(
             },
             choices = buildList {
                 add(ConnectorPolicyChoice(R.string.connector_policy_ask) { onPolicy(AutonomyPolicy.ASK) })
-                if (operation.autonomyAllowed) add(ConnectorPolicyChoice(R.string.connector_policy_allow) { onPolicy(AutonomyPolicy.ALLOW) })
+                add(ConnectorPolicyChoice(R.string.connector_policy_allow) { onPolicy(AutonomyPolicy.ALLOW) })
                 add(ConnectorPolicyChoice(R.string.connector_policy_deny) { onPolicy(AutonomyPolicy.DENY) })
             },
         )
     })
-    if (configuredPolicy != effectivePolicy) {
+    if (effectiveReason != null) {
         Text(
             context.getString(R.string.connector_active_policy, effectivePolicy.label(context), effectiveReason?.resolve(context).orEmpty()),
             color = MaterialTheme.colorScheme.error,
             fontSize = 11.sp,
         )
-    }
-    if (!operation.autonomyAllowed) {
-        Text(context.getString(R.string.connector_system_app_confirmation),
-            color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
     }
 }
 

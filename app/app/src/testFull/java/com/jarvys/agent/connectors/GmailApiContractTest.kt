@@ -21,16 +21,16 @@ class GmailApiContractTest {
         val expectedEpochs = mutableListOf<Long?>()
         override fun currentAuthorizationEpoch() = epoch
         override fun requestCancellable(scope: String, method: String, url: String, body: String?, contentType: String,
-                                        token: CancellationToken, requestHeaders: Map<String, String>, expectedAuthorizationEpoch: Long?): GoogleHttpResponse {
+                                        token: CancellationToken, requestHeaders: Map<String, String>, expectedAuthorizationEpoch: Long?, beforeDispatch: (() -> Unit)?): GoogleHttpResponse {
             expectedEpochs += expectedAuthorizationEpoch
             beforeLease?.also { beforeLease = null }?.invoke()
-            return super<GoogleRestAuthorization>.requestCancellable(scope, method, url, body, contentType, token, requestHeaders, expectedAuthorizationEpoch)
+            return super<GoogleRestAuthorization>.requestCancellable(scope, method, url, body, contentType, token, requestHeaders, expectedAuthorizationEpoch, beforeDispatch)
         }
         override fun requestBytes(scope: String, method: String, url: String, body: ByteArray?, contentType: String,
-                                  token: CancellationToken, maxResponseBytes: Int, requestHeaders: Map<String, String>, expectedAuthorizationEpoch: Long?): GoogleBinaryResponse {
+                                  token: CancellationToken, maxResponseBytes: Int, requestHeaders: Map<String, String>, expectedAuthorizationEpoch: Long?, beforeDispatch: (() -> Unit)?): GoogleBinaryResponse {
             expectedEpochs += expectedAuthorizationEpoch
             beforeLease?.also { beforeLease = null }?.invoke()
-            return super<GoogleRestAuthorization>.requestBytes(scope, method, url, body, contentType, token, maxResponseBytes, requestHeaders, expectedAuthorizationEpoch)
+            return super<GoogleRestAuthorization>.requestBytes(scope, method, url, body, contentType, token, maxResponseBytes, requestHeaders, expectedAuthorizationEpoch, beforeDispatch)
         }
         fun respond(value: JSONObject, status: Int = 200) { replies += { GoogleHttpResponse(status, value.toString()) } }
         override fun verifyGmailAccount(capability: String, expectedAccount: String?, token: CancellationToken, epoch: Long): String {
@@ -85,20 +85,49 @@ class GmailApiContractTest {
         assertTrue("Unexpected failure: ${error?.message}", error!!.message.orEmpty().contains(fragment, true))
     }
 
-    @Test fun catalogKeepsOriginalOrderAndRequiresApprovalForEveryNewMutation() {
+    @Test fun exactSendAndReadCarryAdmissionAtTheirActualDispatch() {
+        val api = Api().apply { respond(sent()); respond(message()) }
+        val connector = runtime(api)
+        var admissions = 0
+        val prepared = connector.prepareWrite(GmailConnector.SEND_MESSAGE, args(), CancellationToken.uncancellable())
+            .copy(authorizeEffect = { admissions++ })
+        connector.invokePrepared(GmailConnector.SEND_MESSAGE, prepared.executionArguments, prepared, CancellationToken.uncancellable())
+        assertEquals(1, admissions)
+        val readArgs = JSONObject().put("id", "m1")
+        val read = ConnectorWritePreparation(ApprovalSummary("Read message", emptyList()), readArgs,
+            authorizeEffect = { admissions++ })
+        connector.invokeReadPrepared(GmailConnector.GET_MESSAGE, readArgs, read, CancellationToken.uncancellable())
+        assertEquals(2, admissions)
+        assertEquals(listOf("POST", "GET"), api.calls.map { it.method })
+    }
+
+    @Test fun rejectedAdmissionSendsNothingAndDoesNotPoisonAnUnsentIntent() {
+        val api = Api().apply { respond(sent()) }; val connector = runtime(api)
+        val prepared = connector.prepareWrite(GmailConnector.SEND_MESSAGE, args(), CancellationToken.uncancellable())
+            .copy(authorizeEffect = { error("policy changed") })
+        assertFailure("policy changed") {
+            connector.invokePrepared(GmailConnector.SEND_MESSAGE, prepared.executionArguments, prepared, CancellationToken.uncancellable())
+        }
+        assertTrue(api.calls.isEmpty())
+        // A new explicit preparation can run; the rejected pre-dispatch attempt did not become uncertain.
+        perform(connector, GmailConnector.SEND_MESSAGE, args())
+        assertEquals(1, api.calls.size)
+    }
+
+    @Test fun catalogKeepsOriginalOrderAndConfigurablePoliciesForEveryMutation() {
         val api = Api()
         val connector = runtime(api)
         val definition = GmailConnector.definition(connector)
         assertEquals(listOf("search_messages", "get_message", "list_labels", "create_draft", "send_message"), definition.operations.take(5).map { it.name })
         for (op in definition.operations.filter { it.name in setOf("reply_message", "update_draft", "send_draft") }) {
-            assertTrue(op.write); assertFalse(op.autonomyAllowed)
+            assertTrue(op.write); assertTrue(op.autonomyAllowed)
             assertFailure("approval") { connector.invoke(op.name, JSONObject(), CancellationToken.uncancellable()) }
         }
         assertTrue(definition.connectionAccessGranted!!.invoke())
         api.granted = false
         assertFalse(definition.connectionAccessGranted!!.invoke())
         assertFalse(definition.operations.any { it.name.contains("share") })
-        assertTrue(definition.operations.filter { it.name in GmailManagement.IRREVERSIBLE }.all { it.write && !it.autonomyAllowed })
+        assertTrue(definition.operations.filter { it.name in GmailManagement.IRREVERSIBLE }.all { it.write && it.autonomyAllowed })
     }
 
     @Test fun directSendHasRawAtJsonRootAndUsesOnlyTheReviewedSnapshot() {
@@ -384,6 +413,7 @@ class GmailApiContractTest {
         val registry = ConnectorRegistry.createForTests(FakeConnectorPreferences(), { false }, gate)
         val definition = GmailConnector.definition(runtime(api))
         registry.register(definition); registry.connect(GmailConnector.ID)
+        registry.setAutonomyPolicy(definition, definition.operations.first { it.name == GmailConnector.SEND_MESSAGE }, AutonomyPolicy.ASK)
         assertTrue(runCatching { registry.invoke(definition, definition.operations.first { it.name == GmailConnector.SEND_MESSAGE },
             args(), CancellationToken.uncancellable()) }.isFailure)
         assertTrue(api.calls.isEmpty())
@@ -469,20 +499,20 @@ class GmailApiContractTest {
         }
     }
 
-    @Test fun observedSenderTrustNeverIncludesQuotedDisplayNamesOrComments() {
-        val sender = "\"support@other.example\" (comment@other.example) <actual@example.com>"
-        val api = Api().apply { respond(withHeader(message(), "From", sender)) }
-        val connector = runtime(api)
-        connector.beginAgentRun(0, "Please read this mail")
-        connector.invoke(GmailConnector.GET_MESSAGE, JSONObject().put("id", "m1"), CancellationToken.uncancellable())
-        connector.validateAutonomousWrite(GmailConnector.SEND_MESSAGE, args().put("to", "actual@example.com"), 0)
-        for (untrusted in listOf("support@other.example", "comment@other.example")) {
-            assertTrue(runCatching { connector.validateAutonomousWrite(GmailConnector.SEND_MESSAGE, args().put("to", untrusted), 0) }
-                .exceptionOrNull() is AutonomousWriteValidationFailure)
+    @Test fun autonomousRecipientsNeedCurrentRunAndValidAddressesWithoutProvenanceDowngrade() {
+        val api = Api(); val connector = runtime(api)
+        assertFailure("current user request") {
+            connector.validateAutonomousWrite(GmailConnector.SEND_MESSAGE, args(), 0)
         }
-        // User-authored text remains its separate source of explicit recipient trust.
-        connector.beginAgentRun(1, "Send to support@other.example")
-        connector.validateAutonomousWrite(GmailConnector.SEND_MESSAGE, args().put("to", "support@other.example"), 1)
+        connector.beginAgentRun(0, "Send the requested mail")
+        for (address in listOf("actual@example.com", "unlisted@other.example")) {
+            connector.validateAutonomousWrite(GmailConnector.SEND_MESSAGE, args().put("to", address), 0)
+        }
+        assertTrue(runCatching { connector.validateAutonomousWrite(GmailConnector.SEND_MESSAGE,
+            args().put("to", "bad\r\nBcc: injected@example.com"), 0) }.isFailure)
+        connector.endAgentRun(0)
+        assertFailure("current user request") { connector.validateAutonomousWrite(GmailConnector.SEND_MESSAGE, args(), 0) }
+        assertTrue(api.calls.isEmpty())
     }
 
     @Test fun replyDraftUpdatePreservesItsThreadSubjectAndValidatedReplyHeaders() {

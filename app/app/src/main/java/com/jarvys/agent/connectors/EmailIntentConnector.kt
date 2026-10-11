@@ -60,9 +60,9 @@ class EmailIntentConnector : ConnectorRuntime {
         require(operation == COMPOSE)
         val draft = preparation.attachment as? EmailDraft ?: error("Email draft is missing")
         return JSONObject().put("source", "android.email_intent").put("untrusted_content", false)
-            .put("status", "composer_opened").put("sent", false)
+            .put("status", "email_composer_launch_requested").put("sent", false)
             .put("recipients", draft.to.split(',').filter(String::isNotBlank))
-            .put("message", "The system mail composer opened; review and press Send there. Jarvys did not send the email.")
+            .put("message", "Android accepted the mail composer launch request; presentation is not confirmed. Jarvys did not send the email.")
     }
 
     companion object {
@@ -81,10 +81,10 @@ class EmailIntentConnector : ConnectorRuntime {
             operations = listOf(ConnectorOperation(
                 name = COMPOSE,
                 displayLabel = "Compose email",
-                description = "After approval, opens ACTION_SENDTO with a mailto draft; the user reviews and sends it in the external mail app. This operation cannot use Allow.",
+                description = "Opens ACTION_SENDTO with a mailto draft according to its configured action policy; the user sends it in the external mail app.",
                 inputSchema = EmailIntentPolicy.schema(),
                 write = true,
-                autonomyAllowed = false,
+                autonomyAllowed = true,
                 limits = mapOf("recipientCount" to MAX_RECIPIENTS, "fieldChars" to MAX_FIELD_CHARS),
                 displayLabelResourceId = R.string.connector_operation_email_compose,
                 descriptionResourceId = R.string.connector_operation_email_compose_description,
@@ -92,7 +92,7 @@ class EmailIntentConnector : ConnectorRuntime {
             runtime = EmailIntentConnector(),
             displayNameResourceId = R.string.connector_label_email,
             descriptionResourceId = R.string.connector_description_email,
-            usageNoteProvider = { "Email composition only opens a prefilled system mail draft after approval. Jarvys never sends it; the user reviews and taps Send in their mail app." },
+            usageNoteProvider = { "Email composition opens a prefilled system mail draft according to the configured action policy. Jarvys never sends it; the user reviews and taps Send in their mail app." },
         )
     }
 }

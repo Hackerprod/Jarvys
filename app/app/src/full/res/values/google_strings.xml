@@ -72,9 +72,9 @@
     <string name="full_google_op_gmail_labels">List Gmail labels</string>
     <string name="full_google_op_gmail_labels_description">List label names and identifiers.</string>
     <string name="full_google_op_gmail_draft">Create Gmail draft</string>
-    <string name="full_google_op_gmail_draft_description">Create a draft after approval; it is not sent.</string>
+    <string name="full_google_op_gmail_draft_description">Create an exact draft under its action policy; it is not sent.</string>
     <string name="full_google_op_gmail_send">Send email directly</string>
-    <string name="full_google_op_gmail_send_description">Always requires the write approval card; delivery is not assumed.</string>
+    <string name="full_google_op_gmail_send_description">Send exact content under its action policy; provider acceptance does not prove delivery.</string>
     <string name="full_google_op_drive_search">Search Drive files</string>
     <string name="full_google_op_drive_search_description">Search names and full text with parent, MIME and shared-drive filters; up to 25 files per page.</string>
     <string name="full_google_op_drive_metadata">Get Drive metadata</string>
@@ -82,7 +82,7 @@
     <string name="full_google_op_drive_read">Read Drive text</string>
     <string name="full_google_op_drive_read_description">Read text files or export Docs, Sheets, Slides to text or CSV; maximum 1 MiB.</string>
     <string name="full_google_op_drive_create">Create Drive file</string>
-    <string name="full_google_op_drive_create_description">Create a text file or upload a current-chat attachment after approval; multipart request maximum 5 MiB.</string>
+    <string name="full_google_op_drive_create_description">Create a text file or upload a current-chat attachment under its action policy; multipart request maximum 5 MiB.</string>
 
     <string name="full_google_approval_to">To: %1$s</string>
     <string name="full_google_approval_cc">Cc: %1$s</string>
@@ -94,7 +94,7 @@
     <string name="full_google_approval_drive_create">Create Drive file</string>
     <string name="full_google_approval_name">Name: %1$s</string>
     <string name="full_google_approval_mime">MIME type: %1$s</string>
-    <string name="full_google_autonomy_context">There is no current user-message context; confirm this email action manually.</string>
+    <string name="full_google_autonomy_context">No current user-message context is available for this email action.</string>
     <string name="full_google_autonomy_recipient">Some recipients were not typed by you, listed as a sender this run, or found in your contacts; confirm this email action.</string>
     <string name="full_google_local_disconnected">Disconnected in Jarvys. Google account access has not been revoked.</string>
     <string name="full_google_revoke_action">Revoke Google account access</string>

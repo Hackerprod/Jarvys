@@ -1,4 +1,9 @@
 <div align="center">
+
+## Desarrollo actual: UX44
+
+La entrega vigente sigue siendo Factory v84. UX44 amplía la política configurable «Permitir siempre / Preguntar / Denegar» a las demás herramientas y conectores. El primer checkpoint compila Full Debug y pasa 42 regresiones focalizadas; todavía no es una nueva entrega ni una validación global. La migración conserva decisiones guardadas y no conecta cuentas ni concede permisos Android/OAuth. Alcance implementado, integración pendiente y límites: [política de acciones UX44](docs/UX44_ACTION_POLICY.md).
+
   <img src="app/artwork/jarvys-app-icon-source.png" width="150" alt="Jarvys robot: silver body, dark visor and cyan eyes" />
   <h1>Jarvys</h1>
   <p><strong>An Android workspace for AI agents, device automation and app creation.</strong></p>

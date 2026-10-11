@@ -12,6 +12,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import com.jarvys.agent.R
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -35,6 +36,7 @@ internal data class SafPickerRequest(
     val mimeTypes: Array<String> = emptyArray(),
     val fileName: String = "",
     val mimeType: String = "",
+    val authorizeEffect: (() -> Unit)? = null,
 )
 
 /** Activity Result bridge; its transparent Compose host lives for the full Activity, not only Settings. */
@@ -44,20 +46,22 @@ class SafDocumentPickerCoordinator private constructor() {
     private val _pending = MutableStateFlow<SafPickerRequest?>(null)
     internal val pending = _pending.asStateFlow()
     private var active: Pending? = null
+    // A cancelled Android picker still owns its eventual result. Do not route it into a newer request.
+    private var inFlightId: String? = null
 
-    fun pick(types: Array<String>, token: com.jarvys.agent.CancellationToken): Uri? = await(
-        SafPickerRequest(UUID.randomUUID().toString(), SafPickerAction.OPEN, mimeTypes = types), token,
+    fun pick(types: Array<String>, token: com.jarvys.agent.CancellationToken, authorizeEffect: (() -> Unit)? = null): Uri? = await(
+        SafPickerRequest(UUID.randomUUID().toString(), SafPickerAction.OPEN, mimeTypes = types, authorizeEffect = authorizeEffect), token,
     )
 
-    fun create(fileName: String, mimeType: String, token: com.jarvys.agent.CancellationToken): Uri? = await(
+    fun create(fileName: String, mimeType: String, token: com.jarvys.agent.CancellationToken, authorizeEffect: (() -> Unit)? = null): Uri? = await(
         SafPickerRequest(UUID.randomUUID().toString(), SafPickerAction.CREATE,
-            fileName = fileName, mimeType = mimeType), token,
+            fileName = fileName, mimeType = mimeType, authorizeEffect = authorizeEffect), token,
     )
 
     private fun await(request: SafPickerRequest, token: com.jarvys.agent.CancellationToken): Uri? {
         val pendingResult = Pending(request, CompletableFuture())
         synchronized(lock) {
-            check(active == null) { "Another document picker is already open" }
+            check(active == null && inFlightId == null) { "Another document picker is already open or draining its result" }
             active = pendingResult
             _pending.value = request
         }
@@ -65,11 +69,9 @@ class SafDocumentPickerCoordinator private constructor() {
             while (true) {
                 token.throwIfCancelled()
                 try { return pendingResult.result.get(POLL_MILLIS, TimeUnit.MILLISECONDS) }
+                catch (failure: java.util.concurrent.ExecutionException) { throw (failure.cause as? RuntimeException ?: IllegalStateException("Document picker failed", failure.cause)) }
                 catch (_: TimeoutException) { /* allow STOP/cancellation to interrupt the wait */ }
             }
-        } catch (cancelled: CancellationException) {
-            finish(request.id, null)
-            throw cancelled
         } finally {
             synchronized(lock) {
                 if (active?.request?.id == request.id) {
@@ -80,12 +82,27 @@ class SafDocumentPickerCoordinator private constructor() {
         }
     }
 
+    internal fun claimLaunch(id: String): Boolean = synchronized(lock) {
+        if (active?.request?.id != id || inFlightId != null) false
+        else { inFlightId = id; true }
+    }
+
     fun complete(id: String, uri: Uri?) {
-        val item = synchronized(lock) { active?.takeIf { it.request.id == id } } ?: return
+        val item = synchronized(lock) {
+            if (inFlightId != id) return
+            inFlightId = null
+            active?.takeIf { it.request.id == id }
+        } ?: return
         item.result.complete(uri)
     }
 
-    private fun finish(id: String, uri: Uri?) = complete(id, uri)
+    internal fun fail(id: String, failure: Throwable) {
+        val item = synchronized(lock) {
+            if (inFlightId == id) inFlightId = null
+            active?.takeIf { it.request.id == id }
+        }
+        item?.result?.completeExceptionally(failure)
+    }
 
     companion object {
         private const val POLL_MILLIS = 250L
@@ -99,7 +116,7 @@ class SafDocumentPickerCoordinator private constructor() {
 fun SafDocumentPickerHost(context: Context) {
     val coordinator = remember(context) { SafDocumentPickerCoordinator.get(context) }
     val pending by coordinator.pending.collectAsState()
-    var launchedId by remember { mutableStateOf<String?>(null) }
+    var launchedId by rememberSaveable { mutableStateOf<String?>(null) }
     val openLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         launchedId?.let { coordinator.complete(it, uri) }
         launchedId = null
@@ -110,12 +127,19 @@ fun SafDocumentPickerHost(context: Context) {
     }
     LaunchedEffect(pending?.id) {
         val request = pending ?: return@LaunchedEffect
-        launchedId = request.id
-        when (request.action) {
-            SafPickerAction.OPEN -> openLauncher.launch(request.mimeTypes)
-            SafPickerAction.CREATE -> createLauncher.launch(Intent(Intent.ACTION_CREATE_DOCUMENT)
-                .addCategory(Intent.CATEGORY_OPENABLE).setType(request.mimeType)
-                .putExtra(Intent.EXTRA_TITLE, request.fileName))
+        if (!coordinator.claimLaunch(request.id)) return@LaunchedEffect
+        try {
+            request.authorizeEffect?.invoke()
+            launchedId = request.id
+            when (request.action) {
+                SafPickerAction.OPEN -> openLauncher.launch(request.mimeTypes)
+                SafPickerAction.CREATE -> createLauncher.launch(Intent(Intent.ACTION_CREATE_DOCUMENT)
+                    .addCategory(Intent.CATEGORY_OPENABLE).setType(request.mimeType)
+                    .putExtra(Intent.EXTRA_TITLE, request.fileName))
+            }
+        } catch (failure: RuntimeException) {
+            launchedId = null
+            coordinator.fail(request.id, failure)
         }
     }
 }
@@ -125,6 +149,14 @@ data class SafPickedDocument(val name: String, val mimeType: String, val stream:
 interface SafDocumentGateway {
     fun open(types: Array<String>, token: com.jarvys.agent.CancellationToken): SafPickedDocument?
     fun create(name: String, mimeType: String, token: com.jarvys.agent.CancellationToken): OutputStream?
+    fun openAuthorized(types: Array<String>, token: com.jarvys.agent.CancellationToken, authorize: () -> Unit): SafPickedDocument? {
+        authorize()
+        return open(types, token)
+    }
+    fun createAuthorized(name: String, mimeType: String, token: com.jarvys.agent.CancellationToken, authorize: () -> Unit): OutputStream? {
+        authorize()
+        return create(name, mimeType, token)
+    }
 }
 
 class AndroidSafDocumentGateway(context: Context) : SafDocumentGateway {
@@ -133,7 +165,12 @@ class AndroidSafDocumentGateway(context: Context) : SafDocumentGateway {
     private val picker by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { SafDocumentPickerCoordinator.get(appContext) }
 
     override fun open(types: Array<String>, token: com.jarvys.agent.CancellationToken): SafPickedDocument? {
-        val uri = picker.pick(types, token) ?: return null
+        return openAuthorized(types, token) { token.throwIfCancelled() }
+    }
+
+    override fun openAuthorized(types: Array<String>, token: com.jarvys.agent.CancellationToken, authorize: () -> Unit): SafPickedDocument? {
+        val uri = picker.pick(types, token, authorize) ?: return null
+        authorize()
         runCatching { resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
         val mime = resolver.getType(uri).orEmpty().lowercase(Locale.ROOT)
         val name = resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
@@ -144,7 +181,12 @@ class AndroidSafDocumentGateway(context: Context) : SafDocumentGateway {
     }
 
     override fun create(name: String, mimeType: String, token: com.jarvys.agent.CancellationToken): OutputStream? {
-        val uri = picker.create(name, mimeType, token) ?: return null
+        return createAuthorized(name, mimeType, token) { token.throwIfCancelled() }
+    }
+
+    override fun createAuthorized(name: String, mimeType: String, token: com.jarvys.agent.CancellationToken, authorize: () -> Unit): OutputStream? {
+        val uri = picker.create(name, mimeType, token, authorize) ?: return null
+        authorize()
         return resolver.openOutputStream(uri, "wt") ?: error("The destination document could not be created")
     }
 }
@@ -199,18 +241,25 @@ class SafDocumentConnector(private val gateway: SafDocumentGateway) : ConnectorR
         val name = validateName(arguments.optString("name"))
         val mime = SafDocumentPolicy.validateMime(arguments.optString("mime"))
         val bytes = arguments.optString("content").toByteArray(Charsets.UTF_8)
-        val stream = gateway.create(name, mime, token) ?: return JSONObject()
+        val stream = gateway.createAuthorized(name, mime, token) { token.throwIfCancelled(); preparation.authorizeEffect?.invoke() } ?: return JSONObject()
             .put("source", "android.saf").put("untrusted_content", false).put("status", "cancelled")
-        stream.use { it.write(bytes) }
+        stream.use { token.throwIfCancelled(); preparation.authorizeEffect?.invoke(); it.write(bytes) }
         return JSONObject().put("source", "android.saf").put("untrusted_content", false)
             .put("status", "document_created").put("name", name).put("mimeType", mime)
             .put("bytesWritten", bytes.size).put("message", "The text document was saved to the location selected by the user.")
     }
 
-    private fun readPicked(token: com.jarvys.agent.CancellationToken): JSONObject {
-        val picked = gateway.open(SafDocumentPolicy.OPEN_MIME_TYPES, token)
+    override fun invokeReadPrepared(operation: String, arguments: JSONObject, preparation: ConnectorWritePreparation,
+                                    token: com.jarvys.agent.CancellationToken): JSONObject {
+        require(operation == PICK_DOCUMENT)
+        return readPicked(token, preparation.authorizeEffect)
+    }
+
+    private fun readPicked(token: com.jarvys.agent.CancellationToken, authorize: (() -> Unit)? = null): JSONObject {
+        val picked = gateway.openAuthorized(SafDocumentPolicy.OPEN_MIME_TYPES, token) { token.throwIfCancelled(); authorize?.invoke() }
             ?: return JSONObject().put("source", "android.saf").put("untrusted_content", false).put("status", "cancelled")
         picked.stream.use { input ->
+            token.throwIfCancelled(); authorize?.invoke()
             val decoded = SafDocumentPolicy.readText(picked.mimeType, input)
             val rows = JSONArray().put(JSONObject().put("name", picked.name.take(256))
                 .put("mimeType", picked.mimeType).put("text", decoded.text))
@@ -256,7 +305,7 @@ class SafDocumentConnector(private val gateway: SafDocumentGateway) : ConnectorR
                 ConnectorOperation(
                     name = CREATE_DOCUMENT, displayLabel = "Create text document",
                     description = "After approval, open Android's Create Document picker and write a bounded text, JSON, CSV or Markdown document at the user-selected location.",
-                    inputSchema = createSchema(), write = true, autonomyAllowed = false,
+                    inputSchema = createSchema(), write = true, autonomyAllowed = true,
                     displayLabelResourceId = R.string.connector_operation_file_create,
                     descriptionResourceId = R.string.connector_operation_file_create_description,
                 ),

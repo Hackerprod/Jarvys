@@ -55,9 +55,9 @@
     <string name="full_google_op_gmail_labels">Listar etiquetas Gmail</string>
     <string name="full_google_op_gmail_labels_description">Listar nombres e identificadores de etiquetas.</string>
     <string name="full_google_op_gmail_draft">Crear borrador Gmail</string>
-    <string name="full_google_op_gmail_draft_description">Crear un borrador tras aprobación; no se envía.</string>
+    <string name="full_google_op_gmail_draft_description">Crear un borrador exacto según su política de acción; no se envía.</string>
     <string name="full_google_op_gmail_send">Enviar correo directamente</string>
-    <string name="full_google_op_gmail_send_description">Siempre requiere la tarjeta de aprobación; no se asume entrega.</string>
+    <string name="full_google_op_gmail_send_description">Enviar contenido exacto según su política de acción; la aceptación de Google no demuestra la entrega.</string>
     <string name="full_google_op_drive_search">Buscar archivos Drive</string>
     <string name="full_google_op_drive_search_description">Busca nombres y contenido con filtros de carpeta, MIME y unidades compartidas; hasta 25 archivos por página.</string>
     <string name="full_google_op_drive_metadata">Leer metadatos Drive</string>
@@ -65,7 +65,7 @@
     <string name="full_google_op_drive_read">Leer texto de Drive</string>
     <string name="full_google_op_drive_read_description">Leer texto o exportar Docs, Sheets y Slides como texto/CSV; máximo 1 MiB.</string>
     <string name="full_google_op_drive_create">Crear archivo Drive</string>
-    <string name="full_google_op_drive_create_description">Crea un archivo de texto o sube un adjunto de este chat tras aprobarlo; solicitud multipart de hasta 5 MiB.</string>
+    <string name="full_google_op_drive_create_description">Crear un archivo de texto o subir un adjunto del chat actual según su política de acción; solicitud multipart de 5 MiB como máximo.</string>
 
     <string name="full_google_approval_to">Para: %1$s</string>
     <string name="full_google_approval_cc">CC: %1$s</string>
@@ -77,7 +77,7 @@
     <string name="full_google_approval_drive_create">Crear archivo Drive</string>
     <string name="full_google_approval_name">Nombre: %1$s</string>
     <string name="full_google_approval_mime">Tipo MIME: %1$s</string>
-    <string name="full_google_autonomy_context">No hay contexto del mensaje actual; confirma esta acción de correo manualmente.</string>
+    <string name="full_google_autonomy_context">No hay contexto del mensaje actual para esta acción de correo.</string>
     <string name="full_google_autonomy_recipient">Algunos destinatarios no fueron escritos por ti, listados como remitente en esta ejecución ni encontrados en tus contactos; confirma esta acción.</string>
     <string name="full_google_local_disconnected">Desconectado en Jarvys. El permiso de la cuenta de Google no se ha revocado.</string>
     <string name="full_google_revoke_action">Revocar acceso en Google</string>

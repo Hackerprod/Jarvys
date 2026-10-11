@@ -55,13 +55,14 @@ interface GoogleRestAuthorization {
     fun requestCancellable(scope: String, method: String, url: String, body: String? = null,
                            contentType: String = "application/json", token: CancellationToken,
                            requestHeaders: Map<String, String> = emptyMap(),
-                           expectedAuthorizationEpoch: Long? = null): GoogleHttpResponse {
+                           expectedAuthorizationEpoch: Long? = null, beforeDispatch: (() -> Unit)? = null): GoogleHttpResponse {
         token.throwIfCancelled()
         check(expectedAuthorizationEpoch == null || expectedAuthorizationEpoch == currentAuthorizationEpoch()) {
             "Google connection changed; prepare and approve this operation again"
         }
         GoogleHttpPolicy.validateAdditionalHeaders(requestHeaders)
         body?.let { GoogleHttpPolicy.requireSize(it.toByteArray(Charsets.UTF_8).size, GoogleApiLimits.MAX_TRANSFER_BYTES) }
+        admitGoogleDispatch(beforeDispatch)
         val response = request(scope, method, url, body, contentType)
         token.throwIfCancelled()
         GoogleHttpPolicy.requireSize(response.body.toByteArray(Charsets.UTF_8).size, GoogleApiLimits.MAX_RESPONSE_BYTES)
@@ -71,7 +72,7 @@ interface GoogleRestAuthorization {
                      contentType: String = "application/octet-stream", token: CancellationToken,
                      maxResponseBytes: Int = GoogleApiLimits.MAX_TRANSFER_BYTES,
                      requestHeaders: Map<String, String> = emptyMap(),
-                     expectedAuthorizationEpoch: Long? = null): GoogleBinaryResponse {
+                     expectedAuthorizationEpoch: Long? = null, beforeDispatch: (() -> Unit)? = null): GoogleBinaryResponse {
         token.throwIfCancelled()
         check(expectedAuthorizationEpoch == null || expectedAuthorizationEpoch == currentAuthorizationEpoch()) {
             "Google connection changed; prepare and approve this operation again"
@@ -82,12 +83,53 @@ interface GoogleRestAuthorization {
         // Compatibility seam for text-only fake implementations; real binary uploads must override it.
         val textBody = body?.toString(Charsets.UTF_8)
         require(body == null || body.contentEquals(textBody!!.toByteArray(Charsets.UTF_8))) { "Binary request transport is unavailable" }
+        admitGoogleDispatch(beforeDispatch)
         val response = request(scope, method, url, textBody, contentType)
         token.throwIfCancelled()
         val bytes = response.body.toByteArray(Charsets.UTF_8)
         GoogleHttpPolicy.requireSize(bytes.size, maxResponseBytes)
         return GoogleBinaryResponse(response.status, bytes, response.headers)
     }
+}
+
+/** A lexical, thread-local dispatch hook; policy and exact-request decisions stay in Registry. */
+internal class GoogleDispatchAuthorization(private val delegate: GoogleRestAuthorization) : GoogleRestAuthorization by delegate {
+    private val admission = ThreadLocal<(() -> Unit)?>()
+
+    fun <T> withAdmission(authorize: (() -> Unit)?, action: () -> T): T {
+        val previous = admission.get()
+        if (authorize == null) admission.remove() else admission.set(authorize)
+        return try { action() } finally {
+            if (previous == null) admission.remove() else admission.set(previous)
+        }
+    }
+
+    private fun dispatchHook(explicit: (() -> Unit)?): (() -> Unit)? {
+        val scoped = admission.get()
+        if (scoped == null) return explicit
+        if (explicit == null) return scoped
+        return { scoped(); explicit() }
+    }
+
+    override fun requestCancellable(scope: String, method: String, url: String, body: String?, contentType: String,
+                                    token: CancellationToken, requestHeaders: Map<String, String>,
+                                    expectedAuthorizationEpoch: Long?, beforeDispatch: (() -> Unit)?): GoogleHttpResponse =
+        delegate.requestCancellable(scope, method, url, body, contentType, token, requestHeaders,
+            expectedAuthorizationEpoch, dispatchHook(beforeDispatch))
+
+    override fun requestBytes(scope: String, method: String, url: String, body: ByteArray?, contentType: String,
+                              token: CancellationToken, maxResponseBytes: Int, requestHeaders: Map<String, String>,
+                              expectedAuthorizationEpoch: Long?, beforeDispatch: (() -> Unit)?): GoogleBinaryResponse =
+        delegate.requestBytes(scope, method, url, body, contentType, token, maxResponseBytes, requestHeaders,
+            expectedAuthorizationEpoch, dispatchHook(beforeDispatch))
+}
+
+/** Only a callback rejected before the transport starts may clear an uncertain-write reservation. */
+internal fun admitGoogleDispatch(beforeDispatch: (() -> Unit)?) {
+    try { beforeDispatch?.invoke() }
+    catch (failure: java.util.concurrent.CancellationException) { throw failure }
+    catch (failure: GooglePreDispatchAuthorizationException) { throw failure }
+    catch (failure: Exception) { throw GooglePreDispatchAuthorizationException(failure) }
 }
 
 internal fun interface GoogleHttpTransport {
@@ -177,7 +219,8 @@ internal class GoogleRequestExecutor(
 ) {
     fun execute(scope: String, method: String, url: String, body: ByteArray?, contentType: String,
                 token: CancellationToken, maxResponseBytes: Int, requestHeaders: Map<String, String>,
-                accessToken: () -> String, refresh: () -> Unit, repeatedUnauthorized: () -> Unit = {}): GoogleBinaryResponse {
+                accessToken: () -> String, refresh: () -> Unit, repeatedUnauthorized: () -> Unit = {},
+                beforeDispatch: (() -> Unit)? = null): GoogleBinaryResponse {
         GoogleHttpPolicy.validateEndpoint(method, url, scope)
         GoogleHttpPolicy.validateLimit(maxResponseBytes)
         GoogleHttpPolicy.validateAdditionalHeaders(requestHeaders)
@@ -191,6 +234,8 @@ internal class GoogleRequestExecutor(
             token.throwIfCancelled()
             val headers = mapOf("Authorization" to "Bearer $access", "Content-Type" to contentType,
                 "Accept" to "*/*") + requestHeaders
+            // Refresh and GET backoff never carry an old action admission into another dispatch.
+            admitGoogleDispatch(beforeDispatch)
             val response = try {
                 transport.executeBytes(method, url, headers, body, token, maxResponseBytes)
             } catch (error: GoogleApiException) {

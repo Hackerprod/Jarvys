@@ -101,7 +101,8 @@ class ContactsConnector(
         return JSONObject()
             .put("source", SOURCE)
             .put("untrusted_content", false)
-            .put("status", "contacts_form_opened")
+            .put("status", "contact_editor_launch_requested")
+            .put("presentationConfirmed", false)
             .put("userMustSaveInSystemContacts", true)
     }
 
@@ -215,7 +216,7 @@ class ContactsConnector(
                         description = "After approval, opens the system Contacts insert form. Jarvys does not write contacts directly; the user saves or cancels in Contacts.",
                         inputSchema = createSchema(),
                         write = true,
-                        autonomyAllowed = false,
+                        autonomyAllowed = true,
                         limits = mapOf("displayNameChars" to MAX_NAME_CHARS, "phoneChars" to MAX_PHONE_CHARS,
                             "emailChars" to MAX_EMAIL_CHARS),
                         displayLabelResourceId = R.string.connector_operation_contacts_create,

@@ -7,8 +7,13 @@ internal fun approveAndAllowAlways(
     operationName: String?,
     onStatusDetail: (ConnectorUiText) -> Unit,
     onResolve: (ApprovalDecision) -> Unit,
+    approvalId: String? = null,
 ) {
-    approveAndAllowAlways({ if (connectorId != null && operationName != null) {
+    approveAndAllowAlways({ if (approvalId != null) {
+        val result = runCatching { ApprovalGate.INSTANCE.enableAlwaysFromUi(approvalId) }
+        if (result.getOrNull() == true) null
+        else ConnectorUiText(fallback = result.exceptionOrNull()?.message ?: "This approval cannot change its policy")
+    } else if (connectorId != null && operationName != null) {
         registry.tryEnableAutonomyFromApprovalUi(connectorId, operationName)
     } else {
         ConnectorUiText(com.jarvys.agent.R.string.approval_autonomy_operation_unavailable,

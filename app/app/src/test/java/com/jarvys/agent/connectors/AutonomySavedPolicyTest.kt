@@ -22,10 +22,10 @@ class AutonomySavedPolicyTest {
     @Before fun setup() { preferences.edit().remove(key).commit() }
     @After fun cleanup() { preferences.edit().remove(key).commit() }
 
-    @Test fun inMemoryDistinguishesAbsentFromEveryExplicitChoiceWithoutChangingDefault() {
+    @Test fun inMemoryDistinguishesAbsentFromEveryExplicitChoiceWithCommonDefault() {
         val store = InMemoryConnectorAutonomyStore()
         assertNull(store.savedPolicy(connector, operation))
-        assertEquals(AutonomyPolicy.ASK, store.policy(connector, operation))
+        assertEquals(AutonomyPolicy.ALLOW, store.policy(connector, operation))
         for (choice in AutonomyPolicy.entries) {
             store.setPolicyChecked(connector, operation, choice)
             assertEquals(choice, store.savedPolicy(connector, operation))
@@ -33,13 +33,13 @@ class AutonomySavedPolicyTest {
         }
         store.clearPolicies(connector)
         assertNull(store.savedPolicy(connector, operation))
-        assertEquals(AutonomyPolicy.ASK, store.policy(connector, operation))
+        assertEquals(AutonomyPolicy.ALLOW, store.policy(connector, operation))
     }
 
     @Test fun persistedAbsenceAndExplicitAskRemainDistinctAfterStoreRecreation() {
         val store = SharedPreferencesConnectorAutonomyStore(context)
         assertNull(store.savedPolicy(connector, operation))
-        assertEquals(AutonomyPolicy.ASK, store.policy(connector, operation))
+        assertEquals(AutonomyPolicy.ALLOW, store.policy(connector, operation))
         for (choice in AutonomyPolicy.entries) {
             store.setPolicyChecked(connector, operation, choice)
             val reloaded = SharedPreferencesConnectorAutonomyStore(context)
@@ -66,5 +66,7 @@ class AutonomySavedPolicyTest {
             override fun recentAudit(connectorId: String, limit: Int) = emptyList<AutonomyAuditRecord>()
         }
         assertEquals(AutonomyPolicy.ASK, store.savedPolicy(connector, operation))
+        assertEquals(ActionPolicyOrigin.LEGACY_UNKNOWN, store.snapshot(connector, operation).origin)
+        assertTrue(runCatching { store.admit(store.snapshot(connector, operation), approvedAsk = true) }.isFailure)
     }
 }

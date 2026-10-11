@@ -41,7 +41,7 @@ internal class GmailDraftDeletion(
         checkEpoch(epoch)
         val title = ui(R.string.gmail_draft_delete_title, "Permanently delete Gmail draft")
         return ConnectorWritePreparation(
-            ApprovalSummary(title.fallback, details.map { it.fallback }, allowAlwaysAvailable = false,
+            ApprovalSummary(title.fallback, details.map { it.fallback }, allowAlwaysAvailable = true,
                 localizedTitle = title, localizedLines = details,
                 compactSummary = ui(R.string.gmail_draft_delete_compact, "${title.fallback} · $id · $account", title, id, account)),
             JSONObject().put("id", id).put("expected_revision", revision),
@@ -236,12 +236,12 @@ internal class GmailDraftDeletion(
         private fun ui(resource: Int, fallback: String, vararg arguments: Any) = ConnectorUiText(resource, arguments.toList(), fallback)
         fun operation(): ConnectorOperation = ConnectorOperation(
             OPERATION,
-            "Permanently delete one exact Gmail draft and its attachments using id and expected_revision from get_draft. Always requires explicit irreversible approval; no Allow mode. Changed content, account or authorization invalidates review. Empty drafts are supported. Gmail has no atomic revision precondition; 404 readback proves only observed absence, not causation. Never retry an unknown outcome.",
+            "Permanently delete one exact Gmail draft and its attachments using id and expected_revision from get_draft. Follows the configured action policy for this exact account, draft and revision. Changed content, account or authorization invalidates review. Empty drafts are supported. Gmail has no atomic revision precondition; 404 readback proves only observed absence, not causation. Never retry an unknown outcome.",
             JSONObject().put("type", "object").put("properties", JSONObject()
                 .put("id", JSONObject().put("type", "string").put("minLength", 1).put("maxLength", 256))
                 .put("expected_revision", JSONObject().put("type", "string").put("minLength", 1).put("maxLength", 256)))
                 .put("required", JSONArray(listOf("id", "expected_revision"))).put("additionalProperties", false),
-            write = true, displayLabel = "Permanently delete draft", autonomyAllowed = false,
+            write = true, displayLabel = "Permanently delete draft",
             displayLabelResourceId = R.string.gmail_draft_delete_title,
             descriptionResourceId = R.string.gmail_draft_delete_description,
         )

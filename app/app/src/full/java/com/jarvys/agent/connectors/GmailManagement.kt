@@ -36,7 +36,7 @@ internal class GmailManagement(
     }
 
     fun validateAutonomy(operation: String, args: JSONObject) {
-        require(operation !in IRREVERSIBLE) { "This irreversible Gmail operation requires approval" }
+        require(operation in WRITES) { "Unknown Gmail management write" }
         if (operation in MAIL_WRITES) require(args.has("selection_id") || args.has("ids") || args.has("thread_ids") || args.has("receipt_id")) {
             "Choose explicit Gmail targets before changing mail"
         }
@@ -73,11 +73,11 @@ internal class GmailManagement(
             details += ui(R.string.gmail_management_label_preview, "Label: ${record.optString("name")} · ${record.optJSONObject("body") ?: JSONObject()}", record.optString("name"), (record.optJSONObject("body") ?: JSONObject()).toString())
         }
         if (operation in IRREVERSIBLE) details += ui(R.string.gmail_management_irreversible,
-            "Permanent action. It cannot be undone. This approval applies only to this account and fixed set.")
+            "Permanent action. It cannot be undone. The action is bound to this account and fixed set.")
         if (operation == DELETE_LABEL) details += ui(R.string.gmail_management_delete_label_warning,
             "Deleting this label removes it from all messages in this account. Messages themselves are not deleted.")
         ConnectorWritePreparation(ApprovalSummary(title.fallback, details.map { it.fallback },
-            allowAlwaysAvailable = operation !in IRREVERSIBLE, localizedTitle = title, localizedLines = details,
+            allowAlwaysAvailable = true, localizedTitle = title, localizedLines = details,
             compactSummary = ui(R.string.gmail_management_compact, "${title.fallback} · ${items.length()} · $account", title, items.length(), account)),
             JSONObject(args.toString()), attachment = Reviewed(this, operation, record.toString(), account, epoch))
     }

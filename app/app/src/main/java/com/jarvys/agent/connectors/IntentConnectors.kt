@@ -97,22 +97,24 @@ class DialerConnector(
             return dialerFallbackResult(number)
         }
         require(operation == PLACE_CALL) { "Unknown phone operation: $operation" }
-        if (!callPermissionGranted()) return openDialerFallback(number)
+        if (!callPermissionGranted()) return openDialerFallback(number, preparation.authorizeEffect)
         try {
+            preparation.authorizeEffect?.invoke()
             gateway.placeCall(number)
             return JSONObject().put("source", "android.phone").put("untrusted_content", false)
                 .put("status", "call_requested")
                 .put("phoneNumber", number)
                 .put("message", "Call request accepted by Android Telecom.")
         } catch (_: SecurityException) {
-            return openDialerFallback(number)
+            return openDialerFallback(number, preparation.authorizeEffect)
         } catch (_: IllegalArgumentException) {
-            return openDialerFallback(number)
+            return openDialerFallback(number, preparation.authorizeEffect)
         }
     }
 
-    private fun openDialerFallback(number: String): JSONObject {
+    private fun openDialerFallback(number: String, authorizeEffect: (() -> Unit)?): JSONObject {
         try {
+            authorizeEffect?.invoke()
             gateway.openDialer(number)
         } catch (_: RuntimeException) {
             error("Telecom could not place the call and Android did not allow the dialer to open; no call was placed")
@@ -121,10 +123,10 @@ class DialerConnector(
     }
 
     private fun dialerFallbackResult(number: String) = JSONObject().put("source", "android.phone")
-        .put("untrusted_content", false).put("status", "dialer_opened")
+        .put("untrusted_content", false).put("status", "dialer_launch_requested")
         .put("phoneNumber", number)
         .put("callPlaced", false)
-        .put("message", "The dialer opened; press Call there. Jarvys did not initiate the call.")
+        .put("message", "Android accepted the dialer launch request; presentation is not confirmed. Jarvys did not initiate the call.")
 
     companion object {
         const val ID = "phone"
@@ -161,7 +163,7 @@ class DialerConnector(
                     inputSchema = dialerSchema(),
                     write = true,
                     limits = mapOf("phoneNumberChars" to MAX_NUMBER_CHARS),
-                    autonomyAllowed = false,
+                    autonomyAllowed = true,
                     permissionsOverride = true,
                     displayLabelResourceId = R.string.connector_operation_phone_dialer,
                     descriptionResourceId = R.string.connector_operation_phone_dialer_description,
@@ -253,8 +255,8 @@ class SmsComposerConnector : ConnectorRuntime {
     ): JSONObject {
         token.throwIfCancelled()
         return JSONObject().put("source", "android.sms_composer").put("untrusted_content", false)
-            .put("status", "sms_draft_opened").put("sent", false)
-            .put("message", "Draft opened in the system messaging app; the user must tap Send.")
+            .put("status", "sms_composer_launch_requested").put("sent", false)
+            .put("message", "Android accepted the messaging composer launch request; presentation is not confirmed. The user must tap Send.")
     }
 
     companion object {
@@ -274,7 +276,7 @@ class SmsComposerConnector : ConnectorRuntime {
                 description = "Normal chat only. Resolve a requested contact with contacts read tools; never choose between homonyms. After ApprovalGate approval, open ACTION_SENDTO with smsto: and a prefilled draft. Does not read SMS or send; the user presses Send in the system messaging app.",
                 inputSchema = smsSchema(),
                 write = true,
-                autonomyAllowed = false,
+                autonomyAllowed = true,
                 limits = mapOf("toChars" to DialerConnector.MAX_NUMBER_CHARS, "bodyChars" to MAX_BODY_CHARS),
                 displayLabelResourceId = R.string.connector_operation_sms_compose,
                 descriptionResourceId = R.string.connector_operation_sms_compose_description,

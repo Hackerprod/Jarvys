@@ -961,7 +961,7 @@ Referencias oficiales de base, revisadas el 9 de octubre de 2026: [Android Keyst
 
 ### 27. UX44: Autonomía y permisos predeterminados: permitir siempre
 
-Estado vigente: implementado y entregado en v84 para Factory y ejecución de Coding: política compartida por aplicación/operación con ALLOW_ALWAYS predeterminado, preservando ASK/DENY explícitos y revocación antes del efecto. La petición global para las demás familias de herramientas y conectores sigue pendiente de migración y revisión específica; este lote no cambió silenciosamente sus políticas. Mantiene su lugar después de UX42 y antes de UX43; no se declara completado todo UX44.
+Estado vigente: **UX44 en implementación**, autorizado continuar el 11 de octubre de 2026 después de entregar Factory v84. El inventario de conectores, proveedores/MCP y superficies nativas y su diseño de migración/admisión fueron revisados. Primer checkpoint de desarrollo: fundamento común ALLOW para valores ausentes, conservación de ASK/DENY y procedencia legacy ambigua, políticas de lectura/escritura, despacho único de intents y admisión por efecto en Gmail/Drive. Compilación Full Debug y 42 regresiones focalizadas pasan, sin fallos ni omisiones y con guard offline sin intentos bloqueados. No es una APK nueva ni aceptación global. MCP, Linux, bots/memoria/identidades y correcciones de integración identificadas siguen en curso; ver `docs/UX44_ACTION_POLICY.md`. Factory/Coding v84 sigue siendo la entrega vigente. Mantiene su lugar antes de UX43; UX34 conserva sus gates independientes.
 
 #### Objetivo y alcance pendiente
 

@@ -109,16 +109,7 @@ class ApprovalActionReceiver : BroadcastReceiver() {
             ApprovalDecision.DENIED.name -> ApprovalDecision.DENIED
             else -> return
         }
-        val event = AgentRunUiState.state.value.events.lastOrNull { it.kind == "approval" && it.approvalId == id }
-        val resolved = ApprovalNotificationActionResolver.resolve(ApprovalGate.INSTANCE, id, decision) {
-            if (decision == ApprovalDecision.DENIED) true
-            else {
-                val spec = event?.approvalIntent
-                if (spec == null) true else runCatching {
-                    context.startActivity(com.jarvys.agent.approvalIntent(spec).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                }.isSuccess
-            }
-        }
+        val resolved = ApprovalNotificationActionResolver.resolve(ApprovalGate.INSTANCE, id, decision)
         if (resolved) ApprovalNotificationCenter.dismiss(id)
     }
 

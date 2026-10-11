@@ -33,6 +33,29 @@ class GoogleWorkspaceConnectorTest {
         override fun find(contactId: Long): ContactRecord? = rows.firstOrNull { it.id == contactId }
     }
 
+    @Test fun gmailReadsUseSameThreePoliciesAndNeverPrepareAMutation() {
+        val auth = FakeAuthorization().apply {
+            responses += GoogleHttpResponse(200, "{\"messages\":[]}")
+            responses += GoogleHttpResponse(200, "{\"messages\":[]}")
+        }
+        val definition = GmailConnector.definition(GmailConnector(auth, FakeContacts(), { false }, { false }))
+        val summaries = mutableListOf<ApprovalSummary>()
+        val registry = ConnectorRegistry.createForTests(FakeConnectorPreferences(), { false }, autoApprovingGate(summaries::add))
+        registry.register(definition); registry.connect(definition.id)
+        val operation = definition.operations.single { it.name == GmailConnector.SEARCH_MESSAGES }
+        val args = JSONObject().put("query", "")
+        assertEquals(AutonomyPolicy.ALLOW, registry.configuredAutonomyPolicy(definition, operation))
+        registry.invoke(definition, operation, args, CancellationToken.uncancellable())
+        assertTrue(summaries.isEmpty())
+        registry.setAutonomyPolicy(definition, operation, AutonomyPolicy.ASK)
+        registry.invoke(definition, operation, args, CancellationToken.uncancellable())
+        assertEquals(1, summaries.size)
+        registry.setAutonomyPolicy(definition, operation, AutonomyPolicy.DENY)
+        assertTrue(runCatching { registry.invoke(definition, operation, args, CancellationToken.uncancellable()) }.isFailure)
+        assertEquals(2, auth.requests.size)
+        assertTrue(auth.requests.all { it.third == null })
+    }
+
     @Test fun gmailMultipartBase64HtmlAndAttachmentsAreParsedToBoundedUntrustedText() {
         val plain = GoogleOAuthProtocol.base64Url("Hello from plain text".toByteArray(StandardCharsets.UTF_8))
         val html = GoogleOAuthProtocol.base64Url("<html><script>secret()</script><p>Hello <b>HTML</b>&amp; welcome</p></html>"
@@ -73,7 +96,7 @@ class GoogleWorkspaceConnectorTest {
         assertTrue(envelope.getBoolean("truncated"))
     }
 
-    @Test fun gmailCreateDraftRequiresAskAndApprovalShowsRecipientsSubjectAndBody() {
+    @Test fun gmailSavedAskShowsExactRecipientsSubjectAndBody() {
         val auth = FakeAuthorization()
         auth.responses += GoogleHttpResponse(200, """{"id":"draft-1","message":{"id":"msg-1"}}""")
         val definition = GmailConnector(auth, FakeContacts(), { false }, { false }).let(GmailConnector::definition)
@@ -83,6 +106,8 @@ class GoogleWorkspaceConnectorTest {
         registry.register(definition)
         registry.connect(GmailConnector.ID)
         val op = definition.operations.first { it.name == GmailConnector.CREATE_DRAFT }
+        registry.setAutonomyPolicy(definition, op, AutonomyPolicy.ASK)
+        registry.beginAgentRun(0, "Create the requested draft")
         val result = registry.invoke(definition, op, JSONObject().put("to", "owner@example.com")
             .put("subject", "Plan").put("body", "Private draft body"), CancellationToken.uncancellable())
         assertEquals("draft_created", result.getJSONArray("items").getJSONObject(0).getString("status"))
@@ -92,7 +117,7 @@ class GoogleWorkspaceConnectorTest {
         assertTrue(auth.requests.single().third.orEmpty().contains("raw"))
     }
 
-    @Test fun gmailDirectSendAlwaysUsesWriteApprovalAndTheSendScope() {
+    @Test fun gmailSavedAskUsesWriteApprovalAndTheSendScope() {
         val auth = FakeAuthorization()
         auth.responses += GoogleHttpResponse(200, """{"id":"sent-1","threadId":"thread-1"}""")
         val definition = GmailConnector.definition(GmailConnector(auth, FakeContacts(), { false }, { false }))
@@ -100,6 +125,8 @@ class GoogleWorkspaceConnectorTest {
         val registry = ConnectorRegistry.createForTests(FakeConnectorPreferences(), { false }, autoApprovingGate(summaries::add))
         registry.register(definition)
         registry.connect(GmailConnector.ID)
+        registry.setAutonomyPolicy(definition, definition.operations.first { it.name == GmailConnector.SEND_MESSAGE }, AutonomyPolicy.ASK)
+        registry.beginAgentRun(0, "Send the requested email")
         val result = registry.invoke(definition, definition.operations.first { it.name == GmailConnector.SEND_MESSAGE },
             JSONObject().put("to", "owner@example.com").put("subject", "Status").put("body", "Send body"),
             CancellationToken.uncancellable())
@@ -109,7 +136,7 @@ class GoogleWorkspaceConnectorTest {
         assertEquals("send_accepted", result.getJSONArray("items").getJSONObject(0).getString("status"))
     }
 
-    @Test fun gmailAllowDowngradesUnverifiedRecipientsAndAllowsOnlyUserTypedSavedContactOrListedSender() {
+    @Test fun gmailAllowValidatesAddressesWithoutDowngradingUnknownRecipientsToAsk() {
         val auth = FakeAuthorization()
         auth.responses += GoogleHttpResponse(200, """{"id":"accepted-id","message":{"id":"message-id"}}""")
         auth.responses += GoogleHttpResponse(200, """{"id":"accepted-id","message":{"id":"message-id"}}""")
@@ -129,11 +156,11 @@ class GoogleWorkspaceConnectorTest {
 
         registry.invoke(definition, operation, JSONObject().put("to", "other@example.com")
             .put("subject", "S").put("body", "B"), CancellationToken.uncancellable())
-        assertEquals(1, summaries.size) // unverified recipient falls back from Allow to Ask
+        assertEquals(0, summaries.size) // exact unknown addresses do not override configured Allow
 
         registry.invoke(definition, operation, JSONObject().put("to", "typed@example.com")
             .put("subject", "S").put("body", "B"), CancellationToken.uncancellable())
-        assertEquals(1, summaries.size) // user-typed recipient can use the explicit Allow policy
+        assertEquals(0, summaries.size) // same configured policy for user-typed addresses
         assertEquals(2, auth.requests.size)
     }
 
@@ -160,7 +187,7 @@ class GoogleWorkspaceConnectorTest {
         assertTrue(created.getBoolean("untrusted_content"))
         assertEquals(GoogleOAuthProtocol.DRIVE_FILE, auth.requests.last().first)
         assertTrue(auth.requests.last().third.orEmpty().contains("text body"))
-        assertFalse(definition.operations[3].autonomyAllowed)
+        assertTrue(definition.operations[3].autonomyAllowed)
     }
 
     @Test fun driveEnforcesResultCountTextMimeAndOneMiBLimit() {

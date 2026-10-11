@@ -74,7 +74,6 @@ import org.json.JSONObject
 import com.jarvys.agent.AgentRunUiEvent
 import com.jarvys.agent.AgentRunUiSnapshot
 import com.jarvys.agent.AgentRunUiState
-import com.jarvys.agent.approvalIntent as buildApprovalIntent
 import com.jarvys.agent.AssistantMarkdown
 import com.jarvys.agent.ChatMessageList
 import com.jarvys.agent.JarvysGroup
@@ -869,10 +868,7 @@ private fun ApprovalDecisionCard(event: AgentRunUiEvent, connectorRegistry: Conn
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         ApprovalGate.INSTANCE.resolveFromUi(event.approvalId.orEmpty()) {
             if (granted) permissionDecision
-            else if (event.approvalPermissionDeniedIntent != null) {
-                if (runCatching { context.startActivity(buildApprovalIntent(event.approvalPermissionDeniedIntent)) }.isSuccess)
-                    ApprovalDecision.PERMISSION_FALLBACK_LAUNCHED else ApprovalDecision.ACTION_FAILED
-            } else ApprovalDecision.PERMISSION_DENIED
+            else ApprovalDecision.PERMISSION_DENIED
         }
     }
     fun approve(decisionProvider: () -> ApprovalDecision = { ApprovalDecision.APPROVED }) {
@@ -885,11 +881,7 @@ private fun ApprovalDecisionCard(event: AgentRunUiEvent, connectorRegistry: Conn
                 }
             }.onFailure { ApprovalGate.INSTANCE.resolve(event.approvalId.orEmpty(), ApprovalDecision.ACTION_FAILED) }
         } else ApprovalGate.INSTANCE.resolveFromUi(event.approvalId.orEmpty()) {
-            val decision = decisionProvider()
-            event.approvalIntent?.let { spec ->
-                if (runCatching { context.startActivity(buildApprovalIntent(spec)) }.isSuccess) decision
-                else ApprovalDecision.ACTION_FAILED
-            } ?: decision
+            decisionProvider()
         }
     }
     JarvysGroup(
@@ -935,6 +927,7 @@ private fun ApprovalDecisionCard(event: AgentRunUiEvent, connectorRegistry: Conn
                                 var decision = ApprovalDecision.APPROVED
                                 approveAndAllowAlways(
                                     registry = connectorRegistry,
+                                    approvalId = event.approvalId,
                                     connectorId = event.approvalAutonomyConnectorId,
                                     operationName = event.approvalAutonomyOperationName,
                                     onStatusDetail = { detail -> AgentRunUiState.updateApprovalDetail(event.approvalId.orEmpty(), detail) },

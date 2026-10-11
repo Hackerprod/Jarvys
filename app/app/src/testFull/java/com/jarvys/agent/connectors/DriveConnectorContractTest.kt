@@ -29,20 +29,22 @@ class DriveConnectorContractTest {
         override fun request(scope: String, method: String, url: String, body: String?, contentType: String): GoogleHttpResponse =
             error("Connector must use cancellable transport")
         override fun requestCancellable(scope: String, method: String, url: String, body: String?, contentType: String,
-                                        token: CancellationToken, requestHeaders: Map<String, String>, expectedAuthorizationEpoch: Long?): GoogleHttpResponse {
+                                        token: CancellationToken, requestHeaders: Map<String, String>, expectedAuthorizationEpoch: Long?, beforeDispatch: (() -> Unit)?): GoogleHttpResponse {
             token.throwIfCancelled()
             beforeAcquire?.invoke()
             check(expectedAuthorizationEpoch == null || expectedAuthorizationEpoch == epoch) { "Authorization epoch changed" }
+            admitGoogleDispatch(beforeDispatch)
             val request = Request(scope, method, url, body?.toByteArray(), contentType, requestHeaders, null, expectedAuthorizationEpoch)
             requests += request
             onRequest?.invoke(request, token)
             return text.removeFirst()
         }
         override fun requestBytes(scope: String, method: String, url: String, body: ByteArray?, contentType: String,
-                                  token: CancellationToken, maxResponseBytes: Int, requestHeaders: Map<String, String>, expectedAuthorizationEpoch: Long?): GoogleBinaryResponse {
+                                  token: CancellationToken, maxResponseBytes: Int, requestHeaders: Map<String, String>, expectedAuthorizationEpoch: Long?, beforeDispatch: (() -> Unit)?): GoogleBinaryResponse {
             token.throwIfCancelled()
             beforeAcquire?.invoke()
             check(expectedAuthorizationEpoch == null || expectedAuthorizationEpoch == epoch) { "Authorization epoch changed" }
+            admitGoogleDispatch(beforeDispatch)
             val request = Request(scope, method, url, body?.copyOf(), contentType, requestHeaders, maxResponseBytes, expectedAuthorizationEpoch)
             requests += request
             onRequest?.invoke(request, token)
@@ -71,12 +73,45 @@ class DriveConnectorContractTest {
         }
     }
 
-    @Test fun firstFourOperationsRemainCompatibleAndEveryWriteRequiresApproval() {
+    @Test fun readAdmissionIsUsedAndScopeAvailabilityDoesNotChangePolicies() {
+        val auth = FakeAuthorization().apply { metadata() }
+        val definition = DriveConnector.definition(auth, FakeArtifacts())
+        val runtime = definition.runtime!!
+        val args = JSONObject().put("id", "file-1")
+        var admissions = 0
+        val prepared = ConnectorWritePreparation(ApprovalSummary("Read Drive metadata", emptyList()), args,
+            authorizeEffect = { admissions++ })
+        runtime.invokeReadPrepared(DriveConnector.GET_FILE_METADATA, args, prepared, token())
+        assertEquals(1, admissions)
+        auth.grants.remove(GoogleOAuthProtocol.DRIVE_FILE)
+        assertFalse(definition.operationAccessGranted!!.invoke(DriveConnector.CREATE_FILE))
+        assertTrue(definition.operationAccessGranted!!.invoke(DriveConnector.READ_FILE))
+        assertTrue(definition.operations.all { it.autonomyAllowed })
+        assertEquals(GoogleOAuthProtocol.DRIVE_READ, DriveConnector.requiredScope(DriveConnector.DOWNLOAD_FILE))
+    }
+
+    @Test fun policyRevokedDuringDrivePreflightPreventsMutationAndClearsUnsentMarker() {
+        val auth = FakeAuthorization().apply { metadata(); metadata(); written("file-1") }
+        val runtime = DriveConnector(auth, FakeArtifacts())
+        val args = updateArgs()
+        val prepared = runtime.prepareWrite(DriveConnector.UPDATE_FILE, args, token())
+        var allowed = true
+        auth.onRequest = { request, _ -> if (request.method == "GET") allowed = false }
+        val admitted = prepared.copy(authorizeEffect = { check(allowed) { "policy revoked" } })
+        failure { runtime.invokePrepared(DriveConnector.UPDATE_FILE, admitted.executionArguments, admitted, token()) }
+        assertTrue(auth.requests.all { it.method == "GET" })
+        auth.onRequest = null
+        auth.metadata()
+        // The same intent may be prepared again because it was rejected before the mutation transport.
+        runtime.prepareWrite(DriveConnector.UPDATE_FILE, args, token())
+    }
+
+    @Test fun firstFourOperationsRemainCompatibleAndEveryWriteOffersConfiguredPolicies() {
         val auth = FakeAuthorization()
         val definition = DriveConnector.definition(auth, FakeArtifacts())
         assertEquals(listOf("search_files", "get_file_metadata", "read_file", "create_file"), definition.operations.take(4).map { it.name })
         assertEquals(setOf("create_file", "update_file", "create_folder"), definition.operations.filter { it.write }.map { it.name }.toSet())
-        assertTrue(definition.operations.filter { it.write }.all { !it.autonomyAllowed })
+        assertTrue(definition.operations.filter { it.write }.all { it.autonomyAllowed })
         assertTrue(definition.operations.none { it.name.contains("delete") || it.name.contains("share") || it.name.contains("permission") })
         assertTrue(definition.connectionAccessGranted!!.invoke())
         auth.grants.remove(GoogleOAuthProtocol.DRIVE_READ)
@@ -641,6 +676,7 @@ class DriveConnectorContractTest {
         val definition = DriveConnector.definition(auth, FakeArtifacts())
         registry.register(definition)
         registry.connect(DriveConnector.ID)
+        registry.setAutonomyPolicy(definition, definition.operations[3], AutonomyPolicy.ASK)
         failure { registry.invoke(definition, definition.operations[3], createArgs("denied"), token()) }
         assertTrue(auth.requests.isEmpty())
     }

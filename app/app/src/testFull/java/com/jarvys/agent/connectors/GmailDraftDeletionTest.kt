@@ -43,16 +43,16 @@ class GmailDraftDeletionTest {
             return account
         }
         override fun requestCancellable(scope: String, method: String, url: String, body: String?, contentType: String,
-            token: CancellationToken, requestHeaders: Map<String, String>, expectedAuthorizationEpoch: Long?): GoogleHttpResponse {
+            token: CancellationToken, requestHeaders: Map<String, String>, expectedAuthorizationEpoch: Long?, beforeDispatch: (() -> Unit)?): GoogleHttpResponse {
             expectedEpochs += expectedAuthorizationEpoch
             if (method == "DELETE") preDispatch?.invoke()
-            return super<GoogleRestAuthorization>.requestCancellable(scope, method, url, body, contentType, token, requestHeaders, expectedAuthorizationEpoch)
+            return super<GoogleRestAuthorization>.requestCancellable(scope, method, url, body, contentType, token, requestHeaders, expectedAuthorizationEpoch, beforeDispatch)
         }
         override fun requestBytes(scope: String, method: String, url: String, body: ByteArray?, contentType: String,
-            token: CancellationToken, maxResponseBytes: Int, requestHeaders: Map<String, String>, expectedAuthorizationEpoch: Long?): GoogleBinaryResponse {
+            token: CancellationToken, maxResponseBytes: Int, requestHeaders: Map<String, String>, expectedAuthorizationEpoch: Long?, beforeDispatch: (() -> Unit)?): GoogleBinaryResponse {
             expectedEpochs += expectedAuthorizationEpoch
             bounds += maxResponseBytes
-            return super<GoogleRestAuthorization>.requestBytes(scope, method, url, body, contentType, token, maxResponseBytes, requestHeaders, expectedAuthorizationEpoch)
+            return super<GoogleRestAuthorization>.requestBytes(scope, method, url, body, contentType, token, maxResponseBytes, requestHeaders, expectedAuthorizationEpoch, beforeDispatch)
         }
         override fun request(scope: String, method: String, url: String, body: String?, contentType: String): GoogleHttpResponse {
             check(scope in grants)
@@ -116,13 +116,23 @@ class GmailDraftDeletionTest {
             override fun find(contactId: Long): ContactRecord? = null
         }, { false }, { false }, writeJournal = journal)
 
+    @Test fun draftDeletionRechecksAdmissionAfterExactRevisionPreflight() {
+        val api = Api(); val connector = runtime(api)
+        val prepared = connector.prepareWrite(GmailDraftDeletion.OPERATION, args(), token)
+        var allowed = true
+        api.afterRawRead = { allowed = false }
+        val bound = prepared.copy(authorizeEffect = { check(allowed) { "policy revoked" } })
+        failure("policy revoked") { connector.invokePrepared(GmailDraftDeletion.OPERATION, args(), bound, token) }
+        assertTrue(api.writes.isEmpty()); assertTrue(api.exists)
+    }
+
     @Test fun realConnectorCatalogRoutesComposeOnlyIrreversibleDeleteWithoutAllow() {
         val api = Api()
         val connector = runtime(api)
         val definition = GmailConnector.definition(connector)
         val operation = definition.operations.single { it.name == GmailDraftDeletion.OPERATION }
         assertTrue(operation.write)
-        assertFalse(operation.autonomyAllowed)
+        assertTrue(operation.autonomyAllowed)
         assertTrue(operation.displayLabelResourceId != 0)
         assertTrue(operation.descriptionResourceId != 0)
         assertEquals(GoogleOAuthProtocol.GMAIL_COMPOSE, GmailConnector.requiredScope(operation.name))
@@ -131,7 +141,7 @@ class GmailDraftDeletionTest {
         assertFalse(operation.inputSchema.getBoolean("additionalProperties"))
         failure("approval") { connector.invoke(operation.name, args(), token) }
         val review = connector.prepareWrite(operation.name, args(), token)
-        assertFalse(review.approval.allowAlwaysAvailable)
+        assertTrue(review.approval.allowAlwaysAvailable)
         assertEquals("delete_accepted", item(connector.invokePrepared(operation.name, args(), review, token)).getString("status"))
         val write = api.writes.single()
         assertEquals("DELETE", write.method)
@@ -170,16 +180,18 @@ class GmailDraftDeletionTest {
         assertFalse(definition.operationAccessGranted!!.invoke(GmailDraftDeletion.OPERATION))
     }
 
-    @Test fun registryDenialHasNoEffectAndNoAllowPolicyCanBeEnabled() {
+    @Test fun registryAskRejectionHasNoEffectAndAllowPolicyCanBeSelected() {
         val api = Api(); val connector = runtime(api)
         val definition = GmailConnector.definition(connector)
         val operation = definition.operations.single { it.name == GmailDraftDeletion.OPERATION }
         var summary: ApprovalSummary? = null
         val registry = ConnectorRegistry.createForTests(FakeConnectorPreferences(), { true }, rejectingApprovalGate { summary = it })
         registry.register(definition); registry.connect(definition.id)
-        failure("Allow") { registry.setAutonomyPolicy(definition, operation, AutonomyPolicy.ALLOW) }
-        failure { registry.invoke(definition, operation.copy(write = false, autonomyAllowed = true), args(), token) }
-        assertNotNull(summary); assertFalse(summary!!.allowAlwaysAvailable)
+        registry.setAutonomyPolicy(definition, operation, AutonomyPolicy.ALLOW)
+        assertEquals(AutonomyPolicy.ALLOW, registry.configuredAutonomyPolicy(definition, operation))
+        registry.setAutonomyPolicy(definition, operation, AutonomyPolicy.ASK)
+        failure { registry.invoke(definition, operation, args(), token) }
+        assertNotNull(summary); assertTrue(summary!!.allowAlwaysAvailable)
         assertTrue(api.writes.isEmpty()); assertTrue(api.exists)
     }
 
@@ -286,7 +298,7 @@ class GmailDraftDeletionTest {
         assertTrue(lines.contains("owner@example.test")); assertTrue(lines.contains("d1 · revision: m1"))
         assertTrue(lines.contains("review.pdf")); assertTrue(lines.contains("128 bytes"))
         assertTrue(lines.contains("truncated")); assertTrue(lines.contains("cannot be recovered from Trash"))
-        assertTrue(lines.contains("atomic revision")); assertFalse(review.approval.allowAlwaysAvailable)
+        assertTrue(lines.contains("atomic revision")); assertTrue(review.approval.allowAlwaysAvailable)
         assertTrue(review.approval.localizedLines!!.all { it.resourceId != 0 })
         assertTrue(lines.length < 10_000)
         assertFalse(review.executionArguments.has("raw")); assertFalse(review.executionArguments.has("body"))

@@ -94,6 +94,8 @@ interface ConnectorRuntime {
     fun prepareWrite(operation: String, arguments: JSONObject, token: CancellationToken): ConnectorWritePreparation
     fun invokePrepared(operation: String, arguments: JSONObject, preparation: ConnectorWritePreparation,
                        token: CancellationToken): JSONObject = invoke(operation, arguments, token)
+    fun invokeReadPrepared(operation: String, arguments: JSONObject, preparation: ConnectorWritePreparation,
+                           token: CancellationToken): JSONObject = invoke(operation, arguments, token)
     fun invoke(operation: String, arguments: JSONObject, token: CancellationToken): JSONObject
 }
 
@@ -115,6 +117,8 @@ data class ConnectorWritePreparation(
     val attachment: Any? = null,
     val fallbackOnPermissionDenied: Boolean = false,
     val permissionDeniedFallback: Boolean = false,
+    /** Fresh, exact-operation admission immediately before each provider effect or batch mutation. */
+    val authorizeEffect: (() -> Unit)? = null,
 )
 
 enum class ConnectorState { DISCONNECTED, CONNECTED, PERMISSION_REVOKED }
@@ -143,6 +147,7 @@ class ConnectorRegistry private constructor(
     private val autonomyStore: ConnectorAutonomyStore,
     private val autonomyNotifier: AutonomyActionNotifier,
     private val clock: () -> Long = System::currentTimeMillis,
+    private val launchIntent: (ApprovalIntentSpec) -> Unit = { error("Native intent dispatcher unavailable") },
 ) {
     private val lock = Any()
     private val _definitions = MutableStateFlow<List<ConnectorDefinition>>(emptyList())
@@ -170,29 +175,18 @@ class ConnectorRegistry private constructor(
         it.runtime != null && calculateState(it) == ConnectorState.CONNECTED
     }
 
-    fun autonomyPolicy(definition: ConnectorDefinition, operation: ConnectorOperation): AutonomyPolicy {
-        val configured = configuredAutonomyPolicy(definition, operation)
-        if (configured != AutonomyPolicy.ALLOW) return configured
-        return if (autonomyPolicyUnavailableReason(definition, operation) == null) AutonomyPolicy.ALLOW else AutonomyPolicy.ASK
-    }
+    fun autonomyPolicy(definition: ConnectorDefinition, operation: ConnectorOperation): AutonomyPolicy =
+        configuredAutonomyPolicy(definition, operation)
 
     fun configuredAutonomyPolicy(definition: ConnectorDefinition, operation: ConnectorOperation): AutonomyPolicy =
         autonomyStore.policy(definition.id, operation.name)
 
+    /** Availability is independent from the saved decision; it never silently changes ALLOW to ASK. */
     fun autonomyPolicyUnavailableReason(definition: ConnectorDefinition, operation: ConnectorOperation): String? {
-        if (configuredAutonomyPolicy(definition, operation) != AutonomyPolicy.ALLOW) return null
-        if (!operation.autonomyAllowed) return "This operation requires explicit confirmation."
-        if (state(definition) != ConnectorState.CONNECTED) return "Reconnect this connector to use Allow mode."
-        val missing = writePermissions(definition, operation).firstOrNull { !permissionGranted(it) }
-        if (missing != null) return "Grant ${missing.substringAfterLast('.')} permission to use Allow mode."
-        if (!autonomyNotifier.canPost()) {
-            return if (autonomyNotifier.missingRuntimePermission() != null) {
-                "Grant notification permission to use Allow mode."
-            } else {
-                "Enable Jarvys notifications to use Allow mode."
-            }
-        }
-        return null
+        if (state(definition) != ConnectorState.CONNECTED) return "This connector is not connected."
+        if (definition.operationAccessGranted?.invoke(operation.name) == false) return "The service permission is unavailable."
+        val permissions = if (operation.write) writePermissions(definition, operation) else readPermissions(definition, operation)
+        return permissions.firstOrNull { !permissionGranted(it) }?.let { "Grant ${it.substringAfterLast('.')} permission to execute this action." }
     }
 
     fun autonomyPolicyUnavailableUiReason(definition: ConnectorDefinition, operation: ConnectorOperation): ConnectorUiText? =
@@ -214,50 +208,21 @@ class ConnectorRegistry private constructor(
         val operation = definition.operations.firstOrNull { it.name == operationName } ?: return ConnectorUiText(
             R.string.approval_autonomy_operation_unavailable, fallback = "This operation is no longer available.",
         )
-        autonomyAllowUnavailableReason(definition, operation)?.let { return it }
         val failure = runCatching { setAutonomyPolicy(definition, operation, AutonomyPolicy.ALLOW) }.exceptionOrNull()
         return failure?.let { ConnectorUiText(R.string.connector_allow_failed, fallback = it.message ?: "Could not enable Allow mode.") }
     }
 
-    private fun autonomyAllowUnavailableReason(definition: ConnectorDefinition, operation: ConnectorOperation): ConnectorUiText? {
-        if (!operation.write) return ConnectorUiText(R.string.approval_autonomy_operation_unavailable, fallback = "Allow mode is only available for write operations.")
-        if (!operation.autonomyAllowed) return ConnectorUiText(R.string.approval_autonomy_system_confirmation, fallback = "This operation requires explicit confirmation.")
-        if (state(definition) != ConnectorState.CONNECTED) return ConnectorUiText(
-            R.string.approval_autonomy_reconnect_required, fallback = "Reconnect this connector to use Allow mode.",
-        )
-        if (writePermissions(definition, operation).any { !permissionGranted(it) }) return ConnectorUiText(
-            R.string.approval_autonomy_permission_required,
-            listOf(ConnectorUiText(definition.permissionLabelResourceId, fallback = definition.permissionLabel)),
-            "Grant ${definition.permissionLabel} permission to use Allow mode.",
-        )
-        if (!autonomyNotifier.canPost()) {
-            return if (autonomyNotifier.missingRuntimePermission() != null) ConnectorUiText(
-                R.string.approval_autonomy_notification_permission_required,
-                fallback = "Grant notification permission to use Allow mode.",
-            ) else ConnectorUiText(
-                R.string.approval_notifications_required_reason,
-                fallback = "Enable Jarvys notifications to use Allow mode.",
-            )
-        }
-        return null
-    }
+    private fun autonomyAllowUnavailableReason(definition: ConnectorDefinition, operation: ConnectorOperation): ConnectorUiText? =
+        autonomyPolicyUnavailableReason(definition, operation)?.let { ConnectorUiText(fallback = it) }
 
     fun autonomyPermissions(definition: ConnectorDefinition, operation: ConnectorOperation): List<String> =
-        (writePermissions(definition, operation).filterNot(permissionGranted) +
-            listOfNotNull(autonomyNotifier.missingRuntimePermission())).distinct()
+        (if (operation.write) writePermissions(definition, operation) else readPermissions(definition, operation)).filterNot(permissionGranted)
 
     fun autonomyNotificationsAvailable(): Boolean = autonomyNotifier.canPost()
 
     fun setAutonomyPolicy(definition: ConnectorDefinition, operation: ConnectorOperation, policy: AutonomyPolicy) {
-        require(operation.write) { "Autonomy policy applies only to write operations" }
-        if (policy == AutonomyPolicy.ALLOW) {
-            require(operation.autonomyAllowed) { "This operation requires explicit confirmation and cannot use Allow" }
-            require(definition.operationAccessGranted?.invoke(operation.name) != false) { "Authorize the operation's service permission before enabling Allow" }
-            require(state(definition) == ConnectorState.CONNECTED) { "Connect this device connector before changing its autonomy policy" }
-            require(writePermissions(definition, operation).all(permissionGranted)) { "Grant the operation permission before enabling Allow" }
-            require(autonomyNotifier.canPost()) { "Enable Jarvys notifications before enabling Allow" }
-        }
-        autonomyStore.setPolicy(definition.id, operation.name, policy)
+        require(get(definition.id)?.operations?.any { it.name == operation.name } == true) { "Action is no longer available" }
+        autonomyStore.setPolicyChecked(definition.id, operation.name, policy)
         synchronized(lock) { _autonomyRevision.value += 1L }
     }
 
@@ -376,101 +341,79 @@ class ConnectorRegistry private constructor(
             error("${current.name} está desconectado; conectalo de nuevo en Conectores")
         }
         val permissions = if (selectedOperation.write) writePermissions(current, selectedOperation) else readPermissions(current, selectedOperation)
-        if (!selectedOperation.write && !permissions.all(permissionGranted)) {
-                refreshStates()
-                error("El permiso de ${current.permissionLabel} fue revocado; volvé a conectarlo en Conectores")
-        }
         token.throwIfCancelled()
         val runtime = requireNotNull(current.runtime) { "El conector ${current.name} no tiene runtime" }
-        if (!selectedOperation.write) return runtime.invoke(selectedOperation.name, arguments, token)
-
-        val configuredPolicy = autonomyStore.policy(current.id, selectedOperation.name)
-        if (configuredPolicy == AutonomyPolicy.DENY) {
-            error("La política de autonomía de ${selectedOperation.displayLabel} está en Deny")
-        }
-        var autonomousWriteValidationReason: ConnectorUiText? = null
-        if (configuredPolicy == AutonomyPolicy.ALLOW && selectedOperation.autonomyAllowed) {
-            try {
-                (runtime as? AgentRunScopedConnectorRuntime)?.validateAutonomousWrite(
-                    selectedOperation.name, arguments, token.generation(),
-                )
-            } catch (failure: AutonomousWriteValidationFailure) {
-                autonomousWriteValidationReason = failure.userReason
-            }
-        }
-        val effectivePolicy = if (autonomousWriteValidationReason != null) AutonomyPolicy.ASK
-            else autonomyPolicy(current, selectedOperation)
-        val preparation = runtime.prepareWrite(selectedOperation.name, arguments, token)
-        val missingWritePermission = permissions.firstOrNull { !permissionGranted(it) }
-        val autonomous = effectivePolicy == AutonomyPolicy.ALLOW
+        val executionArguments = JSONObject(arguments.toString())
+        val schema = selectedOperation.inputSchema.toString()
+        var snapshot = autonomyStore.snapshot(current.id, selectedOperation.name)
+        check(snapshot.policy != AutonomyPolicy.DENY) { "This action is denied by its saved policy" }
+        val preparation = if (selectedOperation.write) runtime.prepareWrite(selectedOperation.name, executionArguments, token)
+            else ConnectorWritePreparation(ApprovalSummary(
+                title = selectedOperation.displayLabel,
+                lines = listOf(selectedOperation.description, executionArguments.toString().take(4096)),
+            ), executionArguments)
+        val preparedArguments = preparation.executionArguments.toString()
+        var approvedAsk = false
+        var alwaysDecision: ActionPolicySnapshot? = null
         var permissionDeniedFallback = false
-        if (!autonomous) {
-            val missingAutonomyPermission = if (configuredPolicy == AutonomyPolicy.ALLOW) autonomyNotifier.missingRuntimePermission() else null
-            val reasonText = autonomousWriteValidationReason ?: when {
-                configuredPolicy == AutonomyPolicy.ALLOW && !selectedOperation.autonomyAllowed ->
-                    ConnectorUiText(R.string.approval_system_confirmation_reason,
-                        fallback = "This action requires explicit confirmation and cannot run automatically.")
-                configuredPolicy == AutonomyPolicy.ALLOW && missingWritePermission != null ->
-                    ConnectorUiText(R.string.approval_permission_required_reason,
-                        listOf(missingWritePermission.substringAfterLast('.')),
-                        "Grant ${missingWritePermission.substringAfterLast('.')} permission to enable automatic execution.")
-                configuredPolicy == AutonomyPolicy.ALLOW && !autonomyNotifier.canPost() ->
-                    ConnectorUiText(R.string.approval_notifications_required_reason,
-                        fallback = "Enable Jarvys notifications to keep Allow mode auditable.")
-                else -> null
-            }
-            val originalLines = preparation.approval.localizedLines
-                ?: preparation.approval.lines.map { ConnectorUiText(fallback = it) }
-            val requestLines = if (reasonText == null) originalLines else listOf(reasonText) + originalLines
-            val decision = approvalGate.request(
-                preparation.approval.copy(
-                    // Notification permission is a prerequisite for persistent Allow mode, not for this
-                    // individually approved write. Do not gate the current action on that permission.
-                    permission = missingWritePermission,
-                    lines = requestLines.map { it.fallback },
-                    localizedLines = requestLines,
-                    allowAlwaysAvailable = configuredPolicy != AutonomyPolicy.ALLOW && selectedOperation.autonomyAllowed,
-                    autonomyConnectorId = current.id,
-                    autonomyOperationName = selectedOperation.name,
-                    requester = requester,
-                    requesterColorKey = requesterColorKey,
-                    permissionLabel = missingWritePermission?.let {
-                        ConnectorUiText(current.permissionLabelResourceId, fallback = current.permissionLabel)
-                    },
-                ),
-                token,
-            )
+        val autonomous = snapshot.policy == AutonomyPolicy.ALLOW
+        if (snapshot.policy == AutonomyPolicy.ASK) {
+            val decision = approvalGate.request(preparation.approval.copy(
+                permission = permissions.firstOrNull { !permissionGranted(it) },
+                allowAlwaysAvailable = true,
+                autonomyConnectorId = current.id, autonomyOperationName = selectedOperation.name,
+                requester = requester, requesterColorKey = requesterColorKey,
+                enableAlways = { alwaysDecision = autonomyStore.setPolicyAndSnapshot(current.id, selectedOperation.name, AutonomyPolicy.ALLOW) },
+            ), token)
             when (decision) {
-                ApprovalDecision.APPROVED, ApprovalDecision.APPROVED_ALLOW_ALWAYS,
-                ApprovalDecision.APPROVED_ALLOW_FAILED -> Unit
-                ApprovalDecision.DENIED -> error("El usuario rechazó la acción; no la reintentes sin una nueva solicitud explícita")
+                ApprovalDecision.APPROVED, ApprovalDecision.APPROVED_ALLOW_FAILED -> approvedAsk = true
+                ApprovalDecision.APPROVED_ALLOW_ALWAYS -> {
+                    // The explicit button durably updates the same action; no other policy change inherits this grant.
+                    snapshot = requireNotNull(alwaysDecision) { "Missing exact Allow decision receipt" }
+                    check(snapshot.policy == AutonomyPolicy.ALLOW) { "Allow policy was not saved or was revoked" }
+                }
                 ApprovalDecision.PERMISSION_DENIED -> {
-                    if (preparation.fallbackOnPermissionDenied) permissionDeniedFallback = true
-                    else error("Se denegó el permiso de escritura de ${current.name}; habilitalo en Ajustes de la app y volvé a intentar")
+                    check(preparation.fallbackOnPermissionDenied) { "Android permission was denied" }
+                    alwaysDecision?.let { snapshot = it }
+                    approvedAsk = snapshot.policy == AutonomyPolicy.ASK
+                    permissionDeniedFallback = true
                 }
-                ApprovalDecision.PERMISSION_FALLBACK_LAUNCHED -> {
-                    if (preparation.fallbackOnPermissionDenied) permissionDeniedFallback = true
-                    else error("No hay un fallback aprobado para esta operación")
-                }
-                ApprovalDecision.ACTION_FAILED -> error("No se pudo abrir la aplicación del sistema para completar esta acción")
-                ApprovalDecision.EXPIRED -> error("La aprobación expiró; pedile al usuario que intente de nuevo")
-                ApprovalDecision.CANCELLED -> throw java.util.concurrent.CancellationException("Aprobación cancelada")
+                ApprovalDecision.PERMISSION_FALLBACK_LAUNCHED -> error("Legacy UI effect receipt cannot authorize another dispatch")
+                ApprovalDecision.DENIED -> error("The user denied this action; do not retry automatically")
+                ApprovalDecision.ACTION_FAILED -> error("Android could not complete the permission request")
+                ApprovalDecision.EXPIRED -> error("Approval expired")
+                ApprovalDecision.CANCELLED -> throw java.util.concurrent.CancellationException("Approval cancelled")
             }
         }
-        token.throwIfCancelled()
-        if (state(current) != ConnectorState.CONNECTED) {
-            refreshStates()
-            error("El permiso de ${current.permissionLabel} fue revocado; volvé a conectarlo en Conectores")
+        fun validateCurrent() {
+            token.throwIfCancelled()
+            check(preparation.executionArguments.toString() == preparedArguments) { "Prepared action arguments changed" }
+            if (selectedOperation.write) (runtime as? AgentRunScopedConnectorRuntime)?.validateAutonomousWrite(
+                selectedOperation.name, preparation.executionArguments, token.generation())
+            check(get(current.id) === current && current.runtime === runtime &&
+                current.operations.firstOrNull { it.name == selectedOperation.name } === selectedOperation &&
+                selectedOperation.inputSchema.toString() == schema) { "Connector action changed before dispatch" }
+            check(state(current) == ConnectorState.CONNECTED) { "Connector access was revoked" }
+            check(current.operationAccessGranted?.invoke(selectedOperation.name) != false) { "Service permission was revoked" }
+            check(permissionDeniedFallback || permissions.all(permissionGranted)) { "Android permission is unavailable; grant it in connector settings" }
         }
-        if (!permissionDeniedFallback && !permissions.all(permissionGranted)) {
-            error("Falta el permiso de escritura de ${current.name}; habilitalo en Ajustes de la app y volvé a intentar")
+        // Admission is the linearization boundary. Later revocation blocks the next admission,
+        // but cannot undo an effect already dispatched to Android or a provider.
+        fun authorizeEffect() {
+            val fresh = autonomyStore.snapshotMatching(snapshot)
+            check(token.runIfActive { autonomyStore.admit(fresh, approvedAsk, ::validateCurrent) }) { "Action cancelled before admission" }
         }
-        val result = runtime.invokePrepared(
-            selectedOperation.name,
-            preparation.executionArguments,
-            preparation.copy(permissionDeniedFallback = permissionDeniedFallback),
-            token,
-        )
+        check(token.runIfActive { autonomyStore.admit(snapshot, approvedAsk, ::validateCurrent) }) { "Action cancelled before admission" }
+        val intent = if (permissionDeniedFallback) preparation.approval.permissionDeniedIntent else preparation.approval.activityIntent
+        if (intent != null) {
+            authorizeEffect()
+            launchIntent(intent)
+        }
+        val result = if (selectedOperation.write) runtime.invokePrepared(
+            selectedOperation.name, preparation.executionArguments,
+            preparation.copy(permissionDeniedFallback = permissionDeniedFallback, authorizeEffect = ::authorizeEffect), token,
+        ) else runtime.invokeReadPrepared(selectedOperation.name, preparation.executionArguments,
+            preparation.copy(authorizeEffect = ::authorizeEffect), token)
         if (autonomous) {
             val record = AutonomyAuditRecord(
                 timestampMillis = clock(),
@@ -530,6 +473,7 @@ class ConnectorRegistry private constructor(
                 ApprovalGate.INSTANCE,
                 SharedPreferencesConnectorAutonomyStore(appContext),
                 AndroidAutonomyActionNotifier(appContext),
+                launchIntent = { spec -> appContext.startActivity(com.jarvys.agent.approvalIntent(spec).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) },
             ).also { registry ->
                 registry.registerBuiltInDefinitions(deviceDefinitions(appContext))
                 instance = registry
@@ -564,8 +508,9 @@ class ConnectorRegistry private constructor(
             autonomyStore: ConnectorAutonomyStore,
             autonomyNotifier: AutonomyActionNotifier,
             clock: () -> Long = System::currentTimeMillis,
+            launchIntent: (ApprovalIntentSpec) -> Unit = { error("Native intent dispatcher unavailable") },
         ): ConnectorRegistry = ConnectorRegistry(
-            stateStore, permissionGranted, approvalGate, autonomyStore, autonomyNotifier, clock,
+            stateStore, permissionGranted, approvalGate, autonomyStore, autonomyNotifier, clock, launchIntent,
         )
 
     }

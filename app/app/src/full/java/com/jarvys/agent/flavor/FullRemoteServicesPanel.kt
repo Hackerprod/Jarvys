@@ -381,20 +381,18 @@ internal fun GoogleServiceCard(
                 }
             } else if (writeScopes.isNotEmpty()) ConnectorDetailSection(stringResource(R.string.remote_service_write_tool)) { ScopeRows(writeScopes) }
             val definition = definitions.firstOrNull { it.id == connectorId }
-            val writes = definition?.operations.orEmpty().filter { it.write }
-            if (definition != null && writes.isNotEmpty()) ConnectorDetailSection(stringResource(R.string.connector_section_tools)) {
-                writes.forEach { operation ->
+            val actions = definition?.operations.orEmpty()
+            if (definition != null && actions.isNotEmpty()) ConnectorDetailSection(stringResource(R.string.connector_section_tools)) {
+                actions.forEach { operation ->
                     val configured = remember(registry, definition, operation, autonomyRevision) {
                         registry.configuredAutonomyPolicy(definition, operation)
                     }
                     val requiredScope = if (connectorId == GmailConnector.ID) GmailConnector.requiredScope(operation.name)
-                        else GoogleOAuthProtocol.DRIVE_FILE
+                        else DriveConnector.requiredScope(operation.name)
                     val scopeAvailable = requiredScope != null && manager.isScopeGranted(requiredScope)
-                    val canAllow = scopeAvailable && operation.autonomyAllowed &&
-                        registry.autonomyPolicyUnavailableUiReason(definition, operation) == null
                     val choices = buildList {
                         add(ConnectorPolicyChoice(R.string.connector_policy_ask) { registry.setAutonomyPolicy(definition, operation, AutonomyPolicy.ASK) })
-                        if (canAllow) add(ConnectorPolicyChoice(R.string.connector_policy_allow) {
+                        add(ConnectorPolicyChoice(R.string.connector_policy_allow) {
                             registry.setAutonomyPolicy(definition, operation, AutonomyPolicy.ALLOW)
                         })
                         add(ConnectorPolicyChoice(R.string.connector_policy_deny) { registry.setAutonomyPolicy(definition, operation, AutonomyPolicy.DENY) })

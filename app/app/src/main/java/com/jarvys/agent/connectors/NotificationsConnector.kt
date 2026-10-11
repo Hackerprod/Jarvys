@@ -102,11 +102,12 @@ class NotificationsConnector(
         token.throwIfCancelled()
         val key = preparation.executionArguments.optString("key")
         when (operation) {
-            DISMISS -> gateway.dismiss(key)
-            OPEN -> gateway.open(key)
+            DISMISS -> { preparation.authorizeEffect?.invoke(); gateway.dismiss(key) }
+            OPEN -> { preparation.authorizeEffect?.invoke(); gateway.open(key) }
             REPLY -> {
                 val text = preparation.executionArguments.optString("replyText")
                 require(text.isNotBlank() && text.length <= MAX_REPLY_CHARS) { "replyText is invalid" }
+                preparation.authorizeEffect?.invoke()
                 gateway.reply(key, text)
             }
             else -> error("Unknown notification write operation: $operation")
