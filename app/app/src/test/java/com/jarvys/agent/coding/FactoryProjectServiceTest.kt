@@ -105,6 +105,7 @@ class FactoryProjectServiceTest {
         val first = f.build("first.apk")
         f.build("second.apk")
         assertArrayEquals(File(f.root,"first.apk").readBytes(),File(f.root,"second.apk").readBytes())
+        com.jarvys.agent.apkfactory.FactoryApkEvidence.write("local-ui-example-unsigned.apk", File(f.root,"first.apk").readBytes())
         val ui = com.jarvys.factory.runtime.FactoryUiAssets.fromApk(File(f.root,"first.apk").readBytes())
         assertEquals(5, ui.size)
         val result = f.service.harness("preview", "first.apk", first.getString("sha256"), f.scope.version(), CancellationToken.cancellable())

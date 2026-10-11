@@ -49,3 +49,21 @@ The usable example lives at `app/examples/factory-local-ui/`, with versioned CSS
 responsive form/table/buttons and bounded session-only DOM state. Documentation and a
 version/hash-bound Coding reference describe actual usage and limits. All preexisting
 runtime capabilities and physical/device acceptance gates remain unchanged.
+
+## Retained preflight failure and rendering boundary
+
+The first guarded focused run completed 144 tests with one failure: the new guidance
+reference discovery exceeded the preexisting stricter 7,680-byte core-headroom assertion.
+The 8 KiB loader ceiling was not exceeded. The original assertion was preserved; only
+redundant discovery wording was compacted, keeping all family references and biometric
+boundaries. Corrected parsed core is 7,676 bytes. Three guarded JVMs completed with paired
+receipts. This failed run is retained separately and is not release evidence.
+
+The shipped-example test now exports its public synthetic APK through the existing opt-in,
+bounded, readback-verified test evidence helper. Full/Play use distinct task directories.
+
+A desktop Chromium smoke was attempted with its sandbox retained. Startup failed before
+page load at process_singleton socket permission, including the approved escalation. No
+rendering, screenshots or interaction checks passed. The exposed alternate CUA route targets
+the user's computer and was not used. A local-only, exact-CSP harness and failure evidence
+are retained externally; Android WebView/device compatibility remains unverified.

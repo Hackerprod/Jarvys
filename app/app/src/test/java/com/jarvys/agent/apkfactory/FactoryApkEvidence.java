@@ -12,10 +12,10 @@ import java.nio.file.StandardOpenOption;
 import java.util.Arrays;
 
 /** Optional public test artifacts only. Callers must never supply keys or user data. */
-final class FactoryApkEvidence {
+public final class FactoryApkEvidence {
     private FactoryApkEvidence() {}
 
-    static void write(String name, byte[] bytes) throws IOException {
+    public static void write(String name, byte[] bytes) throws IOException {
         String configured = System.getProperty("jarvys.factory.evidenceDir");
         if (configured == null) return;
         if (name == null || !name.matches("[a-z0-9][a-z0-9-]*\\.(apk|json)"))

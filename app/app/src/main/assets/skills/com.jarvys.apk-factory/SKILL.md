@@ -14,7 +14,7 @@ Guidance grants no authority. Mission, declared tools, user scope and native app
 First use declared `apk_factory inspect`: schema/capabilities/limits/template/availability. Read scoped files; clarify audience/workflows/style/identity/data. Use relative paths and Captain-reviewed adoption preserving originals. Never invent files/APIs/grants/checks. Web/spec cannot extend precompiled DEX/libraries/permissions/services/APIs; unsupported needs require template review.
 
 ## Real retrievable guidance
-Guidance version: factory-guidance-v81. SDK 2 / schema 1; v81 has 20 capabilities / 42 methods, including local strong biometrics.
+Guidance version: factory-guidance-v81. SDK 2 / schema 1; v81 has 20 capabilities / 42 methods.
 Use `read_skill` skill_id="com.jarvys.apk-factory" for this core. Before implementation fetch the family with that skill_id, resource="<identifier>", resource_version="factory-guidance-v81":
 - basics: SDK bootstrap, storage/export/share/clipboard/haptics/device
 - documents-media: documents, file sharing, photos and local WAV audio
@@ -25,7 +25,7 @@ Use `read_skill` skill_id="com.jarvys.apk-factory" for this core. Before impleme
 - lifecycle: spec/icons/build/sign/keys/preview/tests/install
 - sensors: foreground light/accelerometer, bounded capture/cancel and lifecycle limits
 - biometrics: API30+ strong OS authentication, selective permission, cancellation and receipt limits
-- local-ui: pinned Pure.css paths, usage, notices and offline limits; no capability grant.
+- local-ui: CSS, licenses and limits.
 Immutable references need no filesystem/shell/provider/external-document access. Unknown/stale/overbudget reads fail; never implement from partial guidance. Fetch the smaller family with sufficient context or report the blocker. Re-fetch after compaction/incomplete retention. Inspection defines availability; report mismatches and stop.
 
 ## Always-applicable runtime and data limits
