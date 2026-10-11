@@ -54,6 +54,8 @@ public final class FileShareTransfer extends Binder implements AutoCloseable {
     // Guarded by LOCK; deliberately nullable so a retained Binder cannot retain expired bytes.
     private byte[] snapshot;
     private int nextOffset;
+    private Runnable closedCallback;
+    private boolean callbackRegistered;
 
     private FileShareTransfer(Admission admission, byte[] snapshot, String nonce,
             HostVerifier verifier, String sha256) {
@@ -75,7 +77,9 @@ public final class FileShareTransfer extends Binder implements AutoCloseable {
 
     private static Admission reserve(Clock clock, boolean schedule) throws FactoryException {
         if (clock == null) throw invalid();
-        synchronized (LOCK) {
+        Admission previous = null;
+        try { synchronized (LOCK) {
+            previous = active;
             if (active != null) active.expireLocked();
             if (active != null) throw new FactoryException("SHARE_BUSY", "A file share is already active.");
             Admission admission = new Admission(clock);
@@ -84,6 +88,7 @@ public final class FileShareTransfer extends Binder implements AutoCloseable {
                 try {
                     admission.expiry = EXPIRY.schedule(() -> {
                         synchronized (LOCK) { admission.expireLocked(); }
+                        if (admission.endpoint != null) admission.endpoint.notifyClosed();
                     }, LIFETIME_MILLIS, TimeUnit.MILLISECONDS);
                 } catch (RuntimeException unavailable) {
                     admission.releaseLocked();
@@ -91,7 +96,7 @@ public final class FileShareTransfer extends Binder implements AutoCloseable {
                 }
             }
             return admission;
-        }
+        } } finally { if (previous != null && previous.endpoint != null) previous.endpoint.notifyClosed(); }
     }
 
     public static final class Admission implements AutoCloseable {
@@ -108,7 +113,7 @@ public final class FileShareTransfer extends Binder implements AutoCloseable {
                 throws FactoryException {
             if (snapshot == null || snapshot.length == 0 || snapshot.length > MAX_BYTES || !canonicalHex(nonce) || verifier == null)
                 throw invalid();
-            synchronized (LOCK) {
+            try { synchronized (LOCK) {
                 expireLocked();
                 if (closed || expired || active != this || endpoint != null) throw invalid();
                 String digest;
@@ -121,7 +126,7 @@ public final class FileShareTransfer extends Binder implements AutoCloseable {
                 if (expired) throw invalid();
                 endpoint = new FileShareTransfer(this, snapshot, nonce, verifier, digest);
                 return endpoint;
-            }
+            } } finally { if (endpoint != null) endpoint.notifyClosed(); }
         }
 
         /** After complete(), ownership belongs to the endpoint and this close is a no-op. */
@@ -153,12 +158,37 @@ public final class FileShareTransfer extends Binder implements AutoCloseable {
     }
 
     /** Synchronous, bounded memory cleanup only; never performs provider, file, or Binder I/O. */
-    @Override public void close() { synchronized (LOCK) { admission.releaseLocked(); } }
+    @Override public void close() {
+        synchronized (LOCK) { admission.releaseLocked(); }
+        notifyClosed();
+    }
+
+    /** One bounded in-memory terminal callback, always outside the transfer lock. */
+    public AutoCloseable onClosed(Runnable callback) {
+        if (callback == null) throw new IllegalArgumentException();
+        synchronized (LOCK) {
+            if (callbackRegistered) throw new IllegalStateException("Terminal callback already registered");
+            callbackRegistered = true; closedCallback = callback;
+        }
+        notifyClosed();
+        return () -> { synchronized (LOCK) { if (closedCallback == callback) closedCallback = null; } };
+    }
+    private void notifyClosed() {
+        Runnable callback;
+        synchronized (LOCK) {
+            if (!admission.closed) return;
+            callback = closedCallback; closedCallback = null;
+        }
+        if (callback != null) try { callback.run(); } catch (RuntimeException ignored) { }
+    }
 
     /** Enforces the monotonic deadline. Calling this repeatedly before or after expiry is safe. */
-    public void expire() { synchronized (LOCK) { admission.expireLocked(); } }
+    public void expire() { synchronized (LOCK) { admission.expireLocked(); } notifyClosed(); }
 
     @Override protected boolean onTransact(int code, Parcel data, Parcel reply, int flags) {
+        try { return transactChecked(code, data, reply, flags); } finally { notifyClosed(); }
+    }
+    private boolean transactChecked(int code, Parcel data, Parcel reply, int flags) {
         // Authenticate EVERY transaction, including unknown codes and descriptor probes, before
         // parsing. Never clear identity: the verifier observes the original, kernel-supplied UID.
         try { if (!verifier.allowed(Binder.getCallingUid())) throw denied(); }

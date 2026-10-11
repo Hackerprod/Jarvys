@@ -99,6 +99,43 @@ internal class FactoryFileShareProviderTest : FactoryFileShareTestSupport() {
         assertEquals(256, Os.lstat(snapshotFile(snapshot).path).st_mode and 511)
     }
 
+    @Test fun livePolicyDeniesNewMetadataAndOpenWhileAlreadyOpenFdCannotBeRecalled() {
+        val policy = FactoryOperationPolicy.inMemory()
+        val proof = FactoryDocumentCoordinator.Proof("example.factory.app", "a".repeat(64), "b".repeat(64), 1, "c".repeat(64))
+        val subject = FactoryOperationPolicy.Subject.installed(proof)
+        val grant = policy.acquire(subject, FactoryOperationPolicy.Operation.FILE_SHARE, FactoryOperationPolicy.binding(nonce, digest(bytes)))
+        val snapshot = store().stage(nonce, "report.txt", "text/plain", bytes.size, digest(bytes), Binder(), {}, { grant.checkBeforeEffect() })
+        val alreadyOpen = ParcelFileDescriptor.AutoCloseInputStream(provider.openFile(snapshot.uri, "r"))
+        assertEquals("text/plain", provider.getType(snapshot.uri))
+        policy.setMode(subject, FactoryOperationPolicy.Operation.FILE_SHARE, FactoryOperationPolicy.Mode.DENY)
+        reject { provider.getType(snapshot.uri) }; reject { provider.query(snapshot.uri, null, null, null, null) }; reject { provider.openFile(snapshot.uri, "r") }
+        // Revoking new opens cannot retract an FD that Android already handed to a recipient.
+        alreadyOpen.use { assertArrayEquals(bytes, it.readBytes()) }; grant.close()
+    }
+
+    @Test fun oldExpiryCannotInvalidateNewRecipientProviderRegistration() {
+        val policy = FactoryOperationPolicy.inMemory()
+        val proof = FactoryDocumentCoordinator.Proof("example.factory.app", "a".repeat(64), "b".repeat(64), 1, "c".repeat(64))
+        val worker = java.util.concurrent.Executors.newSingleThreadExecutor()
+        fun <T> io(action: () -> T) = worker.submit(java.util.concurrent.Callable(action)).get(5, java.util.concurrent.TimeUnit.SECONDS)
+        val coordinator = FactoryFileShareCoordinator(context, { proof }, receive = { request, active ->
+            store().stage(request.nonce, request.filename, request.mimeType, bytes.size, digest(bytes), Binder(), active)
+        }, clean = { store().cleanup() }, policy = policy)
+        val request = FactoryFileShareCoordinator.Request(nonce, "report.txt", "text/plain", bytes.size, digest(bytes), Binder())
+        try {
+            val oldOwner = io { coordinator.begin(proof.appId, request) {} }
+            val oldExpiry = FactoryFileShareCoordinator::class.java.getDeclaredField("expire").apply { isAccessible = true }.get(coordinator) as Runnable
+            io { coordinator.close(oldOwner, false) {} }
+            val newOwner = io { coordinator.begin(proof.appId, request.copy(nonce = "f".repeat(64))) {} }
+            val chooser = io { coordinator.prepareChooser(newOwner, "Current") {} }
+            val send = chooser.getParcelableExtra<android.content.Intent>(android.content.Intent.EXTRA_INTENT)!!
+            val uri = send.getParcelableExtra<Uri>(android.content.Intent.EXTRA_STREAM)!!
+            oldExpiry.run()
+            assertEquals("chooser_pending", coordinator.status()); assertArrayEquals(bytes, read(uri))
+            io { coordinator.close(newOwner, true) {} }
+        } finally { worker.shutdownNow(); policy.revokeActive(); java.io.File(context.noBackupFilesDir,"factory-file-sharing").deleteRecursively() }
+    }
+
     @Test fun queryRejectsUnboundedDuplicateAndUnknownProjections() {
         val uri = stage().uri
         for (projection in listOf(emptyArray(), arrayOf("_data"),

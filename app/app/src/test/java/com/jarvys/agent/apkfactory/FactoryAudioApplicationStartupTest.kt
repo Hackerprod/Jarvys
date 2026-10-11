@@ -71,14 +71,14 @@ class FactoryAudioApplicationStartupTest {
             Instrumentation.newApplication(FactoryInstallApplication::class.java, context).onCreate()
             val audio = FactoryAudioCoordinator.get(context)
             assertTrue(audio.isBusy()); assertFalse(audio.canBegin()); assertNull(audio.session())
-            assertTrue(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
-            assertTrue(runCatching { MemoryUiAutomationGuard.captureAutomationEpoch() }.isFailure)
+            assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
+            assertTrue(runCatching { MemoryUiAutomationGuard.captureAutomationEpoch() }.isSuccess)
             assertFalse(FactoryDocumentCoordinator.get(context).canBegin())
         } finally { release.countDown() }
         audioBarrier(); FactoryStartupTestIsolation.awaitSharingWorkerCompletion()
         val audio = FactoryAudioCoordinator.get(context)
         assertFalse(audio.isBusy()); assertTrue(audio.needsRecovery()); assertEquals("outcome_unknown", audio.status())
-        assertNull(audio.session()); assertTrue(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
+        assertNull(audio.session()); assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
         val refused = FutureTask(Callable { audio.close(null, true) { error("No human confirmation") } })
         check(worker.queue.offer(refused, 5, TimeUnit.SECONDS)); assertTrue(runCatching { refused.get(5, TimeUnit.SECONDS) }.isFailure)
         assertTrue(audio.needsRecovery()); assertFalse(FactoryInteractionAdmission.available())
@@ -86,7 +86,7 @@ class FactoryAudioApplicationStartupTest {
         check(worker.queue.offer(close, 5, TimeUnit.SECONDS)); assertNull(close.get(5, TimeUnit.SECONDS))
         assertEquals("closed_outcome_unknown", audio.status()); assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available())
     }
-    @Test fun openAudioJournalBlocksAutomationBeforeAsyncRestoreStarts() = startup(JSONObject()
+    @Test fun openAudioJournalDoesNotBlockAutomationBeforeAsyncRestoreStarts() = startup(JSONObject()
         .put("schemaVersion", 1).put("state", "play_pending").put("open", true).put("nonce", "a".repeat(64)).toString())
-    @Test fun corruptAudioJournalRetainsProtectionThroughRealApplicationStartup() = startup("{")
+    @Test fun corruptAudioJournalRetainsFamilyStateThroughRealApplicationStartup() = startup("{")
 }

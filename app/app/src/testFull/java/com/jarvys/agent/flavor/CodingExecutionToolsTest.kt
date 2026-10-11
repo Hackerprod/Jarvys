@@ -37,7 +37,7 @@ class CodingExecutionToolsTest {
         override fun deleteWorkspace() = error("No delete")
         override fun exec(command: String, cwd: String, timeoutMillis: Long?, callback: LinuxOutputCallback, token: CancellationToken): LinuxExecResult = error("No principal command")
     }
-    private class Fixture(val files: java.io.File) {
+    private class Fixture(val files: java.io.File, policy: AutonomyPolicy? = null, executor: Executor = Executor { it.run() }) {
         val scope = ProjectScopeStore(files).open("chat")
         val runtime = Runtime()
         val store = InMemoryConnectorAutonomyStore()
@@ -49,14 +49,20 @@ class CodingExecutionToolsTest {
         var capability = true
         var decision = ApprovalDecision.APPROVED
         var duringApproval: () -> Unit = { }
+        var beforeLaunch: () -> Unit = { }
         lateinit var gate: ApprovalGate
         val jobs = CodingJobManager(files, CodingJobManager.Backend { _, _, _, limit, _, output, launch ->
-            launch(); executed++; timeout = limit; output.onChunk(LinuxOutputStream.STDOUT, "verified\n"); LinuxExecResult(0)
-        }, executor = Executor { it.run() })
+            beforeLaunch(); launch(); executed++; timeout = limit; output.onChunk(LinuxOutputStream.STDOUT, "verified\n"); LinuxExecResult(0)
+        }, executor = executor)
         init {
+            policy?.let { assertNull(autonomy.setProjectPolicyFromUi(it)) }
             gate = ApprovalGate(presenter = object : ApprovalPresenter {
                 override fun show(id: String, summary: ApprovalSummary) {
-                    requests++; assertFalse(summary.allowAlwaysAvailable); duringApproval(); gate.resolve(id, decision)
+                    requests++
+                    assertTrue(summary.allowAlwaysAvailable)
+                    assertEquals(LinuxExecAutonomy.PROJECT_CONNECTOR_ID, summary.autonomyConnectorId)
+                    assertEquals(LinuxExecAutonomy.PROJECT_OPERATION_NAME, summary.autonomyOperationName)
+                    duringApproval(); gate.resolve(id, decision)
                 }
                 override fun update(id: String, decision: ApprovalDecision) = Unit
             })
@@ -64,27 +70,79 @@ class CodingExecutionToolsTest {
         val tools get() = CodingExecutionTools(scope, jobs, runtime, gate, autonomy, LinuxOutputSanitizer(emptyList(), emptyList()),
             budget, "Bot", "coding", { "chat/bot/1" }, { _, _ -> capability }).create(CodingExecutionTools.NAMES)
             .associateBy { it.declaration().name }
-        fun execute(extra: Map<String, Any> = emptyMap()) = tools.getValue(CodingExecutionTools.EXEC).execute(
-            mapOf("command" to "test", "expected_scope_version" to scope.version()) + extra, CancellationToken.cancellable())
+        fun execute(extra: Map<String, Any> = emptyMap(), token: CancellationToken = CancellationToken.cancellable()) =
+            tools.getValue(CodingExecutionTools.EXEC).execute(
+                mapOf("command" to "test", "expected_scope_version" to scope.version()) + extra, token)
     }
-    @Test fun statusIsInspectionOnlyAndDisclosesAskEvenForPrincipalAllow() {
-        val f = Fixture(folder.newFolder()); f.autonomy.setPolicyFromUi(AutonomyPolicy.ALLOW)
-        val result = f.tools.getValue(CodingExecutionTools.STATUS).execute(emptyMap(), CancellationToken.cancellable())
-        assertTrue(result.content, result.success); assertEquals("ask", JSONObject(result.content).getString("policy"))
+    @Test fun statusIsInspectionOnlyAndDisclosesTheEffectiveCodingPolicy() {
+        val f = Fixture(folder.newFolder())
+        for (policy in listOf(AutonomyPolicy.ALLOW, AutonomyPolicy.ASK, AutonomyPolicy.DENY)) {
+            if (policy != AutonomyPolicy.ALLOW) f.autonomy.setProjectPolicyFromUi(policy)
+            val result = f.tools.getValue(CodingExecutionTools.STATUS).execute(emptyMap(), CancellationToken.cancellable())
+            assertTrue(result.content, result.success)
+            assertEquals(policy.name.lowercase(java.util.Locale.ROOT), JSONObject(result.content).getString("policy"))
+        }
         assertEquals(0, f.executed); assertEquals(0, f.requests)
     }
-    @Test fun principalAllowDoesNotBypassProjectApprovalAndDenyBlocksBeforePrompt() {
+    @Test fun absentPolicyAndExplicitAllowRunWithoutCardsAndKeepDurableReceipts() {
+        val f = Fixture(folder.newFolder())
+        repeat(2) {
+            val result = f.execute()
+            assertTrue(result.content, result.success)
+            assertEquals("SUCCEEDED", JSONObject(result.content).getString("state"))
+        }
+        f.autonomy.setProjectPolicyFromUi(AutonomyPolicy.ALLOW)
+        assertTrue(f.execute().success)
+        assertEquals(0, f.requests); assertEquals(3, f.executed)
+        assertEquals(3, f.jobs.list("chat/bot/1", f.scope).size)
+        assertEquals(AutonomyPolicy.ASK, f.autonomy.policy())
+    }
+    @Test fun existingLinuxAllowAndDenyRemainEffectiveWithoutCodingOverride() {
         val f = Fixture(folder.newFolder()); f.autonomy.setPolicyFromUi(AutonomyPolicy.ALLOW)
-        assertTrue(f.execute().success); assertEquals(1, f.requests); assertEquals(1, f.executed)
+        assertTrue(f.execute().success); assertEquals(0, f.requests); assertEquals(1, f.executed)
         f.autonomy.setPolicyFromUi(AutonomyPolicy.DENY)
+        assertFalse(f.execute().success); assertEquals(0, f.requests); assertEquals(1, f.executed)
+    }
+    @Test fun savedLegacyAskStillAsksAndExplicitCodingDenyBlocksEvenPrincipalAllow() {
+        val f = Fixture(folder.newFolder()); f.autonomy.setPolicyFromUi(AutonomyPolicy.ASK)
+        assertTrue(f.execute().success); assertEquals(1, f.requests)
+        f.autonomy.setPolicyFromUi(AutonomyPolicy.ALLOW)
+        f.autonomy.setProjectPolicyFromUi(AutonomyPolicy.DENY)
         assertFalse(f.execute().success); assertEquals(1, f.requests); assertEquals(1, f.executed)
     }
     @Test fun denialAndPolicyRevisionChangeDoNotLaunch() {
-        val f = Fixture(folder.newFolder()); f.decision = ApprovalDecision.DENIED
+        val f = Fixture(folder.newFolder(), AutonomyPolicy.ASK); f.decision = ApprovalDecision.DENIED
         assertFalse(f.execute().success); assertEquals(0, f.executed)
         f.decision = ApprovalDecision.APPROVED
         f.duringApproval = { f.autonomy.setPolicyFromUi(AutonomyPolicy.ASK) }
         assertFalse(f.execute().success); assertEquals(0, f.executed)
+    }
+    @Test fun allowAlwaysApprovesThisCommandAndPersistsOnlyCodingPermission() {
+        val f = Fixture(folder.newFolder(), AutonomyPolicy.ASK)
+        f.duringApproval = { assertNull(f.autonomy.setProjectPolicyFromUi(AutonomyPolicy.ALLOW)) }
+        f.decision = ApprovalDecision.APPROVED_ALLOW_ALWAYS
+        assertTrue(f.execute().success); assertTrue(f.execute().success)
+        assertEquals(1, f.requests); assertEquals(2, f.executed)
+        val recreated = LinuxExecAutonomy(f.store, { true })
+        assertEquals(AutonomyPolicy.ALLOW, recreated.projectPolicy())
+        assertEquals(AutonomyPolicy.ASK, recreated.policy())
+    }
+    @Test fun allowAlwaysCannotHideRevocationOrPretendTheChoiceWasSaved() {
+        val f = Fixture(folder.newFolder(), AutonomyPolicy.ASK)
+        f.decision = ApprovalDecision.APPROVED_ALLOW_ALWAYS
+        assertFalse(f.execute().success)
+        f.duringApproval = {
+            f.autonomy.setProjectPolicyFromUi(AutonomyPolicy.DENY)
+            f.autonomy.setProjectPolicyFromUi(AutonomyPolicy.ALLOW)
+        }
+        assertFalse(f.execute().success); assertEquals(0, f.executed)
+    }
+    @Test fun failedAlwaysPersistenceStillAllowsOnlyTheApprovedCommand() {
+        val f = Fixture(folder.newFolder(), AutonomyPolicy.ASK)
+        f.decision = ApprovalDecision.APPROVED_ALLOW_FAILED
+        assertTrue(f.execute().success); assertTrue(f.execute().success)
+        assertEquals(2, f.requests); assertEquals(2, f.executed)
+        assertEquals(AutonomyPolicy.ASK, f.autonomy.projectPolicy())
     }
     @Test fun revokedCapabilityMissingToolsAndInteractiveArgumentsFailClosed() {
         val f = Fixture(folder.newFolder())
@@ -92,11 +150,12 @@ class CodingExecutionToolsTest {
         assertFalse(f.execute(mapOf("stdin" to "yes")).success)
         assertFalse(f.execute(mapOf("timeout_seconds" to 0)).success)
         assertEquals(0, f.requests)
+        f.autonomy.setProjectPolicyFromUi(AutonomyPolicy.ASK)
         f.duringApproval = { f.capability = false }
         assertFalse(f.execute().success); assertEquals(0, f.executed)
     }
     @Test fun oldScopeVersionInvalidatesApprovalAndToolsCannotDelegate() {
-        val f = Fixture(folder.newFolder())
+        val f = Fixture(folder.newFolder(), AutonomyPolicy.ASK)
         assertTrue(f.tools.values.none { it.canDelegate() })
         f.duringApproval = { f.scope.acquireWriter("other", f.scope.version()).use { it.markChanged() } }
         assertFalse(f.execute().success); assertEquals(0, f.executed)
@@ -110,8 +169,53 @@ class CodingExecutionToolsTest {
         assertFalse(f.execute(mapOf("timeout_seconds" to 3601)).success)
         assertFalse(f.execute(mapOf("timeout_seconds" to 1.5)).success)
         assertFalse(f.execute(mapOf("timeout_seconds" to Long.MAX_VALUE)).success)
-        assertEquals(2, f.requests)
+        assertEquals(0, f.requests)
         assertEquals(2, f.executed)
+    }
+
+    @Test fun allowStillRejectsUnpreparedRuntimeStaleScopeAndOccupiedWriterLease() {
+        val f = Fixture(folder.newFolder())
+        f.runtime.ready = false
+        assertFalse(f.execute().success)
+        f.runtime.ready = true
+        val previous = f.scope.version()
+        f.scope.acquireWriter("other", previous).use { it.markChanged() }
+        assertFalse(f.execute(mapOf("expected_scope_version" to previous)).success)
+        f.scope.acquireWriter("other", f.scope.version()).use { assertFalse(f.execute().success) }
+        assertEquals(0, f.executed); assertEquals(0, f.requests)
+    }
+
+    @Test fun queuedAllowRevalidatesPolicyAndReleasesWriterLeaseWithoutLaunching() {
+        for (revoked in listOf(AutonomyPolicy.ASK, AutonomyPolicy.DENY)) {
+            val pending = mutableListOf<Runnable>()
+            val f = Fixture(folder.newFolder(), executor = Executor { pending += it })
+            val result = f.execute()
+            assertTrue(result.content, result.success)
+            assertEquals("LAUNCH_INTENT", JSONObject(result.content).getString("state"))
+            assertThrows(ProjectScope.ConflictException::class.java) { f.scope.acquireWriter("other", f.scope.version()) }
+            f.autonomy.setProjectPolicyFromUi(revoked)
+            pending.single().run()
+            val completed = f.jobs.list("chat/bot/1", f.scope).single()
+            assertEquals(CodingJobManager.State.NOT_STARTED, completed.state)
+            f.scope.acquireWriter("other", f.scope.version()).use { it.validate() }
+            assertEquals(0, f.executed); assertEquals(0, f.requests)
+        }
+    }
+
+    @Test fun allowStillHonorsStopAndLateCapabilityRevocation() {
+        val pending = mutableListOf<Runnable>()
+        val f = Fixture(folder.newFolder(), executor = Executor { pending += it })
+        val token = CancellationToken.cancellable()
+        assertTrue(f.execute(token = token).success)
+        token.cancel(); pending.single().run()
+        assertEquals(CodingJobManager.State.CANCELLED, f.jobs.list("chat/bot/1", f.scope).single().state)
+        assertEquals(0, f.executed)
+        val g = Fixture(folder.newFolder())
+        g.beforeLaunch = { g.capability = false }
+        val result = g.execute()
+        assertTrue(result.content, result.success) // The receipt records a job that never started.
+        assertEquals("NOT_STARTED", JSONObject(result.content).getString("state"))
+        assertEquals(0, g.executed); assertEquals(0, g.requests)
     }
 
     @Test fun longCommandPreviewCannotConsumeTheBudgetNeededForJobLogsAndLifecycle() {

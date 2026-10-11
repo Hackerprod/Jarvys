@@ -25,6 +25,20 @@ internal class FactoryBrowserTargets(private val context: Context) {
         return results.mapNotNull { info -> runCatching { eligible(info); snapshot(info) }.getOrNull() }
             .distinctBy { it.component }.sortedBy { it.component.flattenToString() }.also { require(it.size <= 16) }
     }
+    /** Accept only the Android-resolved default whose full identity is still an eligible candidate.
+     * A resolver/chooser activity or a missing default leaves recipient selection to the user. */
+    fun preferred(url: String, candidates: List<Target> = discover()): Target? {
+        val checked = BrowserUrl.parse(url).url
+        // A verified app-link handler is not a general browser. In that case Android's
+        // general HTTPS default may still be used, with the exact URL revalidated before dispatch.
+        for (address in listOf(checked, "https://browser-discovery.invalid/").distinct()) {
+            val exact = runCatching {
+                pm.resolveActivity(view(address), PackageManager.MATCH_DEFAULT_ONLY)?.let(::snapshot)
+            }.getOrNull() ?: continue
+            candidates.singleOrNull { it == exact }?.let { return it }
+        }
+        return null
+    }
     fun verifiedIntent(target: Target, url: String): Intent {
         val value = BrowserUrl.parse(url)
         check(target in discover()) { "Browser changed since review" }

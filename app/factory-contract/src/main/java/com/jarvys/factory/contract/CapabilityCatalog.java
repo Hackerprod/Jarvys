@@ -61,7 +61,7 @@ public final class CapabilityCatalog {
         private Capability(String name) {
             this.name = name;
             boolean biometric = name.equals("biometrics");
-            boolean broker = name.equals("documents") || name.equals("browser") || name.equals("maps") || name.equals("phone") || name.equals("email") || name.equals("sms") || name.equals("contacts") || name.equals("calendar");
+            boolean broker = name.equals("documents") || name.equals("browser") || name.equals("maps") || name.equals("phone") || name.equals("email") || name.equals("sms") || name.equals("contacts") || name.equals("calendar") || name.equals("clipboard");
             minimumApi = biometric ? 30 : MIN_APP_API;
             permissions = biometric ? Collections.singleton(BIOMETRIC_PERMISSION) : Collections.emptySet();
             manifestNodes = biometric ? Collections.singletonList(BIOMETRIC_DECLARATION) : broker ? Collections.singletonList(DOCUMENT_QUERIES) : Collections.emptyList();

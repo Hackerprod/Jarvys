@@ -26,6 +26,13 @@ internal class FactoryExternalLaunchTargets(private val context: Context) {
         return results.mapNotNull { info -> runCatching { eligible(info, spec); snapshot(info) }.getOrNull() }
             .distinctBy { it.component }.sortedBy { it.component.flattenToString() }.also { require(it.size <= 16) }
     }
+    /** Accept only the Android-resolved default whose full identity is still an eligible candidate.
+     * A resolver/chooser activity or a missing default leaves recipient selection to the user. */
+    fun preferred(spec: ExternalLaunchSpec, candidates: List<Target> = discover(spec)): Target? = runCatching {
+        val resolved = pm.resolveActivity(view(spec), PackageManager.MATCH_DEFAULT_ONLY) ?: return@runCatching null
+        val exact = snapshot(resolved)
+        candidates.singleOrNull { it == exact }
+    }.getOrNull()
     fun verifiedIntent(target: Target, spec: ExternalLaunchSpec): Intent {
         check(target in discover(spec)) { "External recipient changed since review" }
         val matches = pm.queryIntentActivities(view(spec).setPackage(target.component.packageName), queryFlags)

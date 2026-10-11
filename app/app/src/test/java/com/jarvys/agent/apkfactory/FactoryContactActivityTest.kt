@@ -43,6 +43,7 @@ class FactoryContactActivityTest {
     private val context: FactoryContactFixtureApplication get() = ApplicationProvider.getApplicationContext()
     private val root get() = File(context.noBackupFilesDir, "factory-contacts")
     private var proof = FactoryDocumentCoordinator.Proof("example.factory.app", "a".repeat(64), "b".repeat(64), 2, "c".repeat(64))
+    private val policy = FactoryOperationPolicy.inMemory(FactoryOperationPolicy.Mode.ASK)
     private lateinit var coordinator: FactoryContactCoordinator
     private lateinit var fixture: FactoryContactTestPackages.Fixture
     private lateinit var source: ExternalLaunchControl
@@ -51,7 +52,7 @@ class FactoryContactActivityTest {
     private val nonce = "d".repeat(64)
     @Before fun setup() {
         FactoryStartupTestIsolation.releaseCompletedSharingStartup(); root.deleteRecursively(); context.resetContactPermissions()
-        coordinator = FactoryContactCoordinator(context) { appId, capability ->
+        coordinator = FactoryContactCoordinator(context, policy) { appId, capability ->
             check(appId == proof.appId); check(capability == "contacts"); verifiedCapabilities += capability; proof
         }
         FactoryContactCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(null, coordinator)
@@ -76,7 +77,7 @@ class FactoryContactActivityTest {
         val executor = FactoryContactCoordinator.WORKER; executor.prestartCoreThread(); val task = FutureTask(Callable(block))
         check(executor.queue.offer(task, 5, TimeUnit.SECONDS)); return task.get(5, TimeUnit.SECONDS)
     }
-    private fun drain() { worker {}; shadowOf(Looper.getMainLooper()).idle() }
+    private fun drain() { repeat(4) { worker {}; shadowOf(Looper.getMainLooper()).idle() } }
     private fun request(kind: String = "phone", control: IBinder = source) = Intent(context, FactoryContactRecordingActivity::class.java).putExtras(Bundle().apply {
         putInt("protocolVersion", 1); putString("nonce", nonce); putString("kind", kind); putBinder("control", control)
     })
@@ -99,46 +100,61 @@ class FactoryContactActivityTest {
     private fun assertNoReturnedData(activity: FactoryContactActivity) {
         assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode); assertNull(shadowOf(activity).resultIntent)
     }
-    @Test fun nativeReviewProtectsCaptureSavingAutofillAndExposesOnlyHumanControls() {
+    @Test fun configuredAskShowsOnePrivateReviewAndNoUseControl() {
         val activity = launch().get(); assertTrue(activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0)
         val column = views(activity.window.decorView).filterIsInstance<PrivateReviewColumn>().single()
         assertFalse(column.isSaveEnabled); assertFalse(column.isSaveFromParentEnabled)
         assertEquals(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS, column.importantForAutofill)
         assertEquals(View.IMPORTANT_FOR_CONTENT_CAPTURE_NO_EXCLUDE_DESCENDANTS, column.importantForContentCapture)
-        assertNotEquals(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS, column.importantForAccessibility)
-        for (name in listOf("choose", "use", "close")) {
-            val control = button(activity, name); assertTrue(control.filterTouchesWhenObscured); assertFalse(control.isSaveEnabled); assertFalse(control.isSaveFromParentEnabled)
+        for (name in listOf("choose", "close")) {
+            val control = button(activity, name); assertTrue(control.filterTouchesWhenObscured); assertFalse(control.isSaveEnabled)
         }
-        assertTrue(button(activity, "choose").isEnabled); assertFalse(button(activity, "use").isEnabled)
-        assertTrue(activity.launches.isEmpty()); assertTrue(fixture.provider.queries.isEmpty()); assertNoReturnedData(activity)
+        assertTrue(button(activity, "choose").isEnabled); assertNull(button(activity, "use"))
+        assertTrue(MemoryUiAutomationGuard.isProtected()); assertTrue(activity.launches.isEmpty()); assertTrue(fixture.provider.queries.isEmpty())
+        choose(activity); assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(coordinator.session()!!.grant.requiresApproval)
     }
-    @Test fun phoneSelectionShowsExactFullValueAndNeedsSeparateNativeApproval() = approval("phone", FactoryContactCoordinatorTest.PHONE)
-    @Test fun emailSelectionShowsExactFullValueAndNeedsSeparateNativeApproval() = approval("email", FactoryContactCoordinatorTest.EMAIL)
+    @Test fun defaultAllowLaunchesAndDeliversWithoutHumanGuardDuringAutomation() {
+        policy.setDefaultMode(FactoryOperationPolicy.Mode.ALLOW_ALWAYS); context.uriReadGranted = true
+        val automation = MemoryUiAutomationGuard.beginAsyncAction(MemoryUiAutomationGuard.captureAutomationEpoch())
+        try {
+            val activity = launch().get()
+            assertEquals(1, activity.launches.size); assertFalse(MemoryUiAutomationGuard.isProtected()); assertNull(button(activity, "use"))
+            assertEquals(View.GONE, button(activity, "choose").visibility)
+            callback(activity); drain()
+            assertEquals(Activity.RESULT_OK, shadowOf(activity).resultCode)
+            assertEquals(FactoryContactCoordinatorTest.PHONE, shadowOf(activity).resultIntent.getStringExtra("value"))
+        } finally { automation.close() }
+    }
+    @Test fun denyReturnsCancellationBeforeControlRegistrationPickerOrProviderRead() {
+        policy.setDefaultMode(FactoryOperationPolicy.Mode.DENY)
+        val activity = launch().get()
+        assertTrue(activity.isFinishing); assertTrue(activity.launches.isEmpty()); assertTrue(fixture.provider.queries.isEmpty())
+        assertFalse(File(root, "interaction.json").exists()); assertNull(coordinator.session()); assertFalse(MemoryUiAutomationGuard.isProtected())
+        assertNoReturnedData(activity)
+    }
+    @Test fun phoneSelectionAutomaticallyReturnsExactValueAfterOneConfiguredReview() = approval("phone", FactoryContactCoordinatorTest.PHONE)
+    @Test fun emailSelectionAutomaticallyReturnsExactValueAfterOneConfiguredReview() = approval("email", FactoryContactCoordinatorTest.EMAIL)
     private fun approval(kind: String, datum: String) {
         context.uriReadGranted = true; val activity = selected(kind, datum).get()
-        assertEquals(datum, value(activity).text.toString()); assertNull(value(activity).ellipsize); assertEquals(0, value(activity).autoLinkMask)
-        assertFalse(value(activity).isSaveEnabled); assertFalse(value(activity).isSaveFromParentEnabled)
+        assertNull(button(activity, "use")); assertFalse(MemoryUiAutomationGuard.isProtected()); assertEquals(1, fixture.provider.queries.size)
         assertTrue(views(activity.window.decorView).filterIsInstance<TextView>().any { it.text.contains(proof.appId) && it.text.contains(proof.apk) })
-        assertFalse(button(activity, "choose").isEnabled); assertTrue(button(activity, "use").isEnabled); assertNoReturnedData(activity)
-        assertEquals("selected", coordinator.status()); assertEquals(1, fixture.provider.queries.size)
         val raw = File(root, "interaction.json").readText(); assertFalse(raw.contains(datum)); assertFalse(raw.contains(FactoryContactCoordinatorTest.ROW_URI)); assertFalse(raw.contains(proof.appId))
-        button(activity, "use").performClick(); drain()
         assertEquals(Activity.RESULT_OK, shadowOf(activity).resultCode); val result = shadowOf(activity).resultIntent
         assertEquals(setOf("nonce", "kind", "value"), result.extras!!.keySet()); assertEquals(nonce, result.getStringExtra("nonce")); assertEquals(kind, result.getStringExtra("kind")); assertEquals(datum, result.getStringExtra("value"))
         assertNull(result.data); assertNull(result.clipData); assertEquals(0, result.flags)
-        assertEquals(List(5) { "contacts" }, verifiedCapabilities); assertEquals("closed", coordinator.status())
+        assertEquals(List(5) { "contacts" }, verifiedCapabilities); assertEquals("closed", coordinator.status()); assertTrue(activity.isFinishing)
     }
-    @Test fun maximumLengthValueIsCompleteAndCannotLeakThroughAutofillOrSavedState() {
+    @Test fun maximumLengthValueReturnsExactlyAndDoesNotLeakThroughAutofillOrSavedState() {
         context.uriReadGranted = true; val datum = "Fixture:" + "x".repeat(248); val controller = selected(datum = datum); val activity = controller.get()
-        assertEquals(256, datum.length); assertEquals(datum, value(activity).text.toString()); assertNull(value(activity).ellipsize)
+        assertEquals(256, datum.length); assertEquals(datum, shadowOf(activity).resultIntent.getStringExtra("value"))
+        assertFalse(value(activity).isSaveEnabled); assertFalse(value(activity).isSaveFromParentEnabled)
         val column = views(activity.window.decorView).filterIsInstance<PrivateReviewColumn>().single()
         for (flags in listOf(0, View.AUTOFILL_FLAG_INCLUDE_NOT_IMPORTANT_VIEWS)) {
             val structure = FactoryEditorRecordingViewStructure(); column.dispatchProvideAutofillStructure(structure, flags)
-            assertEquals(listOf("setAutofillId"), structure.calls); assertEquals(column.autofillId, structure.recordedId)
+            assertEquals(listOf("setAutofillId"), structure.calls)
         }
         val saved = Bundle(); controller.saveInstanceState(saved); val parcel = Parcel.obtain()
         try { parcel.writeBundle(saved); val bytes = parcel.marshall(); assertFalse(String(bytes, Charsets.UTF_16LE).contains(datum)); assertFalse(String(bytes, Charsets.UTF_8).contains(datum)) } finally { parcel.recycle() }
-        assertNoReturnedData(activity)
     }
     @Test fun durableLaunchPendingPrecedesOneExactPinnedSystemPickerDispatch() {
         val activity = launch().get()
@@ -154,104 +170,113 @@ class FactoryContactActivityTest {
         assertNull(intent.data); assertNull(intent.extras); assertNull(intent.clipData); assertNull(intent.selector); assertEquals(Intent.FLAG_GRANT_READ_URI_PERMISSION, intent.flags)
         assertTrue(fixture.provider.queries.isEmpty()); assertNoReturnedData(activity)
     }
-    @Test fun unsolicitedCallbackWithAmbientContactsPermissionMakesZeroQueries() {
+    @Test fun unsolicitedCallbackWithAmbientPermissionCannotQueryBeforeAskApproval() {
         context.contactsReadGranted = true; val activity = launch().get()
         callback(activity, FactoryContactTestPackages.result(flags = 0)); drain()
         assertTrue(fixture.provider.queries.isEmpty()); assertTrue(activity.launches.isEmpty()); assertEquals("review", coordinator.status()); assertNoReturnedData(activity)
-        assertFalse(button(activity, "use").isEnabled)
     }
-    @Test fun wrongRequestCodeWithAmbientPermissionCannotConsumeOwnedPicker() {
+    @Test fun wrongRequestCodeCannotConsumeOwnedPickerAndCorrectResultReturnsOnce() {
         context.contactsReadGranted = true; val activity = launch().get(); choose(activity)
         callback(activity, FactoryContactTestPackages.result(flags = 0), requestCode = FactoryContactActivity.EXTERNAL + 1); drain()
         assertTrue(fixture.provider.queries.isEmpty()); assertFalse(coordinator.session()!!.pickerReturned)
         callback(activity, FactoryContactTestPackages.result(flags = 0)); drain()
-        assertEquals(1, fixture.provider.queries.size); assertTrue(button(activity, "use").isEnabled); assertNoReturnedData(activity)
+        assertEquals(1, fixture.provider.queries.size); assertEquals(Activity.RESULT_OK, shadowOf(activity).resultCode)
     }
-    @Test fun ownedResultWithExistingReadContactsAndNoUriGrantCanReachExactReview() {
+    @Test fun ownedResultWithExistingContactsPermissionReadsOnlySelectedRow() {
         context.contactsReadGranted = true; val activity = launch().get(); choose(activity)
         callback(activity, FactoryContactTestPackages.result(flags = 0)); drain()
-        assertEquals(FactoryContactCoordinatorTest.PHONE, value(activity).text.toString()); assertEquals(1, fixture.provider.queries.size)
-        assertEquals(FactoryContactCoordinatorTest.ROW_URI, fixture.provider.queries.single().uri.toString()); assertNoReturnedData(activity)
+        assertEquals(FactoryContactCoordinatorTest.PHONE, shadowOf(activity).resultIntent.getStringExtra("value")); assertEquals(1, fixture.provider.queries.size)
+        assertEquals(FactoryContactCoordinatorTest.ROW_URI, fixture.provider.queries.single().uri.toString())
     }
-    @Test fun ownedResultWithoutActualReadAccessMakesZeroQueriesAndNeedsRecovery() {
+    @Test fun ownedResultWithoutActualReadAccessMakesZeroQueriesAndReturnsNothing() {
         val activity = launch().get(); choose(activity); callback(activity); drain()
-        assertTrue(fixture.provider.queries.isEmpty()); assertTrue(coordinator.needsRecovery()); assertFalse(button(activity, "use").isEnabled); assertNoReturnedData(activity)
+        assertTrue(fixture.provider.queries.isEmpty()); assertTrue(coordinator.needsRecovery()); assertNoReturnedData(activity)
     }
-    @Test fun cancelledCallbackConsumesOwnershipAndLaterSuccessCannotQueryEvenWithAmbientPermission() {
+    @Test fun cancelledCallbackAutomaticallyClosesAndLateSuccessCannotQuery() {
         context.contactsReadGranted = true; val activity = launch().get(); choose(activity)
         callback(activity, data = null, code = Activity.RESULT_CANCELED); drain()
         callback(activity, FactoryContactTestPackages.result(flags = 0)); drain()
-        assertTrue(fixture.provider.queries.isEmpty()); assertTrue(coordinator.session()!!.pickerReturned); assertFalse(button(activity, "use").isEnabled)
-        button(activity, "close").performClick(); drain(); assertNoReturnedData(activity); assertEquals("closed", coordinator.status())
+        assertTrue(fixture.provider.queries.isEmpty()); assertNull(coordinator.session()); assertEquals("closed", coordinator.status())
+        assertTrue(activity.isFinishing); assertNoReturnedData(activity)
     }
     @Test fun nullSuccessfulCallbackConsumesOwnershipWithoutEverQuerying() {
         context.contactsReadGranted = true; val activity = launch().get(); choose(activity)
         callback(activity, data = null); drain(); callback(activity, FactoryContactTestPackages.result(flags = 0)); drain()
-        assertTrue(fixture.provider.queries.isEmpty()); assertFalse(button(activity, "use").isEnabled); assertNoReturnedData(activity)
+        assertTrue(fixture.provider.queries.isEmpty()); assertNoReturnedData(activity)
     }
-    @Test fun replayedCallbackCannotReplaceAlreadyReviewedDatumOrQueryAgain() {
+    @Test fun repeatedCallbackCannotReplaceDeliveredDatumOrQueryAgain() {
         context.contactsReadGranted = true; val activity = selected().get()
         fixture.provider.rows = listOf(arrayOf(ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE, "Attacker replacement"))
         callback(activity, FactoryContactTestPackages.result("content://com.android.contacts/data/43", flags = 0)); drain()
-        assertEquals(1, fixture.provider.queries.size); assertEquals(FactoryContactCoordinatorTest.PHONE, value(activity).text.toString()); assertNoReturnedData(activity)
+        assertEquals(1, fixture.provider.queries.size); assertEquals(FactoryContactCoordinatorTest.PHONE, shadowOf(activity).resultIntent.getStringExtra("value"))
     }
-    @Test fun sourceRevocationBeforeOwnedCallbackPreventsQueryWithAmbientPermission() {
+    @Test fun sourceRevocationBeforeOwnedCallbackPreventsQuery() {
         context.contactsReadGranted = true; val activity = launch().get(); choose(activity); coordinator.session()!!.registration!!.close(); drain()
         callback(activity, FactoryContactTestPackages.result(flags = 0)); drain()
-        assertTrue(fixture.provider.queries.isEmpty()); assertTrue(coordinator.needsRecovery()); assertFalse(button(activity, "use").isEnabled); assertNoReturnedData(activity)
+        assertTrue(fixture.provider.queries.isEmpty()); assertTrue(coordinator.needsRecovery()); assertNoReturnedData(activity)
+    }
+    @Test fun policyRevocationBeforeOwnedCallbackPreventsProviderQuery() {
+        context.contactsReadGranted = true; val activity = launch().get(); choose(activity)
+        policy.setDefaultMode(FactoryOperationPolicy.Mode.DENY); drain()
+        callback(activity, FactoryContactTestPackages.result(flags = 0)); drain()
+        assertTrue(fixture.provider.queries.isEmpty()); assertTrue(coordinator.needsRecovery()); assertNoReturnedData(activity)
+        button(activity, "close").performClick(); drain(); assertEquals("closed_outcome_unknown", coordinator.status())
     }
     @Test fun latestSourceProofChangedBeforeOwnedCallbackPreventsProviderQuery() {
         context.contactsReadGranted = true; val activity = launch().get(); choose(activity); proof = proof.copy(record = "f".repeat(64))
         callback(activity, FactoryContactTestPackages.result(flags = 0)); drain()
         assertTrue(fixture.provider.queries.isEmpty()); assertTrue(coordinator.needsRecovery()); assertNoReturnedData(activity)
     }
-    @Test fun pendingResultWaitsForFocusedForegroundBeforeExactQuery() {
+    @Test fun proofChangeDuringProviderReadPreventsAutomaticDelivery() {
+        context.contactsReadGranted = true; val activity = launch().get(); choose(activity)
+        fixture.provider.onQuery = { proof = proof.copy(certificate = "f".repeat(64)) }
+        callback(activity, FactoryContactTestPackages.result(flags = 0)); drain()
+        assertEquals(1, fixture.provider.queries.size); assertTrue(coordinator.needsRecovery()); assertNoReturnedData(activity)
+    }
+    @Test fun pendingResultWaitsForFocusedForegroundBeforeReadAndAutomaticDelivery() {
         context.contactsReadGranted = true; val controller = launch(); val activity = controller.get(); choose(activity)
         activity.onWindowFocusChanged(false); controller.pause(); callback(activity, FactoryContactTestPackages.result(flags = 0)); drain()
         assertTrue(fixture.provider.queries.isEmpty()); controller.resume(); assertTrue(fixture.provider.queries.isEmpty())
-        activity.onWindowFocusChanged(true); drain(); assertEquals(1, fixture.provider.queries.size); assertTrue(button(activity, "use").isEnabled); assertNoReturnedData(activity)
+        activity.onWindowFocusChanged(true); drain(); assertEquals(1, fixture.provider.queries.size); assertEquals(Activity.RESULT_OK, shadowOf(activity).resultCode)
     }
     @Test fun secondPauseAfterPendingCallbackDiscardsOwnershipInsteadOfReadingOnResume() {
         context.contactsReadGranted = true; val controller = launch(); val activity = controller.get(); choose(activity)
         activity.onWindowFocusChanged(false); controller.pause(); callback(activity, FactoryContactTestPackages.result(flags = 0)); drain()
         controller.resume(); controller.pause(); controller.resume(); activity.onWindowFocusChanged(true); drain()
-        assertTrue(fixture.provider.queries.isEmpty()); assertFalse(button(activity, "use").isEnabled); assertNoReturnedData(activity)
+        assertTrue(fixture.provider.queries.isEmpty()); assertNoReturnedData(activity)
     }
-    @Test fun selectedDatumIsClearedOnLostFocusAndCannotReturnAfterRefocus() {
-        context.uriReadGranted = true; val activity = selected().get(); activity.onWindowFocusChanged(false); drain()
-        assertFalse(value(activity).text.toString().contains(FactoryContactCoordinatorTest.PHONE)); assertTrue(coordinator.needsRecovery())
-        activity.onWindowFocusChanged(true); button(activity, "use").performClick(); drain()
-        assertEquals(1, fixture.provider.queries.size); assertFalse(button(activity, "use").isEnabled); assertNoReturnedData(activity)
-    }
-    @Test fun closeAfterSelectionReturnsCancellationAndNoContactData() {
-        context.uriReadGranted = true; val activity = selected().get(); button(activity, "close").performClick(); drain()
-        assertEquals("closed", coordinator.status()); assertNoReturnedData(activity); assertTrue(activity.isFinishing)
-    }
-    @Test fun backAfterSelectionReturnsCancellationAndNoContactData() {
-        context.uriReadGranted = true; val activity = selected().get(); activity.onBackPressedDispatcher.onBackPressed(); drain()
-        assertEquals("closed", coordinator.status()); assertNoReturnedData(activity); assertTrue(activity.isFinishing)
-    }
-    @Test fun changedSourceAtSecondApprovalCannotReturnAlreadyReviewedContactData() {
-        context.uriReadGranted = true; val activity = selected().get(); proof = proof.copy(certificate = "f".repeat(64))
-        button(activity, "use").performClick(); drain(); assertNoReturnedData(activity); assertTrue(coordinator.needsRecovery())
-    }
-    @Test fun closeWhileProviderIsBlockedRetainsAdmissionUntilWorkEndsAndDiscardsData() {
+    private fun interruptBlockedRead(change: (FactoryContactRecordingActivity) -> Unit) {
         context.contactsReadGranted = true; val activity = launch().get(); choose(activity)
         val entered = CountDownLatch(1); val release = CountDownLatch(1)
         fixture.provider.onQuery = { entered.countDown(); check(release.await(10, TimeUnit.SECONDS)) }
         try {
             callback(activity, FactoryContactTestPackages.result(flags = 0)); assertTrue(entered.await(5, TimeUnit.SECONDS))
-            assertTrue(coordinator.session()!!.preparing); button(activity, "close").performClick()
-            assertTrue(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available()); assertNoReturnedData(activity)
+            assertTrue(coordinator.session()!!.preparing); change(activity)
+            assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available(coordinator)); assertNoReturnedData(activity)
         } finally { release.countDown() }
-        drain(); assertTrue(coordinator.needsRecovery()); assertFalse(button(activity, "use").isEnabled); assertNoReturnedData(activity)
-        button(activity, "close").performClick(); drain(); assertEquals("closed_outcome_unknown", coordinator.status()); assertNoReturnedData(activity)
+        drain(); assertTrue(coordinator.needsRecovery()); assertNoReturnedData(activity)
     }
-    @Test fun savedInstanceRecreationNeverRestoresDatumOrPickerAuthority() {
-        context.contactsReadGranted = true; val controller = selected(); val first = controller.get(); val saved = Bundle(); controller.saveInstanceState(saved)
+    @Test fun closeDuringBlockedProviderRetainsResourcesUntilActualTermination() {
+        interruptBlockedRead { button(it, "close").performClick() }
+        val activity = controllers.last().get(); button(activity, "close").performClick(); drain()
+        assertEquals("closed_outcome_unknown", coordinator.status()); assertNoReturnedData(activity)
+    }
+    @Test fun policyChangeDuringBlockedProviderDiscardsSelectedData() = interruptBlockedRead {
+        policy.setDefaultMode(FactoryOperationPolicy.Mode.DENY); shadowOf(Looper.getMainLooper()).idle()
+    }
+    @Test fun lostFocusDuringBlockedProviderDiscardsSelectedData() = interruptBlockedRead { it.onWindowFocusChanged(false) }
+    @Test fun backDuringBlockedProviderDiscardsSelectedData() = interruptBlockedRead { it.onBackPressedDispatcher.onBackPressed() }
+    @Test fun savedInstanceRecreationNeverRestoresPickerAuthorityOrDatum() {
+        val controller = launch(); val first = controller.get(); val saved = Bundle(); controller.saveInstanceState(saved)
         controller.pause().stop().destroy(); controllers.remove(controller); drain()
         val next = launch(saved = saved).get(); callback(next, FactoryContactTestPackages.result(flags = 0)); drain()
-        assertTrue(next.isFinishing); assertTrue(next.launches.isEmpty()); assertEquals(1, fixture.provider.queries.size); assertNoReturnedData(first); assertNoReturnedData(next)
+        assertTrue(next.isFinishing); assertTrue(next.launches.isEmpty()); assertTrue(fixture.provider.queries.isEmpty()); assertNoReturnedData(first); assertNoReturnedData(next)
+    }
+    @Test fun taintedAskReviewCannotApproveAfterAutomationEnds() {
+        val action = MemoryUiAutomationGuard.beginAsyncAction(MemoryUiAutomationGuard.captureAutomationEpoch())
+        val activity = try { launch().get() } finally { action.close() }
+        assertFalse(button(activity, "choose").isEnabled); button(activity, "choose").performClick(); drain()
+        assertTrue(activity.launches.isEmpty()); assertTrue(fixture.provider.queries.isEmpty()); assertNoReturnedData(activity)
     }
     @Test fun forgedControlAndNullCallerCannotAcquirePickerOrQueryAuthority() {
         val activity = launch(request(control = Binder())).get(); assertTrue(activity.launches.isEmpty()); assertTrue(fixture.provider.queries.isEmpty()); assertNoReturnedData(activity)
@@ -267,6 +292,26 @@ class FactoryContactActivityTest {
         activity.onBackPressedDispatcher.onBackPressed(); drain()
         assertTrue(activity.isFinishing); assertNoReturnedData(activity); assertTrue(fixture.provider.queries.isEmpty()); assertNull(coordinator.session())
     }
+
+    @Test fun recoveryUnderAllowDoesNotAcquireHumanGuardOrReplay() = recoverWithoutGuard(FactoryOperationPolicy.Mode.ALLOW_ALWAYS)
+    @Test fun recoveryUnderDenyDoesNotAcquireHumanGuardOrReplay() = recoverWithoutGuard(FactoryOperationPolicy.Mode.DENY)
+    private fun recoverWithoutGuard(mode: FactoryOperationPolicy.Mode) {
+        policy.setDefaultMode(FactoryOperationPolicy.Mode.ALLOW_ALWAYS)
+        val old = worker { coordinator.begin(proof.appId, FactoryContactCoordinator.Request(nonce, "phone", source)) {} }
+        old.revoke(); policy.setDefaultMode(mode)
+        val automated = MemoryUiAutomationGuard.beginAsyncAction(MemoryUiAutomationGuard.captureAutomationEpoch())
+        try {
+            val activity = launch(FactoryContactCoordinator.recoveryIntent(context), caller = null).get()
+            assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(button(activity, "close").isEnabled)
+            button(activity, "close").performClick(); drain()
+            assertEquals("closed_outcome_unknown", coordinator.status()); assertTrue(activity.isFinishing)
+            assertTrue(activity.launches.isEmpty()); assertTrue(fixture.provider.queries.isEmpty()); assertNoReturnedData(activity)
+            assertNull(coordinator.session())
+        } finally { automated.close() }
+        policy.setDefaultMode(FactoryOperationPolicy.Mode.ALLOW_ALWAYS)
+        assertTrue(runCatching { worker { coordinator.begin(proof.appId, old.request) {} } }.isFailure)
+    }
+
 }
 
 class FactoryContactRecordingActivity : FactoryContactActivity() {

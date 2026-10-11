@@ -44,6 +44,7 @@ import java.util.concurrent.atomic.AtomicInteger
 @Config(sdk = [34], application = android.app.Application::class, shadows = [FactoryBrowserPackageManagerShadow::class, FactoryFileShareOsShadow::class])
 class FactoryBrowserActivityTest {
     private val context: Context get() = ApplicationProvider.getApplicationContext()
+    private val policy = FactoryOperationPolicy.inMemory(FactoryOperationPolicy.Mode.ASK)
     private val root get() = File(context.noBackupFilesDir, "factory-browser")
     private var proof = FactoryDocumentCoordinator.Proof("example.factory.app", "a".repeat(64), "b".repeat(64), 2, "c".repeat(64))
     private lateinit var coordinator: FactoryBrowserCoordinator
@@ -53,8 +54,8 @@ class FactoryBrowserActivityTest {
     private val nonce = "d".repeat(64)
     @Before fun setup() {
         FactoryStartupTestIsolation.releaseCompletedSharingStartup(); root.deleteRecursively()
-        FactoryBrowserPackageManagerShadow.beforeQuery = null
-        coordinator = FactoryBrowserCoordinator(context, { proof })
+        FactoryBrowserPackageManagerShadow.beforeQuery = null; FactoryBrowserPackageManagerShadow.useAndroidDefault = false
+        coordinator = FactoryBrowserCoordinator(context, policy, { proof })
         FactoryBrowserCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(null, coordinator)
         fixture = FactoryBrowserTestPackages.install(context)
         val uid = Binder.getCallingUid(); val pm = shadowOf(context.packageManager)
@@ -67,8 +68,8 @@ class FactoryBrowserActivityTest {
         controllers.asReversed().forEach { runCatching { it.pause().stop().destroy() } }
         shadowOf(Looper.getMainLooper()).idle(); drain()
         coordinator.session()?.preparing = false
-        if (coordinator.needsRecovery()) worker { coordinator.close(coordinator.session(), true, true) {} }
-        else coordinator.session()?.let { worker { coordinator.close(it, false, true) {} } }
+        if (coordinator.needsRecovery()) worker { coordinator.close(coordinator.session(), true) {} }
+        else coordinator.session()?.let { worker { coordinator.close(it, false) {} } }
         source.close(); drain()
         FactoryBrowserCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(null, null)
         assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available()); root.deleteRecursively()
@@ -77,7 +78,7 @@ class FactoryBrowserActivityTest {
         val executor = FactoryBrowserCoordinator.WORKER; executor.prestartCoreThread(); val task = FutureTask(Callable(block))
         check(executor.queue.offer(task, 5, TimeUnit.SECONDS)); return task.get(5, TimeUnit.SECONDS)
     }
-    private fun drain() { worker {}; shadowOf(Looper.getMainLooper()).idle() }
+    private fun drain() { repeat(3) { worker {}; shadowOf(Looper.getMainLooper()).idle() } }
     private fun request() = Intent(context, FactoryBrowserRecordingActivity::class.java).putExtras(Bundle().apply {
         putInt("protocolVersion", 1); putString("nonce", nonce); putString("url", FactoryBrowserTestPackages.URL); putBinder("control", source)
     })
@@ -100,39 +101,47 @@ class FactoryBrowserActivityTest {
         val action = registration.javaClass.getDeclaredField("action").apply { isAccessible = true }
         val original = action.get(registration) as Runnable; action.set(registration, Runnable { around(original) })
     }
-    @Test fun coldStartWaitsForAudioThenSharingRestorationBeforeAdmittingReview() = startupOrdering(false)
-    @Test fun destroyedStartupWaiterCannotOccupyNextBrokerOrStarveFreshReview() = startupOrdering(true)
-    private fun startupOrdering(destroyFirst: Boolean) {
-        for (name in listOf("factory-audio", "factory-file-sharing")) File(context.noBackupFilesDir, name).deleteRecursively()
-        File(context.cacheDir, "factory-file-shares").deleteRecursively()
-        val audio = FactoryAudioCoordinator.WORKER; val sharing = FactoryFileShareCoordinator.WORKER
-        val audioEntered = CountDownLatch(1); val audioRelease = CountDownLatch(1)
-        val sharingEntered = CountDownLatch(1); val sharingRelease = CountDownLatch(1)
-        fun barrier(executor: java.util.concurrent.ThreadPoolExecutor) {
-            val task = FutureTask(Callable { Unit }); check(executor.queue.offer(task, 5, TimeUnit.SECONDS)); task.get(5, TimeUnit.SECONDS)
-        }
-        audio.execute { audioEntered.countDown(); check(audioRelease.await(10, TimeUnit.SECONDS)) }
-        sharing.execute { sharingEntered.countDown(); check(sharingRelease.await(10, TimeUnit.SECONDS)) }
-        assertTrue(audioEntered.await(5, TimeUnit.SECONDS)); assertTrue(sharingEntered.await(5, TimeUnit.SECONDS))
+    @Test fun allowUsesVerifiedAndroidDefaultAndReturnsHonestTerminalReceiptWithoutClicks() {
+        policy.setDefaultMode(FactoryOperationPolicy.Mode.ALLOW_ALWAYS)
+        FactoryBrowserPackageManagerShadow.useAndroidDefault = true
+        shadowOf(context.packageManager).setResolveInfosForIntent(FactoryBrowserTestPackages.view(FactoryBrowserTestPackages.URL), listOf(fixture.resolve))
+        val activity = launch().get(); drain()
+        assertEquals(1, activity.launches.size); assertEquals(fixture.component, activity.launches.single().component)
+        assertTrue(activity.isFinishing); assertNull(coordinator.session()); assertFalse(MemoryUiAutomationGuard.isProtected())
+        assertEquals(Activity.RESULT_OK, shadowOf(activity).resultCode)
+        assertTrue(shadowOf(activity).resultIntent.getBooleanExtra("launchRequested", false))
+        assertFalse(shadowOf(activity).resultIntent.getBooleanExtra("pageLoadConfirmed", true))
+    }
+    @Test fun allowWithoutAndroidDefaultWaitsOnlyForTargetChoiceThenDispatches() {
+        policy.setDefaultMode(FactoryOperationPolicy.Mode.ALLOW_ALWAYS)
+        val activity = launch().get()
+        assertEquals(0, activity.launches.size); assertFalse(MemoryUiAutomationGuard.isProtected())
+        assertEquals(View.GONE, button(activity, "open").visibility)
+        choose(activity); drain(); assertEquals(1, activity.launches.size)
+        assertEquals(Activity.RESULT_OK, shadowOf(activity).resultCode)
+    }
+    @Test fun denyHasNoControlRegistrationJournalOrNativeDispatch() {
+        policy.setDefaultMode(FactoryOperationPolicy.Mode.DENY)
+        val activity = launch().get()
+        assertTrue(activity.isFinishing); assertNull(coordinator.session()); assertEquals(0, activity.launches.size)
+        assertFalse(File(root, "interaction.json").exists()); assertFalse(MemoryUiAutomationGuard.isProtected())
+    }
+    @Test fun policyRevocationBeforeChosenTargetPreventsDispatch() {
+        policy.setDefaultMode(FactoryOperationPolicy.Mode.ALLOW_ALWAYS)
+        val activity = launch().get(); val value = coordinator.session()!!
+        policy.setMode(FactoryOperationPolicy.Subject.installed(proof), FactoryOperationPolicy.Operation.BROWSER_OPEN, FactoryOperationPolicy.Mode.DENY)
+        assertTrue(value.revoked.get()); render(activity)
+        assertEquals(0, activity.launches.size); assertFalse(button(activity, "open").isEnabled)
+    }
+    @Test fun unrelatedStartupOwnerDoesNotBlockThisOperation() {
+        val other = Any(); FactoryInteractionAdmission.restore(other)
         try {
-            FactoryAudioCoordinator.get(context); val sharingOwner = FactoryFileShareCoordinator.get(context)
-            val first = launch(); var activity = first.get()
-            assertFalse(activity.isFinishing); assertNull(coordinator.session()); assertFalse(button(activity, "open").isEnabled)
-            assertTrue(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
-            if (destroyFirst) { first.pause().stop().destroy(); controllers.remove(first) }
-            audioRelease.countDown(); barrier(audio); shadowOf(Looper.getMainLooper()).idle()
-            assertNull(coordinator.session()); assertFalse(FactoryInteractionAdmission.available())
-            if (destroyFirst) {
-                val waiter = FactoryFileShareCoordinator::class.java.getDeclaredField("startupWaiter").apply { isAccessible = true }
-                assertNull("Destroyed Activity must not claim the following broker's waiter", waiter.get(sharingOwner))
-                activity = launch().get(); assertFalse(activity.isFinishing)
-            }
-            assertEquals(0, activity.launches.size); sharingRelease.countDown(); barrier(sharing)
-            shadowOf(Looper.getMainLooper()).idle(); drain()
-            assertNotNull(coordinator.session()); assertFalse(activity.isFinishing); assertEquals("review", coordinator.status())
-            choose(activity); assertTrue(button(activity, "open").isEnabled); assertEquals(0, activity.launches.size)
-            button(activity, "close").performClick(); drain(); assertEquals(Activity.RESULT_OK, shadowOf(activity).resultCode)
-        } finally { audioRelease.countDown(); sharingRelease.countDown(); barrier(audio); barrier(sharing); shadowOf(Looper.getMainLooper()).idle(); drain() }
+            val activity = launch().get()
+            assertNotNull(coordinator.session()); assertFalse(activity.isFinishing)
+            choose(activity); button(activity, "open").performClick(); drain()
+            assertEquals(1, activity.launches.size); assertEquals(Activity.RESULT_OK, shadowOf(activity).resultCode)
+            assertFalse(FactoryInteractionAdmission.available(other))
+        } finally { FactoryInteractionAdmission.release(other) }
     }
     @Test fun fullyAndPartiallyObscuredNativeControlsRejectSyntheticTouch() {
         val activity = launch().get()
@@ -185,20 +194,19 @@ class FactoryBrowserActivityTest {
         val exact = activity.launches.single(); assertEquals(fixture.component, exact.component); assertEquals(FactoryBrowserTestPackages.URL, exact.dataString)
         assertEquals(Intent.ACTION_VIEW, exact.action); assertEquals(setOf(Intent.CATEGORY_BROWSABLE), exact.categories)
         assertEquals(0, exact.flags); assertNull(exact.extras); assertNull(exact.selector); assertNull(exact.clipData)
-        assertTrue(coordinator.session()!!.launchRequested); assertFalse(button(activity, "open").isEnabled)
+        assertNull(coordinator.session()); assertTrue(activity.isFinishing); assertFalse(MemoryUiAutomationGuard.isProtected())
         button(activity, "open").performClick(); drain(); assertEquals(1, activity.launches.size)
-        assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode); assertNull(shadowOf(activity).resultIntent)
-        button(activity, "close").performClick(); drain()
         val receipt = shadowOf(activity).resultIntent; assertEquals(Activity.RESULT_OK, shadowOf(activity).resultCode)
         assertEquals(setOf("nonce", "launchRequested", "pageLoadConfirmed"), receipt.extras!!.keySet()); assertEquals(nonce, receipt.getStringExtra("nonce"))
         assertTrue(receipt.getBooleanExtra("launchRequested", false)); assertFalse(receipt.getBooleanExtra("pageLoadConfirmed", true))
     }
     @Test fun registrationDisposalCallbackBeforeCloseCompletionCannotEraseValidReceipt() {
-        val activity = launch().get(); choose(activity); button(activity, "open").performClick(); drain()
+        val activity = launch().get(); choose(activity)
         val callbackPosted = CountDownLatch(1); val finishClose = CountDownLatch(1)
         wrapRevocation(coordinator.session()!!) { original -> original.run(); callbackPosted.countDown(); check(finishClose.await(10, TimeUnit.SECONDS)) }
         try {
-            button(activity, "close").performClick(); assertTrue(callbackPosted.await(5, TimeUnit.SECONDS))
+            button(activity, "open").performClick(); worker {}; shadowOf(Looper.getMainLooper()).idle()
+            assertTrue(callbackPosted.await(5, TimeUnit.SECONDS))
             shadowOf(Looper.getMainLooper()).idle()
             assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode); assertFalse(activity.isFinishing)
         } finally { finishClose.countDown() }
@@ -286,19 +294,22 @@ class FactoryBrowserActivityTest {
         val recovered = recovery().get(); assertFalse(button(recovered, "open").isEnabled); button(recovered, "close").performClick(); drain()
         assertEquals(Activity.RESULT_CANCELED, shadowOf(recovered).resultCode); assertNull(shadowOf(recovered).resultIntent)
     }
-    @Test fun backAfterDispatchRetainsUnknownOutcomeAndNeverClaimsBrowserClosure() {
-        val activity = launch().get(); choose(activity); button(activity, "open").performClick(); drain()
+    @Test fun backAfterTerminalDispatchCannotEraseReceipt() {
+        val controller = launch(); val activity = controller.get(); choose(activity); button(activity, "open").performClick(); drain()
         activity.onBackPressedDispatcher.onBackPressed(); drain()
-        assertTrue(activity.isFinishing); assertTrue(coordinator.needsRecovery()); assertTrue(MemoryUiAutomationGuard.isProtected())
-        assertFalse(FactoryInteractionAdmission.available()); assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode); assertNull(shadowOf(activity).resultIntent)
-        assertEquals(1, activity.launches.size)
+        assertTrue(activity.isFinishing); assertFalse(coordinator.needsRecovery()); assertNull(coordinator.session())
+        assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available())
+        assertEquals(Activity.RESULT_OK, shadowOf(activity).resultCode)
+        assertTrue(shadowOf(activity).resultIntent.getBooleanExtra("launchRequested", false))
+        assertFalse(shadowOf(activity).resultIntent.getBooleanExtra("pageLoadConfirmed", true)); assertEquals(1, activity.launches.size)
     }
-    @Test fun externalBrowserLifecycleDoesNotAutoCloseOrTurnDispatchIntoPageLoad() {
+    @Test fun externalLifecycleDoesNotReplayOrClaimExternalOutcome() {
         val controller = launch(); val activity = controller.get(); choose(activity); button(activity, "open").performClick(); drain()
         activity.onWindowFocusChanged(false); controller.pause().resume(); activity.onWindowFocusChanged(true); drain()
-        assertFalse(coordinator.session()!!.revoked.get()); assertFalse(button(activity, "open").isEnabled); assertTrue(button(activity, "close").isEnabled)
-        assertFalse(FactoryInteractionAdmission.available()); assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode)
-        button(activity, "close").performClick(); drain(); assertEquals(Activity.RESULT_OK, shadowOf(activity).resultCode)
+        assertTrue(activity.isFinishing); assertFalse(coordinator.needsRecovery()); assertNull(coordinator.session())
+        assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available())
+        assertEquals(Activity.RESULT_OK, shadowOf(activity).resultCode)
+        assertTrue(shadowOf(activity).resultIntent.getBooleanExtra("launchRequested", false))
         assertFalse(shadowOf(activity).resultIntent.getBooleanExtra("pageLoadConfirmed", true)); assertEquals(1, activity.launches.size)
     }
     @Test fun expiredReviewNeverLaunchesAndOnlyExplicitRecoveryReleasesAdmission() {
@@ -333,5 +344,10 @@ class FactoryBrowserPackageManagerShadow : ShadowApplicationPackageManager() {
     @Implementation override fun queryIntentActivities(intent: Intent, flags: Int): MutableList<ResolveInfo> {
         beforeQuery?.invoke(intent); return super.queryIntentActivities(intent, flags)
     }
-    companion object { @Volatile var beforeQuery: ((Intent) -> Unit)? = null }
+    @Implementation override fun resolveActivity(intent: Intent, flags: Int): ResolveInfo? =
+        if (useAndroidDefault) super.resolveActivity(intent, flags) else null
+    companion object {
+        @Volatile var beforeQuery: ((Intent) -> Unit)? = null
+        @Volatile var useAndroidDefault = false
+    }
 }

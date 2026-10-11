@@ -81,7 +81,7 @@ class CodingExecutionAssemblyTest {
         }
     }
 
-    @Test fun realEffectiveProfileRequiresEachExactApprovalAndKeepsCommandReceipt() {
+    @Test fun realEffectiveProfileHonorsAskAllowDenyAndKeepsCommandReceipt() {
         val session = "ux25-approved-${System.nanoTime()}"
         val scope = ProjectScopeStore(context.filesDir).open(session)
         var launches = 0; var approvals = 0; var timeout: Long? = null
@@ -91,13 +91,15 @@ class CodingExecutionAssemblyTest {
             output.onChunk(LinuxOutputStream.STDOUT, "fixture check completed\n"); LinuxExecResult(0)
         }, executor = Executor { it.run() })
         val autonomy = LinuxExecAutonomy(InMemoryConnectorAutonomyStore(), { true })
-        autonomy.setPolicyFromUi(AutonomyPolicy.ALLOW)
+        autonomy.setProjectPolicyFromUi(AutonomyPolicy.ASK)
         var decision = ApprovalDecision.DENIED
         var whileApproving: () -> Unit = { }
         lateinit var gate: ApprovalGate
         gate = ApprovalGate(presenter = object : ApprovalPresenter {
             override fun show(id: String, summary: ApprovalSummary) {
-                approvals++; assertFalse(summary.allowAlwaysAvailable); whileApproving(); gate.resolve(id, decision)
+                approvals++; assertTrue(summary.allowAlwaysAvailable)
+                assertEquals(LinuxExecAutonomy.PROJECT_CONNECTOR_ID, summary.autonomyConnectorId)
+                whileApproving(); gate.resolve(id, decision)
             }
             override fun update(id: String, decision: ApprovalDecision) = Unit
         })
@@ -118,9 +120,14 @@ class CodingExecutionAssemblyTest {
             assertEquals("test approved", receipt.getString("command"))
             assertEquals("SUCCEEDED", receipt.getString("state"))
             assertTrue(receipt.getString("verification_notice").contains("Process evidence only"))
+            autonomy.setProjectPolicyFromUi(AutonomyPolicy.ALLOW)
             assertTrue(execute("test second").success)
             assertEquals(listOf("test approved", "test second"), commands)
-            assertEquals(3, approvals)
+            assertEquals(2, approvals)
+            autonomy.setProjectPolicyFromUi(AutonomyPolicy.DENY)
+            assertFalse(execute("test denied").success)
+            assertEquals(2, launches); assertEquals(2, approvals)
+            autonomy.setProjectPolicyFromUi(AutonomyPolicy.ASK)
             whileApproving = { bot.token.cancel() }
             assertThrows(java.util.concurrent.CancellationException::class.java) { execute("must never run") }
             assertEquals(2, launches)
@@ -152,7 +159,9 @@ class CodingExecutionAssemblyTest {
         manager(session).use { crew ->
             val bot = restored(crew, profiles.resolveRole(configured.id, CoreAgentRuntime.profileCapabilities(context, session), emptyList()))
             val tools = FlavorLinuxTools.createProfileForRuntime(context, session, bot, crew, CorePromptBudget.standard(),
-                scope, jobs, Runtime(), gate, LinuxExecAutonomy(InMemoryConnectorAutonomyStore(), { true }),
+                scope, jobs, Runtime(), gate, LinuxExecAutonomy(InMemoryConnectorAutonomyStore(), { true }).apply {
+                    setProjectPolicyFromUi(AutonomyPolicy.ASK)
+                },
                 LinuxOutputSanitizer(emptyList(), emptyList())).associateBy { it.declaration().name }
             val result = tools.getValue(CodingExecutionTools.EXEC).execute(
                 mapOf("command" to "test", "expected_scope_version" to scope.version()), bot.token)

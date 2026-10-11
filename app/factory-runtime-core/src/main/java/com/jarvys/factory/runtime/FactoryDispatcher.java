@@ -36,7 +36,7 @@ public final class FactoryDispatcher {
                 case SENSORS_LIST: case SENSORS_CAPTURE: case SENSORS_CANCEL:
                 case PRESENTATION_GET: case PRESENTATION_SET: case PRESENTATION_RESET:
                 case CALENDAR_INSERT: case CONTACTS_PICK: case MAPS_OPEN: case PHONE_DIAL: case EMAIL_COMPOSE: case SMS_COMPOSE: case BROWSER_OPEN: case AUDIO_PLAY: case PHOTOS_PICK: case PHOTOS_CAPTURE: case SHARE_FILE: case DOCUMENTS_OPEN: case DOCUMENTS_CREATE: case DOCUMENTS_READ: case DOCUMENTS_WRITE: case DOCUMENTS_CLOSE: case DOCUMENTS_CANCEL:
-                    throw new FactoryException("UNAVAILABLE", "Biometrics requires an installed generated Activity and is never simulated. Presentation and sensors require an installed generated Activity; preview cannot change host theme/orientation or read hardware sensors. Documents, photos, audio, browser, maps, phone, email, SMS, contacts and calendar require an installed generated app and the matching human-only Jarvys broker; preview never opens files, camera, audio, external URLs, maps, dialers, message editors, contact pickers or calendar editors.");
+                    throw new FactoryException("UNAVAILABLE", "Biometrics requires an installed generated Activity and is never simulated. Presentation and sensors require an installed generated Activity; preview cannot change host theme/orientation or read hardware sensors. Documents, photos, audio, browser, maps, phone, email, SMS, contacts and calendar require an installed generated app and the matching authenticated Jarvys broker; preview never opens files, camera, audio, external URLs, maps, dialers, message editors, contact pickers or calendar editors.");
                 case HAPTICS_PERFORM: case SHARE_TEXT: case CLIPBOARD_WRITE: case EXPORT_TEXT:
                     return new JSONObject().put("simulated", true).put("performed", false).put("mode", "preview")
                             .put("operation", method.wireName);
@@ -67,7 +67,7 @@ public final class FactoryDispatcher {
                 new JSONObject().put("v", 1).put("id", request.id).put("method", request.method).put("args", request.args).toString(), config);
         switch (request.operation) {
             case STORAGE_BACKUP_EXPORT: case STORAGE_BACKUP_IMPORT:
-                if ("preview".equals(metadata.mode())) throw new FactoryException("UNAVAILABLE", "Storage backups require an installed generated app, current exact signed receipt and matching human-only Jarvys broker.");
+                if ("preview".equals(metadata.mode())) throw new FactoryException("UNAVAILABLE", "Storage backups require an installed generated app, current exact signed receipt and matching authenticated Jarvys broker.");
                 JSONArray keys = request.args.getJSONArray("keys");
                 for (int index = 0; index < keys.length(); index++)
                     if (!config.dataBackupKeys.contains(keys.getString(index)))
@@ -75,7 +75,7 @@ public final class FactoryDispatcher {
                 if (database == null) throw new FactoryException("UNAVAILABLE", "A private native storage backup session is required.");
                 return database.perform(request.method, request.args);
             case DATABASE_BACKUP_EXPORT: case DATABASE_BACKUP_IMPORT:
-                if ("preview".equals(metadata.mode())) throw new FactoryException("UNAVAILABLE", "Database backups require an installed generated app, current exact signed receipt and matching human-only Jarvys broker.");
+                if ("preview".equals(metadata.mode())) throw new FactoryException("UNAVAILABLE", "Database backups require an installed generated app, current exact signed receipt and matching authenticated Jarvys broker.");
                 JSONArray tables = request.args.getJSONArray("tables");
                 for (int index = 0; index < tables.length(); index++)
                     if (!config.dataBackupTables.contains(tables.getString(index)))

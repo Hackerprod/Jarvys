@@ -26,14 +26,17 @@ import com.jarvys.agent.AppLanguageRuntime
 import com.jarvys.agent.MemoryUiAutomationGuard
 import com.jarvys.agent.R
 import com.jarvys.factory.runtime.FileShareTransfer
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.SynchronousQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
-/** Human-only broker. Photo bytes never enter saved state, journals, logs or JavaScript IPC. */
+/** Policy-authorized broker. Photo bytes never enter saved state, journals, logs or JavaScript IPC. */
 open class FactoryPhotoActivity : ComponentActivity() {
     private val coordinator by lazy { FactoryPhotoCoordinator.get(applicationContext) }
-    private lateinit var guard: MemoryUiAutomationGuard.Lease
+    private var guard: MemoryUiAutomationGuard.Lease? = null
+    private var authorityWatch: AutoCloseable? = null
+    private var recoverySurface = false
     private var token: String? = null
     private var request: FactoryPhotoCoordinator.Request? = null
     private var selected: FactoryPhotoCapture.Image? = null
@@ -64,7 +67,6 @@ open class FactoryPhotoActivity : ComponentActivity() {
     private var rejected = false
     private lateinit var status: TextView
     private lateinit var choose: Button
-    private lateinit var use: Button
     private lateinit var close: Button
     private lateinit var recover: Button
     override fun attachBaseContext(newBase: Context) { super.attachBaseContext(AppLanguageRuntime.attachBaseContext(newBase)) }
@@ -76,19 +78,20 @@ open class FactoryPhotoActivity : ComponentActivity() {
         val caller = callingPackage
         val value = if (!recovery && savedInstanceState == null && caller != null) runCatching { FactoryPhotoCoordinator.Request.parse(intent) }.getOrNull() else null
         if (!recovery && value == null) { rejected = true; finish(); return }
-        if (recovery) guard = MemoryUiAutomationGuard.enterProtectedSurface()
+        recoverySurface = recovery
         val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 32, 24, 32) }
         column.addView(TextView(this).apply { setText(R.string.factory_photos_title); textSize = 22f })
         status = TextView(this).apply { textSize = 16f }; column.addView(status)
         fun button(label: Int, tagValue: String, action: () -> Unit) = Button(this).also {
             it.setText(label); it.tag = tagValue; it.filterTouchesWhenObscured = true
-            it.setOnClickListener { if (humanReady()) runCatching(action).onFailure { rejected = true; render() } }; column.addView(it)
+            it.setOnClickListener { if (activeReady()) runCatching(action).onFailure { rejected = true; render() } }; column.addView(it)
         }
-        choose = button(R.string.factory_photos_choose, "factory-photos-choose") { launchExternal() }
-        use = button(R.string.factory_photos_use, "factory-photos-use") { deliver() }
+        choose = button(R.string.factory_photos_choose, "factory-photos-choose") {
+            requireHuman(); coordinator.approve(token ?: error("No request")) { requireHuman() }; releaseGuard(); launchExternal()
+        }
         close = button(R.string.factory_documents_close, "factory-photos-close") { closeNative() }
         recover = button(R.string.factory_documents_recover, "factory-photos-recover") {
-            requireHuman(); coordinator.acknowledgeRecovery { requireHuman() }; closed = true; finish()
+            requireActive(); coordinator.acknowledgeRecovery { requireActive() }; closed = true; finish()
         }
         val scroll = ScrollView(this).apply { isFillViewport = true; isSaveEnabled = false; addView(column) }; setContentView(scroll)
         ViewCompat.setOnApplyWindowInsetsListener(scroll) { view, insets ->
@@ -96,42 +99,69 @@ open class FactoryPhotoActivity : ComponentActivity() {
             view.setPadding(safe.left, safe.top, safe.right, safe.bottom); insets
         }; ViewCompat.requestApplyInsets(scroll)
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() { if (humanReady()) runCatching { closeNative() }.onFailure { rejected = true; render() } else finish() }
+            override fun handleOnBackPressed() { if (activeReady()) runCatching { closeNative() }.onFailure { rejected = true; render() } else finish() }
         })
         if (value != null && caller != null) {
             val approved = generation; working = true
-            if (!FactoryFileShareCoordinator.afterStartup {
-                if (generation != approved || isDestroyed || isFinishing) working = false
-                else if (!coordinator.canBegin()) { working = false; rejected = true; finish() }
-                else execute {
-                    val outcome = runCatching { coordinator.begin(caller, value) }
-                    runOnUiThread {
-                        working = false
-                        outcome.onSuccess { owner ->
-                            if (generation == approved && !isDestroyed && !isFinishing) {
-                                guard = MemoryUiAutomationGuard.enterProtectedSurface(); token = owner; request = value
-                            } else runCatching { coordinator.revoke(owner) }
-                        }.onFailure { rejected = true; finish() }; render()
-                    }
+            execute {
+                val outcome = runCatching {
+                    check(generation == approved && !isDestroyed && !isFinishing)
+                    coordinator.begin(caller, value)
                 }
-            }) { working = false; rejected = true; finish() }
+                runOnUiThread {
+                    working = false
+                    outcome.onSuccess { owner ->
+                        if (generation == approved && !isDestroyed && !isFinishing) {
+                            token = owner; request = value
+                            val authority = coordinator.authority(owner)
+                            if (authority.requiresApproval) guard = MemoryUiAutomationGuard.enterProtectedSurface()
+                            authorityWatch = authority.onRevoked {
+                                expiryHandler.post {
+                                    if (!closed && token == owner) {
+                                        generation++; rejected = true; releaseGuard(); cancelInput(); cleanup()
+                                        if (externalOwned) runCatching { finishActivity(EXTERNAL) }
+                                        runCatching { coordinator.revoke(owner) }; token = null; render()
+                                    }
+                                }
+                            }
+                            advance()
+                        } else runCatching { coordinator.revoke(owner) }
+                    }.onFailure { rejected = true; finish() }; render()
+                }
+            }
         }
         render()
     }
     private fun execute(action: () -> Unit) {
         try { WORKER.execute(action) } catch (_: java.util.concurrent.RejectedExecutionException) { working = false; rejected = true; render() }
     }
-    private fun humanReady() = resumed && !closed && !isFinishing && ::guard.isInitialized && guard.isReadyForUser
-    private fun requireHuman(approved: Long = generation) { check(humanReady() && generation == approved && !isDestroyed); guard.requireHumanUiInteraction() }
+    private fun activeReady() = resumed && !closed && !isFinishing && !isDestroyed
+    private fun requireActive(approved: Long = generation) { check(activeReady() && generation == approved) }
+    private fun humanReady() = activeReady() && guard?.isReadyForUser == true
+    private fun requireHuman() { check(humanReady()); guard!!.requireHumanUiInteraction() }
+    private fun releaseGuard() { guard?.close(); guard = null }
+    private fun advance() {
+        val owner = token ?: return
+        if (!activeReady() || working || rejected) return
+        runCatching {
+            val authority = coordinator.authority(owner); authority.requireCurrent()
+            when (coordinator.status()) {
+                "review" -> if (!authority.requiresApproval) launchExternal()
+                "selected" -> if (selected != null) deliver()
+                "cancelled" -> closeNative()
+            }
+        }.onFailure { rejected = true; cleanup(); render() }
+    }
     private fun launchExternal() {
-        requireHuman(); val owner = token ?: error("No photo request"); val value = request!!; val approved = generation
+        requireActive(); val owner = token ?: error("No photo request"); val value = request!!; val approved = generation
         working = true; render()
         execute {
             val outcome = runCatching {
+                coordinator.authority(owner).checkBeforeEffect()
+                coordinator.launch(owner) { requireActive(approved) }
                 val pending = FileShareTransfer.reserve(); FactoryInteractionAdmission.restore(pending); admission = pending
                 selectionDeadline = SystemClock.elapsedRealtime() + FactoryPhotoCapture.LIFETIME
                 expiryHandler.postDelayed(expireSelection, FactoryPhotoCapture.LIFETIME)
-                coordinator.launch(owner) { requireHuman(approved) }
                 if (value.operation == "pick") photoPicker(this)
                 else {
                     val intent = FactoryDocumentActivity.trustedPicker(this, Intent(MediaStore.ACTION_IMAGE_CAPTURE))
@@ -139,8 +169,11 @@ open class FactoryPhotoActivity : ComponentActivity() {
                     val info = packageManager.getApplicationInfo(component.packageName, 0)
                     val original = packageManager.getPackageInfo(component.packageName, PackageManager.GET_SIGNATURES)
                     check(!original.signatures.isNullOrEmpty()) { "Camera certificate unavailable" }
+                    val authority = coordinator.authority(owner)
+                    requireActive(approved); authority.checkBeforeEffect()
                     val photo = FactoryPhotoCapture.reserve(this, component.packageName, info.uid) {
                         runCatching {
+                            authority.checkBeforeEffect()
                             val current = packageManager.getPackageInfo(component.packageName, PackageManager.GET_SIGNATURES)
                             packageManager.getPackagesForUid(info.uid)?.toSet() == setOf(component.packageName) &&
                                 packageManager.getApplicationInfo(component.packageName, 0).uid == info.uid &&
@@ -157,9 +190,9 @@ open class FactoryPhotoActivity : ComponentActivity() {
             runOnUiThread {
                 working = false
                 outcome.onSuccess { external ->
-                    if (humanReady() && generation == approved && token == owner && !rejected && !signal.isCanceled && SystemClock.elapsedRealtime() < selectionDeadline) {
+                    if (activeReady() && generation == approved && token == owner && !rejected && !signal.isCanceled && SystemClock.elapsedRealtime() < selectionDeadline) {
                         launching = true; externalOwned = true
-                        try { startActivityForResult(external, EXTERNAL) }
+                        try { coordinator.authority(owner).checkBeforeEffect(); startActivityForResult(external, EXTERNAL) }
                         catch (_: Exception) { externalOwned = false; launching = false; failSelection(owner) }
                     } else { cleanup(); runCatching { coordinator.revoke(owner) }; token = null; rejected = true }
                 }.onFailure { failSelection(owner) }; render()
@@ -167,7 +200,13 @@ open class FactoryPhotoActivity : ComponentActivity() {
         }
     }
     private fun failSelection(owner: String) {
-        cleanup(); runCatching { coordinator.pickerTerminal(owner, false) }; rejected = true
+        cleanup()
+        val terminal = runCatching { coordinator.pickerTerminal(owner, false) }.isSuccess
+        if (terminal && activeReady() && !working) {
+            runCatching { coordinator.close(owner, false) { requireActive() } }.onSuccess {
+                authorityWatch?.close(); authorityWatch = null; closed = true; token = null; finish()
+            }.onFailure { rejected = true }
+        } else rejected = true
     }
     @Deprecated("For-result ownership is required for the external photo lifecycle")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
@@ -192,7 +231,7 @@ open class FactoryPhotoActivity : ComponentActivity() {
         val approved = generation; working = true; render()
         execute {
             val outcome = runCatching {
-                fun allowed() { requireHuman(approved); check(!signal.isCanceled && SystemClock.elapsedRealtime() < selectionDeadline) }
+                fun allowed() { requireActive(approved); coordinator.authority(owner).checkBeforeEffect(); check(!signal.isCanceled && SystemClock.elapsedRealtime() < selectionDeadline) }
                 allowed()
                 if (request?.operation == "capture") {
                     val photo = capture ?: error("No camera output")
@@ -209,28 +248,31 @@ open class FactoryPhotoActivity : ComponentActivity() {
             runOnUiThread {
                 working = false
                 outcome.onSuccess { image ->
-                    if (humanReady() && generation == approved && token == owner && !rejected && !signal.isCanceled && SystemClock.elapsedRealtime() < selectionDeadline) {
+                    if (activeReady() && generation == approved && token == owner && !rejected && !signal.isCanceled && SystemClock.elapsedRealtime() < selectionDeadline) {
                         selected = image
                         runCatching { coordinator.pickerTerminal(owner, true) }.onFailure { cleanup(); rejected = true }
                     } else { image.bytes.fill(0); cleanup(); runCatching { coordinator.revoke(owner) }; rejected = true }
-                }.onFailure { failSelection(owner) }; render()
+                }.onFailure { failSelection(owner) }; advance(); render()
             }
         }
     }
     private fun deliver() {
-        requireHuman(); val owner = token ?: error("No photo request"); val image = selected ?: error("No image")
-        val value = request!!; val approved = generation; working = true; render()
+        requireActive(); val owner = token ?: error("No photo request"); val image = selected ?: error("No image")
+        val value = request!!; val authority = coordinator.authority(owner); val approved = generation; working = true; render()
         execute {
             var transfer: FileShareTransfer? = null
             val pending = admission
             var transferred = false
             val outcome = runCatching {
-                val verifier = coordinator.transferVerifier(owner) { requireHuman(approved) }
+                val verifier = coordinator.transferVerifier(owner) { requireActive(approved) }
+                authority.checkBeforeEffect()
                 transfer = pending!!.complete(image.bytes, value.nonce, verifier)
+                val endpoint = transfer!!
+                val revocation = authority.onRevoked { endpoint.close() }
+                endpoint.onClosed { revocation.close(); authority.close() }
                 transferred = true
                 selected = null; admission = null; admissionCapture = null
-                coordinator.close(owner, true) { requireHuman(approved) }
-                val endpoint = transfer!!
+                coordinator.close(owner, true) { requireActive(approved) }
                 Intent().putExtras(Bundle().apply {
                     putString("nonce", value.nonce); putBinder("transfer", endpoint); putInt("size", endpoint.size)
                     putString("sha256", endpoint.sha256); putString("mimeType", image.mimeType)
@@ -241,14 +283,16 @@ open class FactoryPhotoActivity : ComponentActivity() {
             runOnUiThread {
                 working = false
                 outcome.onSuccess { result ->
-                    if (humanReady() && generation == approved && !rejected && !signal.isCanceled && SystemClock.elapsedRealtime() < selectionDeadline) { setResult(Activity.RESULT_OK, result); closed = true; token = null; finish() }
-                    else { transfer?.close(); rejected = true; finish() }
+                    if (activeReady() && generation == approved && !rejected && !signal.isCanceled && SystemClock.elapsedRealtime() < selectionDeadline && runCatching { authority.checkBeforeEffect() }.isSuccess) {
+                        authorityWatch?.close(); authorityWatch = null
+                        setResult(Activity.RESULT_OK, result); closed = true; token = null; finish()
+                    } else { transfer?.close(); rejected = true; finish() }
                 }.onFailure { transfer?.close(); cleanup(); rejected = true; render() }
             }
         }
     }
     private fun closeNative() {
-        requireHuman(); val owner = token
+        requireActive(); val owner = token
         if (working) {
             generation++; cancelInput(); cleanup(); owner?.let { runCatching { coordinator.revoke(it) } }
             token = null; rejected = true; render(); return
@@ -257,7 +301,7 @@ open class FactoryPhotoActivity : ComponentActivity() {
             runCatching { coordinator.cancelPicker(owner) }; cleanup(); finishActivity(EXTERNAL); render(); return
         }
         cleanup()
-        if (owner != null) coordinator.close(owner, false) { requireHuman() }
+        if (owner != null) coordinator.close(owner, false) { requireActive() }
         closed = true; token = null; finish()
     }
     private fun releaseInput() { input?.let { runCatching { revokeUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION) } }; input = null }
@@ -287,36 +331,31 @@ open class FactoryPhotoActivity : ComponentActivity() {
                 selected != null -> append("\n\n").append(getString(R.string.factory_photos_selected))
             }
         }
-        choose.isEnabled = humanReady() && !working && !rejected && token != null && coordinator.status() == "review"
-        use.isEnabled = humanReady() && !working && !rejected && selected != null
-        close.isEnabled = humanReady()
-        recover.visibility = if (recovery) View.VISIBLE else View.GONE
-        recover.isEnabled = humanReady() && !working && recovery
+        val ask = token?.let { runCatching { coordinator.authority(it).requiresApproval }.getOrDefault(false) } == true
+        choose.visibility = if (ask) View.VISIBLE else View.GONE
+        choose.isEnabled = humanReady() && !working && !rejected && ask && coordinator.status() == "review"
+        close.isEnabled = activeReady()
+        recover.visibility = if (recoverySurface && recovery) View.VISIBLE else View.GONE
+        recover.isEnabled = activeReady() && !working && recovery
     }
-    override fun onResume() { super.onResume(); resumed = true; launching = false; terminalPending = false; processResult(); render() }
+    override fun onResume() { super.onResume(); resumed = true; launching = false; terminalPending = false; processResult(); advance(); render() }
     override fun onPause() {
         resumed = false; generation++
         if (!closed && !launching && !externalOwned && !terminalPending) {
-            cancelInput(); cleanup(); token?.let { runCatching { coordinator.revoke(it) } }; token = null; rejected = true
+            cancelInput(); cleanup(); token?.let { runCatching { coordinator.revoke(it) } }; token = null; rejected = true; releaseGuard()
         }
         super.onPause()
     }
     override fun onDestroy() {
         expiryHandler.removeCallbacks(expireSelection)
         if (!closed) { cancelInput(); cleanup(); if (externalOwned) runCatching { finishActivity(EXTERNAL) }; token?.let { runCatching { coordinator.revoke(it) } } }
-        if (::guard.isInitialized) {
-            val decor = window.decorView
-            if (!decor.isAttachedToWindow) guard.close() else decor.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
-                override fun onViewAttachedToWindow(v: View) = Unit
-                override fun onViewDetachedFromWindow(v: View) { guard.close(); v.removeOnAttachStateChangeListener(this) }
-            })
-        }
+        authorityWatch?.close(); authorityWatch = null; releaseGuard()
         super.onDestroy()
     }
     companion object {
         private const val EXTERNAL = 6901
         private val CANCELLATION = ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS, SynchronousQueue<Runnable>()).apply { allowCoreThreadTimeOut(true) }
-        private val WORKER = ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS, SynchronousQueue<Runnable>()).apply { allowCoreThreadTimeOut(true) }
+        private val WORKER = ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS, ArrayBlockingQueue<Runnable>(1)).apply { allowCoreThreadTimeOut(true) }
         private fun android.content.pm.PackageInfo.longVersionCompat() = if (android.os.Build.VERSION.SDK_INT >= 28) longVersionCode else versionCode.toLong()
         internal fun photoPicker(context: Context): Intent {
             if (android.os.Build.VERSION.SDK_INT >= 33) {

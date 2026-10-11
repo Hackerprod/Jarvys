@@ -192,6 +192,11 @@ private fun SettingsIndex(
         SettingsIndexRow(LucideIcons.Accessibility, stringResource(R.string.settings_accessibility), null, onAccessibility)
         SettingsRule()
         val context = LocalContext.current
+        SettingsIndexRow(LucideIcons.Boxes, stringResource(R.string.factory_permissions_title),
+            stringResource(R.string.factory_permissions_summary),
+            { context.startActivity(Intent(context, com.jarvys.agent.apkfactory.FactoryPermissionsActivity::class.java)) },
+            testTag = "settings-factory-permissions-row")
+        SettingsRule()
         SettingsIndexRow(LucideIcons.Boxes, stringResource(R.string.factory_identity_title),
             stringResource(R.string.factory_identity_settings_summary),
             { context.startActivity(Intent(context, FactoryIdentityActivity::class.java)) },

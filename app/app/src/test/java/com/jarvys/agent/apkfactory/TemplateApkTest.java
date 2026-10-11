@@ -114,7 +114,7 @@ public class TemplateApkTest {
             List<String> requested=new ArrayList<>();
             for(int bit=0;bit<com.jarvys.factory.contract.CapabilityCatalog.NAMES.size();bit++) if((mask&(1<<bit))!=0) requested.add(com.jarvys.factory.contract.CapabilityCatalog.NAMES.get(bit));
             com.jarvys.factory.contract.ManifestPlan plan=new com.jarvys.factory.contract.ManifestPlan(spec.appId,spec.label,spec.versionCode,spec.versionName,base.iconResourceId,base.backupResourceId,requested);
-            boolean hasQueries=requested.contains("documents") || requested.contains("browser") || requested.contains("maps") || requested.contains("phone") || requested.contains("email") || requested.contains("sms") || requested.contains("contacts") || requested.contains("calendar");
+            boolean hasQueries=requested.contains("documents") || requested.contains("browser") || requested.contains("maps") || requested.contains("phone") || requested.contains("email") || requested.contains("sms") || requested.contains("contacts") || requested.contains("calendar") || requested.contains("clipboard");
             boolean hasBiometrics=requested.contains("biometrics");
             (hasBiometrics ? (hasQueries ? combinedDecoded : biometricDecoded) : (hasQueries ? documentDecoded : decoded)).verify(plan);
             assertEquals(hasBiometrics ? Collections.singletonList(CapabilityCatalog.BIOMETRIC_PERMISSION) : Collections.emptyList(),plan.permissions);
@@ -150,7 +150,7 @@ public class TemplateApkTest {
     }
     @Test public void typedExternalOnlyAndCombinedAppsBuildWithOneSharedZeroPermissionQueryProfile() throws Exception {
         byte[] browserManifest = null;
-        for (List<String> capabilities : Arrays.asList(Collections.singletonList("browser"), Collections.singletonList("maps"), Collections.singletonList("phone"), Arrays.asList("browser", "documents", "maps", "phone"))) {
+        for (List<String> capabilities : Arrays.asList(Collections.singletonList("browser"), Collections.singletonList("clipboard"), Collections.singletonList("maps"), Collections.singletonList("phone"), Arrays.asList("browser", "clipboard", "documents", "maps", "phone"))) {
             TemplateApk.Spec browser = new TemplateApk.Spec(spec.appId,spec.label,spec.versionCode,spec.versionName,capabilities);
             byte[] generated = TemplateApk.build(template,browser,icon,assets);
             TemplateApk.ManifestInfo info = TemplateApk.verify(generated,browser);
@@ -542,6 +542,52 @@ public class TemplateApkTest {
         System.arraycopy(xml,8+size,result,8+next.length,xml.length-8-size);set32(result,4,result.length);return result;
     }
 
+    @Test public void clipboardManifestRequiresQueriesOnlyForNewContractAndLegacyRemainsExact() throws Exception {
+        TemplateApk.Spec clipboard = new TemplateApk.Spec(spec.appId, spec.label, spec.versionCode,
+                spec.versionName, Collections.singletonList("clipboard"));
+        byte[] current = TemplateApk.build(template, clipboard, icon, assets);
+        TemplateApk.ManifestInfo modern = TemplateApk.verify(current, clipboard);
+        assertEquals(ManifestPlan.Profile.CURRENT, modern.plan.profile);
+        assertEquals(new ArrayList<>(CapabilityCatalog.DOCUMENT_BROKER_PACKAGES), modern.plan.queries);
+        rejects(() -> TemplateApk.verifyExistingClosedV1(current, clipboard));
+        rejects(() -> TemplateApk.verifyExistingV1(current, clipboard));
+
+        ManifestPlan oldPlan = new ManifestPlan(clipboard.appId, clipboard.label, clipboard.versionCode,
+                clipboard.versionName, modern.plan.iconResourceId, modern.plan.backupResourceId,
+                clipboard.capabilities, ManifestPlan.Profile.V1_BEFORE_CLIPBOARD_BROKER);
+        byte[] oldManifest = ManifestXml.encode(oldPlan);
+        byte[] historical = legacyClosedV1ArtifactFixture(current, clipboard);
+        Map<String, byte[]> files = unzip(historical);
+        assertArrayEquals(oldManifest, files.get("AndroidManifest.xml"));
+        rejects(() -> TemplateApk.verify(historical, clipboard));
+        TemplateApk.ManifestInfo accepted = TemplateApk.verifyExistingClosedV1(historical, clipboard);
+        assertEquals(ManifestPlan.Profile.V1_BEFORE_CLIPBOARD_BROKER, accepted.plan.profile);
+        assertTrue(accepted.plan.queries.isEmpty()); assertEquals(modern.dexSha256, accepted.dexSha256);
+        assertEquals(16, ManifestAudit.read(oldManifest).attribute("manifest/application/activity", ManifestPlan.ANDROID, "windowSoftInputMode").value);
+        TemplateApk.verifyAgainstPlan(historical, accepted.plan);
+        assertEquals(ManifestPlan.Profile.V1_BEFORE_CLIPBOARD_BROKER, TemplateApk.verifyExistingV1(historical, clipboard).plan.profile);
+        rejects(() -> TemplateApk.verifyExistingClosedV1(historical,
+                new TemplateApk.Spec(clipboard.appId, clipboard.label, 2, clipboard.versionName, clipboard.capabilities)));
+
+        ManifestPlan extraPermission = new ManifestPlan(clipboard.appId, clipboard.label, clipboard.versionCode,
+                clipboard.versionName, modern.plan.iconResourceId, modern.plan.backupResourceId,
+                Arrays.asList("biometrics", "clipboard"), ManifestPlan.Profile.V1_BEFORE_CLIPBOARD_BROKER);
+        files.put("AndroidManifest.xml", ManifestXml.encode(extraPermission));
+        rejects(() -> TemplateApk.verifyExistingClosedV1(alignedZip(files), clipboard));
+        files.put("AndroidManifest.xml", renamePoolString(oldManifest, "android.intent.action.MAIN", "android.intent.action.VIEW"));
+        rejects(() -> TemplateApk.verifyExistingClosedV1(alignedZip(files), clipboard));
+        files.put("AndroidManifest.xml", removeAttributeById(oldManifest, 0x0101022b));
+        byte[] ancient = alignedZip(files);
+        rejects(() -> TemplateApk.verifyExistingClosedV1(ancient, clipboard));
+        assertEquals(ManifestPlan.Profile.V1_BEFORE_SAFE_AREA, TemplateApk.verifyExistingV1(ancient, clipboard).plan.profile);
+
+        TemplateApk.Spec mixed = new TemplateApk.Spec(spec.appId, spec.label, spec.versionCode, spec.versionName,
+                Arrays.asList("biometrics", "clipboard", "documents"));
+        byte[] sharedQueries = TemplateApk.build(template, mixed, icon, assets);
+        TemplateApk.ManifestInfo oldMixed = TemplateApk.verifyExistingClosedV1(sharedQueries, mixed);
+        assertEquals(new ArrayList<>(CapabilityCatalog.DOCUMENT_BROKER_PACKAGES), oldMixed.plan.queries);
+        assertEquals(Collections.singletonList(CapabilityCatalog.BIOMETRIC_PERMISSION), oldMixed.plan.permissions);
+    }
     @Test public void legacyV1LayoutIsAcceptedOnlyThroughExplicitReceiptCompatibility() throws Exception {
         Map<String,byte[]> files=unzip(build());
         byte[] old=removeAttributeById(files.get("AndroidManifest.xml"),0x0101022b);files.put("AndroidManifest.xml",old);
@@ -554,7 +600,17 @@ public class TemplateApkTest {
         byte[] unsafe=renamePoolString(old,"android.intent.action.MAIN","android.intent.action.VIEW");
         files.put("AndroidManifest.xml",unsafe);
         rejects(()->TemplateApk.verifyExistingV1(alignedZip(files),spec));
-        assertEquals(com.jarvys.factory.contract.ManifestPlan.Profile.CURRENT,TemplateApk.verifyExistingV1(build(),spec).plan.profile);
+        assertEquals(com.jarvys.factory.contract.ManifestPlan.Profile.V1_BEFORE_CLIPBOARD_BROKER,TemplateApk.verifyExistingV1(build(),spec).plan.profile);
+    }
+    /** Exact old-current manifest, preserving safe-area fields, DEX, resources and assets. */
+    public static byte[] legacyClosedV1ArtifactFixture(byte[] current, TemplateApk.Spec expected) throws IOException {
+        TemplateApk.ManifestInfo verified = TemplateApk.verify(current, expected);
+        ManifestPlan legacy = new ManifestPlan(expected.appId, expected.label, expected.versionCode,
+                expected.versionName, verified.plan.iconResourceId, verified.plan.backupResourceId,
+                expected.capabilities, ManifestPlan.Profile.V1_BEFORE_CLIPBOARD_BROKER);
+        Map<String, byte[]> files = unzip(current);
+        files.put("AndroidManifest.xml", ManifestXml.encode(legacy));
+        return alignedZip(files);
     }
     public static byte[] legacyArtifactFixture(byte[] current) throws IOException {
         Map<String,byte[]> files=unzip(current);

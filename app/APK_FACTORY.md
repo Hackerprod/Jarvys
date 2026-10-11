@@ -3,16 +3,40 @@
 Current v84 contract: 20 capabilities / 46 methods; SDK 2 and schema/protocol 1.
 Selected SQLite and string key-value backups are documented at the end of this guide. Implementation and host
 validation do not establish physical device, provider durability or independent restore evidence.
-Historical version sections retain their original scope; the v83/v84 backup contracts override their
-previous no-import/export restrictions within the explicit table/key selections only.
+Versioned technical sections retain their API/data scope; the current operation-policy section
+supersedes forced host-confirmation behavior. The v83/v84 backup contracts supersede older
+no-import/export restrictions within explicit table/key selections only.
 
 ## What it does
 
 Coding can turn a reviewed HTML/CSS/JavaScript project into a separate Android APK with its own application ID, name, icon, version and selected native capabilities. The HTML describes the requested product; the offline notebook included with the runtime is an acceptance example, not a fixed application generator.
 
-The native Activity and AndroidX WebKit bridge are compiled into DEX once when Jarvys is built. Each new app reuses those exact DEX bytes. Jarvys transforms the binary manifest and the resource package name with a bounded, typed parser, replaces the launcher PNG and website assets, writes an aligned ZIP, and can sign it after explicit approval. It never runs Gradle, AAPT, a shell, a downloaded compiler, or x86 emulation for an individual app.
+The native Activity and AndroidX WebKit bridge are compiled into DEX once when Jarvys is built. Each new app reuses those exact DEX bytes. Jarvys transforms the binary manifest and the resource package name with a bounded, typed parser, replaces the launcher PNG and website assets, writes an aligned ZIP, and signs according to the saved factory.sign policy (default ALLOW_ALWAYS, configurable ASK/DENY). It never runs Gradle, AAPT, a shell, a downloaded compiler, or x86 emulation for an individual app.
 
 This is the established hybrid-app pattern used by projects such as [Cordova](https://cordova.apache.org/docs/en/latest/guide/overview/) and [Capacitor](https://capacitorjs.com/docs). The template adds a deliberately bounded local factory and a restricted native API; it does not invent a new app architecture or promise arbitrary native functionality from JavaScript.
+
+## Factory operation permissions
+
+Settings → Factory permissions starts with ALLOW_ALWAYS. The user can choose ASK or DENY as the default and override each operation for each authenticated app. “Use default” removes that override. The protected permission editor cannot be operated by an agent to expand its own authority. Factory permissions are separate from Coding autonomy.
+
+The configurable operations are exactly:
+- documents.open, documents.create
+- photos.pick, photos.capture, audio.play
+- browser.open, contacts.pick, share.file
+- maps.open, phone.dial, email.compose, sms.compose, calendar.insert
+- database.backupExport, database.backupImport
+- storage.backupExport, storage.backupImport
+- factory.sign, factory.install, clipboard.write
+
+ALLOW_ALWAYS advances without a Jarvys approval prompt. ASK asks once for the exact request, then continues without duplicate Use, Play, all-values, sign or install confirmations. DENY prevents that operation's effects. Android document/photo/contact selection, recipient choice when no verified default exists, genuine Android grants, biometric authentication and installer consent remain when required. This is saved application authority, not a bypass for Android security. Capability declarations and backup table/key selections still constrain scope.
+
+Identity is appId plus authenticated certificate, never an Intent label. First signing uses a project-bound new-identity subject; explicit choices transfer to the resulting certificate. Atomic persisted policy revisions invalidate affected pending grants after a default/override change. “Revoke this app’s pending operations” persists revocation without changing future policy. Unreadable or failed policy persistence fails closed. A grant binds one exact request and cannot survive relevant policy revision, lifecycle or identity loss.
+
+New backup protocol v2 authenticates both Binder endpoints and checks live policy before each export write and import commit. Legacy backup protocol v1 remains authenticated, but its final host authorization is the last enforceable checkpoint; older DEX has no later callback. Already-open file descriptors cannot be revoked retroactively, nor can completed writes, clipboard copies, installation commits or recipient copies be undone. New share-file opens recheck authority; an already-open recipient descriptor may remain usable. Never claim cancellation proves rollback or external task closure.
+
+The latest signed APK receipt still authenticates an installed broker caller. Signing a newer APK can make the previously installed APK unavailable until updated; per-artifact trust history is deferred. Already-generated APKs retain their packaged DEX: rebuild/sign/install an update to obtain new clipboard and backup runtime behavior. No arbitrary compiler is added; a new app packages the precompiled, authenticated DEX unchanged.
+
+This is a 20-operation policy, not a switch for all 46 SDK methods. share.text, export.text, local storage, ordinary SQLite, haptics, device information, presentation, sensors and biometrics retain their direct runtime contracts. Clipboard uses the authenticated host in the new runtime; preview stays simulated with performed:false and never writes the system clipboard. Byte/file/row/rate/deadline budgets remain technical quotas, not permission settings. Dispatch, chooser return and cleaned-up audio need no invented success attestation; unknown outcomes still require reconciliation and are never replayed automatically.
 
 ## A. Architecture and ARM64 viability
 
@@ -56,13 +80,13 @@ Window fixes ship in the compiled template. An APK previously generated by Jarvy
 old runtime until rebuilt and signed as an update with the same application ID and existing key,
 and a larger version code. Updating Jarvys alone does not modify already generated applications.
 
-The runtime implements `storage`, `export`, `share`, `clipboard`, `haptics`, `device`, `documents`, `photos`, `audio`, `browser`, `maps`, `phone`, `email`, `sms`, `contacts`, `calendar`, `database`, `presentation`, `sensors` and `biometrics`. Documents adds temporary binary handles through a compatible installed Jarvys host; it does not add general filesystem access. `runtime.info` returns non-sensitive API/capability metadata without granting any capability. Every functional method checks the generated app's declared capability before executing it. Storage is private to that installed app. Export uses the Android document picker, sharing uses a system chooser, and clipboard writes require a native confirmation dialog.
+The runtime implements `storage`, `export`, `share`, `clipboard`, `haptics`, `device`, `documents`, `photos`, `audio`, `browser`, `maps`, `phone`, `email`, `sms`, `contacts`, `calendar`, `database`, `presentation`, `sensors` and `biometrics`. Documents adds temporary binary handles through a compatible installed Jarvys host; it does not add general filesystem access. `runtime.info` returns non-sensitive API/capability metadata without granting any capability. Every functional method checks the generated app's declared capability before executing it. Storage is private to that installed app. Export uses the Android document picker, sharing uses a system chooser, and clipboard writes in the new runtime use the authenticated host operation policy; preview is simulated with performed:false.
 
 The compiled offline template and every generated profile without `biometrics` declare **zero Android permissions**. A generated profile selecting `biometrics` adds only the normal `android.permission.USE_BIOMETRIC` permission; API24–29 remains unsupported for this capability and API30+ uses strong biometrics only. Its JavaScript cannot request Android permissions for camera, microphone, contacts, calendar, location, Internet, notifications, package installation or broad filesystem access. Adding any such API requires a reviewed native template update, appropriate per-app manifest selection, current Android permission checks and a new acceptance pass. Listing a desired method in JavaScript cannot add native code that is absent from DEX.
 
 ### Closed capability and manifest contract (UX42 F0a-1)
 
-Pure Java `:factory-contract` owns twenty capabilities and forty-four wire methods (including ungated, non-sensitive `runtime.info`). FactorySpec, FactoryConfig, bridge validation, dispatch and introspection share this catalog; native validation and handlers remain explicit switches. v67 adds SDK 2 document methods while schema and bridge protocol remain 1. Across 1,048,576 capability subsets, the 524,288 without `biometrics` retain zero Android permissions; the other 524,288 select exactly `android.permission.USE_BIOMETRIC`. All retain the same launcher component. These are catalog-derived combinations, not a claim of exhaustive APK build or physical validation. `documents`, `browser`, `maps`, `phone`, `email`, `sms`, `contacts` or `calendar` contributes the same deduplicated exact package visibility queries for `com.jarvys.agent` and `com.jarvys.agent.recoverytest`; it adds no generated-app permission, provider, service, receiver or Activity. This remains a bounded extension, not completion of Runtime2 or the broader selective-manifest roadmap.
+Pure Java `:factory-contract` owns twenty capabilities and forty-six wire methods (including ungated, non-sensitive `runtime.info`). FactorySpec, FactoryConfig, bridge validation, dispatch and introspection share this catalog; native validation and handlers remain explicit switches. v67 adds SDK 2 document methods while schema and bridge protocol remain 1. Across 1,048,576 capability subsets, the 524,288 without `biometrics` retain zero Android permissions; the other 524,288 select exactly `android.permission.USE_BIOMETRIC`. All retain the same launcher component. These are catalog-derived combinations, not a claim of exhaustive APK build or physical validation. `documents`, `clipboard`, `browser`, `maps`, `phone`, `email`, `sms`, `contacts` or `calendar` contributes the same deduplicated exact package visibility queries for `com.jarvys.agent` and `com.jarvys.agent.recoverytest`; it adds no generated-app permission, provider, service, receiver or Activity. This remains a bounded extension, not completion of Runtime2 or the broader selective-manifest roadmap.
 
 `ManifestPlan` is an immutable, closed expected tree with exact names, namespaces, Android attribute resource IDs, types and values. It pins API 24/35/compile 36, the launcher, theme, backup/cleartext policy and compiled icon/backup references. Project JSON cannot supply XML, nodes or arbitrary manifest attributes. F0a-2 adds an immutable compiled construction vocabulary and deterministic typed AXML encoder, including bounded repeated permissions/features/private components/filters/package and intent queries/metadata. Apart from the two exact broker package queries and the v80 selective `USE_BIOMETRIC` declaration, these extra nodes remain host construction fixtures. Other contributions and project-defined nodes remain rejected. See [the construction scope and gates](../recovery/ux42-f0a2/README.md).
 
@@ -84,7 +108,7 @@ Previously completed v1 receipts remain usable. Receipt-less or foreign artifact
 
 Create these inside the Coding project's existing scope:
 
-- `factory.json`: exact keys `schemaVersion` (1), `appId`, `name`, `versionCode`, `versionName`, `capabilities`, `webDir`, `icon`.
+- `factory.json`: required keys `schemaVersion` (1), `appId`, `name`, `versionCode`, `versionName`, `capabilities`, `webDir`, `icon`; optional `dataBackup` selects bounded table/key backups below.
 - The directory named by `webDir`, containing `index.html`, separate scripts and styles, and local assets. Up to 128 files, 1 MiB each and 8 MiB total, with bounded directory depth and 256 total directory entries. Hidden paths, symlinks, special files and parent traversal are rejected.
 - An icon file: PNG (48–1024 pixels per side, at most 1 MiB), or bounded geometric JSON authored with text tools.
 
@@ -97,7 +121,7 @@ Vector icon schema: `schemaVersion: 1`, an opaque `background` color in `#RRGGBB
 1. In built-in Coding, load `com.jarvys.apk-factory` using `read_skill` and inspect the real `apk_factory` tool.
 2. `apk_factory` with `action: inspect` reports the template hash, actual capability ceiling and project version.
 3. `action: build`, `spec_path`, `output_path`, `expected_scope_version` snapshots files, checks the template hash, creates a deterministic aligned unsigned APK and returns its SHA-256. The output parent directory must already exist; existing files are never replaced.
-4. `action: sign`, `input_path`, `expected_sha256`, `output_path`, `expected_scope_version` accepts only an exact, completed factory artifact from this same project. It requests explicit in-app approval, signs and independently verifies using AOSP apksig.
+4. `action: sign`, `input_path`, `expected_sha256`, `output_path`, `expected_scope_version` accepts only an exact, completed factory artifact from this same project. It applies factory.sign policy (ALLOW_ALWAYS, ASK once, or DENY), signs and independently verifies using AOSP apksig.
 
 The principal only discovers that Coding has this workflow. Custom bots, Android-use and nested delegates cannot inherit the factory tool or its full skill. Disabling the skill or changing the active bot policy revokes availability; bundled instructions do not authorize actions by themselves.
 
@@ -105,7 +129,7 @@ Unsigned archives include a public provenance asset with the template SHA-256, i
 
 ### Signing identity and limitations
 
-Existing schema-v1 identities retain their distinct non-exportable AndroidKeyStore key. They cannot be exported or converted, even if their key is missing. Missing keys, mismatches, interrupted creation and unsupported records fail closed. Signing a new app still offers explicit creation of a non-exportable key; cancel that approval and use **Settings → Device → Factory identities** first to choose recoverable signing instead. No tool, bridge, project file or prompt accepts passphrases or private keys.
+Existing schema-v1 identities retain their distinct non-exportable AndroidKeyStore key. They cannot be exported or converted, even if their key is missing. Missing keys, mismatches, interrupted creation and unsupported records fail closed. First signing creates a non-exportable key under factory.sign policy unless a recoverable identity already exists. To choose recoverable signing, use **Settings → Device → Factory identities** before requesting the first signature; ALLOW_ALWAYS does not pause for a key-choice prompt. No tool, bridge, project file or prompt accepts passphrases or private keys.
 
 For a new recoverable identity, the native secure screen obtains an explicit file destination and a user-entered, confirmed passphrase. It generates a portable RSA identity only after approval, saves and reads back an authenticated encrypted backup, and then commits the local identity. The local PKCS#8 copy is encrypted with a distinct per-app AndroidKeyStore AES-GCM wrapping key in no-backup app storage. This wrapper is not the recovery backup. The versioned portable container uses PBKDF2-HMAC-SHA256 (600,000 iterations, random salt) and AES-256-GCM with authenticated format parameters and random nonce. It includes the exact certificate, appId, private key and known version/hash evidence. A strong, unique passphrase is essential; the 12-character minimum alone does not guarantee strength. Losing the passphrase or the only usable backup may permanently prevent updates.
 
@@ -156,31 +180,31 @@ The originating active Coding token's cancellation, scope/version change, profil
 
 ## F0c: separately authorized installation
 
-`install`, `install_status` and `install_cancel` take exactly `input_path`, `expected_sha256` and `expected_scope_version`. They require a completed signed same-project receipt, with immutable app/version, APK SHA-256, certificate SHA-256 and receipt digest. Native Full installation verifies signed bytes with apksig and checks manifest/DEX bindings; project identity, scope, receipt and source artifact are revalidated after review and the immutable private snapshot is reverified before commit. Signing never supplies install approval.
+`install`, `install_status` and `install_cancel` take exactly `input_path`, `expected_sha256` and `expected_scope_version`. They require a completed signed same-project receipt, with immutable app/version, APK SHA-256, certificate SHA-256 and receipt digest. Native Full installation verifies signed bytes with apksig and checks manifest/DEX bindings; project identity, scope, receipt and source artifact are revalidated after review and the immutable private snapshot is reverified before commit. Signing never requests installation; a requested install checks the separate factory.install policy.
 
-Full alone declares `REQUEST_INSTALL_PACKAGES`. Android's per-source permission must have been enabled by the user before a new install approval; Jarvys neither grants it nor opens settings automatically. Before querying permission, Full persists the automation guard. Denied, failed-query or unsupported configurations open distinct protected native review states without creating a session. These survive manual backgrounding/restart; granting permission never resumes them. The user must close native review and request a fresh install. Play returns an explicit unavailable result and leaves the artifact available in the project. Generated apps without `biometrics` retain zero permissions; selecting it adds only normal `USE_BIOMETRIC`, never package-install permission. No claim of Google Play eligibility or approval is made. Managed-owner and privileged-installer modes are rejected; API 31+ explicitly requires system user action, and older supported versions use the ordinary unprivileged installer path.
+Full alone declares `REQUEST_INSTALL_PACKAGES`. Android's per-source permission must have been enabled by the user before installation; Jarvys neither grants it nor opens settings automatically. Permission inspection creates no global automation guard. Denied, failed-query or unsupported configurations retain distinct status records without creating a session. Granting permission never resumes old authority; request a fresh install after changing the Android grant. Play returns an explicit unavailable result and leaves the artifact available in the project. Generated apps without `biometrics` retain zero permissions; selecting it adds only normal `USE_BIOMETRIC`, never package-install permission. No claim of Google Play eligibility or approval is made. Managed-owner and privileged-installer modes are rejected; API 31+ explicitly requires system user action, and older supported versions use the ordinary unprivileged installer path.
 
-`install` opens a private screenshot-protected native review screen. It discloses app identity, version, exact hashes and replacement/data risks. Only a human button stages and commits a PackageInstaller session; a second native human action opens Android's returned consent Intent. No receiver starts UI in the background. Jarvys's own native device automation guard blocks observations and actions across review and external consent. A durable interaction latch restores that boundary at process startup and survives unknown outcomes. It is released only through foreground protected native recovery after the session has ended or been abandoned. A screen entered during an already-active automated action cannot approve anything.
+`install` opens a private screenshot-protected native review screen. It discloses app identity, version, exact hashes and replacement/data risks. ALLOW_ALWAYS stages and commits without a host approval; ASK requires one protected review. Android's returned consent Intent opens from the live foreground flow without a second host confirmation. DENY blocks staging. Real Android installer consent remains protected; no receiver starts UI in the background. Durable state preserves unknown outcomes without restoring a process-global automation lock. Protection belongs to live ASK or genuine Android consent, and ends with terminal/cancellation evidence. An ASK screen entered during an already-active automated action cannot approve the request.
 
 A single atomic no-backup journal records the latest session. Session ID is saved before commit; `committing` is written before Binder. A crash or uncertain call is never replayed. Pending-system Intents remain process-local and are not reconstructed after restart. Callback delivery uses an explicit private mutable PendingIntent with a fixed unique URI nonce and checked session/state. Only `STATUS_SUCCESS` establishes session success. Rejection/abort, policy blocking, other errors, pre-commit cancellation and post-commit unknown cancellation are distinct states. Android's aborted status does not reliably distinguish all user denials from other abort causes. Closing the system UI, a disappeared session or an installed package/version do not establish success. Cancellation cannot promise rollback.
 
-Status/cancel bind the durable receipt even if APK bytes are no longer readable; changed project scope or inaccessible receipts require **Settings → Factory installations** recovery. Background/recreation revokes uncommitted authority. A malformed journal remains protected instead of being discarded. Explicit native recovery can cancel up to 16 validated Jarvys-owned installer sessions (not installed apps), with foreground checks and a required empty final query, then atomically preserve an unknown-outcome record. Query, cancellation or write failure retains protection. A separate native Close rechecks no owned sessions remain. No signing identity or project artifact is reset. Crash-created uncommitted orphan sessions can never commit themselves; real-device lifecycle, OEM system UI, source permission denial, update/data preservation and recovery remain acceptance gates. Synthetic tests do not install anything, change settings or use real signing keys.
+Status/cancel bind the durable receipt even if APK bytes are no longer readable; changed project scope or inaccessible receipts require **Settings → Factory installations** recovery. Background/recreation revokes uncommitted authority. A malformed journal remains unavailable for new installation until recovery; it does not create a process-global lock. Explicit native recovery can cancel up to 16 validated Jarvys-owned installer sessions (not installed apps), with foreground checks and a required empty final query, then atomically preserve an unknown-outcome record. Query, cancellation or write failure retains the unresolved journal state. A separate native Close rechecks no owned sessions remain. No signing identity or project artifact is reset. Crash-created uncommitted orphan sessions can never commit themselves; real-device lifecycle, OEM system UI, source permission denial, update/data preservation and recovery remain acceptance gates. Synthetic tests do not install anything, change settings or use real signing keys.
 
 References: [Android PackageInstaller](https://developer.android.com/reference/android/content/pm/PackageInstaller), [session commit](https://developer.android.com/reference/android/content/pm/PackageInstaller.Session), [required user action](https://developer.android.com/reference/android/content/pm/PackageInstaller.SessionParams#setRequireUserAction(int)), and [Google Play permission policy](https://support.google.com/googleplay/android-developer/answer/12085295).
 
-The automation boundary covers the Factory interaction, including its manual permission handoff. It is not a global prohibition on Android-use navigating every OS security setting outside that interaction.
+Automation protection covers the configured ASK review and actual Android installer consent. Permission errors and old uncertainty do not create a blanket lock on unrelated automation.
 
 ## v67: temporary binary documents
 
 Declare `documents` in factory.json and use the Promise SDK contract in [RUNTIME.md](apk-runtime/docs/RUNTIME.md#temporary-binary-documents-v67). The factory writes build-pinned `documentBroker` package/certificate metadata into runtime-owned factory-app.json; the project cannot choose or replace that trust anchor. A compatible Jarvys host must remain installed. Both known host packages installed together blocks access.
 
-Jarvys's exported native `FactoryDocumentActivity` verifies the caller's actual installed package, unique UID, certificate, version and exact APK hash against the latest signed identity/scope evidence. Unknown, restored-but-unresolved or mismatched evidence fails closed. Signing a newer release makes the previously installed release unavailable for documents until that exact newer APK is installed; signing alone does not update it. Human-only native review opens Android's picker, then a separate **Use this document** action grants temporary access. Jarvys automation stays blocked across this interaction. Generated apps add only the two exact package queries, no permissions or components; the broker belongs to Jarvys.
+Jarvys's exported native `FactoryDocumentActivity` verifies the caller's actual installed package, unique UID, certificate, version and exact APK hash against the latest signed identity/scope evidence. Unknown, restored-but-unresolved or mismatched evidence fails closed. Signing a newer release makes the previously installed release unavailable for documents until that exact newer APK is installed; signing alone does not update it. Saved documents.open/create policy controls picker launch: ALLOW_ALWAYS proceeds, ASK reviews once, and DENY blocks. A validated Android selection returns temporary access without a second **Use this document** confirmation. Policy and foreground authority are rechecked before delivery; already-open descriptors cannot be recalled retroactively. Generated apps add only the two exact package queries, no permissions or components; the broker belongs to Jarvys.
 
 Handles carry no path/URI and cannot be persisted or restored. Reads/writes are sequential, canonical-base64 chunks of at most 32 KiB, 16 MiB per handle and 32 MiB cumulative per page/session, with four admission slots and five-minute expiry. Cancel/close do not replenish the cumulative budget. Backgrounding, page reset and rotation revoke authority; installed selection is effectively one at a time. Selecting the next document closes the previous one and may return BUSY across runtime instances while provider cleanup remains pending.
 
-Cancellation cannot roll back provider work. Create may leave an empty or partial file even if no handle is returned; a user-selected cloud provider may transfer data remotely. `close_requested` and `providerCommitConfirmed:false` do not certify flush, durable commit or upload. At exact quota, close rather than reading an extra byte to prove EOF. Interrupted-picker recovery requires the human to close the old picker/task and acknowledge it in **Settings → Factory documents**. That is user-reported closure, not OS proof; outcome stays unknown and no grant is restored.
+Cancellation cannot roll back provider work. Create may leave an empty or partial file even if no handle is returned; a user-selected cloud provider may transfer data remotely. `close_requested` and `providerCommitConfirmed:false` do not certify flush, durable commit or upload. At exact quota, close rather than reading an extra byte to prove EOF. Interrupted-picker recovery in **Settings → Factory documents** acknowledges uncertainty without proving task closure or restoring authority. A fresh ALLOW_ALWAYS request may retire historical uncertainty before acquiring new authority; it never replays the old request.
 
-v67 host test and delivery results are recorded in recovery/factory-documents. Physical acceptance remains pending. The bounded v68 file-sharing extension is described below; the other F1/F2/F3 families remain closed. Required device checks include exact-latest identity rejection, both-host ambiguity, picker denial/cancel, Use this document, background/rotation/reset, slow/cloud providers, quota boundaries, partial output and unknown-outcome recovery. Host tests and preview never establish those results.
+v67 host test and delivery results are recorded in recovery/factory-documents. Physical acceptance remains pending. The bounded v68 file-sharing extension is described below; the other F1/F2/F3 families remain closed. Required device checks include exact-latest identity rejection, both-host ambiguity, picker denial/cancel, policy revocation/no duplicate Use confirmation, background/rotation/reset, slow/cloud providers, quota boundaries, partial output and unknown-outcome recovery. Host tests and preview never establish those results.
 
 
 ## v68: bounded binary file sharing
@@ -193,16 +217,16 @@ length/hash/EOF validation precedes publication. One process-wide transfer admis
 five-minute lifetime bound authority. No caller URI/path or persistent grant is introduced.
 
 The host rechecks exact latest signed caller identity and both capabilities, then stages one
-private snapshot. A separate human-only sharing coordinator uses shared document/share admission
-and its own durable automation latch, restored before automation starts. Host-only FileProvider
+private snapshot. The sharing coordinator applies share.file policy and shared document/share
+admission; ASK requires one protected review, ALLOW_ALWAYS advances automatically. Host-only FileProvider
 `${applicationId}.factory.files` exposes only `cache/factory-file-shares/`, with an exact registered
 URI, monotonic expiry, read-only operations and process-death fail-closed behavior. Generated
 manifest permissions/providers are unchanged. See [the complete API and lifecycle contract](apk-runtime/docs/RUNTIME.md#binary-file-sharing-v68).
 
-Only a native human action opens the system chooser. Read-only URI grants never include write,
-prefix or persistable authority. Chooser callbacks do not release automation protection: the
-human must close the chooser/recipient task and acknowledge uncertainty in native closure or
-Settings recovery. No outcome is reported as delivery; `deliveryConfirmed` is always false.
+Policy-authorized launch opens the system chooser. Read-only URI grants never include write,
+prefix or persistable authority. Chooser return delivers a dispatch-only receipt and detaches the
+bounded recipient lease, without a second closure acknowledgment. New provider opens recheck
+live authority; Settings recovery handles uncertain state without claiming recipient closure. No outcome is reported as delivery; `deliveryConfirmed` is always false.
 Deletion/revocation cannot recall already opened descriptors, recipient copies or uploads.
 Preview remains unavailable for file sharing. Existing text sharing and SAF behavior are preserved.
 
@@ -225,10 +249,11 @@ repeat opens and modes other than `w`; capture identity is pinned and checked be
 Cameras requiring seekable descriptors or reopening output are unsupported. There is no
 silent thumbnail fallback. Generated APK permissions/components remain unchanged.
 
-Both flows use a separate protected native review and **Use this photo** action, the same
-latest signed APK/certificate/receipt checks, shared interaction admission and a durable
-native recovery latch. Interrupted work cannot resume or restore image authority. Recovery
-acknowledges the person's closure of external tasks, never independently verified OS closure.
+Both flows apply photos.pick/capture policy with the same latest signed APK/certificate/receipt
+checks and shared admission. ALLOW_ALWAYS launches automatically; ASK reviews once before the
+Android picker/camera. Validated image delivery has no second **Use this photo** confirmation.
+A durable native recovery latch retains uncertainty. Interrupted work cannot resume or restore image authority. Recovery
+reconciles uncertainty, never proves external-task closure or restores old authority.
 No user photo, real camera or device is accessed during synthetic host validation.
 
 Full encoded input is frozen and bounded to 8 MiB before validation. JPEG/PNG only, at most
@@ -273,7 +298,8 @@ extra chunks. Frames must not exceed sampleRate × 30. Maximum valid data is 5,7
 No compressed codec, external playback/synthesis engine, network addition or new permission.
 Earlier document selection may involve a cloud provider; local playback does not change that.
 
-The host shows protected native review and an explicit **Play once** action. Durable
+The host validates the bytes and applies audio.play policy: ALLOW_ALWAYS plays automatically,
+ASK reviews once with **Play once**, and DENY blocks. Durable
 play_pending precedes native playback. Allocation and exact single STATIC PCM write run on
 a bounded worker without playing; a final installed identity check precedes main-thread
 foreground/generation/guard checks and immediate-granted audio focus. API26+ disables delayed
@@ -288,7 +314,8 @@ source cancellation latches irrevocably and requests host revocation on a bounde
 lane; oneway delivery never proves completed stop. Process death also revokes. Late callbacks
 cannot authorize playback or another request. Restart restores only protected unknown outcome,
 never bytes/player authority. Pending preparation and uncertain native cleanup keep admission
-and protection until explicit native cleanup. The result `{playbackAttempted,audibilityConfirmed:false}`
+until native cleanup is confirmed. ALLOW_ALWAYS then completes without a separate user attestation;
+unknown cleanup remains blocked. The result `{playbackAttempted,audibilityConfirmed:false}`
 never establishes that sound was heard; interrupted requests may instead reject as unavailable.
 
 Preview returns UNAVAILABLE. Physical playback, routing, focus, Binder/death, lifecycle,
@@ -325,10 +352,10 @@ controls/space/DEL/backslash. Paths and queries remain exact, without decoding o
 These rules do not detect arbitrary secrets in a path/query or prove a public/safe destination.
 Do not put passwords, tokens or other secrets into a URL.
 
-An authenticated native FLAG_SECURE review displays the full exact URL and canonical host without
-links or ellipsis, only after human-only automation protection is acquired. Native controls reject
-obscured touches, including partial obscuration on API29+. This does not control unrelated
-accessibility services. The user chooses a
+An authenticated FLAG_SECURE view displays the exact URL/host. ASK protects one native approval
+and rejects obscured touches, including partial obscuration on API29+. ALLOW_ALWAYS proceeds with
+a verified Android default browser; if no eligible default exists, recipient choice is still needed.
+DENY blocks. These controls do not control unrelated accessibility services. The selected target is a
 native browser component; JavaScript cannot choose packages, components, flags, extras or schemes.
 Discovery uses a single host-only HTTPS/BROWSABLE query and public GET_RESOLVED_FILTER metadata.
 Eligible components have a general HTTPS filter without authority/path/SSP/MIME/relative-filter
@@ -338,7 +365,7 @@ The selected component, certificate, version, update time and UID are rechecked 
 verification on the bounded worker; main dispatch rechecks live foreground/focus/consent/cancellation.
 There is no implicit intent fallback. Eligibility is not a guarantee of browser trustworthiness.
 
-Native consent discloses that the exact URL, including path and query, goes to the selected browser
+The native disclosure explains that the exact URL, including path and query, goes to the selected browser
 and website. Browser cookies, signed-in accounts, history/sync/network settings may apply. DNS,
 redirects, resources and browser behavior can contact other destinations, downgrade to HTTP or open
 other apps. Jarvys neither fetches data nor follows redirects; it cannot constrain the external
@@ -349,13 +376,12 @@ The host persists `launch_pending` before its one-shot dispatch. Minimal durable
 state/open/nonce only, never URL or browser data. Source cancellation/death, expiry and interrupted
 preparation revoke authority. IPC cancellation delivery is not a hard realtime guarantee;
 local checks and host expiry remain fail-safes. Five-minute native expiry is independent of JavaScript timeout.
-The durable automation guard and global admission remain held until explicit human closure or
-recovery; no automatic retries, relaunches or resurrection after restart. A worker still preparing
-blocks recovery until it finishes. The user must manually close the external browser screen/task
-and acknowledge that fact. This is user-reported closure, not OS verification. Back cannot make
-that declaration. Cancellation cannot close the browser, undo site actions or retract transmitted data.
+After dispatch, the broker closes its request without asking for an external-task closure
+attestation. No automatic retries, relaunches or resurrection after restart. A worker still preparing
+blocks recovery until it finishes. Unknown recovery remains distinct from successful dispatch and
+never verifies OS closure. Cancellation cannot close the browser, undo site actions or retract data.
 
-A successful receipt is `{launchRequested:boolean,pageLoadConfirmed:false}` after native closure.
+A successful receipt is `{launchRequested:boolean,pageLoadConfirmed:false}` after dispatch and broker completion.
 `launchRequested` means only that `startActivity` returned without an exception. It proves neither
 rendered browser, page loading, server receipt, data delivery nor successful website action.
 Interrupted or uncertain recovery yields no successful receipt. Preview is unavailable and never
@@ -413,7 +439,8 @@ intent resolution after source verification, before explicit dispatch. No implic
 Eligibility is not proof that the recipient is trustworthy or behaves as requested.
 
 FLAG_SECURE native review shows the full query/coordinates/number, source app, operation and
-chosen native recipient. Human-only controls reject obscured/partially obscured touches.
+chosen native recipient. ASK reviews once with obscured-touch protection. ALLOW_ALWAYS dispatches
+to a verified Android default or waits for recipient choice; DENY blocks.
 The disclosure says the selected app receives these data and may use its own network,
 accounts and history. Maps may send a location query to its provider. Dialer apps also receive
 the number. External app behavior is outside Jarvys control; ACTION_DIAL requests a dialer UI,
@@ -430,9 +457,9 @@ The consumed `launch_pending` latch is durable before dispatch; no exception, ca
 rotation, timeout or process restart replays it. Five-minute native expiry is independent of JS.
 Source death/revocation and stale focus/generation checks revoke pending authority. Cancellation
 cannot retract data or close another app. A pending worker retains ownership until finished.
-After any attempt, the user must manually close the external screen/task and acknowledge that
-in native review or Settings → External action review. This is a user declaration, not verified
-OS closure. Recovery of an unknown outcome never yields a successful operation receipt.
+A completed dispatch returns without a second external-screen closure acknowledgment.
+Settings → External action review reconciles uncertain state, never proves OS closure, and
+never turns an unknown outcome into a successful operation receipt.
 
 A successful closed review returns `{launchRequested:boolean,actionConfirmed:false}`.
 `launchRequested` only means startActivity returned; it does not prove UI display, navigation,
@@ -488,19 +515,19 @@ remain mandatory, as do bounded eligible-recipient discovery and selected compon
 UID/version/update-time revalidation immediately before dispatch. Two installed hosts fail closed.
 Native review displays complete, separately labelled recipient, subject and body (including empty
 values), source and selected app. FLAG_SECURE, disabled saved view state/autofill descendants/content
-capture, human-only controls and the durable automation guard protect review. These protections do
+capture and, for ASK, human-only controls protect the single policy review. These protections do
 not erase IME/JVM copies or control the recipient app. No content is persisted in the journal.
 
 Opening itself shares the fields with the selected app. It may ignore/change them, save or
 cloud-sync drafts, or transmit content using its own accounts/network/permissions. Do not submit
 secrets. ACTION_SENDTO requests an editor; Jarvys never presses Send, but cannot enforce recipient
-behavior. Inspect the external editor yourself before any further action. Native full-field review
-is required even when an external app later ignores the fields.
+behavior. Inspect the external editor before any further action. ASK reviews all fields once;
+ALLOW_ALWAYS uses saved authority even when an external app later ignores the fields.
 
 Five-minute expiry, cancellation/source death, stale/lost lifecycle authority, durable consumed
 launch state, pending-worker ownership and no-replay recovery remain unchanged. Cancellation cannot
-recall data or close the external app. Manually close that task, then acknowledge closure in native
-review or Settings → External action review. Closure is user-declared, never OS-verified; an unknown
+recall data or close the external app. Dispatch completes without another closure acknowledgment;
+Settings → External action review preserves any uncertain outcome, never OS-verified closure. An unknown
 outcome cannot become a successful receipt. `{launchRequested,actionConfirmed:false}` only records
 startActivity acceptance, never editor display, draft saving, sending, delivery or verified closure.
 Preview rejects both methods with UNAVAILABLE; `documents.cancel` remains unrelated.
@@ -534,7 +561,7 @@ installed generated APK, version, certificate, hash and signing scope. Source/ho
 ambiguity and two installed Jarvys hosts fail closed. A separate bounded control endpoint
 handles cancellation and source death; no document handle or photo transfer is used.
 
-Native human approval opens one verified system `ACTION_PICK` component using only the
+Saved contacts.pick policy opens one verified system `ACTION_PICK` component (ASK reviews once) using only the
 Phone or Email `CONTENT_TYPE`. Picker and canonical contacts-provider package/component,
 UID, certificate set, version and update time are pinned and rechecked. A legitimate platform
 contacts provider may have a shared UID. System provenance is not universal OEM compatibility.
@@ -562,9 +589,9 @@ to 256 Unicode code points/1,024 UTF-8 bytes; malformed surrogates, blank-only t
 format/bidi and line/paragraph separators fail. Cursor/provider allocation is outside this
 accepted-value bound. Provider Binder cancellation is best effort, not a hard I/O timeout.
 
-The frozen accepted string is shown completely in a separate native value view, alongside the
-exact receiving generated app/version/APK hash, for a second human approval. Delivery rechecks
-the latest source proof/control and consumes authority durably before returning exactly
+The human selects the datum in Android. The validated frozen string is delivered without a second
+host approval. Delivery rechecks saved policy, latest source proof/control and consumes authority
+durably before returning exactly
 `{kind,value}`. The returned value is unchanged: no normalization, dialability, mailbox validity,
 contact ownership or external action claim. No URI/ID/name/permissions are returned. A generated
 app can retain this approved value or use other separately granted capabilities to share it.
@@ -573,10 +600,10 @@ Review uses FLAG_SECURE, disabled saved state/autofill descendants/content captu
 and partially obscured touch filtering; human accessibility remains. These protections do not
 erase immutable JVM strings or control another app. Journals contain state/open/nonce only.
 Five-minute expiry, background/focus loss after return, cancellation and restart revoke delivery.
-The durable automation guard and shared admission remain while provider work is blocked.
-Settings → Contact selection review provides native-only uncertain-outcome recovery. The user
-must close any old picker themselves; acknowledgment is not OS closure proof. Recovery never
-returns data or replays selection. Cancellation cannot erase copies already received.
+Shared admission remains while provider work is blocked; ASK protection ends after its one approval.
+Settings → Contact selection review provides native uncertain-outcome recovery; acknowledgment
+is not OS closure proof. A new ALLOW_ALWAYS request may retire historical uncertainty without
+restoring old authority. Recovery never returns data or replays selection. Cancellation cannot erase copies already received.
 
 Preview returns UNAVAILABLE. `documents.cancel` is unrelated. `runtime.info` exposes
 `contactsRequires:["contacts"]`, `contactsBrokerRequired:true`, allowed kinds, protocol and
@@ -626,17 +653,18 @@ exactly that sole MIME, no scheme/authority/path/scheme-specific-part/relative-U
 and the matching action/default category. Wildcards and item-event MIME fail. This conservative
 subset can reject otherwise legitimate OEM or content-scheme handlers; no generic fallback.
 
-Human-only native review shows source app/version/APK hash/certificate, every field in separate
+The native view shows source app/version/APK hash/certificate, every field in separate
 labelled views, exact epochs and readable timezone offsets (UTC dates for all-day), and the exact
-selected recipient. Description is last and never interpreted as labels or links. Opening itself
+selected recipient. ASK reviews once; ALLOW_ALWAYS dispatches to a verified default or waits for
+recipient choice; DENY blocks. Description is last and never interpreted as labels or links. Opening itself
 shares all fields with the app. It may ignore/change times, timezone, all-day or other values,
 save or transmit data, and cloud-sync a draft using its own accounts/network/permissions. Jarvys
 never presses Save. Inspect all fields again in the external editor; never submit secrets.
 
 FLAG_SECURE, disabled saved state/autofill descendant export/content capture, obscured-touch
-filtering and durable Jarvys automation guards remain; they do not erase JVM copies or control
-external-app behavior. Five-minute expiry, cancellation/source death, lifecycle loss, consumed
-launch authority and native user-declared closure/recovery prohibit replay. Journals retain only
+filtering protect ASK review; they do not erase JVM copies or control external-app behavior.
+Five-minute expiry, cancellation/source death, lifecycle loss, consumed launch authority and
+uncertain-state recovery prohibit replay. Dispatch needs no extra user-declared closure. Journals retain only
 state/open/nonce, never event content. Cancellation cannot recall content or close another app.
 Settings → External action review recovers uncertainty without dispatching or returning event data.
 `{launchRequested,actionConfirmed:false}` proves only accepted startActivity dispatch, never that
@@ -896,8 +924,8 @@ are shown in the system prompt. No arbitrary title or button labels from JavaScr
 - Success returns exactly `{authenticated:true,biometricClass:"strong",authorizesOtherActions:false,
   mode:"installed",simulated:false}`. It records only this local OS biometric event. It is not
   remote identity, identity proof, a cryptographic assertion, a token or a grant for payment,
-  signing, sending, installation, data release or any other action. All independent approvals,
-  capability checks and human review remain required. Never persist a receipt as reusable
+  signing, sending, installation, data release or any other action. Each operation still requires
+  its own saved policy and capability checks; ASK and required Android consent are not satisfied by a biometric receipt. Never persist a receipt as reusable
   authorization, claim who authenticated, or use it to unlock an unrelated protected action.
 - `biometrics.cancel({})` (or no argument) accepts only empty args. It rejects an active
   authentication with `CANCELLED` and returns `{cancelRequested:boolean,cancellationAcknowledged:false}`.
@@ -1020,12 +1048,12 @@ The current catalog has 20 capabilities / 46 methods, SDK 2 and schema/protocol 
 Declare the optional factory.json policy dataBackup:{"tables":["notes","tasks"]}. tables permits at most eight database identifiers in ascending order, without duplicates; the optional independent keys policy is documented in basics. Absence or an empty tables list disables SQLite backup; it grants nothing implicitly. Nonempty policy requires both database and documents capabilities. Signing discloses this exact policy, and the receipt must match the embedded runtime configuration. No manifest permission, signing key or signing-identity backup format changes.
 
 - Jarvys.database.backupExport({version,tables,filename}) exports exactly the nonempty, sorted, unique selected subset of the declared tables. version is the exact current database version (1–1000); filename uses the existing simple document filename grammar. It does not export every declared table automatically.
-- Jarvys.database.backupImport({version,handle,tables,mode}) consumes one untouched document read handle. Open it with documents.open({mimeType:"application/json"}); the normal native selection and Use steps still apply. The file's table set must exactly match the explicit selection, within the declared policy. The same exact database version and selected-table schema must already exist. No migration occurs.
+- Jarvys.database.backupImport({version,handle,tables,mode}) consumes one untouched document read handle. Open it with documents.open({mimeType:"application/json"}); Android selection remains; the saved documents.open policy adds at most one ASK review, with no extra Use step. The file's table set must exactly match the explicit selection, within the declared policy. The same exact database version and selected-table schema must already exist. No migration occurs.
 - mode:"insertOnly" inserts rows only; any existing ID collision in any selected table rolls back the entire import. mode:"replaceSelectedTables" atomically deletes and replaces rows in selected tables only. Both preserve every unselected table. Target data or schema changes after native review produce a conflict, requiring a fresh review.
 
 The bounded format is canonical plaintext JSON, at most 1 MiB, named jarvys-sqlite-data with formatVersion:1. It contains selected table schemas and typed rows plus database version, package and certificate labels. It contains no SQL, ZIP, signing keys, preferences, arbitrary files or document contents. It is unencrypted. Package/certificate labels are compatibility checks, not authentication of a backup's author or contents; an attacker can rewrite them. Secrets are unsupported and cannot be reliably detected. Never claim that scanning or a label makes a backup safe.
 
-An installed generated app, current exact signed receipt and compatible pinned Jarvys host are required. Human native review shows all values and the exact operation, table selection, counts and consequences. Export then requires a separate provider disclosure and human destination choice: the selected provider may upload, cloud-sync or retain plaintext copies. Never automate review, confirmation or the picker. File selection or a matching label does not authorize restoring it.
+An installed generated app, current exact signed receipt and compatible pinned Jarvys host are required. The backup operation policy controls authorization: ALLOW_ALWAYS continues automatically, ASK reviews all values, the operation, table selection, counts and consequences once, and DENY blocks. Export discloses that the destination provider may upload, cloud-sync or retain plaintext copies; Android destination selection remains without a second host approval. File selection or a matching label alone is not restore authority. New protocol v2 checks live authorization before each write/commit; authenticated legacy v1 ends at the final host authorization.
 
 Export reports bytes/hash with providerCommitConfirmed:false and closeStatus:"close_requested"; it does not prove provider durability, upload completion or recoverability. Cancellation or failure may leave an empty or partial file. Import reports the native transaction result, not physical durability or a successful independent restore test. A cancellation, lost reply or timeout may occur after commit; inspect state and never automatically retry or claim rollback. database.cancel and documents.cancel share the native backup control rate budget. Each has a bounded SDK control slot beside sensors.cancel and biometrics.cancel (16 ordinary requests plus four controls); cancellation still proves no rollback. The native backup lifetime is five minutes; SDK timeout is 310000 ms, allowing the terminal callback. Lifecycle revocation and cleanup remain authoritative; no background/resume permission is added.
 
@@ -1036,14 +1064,14 @@ The catalog remains 20 capabilities with 46 methods, SDK 2 and schema/protocol 1
 Declare optional dataBackup:{"keys":["settings","tasks"]}. dataBackup.keys defaults empty, allows 0–32 sorted, unique names matching [a-zA-Z0-9_.:-]{1,96}, and independently requires storage+documents when nonempty. dataBackup may contain keys, legacy tables, or both, with at least one field and no extras. Legacy tables-only serialization and SQLite behavior remain unchanged; empty keys are omitted when serializing. Nonempty tables still require database+documents independently. The signed receipt must exactly match both embedded policies. An allowlist grants no approval and is not a secret detector.
 
 - Jarvys.storage.backupExport({version:1,keys,filename}): select 1–32 sorted, unique allowed keys explicitly. Every selected key must exist; missing selected export keys reject the whole operation. filename uses the existing simple document filename grammar. Export never selects all allowed keys implicitly.
-- Jarvys.storage.backupImport({version:1,keys,handle,mode}): consumes an untouched document read handle opened through documents.open({mimeType:"application/json"}) and the normal human selection/Use steps. The archive key set must exactly match the nonempty explicit selection. version is exactly the integer 1, not the SQLite database version. No migration or key renaming occurs.
+- Jarvys.storage.backupImport({version:1,keys,handle,mode}): consumes an untouched document read handle opened through documents.open({mimeType:"application/json"}) and Android selection under the saved documents.open policy, with no extra Use step. The archive key set must exactly match the nonempty explicit selection. version is exactly the integer 1, not the SQLite database version. No migration or key renaming occurs.
 - mode:"insertOnly": any existing selected key is a collision, even if its value equals the archive value. mode:"replaceSelectedKeys": writes only selected archive values, replacing selected existing keys or inserting selected absent keys. It never clears the store or deletes unselected keys. The reviewed selected-key preimage must still match before mutation; changed selected targets require fresh review. Unselected state is preserved and current whole-store quotas are rechecked.
 
 The canonical plaintext JSON format is jarvys-preferences-data with formatVersion:1 and storageVersion:1, at most 1 MiB. It contains selected string keys/values plus package/certificate compatibility labels. Values require valid paired Unicode. Existing string limits remain: 64 KiB UTF-8 per value, 256 total store entries and 1 MiB total key/value bytes; archive escaping/metadata also count toward the independent archive limit. It is unencrypted. Labels are not authentication of the author or contents; an attacker can rewrite them. Secrets are unsupported, and arbitrary strings cannot be reliably detected as secret-free.
 
-Installed generated app, exact current signed receipt and matching pinned Jarvys host are required. Native human review shows all outgoing or incoming values, selected keys, counts, mode and overwrite impact and requires explicit all-values approval. Export then discloses the provider and asks for a destination; it may upload, cloud-sync or retain plaintext copies. Never automate native approval, review, Use or picker actions. File selection and compatible labels do not authorize restore.
+Installed generated app, exact current signed receipt and matching pinned Jarvys host are required. The backup operation policy supplies ALLOW_ALWAYS authority or one ASK all-values approval showing selected keys, counts, mode and overwrite impact; DENY blocks. Export discloses that the provider may upload, cloud-sync or retain plaintext copies and retains Android destination selection, with no second host approval. File selection and compatible labels alone do not authorize restore. New protocol v2 checks live authorization before each write/commit; authenticated legacy v1 ends at the final host authorization.
 
-Import uses one bounded store replacement under the same transaction lock as ordinary storage, after validation and review-preimage checks. No lock spans human review or provider I/O. A backend commit returning false or throwing is an unknown outcome: memory or disk may already have changed, no rollback is promised and no automatic replay is allowed. Cancellation, process death, reply loss or timeout can follow mutation. Inspect state before a new human-reviewed attempt; a receipt proves no physical durability or independent recovery.
+Import uses one bounded store replacement under the same transaction lock as ordinary storage, after validation and review-preimage checks. No lock spans human review or provider I/O. A backend commit returning false or throwing is an unknown outcome: memory or disk may already have changed, no rollback is promised and no automatic replay is allowed. Cancellation, process death, reply loss or timeout can follow mutation. Inspect state before a fresh policy-authorized attempt; a receipt proves no physical durability or independent recovery.
 
 Export returns providerCommitConfirmed:false and closeStatus:"close_requested"; provider close does not prove durable storage, cloud completion or recoverability. Failed or cancelled exports may leave empty/partial files. The operation lifetime is five minutes and both backup families use a 310000 ms SDK timeout with an ambiguity warning. documents.cancel uses the existing authenticated cancellation path for storage-only apps; database.cancel and documents.cancel share the native backup control rate budget. SDK admission reserves one slot for each of documents.cancel, database.cancel, sensors.cancel and biometrics.cancel alongside 16 ordinary requests (20 maximum). Cancellation proves neither rollback nor provider closure; cleanup may remain busy. No new storage.cancel method exists.
 

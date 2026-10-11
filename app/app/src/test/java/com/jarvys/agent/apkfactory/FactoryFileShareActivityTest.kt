@@ -42,17 +42,19 @@ class FactoryFileShareActivityTest {
     private val executor = Executors.newSingleThreadExecutor()
     private val controllers = mutableListOf<ActivityController<FactoryFileShareActivity>>()
     private lateinit var coordinator: FactoryFileShareCoordinator
+    private val operationPolicy = FactoryOperationPolicy.inMemory(FactoryOperationPolicy.Mode.ASK)
     private var cleanups = 0
     private fun <T> io(block: () -> T): T = executor.submit(Callable { block() }).get(10, TimeUnit.SECONDS)
     @Before fun setup() {
         File(context.noBackupFilesDir, "factory-file-sharing").deleteRecursively()
         coordinator = FactoryFileShareCoordinator(context, { check(it == proof.appId); proof }, receive = { value, active ->
             active(); FactoryFileShareStore.Snapshot(Uri.parse("content://${context.packageName}.factory.files/files/synthetic.bin"), value.filename, value.mimeType, value.size, SystemClock.elapsedRealtime() + 300000)
-        }, clean = { cleanups++ })
+        }, clean = { cleanups++ }, policy = operationPolicy)
         FactoryFileShareCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(null, coordinator)
     }
     @After fun cleanup() {
         controllers.forEach { runCatching { it.pause().stop().destroy() } }
+        operationPolicy.revokeActive(); drain()
         executor.shutdownNow()
         FactoryFileShareCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(null, null)
         for (name in listOf("protectedSurfaces", "taintedSurfaces", "activeActions")) MemoryUiAutomationGuard::class.java.getDeclaredField(name).apply { isAccessible = true }.setInt(null, 0)
@@ -71,6 +73,7 @@ class FactoryFileShareActivityTest {
     private fun bind(activity: FactoryFileShareActivity, opened: Boolean = false): String {
         val owner = io { coordinator.begin(proof.appId, request) {} }
         if (opened) { io { coordinator.prepareChooser(owner, "Test") {} }; coordinator.chooserLaunched(owner) }
+        if (coordinator.requiresApproval()) set(activity, "guard", MemoryUiAutomationGuard.enterProtectedSurface())
         set(activity, "token", owner); set(activity, "request", request); set(activity, "external", opened); render(activity)
         return owner
     }
@@ -89,20 +92,16 @@ class FactoryFileShareActivityTest {
         assertTrue(activity.packageManager.getActivityInfo(ComponentName(activity, FactoryFileShareActivity::class.java), 0).exported)
         assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode)
     }
-    @Test fun chooserCallbackCannotReleaseLatchOrConfirmDelivery() {
+    @Test fun chooserCallbackAutomaticallyReturnsHonestReceiptAndRetainsRecipientLease() {
         val activity = launch().get(); bind(activity, opened = true)
-        shadowOf(activity).callOnActivityResult(6801, Activity.RESULT_OK, Intent().putExtra("deliveryConfirmed", true))
-        assertTrue(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
-        assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode)
-        assertEquals(View.GONE, button(activity, "close").visibility)
-        assertTrue(button(activity, "acknowledge").isEnabled)
-        button(activity, "acknowledge").performClick(); drain()
+        shadowOf(activity).callOnActivityResult(6801, Activity.RESULT_OK, Intent().putExtra("deliveryConfirmed", true)); drain()
+        assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available())
         assertEquals(Activity.RESULT_OK, shadowOf(activity).resultCode)
         val result = shadowOf(activity).resultIntent
         assertEquals(setOf("nonce", "chooserOpened", "deliveryConfirmed"), result.extras!!.keySet())
         assertTrue(result.getBooleanExtra("chooserOpened", false)); assertFalse(result.getBooleanExtra("deliveryConfirmed", true))
         assertNull(result.data); assertNull(result.clipData); assertEquals(0, result.flags)
-        assertEquals(2, cleanups)
+        assertEquals(1, cleanups); assertEquals("transfer_active", coordinator.status())
     }
     @Test fun nativeCancelBeforeChooserReturnsFalseWithoutExternalEffect() {
         val activity = launch().get(); bind(activity)
@@ -114,19 +113,20 @@ class FactoryFileShareActivityTest {
     @Test fun backAfterChooserKeepsRecoveryAndNeverAcknowledgesForHuman() {
         val activity = launch().get(); bind(activity, opened = true)
         activity.onBackPressedDispatcher.onBackPressed()
-        assertTrue(coordinator.needsRecovery()); assertTrue(MemoryUiAutomationGuard.isProtected())
+        assertFalse(MemoryUiAutomationGuard.isProtected())
         assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode)
     }
     @Test fun backgroundAndRecreationNeverRestoreBytesOrReturnLaunchClaim() {
         val control = launch(); val activity = control.get(); bind(activity)
         control.pause().stop().destroy(); controllers.remove(control)
-        assertTrue(coordinator.needsRecovery())
+        drain(); assertFalse(MemoryUiAutomationGuard.isProtected())
         val next = launch(saved = Bundle()).get()
         assertTrue(next.isFinishing); assertNull(shadowOf(next).nextStartedActivity)
         assertEquals(Activity.RESULT_CANCELED, shadowOf(next).resultCode); assertNull(shadowOf(next).resultIntent)
     }
     @Test fun recoveryRequiresSeparateForegroundHumanAndNeverReturnsReceipt() {
-        val owner = io { coordinator.begin(proof.appId, request) {} }; coordinator.invalidate(owner)
+        val root = File(context.noBackupFilesDir, "factory-file-sharing").apply { mkdirs() }
+        File(root, "interaction.json").writeText("{"); io { coordinator.restore() }
         val control = launch(); val activity = control.get()
         control.pause(); button(activity, "acknowledge").performClick(); assertTrue(coordinator.needsRecovery())
         control.resume(); button(activity, "acknowledge").performClick(); drain()
@@ -162,7 +162,7 @@ class FactoryFileShareActivityTest {
         var first = true
         coordinator = FactoryFileShareCoordinator(context, { check(it == proof.appId); proof }, receive = { value, active ->
             active(); FactoryFileShareStore.Snapshot(Uri.parse("content://${context.packageName}.factory.files/files/synthetic.bin"), value.filename, value.mimeType, value.size, SystemClock.elapsedRealtime() + 300000)
-        }, clean = { if (first) { first = false; entered.countDown(); check(release.await(10, TimeUnit.SECONDS)) } })
+        }, clean = { if (first) { first = false; entered.countDown(); check(release.await(10, TimeUnit.SECONDS)) } }, policy = operationPolicy)
         FactoryFileShareCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(null, coordinator)
         FactoryFileShareCoordinator::class.java.getDeclaredMethod("prepareRestore").apply { isAccessible = true }.invoke(coordinator)
         val future = FactoryFileShareCoordinator.WORKER.submit { coordinator.restore() }
@@ -175,7 +175,7 @@ class FactoryFileShareActivityTest {
         shadowOf(control.get()).setCallingPackage(proof.appId)
         control.create().start().resume().visible()
         assertFalse(control.get().isFinishing); assertTrue(FactoryFileShareCoordinator.startupPending())
-        assertTrue(MemoryUiAutomationGuard.isProtected()); assertFalse(button(control.get(), "choose").isEnabled)
+        assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(button(control.get(), "choose").isEnabled)
         release.countDown(); startup.get(5, TimeUnit.SECONDS)
         shadowOf(Looper.getMainLooper()).idle(); drain()
         assertEquals("review", coordinator.status()); assertTrue(button(control.get(), "choose").isEnabled)
@@ -195,7 +195,7 @@ class FactoryFileShareActivityTest {
     }
     @Test fun validColdStartDocumentRequestWaitsWithoutRegressingSaf() {
         val (release, startup) = pendingStartup()
-        val documents = FactoryDocumentCoordinator(context) { check(it == proof.appId); proof }
+        val documents = FactoryDocumentCoordinator(context, FactoryOperationPolicy.inMemory(FactoryOperationPolicy.Mode.ASK)) { check(it == proof.appId); proof }
         FactoryDocumentCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(null, documents)
         val intent = Intent(context, FactoryDocumentActivity::class.java).putExtra("operation", "open").putExtra("mimeType", "text/plain").putExtra("nonce", request.nonce)
         val control = Robolectric.buildActivity(FactoryDocumentActivity::class.java, intent)

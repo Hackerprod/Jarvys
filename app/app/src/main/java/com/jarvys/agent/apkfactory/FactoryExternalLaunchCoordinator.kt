@@ -7,8 +7,8 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
 import android.util.AtomicFile
-import com.jarvys.agent.MemoryUiAutomationGuard
 import com.jarvys.factory.runtime.ExternalLaunchControl
+import com.jarvys.factory.contract.ExternalLaunchSpec
 import com.jarvys.factory.runtime.ExternalLaunchRequest
 import org.json.JSONObject
 import java.io.File
@@ -18,9 +18,10 @@ import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** Durable human-only external action launch authority; Input data and recipients are never journaled. */
+/** Durable policy-bound external action launch authority; Input data and recipients are never journaled. */
 internal class FactoryExternalLaunchCoordinator(
     context: Context,
+    private val policy: FactoryOperationPolicy = FactoryOperationPolicy.get(context),
     private val verify: (String, String) -> FactoryDocumentCoordinator.Proof = { appId, capability ->
         FactoryDocumentCoordinator.verifyInstalled(context, appId, setOf(capability))
     },
@@ -43,17 +44,16 @@ internal class FactoryExternalLaunchCoordinator(
             }
         }
     }
-    class Session(val token: String, val proof: FactoryDocumentCoordinator.Proof, val request: Request, val expiresAt: Long) {
+    class Session(val token: String, val proof: FactoryDocumentCoordinator.Proof, val request: Request, val expiresAt: Long, val authority: FactoryOperationPolicy.Grant) {
         val revoked = AtomicBoolean(false)
         @Volatile var registration: ExternalLaunchControl.Registration? = null
         @Volatile var attempted = false
         @Volatile var launchRequested = false
         @Volatile var preparing = false
-        fun revoke() { revoked.set(true) }
+        fun revoke() { revoked.set(true); authority.revoke() }
     }
     private val packageManager = context.applicationContext.packageManager
     private val journal = AtomicFile(File(context.noBackupFilesDir, "factory-external-launch/interaction.json"))
-    private var lease: MemoryUiAutomationGuard.Lease? = null
     @Volatile private var current: Session? = null
     @Volatile private var state = "idle"
     @Volatile private var open = false
@@ -66,9 +66,8 @@ internal class FactoryExternalLaunchCoordinator(
     fun status() = state
     fun isBusy() = busy || restoring
     fun needsRecovery(): Boolean { val value = current; return open && !restoring && (value == null || value.revoked.get() || broken) }
-    fun canBegin() = !open && !broken && !busy && !restoring && FactoryInteractionAdmission.available()
+    fun canBegin() = (!open || (current == null && state == "outcome_unknown")) && !broken && !busy && !restoring && (current == null || FactoryInteractionAdmission.available(this))
     private fun worker() { check(Looper.myLooper() != Looper.getMainLooper()) { "External action I/O must run on the bounded worker" } }
-    private fun protect() { if (lease == null) lease = MemoryUiAutomationGuard.enterProtectedSurface() }
     private fun save() {
         worker()
         try {
@@ -78,11 +77,11 @@ internal class FactoryExternalLaunchCoordinator(
             try { stream.write(bytes); stream.fd.sync() } catch (failure: Throwable) { journal.failWrite(stream); throw failure }
             journal.finishWrite(stream); check(journal.readFully().contentEquals(bytes))
         } catch (failure: Exception) {
-            broken = true; open = true; state = "outcome_unknown"; current?.revoke(); protect(); FactoryInteractionAdmission.restore(this)
+            broken = true; open = true; state = "outcome_unknown"; current?.revoke(); FactoryInteractionAdmission.restore(this)
             throw failure
         }
     }
-    private fun prepareRestore() { restoring = true; protect(); FactoryInteractionAdmission.restore(this) }
+    private fun prepareRestore() { restoring = true; FactoryInteractionAdmission.restore(this) }
     fun restore() {
         worker()
         if (!restoring) prepareRestore()
@@ -103,7 +102,7 @@ internal class FactoryExternalLaunchCoordinator(
                 state = if (open) "outcome_unknown" else old
             }
             if (open) save() else release()
-        } catch (_: Exception) { broken = true; open = true; state = "outcome_unknown"; protect(); FactoryInteractionAdmission.restore(this) }
+        } catch (_: Exception) { broken = true; open = true; state = "outcome_unknown"; FactoryInteractionAdmission.restore(this) }
         finally {
             val ready = synchronized(this) { restoring = false; startupWaiter.also { startupWaiter = null } }
             ready?.let { Handler(Looper.getMainLooper()).post(it) }
@@ -111,19 +110,27 @@ internal class FactoryExternalLaunchCoordinator(
     }
     fun begin(callingPackage: String?, request: Request, preparing: Boolean = false, active: () -> Unit): Session {
         worker(); require(!callingPackage.isNullOrBlank()); check(canBegin()); require(request.nonce != nonce)
-        FactoryInteractionAdmission.acquire(this); busy = true
+        busy = true
+        var acquired: FactoryOperationPolicy.Grant? = null
         try {
             ExternalLaunchRequest.parse(request.method, request.args)
             val proof = verify(callingPackage, request.spec.capability); check(proof.appId == callingPackage); active()
-            protect(); check(lease!!.isReadyForUser) { "Automation in flight" }
+            val authority = policy.acquire(FactoryOperationPolicy.Subject.installed(proof), operation(request), FactoryOperationPolicy.binding(request.nonce, request.method, request.args))
+            acquired = authority
+            // An authenticated fresh ALLOW request can retire restored unknown state. It never replays it.
+            if (open) {
+                check(current == null && !broken && authority.mode == FactoryOperationPolicy.Mode.ALLOW_ALWAYS)
+                state = "closed_outcome_unknown"; open = false; save(); release()
+            }
+            FactoryInteractionAdmission.acquire(this)
             val now = SystemClock.elapsedRealtime(); check(now >= 0 && now <= Long.MAX_VALUE - 300000)
-            val value = Session(UUID.randomUUID().toString(), proof, request, now + 300000)
+            val value = Session(UUID.randomUUID().toString(), proof, request, now + 300000, authority)
             value.preparing = preparing
-            current = value; nonce = request.nonce; open = true; state = "review"; save(); return value
+            current = value; acquired = null; authority.onRevoked { value.revoked.set(true) }; nonce = request.nonce; open = true; state = "review"; save(); return value
         } catch (failure: Exception) {
-            current?.preparing = false; current?.revoke(); if (open) { state = "outcome_unknown"; runCatching { save() } }
+            current?.preparing = false; current?.revoke(); if (current != null && open) { state = "outcome_unknown"; runCatching { save() } }
             throw failure
-        } finally { busy = false; if (!open && !broken) { lease?.close(); lease = null; FactoryInteractionAdmission.release(this) } }
+        } finally { acquired?.close(); busy = false; if (!open && !broken) FactoryInteractionAdmission.release(this) }
     }
     fun sourceVerifier(value: Session): ExternalLaunchControl.HostVerifier {
         worker(); requireActive(value)
@@ -133,34 +140,41 @@ internal class FactoryExternalLaunchCoordinator(
     }
     fun requireActive(value: Session) {
         check(current === value && open && !broken && !value.revoked.get() && SystemClock.elapsedRealtime() < value.expiresAt)
+        value.authority.requireCurrent()
     }
     /** Consume authority durably before any external dispatch. No state ever permits replay. */
-    fun prepareLaunch(value: Session, human: () -> Unit) {
+    fun prepareLaunch(value: Session, active: () -> Unit) {
         worker(); requireActive(value); check(state == "review" && !value.attempted)
-        human(); lease!!.requireHumanUiInteraction(); check(verify(value.proof.appId, value.request.spec.capability) == value.proof)
-        requireActive(value); human(); lease!!.requireHumanUiInteraction()
+        active(); value.authority.checkBeforeEffect(); check(verify(value.proof.appId, value.request.spec.capability) == value.proof)
+        requireActive(value); active(); value.authority.checkBeforeEffect()
         check(value.registration?.isRevoked == false)
         value.attempted = true; state = "launch_pending"; save()
     }
-    fun verifyReady(value: Session, human: () -> Unit) {
-        worker(); requireActive(value); human(); lease!!.requireHumanUiInteraction()
+    fun verifyReady(value: Session, active: () -> Unit) {
+        worker(); requireActive(value); active(); value.authority.checkBeforeEffect()
         check(state == "launch_pending" && value.attempted && verify(value.proof.appId, value.request.spec.capability) == value.proof)
-        requireActive(value); human(); check(value.registration?.isRevoked == false)
+        requireActive(value); active(); value.authority.checkBeforeEffect(); check(value.registration?.isRevoked == false)
     }
-    fun close(value: Session?, recovery: Boolean, externalClosedByUser: Boolean, human: () -> Unit): Intent? {
-        worker(); check(!busy && !restoring); human(); lease?.requireHumanUiInteraction()
+    fun close(value: Session?, recovery: Boolean, active: () -> Unit): Intent? {
+        worker(); check(!busy && !restoring); active()
         if (recovery) check(needsRecovery()) else check(value != null && current === value && open && !broken)
         val owned = current
         check(owned?.preparing != true) { "Native external action preparation is still active" }
-        if (recovery || owned?.attempted == true) check(externalClosedByUser) { "The user must close the external action task themselves" }
         owned?.revoke(); owned?.registration?.close(); owned?.registration = null
-        human(); lease?.requireHumanUiInteraction()
+        active()
         val result = if (!recovery && owned != null) Intent().putExtra("nonce", nonce).putExtra("launchRequested", owned.launchRequested).putExtra("actionConfirmed", false) else null
         state = if (recovery) "closed_outcome_unknown" else "closed"; open = false
         if (!nonce.matches(Regex("[a-f0-9]{64}"))) nonce = ""
         save(); broken = false; release(); return result
     }
-    private fun release() { current = null; lease?.close(); lease = null; FactoryInteractionAdmission.release(this) }
+    private fun release() { current?.authority?.close(); current = null; FactoryInteractionAdmission.release(this) }
+    private fun operation(request: Request) = when (request.spec.kind) {
+        ExternalLaunchSpec.Kind.MAPS_COORDINATES, ExternalLaunchSpec.Kind.MAPS_QUERY -> FactoryOperationPolicy.Operation.MAPS_OPEN
+        ExternalLaunchSpec.Kind.PHONE_DIAL -> FactoryOperationPolicy.Operation.PHONE_DIAL
+        ExternalLaunchSpec.Kind.EMAIL_COMPOSE -> FactoryOperationPolicy.Operation.EMAIL_COMPOSE
+        ExternalLaunchSpec.Kind.SMS_COMPOSE -> FactoryOperationPolicy.Operation.SMS_COMPOSE
+        ExternalLaunchSpec.Kind.CALENDAR_INSERT -> FactoryOperationPolicy.Operation.CALENDAR_INSERT
+    }
     companion object {
         private const val GRANT_FLAGS = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
         private val OPEN_STATES = setOf("review", "launch_pending", "outcome_unknown")

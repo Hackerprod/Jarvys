@@ -14,6 +14,9 @@
 
 ---
 
+> Development checkpoint: Factory v84 configurable autonomy is being implemented and tested. The packaged-DEX runtime now has a shared per-app/per-operation ALLOW_ALWAYS / ASK / DENY policy, defaulting to ALLOW_ALWAYS. This source checkpoint is not a validated APK release; see [Pending.md](Pending.md) and [Factory guidance](app/APK_FACTORY.md) for scope and remaining technical limits.
+
+
 ## What is Jarvys?
 
 Jarvys brings a tool-using AI workspace to Android: persistent conversations, configurable model providers, specialist agents, project files, connectors, scheduled work and optional phone interaction. Its native interface is built with Kotlin, Java and Jetpack Compose.
@@ -134,9 +137,9 @@ Building with Factory requires **Android 8/API 26 or newer** in either Jarvys fl
 Project files + factory.json
          │
          ▼
-Inspect → Build unsigned APK → Review signing scope → Sign
+Inspect → Build unsigned APK → Apply signing policy → Sign
          │                                           │
-         └── Private preview / simulated tests       └── Separate install review
+         └── Private preview / simulated tests       └── Apply install policy / Android flow
 ```
 
 ### Implemented slices
@@ -144,15 +147,15 @@ Inspect → Build unsigned APK → Review signing scope → Sign
 | Area | What exists | Important boundary |
 | --- | --- | --- |
 | Packaging | Closed project schema, local assets/icons, authenticated template, manifest/resource/DEX checks and provenance receipts | Unsupported manifest nodes and arbitrary native code are rejected |
-| Signing | Explicit review, version/app identity continuity, verified signed payloads, recoverable new identities and encrypted backup/import | Backup/import is an explicit user interaction; older non-exportable keys stay non-exportable |
+| Signing | Configurable signing policy, version/app identity continuity, verified signed payloads, recoverable new identities and encrypted backup/import | Backup/import is an explicit user interaction; older non-exportable keys stay non-exportable |
 | Preview and tests | Shared runtime core, isolated test storage, exact preview snapshots, simulated effects and bounded receipts | Preview success does not establish live native effects |
-| Installation | Separate native review tied to the exact signed artifact and durable recovery | Full flavor; Android user action/permission and actual install result remain separate |
-| Documents and sharing | SAF document operations, opaque handles and bounded native file sharing | Require a compatible authenticated Jarvys host and human interaction |
-| Camera/photos | Bounded capture/picker workflows with native consent | Camera compatibility varies; selected original image metadata can be retained |
+| Installation | Configurable install policy tied to the exact signed artifact and durable recovery | Full flavor; Android user action/permission and actual install result remain separate |
+| Documents and sharing | SAF document operations, opaque handles and bounded native file sharing | Require a compatible authenticated Jarvys host; ALLOW advances automatically, ASK reviews once, DENY blocks |
+| Camera/photos | Bounded capture/picker workflows with configurable host policy and Android selection/grants | Camera compatibility varies; selected original image metadata can be retained |
 | Audio | Local bounded PCM16 WAV playback | Not synthesis, microphone recognition or cloud voice |
 | Browser, maps and dialer | Typed HTTPS, map and dialer launches with reviewed destinations | Dispatch does not prove page display, navigation, calling or external-task closure |
-| Contacts | One selected datum and second native approval | Host gates and independent APK audit passed; signed test APK delivered; no agenda enumeration or permission requests |
-| Calendar editor | Typed event prefill and native review | Opens an external editor; never saves automatically or grants calendar database access |
+| Contacts | One selected datum; no second native approval under ALLOW | Host gates and independent APK audit passed; signed test APK delivered; no agenda enumeration or permission requests |
+| Calendar editor | Typed event prefill with configurable host policy | Opens an external editor; never saves automatically or grants calendar database access |
 | Private SQLite | Standalone typed CRUD, bounded atomic batches and adjacent create-table/add-nullable-column migrations | No broker or query-by-query consent; private no-backup data, ephemeral preview, no raw SQL/path/export API; physical persistence remains unverified |
 | Local presentation | Per-app system/light/dark theme and system/portrait/landscape orientation requests | Private preferences, controlled Activity recreation, preview unavailable; orientation and WebView CSS require physical acceptance |
 | Foreground sensors | Bounded installed light/accelerometer capture and cancel | No background or new permission; physical timing, cleanup and installation remain unverified |
@@ -342,7 +345,7 @@ The in-app [Coding contract](app/CODING_AGENT.md) and [main-agent contract](app/
 | Coding has no command tools | Full versus Play, prepared environment, effective bot tool set and per-command approval |
 | Connector exists but tools are unavailable | Enabled tools, granted service scopes, Android permissions and current account/connection state |
 | Private database operation is rejected | Declared database capability, foreground session, schema version, typed arguments and quotas; inspect state before retrying uncertain writes |
-| Brokered Factory native action is rejected | Declared capability, compatible host, exact latest-signed caller identity and native review state |
+| Brokered Factory native action is rejected | Declared capability, compatible host, exact latest-signed caller identity, configured policy and current request state |
 | Interrupted action cannot be repeated | Inspect the durable receipt and actual external state; do not erase uncertainty or blindly replay |
 | HTML preview differs from expected | Authored responsive CSS/viewport, captured assets, WebView provider and the device acceptance checklist |
 | A note is absent in another chat | Memory is conversation-local unless its exact content was explicitly shared |
@@ -351,7 +354,7 @@ When reporting a bug, include the app version/flavor, Android and WebView versio
 
 ## Roadmap and documentation
 
-The authoritative queue is [Pending.md](Pending.md). Current open themes include the remaining Factory capability families, strict TTS/voice design, physical-device acceptance, context-work gates, future persistent command approval and the later central Jarvys/spaces architecture. Their presence in the queue does not mean they are enabled. **UX44**'s proposed permission defaults and migration remain documentation-only; current approval behavior is unchanged.
+The authoritative queue is [Pending.md](Pending.md). Current open themes include the remaining Factory capability families, strict TTS/voice design, physical-device acceptance, context-work gates, remaining autonomy and runtime expansion work and the later central Jarvys/spaces architecture. Their presence in the queue does not mean they are enabled. **UX44**'s proposed permission defaults and migration remain documentation-only; current approval behavior is unchanged.
 
 - [Main agent](app/MAIN_AGENT.md) · [Crew](app/CREW_TASKS.md) · [Coding](app/CODING_AGENT.md)
 - [Memory](app/MEMORY_SCOPE.md) · [Continuous missions](app/CONTINUOUS_MISSIONS.md)

@@ -10,7 +10,7 @@ import java.util.Map;
 public final class ManifestPlan {
     public static final String ANDROID = "http://schemas.android.com/apk/res/android";
     public static final String ACTIVITY = "com.jarvys.factory.runtime.FactoryActivity";
-    public enum Profile { CURRENT, V1_BEFORE_SAFE_AREA }
+    public enum Profile { CURRENT, V1_BEFORE_CLIPBOARD_BROKER, V1_BEFORE_SAFE_AREA }
     public final Profile profile;
     public final String appId, label, versionName;
     public final int versionCode, iconResourceId, backupResourceId;
@@ -88,10 +88,15 @@ public final class ManifestPlan {
             // Exact published v1 layout before UX35, only for previously receipted artifacts.
             result.set(3, without(result.get(3), "windowSoftInputMode"));
         }
-        List<ManifestNodes.Element> contributions = CapabilityCatalog.manifestContributions(this.capabilities);
+        // Legacy receipt profiles retain the complete historical declaration set. Clipboard
+        // was local then; it must not acquire new broker queries when re-verifying old bytes.
+        List<String> manifestCapabilities = new ArrayList<>(this.capabilities);
+        if (profile == Profile.V1_BEFORE_CLIPBOARD_BROKER || profile == Profile.V1_BEFORE_SAFE_AREA)
+            manifestCapabilities.remove("clipboard");
+        List<ManifestNodes.Element> contributions = CapabilityCatalog.manifestContributions(manifestCapabilities);
         List<String> selectedPermissions = new ArrayList<>(), selectedQueries = new ArrayList<>();
         for (ManifestNodes.Element contribution : contributions) {
-            if (profile != Profile.CURRENT)
+            if (profile == Profile.V1_BEFORE_SAFE_AREA)
                 throw new IllegalArgumentException("Additional manifest declarations are not activated");
             if (contribution == CapabilityCatalog.BIOMETRIC_DECLARATION) {
                 selectedPermissions.add(CapabilityCatalog.BIOMETRIC_PERMISSION);

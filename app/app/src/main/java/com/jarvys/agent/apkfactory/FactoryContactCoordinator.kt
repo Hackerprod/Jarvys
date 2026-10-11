@@ -7,7 +7,6 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
 import android.util.AtomicFile
-import com.jarvys.agent.MemoryUiAutomationGuard
 import com.jarvys.factory.runtime.ExternalLaunchControl
 import com.jarvys.factory.contract.ContactPickSpec
 import org.json.JSONObject
@@ -21,6 +20,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 /** Durable contact-selection authority. Personal data, URI and source identity are never journaled. */
 internal class FactoryContactCoordinator(
     context: Context,
+    private val policy: FactoryOperationPolicy = FactoryOperationPolicy.get(context),
     private val verify: (String, String) -> FactoryDocumentCoordinator.Proof = { appId, capability ->
         FactoryDocumentCoordinator.verifyInstalled(context, appId, setOf(capability))
     },
@@ -43,17 +43,20 @@ internal class FactoryContactCoordinator(
             }
         }
     }
-    class Session(val token: String, val proof: FactoryDocumentCoordinator.Proof, val request: Request, val expiresAt: Long) {
+    class Session(val token: String, val proof: FactoryDocumentCoordinator.Proof, val request: Request, val expiresAt: Long, val grant: FactoryOperationPolicy.Grant) {
         val revoked = AtomicBoolean(false)
         @Volatile var registration: ExternalLaunchControl.Registration? = null
         @Volatile var attempted = false
         @Volatile var pickerReturned = false
         @Volatile var preparing = false
-        fun revoke() { revoked.set(true) }
+        @Volatile var retired = false
+            private set
+        fun revoke() { revoked.set(true); if (!retired) grant.revoke() }
+        fun retire() { retired = true; revoked.set(true) }
+
     }
     private val packageManager = context.applicationContext.packageManager
     private val journal = AtomicFile(File(context.noBackupFilesDir, "factory-contacts/interaction.json"))
-    private var lease: MemoryUiAutomationGuard.Lease? = null
     @Volatile private var current: Session? = null
     @Volatile private var state = "idle"
     @Volatile private var open = false
@@ -61,14 +64,15 @@ internal class FactoryContactCoordinator(
     @Volatile private var busy = false
     @Volatile private var restoring = false
     private var nonce = ""
+    private var restoredUnknown = false
     private var startupWaiter: (() -> Unit)? = null
     fun session() = current
     fun status() = state
     fun isBusy() = busy || restoring
-    fun needsRecovery(): Boolean { val value = current; return open && !restoring && (value == null || value.revoked.get() || broken) }
-    fun canBegin() = !open && !broken && !busy && !restoring && FactoryInteractionAdmission.available()
+    fun needsRecovery(): Boolean { val value = current; return open && !restoring && (value == null || value.revoked.get() || broken || runCatching { value.grant.requireCurrent() }.isFailure) }
+    private fun recoverable() = restoredUnknown && open && !broken && current == null
+    fun canBegin() = !broken && !busy && !restoring && (recoverable() || (!open && FactoryInteractionAdmission.available(this)))
     private fun worker() { check(Looper.myLooper() != Looper.getMainLooper()) { "External action I/O must run on the bounded worker" } }
-    private fun protect() { if (lease == null) lease = MemoryUiAutomationGuard.enterProtectedSurface() }
     private fun save() {
         worker()
         try {
@@ -78,11 +82,11 @@ internal class FactoryContactCoordinator(
             try { stream.write(bytes); stream.fd.sync() } catch (failure: Throwable) { journal.failWrite(stream); throw failure }
             journal.finishWrite(stream); check(journal.readFully().contentEquals(bytes))
         } catch (failure: Exception) {
-            broken = true; open = true; state = "outcome_unknown"; current?.revoke(); protect(); FactoryInteractionAdmission.restore(this)
+            broken = true; open = true; state = "outcome_unknown"; restoredUnknown = false; current?.revoke(); FactoryInteractionAdmission.restore(this)
             throw failure
         }
     }
-    private fun prepareRestore() { restoring = true; protect(); FactoryInteractionAdmission.restore(this) }
+    private fun prepareRestore() { restoring = true; FactoryInteractionAdmission.restore(this) }
     fun restore() {
         worker()
         if (!restoring) prepareRestore()
@@ -102,8 +106,8 @@ internal class FactoryContactCoordinator(
                 require(nonce.matches(Regex("[a-f0-9]{64}")) || (!open && old == "closed_outcome_unknown" && nonce.isEmpty()))
                 state = if (open) "outcome_unknown" else old
             }
-            if (open) save() else release()
-        } catch (_: Exception) { broken = true; open = true; state = "outcome_unknown"; protect(); FactoryInteractionAdmission.restore(this) }
+            if (open) { save(); restoredUnknown = true } else release()
+        } catch (_: Exception) { broken = true; open = true; state = "outcome_unknown"; restoredUnknown = false; FactoryInteractionAdmission.restore(this) }
         finally {
             val ready = synchronized(this) { restoring = false; startupWaiter.also { startupWaiter = null } }
             ready?.let { Handler(Looper.getMainLooper()).post(it) }
@@ -111,20 +115,30 @@ internal class FactoryContactCoordinator(
     }
     fun begin(callingPackage: String?, request: Request, preparing: Boolean = false, active: () -> Unit): Session {
         worker(); require(!callingPackage.isNullOrBlank()); check(canBegin()); require(request.nonce != nonce)
-        FactoryInteractionAdmission.acquire(this); busy = true
+        if (!recoverable()) FactoryInteractionAdmission.acquire(this)
+        busy = true
+        var acquired: FactoryOperationPolicy.Grant? = null
         try {
             ContactPickSpec.kind(request.kind)
             val proof = verify(callingPackage, "contacts"); check(proof.appId == callingPackage); active()
-            protect(); check(lease!!.isReadyForUser) { "Automation in flight" }
+            val grant = policy.acquire(FactoryOperationPolicy.Subject.installed(proof), FactoryOperationPolicy.Operation.CONTACT_PICK,
+                FactoryOperationPolicy.binding(request.nonce, request.kind))
+            acquired = grant; grant.requireCurrent(); active()
+            if (recoverable()) {
+                check(grant.mode == FactoryOperationPolicy.Mode.ALLOW_ALWAYS) { "Historical outcome needs explicit recovery" }
+                state = "closed_outcome_unknown"; open = false; save(); restoredUnknown = false
+            }
             val now = SystemClock.elapsedRealtime(); check(now >= 0 && now <= Long.MAX_VALUE - 300000)
-            val value = Session(UUID.randomUUID().toString(), proof, request, now + 300000)
+            val value = Session(UUID.randomUUID().toString(), proof, request, now + 300000, grant)
             value.preparing = preparing
             current = value; nonce = request.nonce; open = true; state = "review"; save(); return value
         } catch (failure: Exception) {
-            current?.preparing = false; current?.revoke(); if (open) { state = "outcome_unknown"; runCatching { save() } }
+            acquired?.close(); current?.preparing = false; current?.revoke()
+            if (open && current != null) { state = "outcome_unknown"; runCatching { save() } }
             throw failure
-        } finally { busy = false; if (!open && !broken) { lease?.close(); lease = null; FactoryInteractionAdmission.release(this) } }
+        } finally { busy = false; if (!open && !broken) FactoryInteractionAdmission.release(this) }
     }
+    fun approve(value: Session, human: () -> Unit) { requireActive(value); value.grant.approveOnce(human) }
     fun sourceVerifier(value: Session): ExternalLaunchControl.HostVerifier {
         worker(); requireActive(value)
         val uid = packageManager.getApplicationInfo(value.proof.appId, 0).uid
@@ -133,53 +147,54 @@ internal class FactoryContactCoordinator(
     }
     fun requireActive(value: Session) {
         check(current === value && open && !broken && !value.revoked.get() && SystemClock.elapsedRealtime() < value.expiresAt)
+        value.grant.requireCurrent()
     }
     /** Consume authority durably before any external dispatch. No state ever permits replay. */
-    fun prepareLaunch(value: Session, human: () -> Unit) {
+    fun prepareLaunch(value: Session, active: () -> Unit) {
         worker(); requireActive(value); check(state == "review" && !value.attempted)
-        human(); lease!!.requireHumanUiInteraction(); check(verify(value.proof.appId, "contacts") == value.proof)
-        requireActive(value); human(); lease!!.requireHumanUiInteraction()
+        active(); value.grant.checkBeforeEffect(); check(verify(value.proof.appId, "contacts") == value.proof)
+        requireActive(value); active(); value.grant.checkBeforeEffect()
         check(value.registration?.isRevoked == false)
         value.attempted = true; state = "launch_pending"; save()
     }
-    fun verifyReady(value: Session, human: () -> Unit) {
-        worker(); requireActive(value); human(); lease!!.requireHumanUiInteraction()
+    fun verifyReady(value: Session, active: () -> Unit) {
+        worker(); requireActive(value); active(); value.grant.checkBeforeEffect()
         check(state == "launch_pending" && value.attempted && verify(value.proof.appId, "contacts") == value.proof)
-        requireActive(value); human(); check(value.registration?.isRevoked == false)
+        requireActive(value); active(); value.grant.checkBeforeEffect(); check(value.registration?.isRevoked == false)
     }
-    fun prepareRead(value: Session, human: () -> Unit) {
+    fun prepareRead(value: Session, active: () -> Unit) {
         worker(); requireActive(value); check(value.attempted && value.pickerReturned && state == "launch_pending")
-        human(); lease!!.requireHumanUiInteraction(); check(verify(value.proof.appId, "contacts") == value.proof)
-        requireActive(value); human(); check(value.registration?.isRevoked == false)
+        active(); value.grant.checkBeforeEffect(); check(verify(value.proof.appId, "contacts") == value.proof)
+        requireActive(value); active(); value.grant.checkBeforeEffect(); check(value.registration?.isRevoked == false)
     }
     fun selected(value: Session) {
-        worker(); requireActive(value); check(value.attempted && state == "launch_pending" && value.pickerReturned)
+        worker(); requireActive(value); value.grant.checkBeforeEffect(); check(value.attempted && state == "launch_pending" && value.pickerReturned)
         check(value.registration?.isRevoked == false); state = "selected"; save()
     }
-    /** Only the original foreground owner can approve the exact in-memory selected datum. */
-    fun deliver(value: Session, datum: String, human: () -> Unit): Intent {
+    /** Only the original foreground owner can deliver the exact validated in-memory datum. */
+    fun deliver(value: Session, datum: String, active: () -> Unit): Intent {
         worker(); requireActive(value); check(!value.preparing && state == "selected" && value.pickerReturned)
-        ContactPickSpec.value(datum); human(); lease!!.requireHumanUiInteraction()
+        ContactPickSpec.value(datum); active(); value.grant.checkBeforeEffect()
         check(verify(value.proof.appId, "contacts") == value.proof)
-        requireActive(value); human(); check(value.registration?.isRevoked == false)
+        requireActive(value); active(); value.grant.checkBeforeEffect(); check(value.registration?.isRevoked == false)
         val result = Intent().putExtra("nonce", nonce).putExtra("kind", value.request.kind).putExtra("value", datum)
         // Persist consumption before returning personal data; a failed/uncertain return is never replayed.
         state = "closed"; open = false; save()
-        value.revoke(); value.registration?.close(); value.registration = null; release(); return result
+        value.retire(); value.registration?.close(); value.registration = null; release(closeGrant = false); return result
     }
-    fun close(value: Session?, recovery: Boolean, externalClosedByUser: Boolean, human: () -> Unit) {
-        worker(); check(!busy && !restoring); human(); lease?.requireHumanUiInteraction()
+    fun close(value: Session?, recovery: Boolean, externalClosedByUser: Boolean, active: () -> Unit) {
+        worker(); check(!busy && !restoring); active()
         if (recovery) check(needsRecovery()) else check(value != null && current === value && open && !broken)
         val owned = current
         check(owned?.preparing != true) { "Contact provider work is still active" }
         if (recovery || (owned?.attempted == true && !owned.pickerReturned)) check(externalClosedByUser)
         owned?.revoke(); owned?.registration?.close(); owned?.registration = null
-        human(); lease?.requireHumanUiInteraction()
+        active()
         state = if (recovery) "closed_outcome_unknown" else "closed"; open = false
         if (!nonce.matches(Regex("[a-f0-9]{64}"))) nonce = ""
         save(); broken = false; release()
     }
-    private fun release() { current = null; lease?.close(); lease = null; FactoryInteractionAdmission.release(this) }
+    private fun release(closeGrant: Boolean = true) { if (closeGrant) current?.grant?.close(); current = null; restoredUnknown = false; FactoryInteractionAdmission.release(this) }
     companion object {
         private const val GRANT_FLAGS = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
         private val OPEN_STATES = setOf("review", "launch_pending", "selected", "outcome_unknown")

@@ -5,7 +5,6 @@ import android.annotation.SuppressLint;
 import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
 import android.content.ClipData;
-import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -61,6 +60,7 @@ public final class FactoryRuntime implements AutoCloseable {
     private static final int BROWSER_REQUEST = 46;
     private static final int EXTERNAL_REQUEST = 47;
     private static final int CONTACT_REQUEST = 48;
+    private static final int CLIPBOARD_REQUEST = 49;
     private static final int BACKUP_REQUEST_MIN = 0x1000, BACKUP_REQUEST_MAX = 0x7fff;
     private static final java.util.concurrent.atomic.AtomicInteger BACKUP_REQUEST_SEQUENCE = new java.util.concurrent.atomic.AtomicInteger(BACKUP_REQUEST_MIN);
     private static final java.util.concurrent.atomic.AtomicBoolean BACKUP_ADMISSION = new java.util.concurrent.atomic.AtomicBoolean();
@@ -102,6 +102,7 @@ public final class FactoryRuntime implements AutoCloseable {
     private volatile BrowserOpen browserOpen;
     private volatile ExternalLaunch externalLaunch;
     private volatile ContactPick contactPick;
+    private volatile ClipboardWrite clipboardWrite;
     private volatile PhotoSelection photoSelection;
     private static final java.util.concurrent.Semaphore PHOTO_ADMISSION = new java.util.concurrent.Semaphore(1);
     private static final ThreadPoolExecutor PHOTO_IO = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
@@ -214,6 +215,7 @@ public final class FactoryRuntime implements AutoCloseable {
         cancelBrowserOpen(browserOpen, "CANCELLED", "Browser launch authority ended. A browser already opened may remain open.");
         cancelExternalLaunch(externalLaunch, "CANCELLED", "External launch authority ended. An external application already opened may remain open.");
         cancelContactPick(contactPick, "CANCELLED", "Contact selection authority ended.");
+        cancelClipboardWrite("CANCELLED", "Clipboard authority ended. An earlier copy cannot be undone.");
         // Keep an outstanding picker tombstone until its callback: request code 41 must never
         // attach an old result to a new page's export request.
         if (export != null) export.text = null;
@@ -410,7 +412,7 @@ public final class FactoryRuntime implements AutoCloseable {
             // Unparseable/oversized traffic retains this global failAll contract, never cancel authority.
             if(sensors!=null) sensors.cancel();
             if(biometrics!=null) biometrics.cancel();
-            cancelBackup("CANCELLED", "Backup response ended. A restore may have committed; inspect data before retrying.");
+            cancelBackup("CANCELLED", "Backup response ended. A restore may have committed or an export may have been written; inspect before retrying.");
             safePost(proxy, BridgeProtocol.failure(null, "RATE_LIMITED", "Too many native requests; try again shortly.")); return;
         }
         final BridgeProtocol.Request request;
@@ -607,7 +609,7 @@ public final class FactoryRuntime implements AutoCloseable {
             DocumentBrokerIdentity.verify(activity,config.documentBroker);
             Intent intent=new Intent().setComponent(new android.content.ComponentName(config.documentBroker.packageName,
                     "com.jarvys.agent.apkfactory.FactoryDataBackupActivity"))
-                    .putExtra("protocolVersion",1).putExtra("plan",work.plan.json());
+                    .putExtra("protocolVersion",2).putExtra("plan",work.plan.json());
             android.os.Bundle authority=new android.os.Bundle();
             authority.putBinder("transfer",work.transfer); authority.putBinder("control",work.control); intent.putExtras(authority);
             work.launched=true;
@@ -624,9 +626,10 @@ public final class FactoryRuntime implements AutoCloseable {
             requireBackup(work,true); DocumentBrokerIdentity.verify(activity,config.documentBroker);
             if(work.resultCode!=Activity.RESULT_OK || result==null) throw new FactoryException("CANCELLED","Backup was not approved. A created empty file may remain.");
             android.os.Bundle extras=result.getExtras();
-            if(extras==null || !extras.keySet().equals(new java.util.HashSet<>(java.util.Arrays.asList("nonce","planSha256","approved")))
+            if(extras==null || !extras.keySet().equals(new java.util.HashSet<>(java.util.Arrays.asList("nonce","planSha256","approved","protocolVersion","authorization")))
                     || !work.nonce.equals(extras.get("nonce")) || !work.plan.sha256().equals(extras.get("planSha256"))
-                    || !Boolean.TRUE.equals(extras.get("approved")) || result.getSelector()!=null)
+                    || !Boolean.TRUE.equals(extras.get("approved")) || !Integer.valueOf(2).equals(extras.get("protocolVersion"))
+                    || !(extras.get("authorization") instanceof android.os.IBinder) || result.getSelector()!=null)
                 throw new FactoryException("BACKUP_UNAVAILABLE","Backup approval did not match the exact native plan.");
             if(work.exporting) {
                 Uri uri=result.getData(); int mode=Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
@@ -640,22 +643,31 @@ public final class FactoryRuntime implements AutoCloseable {
                 work.output=uri;
             } else if(result.getData()!=null || result.getClipData()!=null || result.getFlags()!=0)
                 throw new FactoryException("PERMISSION_DENIED","Import approval must contain no document grant.");
+            work.authorizationBinder=extras.getBinder("authorization");
             work.applying=true; work.worker=true;
             try { io.execute(()-> applyBackup(work)); }
             catch(RejectedExecutionException full) { work.worker=false; throw full; }
         } catch(Exception failure) { releaseDocumentGrant(result); work.output=null; failBackup(work,failure); }
     }
+    private boolean backupEffectAllowed(BackupWork work) {
+        return backupAuthority(work,true) && work.authorization!=null && work.authorization.allowed();
+    }
+    private void requireBackupEffect(BackupWork work) throws FactoryException {
+        if(!backupEffectAllowed(work)) throw new FactoryException("PERMISSION_DENIED","Backup authorization ended. A previous write or commit cannot be undone.");
+    }
     private void applyBackup(BackupWork work) {
         try {
             requireBackup(work,true); DocumentBrokerIdentity.verify(activity,config.documentBroker);
+            work.authorization=BackupCommitAuthorization.connect(work.authorizationBinder,work.nonce,work.plan.sha256(),uid->backupHostAllowed(work,uid));
+            requireBackupEffect(work);
             final JSONObject result;
             if(work.exporting) result=writeBackup(work);
-            else if(work.storageBackup) result=store.backupImport(work.archive.storage,work.plan.mode,work.storageBaseline,()->backupAuthority(work,true));
+            else if(work.storageBackup) result=store.backupImport(work.archive.storage,work.plan.mode,work.storageBaseline,()->backupEffectAllowed(work));
             else {
                 PrivateDatabase selected=database;
                 if(selected==null) { selected=PrivateDatabase.installed(activity,config.appId); database=selected; }
                 final PrivateDatabase owner=selected; final long ticket=owner.ticket();
-                result=owner.backupImport(work.archive.database,work.plan.mode,work.baseline,ticket,()->backupAuthority(work,true));
+                result=owner.backupImport(work.archive.database,work.plan.mode,work.baseline,ticket,()->backupEffectAllowed(work));
             }
             main.post(()-> {
                 work.worker=false; work.terminal=true;
@@ -672,12 +684,12 @@ public final class FactoryRuntime implements AutoCloseable {
         documentResources.incrementAndGet();
         boolean streamOwnsResource=false; String token=null;
         try {
-            requireBackup(work,true); reservation.beginOpen();
+            requireBackupEffect(work); reservation.beginOpen();
             android.os.ParcelFileDescriptor descriptor=activity.getContentResolver().openFileDescriptor(uri,"w",work.signal);
             if(descriptor==null) throw new IOException("Output unavailable");
             OutputStream stream=new java.io.FilterOutputStream(new android.os.ParcelFileDescriptor.AutoCloseOutputStream(descriptor)) {
                 private void allowed() throws IOException {
-                    try { requireBackup(work,true); }
+                    try { requireBackupEffect(work); }
                     catch(FactoryException denied) { throw new IOException("Backup authority ended"); }
                     if(activity.checkUriPermission(uri,Process.myPid(),Process.myUid(),Intent.FLAG_GRANT_WRITE_URI_PERMISSION)!=PackageManager.PERMISSION_GRANTED)
                         throw new IOException("Backup grant ended");
@@ -693,7 +705,7 @@ public final class FactoryRuntime implements AutoCloseable {
             byte[] bytes=work.archive.bytes(); long offset=0;
             try {
                 while(offset<bytes.length) {
-                    requireBackup(work,true);
+                    requireBackupEffect(work);
                     int count=Math.min(DocumentHandles.MAX_CHUNK_BYTES,bytes.length-(int)offset);
                     byte[] chunk=java.util.Arrays.copyOfRange(bytes,(int)offset,(int)offset+count);
                     handles.write(token,offset,android.util.Base64.encodeToString(chunk,android.util.Base64.NO_WRAP));
@@ -745,18 +757,27 @@ public final class FactoryRuntime implements AutoCloseable {
     }
     private void finishBackup(BackupWork work) {
         if(backup!=work || work.worker || (!work.cancelled && !work.terminal)) return;
-        // Discard private snapshots before retaining only the callback tombstone.
+        // The live host authorization outlives the UI and all actual provider-close work.
+        if(documentResources.get()!=0) return;
+        if(work.authorization!=null && !work.authorizationClosed) {
+            if(!work.authorizationClosing) {
+                work.authorizationClosing=true;
+                try { DOCUMENT_CLEANUP.execute(()-> {
+                    try { work.authorization.close(); }
+                    catch(Exception uncertain) { host.onTrace("backup.authorization","close_unconfirmed"); }
+                    finally { work.authorizationClosed=true; main.post(()->finishBackup(work)); }
+                }); } catch(RejectedExecutionException full) { work.authorizationClosing=false; }
+            }
+            return;
+        }
+        work.authorization=null; work.authorizationBinder=null;
         work.archive=null; work.baseline=null; work.storageBaseline=null; work.plan=null;
         if(work.control!=null) { work.control.close(); work.control=null; }
         if(work.transfer!=null) { work.transfer.close(); work.transfer=null; }
         if(work.admission!=null) { work.admission.close(); work.admission=null; }
         if(work.launched && !work.returned && !destroyed && !activity.isDestroyed()) return;
-        if(documentResources.get()!=0) return; // Blocked provider cleanup retains native admission.
         if(work.output!=null) { releaseDocumentGrant(work.output,Intent.FLAG_GRANT_WRITE_URI_PERMISSION); work.output=null; return; }
-        if(work.control!=null) work.control.close();
-        if(work.transfer!=null) work.transfer.close();
-        if(work.admission!=null) work.admission.close();
-        work.archive=null; work.baseline=null; work.result=null;
+        work.result=null;
         main.removeCallbacks(work.tick);
         if(uiOwner==work.reply) uiOwner=null;
         backup=null; BACKUP_ADMISSION.set(false);
@@ -773,6 +794,9 @@ public final class FactoryRuntime implements AutoCloseable {
         volatile DataBackupPlan plan;
         volatile FileShareTransfer transfer; volatile FileShareTransfer.Admission admission;
         volatile BackupReviewControl control;
+        volatile android.os.IBinder authorizationBinder;
+        volatile BackupCommitAuthorization.Client authorization;
+        volatile boolean authorizationClosing,authorizationClosed;
         Intent result; int resultCode; volatile Uri output; volatile String internalHandle;
         final Runnable tick=new Runnable() { public void run() {
             if(backup!=BackupWork.this) return;
@@ -902,28 +926,7 @@ public final class FactoryRuntime implements AutoCloseable {
                 finally { if (uiOwner == reply) uiOwner = null; }
                 break;
             case CLIPBOARD_WRITE:
-                if (!claimUi(reply)) break;
-                String text = request.args.getString("text");
-                String preview = text.length() > 160 ? text.substring(0, 160) + "…" : text;
-                prompt = new AlertDialog.Builder(activity).setTitle("Copy text to clipboard?")
-                        .setMessage("Other applications may be able to read copied text.\n\n" + preview)
-                        .setPositiveButton("Copy", (dialog, which) -> {
-                            if (uiOwner == reply) uiOwner = null;
-                            if (!reply.current()) return;
-                            try {
-                                ClipboardManager manager = (ClipboardManager) activity.getSystemService(Context.CLIPBOARD_SERVICE);
-                                if (manager == null) { reply.fail("UNAVAILABLE", "Clipboard is unavailable."); return; }
-                                ClipData clip = ClipData.newPlainText(config.name, text);
-                                if (Build.VERSION.SDK_INT >= 33) {
-                                    android.os.PersistableBundle extras = new android.os.PersistableBundle();
-                                    extras.putBoolean("android.content.extra.IS_SENSITIVE", true);
-                                    clip.getDescription().setExtras(extras);
-                                }
-                                manager.setPrimaryClip(clip); reply.ok(null);
-                            } catch (RuntimeException e) { reply.fail("NATIVE_ERROR", "Text could not be copied."); }
-                        }).setNegativeButton("Cancel", (dialog, which) -> { if (uiOwner == reply) uiOwner = null; reply.fail("CANCELLED", "Copy cancelled."); })
-                        .setOnCancelListener(dialog -> { if (uiOwner == reply) uiOwner = null; reply.fail("CANCELLED", "Copy cancelled."); }).show();
-                break;
+                openClipboardWrite(request, reply); break;
             case EXPORT_TEXT:
                 if (!claimUi(reply)) break;
                 export = new Export(reply, request.args.getString("text"));
@@ -1026,13 +1029,20 @@ public final class FactoryRuntime implements AutoCloseable {
     }
 
     private boolean claimUi(Reply reply) {
-        if (BiometricAuthentication.processUiBusy() || (biometrics!=null && biometrics.isUiBusy()) || presentationScheduled || uiOwner != null || export != null || documentSelection != null || fileShare != null || photoSelection != null || audioPlayback != null || browserOpen != null || externalLaunch != null || contactPick != null || backup != null || BACKUP_ADMISSION.get() || !activity.hasWindowFocus() || activity.isFinishing()) {
+        if (BiometricAuthentication.processUiBusy() || (biometrics!=null && biometrics.isUiBusy()) || presentationScheduled || uiOwner != null || export != null || documentSelection != null || fileShare != null || photoSelection != null || audioPlayback != null || browserOpen != null || externalLaunch != null || contactPick != null || clipboardWrite != null || backup != null || BACKUP_ADMISSION.get() || !activity.hasWindowFocus() || activity.isFinishing()) {
             reply.fail("BUSY", "Another native prompt is open, or the application is not in the foreground."); return false;
         }
         uiOwner = reply; return true;
     }
 
     public void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if(requestCode==CLIPBOARD_REQUEST) {
+            ClipboardWrite work=clipboardWrite;
+            if(work==null || work.returned || !work.launched) return;
+            work.returned=true; work.resultCode=resultCode; work.result=data;
+            if(documentForeground || work.cancelled) finishClipboardWrite(work);
+            return;
+        }
         if(requestCode >= BACKUP_REQUEST_MIN && requestCode <= BACKUP_REQUEST_MAX) {
             BackupWork work=backup;
             if(work==null || work.requestCode!=requestCode || work.returned || !work.launched) { releaseDocumentGrant(data); return; }
@@ -1136,6 +1146,8 @@ public final class FactoryRuntime implements AutoCloseable {
             cancelBackup("CANCELLED", "Backup ended in background. A restore may have committed or a partial file may remain.");
         for (Reply reply : new java.util.ArrayList<>(pending.values()))
             if(reply.method.startsWith("database.") && !(preserving!=null && preserving.launched && !preserving.returned && !preserving.cancelled && reply==preserving.reply)) reply.fail("CANCELLED","Database session ended. A prior commit is not undone.");
+        ClipboardWrite copied=clipboardWrite;
+        if(copied!=null && (!copied.launched || copied.returned)) cancelClipboardWrite("CANCELLED","Clipboard request ended in background.");
         ContactPick contact = contactPick;
         if (contact != null && (!contact.launched || contact.returned))
             cancelContactPick(contact, "CANCELLED", "Contact selection authority ended in background.");
@@ -1161,6 +1173,7 @@ public final class FactoryRuntime implements AutoCloseable {
     }
     public void onResume() {
         documentForeground = true;
+        ClipboardWrite copied=clipboardWrite; if(copied!=null && copied.returned) finishClipboardWrite(copied);
         BackupWork returnedBackup=backup; if(returnedBackup!=null && returnedBackup.returned) acceptBackup(returnedBackup);
         ContactPick contact = contactPick;
         if (contact != null && contact.returned) finishContactPick(contact);
@@ -1206,7 +1219,7 @@ public final class FactoryRuntime implements AutoCloseable {
                 .putExtra("nonce",work.nonce);
         try { activity.startActivityForResult(intent,PHOTO_REQUEST); }
         catch (Exception unavailable) {
-            finishPhotoSelection(work); reply.fail("UNAVAILABLE","The matching human-only photo broker is unavailable.");
+            finishPhotoSelection(work); reply.fail("UNAVAILABLE","The matching policy-controlled photo broker is unavailable.");
         }
     }
     private void cancelPhotoSelection() {
@@ -1410,7 +1423,7 @@ public final class FactoryRuntime implements AutoCloseable {
         work.reply.fail("CANCELLED","File sharing was cancelled. Host or recipient copies may remain; close the native sharing flow.");
         if (work.snapshot != null) work.snapshot.close();
         // A launched broker remains a tombstone until its own callback. Cancellation cannot
-        // recall its staged copy or a recipient's copy, and never releases the host's guard.
+        // recall its staged copy or a recipient's copy, and does not prove closure of a host or recipient task.
     }
     private void finishUnlaunchedShare(FileShare work) {
         if (fileShare == work) fileShare=null;
@@ -1437,6 +1450,62 @@ public final class FactoryRuntime implements AutoCloseable {
             work.reply.fail("SHARE_UNAVAILABLE","The sharing outcome is unavailable. Opening a chooser never proves delivery.");
         }
     }
+    private static final class ClipboardWrite {
+        final Reply reply; final String nonce; final long deadline=SystemClock.elapsedRealtime()+300000;
+        ClipboardWriteControl control; Runnable expiry;
+        boolean cancelled,launched,returned; int resultCode; Intent result;
+        ClipboardWrite(Reply reply,String nonce) { this.reply=reply; this.nonce=nonce; }
+    }
+    private void openClipboardWrite(BridgeProtocol.Request request,Reply reply) throws Exception {
+        requireDocumentForeground();
+        if(host.isPreview()) throw new FactoryException("UNAVAILABLE","Real clipboard writes are unavailable in preview.");
+        DocumentBrokerIdentity.verify(activity,config.documentBroker);
+        final int hostUid=activity.getPackageManager().getApplicationInfo(config.documentBroker.packageName,0).uid;
+        final String text=request.args.getString("text");
+        if(!claimUi(reply)) return;
+        byte[] random=new byte[32]; new java.security.SecureRandom().nextBytes(random);
+        StringBuilder nonce=new StringBuilder(); for(byte b:random) nonce.append(String.format(java.util.Locale.ROOT,"%02x",b&255));
+        ClipboardWrite work=new ClipboardWrite(reply,nonce.toString()); clipboardWrite=work;
+        work.control=new ClipboardWriteControl(work.nonce,uid-> {
+            if(uid!=hostUid || clipboardWrite!=work || work.cancelled || !work.reply.current() || SystemClock.elapsedRealtime()>=work.deadline) return false;
+            try {
+                DocumentBrokerIdentity.verify(activity,config.documentBroker);
+                String[] packages=activity.getPackageManager().getPackagesForUid(uid);
+                return packages!=null && packages.length==1 && packages[0].equals(config.documentBroker.packageName)
+                        && activity.getPackageManager().getApplicationInfo(config.documentBroker.packageName,0).uid==uid;
+            } catch(Exception denied) { return false; }
+        });
+        work.expiry=()->cancelClipboardWrite("TIMEOUT","Clipboard request expired. An earlier copy cannot be undone.");
+        main.postDelayed(work.expiry,300000);
+        try {
+            android.os.Bundle extras=new android.os.Bundle();
+            extras.putInt("protocolVersion",1); extras.putString("nonce",work.nonce); extras.putString("text",text); extras.putBinder("control",work.control);
+            Intent intent=new Intent().setComponent(new android.content.ComponentName(config.documentBroker.packageName,"com.jarvys.agent.apkfactory.FactoryClipboardActivity")).putExtras(extras);
+            work.launched=true; activity.startActivityForResult(intent,CLIPBOARD_REQUEST);
+        } catch(Exception failed) { work.launched=false; cancelClipboardWrite("UNAVAILABLE","The matching clipboard broker is unavailable."); }
+    }
+    private void cancelClipboardWrite(String code,String message) {
+        ClipboardWrite work=clipboardWrite; if(work==null) return;
+        work.cancelled=true; work.control.cancel(); main.removeCallbacks(work.expiry); work.reply.fail(code,message);
+        if(!work.launched || work.returned) { clipboardWrite=null; if(uiOwner==work.reply) uiOwner=null; }
+    }
+    private void finishClipboardWrite(ClipboardWrite work) {
+        if(clipboardWrite!=work) return;
+        clipboardWrite=null; work.control.close(); main.removeCallbacks(work.expiry); if(uiOwner==work.reply) uiOwner=null;
+        if(work.cancelled || !work.reply.current()) return;
+        try {
+            DocumentBrokerIdentity.verify(activity,config.documentBroker);
+            Intent result=work.result;
+            if(SystemClock.elapsedRealtime()>=work.deadline || work.resultCode!=Activity.RESULT_OK || result==null || result.getData()!=null || result.getClipData()!=null
+                    || result.getSelector()!=null || result.getFlags()!=0 || result.getAction()!=null || result.getComponent()!=null || result.getPackage()!=null
+                    || result.getType()!=null || result.getCategories()!=null) throw new SecurityException();
+            android.os.Bundle extras=result.getExtras();
+            if(extras==null || !extras.keySet().equals(new java.util.HashSet<>(java.util.Arrays.asList("nonce","copied")))
+                    || !work.nonce.equals(extras.get("nonce")) || !Boolean.TRUE.equals(extras.get("copied"))) throw new SecurityException();
+            work.reply.ok(null);
+        } catch(Exception unavailable) { work.reply.fail("CLIPBOARD_UNAVAILABLE","The clipboard operation was denied, cancelled or its outcome is unavailable."); }
+    }
+
     private static final class BrowserOpen {
         final Reply reply;
         final String nonce, url;
@@ -1505,7 +1574,7 @@ public final class FactoryRuntime implements AutoCloseable {
         work.control.cancel();
         main.removeCallbacks(work.expiration);
         work.reply.fail(code, message);
-        // A launched host owns its durable human-only guard until explicit manual closure.
+        // A launched host owns its bounded interaction until its original terminal callback.
         // Cancellation does not prove launch prevention, page loading or browser closure.
         if (!work.launched) {
             browserOpen = null;
@@ -1606,7 +1675,7 @@ public final class FactoryRuntime implements AutoCloseable {
         work.control.cancel();
         main.removeCallbacks(work.expiration);
         work.reply.fail(code, message);
-        // A launched host owns its durable human-only guard until explicit manual closure.
+        // A launched host owns its bounded interaction until its original terminal callback.
         // Cancellation does not prove launch prevention, action completion or external application closure.
         if (!work.launched) {
             externalLaunch = null;
@@ -1844,7 +1913,7 @@ public final class FactoryRuntime implements AutoCloseable {
         if (work.control != null) work.control.cancel();
         if (work.snapshot != null) work.snapshot.close();
         // A launched broker remains a tombstone until its own callback. Cancellation cannot
-        // prove remote stop, and never releases the host's guard.
+        // prove remote stop, and does not prove closure of a host or recipient task.
     }
     private void finishUnlaunchedAudio(AudioPlayback work) {
         if (audioPlayback == work) audioPlayback=null;
@@ -1891,7 +1960,7 @@ public final class FactoryRuntime implements AutoCloseable {
         try { activity.startActivityForResult(intent, DOCUMENT_REQUEST); }
         catch (RuntimeException e) {
             finishDocumentSelection(work);
-            reply.fail("UNAVAILABLE", "The matching human-only Jarvys document broker is unavailable.");
+            reply.fail("UNAVAILABLE", "The matching policy-controlled Jarvys document broker is unavailable.");
         }
     }
     private void cancelDocumentSelection() {

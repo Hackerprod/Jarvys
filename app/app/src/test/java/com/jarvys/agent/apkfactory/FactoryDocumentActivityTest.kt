@@ -37,12 +37,13 @@ class FactoryDocumentActivityTest {
     private val root get() = File(context.noBackupFilesDir, "factory-documents")
     private val proof = FactoryDocumentCoordinator.Proof("example.factory.app", "a".repeat(64), "b".repeat(64), 2, "c".repeat(64))
     private val request = FactoryDocumentCoordinator.Request("open", "text/plain", null, "d".repeat(64))
+    private val policy = FactoryOperationPolicy.inMemory()
     private lateinit var coordinator: FactoryDocumentCoordinator
     private val controllers = mutableListOf<ActivityController<out FactoryDocumentActivity>>()
     @Before fun setup() {
         FactoryStartupTestIsolation.releaseCompletedSharingStartup()
         root.deleteRecursively()
-        coordinator = FactoryDocumentCoordinator(context) { caller -> check(caller == proof.appId); proof }
+        coordinator = FactoryDocumentCoordinator(context, policy) { caller -> check(caller == proof.appId); proof }
         FactoryDocumentCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(null, coordinator)
     }
     @After fun cleanup() {
@@ -60,6 +61,7 @@ class FactoryDocumentActivityTest {
     }
     private fun button(activity: FactoryDocumentActivity, name: String) = activity.window.decorView.findViewWithTag<Button>("factory-documents-$name")
     private fun set(activity: FactoryDocumentActivity, name: String, value: Any?) = FactoryDocumentActivity::class.java.getDeclaredField(name).apply { isAccessible = true }.set(activity, value)
+    private fun advance(activity: FactoryDocumentActivity) = FactoryDocumentActivity::class.java.getDeclaredMethod("advance").apply { isAccessible = true }.invoke(activity)
     private fun render(activity: FactoryDocumentActivity) = FactoryDocumentActivity::class.java.getDeclaredMethod("render").apply { isAccessible = true }.invoke(activity)
     private fun drain(activity: FactoryDocumentActivity) {
         val executor = FactoryDocumentActivity::class.java.getDeclaredField("worker").apply { isAccessible = true }.get(activity) as ExecutorService
@@ -87,10 +89,10 @@ class FactoryDocumentActivityTest {
         control.setup(); val activity = control.get(); drain(activity)
         assertTrue(activity.packageManager.getActivityInfo(ComponentName(activity, FactoryDocumentActivity::class.java), 0).exported)
         assertTrue(activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0)
-        assertFalse(button(activity,"choose").isEnabled); assertFalse(button(activity,"use").isEnabled)
+        assertFalse(button(activity,"choose").isEnabled); assertNull(button(activity, "use"))
         assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode)
         assertEquals("idle", coordinator.status())
-        for (name in listOf("choose","use","close","recover")) assertTrue(button(activity,name).filterTouchesWhenObscured)
+        for (name in listOf("choose","close","recover")) assertTrue(button(activity,name).filterTouchesWhenObscured)
         assertNull(shadowOf(activity).nextStartedActivity)
     }
     @Test fun backNeverReturnsSelectedDocument() {
@@ -106,10 +108,10 @@ class FactoryDocumentActivityTest {
         assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode)
         assertEquals("cancelled", coordinator.status())
     }
-    @Test fun explicitUseAloneReturnsBoundNonceAndMinimalTemporaryReadGrant() {
+    @Test fun validatedSelectionAutomaticallyReturnsBoundNonceAndMinimalTemporaryReadGrant() {
         val activity = launch().get(); bindSelected(activity)
         assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode)
-        button(activity,"use").performClick(); drain(activity)
+        advance(activity); drain(activity)
         assertEquals(Activity.RESULT_OK, shadowOf(activity).resultCode)
         val result = shadowOf(activity).resultIntent
         assertEquals(request.nonce, result.getStringExtra("nonce"))
@@ -123,8 +125,8 @@ class FactoryDocumentActivityTest {
         control.pause()
         assertTrue(coordinator.needsRecovery())
         shadowOf(activity).callOnActivityResult(6701, Activity.RESULT_OK, Intent().setData(Uri.parse("content://synthetic/document/late")).addFlags(1))
-        control.resume(); button(activity,"use").performClick()
-        assertFalse(button(activity,"use").isEnabled)
+        control.resume(); advance(activity)
+        assertNull(button(activity, "use"))
         assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode)
     }
     @Test fun recreationNeverReplaysOldPickerOrRecoversSelection() {
@@ -142,14 +144,14 @@ class FactoryDocumentActivityTest {
         val epoch = MemoryUiAutomationGuard.captureAutomationEpoch()
         lateinit var activity: FactoryDocumentActivity
         assertTrue(MemoryUiAutomationGuard.runAutomated(epoch) { activity = launch().get() })
-        for (name in listOf("choose","use","recover")) {
+        for (name in listOf("choose","recover")) {
             assertFalse(button(activity,name).isEnabled); button(activity,name).performClick()
         }
         assertEquals("idle", coordinator.status())
         assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode)
         assertNull(shadowOf(activity).nextStartedActivity)
     }
-    @Test fun recoveryRequiresHumanForegroundAndDoesNotRestoreGrants() {
+    @Test fun recoveryRequiresActiveForegroundAndDoesNotRestoreGrants() {
         val owner = coordinator.begin(proof.appId,request); coordinator.launch(owner) {}; coordinator.revoke(owner)
         val control = launch(); val activity = control.get()
         assertTrue(button(activity,"recover").isEnabled)
@@ -174,6 +176,78 @@ class FactoryDocumentActivityTest {
         assertTrue(FactoryDocumentCoordinator.consumeRecoveryToken(intent))
         assertFalse(FactoryDocumentCoordinator.consumeRecoveryToken(intent))
         assertFalse(FactoryDocumentCoordinator.consumeRecoveryToken(Intent().putExtra("nativeRecoveryToken", "forged")))
+    }
+
+    private fun launchRequest(): ActivityController<GrantedDocumentActivity> {
+        val picker = android.content.pm.ResolveInfo().apply {
+            activityInfo = android.content.pm.ActivityInfo().apply {
+                packageName = "example.android.picker"; name = "example.android.picker.Picker"; exported = true; enabled = true
+                applicationInfo = android.content.pm.ApplicationInfo().apply { packageName = "example.android.picker"; flags = android.content.pm.ApplicationInfo.FLAG_SYSTEM; enabled = true }
+            }
+        }
+        shadowOf(context.packageManager).addResolveInfoForIntent(Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("text/plain"), picker)
+        val control = Robolectric.buildActivity(GrantedDocumentActivity::class.java, Intent().putExtra("operation", "open").putExtra("mimeType", request.mimeType).putExtra("nonce", request.nonce))
+        controllers += control; shadowOf(control.get()).setCallingPackage(proof.appId)
+        control.create().start().resume().visible(); repeat(3) { drain(control.get()) }
+        return control
+    }
+    @Test fun defaultAllowAutomaticallyStartsPickerWithoutGuardDuringAutomation() {
+        val action = MemoryUiAutomationGuard.beginAsyncAction(MemoryUiAutomationGuard.captureAutomationEpoch())
+        try {
+            val activity = launchRequest().get()
+            assertEquals("picker", coordinator.status()); assertNotNull(shadowOf(activity).nextStartedActivityForResult)
+            assertFalse(MemoryUiAutomationGuard.isProtected()); assertNull(button(activity, "use"))
+            assertEquals(android.view.View.GONE, button(activity, "choose").visibility)
+        } finally { action.close() }
+    }
+    @Test fun denyDoesNotLaunchPickerOrCreateJournalOrGuard() {
+        policy.setDefaultMode(FactoryOperationPolicy.Mode.DENY)
+        val activity = launchRequest().get()
+        assertTrue(activity.isFinishing); assertNull(shadowOf(activity).nextStartedActivityForResult)
+        assertFalse(File(root, "interaction.json").exists()); assertFalse(MemoryUiAutomationGuard.isProtected())
+        assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode)
+    }
+    @Test fun configuredAskOwnsGuardOnlyUntilOneApproval() {
+        policy.setDefaultMode(FactoryOperationPolicy.Mode.ASK)
+        val activity = launchRequest().get()
+        assertEquals("review", coordinator.status()); assertNull(shadowOf(activity).nextStartedActivityForResult)
+        assertTrue(MemoryUiAutomationGuard.isProtected()); assertTrue(button(activity, "choose").isEnabled)
+        button(activity, "choose").performClick(); repeat(3) { drain(activity) }
+        assertEquals("picker", coordinator.status()); assertNotNull(shadowOf(activity).nextStartedActivityForResult)
+        assertFalse(MemoryUiAutomationGuard.isProtected()); assertNull(button(activity, "use"))
+    }
+    @Test fun policyRevocationCancelsOutstandingPickerAuthorityWithoutReturn() {
+        val activity = launchRequest().get(); assertEquals("picker", coordinator.status())
+        policy.setDefaultMode(FactoryOperationPolicy.Mode.DENY); repeat(3) { drain(activity) }
+        assertTrue(coordinator.needsRecovery()); assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode)
+        assertNull(shadowOf(activity).resultIntent); assertFalse(MemoryUiAutomationGuard.isProtected())
+    }
+
+    @Test fun recoveryUnderAllowNeedsNoGlobalHumanGuardAndNeverReplays() = recoverWithoutGuard(FactoryOperationPolicy.Mode.ALLOW_ALWAYS)
+    @Test fun recoveryUnderDenyNeedsNoGlobalHumanGuardAndNeverReplays() = recoverWithoutGuard(FactoryOperationPolicy.Mode.DENY)
+    private fun recoverWithoutGuard(mode: FactoryOperationPolicy.Mode) {
+        val owner = coordinator.begin(proof.appId, request); coordinator.launch(owner) {}; coordinator.revoke(owner)
+        policy.setDefaultMode(mode)
+        val automated = MemoryUiAutomationGuard.beginAsyncAction(MemoryUiAutomationGuard.captureAutomationEpoch())
+        try {
+            val activity = launch().get()
+            assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(button(activity, "recover").isEnabled)
+            button(activity, "recover").performClick(); drain(activity)
+            assertEquals("closed_outcome_unknown", coordinator.status()); assertTrue(activity.isFinishing)
+            assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode); assertNull(shadowOf(activity).resultIntent)
+            assertNull(shadowOf(activity).nextStartedActivityForResult)
+            assertTrue(runCatching { coordinator.pickerTerminal(owner, true) }.isFailure)
+        } finally { automated.close() }
+        policy.setDefaultMode(FactoryOperationPolicy.Mode.ALLOW_ALWAYS)
+        assertTrue(runCatching { coordinator.begin(proof.appId, request) }.isFailure)
+    }
+    @Test fun actualAskReviewRemainsTaintedWhenAutomationWasInFlight() {
+        policy.setDefaultMode(FactoryOperationPolicy.Mode.ASK)
+        val automated = MemoryUiAutomationGuard.beginAsyncAction(MemoryUiAutomationGuard.captureAutomationEpoch())
+        val activity = try { launchRequest().get() } finally { automated.close() }
+        assertFalse(button(activity, "choose").isEnabled); button(activity, "choose").performClick(); drain(activity)
+        assertEquals("review", coordinator.status()); assertNull(shadowOf(activity).nextStartedActivityForResult)
+        assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode)
     }
 
 }

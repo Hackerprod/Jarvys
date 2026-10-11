@@ -31,14 +31,16 @@ import java.util.concurrent.TimeUnit
 @Config(sdk = [34], application = android.app.Application::class)
 class FactoryAudioActivityTest {
     private val context: Context get() = ApplicationProvider.getApplicationContext()
+    private val policy = FactoryOperationPolicy.inMemory(FactoryOperationPolicy.Mode.ASK)
     private val root get() = File(context.noBackupFilesDir, "factory-audio")
     private val proof = FactoryDocumentCoordinator.Proof("example.factory.app", "a".repeat(64), "b".repeat(64), 2, "c".repeat(64))
     private lateinit var coordinator: FactoryAudioCoordinator
-    private val controllers = mutableListOf<ActivityController<FactoryAudioActivity>>()
+    private val controllers = mutableListOf<ActivityController<out FactoryAudioActivity>>()
     private val io = Executors.newSingleThreadExecutor()
     private class FakeAudio : FactoryAudioPlayer.Platform, FactoryAudioPlayer.Track {
         var stops = 0; var releases = 0; var plays = 0; var writes = 0; var releaseFails = false
         var beforeWrite: (() -> Unit)? = null
+        var onMarker: (() -> Unit)? = null
         override fun requireMain() { }
         override fun requireWorker() { }
         override fun create(pcm: FactoryAudioPcm): FactoryAudioPlayer.Track = this
@@ -50,19 +52,20 @@ class FactoryAudioActivityTest {
         override fun schedule(delayMs: Long, callback: () -> Unit): Any = callback
         override fun cancel(token: Any) { }
         override fun write(pcm: FactoryAudioPcm): Int { writes++; beforeWrite?.invoke(); return pcm.pcmBytes }
-        override fun marker(frames: Int, callback: () -> Unit) { }
+        override fun marker(frames: Int, callback: () -> Unit) { onMarker = callback }
         override fun play() { plays++ }
         override fun stop() { stops++ }
         override fun release() { releases++; if (releaseFails) error("synthetic release failure") }
     }
     @Before fun setup() {
         FactoryStartupTestIsolation.releaseCompletedSharingStartup(); root.deleteRecursively()
-        coordinator = FactoryAudioCoordinator(context, { proof }, { _, active -> active(); syntheticWav() })
+        coordinator = FactoryAudioCoordinator(context, policy, { proof }, { _, active -> active(); syntheticWav() })
         FactoryAudioCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(null, coordinator)
     }
     @After fun cleanup() {
         drain()
         controllers.forEach { runCatching { it.pause().stop().destroy() } }
+        drain()
         io.shutdown(); assertTrue(io.awaitTermination(5, TimeUnit.SECONDS))
         FactoryAudioCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(null, null)
         for (name in listOf("protectedSurfaces", "taintedSurfaces", "activeActions")) MemoryUiAutomationGuard::class.java.getDeclaredField(name).apply { isAccessible = true }.setInt(null, 0)
@@ -70,14 +73,22 @@ class FactoryAudioActivityTest {
         root.deleteRecursively()
     }
     private fun drain() {
-        val worker = FactoryAudioCoordinator.WORKER; worker.prestartCoreThread()
-        val barrier = FutureTask(Callable { Unit })
-        check(worker.queue.offer(barrier, 5, TimeUnit.SECONDS)); barrier.get(5, TimeUnit.SECONDS)
-        shadowOf(Looper.getMainLooper()).idle()
+        repeat(3) {
+            val worker = FactoryAudioCoordinator.WORKER; worker.prestartCoreThread()
+            val barrier = FutureTask(Callable { Unit })
+            check(worker.queue.offer(barrier, 5, TimeUnit.SECONDS)); barrier.get(5, TimeUnit.SECONDS)
+            shadowOf(Looper.getMainLooper()).idle()
+        }
     }
-    private fun launch(saved: Bundle? = null, intent: Intent = FactoryAudioCoordinator.recoveryIntent(context)): ActivityController<FactoryAudioActivity> {
+    private fun launch(saved: Bundle? = null, intent: Intent = FactoryAudioCoordinator.recoveryIntent(context), reviewFixture: Boolean = true): ActivityController<FactoryAudioActivity> {
         val controller = Robolectric.buildActivity(FactoryAudioActivity::class.java, intent)
         controllers += controller; controller.create(saved).start().resume().visible()
+        // Existing cleanup tests inject a verified live session at the same point as real incoming registration.
+        // A genuine recovery Activity never gains playback authority.
+        if (reviewFixture && coordinator.session() != null && !controller.get().isFinishing) {
+            set(controller.get(), "recoveryOnly", false)
+            if (coordinator.session()!!.authority.requiresApproval) set(controller.get(), "guard", MemoryUiAutomationGuard.enterProtectedSurface())
+        }
         controller.get().onWindowFocusChanged(true)
         return controller
     }
@@ -97,6 +108,64 @@ class FactoryAudioActivityTest {
         val type = com.jarvys.factory.runtime.AudioPlaybackControl.Registration::class.java
         val constructor = type.getDeclaredConstructor(android.os.IBinder::class.java, Runnable::class.java).apply { isAccessible = true }
         value.registration = constructor.newInstance(Binder(), Runnable { value.revoke() })
+    }
+    private fun incoming(backend: FakeAudio): FactoryAudioRecordingActivity {
+        val uid = Binder.getCallingUid(); val pm = shadowOf(context.packageManager)
+        pm.installPackage(android.content.pm.PackageInfo().apply {
+            packageName = proof.appId
+            applicationInfo = android.content.pm.ApplicationInfo().apply { packageName = proof.appId; this.uid = uid; enabled = true }
+        })
+        pm.setPackagesForUid(uid, proof.appId)
+        val nonce = "d".repeat(64)
+        val control = com.jarvys.factory.runtime.AudioPlaybackControl(nonce) { caller -> caller == uid }
+        val request = Intent(context, FactoryAudioRecordingActivity::class.java).putExtras(Bundle().apply {
+            putInt("protocolVersion", 1); putString("nonce", nonce); putInt("size", syntheticWav().size)
+            putString("sha256", "e".repeat(64)); putBinder("transfer", Binder()); putBinder("control", control)
+        })
+        FactoryAudioRecordingActivity.playerFactory = { FactoryAudioPlayer(backend) }
+        val controller = Robolectric.buildActivity(FactoryAudioRecordingActivity::class.java, request); controllers += controller
+        shadowOf(controller.get()).setCallingPackage(proof.appId)
+        controller.create().start().resume().visible(); controller.get().onWindowFocusChanged(true); drain()
+        return controller.get()
+    }
+    @Test fun allowAutomaticallyPlaysOnceAndCompletesAfterConfirmedNativeCleanup() {
+        policy.setDefaultMode(FactoryOperationPolicy.Mode.ALLOW_ALWAYS)
+        val backend = FakeAudio(); val activity = incoming(backend)
+        assertEquals(1, backend.plays); assertFalse(MemoryUiAutomationGuard.isProtected())
+        assertEquals(android.view.View.GONE, button(activity, "play").visibility)
+        backend.onMarker!!.invoke(); drain()
+        assertEquals(1, backend.releases); assertEquals(1, backend.plays); assertTrue(activity.isFinishing)
+        assertEquals(Activity.RESULT_OK, shadowOf(activity).resultCode); assertNull(coordinator.session())
+        assertTrue(shadowOf(activity).resultIntent.getBooleanExtra("playbackAttempted", false))
+        assertFalse(shadowOf(activity).resultIntent.getBooleanExtra("audibilityConfirmed", true))
+    }
+    @Test fun askGetsOneMeaningfulApprovalAndReleasesGuardBeforePlayback() {
+        val backend = FakeAudio(); val activity = incoming(backend)
+        assertEquals(0, backend.plays); assertTrue(MemoryUiAutomationGuard.isProtected())
+        button(activity, "play").performClick(); drain()
+        assertEquals(1, backend.plays); assertFalse(MemoryUiAutomationGuard.isProtected())
+        backend.onMarker!!.invoke(); drain(); assertEquals(Activity.RESULT_OK, shadowOf(activity).resultCode)
+    }
+    @Test fun deniedAudioAcquiresNoPcmPlayerOrJournal() {
+        policy.setDefaultMode(FactoryOperationPolicy.Mode.DENY)
+        val backend = FakeAudio(); val activity = incoming(backend)
+        assertTrue(activity.isFinishing); assertNull(coordinator.session()); assertEquals(0, backend.writes); assertEquals(0, backend.plays)
+        assertFalse(File(root, "interaction.json").exists()); assertFalse(MemoryUiAutomationGuard.isProtected())
+    }
+    @Test fun policyChangeStopsActiveAudioAndReturnsNoAudibilityClaim() {
+        policy.setDefaultMode(FactoryOperationPolicy.Mode.ALLOW_ALWAYS)
+        val backend = FakeAudio(); val activity = incoming(backend); assertEquals(1, backend.plays)
+        policy.setMode(FactoryOperationPolicy.Subject.installed(proof), FactoryOperationPolicy.Operation.AUDIO_PLAY, FactoryOperationPolicy.Mode.DENY)
+        shadowOf(Looper.getMainLooper()).idle(); drain()
+        assertEquals(1, backend.releases); assertEquals(1, backend.plays); assertTrue(activity.isFinishing)
+        assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode); assertNull(shadowOf(activity).resultIntent)
+        assertTrue(FactoryInteractionAdmission.available())
+    }
+    @Test fun recoveryNeverReplaysAnAllowSession() {
+        policy.setDefaultMode(FactoryOperationPolicy.Mode.ALLOW_ALWAYS)
+        val value = session(); register(value); val backend = FakeAudio(); value.player = FactoryAudioPlayer(backend)
+        val activity = launch(reviewFixture = false).get(); drain()
+        assertFalse(button(activity, "play").isEnabled); assertEquals(0, backend.plays); assertFalse(value.attempted)
     }
     @Test fun actualWorkerPreparationMustReturnAndDiscardBeforeNewRecoveryCanClose() {
         val value = session(); register(value)
@@ -233,4 +302,10 @@ class FactoryAudioActivityTest {
         assertFalse(shadowOf(activity).resultIntent.getBooleanExtra("audibilityConfirmed", true))
         assertFalse(shadowOf(activity).resultIntent.getBooleanExtra("playbackAttempted", true))
     }
+}
+
+/** Uses the real request/registration flow with a fake native audio implementation. */
+class FactoryAudioRecordingActivity : FactoryAudioActivity() {
+    override fun createAudioPlayer(): FactoryAudioPlayer = playerFactory()
+    companion object { lateinit var playerFactory: () -> FactoryAudioPlayer }
 }

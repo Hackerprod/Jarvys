@@ -20,7 +20,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.CancellationException
 
-/** Full-only, explicitly selected project execution. Principal ALLOW never authorizes a bot command. */
+/** Full-only, selected project execution governed by the separately configurable Coding policy. */
 class CodingExecutionTools internal constructor(
     private val scope: ProjectScope,
     private val jobs: CodingJobManager,
@@ -52,7 +52,7 @@ class CodingExecutionTools internal constructor(
                         "expected_scope_version" to type("integer"), "timeout_seconds" to mapOf("type" to "integer", "minimum" to 1, "maximum" to MAX_TIMEOUT_SECONDS, "default" to DEFAULT_TIMEOUT_SECONDS),
                         "required_tools" to mapOf("type" to "array", "items" to type("string")))
                     required = listOf("command", "expected_scope_version")
-                    description = "Start one approved non-interactive command job in this exact project. ASK on every invocation, even when principal commands are allowed. Stdin is closed; no PTY, daemon service or automatic installation. Uses a 900-second default timeout; explicit timeout_seconds must be 1..3600. Requires current expected_scope_version; holds the project writer lease until reaped. Poll project_jobs; never repeat an uncertain command."
+                    description = "Start one non-interactive command job in this exact project under the Coding ALLOW/ASK/DENY policy. ALLOW runs without a card, ASK requests approval, and DENY blocks execution. Coding defaults to ALLOW only when no Coding or legacy Linux choice is saved. Stdin is closed; no PTY or managed daemon service. Preflight does not install missing tools. Uses a 900-second default timeout; explicit timeout_seconds must be 1..3600. Requires current expected_scope_version; holds the project writer lease until reaped. Poll project_jobs; never repeat an uncertain command."
                 }
                 JOBS -> {
                     properties = linkedMapOf("action" to mapOf("type" to "string", "enum" to listOf("list", "read", "wait", "cancel")),
@@ -87,7 +87,7 @@ class CodingExecutionTools internal constructor(
             .put("device_abis", JSONArray(status.deviceAbis)).put("required_abi", status.requiredAbi)
             .put("prepared_architecture", status.preparedArchitecture.ifBlank { null } ?: JSONObject.NULL)
             .put("probe", status.probe).put("tools", JSONObject(status.tools)).put("recovery", recovery)
-            .put("policy", if (autonomy.policy() == AutonomyPolicy.DENY) "deny" else "ask")
+            .put("policy", autonomy.projectPolicy().name.lowercase(java.util.Locale.ROOT))
             .put("notice", "PRoot is not a security sandbox; the prepared system rootfs is shared and writable. No command was run by this status check; tool versions were not executed.").toString())
     }
 
@@ -111,13 +111,13 @@ class CodingExecutionTools internal constructor(
         }
         val requiredTools = rawTools.filterIsInstance<String>()
         scope.require(ProjectScope.Capability.WRITE)
-        check(autonomy.policy() != AutonomyPolicy.DENY) { "Project execution is denied by the current command policy." }
-        val revision = autonomy.revision.value
+        var authorization = autonomy.projectAuthorization()
+        check(authorization.policy != AutonomyPolicy.DENY) { "Project execution is denied by the current Coding command policy." }
         fun validatePolicy() {
             token.throwIfCancelled()
             check(available(EXEC, token) && available(JOBS, token)) { "The profile capability or active bot changed; command not launched." }
-            check(autonomy.policy() != AutonomyPolicy.DENY && autonomy.revision.value == revision) {
-                "Command policy changed while waiting; this approval is no longer valid. Command not launched."
+            check(autonomy.projectAuthorization() == authorization) {
+                "Command policy changed while waiting; this authorization is no longer valid. Command not launched."
             }
         }
         fun validate() {
@@ -130,25 +130,39 @@ class CodingExecutionTools internal constructor(
         }
         validate()
         check(version == scope.version()) { "Project version changed; inspect it before requesting execution." }
-        val guestCwd = if (cwd == ".") "/workspace" else "/workspace/$cwd"
-        val lines = mutableListOf(
-            ConnectorUiText(R.string.full_project_exec_bot, listOf(requester), "Bot: $requester"),
-            ConnectorUiText(R.string.full_project_exec_project, listOf(scope.id()), "Project: ${scope.id()}"),
-            ConnectorUiText(R.string.full_project_exec_command, listOf(command), "Command (literal):\n$command"),
-            ConnectorUiText(R.string.full_project_exec_cwd, listOf(cwd, guestCwd), "Project cwd: $cwd (guest $guestCwd)"),
-            ConnectorUiText(R.string.full_project_exec_effects, fallback = "Effects: may read, write or delete project files, execute programs and use this app's network access. A project writer lease is held until process cleanup."),
-            ConnectorUiText(R.string.full_project_exec_warning, fallback = "PRoot is not a security sandbox; the prepared system rootfs is shared and writable. Project cwd and a limited mount do not contain malicious code or isolate it from this app's privileges."),
-            ConnectorUiText(R.string.full_project_exec_noninteractive, fallback = "Non-interactive: stdin is closed. A read-only environment probe runs before the literal command. Missing packages are never installed automatically."),
-            ConnectorUiText(R.string.full_project_exec_timeout, listOf(timeoutSeconds), "Requested timeout (seconds): $timeoutSeconds"))
-        if (prior.isNotEmpty()) {
-            val ids = prior.joinToString("\n") { "${it.id}: ${it.state}" }
-            lines += ConnectorUiText(R.string.full_project_exec_prior_outcomes, listOf(ids), "Prior interrupted or uncertain jobs in this project:\n$ids\nTheir exit results are unknown. Do not repeat them automatically. Inspect the project before approving new effects.")
+        if (authorization.policy == AutonomyPolicy.ASK) {
+            val guestCwd = if (cwd == ".") "/workspace" else "/workspace/$cwd"
+            val lines = mutableListOf(
+                ConnectorUiText(R.string.full_project_exec_bot, listOf(requester), "Bot: $requester"),
+                ConnectorUiText(R.string.full_project_exec_project, listOf(scope.id()), "Project: ${scope.id()}"),
+                ConnectorUiText(R.string.full_project_exec_command, listOf(command), "Command (literal):\n$command"),
+                ConnectorUiText(R.string.full_project_exec_cwd, listOf(cwd, guestCwd), "Project cwd: $cwd (guest $guestCwd)"),
+                ConnectorUiText(R.string.full_project_exec_effects, fallback = "Effects: may read, write or delete project files, execute programs and use this app's network access. A project writer lease is held until process cleanup."),
+                ConnectorUiText(R.string.full_project_exec_warning, fallback = "PRoot is not a security sandbox; the prepared system rootfs is shared and writable. Project cwd and a limited mount do not contain malicious code or isolate it from this app's privileges."),
+                ConnectorUiText(R.string.full_project_exec_noninteractive, fallback = "Non-interactive: stdin is closed. A read-only environment probe runs before the literal command. Missing packages are never installed automatically."),
+                ConnectorUiText(R.string.full_project_exec_timeout, listOf(timeoutSeconds), "Requested timeout (seconds): $timeoutSeconds"))
+            if (prior.isNotEmpty()) {
+                val ids = prior.joinToString("\n") { "${it.id}: ${it.state}" }
+                lines += ConnectorUiText(R.string.full_project_exec_prior_outcomes, listOf(ids), "Prior interrupted or uncertain jobs in this project:\n$ids\nTheir exit results are unknown. Do not repeat them automatically. Inspect the project before approving new effects.")
+            }
+            if (unreadable > 0) lines += ConnectorUiText(R.string.full_project_exec_unreadable_journals, listOf(unreadable), "Unreadable prior job records: $unreadable. They may conceal an uncertain previous effect. Original records are preserved; inspect the project before approving new effects.")
+            val decision = gate.request(ApprovalSummary("Approve project command", lines.map { it.fallback }, allowAlwaysAvailable = true,
+                autonomyConnectorId = LinuxExecAutonomy.PROJECT_CONNECTOR_ID, autonomyOperationName = LinuxExecAutonomy.PROJECT_OPERATION_NAME,
+                localizedTitle = ConnectorUiText(R.string.full_project_exec_title, fallback = "Approve project command"),
+                localizedLines = lines, requester = requester, requesterColorKey = colorKey), token)
+            when (decision) {
+                ApprovalDecision.APPROVED_ALLOW_ALWAYS -> {
+                    val updated = autonomy.projectAuthorization()
+                    // Accept only the policy transition performed by this card, never intervening revocation.
+                    check(updated.policy == AutonomyPolicy.ALLOW && updated.revision == authorization.revision + 1) {
+                        "Coding permission changed unexpectedly during approval. No command was launched."
+                    }
+                    authorization = updated
+                }
+                ApprovalDecision.APPROVED, ApprovalDecision.APPROVED_ALLOW_FAILED -> Unit
+                else -> return CoreToolResult.failure("Project command was not approved. No command was launched; do not retry through another tool.")
+            }
         }
-        if (unreadable > 0) lines += ConnectorUiText(R.string.full_project_exec_unreadable_journals, listOf(unreadable), "Unreadable prior job records: $unreadable. They may conceal an uncertain previous effect. Original records are preserved; inspect the project before approving new effects.")
-        val decision = gate.request(ApprovalSummary("Approve project command", lines.map { it.fallback }, allowAlwaysAvailable = false,
-            localizedTitle = ConnectorUiText(R.string.full_project_exec_title, fallback = "Approve project command"),
-            localizedLines = lines, requester = requester, requesterColorKey = colorKey), token)
-        if (decision != ApprovalDecision.APPROVED) return CoreToolResult.failure("Project command was not approved. No command was launched; do not retry through another tool.")
         validate()
         val result = jobs.start(scope, owner(token), command, cwd, version, timeout, token, ::validate) { completed(token, it) }
         return CoreToolResult.success(snapshotJson(result).put("message", "Job accepted. Read or wait with project_jobs; do not report completion while it is pending.").toString())

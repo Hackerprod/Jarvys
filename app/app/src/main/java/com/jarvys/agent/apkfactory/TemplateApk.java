@@ -90,11 +90,16 @@ public final class TemplateApk {
         validateSpec(expected);
         return inspectFiles(readZip(apk,true), expected, ManifestPlan.Profile.CURRENT);
     }
-    /** Only the receipt-owning service may opt in to the exact historical v1 profile. */
+    /** Exact closed-v1-current receipt layout: safe-area attributes, before clipboard broker queries. */
+    public static ManifestInfo verifyExistingClosedV1(byte[] apk, Spec expected) throws IOException {
+        validateSpec(expected);
+        return inspectFiles(readZip(apk,true), expected, ManifestPlan.Profile.V1_BEFORE_CLIPBOARD_BROKER);
+    }
+    /** Only the receipt-owning service may opt in for artifacts predating a manifest contract marker. */
     public static ManifestInfo verifyExistingV1(byte[] apk, Spec expected) throws IOException {
         validateSpec(expected);
         Map<String,byte[]> files=readZip(apk,true);
-        try { return inspectFiles(files,expected,ManifestPlan.Profile.CURRENT); }
+        try { return inspectFiles(files,expected,ManifestPlan.Profile.V1_BEFORE_CLIPBOARD_BROKER); }
         catch(IOException current) {
             try { return inspectFiles(files,expected,ManifestPlan.Profile.V1_BEFORE_SAFE_AREA); }
             catch(IOException legacy) { throw new IOException("Artifact does not match a supported v1 manifest. Rebuild the original project with the same appId and retained key; no receipt or key was replaced.",legacy); }

@@ -51,14 +51,14 @@ class FactoryDataBackupApplicationStartupTest {
             Instrumentation.newApplication(FactoryInstallApplication::class.java, context).onCreate()
             val value = created()
             assertTrue(value.isBusy()); assertNull(value.session()); assertFalse(value.canBegin())
-            assertTrue(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
-            assertTrue(runCatching { MemoryUiAutomationGuard.captureAutomationEpoch() }.isFailure)
+            assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
+            assertTrue(runCatching { MemoryUiAutomationGuard.captureAutomationEpoch() }.isSuccess)
         } finally { release.countDown() }
         FactoryStartupTestIsolation.awaitSharingWorkerCompletion()
         val value = created(); assertTrue(value.needsRecovery()); assertEquals("outcome_unknown", value.status()); assertNull(value.session())
         assertTrue(runCatching { worker { value.close(null, true, false) {} } }.isFailure)
         assertTrue(runCatching { worker { value.close(null, true, true) { error("No human acknowledgement") } } }.isFailure)
-        assertTrue(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
+        assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
         worker { value.close(null, true, true) {} }
         assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available())
         val saved = JSONObject(File(root, "interaction.json").readText())

@@ -74,8 +74,8 @@ internal class FactoryFileShareStoreTest : FactoryFileShareTestSupport() {
         for (size in listOf(-1, 0, FactoryFileShareStore.MAX_BYTES + 1)) reject { stage(store, size = size) }
         for (filename in listOf("../secret", "a/b", "a\\b", "..", "a\nb", "a.", "x".repeat(121))) reject { stage(store, filename = filename) }
         reject { stage(store, sha256 = "0".repeat(63)) }
-        reject { store.stage("guess", "report.txt", "text/plain", bytes.size, digest(bytes), Binder()) {} }
-        reject { store.stage(nonce, "report.txt", "*/*", bytes.size, digest(bytes), Binder()) {} }
+        reject { store.stage("guess", "report.txt", "text/plain", bytes.size, digest(bytes), Binder(), {}) }
+        reject { store.stage(nonce, "report.txt", "*/*", bytes.size, digest(bytes), Binder(), {}) }
         assertFalse(copied)
         assertFalse(root.exists())
     }

@@ -38,7 +38,7 @@ class FactoryBrowserApplicationStartupTest {
         worker {}
         val field = FactoryBrowserCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }
         val browser = field.get(null) as? FactoryBrowserCoordinator
-        if (browser?.needsRecovery() == true) worker { browser.close(null, true, true) {} }
+        if (browser?.needsRecovery() == true) worker { browser.close(null, true) {} }
         FactoryStartupTestIsolation.releaseCompletedSharingStartup()
         assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available())
         for (name in listOf("factory-browser", "factory-audio", "factory-file-sharing")) File(context.noBackupFilesDir, name).deleteRecursively()
@@ -53,26 +53,25 @@ class FactoryBrowserApplicationStartupTest {
             Instrumentation.newApplication(FactoryInstallApplication::class.java, context).onCreate()
             val browser = FactoryBrowserCoordinator.get(context)
             assertTrue(browser.isBusy()); assertFalse(browser.canBegin()); assertNull(browser.session())
-            assertTrue(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
-            assertTrue(runCatching { MemoryUiAutomationGuard.captureAutomationEpoch() }.isFailure)
+            assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
+            assertTrue(runCatching { MemoryUiAutomationGuard.captureAutomationEpoch() }.isSuccess)
             assertFalse(FactoryDocumentCoordinator.get(context).canBegin()); assertFalse(FactoryAudioCoordinator.get(context).canBegin())
         } finally { release.countDown() }
         worker {}; FactoryStartupTestIsolation.awaitSharingWorkerCompletion()
         val browser = FactoryBrowserCoordinator.get(context)
         assertFalse(browser.isBusy()); assertTrue(browser.needsRecovery()); assertEquals("outcome_unknown", browser.status()); assertNull(browser.session())
-        assertTrue(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
-        assertTrue(runCatching { worker { browser.close(null, true, false) {} } }.isFailure)
-        assertTrue(runCatching { worker { browser.close(null, true, true) { error("No human confirmation") } } }.isFailure)
+        assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
+        assertTrue(runCatching { worker { browser.close(null, true) { error("No human confirmation") } } }.isFailure)
         assertTrue(browser.needsRecovery()); assertFalse(FactoryInteractionAdmission.available())
-        assertNull(worker { browser.close(null, true, true) {} })
+        assertNull(worker { browser.close(null, true) {} })
         assertEquals("closed_outcome_unknown", browser.status()); assertNull(browser.session())
         assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available())
         val journal = JSONObject(File(root, "interaction.json").readText())
         assertEquals(setOf("schemaVersion", "state", "open", "nonce"), journal.keys().asSequence().toSet()); assertFalse(journal.getBoolean("open"))
     }
-    @Test fun openBrowserJournalBlocksAutomationBeforeAsynchronousRestoreEvenStarts() = startup(JSONObject()
+    @Test fun openBrowserJournalDoesNotBlockAutomationBeforeAsynchronousRestoreEvenStarts() = startup(JSONObject()
         .put("schemaVersion", 1).put("state", "launch_pending").put("open", true).put("nonce", "a".repeat(64)).toString())
-    @Test fun corruptBrowserJournalRetainsGuardThroughRealApplicationStartupAndHumanRecovery() = startup("{")
+    @Test fun corruptBrowserJournalRetainsFamilyStateThroughRealApplicationStartupAndHumanRecovery() = startup("{")
     @Test fun reviewJournalRestoresOnlyUnknownOutcomeWithoutRecreatingReviewAuthority() = startup(JSONObject()
         .put("schemaVersion", 1).put("state", "review").put("open", true).put("nonce", "b".repeat(64)).toString())
 }

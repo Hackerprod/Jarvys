@@ -29,7 +29,7 @@ import com.jarvys.agent.MemoryUiAutomationGuard
 import com.jarvys.agent.R
 import java.util.concurrent.RejectedExecutionException
 
-/** Native, human-only exact-plan review. Neither archive values nor URI authority enter WebView. */
+/** Native policy-bound exact-plan authorization. Neither archive values nor URI authority enter WebView. */
 open class FactoryDataBackupActivity : ComponentActivity() {
     private val coordinator by lazy { FactoryDataBackupCoordinator.get(applicationContext) }
     private lateinit var guard: MemoryUiAutomationGuard.Lease
@@ -62,7 +62,6 @@ open class FactoryDataBackupActivity : ComponentActivity() {
         val caller = callingPackage
         val incoming = if (!recoveryEntry && savedInstanceState == null && caller != null) runCatching { FactoryDataBackupCoordinator.Request.parse(intent) }.getOrNull() else null
         if (!recoveryEntry && incoming == null) { rejected = true; finish(); return }
-        guard = MemoryUiAutomationGuard.enterProtectedSurface()
         if (recoveryEntry) session = coordinator.session()
         val column = PrivateReviewColumn(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 32, 24, 32) }
         column.addView(TextView(this).apply { privateBackup(); setText(R.string.factory_data_backup_title); textSize = 22f })
@@ -111,7 +110,7 @@ open class FactoryDataBackupActivity : ComponentActivity() {
                     runOnUiThread {
                         working = false
                         result.onSuccess { value ->
-                            if (generation == admitted && !isDestroyed && !isFinishing && !value.revoked.get()) session = value
+                            if (generation == admitted && !isDestroyed && !isFinishing && !value.revoked.get()) { session = value; if (value.grant?.requiresApproval == true) guard = MemoryUiAutomationGuard.enterProtectedSurface() }
                             else { value.revoke(); value.abandoned = true }
                         }.onFailure {
                             owned?.let { it.revoke(); if (isDestroyed || isFinishing) it.abandoned = true }
@@ -120,7 +119,7 @@ open class FactoryDataBackupActivity : ComponentActivity() {
                             rejected = true
                             if (session == null) finish()
                         }
-                        if (!isDestroyed && !isFinishing) { populateDetails(); render() }
+                        if (!isDestroyed && !isFinishing) { populateDetails(); render(); advanceAllowed() }
                     }
                 }
             }
@@ -140,8 +139,18 @@ open class FactoryDataBackupActivity : ComponentActivity() {
         }) rejectStartup()
     }
     private fun unoccluded(event: MotionEvent) = Build.VERSION.SDK_INT < 29 || event.flags and MotionEvent.FLAG_WINDOW_IS_PARTIALLY_OBSCURED == 0
-    private fun humanReady() = resumed && focused && ::guard.isInitialized && guard.isReadyForUser && !isFinishing && !isDestroyed
-    private fun requireHuman(expected: Long = generation) { check(humanReady() && generation == expected); guard.requireHumanUiInteraction() }
+    private fun humanReady() = resumed && focused && (!::guard.isInitialized || guard.isReadyForUser) && !isFinishing && !isDestroyed
+    private fun requireHuman(expected: Long = generation) {
+        check(humanReady() && generation == expected)
+        if (::guard.isInitialized) guard.requireHumanUiInteraction()
+        if (session?.grant?.requiresApproval == true) check(::guard.isInitialized)
+    }
+    private fun advanceAllowed() {
+        val value = session ?: return
+        if (working || rejected || recoveryEntry || !humanReady() || value.revoked.get() || value.grant?.requiresApproval != false) return
+        if (coordinator.status() == "review") runCatching { approveNative() }.onFailure { reject() }
+        else if (coordinator.status() == "selected" && !pickerOwned) runCatching { deliverNative() }.onFailure { reject() }
+    }
     private fun reject() { rejected = true; selected = null; session?.revoke(); render() }
     private fun execute(onRejected: (() -> Unit)? = null, action: () -> Unit) {
         try { FactoryDataBackupCoordinator.WORKER.execute(action) }
@@ -151,7 +160,7 @@ open class FactoryDataBackupActivity : ComponentActivity() {
         }
     }
     private fun approveNative() {
-        requireHuman(); check(acknowledgement.isChecked && !recoveryEntry)
+        requireHuman(); check(!recoveryEntry)
         val value = session ?: error("No backup plan")
         if (value.plan.operation == "import") { deliverNative(); return }
         val expected = generation; working = true; render()
@@ -165,7 +174,7 @@ open class FactoryDataBackupActivity : ComponentActivity() {
                 working = false
                 result.onSuccess { picker ->
                     try {
-                        requireHuman(expected); coordinator.requireActive(value); check(acknowledgement.isChecked)
+                        requireHuman(expected); coordinator.requireActive(value); value.grant!!.checkBeforeEffect()
                         pickerOwned = true; launching = true; startActivityForResult(picker, PICKER)
                     } catch (_: Exception) {
                         // A failed or uncertain dispatch never becomes another launch opportunity.
@@ -176,7 +185,7 @@ open class FactoryDataBackupActivity : ComponentActivity() {
         }
     }
     private fun deliverNative() {
-        requireHuman(); check(acknowledgement.isChecked && !recoveryEntry)
+        requireHuman(); check(!recoveryEntry)
         val value = session ?: error("No backup plan"); check(!pickerOwned)
         val uri = if (value.plan.operation == "export") selected ?: error("No selected document") else null
         if (uri != null) requireWriteGrant(uri)
@@ -186,15 +195,18 @@ open class FactoryDataBackupActivity : ComponentActivity() {
             runOnUiThread {
                 working = false
                 result.onSuccess { receipt ->
+                    var delivered = false
                     try {
-                        requireHuman(expected); check(acknowledgement.isChecked)
+                        requireHuman(expected)
                         FactoryDataBackupCoordinator.checkDeadline(value.plan)
                         if (uri != null) {
                             requireWriteGrant(uri)
                             receipt.data = uri; receipt.clipData = ClipData.newRawUri("backup", uri); receipt.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
                         }
-                        setResult(Activity.RESULT_OK, receipt)
-                    } catch (_: Exception) { setResult(Activity.RESULT_CANCELED) }
+                        coordinator.requireActive(value); value.grant!!.checkBeforeEffect()
+                        setResult(Activity.RESULT_OK, receipt); delivered = true
+                    } catch (_: Exception) { value.revoke(); setResult(Activity.RESULT_CANCELED) }
+                    if (value.request.protocolVersion == 1) coordinator.finishLegacyHandoff(value, delivered)
                     selected = null; closed = true; session = null; finish()
                 }.onFailure { reject() }
             }
@@ -251,7 +263,7 @@ open class FactoryDataBackupActivity : ComponentActivity() {
         selected = if (valid) uri else null; working = true; render()
         execute {
             val result = runCatching { coordinator.pickerTerminal(value, valid) }
-            runOnUiThread { working = false; result.onFailure { reject() }; render() }
+            runOnUiThread { working = false; result.onFailure { reject() }; render(); advanceAllowed() }
         }
     }
     private fun populateDetails() {
@@ -297,19 +309,21 @@ open class FactoryDataBackupActivity : ComponentActivity() {
             if (pickerOwned || value?.pickerOutstanding == true) append("\n\n").append(getString(R.string.factory_data_backup_picker_pending))
         }
         val ready = humanReady() && !working && !rejected && !recoveryEntry && active
-        acknowledgement.isEnabled = ready && coordinator.status() == "review"
-        approve.isEnabled = ready && acknowledgement.isChecked && coordinator.status() == "review"
-        use.visibility = if (value?.plan?.operation == "export") View.VISIBLE else View.GONE
-        use.isEnabled = ready && acknowledgement.isChecked && selected != null && coordinator.status() == "selected"
+        acknowledgement.visibility = View.GONE
+        acknowledgement.isEnabled = false
+        approve.visibility = if (value?.grant?.requiresApproval == true) View.VISIBLE else View.GONE
+        approve.isEnabled = ready && value?.grant?.requiresApproval == true && coordinator.status() == "review"
+        use.visibility = View.GONE
+        use.isEnabled = false
         close.isEnabled = humanReady() && !working && !coordinator.isBusy() && (!recovery || pickerOwned)
         recover.visibility = if (recovery) View.VISIBLE else View.GONE
         recover.isEnabled = humanReady() && !working && !coordinator.isBusy() && (!pickerOwned || value?.abandoned == true)
     }
-    override fun onResume() { super.onResume(); resumed = true; launching = false; terminalPending = false; render() }
+    override fun onResume() { super.onResume(); resumed = true; launching = false; terminalPending = false; render(); advanceAllowed() }
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus); focused = hasFocus
         if (!hasFocus && session != null && !closed && !launching && !pickerOwned && !terminalPending) { generation++; session?.revoke(); selected = null }
-        render()
+        render(); if (hasFocus) advanceAllowed()
     }
     override fun onPause() {
         resumed = false; generation++

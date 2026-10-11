@@ -34,6 +34,24 @@ class FactoryExternalLaunchTargetsTest {
     private val targets get() = FactoryExternalLaunchTargets(context)
     private val spec get() = FactoryExternalLaunchTestPackages.MAPS_QUERY
     private fun denied(block: () -> Unit) = assertTrue("Expected recipient rejection", runCatching(block).isFailure)
+    @Test fun verifiedAndroidDefaultWinsOverAlphabeticDiscoveryOrder() {
+        val first = FactoryExternalLaunchTestPackages.install(context, "example.aaa", 22001)
+        val chosen = FactoryExternalLaunchTestPackages.install(context, "example.zzz", 22002)
+        val pm = shadowOf(context.packageManager)
+        pm.setResolveInfosForIntent(FactoryExternalLaunchTestPackages.view(spec, discovery = true), listOf(first.resolve, chosen.resolve))
+        pm.setResolveInfosForIntent(FactoryExternalLaunchTestPackages.view(spec), listOf(chosen.resolve))
+        val candidates = targets.discover(spec)
+        assertEquals(first.component, candidates.first().component)
+        assertEquals(chosen.component, targets.preferred(spec, candidates)?.component)
+        chosen.installed.versionCode++
+        assertNull(targets.preferred(spec, candidates))
+    }
+    @Test fun missingOrIneligibleAndroidDefaultNeverFallsBackToFirstCandidate() {
+        FactoryExternalLaunchTestPackages.install(context)
+        val candidates = targets.discover(spec); assertFalse(candidates.isEmpty())
+        shadowOf(context.packageManager).setResolveInfosForIntent(FactoryExternalLaunchTestPackages.view(spec), emptyList())
+        assertNull(targets.preferred(spec, candidates))
+    }
     @Test fun broadTypedFiltersRequireMatchingActionSchemeAndDefaultButNotBrowsable() {
         for (value in FactoryExternalLaunchTestPackages.SPECS) {
             assertTrue(FactoryExternalLaunchTargets.broadTypedFilter(FactoryExternalLaunchTestPackages.filter(value), value))

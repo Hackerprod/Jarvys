@@ -84,8 +84,8 @@ public class BoundedStoreBackupTest {
         assertEquals("CANCELLED",assertThrows(FactoryException.class,()->store.backupImport(archive,"insertOnly",baseline,()->false)).code);
         AtomicInteger checks=new AtomicInteger();assertEquals("CANCELLED",assertThrows(FactoryException.class,()->store.backupImport(archive,"insertOnly",baseline,()->checks.incrementAndGet()<4)).code);assertEquals(0,backend.writes);
         AtomicBoolean allowed=new AtomicBoolean(true);backend.afterWrite=()->allowed.set(false);
-        FactoryException result=assertThrows(FactoryException.class,()->store.backupImport(archive,"insertOnly",baseline,allowed::get));
-        assertEquals("CANCELLED",result.code);assertTrue(result.getMessage().contains("prior write is not undone"));assertEquals("dark",backend.values.get("theme"));assertEquals(1,backend.writes);
+        JSONObject result=store.backupImport(archive,"insertOnly",baseline,allowed::get);
+        assertTrue(result.getBoolean("committed"));assertEquals("dark",backend.values.get("theme"));assertEquals(1,backend.writes);
     }
     @Test public void failedOrThrowingCommitHasUnknownOutcomeWithNoRollbackOrReplay() throws Exception {
         for(boolean throwsFailure:new boolean[]{false,true}) {

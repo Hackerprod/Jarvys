@@ -27,6 +27,7 @@ import java.util.concurrent.TimeUnit
 @Config(sdk = [34], application = android.app.Application::class)
 class FactoryAudioCoordinatorTest {
     private val context: Context get() = ApplicationProvider.getApplicationContext()
+    private val policy = FactoryOperationPolicy.inMemory(FactoryOperationPolicy.Mode.ASK)
     private val root get() = File(context.noBackupFilesDir, "factory-audio")
     private var proof = FactoryDocumentCoordinator.Proof("example.factory.app", "a".repeat(64), "b".repeat(64), 2, "c".repeat(64))
     private lateinit var coordinator: FactoryAudioCoordinator
@@ -39,19 +40,57 @@ class FactoryAudioCoordinatorTest {
     })
     private fun request() = FactoryAudioCoordinator.Request.parse(intent())
     private fun begin() = io { coordinator.begin(proof.appId, request()) {} }
-    private fun register(value: FactoryAudioCoordinator.Session) {
+    private fun register(value: FactoryAudioCoordinator.Session, approve: Boolean = true) {
         val ctor = AudioPlaybackControl.Registration::class.java.getDeclaredConstructor(android.os.IBinder::class.java, Runnable::class.java).apply { isAccessible = true }
         value.registration = ctor.newInstance(Binder(), Runnable { value.revoke() })
+        if (approve) value.authority.approveOnce {}
     }
     @Before fun setup() {
         FactoryStartupTestIsolation.releaseCompletedSharingStartup(); root.deleteRecursively()
-        coordinator = FactoryAudioCoordinator(context, { proof }, { _, check -> check(); syntheticWav() })
+        coordinator = FactoryAudioCoordinator(context, policy, { proof }, { _, check -> check(); syntheticWav() })
     }
     @After fun cleanup() {
         executor.shutdown(); assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS))
         for (name in listOf("protectedSurfaces", "taintedSurfaces", "activeActions")) MemoryUiAutomationGuard::class.java.getDeclaredField(name).apply { isAccessible = true }.setInt(null, 0)
         FactoryInteractionAdmission::class.java.getDeclaredField("owners").apply { isAccessible = true }.let { (it.get(null) as MutableSet<*>).clear() }
         root.deleteRecursively()
+    }
+    @Test fun defaultAllowGrantsEffectAuthorityWithoutHumanApproval() {
+        coordinator = FactoryAudioCoordinator(context, FactoryOperationPolicy.inMemory(), { proof }, { _, active -> active(); syntheticWav() })
+        val value = begin(); register(value, approve = false)
+        assertEquals(FactoryOperationPolicy.Mode.ALLOW_ALWAYS, value.authority.mode); assertFalse(value.authority.requiresApproval)
+        io { coordinator.preparePlay(value) {} }; io { coordinator.verifyReady(value) {} }
+        assertTrue(value.attempted); assertFalse(MemoryUiAutomationGuard.isProtected())
+    }
+    @Test fun askHasNoEffectAuthorityUntilOneExplicitApproval() {
+        val value = begin(); register(value, approve = false)
+        assertTrue(value.authority.requiresApproval)
+        denied { io { coordinator.preparePlay(value) {} } }; assertFalse(value.attempted)
+        var approvals = 0; value.authority.approveOnce { approvals++ }
+        value.authority.approveOnce { approvals++ }; assertEquals(1, approvals)
+        io { coordinator.preparePlay(value) {} }; assertTrue(value.attempted)
+        assertFalse(MemoryUiAutomationGuard.isProtected())
+    }
+    @Test fun denyRejectsBeforeJournalAdmissionAndTransferResources() {
+        policy.setDefaultMode(FactoryOperationPolicy.Mode.DENY)
+        denied { begin() }; assertNull(coordinator.session()); assertFalse(File(root, "interaction.json").exists())
+        assertTrue(coordinator.canBegin()); assertTrue(FactoryInteractionAdmission.available()); assertFalse(MemoryUiAutomationGuard.isProtected())
+    }
+    @Test fun changedOperationPolicyRevokesPendingAuthorityWithoutReleasingLiveOwnership() {
+        val value = begin(); register(value)
+        policy.setMode(FactoryOperationPolicy.Subject.installed(proof), FactoryOperationPolicy.Operation.AUDIO_PLAY, FactoryOperationPolicy.Mode.DENY)
+        assertTrue(value.revoked.get()); denied { io { coordinator.preparePlay(value) {} } }
+        assertFalse(value.attempted); assertTrue(coordinator.needsRecovery()); assertFalse(FactoryInteractionAdmission.available(coordinator))
+        assertTrue(FactoryInteractionAdmission.available(Any())); assertFalse(MemoryUiAutomationGuard.isProtected())
+    }
+    @Test fun freshVerifiedAllowRequestRetiresRestoredUnknownWithoutReplayingOldNonce() {
+        root.mkdirs(); File(root, "interaction.json").writeText(JSONObject().put("schemaVersion", 1)
+            .put("state", "outcome_unknown").put("open", true).put("nonce", "c".repeat(64)).toString())
+        coordinator = FactoryAudioCoordinator(context, FactoryOperationPolicy.inMemory(), { proof }, { _, active -> active(); syntheticWav() })
+        io { coordinator.restore() }; assertTrue(coordinator.needsRecovery()); assertNull(coordinator.session())
+        denied { io { coordinator.begin(proof.appId, request().copy(nonce = "c".repeat(64))) {} } }
+        val value = begin(); assertEquals("d".repeat(64), value.request.nonce); assertFalse(value.attempted)
+        assertEquals("review", coordinator.status()); assertFalse(MemoryUiAutomationGuard.isProtected())
     }
     @Test fun exactRequestShapeRejectsTransportAndTypeConfusion() {
         val invalid = listOf(intent().putExtra("extra", true), intent().putExtra("protocolVersion", 1L), intent().putExtra("nonce", "D".repeat(64)),
@@ -64,7 +103,7 @@ class FactoryAudioCoordinatorTest {
     }
     @Test fun callerProofMustSucceedBeforeAnyPullOrJournal() {
         var pulled = false
-        coordinator = FactoryAudioCoordinator(context, { proof }, { _, _ -> pulled = true; syntheticWav() })
+        coordinator = FactoryAudioCoordinator(context, policy, { proof }, { _, _ -> pulled = true; syntheticWav() })
         denied { io { coordinator.begin(null, request()) {} } }
         denied { io { coordinator.begin("evil.app", request()) {} } }
         assertFalse(pulled); assertFalse(File(root, "interaction.json").exists()); assertTrue(coordinator.canBegin())
@@ -94,7 +133,7 @@ class FactoryAudioCoordinatorTest {
     }
     @Test fun recoveryNeverRehydratesAuthorityAndCorruptionKeepsGuard() {
         begin()
-        val restored = FactoryAudioCoordinator(context, { proof }); io { restored.restore() }
+        val restored = FactoryAudioCoordinator(context, policy, { proof }); io { restored.restore() }
         assertNull(restored.session()); assertEquals("outcome_unknown", restored.status()); assertTrue(restored.needsRecovery())
         denied { io { restored.close(null, true) { error("no human") } } }
         io { restored.close(null, true) {} }
@@ -104,21 +143,21 @@ class FactoryAudioCoordinatorTest {
     @Test fun malformedAndOversizedJournalsFailClosed() {
         for (body in listOf("{", "x".repeat(4097), "{\"schemaVersion\":1,\"state\":\"review\",\"open\":false,\"nonce\":\"${"d".repeat(64)}\"}")) {
             root.mkdirs(); File(root, "interaction.json").writeText(body)
-            val restored = FactoryAudioCoordinator(context, { proof }); io { restored.restore() }
-            assertTrue(restored.needsRecovery()); assertTrue(MemoryUiAutomationGuard.isProtected())
+            val restored = FactoryAudioCoordinator(context, policy, { proof }); io { restored.restore() }
+            assertTrue(restored.needsRecovery()); assertFalse(MemoryUiAutomationGuard.isProtected())
             io { restored.close(null, true) {} }; assertEquals("closed_outcome_unknown", restored.status())
         }
     }
     @Test fun preparingOrUnconfirmedPlayerBlocksEvenExplicitRecovery() {
         val value = begin(); value.revoke(); value.preparing.set(true)
-        denied { io { coordinator.close(value, true) {} } }; assertTrue(MemoryUiAutomationGuard.isProtected())
+        denied { io { coordinator.close(value, true) {} } }; assertFalse(MemoryUiAutomationGuard.isProtected())
         value.preparing.set(false); value.playerClean.set(false)
         denied { io { coordinator.close(value, true) {} } }; assertFalse(FactoryInteractionAdmission.available())
         value.playerClean.set(true); assertNull(io { coordinator.close(value, true) {} }); assertTrue(FactoryInteractionAdmission.available())
     }
     @Test fun stalledCanceledTransferKeepsAdmissionUntilActualReturnAndRecovery() {
         val entered = CountDownLatch(1); val finish = CountDownLatch(1)
-        coordinator = FactoryAudioCoordinator(context, { proof }, { _, active -> entered.countDown(); check(finish.await(5, TimeUnit.SECONDS)); active(); syntheticWav() })
+        coordinator = FactoryAudioCoordinator(context, policy, { proof }, { _, active -> entered.countDown(); check(finish.await(5, TimeUnit.SECONDS)); active(); syntheticWav() })
         val pending = executor.submit(Callable { coordinator.begin(proof.appId, request()) {} })
         try {
             assertTrue(entered.await(5, TimeUnit.SECONDS)); val value = coordinator.session()!!

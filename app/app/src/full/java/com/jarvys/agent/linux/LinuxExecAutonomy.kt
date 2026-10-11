@@ -12,7 +12,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import java.util.Properties
 import java.util.WeakHashMap
 
-/** Explicit command consent. Changes invalidate approvals waiting to launch. */
+/** Separate principal and Coding command policies. Changes invalidate commands waiting to launch. */
 class LinuxExecAutonomy internal constructor(
     private val store: ConnectorAutonomyStore,
     private val installedProvider: () -> Boolean,
@@ -24,6 +24,14 @@ class LinuxExecAutonomy internal constructor(
     val revision = mutableRevision.asStateFlow()
 
     fun policy(): AutonomyPolicy = synchronized(policyLock) { store.policy(CONNECTOR_ID, OPERATION_NAME) }
+    data class ProjectAuthorization(val policy: AutonomyPolicy, val revision: Long)
+
+    /** Preserve saved choices, including legacy ASK/DENY; only absent Coding/legacy settings default to ALLOW. */
+    fun projectAuthorization(): ProjectAuthorization = synchronized(policyLock) {
+        ProjectAuthorization(store.savedPolicy(PROJECT_CONNECTOR_ID, PROJECT_OPERATION_NAME)
+            ?: store.savedPolicy(CONNECTOR_ID, OPERATION_NAME) ?: AutonomyPolicy.ALLOW, mutableRevision.value)
+    }
+    fun projectPolicy(): AutonomyPolicy = projectAuthorization().policy
     fun installed(): Boolean = runCatching(installedProvider).getOrDefault(false)
 
     fun setPolicyFromUi(policy: AutonomyPolicy): ConnectorUiText? = synchronized(policyLock) {
@@ -39,9 +47,27 @@ class LinuxExecAutonomy internal constructor(
         }
     }
 
+    fun setProjectPolicyFromUi(policy: AutonomyPolicy): ConnectorUiText? = synchronized(policyLock) {
+        if (policy == AutonomyPolicy.ALLOW && (uninstallInProgress || !installed())) {
+            return@synchronized ConnectorUiText(R.string.full_linux_autonomy_unavailable, fallback = "Install the Linux environment before enabling Allow mode.")
+        }
+        try {
+            store.setPolicyChecked(PROJECT_CONNECTOR_ID, PROJECT_OPERATION_NAME, policy)
+            changed()
+            null
+        } catch (_: RuntimeException) {
+            ConnectorUiText(R.string.full_coding_autonomy_save_failed, fallback = "The Coding permission could not be saved. Its previous setting is unchanged.")
+        }
+    }
+
     fun resetBeforeUninstall() = synchronized(policyLock) {
         store.setPolicyChecked(CONNECTOR_ID, OPERATION_NAME, AutonomyPolicy.ASK)
         changed()
+        // Keep explicit DENY/ASK, but do not restore a Coding ALLOW override after reinstall.
+        if (store.savedPolicy(PROJECT_CONNECTOR_ID, PROJECT_OPERATION_NAME) == AutonomyPolicy.ALLOW) {
+            store.setPolicyChecked(PROJECT_CONNECTOR_ID, PROJECT_OPERATION_NAME, AutonomyPolicy.ASK)
+            changed()
+        }
     }
 
     fun <T> withUninstallReset(removeEnvironment: () -> T): T {
@@ -69,6 +95,8 @@ class LinuxExecAutonomy internal constructor(
     companion object {
         const val CONNECTOR_ID = "linux"
         const val OPERATION_NAME = "linux_exec"
+        const val PROJECT_CONNECTOR_ID = "coding"
+        const val PROJECT_OPERATION_NAME = "project_exec"
         private val instances = WeakHashMap<Context, LinuxExecAutonomy>()
         @JvmStatic fun get(context: Context): LinuxExecAutonomy = synchronized(instances) {
             val app = context.applicationContext

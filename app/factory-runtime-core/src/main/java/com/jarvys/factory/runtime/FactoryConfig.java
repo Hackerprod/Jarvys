@@ -100,7 +100,7 @@ public final class FactoryConfig {
             }
             DocumentBroker broker = null;
             if (object.has("documentBroker")) {
-                if (!capabilities.contains("documents") && !capabilities.contains("browser") && !capabilities.contains("maps") && !capabilities.contains("phone") && !capabilities.contains("email") && !capabilities.contains("sms") && !capabilities.contains("contacts") && !capabilities.contains("calendar")) throw new FactoryException("INVALID_CONFIG", "Host broker requires documents, browser, maps, phone, email, sms, contacts or calendar capability.");
+                if (!capabilities.contains("documents") && !capabilities.contains("browser") && !capabilities.contains("maps") && !capabilities.contains("phone") && !capabilities.contains("email") && !capabilities.contains("sms") && !capabilities.contains("contacts") && !capabilities.contains("calendar") && !capabilities.contains("clipboard")) throw new FactoryException("INVALID_CONFIG", "Host broker requires documents, browser, maps, phone, email, sms, contacts, calendar or clipboard capability.");
                 JSONObject metadata = object.getJSONObject("documentBroker");
                 exactKeys(metadata, "packageName", "certificateSha256");
                 String host = string(metadata, "packageName"), certificate = string(metadata, "certificateSha256");
@@ -108,8 +108,8 @@ public final class FactoryConfig {
                     throw new FactoryException("INVALID_CONFIG", "Invalid pinned document broker.");
                 broker = new DocumentBroker(host, certificate);
             }
-            if (installedPackage != null && (capabilities.contains("documents") || capabilities.contains("browser") || capabilities.contains("maps") || capabilities.contains("phone") || capabilities.contains("email") || capabilities.contains("sms") || capabilities.contains("contacts") || capabilities.contains("calendar")) && broker == null)
-                throw new FactoryException("INVALID_CONFIG", "Documents, browser, maps, phone, email, sms, contacts or calendar requires a pinned compatible Jarvys broker.");
+            if (installedPackage != null && (capabilities.contains("documents") || capabilities.contains("browser") || capabilities.contains("maps") || capabilities.contains("phone") || capabilities.contains("email") || capabilities.contains("sms") || capabilities.contains("contacts") || capabilities.contains("calendar") || capabilities.contains("clipboard")) && broker == null)
+                throw new FactoryException("INVALID_CONFIG", "Documents, browser, maps, phone, email, sms, contacts, calendar or clipboard requires a pinned compatible Jarvys broker.");
             return new FactoryConfig(appId, name, entry, capabilities, broker, backupTables, backupKeys);
         } catch (JSONException e) {
             throw new FactoryException("INVALID_CONFIG", "Invalid application configuration.");

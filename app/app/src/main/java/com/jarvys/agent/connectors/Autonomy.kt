@@ -28,6 +28,8 @@ data class AutonomyAuditRecord(
 
 interface ConnectorAutonomyStore {
     fun policy(connectorId: String, operationName: String): AutonomyPolicy
+    /** Null means no saved choice. Older/custom stores conservatively retain their effective policy. */
+    fun savedPolicy(connectorId: String, operationName: String): AutonomyPolicy? = policy(connectorId, operationName)
     fun setPolicy(connectorId: String, operationName: String, policy: AutonomyPolicy)
     fun setPolicyChecked(connectorId: String, operationName: String, policy: AutonomyPolicy) =
         setPolicy(connectorId, operationName, policy)
@@ -57,6 +59,10 @@ class InMemoryConnectorAutonomyStore : ConnectorAutonomyStore {
         policies[connectorId to operationName] ?: AutonomyPolicy.ASK
     }
 
+    override fun savedPolicy(connectorId: String, operationName: String): AutonomyPolicy? = synchronized(lock) {
+        policies[connectorId to operationName]
+    }
+
     override fun setPolicy(connectorId: String, operationName: String, policy: AutonomyPolicy) = synchronized(lock) {
         policies[connectorId to operationName] = policy
     }
@@ -82,8 +88,13 @@ class SharedPreferencesConnectorAutonomyStore(context: Context) : ConnectorAuton
 
     init { preferences.edit().remove("autonomy_hourly_reservations").apply() }
 
-    override fun policy(connectorId: String, operationName: String): AutonomyPolicy = runCatching {
-        AutonomyPolicy.valueOf(preferences.getString(policyKey(connectorId, operationName), null) ?: "ASK")
+    override fun policy(connectorId: String, operationName: String): AutonomyPolicy =
+        savedPolicy(connectorId, operationName) ?: AutonomyPolicy.ASK
+
+    override fun savedPolicy(connectorId: String, operationName: String): AutonomyPolicy? = runCatching {
+        val key = policyKey(connectorId, operationName)
+        if (!preferences.contains(key)) null
+        else AutonomyPolicy.valueOf(preferences.getString(key, null) ?: "ASK")
     }.getOrDefault(AutonomyPolicy.ASK)
 
     override fun setPolicy(connectorId: String, operationName: String, policy: AutonomyPolicy) {

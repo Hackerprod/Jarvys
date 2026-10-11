@@ -43,12 +43,13 @@ class FactoryPreferencesBackupCoordinatorTest {
         FactoryDocumentCoordinator.Proof("example.factory.app", "a".repeat(64), "b".repeat(64), 2, "c".repeat(64)),
         FactoryDataBackupPolicy.Installed("synthetic.apk", "a".repeat(64), 2, Binder.getCallingUid(), 1),
         FactoryDataBackupPolicy.Installed("host.apk", "e".repeat(64), 84, 9000, 1), emptySet(), setOf("notes"), true)
+    private val operationPolicy = FactoryOperationPolicy.inMemory()
     private var policyChecks = 0
     private var rejectPolicyAt = Int.MAX_VALUE
     private lateinit var coordinator: FactoryDataBackupCoordinator
     private fun <T> io(action: () -> T): T = executor.submit(Callable(action)).get(5, TimeUnit.SECONDS)
     private fun denied(action: () -> Unit) = assertTrue("Expected rejection", runCatching(action).isFailure)
-    private fun make() = FactoryDataBackupCoordinator(context, currentIdentity = { policyChecks++; check(policyChecks < rejectPolicyAt && it == proof) }) { _, _ -> proof }.also { owners += it }
+    private fun make() = FactoryDataBackupCoordinator(context, currentIdentity = { policyChecks++; check(policyChecks < rejectPolicyAt && it == proof) }, policy = operationPolicy) { _, _ -> proof }.also { owners += it }
     private fun archive(): StorageBackupFormat.Archive = StorageBackupFormat.create(proof.proof.appId, proof.proof.certificate, 1,
         JSONObject().put("notes", "Synthetic only"))
     private fun plan(operation: String = "import"): StorageBackupPlan {
@@ -60,7 +61,7 @@ class FactoryPreferencesBackupCoordinatorTest {
     private fun request(p: StorageBackupPlan = plan(), real: Boolean = false): FactoryDataBackupCoordinator.Request {
         val control = if (real) BackupReviewControl(nonce) { true }.also { controls += it } else Binder()
         val transfer = if (real) FileShareTransfer.reserve().complete(archive().bytes(), nonce) { true }.also { transfers += it } else Binder()
-        return FactoryDataBackupCoordinator.Request(p, transfer, control)
+        return FactoryDataBackupCoordinator.Request(p, transfer, control).copy(protocolVersion = 1)
     }
     private fun prepared(operation: String = "import"): FactoryDataBackupCoordinator.Session {
         val request = request(plan(operation), true)
@@ -126,7 +127,7 @@ class FactoryPreferencesBackupCoordinatorTest {
         for (contents in listOf("broken", "{\"schemaVersion\":1,\"state\":\"picker\",\"open\":true,\"nonce\":\"$nonce\"}")) {
             root.mkdirs(); File(root, "interaction.json").writeText(contents)
             val restored = make(); io { restored.restore() }
-            assertTrue(restored.needsRecovery()); assertTrue(MemoryUiAutomationGuard.isProtected()); assertFalse(restored.canBegin())
+            assertTrue(restored.needsRecovery()); assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(restored.canBegin())
             denied { io { restored.close(null, true, false) {} } }
             io { restored.close(null, true, true) {} }; assertEquals("closed_outcome_unknown", restored.status())
         }
@@ -138,7 +139,7 @@ class FactoryPreferencesBackupCoordinatorTest {
         denied { io { coordinator.begin(proof.proof.appId, request(tooLate)) {} } }
         val value = io { coordinator.begin(proof.proof.appId, request()) {} }
         assertTrue(value.preparing); value.revoke()
-        denied { io { coordinator.close(value, true, true) {} } }; assertFalse(FactoryInteractionAdmission.available()); assertTrue(MemoryUiAutomationGuard.isProtected())
+        denied { io { coordinator.close(value, true, true) {} } }; assertFalse(FactoryInteractionAdmission.available()); assertFalse(MemoryUiAutomationGuard.isProtected())
         value.preparing = false; io { coordinator.close(value, true, true) {} }
     }
     @Test fun revocationDropsSnapshotAndCannotInstallItAgain() {
@@ -161,7 +162,37 @@ class FactoryPreferencesBackupCoordinatorTest {
         val stale = FactoryDataBackupCoordinator.Session(proof, request())
         denied { io { coordinator.close(stale, true, true) {} } }
         assertSame(original, coordinator.session()); assertTrue(coordinator.needsRecovery())
-        assertTrue(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
+        assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
         io { coordinator.close(original, true, true) {} }
     }
+    @Test fun versionTwoRetainsLiveAuthorizationAfterUiUntilTerminalClose() {
+        val request = request(real = true).copy(protocolVersion = 2)
+        val value = io { coordinator.begin(proof.proof.appId, request) {}.also { coordinator.prepare(it, {}, Runnable {}) } }
+        val result = io { coordinator.approve(value) {} }
+        assertEquals(2, result.getIntExtra("protocolVersion", 0)); assertSame(value, coordinator.session())
+        assertEquals("authorized", coordinator.status()); assertNull(value.archive); assertFalse(value.revoked.get())
+        val client = io { com.jarvys.factory.runtime.BackupCommitAuthorization.connect(result.extras!!.getBinder("authorization"), nonce, value.plan.sha256()) { true } }
+        assertTrue(io { client.allowed() })
+        operationPolicy.setDefaultMode(FactoryOperationPolicy.Mode.DENY)
+        assertFalse(io { client.allowed() }); assertTrue(value.revoked.get())
+        io { client.close() }
+        val worker = FactoryDataBackupCoordinator.WORKER; worker.prestartCoreThread()
+        val barrier = java.util.concurrent.FutureTask(Callable { Unit }); check(worker.queue.offer(barrier, 5, TimeUnit.SECONDS)); barrier.get(5, TimeUnit.SECONDS)
+        assertNull(coordinator.session()); assertFalse(MemoryUiAutomationGuard.isProtected())
+    }
+    @Test fun denyPrecedesJournalRegistrationAndArchivePull() {
+        operationPolicy.setDefaultMode(FactoryOperationPolicy.Mode.DENY)
+        denied { io { coordinator.begin(proof.proof.appId, request()) {} } }
+        assertNull(coordinator.session()); assertFalse(File(root, "interaction.json").exists())
+        assertTrue(FactoryInteractionAdmission.available()); assertFalse(MemoryUiAutomationGuard.isProtected())
+    }
+    @Test fun askCannotBecomeApprovalWithoutItsCurrentHumanCallback() {
+        operationPolicy.setDefaultMode(FactoryOperationPolicy.Mode.ASK)
+        val value = prepared()
+        assertTrue(value.grant!!.requiresApproval)
+        denied { io { coordinator.approve(value) { error("Not a human approval") } } }
+        assertTrue(value.grant!!.requiresApproval); assertEquals("review", coordinator.status())
+        val result = io { coordinator.approve(value) {} }; assertTrue(result.getBooleanExtra("approved", false))
+    }
+
 }

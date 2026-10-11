@@ -161,6 +161,8 @@ public class FactoryRuntimeBackupFlowTest {
     private Provider provider;
     private Context owner;
     private int sequence;
+    private final AtomicBoolean nativePolicyAllowed=new AtomicBoolean(true);
+    private final AtomicInteger authorizationChecks=new AtomicInteger(), authorizationCloses=new AtomicInteger();
 
     @Before public void setup() throws Exception {
         activity = Robolectric.buildActivity(TestActivity.class).setup().get();
@@ -172,6 +174,8 @@ public class FactoryRuntimeBackupFlowTest {
         activity.storageOwner = owner;
         DocumentBrokerIdentityTest.install(activity, activity.getPackageName(), new Signature(SOURCE_CERTIFICATE));
         DocumentBrokerIdentityTest.install(activity, DocumentBrokerIdentity.PRIMARY, new Signature(DocumentBrokerIdentityTest.CERTIFICATE));
+        activity.getPackageManager().getApplicationInfo(DocumentBrokerIdentity.PRIMARY,0).uid=android.os.Process.myUid();
+        Shadows.shadowOf(activity.getPackageManager()).setPackagesForUid(android.os.Process.myUid(),DocumentBrokerIdentity.PRIMARY);
         String configuration = new JSONObject(FactoryDispatcherTest.configuration("[\"database\",\"documents\"]"))
                 .put("appId", activity.getPackageName())
                 .put("dataBackup", new JSONObject().put("tables", new JSONArray().put("notes")))
@@ -288,14 +292,17 @@ public class FactoryRuntimeBackupFlowTest {
         Intent launched = activity.launches.get(activity.launches.size() - 1);
         assertEquals(DocumentBrokerIdentity.PRIMARY, launched.getComponent().getPackageName());
         assertEquals("com.jarvys.agent.apkfactory.FactoryDataBackupActivity", launched.getComponent().getClassName());
-        assertEquals(1, launched.getIntExtra("protocolVersion", 0));
+        assertEquals(2, launched.getIntExtra("protocolVersion", 0));
         assertNotNull(launched.getExtras().getBinder("transfer")); assertNotNull(launched.getExtras().getBinder("control"));
         assertNull(launched.getData()); assertNull(launched.getClipData()); assertEquals(0, launched.getFlags());
         return DatabaseBackupPlan.parse(launched.getStringExtra("plan"));
     }
     private int requestCode() { return activity.requestCodes.get(activity.requestCodes.size() - 1); }
-    private static Intent approval(DatabaseBackupPlan plan) {
-        return new Intent().putExtra("nonce", plan.nonce).putExtra("planSha256", plan.sha256()).putExtra("approved", true);
+    private Intent approval(DatabaseBackupPlan plan) {
+        BackupCommitAuthorization endpoint=new BackupCommitAuthorization(plan.nonce,plan.sha256(),plan.deadline,uid->true,
+                ()->{authorizationChecks.incrementAndGet();if(!nativePolicyAllowed.get())throw new SecurityException("Synthetic policy revoked");},authorizationCloses::incrementAndGet);
+        android.os.Bundle extras=new android.os.Bundle();extras.putBinder("authorization",endpoint);
+        return new Intent().putExtra("nonce", plan.nonce).putExtra("planSha256", plan.sha256()).putExtra("approved", true).putExtra("protocolVersion",2).putExtras(extras);
     }
     private Intent exportApproval(DatabaseBackupPlan plan) {
         activity.grantedModes = Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
@@ -307,6 +314,13 @@ public class FactoryRuntimeBackupFlowTest {
         Shadows.shadowOf(Looper.getMainLooper()).idleFor(3, TimeUnit.SECONDS); drain();
         assertEquals(launches, activity.launches.size()); assertEquals(opens, provider.opens.get());
         if (response.value != null) assertEquals(1, response.replies);
+    }
+
+    @Test public void revokedHostPolicyAfterUiApprovalPreventsProviderOpen() throws Exception {
+        Response response=export(); DatabaseBackupPlan plan=review(response);
+        Intent receipt=exportApproval(plan); nativePolicyAllowed.set(false);
+        runtime.onActivityResult(requestCode(),Activity.RESULT_OK,receipt); drain(); awaitFinished();
+        assertNotNull(response.error()); assertEquals(0,provider.opens.get()); assertTrue(authorizationChecks.get()>0);
     }
 
     @Test public void exportPreservesOnlyReviewReplyAcrossPauseAndWritesCanonicalSelectedArchive() throws Exception {

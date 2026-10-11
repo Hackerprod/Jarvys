@@ -1,6 +1,6 @@
 <resources>
     <string name="full_linux_setup_consent_title">Install the optional Linux environment?</string>
-    <string name="full_linux_setup_consent_body">This installs Ubuntu Base %1$s for %2$s. Download: about %3$s; extracted space: about %4$s; free space now: %5$s. It runs inside this app. PRoot is not a sandbox and only simulates root; it does not grant real root privileges. Commands require your approval unless you choose Allow always in Linux.</string>
+    <string name="full_linux_setup_consent_body">This installs Ubuntu Base %1$s for %2$s. Download: about %3$s; extracted space: about %4$s; free space now: %5$s. It runs inside this app. PRoot is not a sandbox and only simulates root; it does not grant real root privileges. Principal commands use the Linux permission. Coding project commands default to Allow when no saved choice exists; you can choose Ask or Deny in Connectors.</string>
     <string name="full_linux_setup_install">Install</string>
     <string name="full_linux_setup_later">Not now</string>
     <string name="full_linux_setup_unavailable">Linux installation needs the active chat to be visible. No download was started.</string>
@@ -68,4 +68,9 @@
     <string name="full_linux_autonomy_unavailable">Install Linux before enabling Allow always.</string>
     <string name="full_linux_exec_allow_always">Allow always in Linux</string>
     <string name="full_linux_exec_approval_allow_warning">"Jarvys will be able to run any command in the Linux environment without asking. PRoot is not a sandbox: commands have this app's access and network permissions. You can revoke this in Connectors."</string>
+    <string name="full_coding_autonomy_title">Coding project commands</string>
+    <string name="full_coding_autonomy_description">Choose a separate permission for selected Coding project execution tools. Without a saved Coding choice, your saved Linux choice applies; with neither saved, Coding defaults to Allow. Changing this setting leaves the principal Linux permission unchanged. STOP, project scope and available tools still apply.</string>
+    <string name="full_coding_autonomy_save_failed">Could not save the Coding permission. The previous permission remains in effect.</string>
+    <string name="full_coding_exec_allow_always">Allow always in Coding</string>
+    <string name="full_coding_exec_approval_allow_warning">"Selected Coding project tools will be able to run commands without asking across conversation projects. This does not change the principal Linux permission. PRoot is not a sandbox: commands have this app's access and network permissions. Choose Ask or Deny in Connectors to revoke this permission."</string>
 </resources>

@@ -3,6 +3,10 @@ package com.jarvys.agent.apkfactory
 import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageInstaller
+import android.os.Looper
+import android.view.View
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.TimeUnit
 import android.view.WindowManager
 import android.widget.Button
 import com.jarvys.agent.MemoryUiAutomationGuard
@@ -43,11 +47,10 @@ class FactoryInstallActivityTest {
         for (tag in listOf("approve", "system", "cancel", "close")) assertTrue(button(activity, tag).filterTouchesWhenObscured)
         assertNull(shadowOf(activity).nextStartedActivity)
         assertEquals(0, fixture.backend.creates)
-        assertTrue(MemoryUiAutomationGuard.isProtected())
+        assertFalse(MemoryUiAutomationGuard.isProtected())
     }
 
-    @Test fun permissionReviewBlocksAutomatedCloseAndSurvivesBackgroundAndManualGrant() {
-        val epoch = MemoryUiAutomationGuard.captureAutomationEpoch()
+    @Test fun permissionStatusSurvivesBackgroundAndManualGrantWithoutGrantingAuthority() {
         fixture.backend.allowed = false
         val result = fixture.prepare()
         val activity = launch(result.getString("launch_token"))
@@ -56,20 +59,13 @@ class FactoryInstallActivityTest {
         assertFalse(button(activity, "system").isEnabled)
         assertTrue(button(activity, "close").isEnabled)
         assertNull(shadowOf(activity).nextStartedActivity)
-        var dispatched = false
-        assertFalse(MemoryUiAutomationGuard.runAutomated(epoch) {
-            dispatched = true
-            button(activity, "close").performClick()
-        })
-        assertFalse(dispatched)
-        assertFalse(activity.isFinishing)
+        assertFalse(MemoryUiAutomationGuard.isProtected())
         controller!!.pause().stop()
-        assertEquals("permission_required", fixture.state())
-        assertTrue(MemoryUiAutomationGuard.isProtected())
         button(activity, "close").performClick()
         assertFalse(activity.isFinishing)
         fixture.backend.allowed = true
         controller!!.restart().start().resume().visible()
+        drain(activity)
         assertEquals("permission_required", fixture.state())
         assertFalse(button(activity, "approve").isEnabled)
         assertFalse(button(activity, "system").isEnabled)
@@ -90,7 +86,7 @@ class FactoryInstallActivityTest {
         assertFalse(button(activity, "system").isEnabled)
         assertTrue(button(activity, "close").isEnabled)
         assertNull(shadowOf(activity).nextStartedActivity)
-        assertTrue(MemoryUiAutomationGuard.isProtected())
+        assertFalse(MemoryUiAutomationGuard.isProtected())
         button(activity, "close").performClick()
         assertTrue(activity.isFinishing)
         assertFalse(fixture.coordinator.status().getBoolean("automation_protected"))
@@ -106,7 +102,7 @@ class FactoryInstallActivityTest {
         assertFalse(button(activity, "system").isEnabled)
         assertTrue(button(activity, "close").isEnabled)
         assertNull(shadowOf(activity).nextStartedActivity)
-        assertTrue(MemoryUiAutomationGuard.isProtected())
+        assertFalse(MemoryUiAutomationGuard.isProtected())
         button(activity, "close").performClick()
         assertTrue(activity.isFinishing)
         assertFalse(fixture.coordinator.status().getBoolean("automation_protected"))
@@ -127,7 +123,7 @@ class FactoryInstallActivityTest {
         assertEquals(0, fixture.backend.ownedQueries)
         assertEquals(0, fixture.backend.abandons)
         assertEquals("journal_unavailable", fixture.state())
-        assertTrue(MemoryUiAutomationGuard.isProtected())
+        assertFalse(MemoryUiAutomationGuard.isProtected())
         controller!!.resume()
     }
 
@@ -156,7 +152,7 @@ class FactoryInstallActivityTest {
         assertEquals(0, fixture.backend.creates)
     }
 
-    @Test fun screenEnteredDuringAutomatedActionRemainsTaintedAfterActionEnds() {
+    @Test fun unboundStatusOpenedDuringAutomationCannotCreateInstallAuthority() {
         val epoch = MemoryUiAutomationGuard.captureAutomationEpoch()
         lateinit var activity: FactoryInstallActivity
         assertTrue(MemoryUiAutomationGuard.runAutomated(epoch) { activity = launch() })
@@ -167,33 +163,117 @@ class FactoryInstallActivityTest {
         assertEquals(0, fixture.backend.creates)
     }
 
-    @Test fun closeBeforeCancellationCannotDismissOutstandingInteraction() {
+    @Test fun closeCancelsPendingAskAndDismissesWithoutCreatingSession() {
         fixture.prepare(); val activity = launch()
-        button(activity, "close").performClick()
-        assertFalse(activity.isFinishing)
-        assertEquals("awaiting_user", fixture.state())
         assertTrue(MemoryUiAutomationGuard.isProtected())
-        button(activity, "cancel").performClick()
-        assertEquals("cancelled_before_commit", fixture.state())
         button(activity, "close").performClick()
         assertTrue(activity.isFinishing)
+        assertEquals("cancelled_before_commit", fixture.state())
         assertFalse(fixture.coordinator.status().getBoolean("automation_protected"))
+        assertFalse(MemoryUiAutomationGuard.isProtected())
+        assertEquals(0, fixture.backend.creates)
         assertEquals(0, fixture.backend.commits)
     }
 
-    @Test fun pendingCallbackDoesNotLaunchSystemUiUntilNativeButton() {
+    @Test fun backCancelsPendingAskAndDismissesWithoutCreatingSession() {
+        fixture.prepare(); val activity = launch()
+        activity.onBackPressedDispatcher.onBackPressed()
+        assertTrue(activity.isFinishing)
+        assertFalse(fixture.record().getBoolean("interactionOpen"))
+        assertFalse(MemoryUiAutomationGuard.isProtected())
+        assertEquals(0, fixture.backend.creates)
+        assertEquals(0, fixture.backend.commits)
+    }
+
+    @Test fun historicalPendingCallbackCannotLaunchSystemUiWithoutLiveAuthority() {
         fixture.seed("committing", 17)
         val activity = launch()
+        fixture.coordinator.callback(fixture.nonce(), 17, PackageInstaller.STATUS_PENDING_USER_ACTION,
+            Intent("org.example.synthetic.INSTALL_CONFIRMATION"))
+        drain(activity)
+        assertNull(shadowOf(activity).nextStartedActivity)
+        button(activity, "system").performClick()
+        assertNull(shadowOf(activity).nextStartedActivity)
+        assertEquals("pending_system", fixture.state())
+        assertFalse(MemoryUiAutomationGuard.isProtected())
+        assertEquals(0, fixture.backend.commits)
+    }
+
+    @Test fun defaultAllowInstallsAutomaticallyWithoutHostApprovalCard() {
+        fixture.close(); fixture = InstallTestFixture(policy = FactoryOperationPolicy.inMemory())
+        fixture.signed(); val prepared = fixture.prepare()
+        val activity = launch(prepared.getString("launch_token"))
+        assertEquals(View.GONE, button(activity, "approve").visibility)
+        drain(activity)
+        assertEquals("committing", fixture.state())
+        assertEquals(1, fixture.backend.creates)
+        assertEquals(1, fixture.backend.commits)
+        assertFalse(MemoryUiAutomationGuard.isProtected())
+        assertNull(shadowOf(activity).nextStartedActivity)
+    }
+
+    @Test fun allowAutomaticallyOpensActualAndroidConfirmationWithGuard() {
+        verifyAutomaticSystemConfirmation(FactoryOperationPolicy.Mode.ALLOW_ALWAYS)
+    }
+
+    @Test fun askNeedsOneApprovalThenAutomaticallyOpensActualAndroidConfirmationWithGuard() {
+        verifyAutomaticSystemConfirmation(FactoryOperationPolicy.Mode.ASK)
+    }
+
+    private fun verifyAutomaticSystemConfirmation(mode: FactoryOperationPolicy.Mode) {
+        fixture.close(); fixture = InstallTestFixture(policy = FactoryOperationPolicy.inMemory(mode))
+        fixture.signed(); val prepared = fixture.prepare()
+        val activity = launch(prepared.getString("launch_token"))
+        if (mode == FactoryOperationPolicy.Mode.ASK) {
+            drain(activity)
+            assertEquals(0, fixture.backend.creates)
+            assertTrue(button(activity, "approve").isEnabled)
+            assertTrue(MemoryUiAutomationGuard.isProtected())
+            button(activity, "approve").performClick()
+        }
+        drain(activity)
+        assertEquals("committing", fixture.state())
+        assertFalse(fixture.coordinator.approvalRequired())
+        assertEquals(View.GONE, button(activity, "approve").visibility)
+        assertFalse(MemoryUiAutomationGuard.isProtected())
         val confirmation = Intent("org.example.synthetic.INSTALL_CONFIRMATION")
         fixture.coordinator.callback(fixture.nonce(), 17, PackageInstaller.STATUS_PENDING_USER_ACTION, confirmation)
-        assertNull(shadowOf(activity).nextStartedActivity)
-        assertTrue(button(activity, "system").isEnabled)
-        button(activity, "system").performClick()
+        drain(activity)
         assertEquals(confirmation.action, shadowOf(activity).nextStartedActivity.action)
+        assertNull(shadowOf(activity).nextStartedActivity)
         assertEquals("system_ui_open", fixture.state())
-        assertFalse(button(activity, "system").isEnabled)
         assertTrue(MemoryUiAutomationGuard.isProtected())
-        assertEquals(0, fixture.backend.commits)
+        controller!!.pause().resume()
+        assertEquals("system_ui_open", fixture.state())
+        assertTrue(MemoryUiAutomationGuard.isProtected())
+        assertEquals(1, fixture.backend.commits)
+        fixture.coordinator.callback(fixture.nonce(), 17, PackageInstaller.STATUS_SUCCESS, null)
+        drain(activity)
+        assertEquals("succeeded", fixture.state())
+        assertFalse(MemoryUiAutomationGuard.isProtected())
+    }
+
+    @Test fun closeAndBackPreserveCommittedPendingSessionWithoutReplay() {
+        fixture.close(); fixture = InstallTestFixture(policy = FactoryOperationPolicy.inMemory())
+        fixture.signed(); fixture.prepare()
+        val activity = launch(); drain(activity)
+        button(activity, "close").performClick()
+        assertFalse(activity.isFinishing)
+        activity.onBackPressedDispatcher.onBackPressed()
+        assertFalse(activity.isFinishing)
+        assertEquals("committing", fixture.state())
+        assertTrue(fixture.record().getBoolean("interactionOpen"))
+        assertEquals(1, fixture.backend.commits)
+        assertEquals(0, fixture.backend.abandons)
+    }
+
+    private fun drain(activity: FactoryInstallActivity) {
+        val worker = FactoryInstallActivity::class.java.getDeclaredField("worker").apply { isAccessible = true }.get(activity) as ExecutorService
+        repeat(3) {
+            shadowOf(Looper.getMainLooper()).idle()
+            worker.submit {}.get(10, TimeUnit.SECONDS)
+            shadowOf(Looper.getMainLooper()).idle()
+        }
     }
 
     @Test fun restartedPendingSessionCannotRelaunchSystemConfirmationOrApprove() {

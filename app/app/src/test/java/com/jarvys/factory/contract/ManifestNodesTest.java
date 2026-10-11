@@ -63,7 +63,7 @@ public class ManifestNodesTest {
             List<String> caps = new ArrayList<>();
             for (int bit=0; bit<CapabilityCatalog.NAMES.size(); bit++) if ((mask & (1<<bit)) != 0) caps.add(CapabilityCatalog.NAMES.get(bit));
             ManifestPlan p = plan(caps);
-            boolean documents = caps.contains("documents") || caps.contains("browser") || caps.contains("maps") || caps.contains("phone") || caps.contains("email") || caps.contains("sms") || caps.contains("contacts") || caps.contains("calendar");
+            boolean documents = caps.contains("documents") || caps.contains("browser") || caps.contains("maps") || caps.contains("phone") || caps.contains("email") || caps.contains("sms") || caps.contains("contacts") || caps.contains("calendar") || caps.contains("clipboard");
             boolean biometrics = caps.contains("biometrics");
             byte[] encoded = ManifestXml.encode(p);
             assertArrayEquals(profiles[(biometrics ? 1 : 0) + (documents ? 2 : 0)], encoded);
@@ -97,6 +97,39 @@ public class ManifestNodesTest {
         assertEquals(1048576, checked);
         for (CapabilityCatalog.Capability c : CapabilityCatalog.CAPABILITIES.values()) assertThrows(UnsupportedOperationException.class, () -> c.manifestNodes.add(ManifestNodes.feature("android.hardware.camera", false)));
         assertThrows(IllegalArgumentException.class, () -> plan(list("camera")));
+    }
+    @Test public void clipboardQueriesAreCurrentOnlyAndLegacyProfilesRemainExact() throws Exception {
+        CapabilityCatalog.Capability clipboard = CapabilityCatalog.CAPABILITIES.get("clipboard");
+        assertEquals(list(CapabilityCatalog.Method.CLIPBOARD_WRITE), clipboard.methods);
+        assertEquals(CapabilityCatalog.DOCUMENT_BROKER_PACKAGES, clipboard.queries);
+        assertTrue(clipboard.permissions.isEmpty()); assertTrue(clipboard.components.isEmpty());
+        assertEquals(1, clipboard.manifestNodes.size());
+        for (List<String> caps : list(list("clipboard"), list("biometrics", "clipboard"), list("clipboard", "documents"))) {
+            ManifestPlan current = plan(caps);
+            ManifestPlan legacy = new ManifestPlan(current.appId, current.label, current.versionCode, current.versionName,
+                    current.iconResourceId, current.backupResourceId, caps, ManifestPlan.Profile.V1_BEFORE_CLIPBOARD_BROKER);
+            List<String> historicalContributions = new ArrayList<>(caps); historicalContributions.remove("clipboard");
+            assertArrayEquals(ManifestXml.encode(plan(historicalContributions)), ManifestXml.encode(legacy));
+            assertEquals(current.capabilities, legacy.capabilities);
+            ManifestAudit.Document decoded = ManifestAudit.read(ManifestXml.encode(legacy));
+            decoded.verify(legacy);
+            assertEquals(16, decoded.attribute("manifest/application/activity", ManifestPlan.ANDROID, "windowSoftInputMode").value);
+            if (!caps.contains("documents")) {
+                assertThrows(IOException.class, () -> decoded.verify(current));
+                assertThrows(IOException.class, () -> ManifestAudit.read(ManifestXml.encode(current)).verify(legacy));
+            }
+            List<ManifestNodes.Element> extraNodes = new ArrayList<>(legacy.root.children);
+            extraNodes.add(ManifestNodes.feature("android.hardware.camera", false));
+            ManifestNodes.Element extra = ManifestNodes.base("manifest", extraNodes,
+                    legacy.root.attributes.toArray(new ManifestPlan.Attribute[0]));
+            assertThrows(IOException.class, () -> ManifestAudit.read(ManifestXml.encodeTree(extra)).verify(legacy));
+        }
+        ManifestPlan current = plan(list("clipboard"));
+        ManifestPlan ancient = new ManifestPlan(current.appId, current.label, current.versionCode, current.versionName,
+                current.iconResourceId, current.backupResourceId, current.capabilities, ManifestPlan.Profile.V1_BEFORE_SAFE_AREA);
+        assertTrue(ancient.queries.isEmpty()); assertEquals(7, ancient.nodes.size());
+        ManifestAudit.read(ManifestXml.encode(ancient)).verify(ancient);
+        assertThrows(IOException.class, () -> ManifestAudit.read(ManifestXml.encode(ancient)).verify(current));
     }
     @Test public void biometricsHasOnlyTheExactNormalPermissionAndFunctionalApi30Floor() throws Exception {
         CapabilityCatalog.Capability biometrics = CapabilityCatalog.CAPABILITIES.get("biometrics");

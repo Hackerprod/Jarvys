@@ -5,8 +5,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -24,6 +27,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
@@ -38,11 +42,15 @@ import com.jarvys.agent.linux.LinuxExecAutonomy
 
 internal val LocalFlavorAutonomy = staticCompositionLocalOf<LinuxExecAutonomy?> { null }
 
-/** Full flavor alone exposes the opt-in Linux command policy. */
+/** Full-only principal and Coding policies remain separate, visible and reversible. */
 object FlavorAutonomyUi {
     fun handlesApproval(event: AgentRunUiEvent): Boolean =
-        event.approvalAutonomyConnectorId == LinuxExecAutonomy.CONNECTOR_ID &&
-            event.approvalAutonomyOperationName == LinuxExecAutonomy.OPERATION_NAME
+        isProjectApproval(event) || (event.approvalAutonomyConnectorId == LinuxExecAutonomy.CONNECTOR_ID &&
+            event.approvalAutonomyOperationName == LinuxExecAutonomy.OPERATION_NAME)
+
+    private fun isProjectApproval(event: AgentRunUiEvent): Boolean =
+        event.approvalAutonomyConnectorId == LinuxExecAutonomy.PROJECT_CONNECTOR_ID &&
+            event.approvalAutonomyOperationName == LinuxExecAutonomy.PROJECT_OPERATION_NAME
 
     @Composable private fun autonomy(): LinuxExecAutonomy {
         val context = LocalContext.current
@@ -51,17 +59,21 @@ object FlavorAutonomyUi {
 
     @Composable fun ApprovalAction(event: AgentRunUiEvent, onStatusDetail: (ConnectorUiText) -> Unit) {
         val autonomy = autonomy()
-        Text(stringResource(R.string.full_linux_exec_approval_allow_warning),
-            Modifier.fillMaxWidth().testTag("linux-allow-warning"), style = MaterialTheme.typography.bodySmall,
+        val project = isProjectApproval(event)
+        Text(stringResource(if (project) R.string.full_coding_exec_approval_allow_warning else R.string.full_linux_exec_approval_allow_warning),
+            Modifier.fillMaxWidth().testTag(if (project) "coding-allow-warning" else "linux-allow-warning"), style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
         OutlinedButton(onClick = {
             ApprovalGate.INSTANCE.resolveFromUi(event.approvalId ?: "") {
                 var decision = ApprovalDecision.APPROVED_ALLOW_FAILED
-                approveAndAllowAlways({ autonomy.setPolicyFromUi(AutonomyPolicy.ALLOW) }, onStatusDetail) { decision = it }
+                approveAndAllowAlways({
+                    if (project) autonomy.setProjectPolicyFromUi(AutonomyPolicy.ALLOW)
+                    else autonomy.setPolicyFromUi(AutonomyPolicy.ALLOW)
+                }, onStatusDetail) { decision = it }
                 decision
             }
-        }, modifier = Modifier.fillMaxWidth().testTag("linux-allow-always")) {
-            Text(stringResource(R.string.full_linux_exec_allow_always))
+        }, modifier = Modifier.fillMaxWidth().testTag(if (project) "coding-allow-always" else "linux-allow-always")) {
+            Text(stringResource(if (project) R.string.full_coding_exec_allow_always else R.string.full_linux_exec_allow_always))
         }
     }
 
@@ -78,6 +90,7 @@ object FlavorAutonomyUi {
         val installed = remember(autonomy, revision, resumed) { autonomy.installed() }
         if (!installed) return false
         val policy = remember(autonomy, revision) { autonomy.policy() }
+        val projectPolicy = remember(autonomy, revision) { autonomy.projectPolicy() }
         var failure by remember { mutableStateOf<ConnectorUiText?>(null) }
         val context = LocalContext.current
         val label = stringResource(R.string.full_linux_autonomy_switch)
@@ -101,7 +114,37 @@ object FlavorAutonomyUi {
                 }
                 failure?.let { Text(it.resolve(context), Modifier.padding(horizontal = 16.dp, vertical = 8.dp), color = MaterialTheme.colorScheme.error) }
             }
+            CodingControls(autonomy, projectPolicy)
         }
         return true
+    }
+
+    @Composable private fun CodingControls(autonomy: LinuxExecAutonomy, policy: AutonomyPolicy) {
+        val context = LocalContext.current
+        var failure by remember { mutableStateOf<ConnectorUiText?>(null) }
+        JarvysSectionLabel(stringResource(R.string.full_coding_autonomy_title), Modifier.padding(start = 4.dp))
+        JarvysGroup {
+            Column(Modifier.fillMaxWidth().testTag("coding-autonomy-controls").selectableGroup()) {
+                Text(stringResource(R.string.full_coding_autonomy_description),
+                    Modifier.padding(16.dp), style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                listOf(AutonomyPolicy.ALLOW, AutonomyPolicy.ASK, AutonomyPolicy.DENY).forEach { choice ->
+                    val label = stringResource(when (choice) {
+                        AutonomyPolicy.ALLOW -> R.string.connector_policy_allow_automatically
+                        AutonomyPolicy.ASK -> R.string.connector_policy_ask_each_time
+                        AutonomyPolicy.DENY -> R.string.connector_policy_deny_action
+                    })
+                    Row(Modifier.fillMaxWidth().testTag("coding-policy-${choice.name.lowercase(java.util.Locale.ROOT)}")
+                        .selectable(selected = policy == choice, role = Role.RadioButton,
+                            onClick = { failure = autonomy.setProjectPolicyFromUi(choice) })
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        RadioButton(selected = policy == choice, onClick = null)
+                        Text(label, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+                failure?.let { Text(it.resolve(context), Modifier.padding(horizontal = 16.dp, vertical = 8.dp), color = MaterialTheme.colorScheme.error) }
+            }
+        }
     }
 }

@@ -75,6 +75,9 @@
             </intent-filter>
         </activity>
 
+        <activity android:name="com.jarvys.agent.apkfactory.FactoryPermissionsActivity" android:exported="false" android:windowSoftInputMode="adjustResize" />
+        <activity android:name="com.jarvys.agent.apkfactory.FactoryClipboardActivity" android:exported="true" android:excludeFromRecents="true" android:noHistory="false" android:windowSoftInputMode="adjustResize" />
+
         <activity
             android:name="com.jarvys.agent.apkfactory.FactoryIdentityActivity"
             android:exported="false"

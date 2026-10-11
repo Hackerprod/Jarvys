@@ -1,6 +1,6 @@
 <resources>
     <string name="full_linux_setup_consent_title">¿Instalar el entorno Linux opcional?</string>
-    <string name="full_linux_setup_consent_body">Se instalará Ubuntu Base %1$s para %2$s. Descarga: aproximadamente %3$s; espacio extraído: aproximadamente %4$s; espacio libre ahora: %5$s. Se ejecuta dentro de esta app. PRoot no es un sandbox y solo simula root; no concede privilegios root reales. Los comandos requieren tu aprobación salvo que elijas Permitir siempre en Linux.</string>
+    <string name="full_linux_setup_consent_body">Se instalará Ubuntu Base %1$s para %2$s. Descarga: aproximadamente %3$s; espacio extraído: aproximadamente %4$s; espacio libre ahora: %5$s. Se ejecuta dentro de esta app. PRoot no es un sandbox y solo simula root; no concede privilegios root reales. Los comandos del agente principal usan el permiso de Linux. Los comandos de proyecto de Coding permiten por defecto si no hay una elección guardada; puedes elegir Preguntar o Denegar en Conectores.</string>
     <string name="full_linux_setup_install">Instalar</string>
     <string name="full_linux_setup_later">Ahora no</string>
     <string name="full_linux_setup_unavailable">La instalación de Linux necesita que el chat activo esté visible. No se inició ninguna descarga.</string>
@@ -68,4 +68,9 @@
     <string name="full_linux_autonomy_unavailable">Instala Linux antes de activar Permitir siempre.</string>
     <string name="full_linux_exec_allow_always">Permitir siempre en Linux</string>
     <string name="full_linux_exec_approval_allow_warning">Jarvys podrá ejecutar cualquier comando en el entorno Linux sin preguntarte. PRoot no es un sandbox: los comandos tienen el acceso y los permisos de red de esta app. Puedes revocarlo en Conectores.</string>
+    <string name="full_coding_autonomy_title">Comandos de proyecto de Coding</string>
+    <string name="full_coding_autonomy_description">Elige un permiso independiente para las herramientas seleccionadas de ejecución de proyectos de Coding. Sin una elección guardada de Coding, se aplica tu elección guardada de Linux; si no hay ninguna, Coding permite por defecto. Este ajuste no cambia el permiso de Linux del agente principal. DETENER, el ámbito del proyecto y las herramientas disponibles siguen vigentes.</string>
+    <string name="full_coding_autonomy_save_failed">No se pudo guardar el permiso de Coding. Sigue vigente el permiso anterior.</string>
+    <string name="full_coding_exec_allow_always">Permitir siempre en Coding</string>
+    <string name="full_coding_exec_approval_allow_warning">Las herramientas seleccionadas de proyectos de Coding podrán ejecutar comandos sin preguntar en los proyectos de las conversaciones. Esto no cambia el permiso de Linux del agente principal. PRoot no es un sandbox: los comandos tienen el acceso y los permisos de red de esta app. Elige Preguntar o Denegar en Conectores para revocar este permiso.</string>
 </resources>

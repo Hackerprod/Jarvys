@@ -33,6 +33,7 @@ import java.util.concurrent.TimeUnit
 @Config(sdk = [34], application = android.app.Application::class)
 class FactoryMessageEditorCoordinatorTest {
     private val context: Context get() = ApplicationProvider.getApplicationContext()
+    private val policy = FactoryOperationPolicy.inMemory(FactoryOperationPolicy.Mode.ASK)
     private val root get() = File(context.noBackupFilesDir, "factory-external-launch")
     private var proof = FactoryDocumentCoordinator.Proof("example.factory.app", "a".repeat(64), "b".repeat(64), 2, "c".repeat(64))
     private lateinit var coordinator: FactoryExternalLaunchCoordinator
@@ -41,7 +42,7 @@ class FactoryMessageEditorCoordinatorTest {
     private val executor = Executors.newSingleThreadExecutor()
     private fun <T> io(block: () -> T): T = executor.submit(Callable(block)).get(5, TimeUnit.SECONDS)
     private fun denied(block: () -> Unit) = assertTrue("Expected rejection", runCatching(block).isFailure)
-    private fun make(verify: (String, String) -> FactoryDocumentCoordinator.Proof = { _, _ -> proof }) = FactoryExternalLaunchCoordinator(context, verify).also { owners += it }
+    private fun make(verify: (String, String) -> FactoryDocumentCoordinator.Proof = { _, _ -> proof }) = FactoryExternalLaunchCoordinator(context, policy, verify).also { owners += it }
     private fun intent(method: String = "email.compose", args: String = ARGS) = Intent(context, FactoryExternalActionActivity::class.java).putExtras(Bundle().apply {
         putInt("protocolVersion", 1); putString("nonce", "d".repeat(64)); putString("method", method); putString("args", args); putBinder("control", Binder())
     })
@@ -50,6 +51,7 @@ class FactoryMessageEditorCoordinatorTest {
     private fun register(value: FactoryExternalLaunchCoordinator.Session, callback: Runnable = Runnable { value.revoke() }) {
         val constructor = ExternalLaunchControl.Registration::class.java.getDeclaredConstructor(IBinder::class.java, Runnable::class.java).apply { isAccessible = true }
         value.registration = constructor.newInstance(Binder(), callback)
+        value.authority.approveOnce {}
     }
     @Before fun setup() {
         FactoryStartupTestIsolation.releaseCompletedSharingStartup(); root.deleteRecursively(); coordinator = make()
@@ -57,12 +59,12 @@ class FactoryMessageEditorCoordinatorTest {
     @After fun cleanup() {
         owners.asReversed().forEach { owner ->
             owner.session()?.preparing = false
-            if (owner.needsRecovery()) io { owner.close(owner.session(), true, true) {} }
-            else owner.session()?.let { io { owner.close(it, false, true) {} } }
+            if (owner.needsRecovery()) io { owner.close(owner.session(), true) {} }
+            else owner.session()?.let { io { owner.close(it, false) {} } }
         }
         browserOwners.asReversed().forEach { owner ->
-            if (owner.needsRecovery()) io { owner.close(owner.session(), true, true) {} }
-            else owner.session()?.let { io { owner.close(it, false, true) {} } }
+            if (owner.needsRecovery()) io { owner.close(owner.session(), true) {} }
+            else owner.session()?.let { io { owner.close(it, false) {} } }
         }
         executor.shutdown(); assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS))
         assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available()); root.deleteRecursively(); File(context.noBackupFilesDir, "factory-browser").deleteRecursively()
@@ -72,37 +74,37 @@ class FactoryMessageEditorCoordinatorTest {
         coordinator = make { _, _ -> error("No latest signed evidence") }
         denied { begin() }; assertFalse(File(root, "interaction.json").exists()); assertTrue(coordinator.canBegin())
     }
-    @Test fun failedDurableWriteRetainsGuardUntilActualHumanRecoveryCanPersist() {
+    @Test fun failedDurableWriteRetainsFamilyAdmissionUntilRecoveryCanPersist() {
         root.writeText("Synthetic filesystem obstruction")
         denied { begin() }; assertTrue(coordinator.needsRecovery()); assertFalse(FactoryInteractionAdmission.available())
-        assertTrue(MemoryUiAutomationGuard.isProtected()); denied { io { coordinator.close(coordinator.session(), true, true) {} } }
+        assertFalse(MemoryUiAutomationGuard.isProtected()); denied { io { coordinator.close(coordinator.session(), true) {} } }
         assertTrue(coordinator.needsRecovery()); check(root.delete()); check(root.mkdirs())
-        assertNull(io { coordinator.close(coordinator.session(), true, true) {} }); assertEquals("closed_outcome_unknown", coordinator.status())
+        assertNull(io { coordinator.close(coordinator.session(), true) {} }); assertEquals("closed_outcome_unknown", coordinator.status())
         assertTrue(FactoryInteractionAdmission.available())
     }
-    @Test fun externalAttemptNeedsExplicitHumanClosureAndNeverConfirmsAction() {
+    @Test fun externalAttemptClosesWithoutExternalClosureAttestationAndNeverConfirmsAction() {
         val value = begin(); register(value); io { coordinator.prepareLaunch(value) {} }; value.launchRequested = true
-        denied { io { coordinator.close(value, false, false) {} } }; assertTrue(MemoryUiAutomationGuard.isProtected())
-        val receipt = io { coordinator.close(value, false, true) {} }!!
+        assertFalse(MemoryUiAutomationGuard.isProtected())
+        val receipt = io { coordinator.close(value, false) {} }!!
         assertTrue(receipt.getBooleanExtra("launchRequested", false)); assertFalse(receipt.getBooleanExtra("actionConfirmed", true))
         assertTrue(value.registration == null); assertTrue(value.revoked.get()); assertEquals("closed", coordinator.status())
     }
-    @Test fun restoreKeepsUnknownGuardButNeverTypedDataLaunchOrBinderAuthority() {
+    @Test fun restoreKeepsFamilyUnknownStateWithoutGlobalGuardAndNeverTypedDataLaunchOrBinderAuthority() {
         val original = begin(); register(original); io { coordinator.prepareLaunch(original) {} }
         val restored = make(); io { restored.restore() }
         assertNull(restored.session()); assertEquals("outcome_unknown", restored.status()); assertTrue(restored.needsRecovery())
-        denied { io { restored.close(null, true, false) {} } }; denied { io { restored.close(null, true, true) { error("No human") } } }
-        assertNull(io { restored.close(null, true, true) {} }); assertFalse(FactoryInteractionAdmission.available())
-        assertTrue(MemoryUiAutomationGuard.isProtected()); assertFalse(File(root, "interaction.json").readText().contains(QUERY))
+        denied { io { restored.close(null, true) { error("No human") } } }
+        assertNull(io { restored.close(null, true) {} }); assertFalse(FactoryInteractionAdmission.available())
+        assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(File(root, "interaction.json").readText().contains(QUERY))
     }
     @Test fun pendingPreparationRetainsAdmissionEvenAfterRevocationAndExplicitRecovery() {
         val value = io { coordinator.begin(proof.appId, request(), preparing = true) {} }; assertTrue(value.preparing)
-        denied { io { coordinator.close(value, false, false) {} } }; value.revoke()
-        denied { io { coordinator.close(value, true, true) {} } }; assertTrue(coordinator.needsRecovery()); assertFalse(FactoryInteractionAdmission.available())
-        value.preparing = false; assertNull(io { coordinator.close(value, true, true) {} }); assertTrue(FactoryInteractionAdmission.available())
+        denied { io { coordinator.close(value, false) {} } }; value.revoke()
+        denied { io { coordinator.close(value, true) {} } }; assertTrue(coordinator.needsRecovery()); assertFalse(FactoryInteractionAdmission.available())
+        value.preparing = false; assertNull(io { coordinator.close(value, true) {} }); assertTrue(FactoryInteractionAdmission.available())
     }
     @Test fun closedJournalPreventsNonceReplayAcrossRestore() {
-        val value = begin(); io { coordinator.close(value, false, false) {} }
+        val value = begin(); io { coordinator.close(value, false) {} }
         val restored = make(); io { restored.restore() }; assertTrue(restored.canBegin()); assertFalse(restored.needsRecovery())
         denied { io { restored.begin(proof.appId, request()) {} } }
         val fresh = io { restored.begin(proof.appId, request().copy(nonce = "e".repeat(64))) {} }; assertNotNull(fresh)
@@ -126,7 +128,7 @@ class FactoryMessageEditorCoordinatorTest {
             for (secret in listOf(req.args, spec.recipient, spec.body, spec.uri, req.method, proof.appId)) assertFalse(raw.contains(secret))
             spec.subject?.takeIf { it.isNotEmpty() }?.let { assertFalse(raw.contains(it)) }
             assertEquals("launch_pending", JSONObject(raw).getString("state"))
-            val receipt = io { coordinator.close(value, false, true) {} }!!
+            val receipt = io { coordinator.close(value, false) {} }!!
             assertFalse(receipt.getBooleanExtra("actionConfirmed", true))
         }
     }

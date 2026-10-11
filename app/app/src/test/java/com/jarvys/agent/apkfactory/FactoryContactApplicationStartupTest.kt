@@ -62,15 +62,14 @@ class FactoryContactApplicationStartupTest {
             Instrumentation.newApplication(FactoryInstallApplication::class.java, context).onCreate()
             val contacts = contactsCreatedByApplication()
             assertTrue(contacts.isBusy()); assertFalse(contacts.canBegin()); assertNull(contacts.session())
-            assertTrue(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
-            assertTrue(runCatching { MemoryUiAutomationGuard.captureAutomationEpoch() }.isFailure)
-            assertFalse(FactoryDocumentCoordinator.get(context).canBegin()); assertFalse(FactoryAudioCoordinator.get(context).canBegin())
-            assertFalse(FactoryBrowserCoordinator.get(context).canBegin()); assertFalse(externalCreatedByApplication().canBegin())
+            assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
+            assertTrue(runCatching { MemoryUiAutomationGuard.captureAutomationEpoch() }.isSuccess)
+            assertTrue(FactoryDocumentCoordinator.get(context).canBegin())
         } finally { release.countDown() }
         FactoryStartupTestIsolation.awaitSharingWorkerCompletion()
         val contacts = contactsCreatedByApplication()
         assertFalse(contacts.isBusy()); assertTrue(contacts.needsRecovery()); assertEquals("outcome_unknown", contacts.status()); assertNull(contacts.session())
-        assertTrue(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
+        assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
         assertTrue(runCatching { worker { contacts.close(null, true, false) {} } }.isFailure)
         assertTrue(runCatching { worker { contacts.close(null, true, true) { error("No human confirmation") } } }.isFailure)
         assertEquals(Unit, worker { contacts.close(null, true, true) {} })
@@ -79,10 +78,10 @@ class FactoryContactApplicationStartupTest {
         val journal = JSONObject(File(root, "interaction.json").readText())
         assertEquals(setOf("schemaVersion", "state", "open", "nonce"), journal.keys().asSequence().toSet()); assertFalse(journal.getBoolean("open"))
     }
-    @Test fun openPickerJournalBlocksAutomationBeforeAsynchronousRestoreStarts() = startup(saved("launch_pending"))
+    @Test fun openPickerJournalReservesOnlyItsFamilyBeforeAsynchronousRestore() = startup(saved("launch_pending"))
     @Test fun selectedJournalRestoresNoContactDatumOrCallbackAuthority() = startup(saved("selected"))
     @Test fun initialReviewJournalRestoresOnlyUnknownOutcome() = startup(saved("review"))
-    @Test fun corruptJournalRetainsProtectionUntilHumanRecovery() = startup("{")
+    @Test fun corruptJournalNeedsRecoveryWithoutBlockingAutomation() = startup("{")
     @Test fun realStartupKeepsExternalRecoveryWhenContactRecoveryClosesFirst() = simultaneousRecovery(contactsFirst = true)
     @Test fun realStartupKeepsContactRecoveryWhenExternalRecoveryClosesFirst() = simultaneousRecovery(contactsFirst = false)
     private fun simultaneousRecovery(contactsFirst: Boolean) {
@@ -96,15 +95,15 @@ class FactoryContactApplicationStartupTest {
             assertTrue(contactsEntered.await(5, TimeUnit.SECONDS)); assertTrue(externalEntered.await(5, TimeUnit.SECONDS))
             Instrumentation.newApplication(FactoryInstallApplication::class.java, context).onCreate()
             assertTrue(contactsCreatedByApplication().isBusy()); assertTrue(externalCreatedByApplication().isBusy())
-            assertTrue(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
+            assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
         } finally { contactsRelease.countDown(); externalRelease.countDown() }
         FactoryStartupTestIsolation.awaitSharingWorkerCompletion()
         val contacts = contactsCreatedByApplication(); val external = externalCreatedByApplication()
         assertTrue(contacts.needsRecovery()); assertTrue(external.needsRecovery()); assertNull(contacts.session()); assertNull(external.session())
         if (contactsFirst) worker { contacts.close(null, true, true) {} } else worker(FactoryExternalLaunchCoordinator.WORKER) { external.close(null, true, true) {} }
         assertTrue(if (contactsFirst) external.needsRecovery() else contacts.needsRecovery())
-        assertTrue(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
-        assertTrue(runCatching { MemoryUiAutomationGuard.captureAutomationEpoch() }.isFailure)
+        assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
+        assertTrue(runCatching { MemoryUiAutomationGuard.captureAutomationEpoch() }.isSuccess)
         if (contactsFirst) worker(FactoryExternalLaunchCoordinator.WORKER) { external.close(null, true, true) {} } else worker { contacts.close(null, true, true) {} }
         assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available())
         for (directory in listOf(root, externalRoot)) {

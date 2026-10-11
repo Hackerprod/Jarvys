@@ -29,7 +29,7 @@ internal class FactoryFileShareStore(
     data class Snapshot(val uri: Uri, val filename: String, val mimeType: String, val size: Int, val expiresAt: Long)
 
     fun stage(nonce: String, filename: String, mimeType: String, size: Int, sha256: String,
-              transfer: IBinder, checkActive: () -> Unit): Snapshot {
+              transfer: IBinder, checkActive: () -> Unit, checkAccess: () -> Unit = {}): Snapshot {
         require(nonce.matches(Regex("[a-f0-9]{64}")))
         require(filename.matches(Regex("[a-zA-Z0-9][a-zA-Z0-9 _.-]{0,119}")) && !filename.endsWith(".") && !filename.contains(".."))
         require(mimeType.length <= 127 && mimeType.matches(Regex("[a-zA-Z0-9][a-zA-Z0-9!#$&^_.+-]*/[a-zA-Z0-9][a-zA-Z0-9!#$&^_.+-]*")))
@@ -72,7 +72,7 @@ internal class FactoryFileShareStore(
             check(now >= 0 && now <= Long.MAX_VALUE - LIFETIME_MILLIS)
             val result = Snapshot(uri, filename, mimeType, size, now + LIFETIME_MILLIS)
             active.run()
-            FactoryFileShareRegistry.register(operation, result, completed, rootIdentity, identity)
+            FactoryFileShareRegistry.register(operation, result, completed, rootIdentity, identity, checkAccess)
             published = true
             return result
         } finally {
@@ -224,7 +224,7 @@ internal class FactoryFileShareStore(
 internal object FactoryFileShareRegistry {
     private data class Entry(val snapshot: FactoryFileShareStore.Snapshot, val file: File,
                              val root: FactoryFileShareStore.Identity, val identity: FactoryFileShareStore.Identity,
-                             val pinned: FileDescriptor)
+                             val pinned: FileDescriptor, val checkAccess: () -> Unit)
     private var operation: String? = null
     private var cancelled = false
     private var entry: Entry? = null
@@ -238,7 +238,7 @@ internal object FactoryFileShareRegistry {
     @Synchronized fun requireActive(token: String) { check(token == operation && !cancelled) { "File-share operation revoked" } }
     @Synchronized fun finish(token: String) { if (operation == token) operation = null }
     @Synchronized fun register(token: String, snapshot: FactoryFileShareStore.Snapshot, file: File,
-                               root: FactoryFileShareStore.Identity, identity: FactoryFileShareStore.Identity) {
+                               root: FactoryFileShareStore.Identity, identity: FactoryFileShareStore.Identity, checkAccess: () -> Unit = {}) {
         requireActive(token)
         check(entry == null && pendingRevocations.isEmpty())
         check(snapshot.uri.scheme == "content" && snapshot.uri.query == null && snapshot.uri.fragment == null)
@@ -247,7 +247,7 @@ internal object FactoryFileShareRegistry {
         val pinned = Os.open(file.path, OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW or FactoryFileShareStore.ATOMIC_CLOSE_ON_EXEC, 0)
         try {
             check(FactoryFileShareStore.Identity.file(Os.fstat(pinned), snapshot.size) == identity)
-            entry = Entry(snapshot, file, root, identity, pinned)
+            entry = Entry(snapshot, file, root, identity, pinned, checkAccess)
         } catch (e: Throwable) { Os.close(pinned); throw e }
     }
     @Synchronized fun invalidate(): List<Uri> {
@@ -277,9 +277,12 @@ internal object FactoryFileShareRegistry {
             SystemClock.elapsedRealtime() !in 0 until current.snapshot.expiresAt) {
             throw java.io.FileNotFoundException("Unknown or expired file share")
         }
+        // Only a bounded policy checkpoint here; no caller-controlled Binder or APK hashing under this lock.
+        current.checkAccess()
         FactoryFileShareStore.requireRootIdentity(current.file.parentFile!!, current.root)
         check(current.file.canonicalFile == current.file)
         check(FactoryFileShareStore.Identity.file(Os.lstat(current.file.path), current.snapshot.size) == current.identity)
+        current.checkAccess()
         return block(current.snapshot, current.file, current.identity)
     }
 }

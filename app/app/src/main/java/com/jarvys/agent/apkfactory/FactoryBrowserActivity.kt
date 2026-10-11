@@ -27,11 +27,12 @@ import com.jarvys.factory.contract.BrowserUrl
 import com.jarvys.factory.runtime.BrowserLaunchControl
 import java.util.concurrent.RejectedExecutionException
 
-/** Human reviews the immutable URL and chooses a native recipient; no automatic navigation. */
+/** Policy-authorized browser handoff. ASK requests get one native approval; Android resolves defaults. */
 open class FactoryBrowserActivity : ComponentActivity() {
     private val coordinator by lazy { FactoryBrowserCoordinator.get(applicationContext) }
     private val browsers by lazy { FactoryBrowserTargets(applicationContext) }
-    private lateinit var guard: MemoryUiAutomationGuard.Lease
+    private var guard: MemoryUiAutomationGuard.Lease? = null
+    private var policySubscription: AutoCloseable? = null
     private var session: FactoryBrowserCoordinator.Session? = null
     private var candidates = emptyList<FactoryBrowserTargets.Target>()
     private var selected: FactoryBrowserTargets.Target? = null
@@ -56,7 +57,7 @@ open class FactoryBrowserActivity : ComponentActivity() {
         val caller = callingPackage
         val incoming = if (!recovery && savedInstanceState == null && caller != null) runCatching { FactoryBrowserCoordinator.Request.parse(intent) }.getOrNull() else null
         if (!recovery && incoming == null) { rejected = true; finish(); return }
-        if (recovery) { guard = MemoryUiAutomationGuard.enterProtectedSurface(); session = coordinator.session() }
+        if (recovery) session = coordinator.session()
         val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 32, 24, 32); isSaveEnabled = false }
         column.addView(TextView(this).apply { setText(R.string.factory_browser_title); textSize = 22f; isSaveEnabled = false })
         status = TextView(this).apply { textSize = 16f; isSaveEnabled = false; autoLinkMask = 0 }; column.addView(status)
@@ -65,7 +66,7 @@ open class FactoryBrowserActivity : ComponentActivity() {
             override fun onFilterTouchEventForSecurity(event: MotionEvent) = super.onFilterTouchEventForSecurity(event) && unoccluded(event)
         }.also {
             it.setText(label); it.tag = "factory-browser-$name"; it.filterTouchesWhenObscured = true; it.isSaveEnabled = false
-            it.setOnClickListener { if (humanReady() && !working) runCatching(action).onFailure { rejected = true; render() } }; column.addView(it)
+            it.setOnClickListener { if (interactionReady() && !working) runCatching(action).onFailure { rejected = true; render() } }; column.addView(it)
         }
         open = button(R.string.factory_browser_open, "open") { openNative() }
         close = button(R.string.factory_browser_close, "close") { closeNative() }
@@ -76,8 +77,8 @@ open class FactoryBrowserActivity : ComponentActivity() {
         }; ViewCompat.requestApplyInsets(scroll)
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                // Back never declares that an external browser has closed.
-                if (session?.attempted == true || coordinator.needsRecovery() || working || !humanReady()) {
+                // Back closes only this host request; external outcomes remain unconfirmed.
+                if (working || !interactionReady()) {
                     session?.revoke(); finish(); return
                 }
                 runCatching { closeNative() }.onFailure { session?.revoke(); finish() }
@@ -89,27 +90,37 @@ open class FactoryBrowserActivity : ComponentActivity() {
                 if (generation != approved || isDestroyed || isFinishing || !coordinator.canBegin()) { working = false; rejected = true; finish() }
                 else execute {
                     val result = runCatching {
-                        val value = coordinator.begin(caller, incoming) { check(generation == approved && !isDestroyed && !isFinishing) }
+                        val value = coordinator.begin(caller, incoming, preparing = true) { check(generation == approved && !isDestroyed && !isFinishing) }
                         try {
                             value.registration = BrowserLaunchControl.register(incoming.control, incoming.nonce, coordinator.sourceVerifier(value), Runnable {
                                 value.revoke(); handler.post { render() }
                             })
                             coordinator.requireActive(value); check(value.registration?.isRevoked == false)
-                            val targets = browsers.discover(); coordinator.requireActive(value); value to targets
+                            val found = browsers.discover()
+                            val preferred = browsers.preferred(value.request.url, found)
+                            coordinator.requireActive(value); Triple(value, found, preferred)
                         } catch (failure: Exception) { value.revoke(); throw failure }
+                        finally { value.preparing = false }
                     }
                     runOnUiThread {
                         working = false
-                        result.onSuccess { (value, targets) ->
+                        result.onSuccess { (value, targets, preferred) ->
                             if (!isDestroyed && !isFinishing && generation == approved && !value.revoked.get()) {
-                                guard = MemoryUiAutomationGuard.enterProtectedSurface(); session = value; candidates = targets
+                                session = value; candidates = targets; selected = preferred
+                                if (value.authority.requiresApproval) guard = MemoryUiAutomationGuard.enterProtectedSurface()
+                                policySubscription = value.authority.onRevoked {
+                                    handler.post { guard?.close(); guard = null; render() }
+                                }
                                 targets.forEach { target ->
                                     choices.addView(object : RadioButton(this) {
                                         override fun onFilterTouchEventForSecurity(event: MotionEvent) = super.onFilterTouchEventForSecurity(event) && unoccluded(event)
                                     }.apply {
                                         text = target.component.flattenToString(); tag = target.component.flattenToString()
-                                        id = View.generateViewId(); isSaveEnabled = false; filterTouchesWhenObscured = true
-                                        setOnClickListener { if (humanReady() && !working && !value.attempted) { requireHuman(); selected = target; render() } }
+                                        id = View.generateViewId(); isSaveEnabled = false; filterTouchesWhenObscured = true; isChecked = target == selected
+                                        setOnClickListener { if (interactionReady() && !working && !value.attempted) {
+                                            if (value.authority.requiresApproval) requireHuman() else requireLifecycle()
+                                            selected = target; render()
+                                        } }
                                     })
                                 }
                                 handler.postDelayed(expire, maxOf(0, value.expiresAt - SystemClock.elapsedRealtime()))
@@ -117,7 +128,7 @@ open class FactoryBrowserActivity : ComponentActivity() {
                         }.onFailure {
                             rejected = true
                             if (coordinator.needsRecovery() && !isDestroyed && !isFinishing) {
-                                session = coordinator.session(); if (!::guard.isInitialized) guard = MemoryUiAutomationGuard.enterProtectedSurface()
+                                session = coordinator.session()
                             } else finish()
                         }; render()
                     }
@@ -130,60 +141,81 @@ open class FactoryBrowserActivity : ComponentActivity() {
     private fun unoccluded(event: MotionEvent) = Build.VERSION.SDK_INT < 29 || event.flags and MotionEvent.FLAG_WINDOW_IS_PARTIALLY_OBSCURED == 0
     private fun awaitStartup(action: () -> Unit) {
         val approved = generation
-        fun alive() = generation == approved && !isDestroyed && !isFinishing
         fun reject() { working = false; rejected = true; if (!isDestroyed) finish() }
         if (!FactoryBrowserCoordinator.afterStartup {
-            if (!alive()) reject()
-            else if (!FactoryAudioCoordinator.afterStartup {
-                if (!alive()) reject()
-                else if (!FactoryFileShareCoordinator.afterStartup { if (alive()) action() else reject() }) reject()
-            }) reject()
+            if (generation == approved && !isDestroyed && !isFinishing) action() else reject()
         }) reject()
     }
-    private fun humanReady() = resumed && focused && ::guard.isInitialized && guard.isReadyForUser && !isFinishing && !isDestroyed
-    private fun requireHuman(approved: Long = generation) { check(humanReady() && generation == approved); guard.requireHumanUiInteraction() }
+    private fun lifecycleReady() = resumed && focused && !isFinishing && !isDestroyed
+    private fun humanReady() = lifecycleReady() && guard?.isReadyForUser == true
+    private fun interactionReady() = if (session?.authority?.requiresApproval == true && !coordinator.needsRecovery()) humanReady() else lifecycleReady()
+    private fun requireHuman(approved: Long = generation) { check(humanReady() && generation == approved); guard!!.requireHumanUiInteraction() }
+    private fun requireLifecycle(approved: Long = generation) { check(lifecycleReady() && generation == approved) }
+    private fun approve(value: FactoryBrowserCoordinator.Session) {
+        requireLifecycle()
+        if (value.authority.requiresApproval) {
+            value.authority.approveOnce { requireHuman() }
+            guard?.close(); guard = null
+        }
+        value.authority.checkBeforeEffect()
+    }
     private fun execute(onRejected: (() -> Unit)? = null, action: () -> Unit) {
         try { FactoryBrowserCoordinator.WORKER.execute(action) }
         catch (_: RejectedExecutionException) { onRejected?.invoke(); working = false; rejected = true; session?.revoke(); render() }
     }
     private fun openNative() {
-        requireHuman(); val value = session ?: error("Missing browser request"); val target = selected ?: error("Choose a browser")
-        check(!value.attempted && target in candidates); val approved = generation
+        requireLifecycle(); val value = session ?: error("Missing browser request"); val target = selected ?: error("Choose a browser")
+        check(!value.attempted && target in candidates); approve(value); val approved = generation
         working = true; value.preparing = true; render()
         execute(onRejected = { value.preparing = false }) {
             val result = runCatching {
                 browsers.verifiedIntent(target, value.request.url)
-                coordinator.prepareLaunch(value) { requireHuman(approved) }
-                coordinator.verifyReady(value) { requireHuman(approved) }
+                coordinator.prepareLaunch(value) { requireLifecycle(approved) }
+                coordinator.verifyReady(value) { requireLifecycle(approved) }
                 val exact = browsers.verifiedIntent(target, value.request.url)
-                coordinator.requireActive(value); requireHuman(approved); exact
+                coordinator.requireActive(value); requireLifecycle(approved); exact
             }
             runOnUiThread {
                 working = false; value.preparing = false
                 result.onSuccess { exact ->
                     try {
-                        requireHuman(approved); coordinator.requireActive(value)
+                        requireLifecycle(approved); coordinator.requireActive(value)
                         check(value.registration?.isRevoked == false && selected == target)
+                        value.authority.checkBeforeEffect()
                         externalDispatched = true
                         startActivity(exact)
                         value.launchRequested = true
+                        completeLaunch(value)
                     } catch (_: Exception) { value.revoke(); rejected = true }
                 }.onFailure { value.revoke(); rejected = true }; render()
             }
         }
     }
+    private fun completeLaunch(value: FactoryBrowserCoordinator.Session) {
+        working = true
+        execute {
+            val result = runCatching { coordinator.close(value, false) {} }
+            runOnUiThread {
+                working = false
+                result.onSuccess { receipt ->
+                    if (receipt != null) setResult(Activity.RESULT_OK, receipt)
+                    closed = true; session = null; finish()
+                }.onFailure { value.revoke(); rejected = true; render() }
+            }
+        }
+    }
     private fun closeNative() {
-        requireHuman(); val value = session ?: coordinator.session(); val approved = generation
+        requireLifecycle(); val value = session ?: coordinator.session(); val approved = generation
         check(value?.preparing != true)
         val recovery = coordinator.needsRecovery()
         if (value == null && !recovery) { closed = true; finish(); return }
         working = true; render()
         execute {
-            val result = runCatching { coordinator.close(value, recovery, recovery || value?.attempted == true) { requireHuman(approved) } }
+            val result = runCatching { coordinator.close(value, recovery) { requireLifecycle(approved) } }
             runOnUiThread {
                 working = false
                 result.onSuccess { receipt ->
-                    if (receipt != null && humanReady() && generation == approved) setResult(Activity.RESULT_OK, receipt)
+                    if (receipt != null && lifecycleReady() && generation == approved) setResult(Activity.RESULT_OK, receipt)
                     closed = true; session = null; finish()
                 }.onFailure { rejected = true; render() }
             }
@@ -194,7 +226,7 @@ open class FactoryBrowserActivity : ComponentActivity() {
         val value = session
         status.text = buildString {
             append(getString(R.string.factory_browser_disclosure))
-            if (value != null && ::guard.isInitialized) {
+            if (value != null) {
                 append("\n\n").append(value.proof.appId).append("\n\n").append(BrowserUrl.parse(value.request.url).host)
                 append("\n\n").append(value.request.url)
                 selected?.let { append("\n\n").append(it.component.flattenToString()) }
@@ -204,11 +236,16 @@ open class FactoryBrowserActivity : ComponentActivity() {
             else if (value?.attempted == true) append("\n\n").append(getString(R.string.factory_browser_attempted))
             if (rejected || (value != null && candidates.isEmpty() && !value.attempted)) append("\n\n").append(getString(R.string.factory_browser_unavailable))
         }
-        val ready = humanReady() && !working && !rejected && value != null && !value.attempted && !value.revoked.get() && value.registration?.isRevoked == false && coordinator.status() == "review"
+        val ready = interactionReady() && !working && !rejected && value != null && !value.attempted && !value.revoked.get() && value.registration?.isRevoked == false && coordinator.status() == "review"
         open.isEnabled = ready && selected != null
+        open.visibility = if (value?.authority?.requiresApproval == true) View.VISIBLE else View.GONE
         for (i in 0 until choices.childCount) choices.getChildAt(i).isEnabled = ready
         close.setText(if (coordinator.needsRecovery() || value?.attempted == true) R.string.factory_browser_recover else R.string.factory_browser_close)
-        close.isEnabled = humanReady() && !working && !coordinator.isBusy() && value?.preparing != true
+        close.isEnabled = interactionReady() && !working && !coordinator.isBusy() && value?.preparing != true
+        if (ready && selected != null && value?.authority?.requiresApproval == false) {
+            // Dispatch once as soon as the active host and verified recipient are ready.
+            runCatching { openNative() }.onFailure { value.revoke(); rejected = true; render() }
+        }
     }
     override fun onResume() { super.onResume(); resumed = true; render() }
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -220,13 +257,8 @@ open class FactoryBrowserActivity : ComponentActivity() {
     override fun onDestroy() {
         handler.removeCallbacks(expire)
         if (!closed) session?.revoke()
-        if (::guard.isInitialized) {
-            val decor = window.decorView
-            if (!decor.isAttachedToWindow) guard.close() else decor.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
-                override fun onViewAttachedToWindow(v: View) = Unit
-                override fun onViewDetachedFromWindow(v: View) { guard.close(); v.removeOnAttachStateChangeListener(this) }
-            })
-        }
+        policySubscription?.close(); policySubscription = null
+        guard?.close(); guard = null
         super.onDestroy()
     }
 }

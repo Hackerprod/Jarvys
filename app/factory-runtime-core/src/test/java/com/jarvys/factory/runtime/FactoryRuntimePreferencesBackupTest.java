@@ -126,6 +126,19 @@ public class FactoryRuntimePreferencesBackupTest {
         field("rateCount").setInt(runtime,1000);field("rateWindow").setLong(runtime,android.os.SystemClock.elapsedRealtime());
         Response cancel=request("documents.cancel","{}");assertTrue(cancel.value.getBoolean("ok"));assertTrue(member(work,"cancelled").getBoolean(work));assertEquals("CANCELLED",response.error());
     }
+    @Test public void paddedDocumentsCancel1025PreservesIdAndCannotCancelActiveBackup() throws Exception {
+        Response original=new Response(); Object work=installWork("review",original,true);
+        String raw=new JSONObject().put("v",1).put("id","cancelBoundary").put("method","documents.cancel").put("args",new JSONObject()).toString();
+        String maximum=raw+new String(new char[1024-raw.getBytes(java.nio.charset.StandardCharsets.UTF_8).length]).replace('\0',' ');
+        assertEquals(1024,maximum.getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
+        Response oversized=new Response();
+        method("receive",String.class,JavaScriptReplyProxy.class).invoke(runtime,maximum+" ",oversized);
+        assertEquals("INVALID_ARGUMENT",oversized.error()); assertEquals("cancelBoundary",oversized.value.getString("id"));
+        assertFalse(member(work,"cancelled").getBoolean(work)); assertSame(work,field("backup").get(runtime)); assertNull(original.value);
+        Response exact=new Response(); method("receive",String.class,JavaScriptReplyProxy.class).invoke(runtime,maximum,exact);
+        assertTrue(exact.value.getBoolean("ok")); assertEquals("cancelBoundary",exact.value.getString("id"));
+        assertTrue(member(work,"cancelled").getBoolean(work)); assertEquals("CANCELLED",original.error());
+    }
     @Test public void malformedCancelCannotRevokeBackup()throws Exception {
         Object work=installWork("review",new Response(),true);assertEquals("INVALID_ARGUMENT",request("documents.cancel","{\"unexpected\":true}").error());
         assertFalse(member(work,"cancelled").getBoolean(work));

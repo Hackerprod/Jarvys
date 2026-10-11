@@ -49,6 +49,7 @@ class FactoryPreferencesBackupActivityTest {
         FactoryDocumentCoordinator.Proof("example.factory.app", "a".repeat(64), "b".repeat(64), 2, "c".repeat(64)),
         FactoryDataBackupPolicy.Installed("synthetic.apk", "a".repeat(64), 2, Binder.getCallingUid(), 1),
         FactoryDataBackupPolicy.Installed("host.apk", "e".repeat(64), 84, 9000, 1), emptySet(), setOf("notes"), true)
+    private val operationPolicy = FactoryOperationPolicy.inMemory(FactoryOperationPolicy.Mode.ASK)
     private var rejectEvidence = false
     private lateinit var coordinator: FactoryDataBackupCoordinator
     private lateinit var source: BackupReviewControl
@@ -58,7 +59,7 @@ class FactoryPreferencesBackupActivityTest {
     private val text = "Literal https://example.invalid/\u202Ehidden\u2066end"
     @Before fun setup() {
         FactoryStartupTestIsolation.releaseCompletedSharingStartup(); root.deleteRecursively()
-        coordinator = FactoryDataBackupCoordinator(context, currentIdentity = { check(it == proof && !rejectEvidence) }) { _, _ -> check(!rejectEvidence) { "Synthetic unknown signed receipt" }; proof }
+        coordinator = FactoryDataBackupCoordinator(context, currentIdentity = { check(it == proof && !rejectEvidence) }, policy = operationPolicy) { _, _ -> check(!rejectEvidence) { "Synthetic unknown signed receipt" }; proof }
         FactoryDataBackupCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(null, coordinator)
         val archive = StorageBackupFormat.create(proof.proof.appId, proof.proof.certificate, 1, JSONObject().put("notes", text))
         plan = StorageBackupPlan.create(nonce, SystemClock.elapsedRealtime() + 300000, "import", archive, "replaceSelectedKeys", "",
@@ -88,7 +89,7 @@ class FactoryPreferencesBackupActivityTest {
         controller.create(saved).start().resume().visible(); controller.get().onWindowFocusChanged(true); drain(); return controller
     }
     private fun <T : View> view(activity: Activity, name: String): T = activity.window.decorView.findViewWithTag("factory-data-backup-$name")
-    @Test fun completeInertValuesAndUncheckedConsentPrecedeApproval() {
+    @Test fun completeInertValuesAndOneApprovalImplementAsk() {
         val activity = launch().get()
         assertTrue(activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0)
         val details = view<TextView>(activity, "values")
@@ -97,9 +98,9 @@ class FactoryPreferencesBackupActivityTest {
         assertFalse(details.text.contains('\u202e')); assertEquals(0, details.autoLinkMask); assertFalse(details.linksClickable)
         assertFalse(details.isSaveEnabled); assertFalse(details.isSaveFromParentEnabled)
         val check = view<CheckBox>(activity, "acknowledgement"); val approve = view<Button>(activity, "approve")
-        assertFalse(check.isChecked); assertFalse(approve.isEnabled)
+        assertEquals(View.GONE, check.visibility); assertTrue(approve.isEnabled)
         assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode)
-        check.performClick(); assertTrue(approve.isEnabled); approve.performClick(); drain()
+        assertTrue(approve.isEnabled); approve.performClick(); drain()
         assertEquals(Activity.RESULT_OK, shadowOf(activity).resultCode)
         val result = shadowOf(activity).resultIntent
         assertEquals(setOf("nonce", "planSha256", "approved"), result.extras!!.keySet())
@@ -173,18 +174,39 @@ class FactoryPreferencesBackupActivityTest {
         assertSame(original, coordinator.session()); assertFalse(original.revoked.get()); assertNotNull(original.archive)
         assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode)
         controller.pause().stop().destroy(); controllers.remove(controller); drain()
-        assertSame(original, coordinator.session()); assertTrue(MemoryUiAutomationGuard.isProtected())
+        assertSame(original, coordinator.session()); assertFalse(MemoryUiAutomationGuard.isProtected())
         worker { coordinator.close(original, false, false) {} }
     }
-    @Test fun forcedApprovalWithoutAcknowledgementCannotApproveOrResumeConsent() {
-        val activity = launch().get()
-        val approve = view<Button>(activity, "approve")
-        assertFalse(view<CheckBox>(activity, "acknowledgement").isChecked); assertFalse(approve.isEnabled)
-        // performClick bypasses Android's disabled-touch dispatch. The action itself must still reject it.
-        approve.performClick(); drain()
+    @Test fun backgroundCannotApprovePendingAsk() {
+        val controller = launch(); val activity = controller.get()
+        assertTrue(view<Button>(activity, "approve").isEnabled)
+        controller.pause(); view<Button>(activity, "approve").performClick(); drain()
         assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode)
-        assertTrue(coordinator.session()?.revoked?.get() == true); assertFalse(approve.isEnabled)
+        assertTrue(coordinator.session()?.revoked?.get() == true)
         assertNull(coordinator.session()?.archive)
+    }
+    @Test fun denyBetweenLegacyWorkerApprovalAndResultHandoffBlocksDelivery() {
+        val activity = launch().get()
+        view<Button>(activity, "approve").performClick()
+        worker {} // Worker approval has queued its main-thread result, but it has not been delivered.
+        assertEquals("legacy_authorized", coordinator.status())
+        operationPolicy.setDefaultMode(FactoryOperationPolicy.Mode.DENY)
+        drain(); drain()
+        assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode)
+        assertNull(shadowOf(activity).resultIntent); assertNull(coordinator.session())
+    }
+    @Test fun allowAutomaticallyApprovesWithoutCheckboxOrUiGuard() {
+        operationPolicy.setDefaultMode(FactoryOperationPolicy.Mode.ALLOW_ALWAYS)
+        val activity = launch().get(); drain()
+        assertEquals(Activity.RESULT_OK, shadowOf(activity).resultCode)
+        assertFalse(MemoryUiAutomationGuard.isProtected())
+    }
+    @Test fun denyReturnsBeforeArchiveTransferOrApprovalSurface() {
+        operationPolicy.setDefaultMode(FactoryOperationPolicy.Mode.DENY)
+        val activity = launch().get()
+        assertTrue(activity.isFinishing); assertNull(coordinator.session())
+        assertFalse(MemoryUiAutomationGuard.isProtected())
+        assertFalse(File(root, "interaction.json").exists())
     }
     @Test fun normalEntryWithoutOwnedSessionCannotRecoverForeignSessionBeforePendingFailureCallback() {
         val entered = java.util.concurrent.CountDownLatch(1); val release = java.util.concurrent.CountDownLatch(1)
@@ -208,7 +230,7 @@ class FactoryPreferencesBackupActivityTest {
         // Exercise the native close boundary directly: an empty normal entry must not borrow global recovery authority.
         FactoryDataBackupActivity::class.java.getDeclaredMethod("closeNative", Boolean::class.javaPrimitiveType).apply { isAccessible = true }.invoke(activity, true)
         worker {}
-        assertSame(original, coordinator.session()); assertTrue(coordinator.needsRecovery()); assertTrue(MemoryUiAutomationGuard.isProtected())
+        assertSame(original, coordinator.session()); assertTrue(coordinator.needsRecovery()); assertFalse(MemoryUiAutomationGuard.isProtected())
         drain(); assertTrue(activity.isFinishing); assertEquals("", view<TextView>(activity, "values").text.toString())
         controller.pause().stop().destroy(); controllers.remove(controller); drain()
         assertSame(original, coordinator.session())
@@ -220,7 +242,7 @@ class FactoryPreferencesBackupActivityTest {
         val details = view<TextView>(activity, "values")
         val consent = view<CheckBox>(activity, "acknowledgement")
         consent.performClick()
-        assertTrue(consent.isChecked); assertTrue(details.text.contains(plan.json()))
+        assertEquals(View.GONE, consent.visibility); assertTrue(details.text.contains(plan.json()))
         assertFalse(details.isSaveEnabled); assertFalse(details.isSaveFromParentEnabled)
         assertFalse(consent.isSaveEnabled); assertFalse(consent.isSaveFromParentEnabled)
         val syntheticUri = Uri.parse("content://synthetic.backup/document/private-fixture")

@@ -132,6 +132,28 @@ public class FileShareTransferTest {
         worker(() -> { FileShareTransfer.copy(binder, NONCE, size, hash, output, active); return null; });
     }
 
+    @Test public void terminalCallbackFiresOnceForEofCancelExpiryAndLateRegistration() throws Exception {
+        FileShareTransfer first=endpoint(pattern(3)); AtomicInteger eof=new AtomicInteger(); first.onClosed(eof::incrementAndGet);
+        read(first,NONCE,0); assertEquals(0,eof.get()); read(first,NONCE,3); first.close(); assertEquals(1,eof.get());
+        FileShareTransfer second=endpoint(pattern(3)); AtomicInteger cancelled=new AtomicInteger(); second.onClosed(cancelled::incrementAndGet);
+        worker(()->{FileShareTransfer.cancel(second,NONCE);return null;}); second.close(); assertEquals(1,cancelled.get());
+        FileShareTransfer third=endpoint(pattern(3)); AtomicInteger expired=new AtomicInteger(); third.onClosed(expired::incrementAndGet);
+        now+=FileShareTransfer.LIFETIME_MILLIS; third.expire(); third.expire(); assertEquals(1,expired.get());
+        FileShareTransfer late=endpoint(pattern(3)); late.close(); AtomicInteger closed=new AtomicInteger(); late.onClosed(closed::incrementAndGet); assertEquals(1,closed.get());
+    }
+    @Test public void expiredAdmissionCompletionAttemptStillDeliversTerminalCallback() throws Exception {
+        FileShareTransfer.Admission admission=reserve(); FileShareTransfer endpoint=endpoint(admission,pattern(3),uid->true);
+        AtomicInteger count=new AtomicInteger(); endpoint.onClosed(count::incrementAndGet); now+=FileShareTransfer.LIFETIME_MILLIS;
+        fails("INVALID_SHARE",()->admission.complete(pattern(2),NONCE,uid->true)); assertEquals(1,count.get());
+    }
+    @Test public void terminalCallbackRunsOutsideLockAndSubscriptionCanBeRemoved() throws Exception {
+        FileShareTransfer first=endpoint(pattern(3));
+        first.onClosed(()->{try {worker(()->{first.expire();return null;});}catch(Exception failure){throw new AssertionError(failure);}});
+        first.close();
+        FileShareTransfer second=endpoint(pattern(3)); AtomicInteger count=new AtomicInteger(); AutoCloseable subscription=second.onClosed(count::incrementAndGet);
+        subscription.close(); second.close(); assertEquals(0,count.get());
+    }
+
     @Test public void chunkedRoundTripsIncludePartial128KiBAndFull8MiB() throws Exception {
         for (int length : new int[] {1, 3, 32767, 32768, 32769, 131073, FileShareTransfer.MAX_BYTES}) {
             byte[] bytes = pattern(length);

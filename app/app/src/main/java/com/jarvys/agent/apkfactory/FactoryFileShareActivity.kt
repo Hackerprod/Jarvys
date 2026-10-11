@@ -23,16 +23,17 @@ import com.jarvys.agent.MemoryUiAutomationGuard
 import com.jarvys.agent.R
 import java.util.concurrent.RejectedExecutionException
 
-/** Exported only for explicit for-result requests; Android callingPackage is independently verified. */
+/** Explicit authenticated for-result broker. Recipient access outlives this short UI lease. */
 open class FactoryFileShareActivity : ComponentActivity() {
     private val coordinator by lazy { FactoryFileShareCoordinator.get(applicationContext) }
-    private lateinit var guard: MemoryUiAutomationGuard.Lease
+    private var guard: MemoryUiAutomationGuard.Lease? = null
     private var token: String? = null
     private var request: FactoryFileShareCoordinator.Request? = null
     @Volatile private var resumed = false
     @Volatile private var generation = 0L
     private var working = false
     private var external = false
+    private var returned = false
     private var rejected = false
     private var closed = false
     private lateinit var status: TextView
@@ -41,175 +42,155 @@ open class FactoryFileShareActivity : ComponentActivity() {
     private lateinit var acknowledge: Button
     override fun attachBaseContext(newBase: Context) { super.attachBaseContext(AppLanguageRuntime.attachBaseContext(newBase)) }
     override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        setResult(Activity.RESULT_CANCELED)
+        super.onCreate(savedInstanceState); window.addFlags(WindowManager.LayoutParams.FLAG_SECURE); setResult(Activity.RESULT_CANCELED)
         val recovery = savedInstanceState == null && runCatching { FactoryFileShareCoordinator.consumeRecoveryToken(intent) }.getOrDefault(false)
         val caller = callingPackage
-        val incoming = if (!recovery && savedInstanceState == null && caller != null)
-            runCatching { FactoryFileShareCoordinator.Request.parse(intent) }.getOrNull() else null
-        if (!recovery && incoming == null) { rejected = true; finish(); return }
-        if (recovery) guard = MemoryUiAutomationGuard.enterProtectedSurface()
+        val incoming = if (!recovery && savedInstanceState == null && caller != null) runCatching { FactoryFileShareCoordinator.Request.parse(intent) }.getOrNull() else null
+        if (!recovery && incoming == null) { finish(); return }
         val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(24, 32, 24, 32); isSaveEnabled = false }
         column.addView(TextView(this).apply { setText(R.string.factory_file_sharing_title); textSize = 22f; isSaveEnabled = false })
         status = TextView(this).apply { textSize = 16f; isSaveEnabled = false }; column.addView(status)
         fun button(label: Int, name: String, action: () -> Unit) = Button(this).also {
             it.setText(label); it.tag = "factory-file-sharing-$name"; it.filterTouchesWhenObscured = true; it.isSaveEnabled = false
-            it.setOnClickListener { if (humanReady() && !working) runCatching(action).onFailure { rejected = true; render() } }
-            column.addView(it)
+            it.setOnClickListener { if (humanReady() && !working) runCatching(action).onFailure { reject() } }; column.addView(it)
         }
-        choose = button(R.string.factory_file_sharing_choose, "choose") {
-            requireHuman(); val owner = token ?: error("Missing owner"); val approved = generation
-            working = true; render()
-            execute {
-                val result = runCatching {
-                    val chooser = coordinator.prepareChooser(owner, getString(R.string.factory_file_sharing_title)) { requireHuman(approved) }
-                    try { trustedChooser(this, chooser) }
-                    catch (failure: Exception) { coordinator.chooserLaunchFailed(owner); throw failure }
-                }
-                runOnUiThread {
-                    working = false
-                    result.onSuccess { chooser ->
-                        if (humanReady() && generation == approved) {
-                            external = true
-                            try {
-                                startActivityForResult(chooser, CHOOSER)
-                                coordinator.chooserLaunched(owner)
-                            } catch (_: Exception) {
-                                external = false; runCatching { coordinator.chooserLaunchFailed(owner) }; rejected = true
-                            }
-                        } else { coordinator.invalidate(owner); token = null; rejected = true }
-                    }.onFailure { rejected = true }
-                    render()
-                }
-            }
-        }
+        choose = button(R.string.factory_file_sharing_choose, "choose") { launchChooser() }
         close = button(R.string.factory_file_sharing_close, "close") { closeNative(false) }
         acknowledge = button(R.string.factory_file_sharing_acknowledge, "acknowledge") { closeNative(true) }
-        val scroll = ScrollView(this).apply { isFillViewport = true; isSaveEnabled = false; addView(column) }
-        setContentView(scroll)
+        val scroll = ScrollView(this).apply { isFillViewport = true; isSaveEnabled = false; addView(column) }; setContentView(scroll)
         ViewCompat.setOnApplyWindowInsetsListener(scroll) { view, insets ->
             val safe = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout() or WindowInsetsCompat.Type.ime())
             view.setPadding(safe.left, safe.top, safe.right, safe.bottom); insets
-        }
-        ViewCompat.requestApplyInsets(scroll)
+        }; ViewCompat.requestApplyInsets(scroll)
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (!::guard.isInitialized || !guard.isReadyForUser) { finish(); return }
-                if (!humanReady() || working) return
-                // Back cannot acknowledge recipient closure. Leaving retains the durable recovery latch.
-                if (coordinator.chooserAttempted() || coordinator.needsRecovery()) {
-                    token?.let { coordinator.invalidate(it) }; token = null; finish()
-                } else runCatching { closeNative(false) }.onFailure { rejected = true; render() }
+                if (working || external) { token?.let(coordinator::invalidate); token = null; finish() }
+                else runCatching { closeNative(recovery) }.onFailure { reject(); finish() }
             }
         })
         if (incoming != null && caller != null) {
-            val approved = generation; working = true
-            val deferred = FactoryFileShareCoordinator.afterStartup {
-                if (generation != approved || isDestroyed || isFinishing) {
-                    working = false
-                } else if (!coordinator.canBegin()) {
-                    working = false; rejected = true; finish()
-                } else {
-                    execute {
-                        val result = runCatching { coordinator.begin(caller, incoming) {
-                            check(generation == approved && !isDestroyed && !isFinishing) { "Request Activity was interrupted" }
-                        } }
-                        runOnUiThread {
-                            working = false
-                            result.onSuccess { owner ->
-                                if (!isDestroyed && !isFinishing && generation == approved) {
-                                    guard = MemoryUiAutomationGuard.enterProtectedSurface(); token = owner; request = incoming
-                                } else coordinator.invalidate(owner)
-                            }.onFailure {
-                                rejected = true
-                                if (coordinator.needsRecovery() && !isDestroyed && !isFinishing) {
-                                    if (!::guard.isInitialized) guard = MemoryUiAutomationGuard.enterProtectedSurface()
-                                } else finish()
-                            }
-                            render()
-                        }
+            val expected = generation; working = true
+            if (!FactoryFileShareCoordinator.afterStartup {
+                if (generation != expected || isDestroyed || isFinishing || !coordinator.canBegin()) { working = false; rejected = true; finish() }
+                else execute {
+                    val result = runCatching { coordinator.begin(caller, incoming) { check(generation == expected && !isDestroyed && !isFinishing) } }
+                    runOnUiThread {
+                        working = false
+                        result.onSuccess { owner ->
+                            if (!isDestroyed && !isFinishing && generation == expected) {
+                                token = owner; request = incoming
+                                if (coordinator.requiresApproval()) guard = MemoryUiAutomationGuard.enterProtectedSurface()
+                            } else coordinator.invalidate(owner)
+                        }.onFailure { rejected = true; if (!coordinator.needsRecovery()) finish() }
+                        render(); advanceAllowed()
                     }
                 }
-            }
-            if (!deferred) { working = false; rejected = true; finish() }
+            }) { working = false; rejected = true; finish() }
         }
         render()
     }
     private fun execute(action: () -> Unit) {
         try { FactoryFileShareCoordinator.WORKER.execute(action) }
-        catch (_: RejectedExecutionException) { working = false; rejected = true; render() }
+        catch (_: RejectedExecutionException) { working = false; reject() }
     }
-    private fun humanReady() = resumed && ::guard.isInitialized && guard.isReadyForUser && !isFinishing && !isDestroyed
-    private fun requireHuman(approved: Long = generation) {
-        check(resumed && generation == approved && !isFinishing && !isDestroyed && ::guard.isInitialized)
-        guard.requireHumanUiInteraction()
+    private fun humanReady() = resumed && (guard?.isReadyForUser != false) && !isFinishing && !isDestroyed
+    private fun requireHuman(expected: Long = generation) {
+        check(humanReady() && generation == expected)
+        if (coordinator.requiresApproval()) check(guard != null)
+        guard?.requireHumanUiInteraction()
     }
-    private fun closeNative(acknowledged: Boolean) {
-        requireHuman(); val owner = token; val approved = generation
-        if (owner == null && !coordinator.needsRecovery()) { closed = true; finish(); return }
-        if (owner == null) check(acknowledged)
+    private fun reject() { rejected = true; token?.let(coordinator::invalidate); render() }
+    private fun advanceAllowed() {
+        if (!humanReady() || working || rejected || token == null || external) return
+        if (returned) deliverReceipt()
+        else if (!coordinator.requiresApproval() && coordinator.status() == "review") runCatching { launchChooser() }.onFailure { reject() }
+    }
+    private fun launchChooser() {
+        requireHuman(); val owner = token ?: error("Missing owner"); val expected = generation
         working = true; render()
         execute {
             val result = runCatching {
-                if (owner != null) coordinator.close(owner, acknowledged) { requireHuman(approved) }
-                else { coordinator.acknowledgeRecovery { requireHuman(approved) }; null }
+                val chooser = coordinator.prepareChooser(owner, getString(R.string.factory_file_sharing_title)) { requireHuman(expected) }
+                try { trustedChooser(this, chooser) } catch (failure: Exception) { coordinator.chooserLaunchFailed(owner); throw failure }
+            }
+            runOnUiThread {
+                working = false
+                result.onSuccess { chooser ->
+                    try {
+                        requireHuman(expected); coordinator.checkCurrent(owner)
+                        guard?.close(); guard = null
+                        external = true; startActivityForResult(chooser, CHOOSER); coordinator.chooserLaunched(owner)
+                    } catch (_: Exception) { external = false; runCatching { coordinator.chooserLaunchFailed(owner) }; reject() }
+                }.onFailure { reject() }; render()
+            }
+        }
+    }
+    private fun deliverReceipt() {
+        val owner = token ?: return; val expected = generation; working = true; render()
+        execute {
+            val result = runCatching { coordinator.detachRecipientLease(owner) { check(generation == expected && !isDestroyed && !isFinishing) } }
+            runOnUiThread {
+                working = false
+                result.onSuccess { receipt ->
+                    if (generation == expected && !isDestroyed && !isFinishing) setResult(Activity.RESULT_OK, receipt)
+                    closed = true; token = null; request = null; finish()
+                }.onFailure { reject() }
+            }
+        }
+    }
+    private fun closeNative(acknowledged: Boolean) {
+        requireHuman(); val owner = token; val expected = generation
+        if (owner == null && !coordinator.needsRecovery()) { closed = true; finish(); return }
+        working = true; render()
+        execute {
+            val result = runCatching {
+                if (owner != null) coordinator.close(owner, acknowledged) { requireHuman(expected) }
+                else { coordinator.acknowledgeRecovery { requireHuman(expected) }; null }
             }
             runOnUiThread {
                 working = false
                 result.onSuccess { receipt ->
-                    if (receipt != null && humanReady() && generation == approved) setResult(Activity.RESULT_OK, receipt)
+                    if (receipt != null && generation == expected && !isDestroyed && !isFinishing) setResult(Activity.RESULT_OK, receipt)
                     closed = true; token = null; request = null; finish()
-                }.onFailure { rejected = true; render() }
+                }.onFailure { reject() }
             }
         }
     }
-    @Deprecated("Chooser return is only a hint; it never establishes delivery or recipient closure")
+    @Deprecated("Chooser return is not proof of delivery or recipient closure")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode != CHOOSER || !external) return
-        external = false
+        external = false; returned = true
         token?.let { runCatching { coordinator.chooserCallback(it) }.onFailure { rejected = true } }
-        // Ignore all chooser result data and codes, including RESULT_OK. Explicit human closure is still required.
-        render()
+        render(); advanceAllowed()
     }
     private fun render() {
         if (!::status.isInitialized) return
-        val recovery = coordinator.needsRecovery(); val attempted = coordinator.chooserAttempted()
+        val recovery = coordinator.needsRecovery()
         status.text = buildString {
             append(getString(R.string.factory_file_sharing_disclosure))
+            request?.let { append("\n\n").append(callingPackage).append("\n").append(it.filename).append("\n").append(it.mimeType).append(" · ").append(it.size).append(" bytes") }
+            if (working) append("\n\n").append(getString(R.string.factory_file_sharing_checking))
             if (recovery) append("\n\n").append(getString(R.string.factory_file_sharing_unknown))
-            else if (working || !::guard.isInitialized) append("\n\n").append(getString(R.string.factory_file_sharing_checking))
-            else {
-                request?.let { value ->
-                    append("\n\n").append(callingPackage).append("\n").append(value.filename)
-                    append("\n").append(value.mimeType).append(" · ").append(value.size).append(" bytes")
-                }
-                if (attempted) append("\n\n").append(getString(R.string.factory_file_sharing_waiting))
-                if (rejected || !guard.isReadyForUser) append("\n\n").append(getString(R.string.factory_file_sharing_rejected))
-            }
+            if (rejected) append("\n\n").append(getString(R.string.factory_file_sharing_rejected))
         }
+        choose.visibility = if (coordinator.requiresApproval()) View.VISIBLE else View.GONE
         choose.isEnabled = humanReady() && !working && !rejected && token != null && coordinator.status() == "review"
-        close.visibility = if (attempted || recovery) View.GONE else View.VISIBLE
-        close.isEnabled = humanReady() && !working && !attempted && !recovery
-        acknowledge.visibility = if (attempted || recovery) View.VISIBLE else View.GONE
-        acknowledge.isEnabled = humanReady() && !working && (attempted || recovery)
+        close.visibility = if (recovery) View.GONE else View.VISIBLE
+        close.isEnabled = humanReady() && !working && !external
+        acknowledge.visibility = if (recovery) View.VISIBLE else View.GONE
+        acknowledge.isEnabled = humanReady() && !working && recovery
     }
-    override fun onResume() { super.onResume(); resumed = true; render() }
+    override fun onResume() { super.onResume(); resumed = true; render(); advanceAllowed() }
     override fun onPause() {
         resumed = false; generation++
-        if (!closed && !external) { token?.let { coordinator.invalidate(it) }; token = null; request = null; rejected = true }
+        if (!closed && !external && !returned) { token?.let(coordinator::invalidate); token = null; request = null; rejected = true }
         super.onPause()
     }
+    override fun onSaveInstanceState(outState: Bundle) { try { super.onSaveInstanceState(outState) } finally { outState.clear() } }
     override fun onDestroy() {
-        if (!closed) { token?.let { coordinator.invalidate(it) }; token = null; request = null }
-        if (::guard.isInitialized) {
-            val decor = window.decorView
-            if (!decor.isAttachedToWindow) guard.close() else decor.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
-                override fun onViewAttachedToWindow(v: View) = Unit
-                override fun onViewDetachedFromWindow(v: View) { guard.close(); v.removeOnAttachStateChangeListener(this) }
-            })
-        }
+        if (!closed) token?.let(coordinator::invalidate)
+        token = null; request = null; guard?.close(); guard = null
         super.onDestroy()
     }
     companion object {

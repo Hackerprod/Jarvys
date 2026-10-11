@@ -119,7 +119,8 @@ public final class BoundedStore {
                 // commit() may have changed the process map even when it returns false or throws. Never replay or roll back.
                 throw outcomeUnknown();
             }
-            checkBackup(allowed); // Losing authority after commit suppresses success; it cannot undo a prior write.
+            // A confirmed irreversible commit is the end of effect authorization. A later revocation
+            // cannot turn known persisted success into failure; response lifecycle is checked by the runtime.
             return receipt;
         }
     }

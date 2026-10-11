@@ -16,7 +16,7 @@ import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
-/** Human-only binary sharing. No external callback is evidence of recipient closure or delivery. */
+/** Policy-authorized binary sharing. No external callback is evidence of recipient closure or delivery. */
 internal class FactoryFileShareCoordinator(
     context: Context,
     private val verify: (String) -> FactoryDocumentCoordinator.Proof = {
@@ -24,6 +24,7 @@ internal class FactoryFileShareCoordinator(
     },
     private val receive: ((Request, () -> Unit) -> FactoryFileShareStore.Snapshot)? = null,
     private val clean: (() -> Unit)? = null,
+    private val policy: FactoryOperationPolicy = FactoryOperationPolicy.get(context),
 ) {
     data class Request(val nonce: String, val filename: String, val mimeType: String, val size: Int, val sha256: String, val transfer: IBinder) {
         companion object {
@@ -55,6 +56,12 @@ internal class FactoryFileShareCoordinator(
     private var proof: FactoryDocumentCoordinator.Proof? = null
     private var request: Request? = null
     private var snapshot: FactoryFileShareStore.Snapshot? = null
+    private var permit: FactoryOperationPolicy.Grant? = null
+    private var revocation: AutoCloseable? = null
+    private var transferLease = false
+    private var leaseId: String? = null
+    private val handler = Handler(Looper.getMainLooper())
+    private var expire: Runnable? = null
     private var nonce = ""
     private var state = "idle"
     private var open = false
@@ -63,10 +70,9 @@ internal class FactoryFileShareCoordinator(
     private var restoring = false
     private var startupWaiter: (() -> Unit)? = null
     private var opened = false // Process-local only. Restart must never claim the chooser opened.
-    private fun protect() { if (lease == null) lease = MemoryUiAutomationGuard.enterProtectedSurface() }
-    @Synchronized fun isRestoring() = restoring
+        @Synchronized fun isRestoring() = restoring
     @Synchronized fun status() = state
-    @Synchronized fun canBegin() = !open && !broken && !busy && !restoring && FactoryInteractionAdmission.available()
+    @Synchronized fun canBegin() = !open && !broken && !busy && !restoring && FactoryInteractionAdmission.available(this)
     @Synchronized fun needsRecovery() = !restoring && open && (owner == null || broken)
     @Synchronized fun chooserAttempted() = state in setOf("chooser_pending", "chooser_opened", "launch_failed")
     @Synchronized fun chooserOpened() = opened
@@ -80,11 +86,11 @@ internal class FactoryFileShareCoordinator(
             val stream = journal.startWrite()
             try { stream.write(bytes); stream.fd.sync() } catch (failure: Throwable) { journal.failWrite(stream); throw failure }
             journal.finishWrite(stream); check(journal.readFully().contentEquals(bytes))
-        } catch (failure: Exception) { broken = true; open = true; owner = null; state = "outcome_unknown"; protect(); FactoryInteractionAdmission.restore(this); throw failure }
+        } catch (failure: Exception) { broken = true; open = true; owner = null; state = "outcome_unknown"; FactoryInteractionAdmission.restore(this); throw failure }
     }
     /** Called synchronously at application startup before components can automate anything. */
     @Synchronized private fun prepareRestore() {
-        restoring = true; protect(); FactoryInteractionAdmission.restore(this)
+        restoring = true; FactoryInteractionAdmission.restore(this)
     }
     /** Disk work runs only on the one bounded host sharing worker. URI capabilities are never restored. */
     fun restore() {
@@ -111,7 +117,7 @@ internal class FactoryFileShareCoordinator(
                 if (open) save() else release()
             }
         } catch (_: Exception) {
-            synchronized(this) { broken = true; open = true; state = "outcome_unknown"; owner = null; protect(); FactoryInteractionAdmission.restore(this) }
+            synchronized(this) { broken = true; open = true; state = "outcome_unknown"; owner = null; FactoryInteractionAdmission.restore(this) }
         } finally {
             val ready = synchronized(this) { restoring = false; startupWaiter.also { startupWaiter = null } }
             ready?.let { Handler(Looper.getMainLooper()).post(it) }
@@ -119,29 +125,34 @@ internal class FactoryFileShareCoordinator(
     }
     fun begin(callingPackage: String?, value: Request, checkActive: () -> Unit): String {
         requireWorker(); require(!callingPackage.isNullOrBlank()) { "Android calling package is required" }
-        synchronized(this) {
-            check(canBegin()); require(value.nonce != nonce) { "Replayed file sharing request" }
-            FactoryInteractionAdmission.acquire(this); busy = true
-        }
+        synchronized(this) { check(canBegin()); require(value.nonce != nonce) { "Replayed file sharing request" } }
+        val identity = verify(callingPackage)
+        check(identity.appId == callingPackage); checkActive()
+        val grant = policy.acquire(FactoryOperationPolicy.Subject.installed(identity), FactoryOperationPolicy.Operation.FILE_SHARE,
+            FactoryOperationPolicy.binding(value.nonce, value.filename, value.mimeType, value.size.toString(), value.sha256, identity.apk, identity.record))
+        try { FactoryInteractionAdmission.acquire(this) } catch (failure: Exception) { grant.close(); throw failure }
+        synchronized(this) { busy = true }
         var authenticated = false
         try {
-            val identity = verify(callingPackage)
-            check(identity.appId == callingPackage); authenticated = true; checkActive()
+            authenticated = true; checkActive(); grant.requireCurrent()
             val token = synchronized(this) {
-                check(!open && !broken); protect()
-                if (lease?.isReadyForUser != true) { lease?.close(); lease = null; error("Automated action in flight") }
-                owner = UUID.randomUUID().toString(); proof = identity; request = value; nonce = value.nonce
+                check(!open && !broken)
+                val boundOwner = UUID.randomUUID().toString()
+                owner = boundOwner; leaseId = boundOwner; proof = identity; request = value; nonce = value.nonce; permit = grant; transferLease = false
+                revocation = grant.onRevoked { revokeTransfer(boundOwner, grant) }
                 open = true; opened = false; state = "receiving"; save(); owner!!
             }
             cleanup()
-            val active = { synchronized(this) { checkOwner(token); check(state == "receiving") }; checkActive() }
+            val active = { synchronized(this) { checkOwner(token); check(state == "receiving"); grant.requireCurrent() }; checkActive() }
             val staged = if (receive != null) receive.invoke(value, active)
-                else store.stage(value.nonce, value.filename, value.mimeType, value.size, value.sha256, value.transfer, active)
+                else store.stage(value.nonce, value.filename, value.mimeType, value.size, value.sha256, value.transfer, active) { grant.checkBeforeEffect() }
             active()
             // Revalidate after the bounded transfer: no old installed APK or signing evidence is accepted.
             check(verify(callingPackage) == identity)
             return synchronized(this) {
-                checkOwner(token); checkActive(); snapshot = staged; state = "review"; save(); token
+                checkOwner(token); checkActive(); grant.requireCurrent(); snapshot = staged; state = "review"; save()
+                expire = Runnable { revokeTransfer(token, grant) }.also { handler.postDelayed(it, maxOf(0, staged.expiresAt - android.os.SystemClock.elapsedRealtime())) }
+                token
             }
         } catch (failure: Exception) {
             synchronized(this) {
@@ -151,18 +162,49 @@ internal class FactoryFileShareCoordinator(
             // This endpoint belongs to the verified caller only. A stalled cancellation keeps this
             // same worker and admission occupied; never spawn a replacement Binder worker.
             if (authenticated) runCatching { FileShareTransfer.cancel(value.transfer, value.nonce) }
-            throw failure
+            grant.close(); throw failure
         } finally {
             synchronized(this) { busy = false; if (!open && !broken) FactoryInteractionAdmission.release(this) }
         }
     }
-    private fun checkOwner(token: String) { check(open && !broken && owner == token) }
+    private fun checkOwner(token: String) { check(open && !broken && owner == token); permit?.requireCurrent() }
+    @Synchronized fun requiresApproval() = permit?.requiresApproval == true
+    @Synchronized fun checkCurrent(token: String) { checkOwner(token); permit?.checkBeforeEffect() }
+    private fun revokeTransfer(boundOwner: String, boundGrant: FactoryOperationPolicy.Grant) {
+        // A stale expiry/retry must not invalidate another request's global registry.
+        synchronized(this) {
+            if (!open || leaseId != boundOwner || permit !== boundGrant) return
+            FactoryFileShareRegistry.invalidate()
+        }
+        try { WORKER.execute {
+            synchronized(this) {
+                if (!open || leaseId != boundOwner || permit !== boundGrant) return@execute
+                if (busy) { handler.postDelayed({ revokeTransfer(boundOwner, boundGrant) }, 1000); return@execute }
+            }
+            runCatching {
+                cleanup()
+                synchronized(this) {
+                    if (!open || leaseId != boundOwner || permit !== boundGrant) return@synchronized
+                    state = if (state == "outcome_unknown") "closed_outcome_unknown" else "closed"; open = false; save(); release()
+                }
+            }.onFailure {
+                synchronized(this) {
+                    if (open && leaseId == boundOwner && permit === boundGrant) {
+                        owner = null; opened = false; state = "outcome_unknown"
+                        FactoryInteractionAdmission.restore(this); runCatching { save() }
+                    }
+                }
+            }
+        } } catch (_: java.util.concurrent.RejectedExecutionException) {
+            handler.postDelayed({ revokeTransfer(boundOwner, boundGrant) }, 1000)
+        }
+    }
     fun prepareChooser(token: String, title: String, human: () -> Unit): Intent {
         requireWorker()
-        val p = synchronized(this) { checkOwner(token); check(state == "review"); human(); lease!!.requireHumanUiInteraction(); proof!! }
+        val p = synchronized(this) { checkOwner(token); check(state == "review"); human(); permit!!.approveOnce(human); permit!!.checkBeforeEffect(); proof!! }
         check(verify(p.appId) == p)
         return synchronized(this) {
-            checkOwner(token); check(state == "review" && proof == p); human(); lease!!.requireHumanUiInteraction()
+            checkOwner(token); check(state == "review" && proof == p); human(); permit?.checkBeforeEffect()
             val file = snapshot ?: error("No verified snapshot")
             check(android.os.SystemClock.elapsedRealtime() < file.expiresAt) { "File sharing snapshot expired" }
             val send = Intent(Intent.ACTION_SEND).setType(file.mimeType).putExtra(Intent.EXTRA_STREAM, file.uri)
@@ -174,47 +216,60 @@ internal class FactoryFileShareCoordinator(
             }
         }
     }
-    /** These are only in-process observations; neither releases protection nor writes a delivery claim. */
+    /** These are only in-process observations; neither releases recipient authority nor writes a delivery claim. */
     @Synchronized fun chooserLaunched(token: String) { checkOwner(token); check(state == "chooser_pending"); opened = true; state = "chooser_opened" }
     @Synchronized fun chooserLaunchFailed(token: String) { checkOwner(token); check(state == "chooser_pending"); opened = false; state = "launch_failed" }
     @Synchronized fun chooserCallback(token: String) { checkOwner(token); check(chooserAttempted()) /* No release, no delivery/closure inference. */ }
     /** No disk/Binder work on lifecycle callbacks; durable open journal already preserves uncertainty. */
     @Synchronized fun invalidate(token: String) {
-        if (owner != token || !open) return
+        if (owner != token || !open || transferLease) return
+        permit?.revoke()
         owner = null; proof = null; request = null; snapshot = null; opened = false; state = "outcome_unknown"
+    }
+    /** The returned UI is not the recipient's lifetime. Retain only bounded, revocable read authority. */
+    fun detachRecipientLease(token: String, active: () -> Unit): Intent {
+        requireWorker()
+        return synchronized(this) {
+            checkOwner(token); check(chooserAttempted()); active(); permit!!.checkBeforeEffect()
+            val result = Intent().putExtra("nonce", nonce).putExtra("chooserOpened", opened).putExtra("deliveryConfirmed", false)
+            transferLease = true; state = "transfer_active"; save()
+            lease?.close(); lease = null; FactoryInteractionAdmission.release(this)
+            result
+        }
     }
     fun close(token: String, acknowledgedRecipientClosed: Boolean, human: () -> Unit): Intent {
         requireWorker()
         val result = synchronized(this) {
-            checkOwner(token); human(); lease!!.requireHumanUiInteraction()
+            check(open && owner == token); human()
             check(state == "review" || chooserAttempted())
-            if (chooserAttempted()) check(acknowledgedRecipientClosed) { "Human acknowledgment of recipient/task closure is required" }
             Intent().putExtra("nonce", nonce).putExtra("chooserOpened", opened).putExtra("deliveryConfirmed", false)
         }
         cleanup() // Invalidate registry, revoke grants globally, remove cache BEFORE journal/guard release.
         synchronized(this) {
-            checkOwner(token); human(); lease!!.requireHumanUiInteraction()
+            check(open && owner == token); human()
             state = "closed"; open = false; save(); release()
         }
         return result
     }
     fun acknowledgeRecovery(human: () -> Unit) {
         requireWorker()
-        synchronized(this) { check(needsRecovery() && !busy); human(); lease!!.requireHumanUiInteraction() }
+        synchronized(this) { check(needsRecovery() && !busy); human() }
         cleanup()
         synchronized(this) {
-            check(needsRecovery() && !busy); human(); lease!!.requireHumanUiInteraction()
+            check(needsRecovery() && !busy); human()
             if (!nonce.matches(Regex("[a-f0-9]{64}"))) nonce = ""
             state = "closed_outcome_unknown"; open = false; save(); broken = false; release()
         }
     }
     private fun release() {
+        expire?.let(handler::removeCallbacks); expire = null
+        revocation?.close(); revocation = null; permit?.close(); permit = null; transferLease = false; leaseId = null
         proof = null; request = null; snapshot = null; owner = null; opened = false
         lease?.close(); lease = null; FactoryInteractionAdmission.release(this)
     }
     companion object {
         private const val GRANT_FLAGS = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
-        private val OPEN_STATES = setOf("receiving", "review", "chooser_pending", "chooser_opened", "launch_failed", "outcome_unknown")
+        private val OPEN_STATES = setOf("receiving", "review", "chooser_pending", "chooser_opened", "launch_failed", "transfer_active", "outcome_unknown")
         private val CLOSED_STATES = setOf("closed", "closed_outcome_unknown")
         internal val WORKER = ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS, ArrayBlockingQueue(1)).apply { allowCoreThreadTimeOut(true) }
         /** At most one incoming Activity waits for startup, never a queue of external requests. */

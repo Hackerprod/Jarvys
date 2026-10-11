@@ -42,8 +42,8 @@ are shown in the system prompt. No arbitrary title or button labels from JavaScr
 - Success returns exactly `{authenticated:true,biometricClass:"strong",authorizesOtherActions:false,
   mode:"installed",simulated:false}`. It records only this local OS biometric event. It is not
   remote identity, identity proof, a cryptographic assertion, a token or a grant for payment,
-  signing, sending, installation, data release or any other action. All independent approvals,
-  capability checks and human review remain required. Never persist a receipt as reusable
+  signing, sending, installation, data release or any other action. Each operation still requires
+  its own saved policy and capability checks; ASK and required Android consent are not satisfied by a biometric receipt. Never persist a receipt as reusable
   authorization, claim who authenticated, or use it to unlock an unrelated protected action.
 - `biometrics.cancel({})` (or no argument) accepts only empty args. It rejects an active
   authentication with `CANCELLED` and returns `{cancelRequested:boolean,cancellationAcknowledged:false}`.

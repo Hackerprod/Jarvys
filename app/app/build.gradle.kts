@@ -32,7 +32,7 @@ android {
         minSdk = 24
         targetSdk = 35
         versionCode = 84
-        versionName = "1.2.77-FACTORY-PREFERENCES-BACKUP" + if (recoveryTestBuild) "-test" else ""
+        versionName = "1.2.77-FACTORY-AUTONOMY" + if (recoveryTestBuild) "-test" else ""
         manifestPlaceholders["jarvysApplicationLabel"] = if (recoveryTestBuild) "Jarvys Prueba" else "@string/app_name"
         manifestPlaceholders["jarvysNotificationListenerLabel"] =
             if (recoveryTestBuild) "Jarvys Prueba: notificaciones" else "@string/notification_listener_label"

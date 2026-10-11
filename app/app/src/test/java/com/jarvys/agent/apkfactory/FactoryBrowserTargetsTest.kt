@@ -32,6 +32,25 @@ class FactoryBrowserTargetsTest {
     private val context: Context get() = ApplicationProvider.getApplicationContext()
     private val targets get() = FactoryBrowserTargets(context)
     private fun denied(block: () -> Unit) = assertTrue("Expected recipient rejection", runCatching(block).isFailure)
+    @Test fun verifiedAndroidDefaultWinsOverAlphabeticDiscoveryOrder() {
+        val first = FactoryBrowserTestPackages.install(context, "example.aaa", 22001)
+        val chosen = FactoryBrowserTestPackages.install(context, "example.zzz", 22002)
+        val pm = shadowOf(context.packageManager)
+        pm.setResolveInfosForIntent(FactoryBrowserTestPackages.view(FactoryBrowserTestPackages.DISCOVERY), listOf(first.resolve, chosen.resolve))
+        pm.setResolveInfosForIntent(FactoryBrowserTestPackages.view(FactoryBrowserTestPackages.URL), listOf(chosen.resolve))
+        val candidates = targets.discover()
+        assertEquals(first.component, candidates.first().component)
+        assertEquals(chosen.component, targets.preferred(FactoryBrowserTestPackages.URL, candidates)?.component)
+        chosen.installed.versionCode++
+        assertNull(targets.preferred(FactoryBrowserTestPackages.URL, candidates))
+    }
+    @Test fun missingOrIneligibleAndroidDefaultNeverFallsBackToFirstCandidate() {
+        FactoryBrowserTestPackages.install(context)
+        val candidates = targets.discover(); assertFalse(candidates.isEmpty())
+        shadowOf(context.packageManager).setResolveInfosForIntent(FactoryBrowserTestPackages.view(FactoryBrowserTestPackages.URL), emptyList())
+        shadowOf(context.packageManager).setResolveInfosForIntent(FactoryBrowserTestPackages.view(FactoryBrowserTestPackages.DISCOVERY), emptyList())
+        assertNull(targets.preferred(FactoryBrowserTestPackages.URL, candidates))
+    }
     @Test fun broadHttpsFilterMustHaveEveryBrowserField() {
         assertTrue(FactoryBrowserTargets.broadHttpsFilter(FactoryBrowserTestPackages.filter()))
         assertFalse(FactoryBrowserTargets.broadHttpsFilter(null))

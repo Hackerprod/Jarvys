@@ -36,13 +36,14 @@ class FactoryContactCoordinatorTest {
     private val root get() = File(context.noBackupFilesDir, "factory-contacts")
     private val journal get() = File(root, "interaction.json")
     private var proof = FactoryDocumentCoordinator.Proof("example.factory.app", "a".repeat(64), "b".repeat(64), 2, "c".repeat(64))
+    private val policy = FactoryOperationPolicy.inMemory()
     private lateinit var coordinator: FactoryContactCoordinator
     private val owners = mutableListOf<FactoryContactCoordinator>()
     private val externalOwners = mutableListOf<FactoryExternalLaunchCoordinator>()
     private val executor = Executors.newSingleThreadExecutor()
     private fun <T> io(block: () -> T): T = executor.submit(Callable(block)).get(5, TimeUnit.SECONDS)
     private fun denied(block: () -> Unit) = assertTrue("Expected contact authority rejection", runCatching(block).isFailure)
-    private fun make(verify: (String, String) -> FactoryDocumentCoordinator.Proof = { _, _ -> proof }) = FactoryContactCoordinator(context, verify).also { owners += it }
+    private fun make(verify: (String, String) -> FactoryDocumentCoordinator.Proof = { _, _ -> proof }) = FactoryContactCoordinator(context, policy, verify).also { owners += it }
     private fun intent(kind: String = "phone") = Intent(context, FactoryContactActivity::class.java).putExtras(Bundle().apply {
         putInt("protocolVersion", 1); putString("nonce", NONCE); putString("kind", kind); putBinder("control", Binder())
     })
@@ -104,16 +105,16 @@ class FactoryContactCoordinatorTest {
         denied { io { coordinator.begin(proof.appId, request()) { error("Source is inactive") } } }
         assertFalse(journal.exists()); assertTrue(coordinator.canBegin())
     }
-    @Test fun automationAlreadyInFlightCannotAcquireContactAuthority() {
+    @Test fun defaultAllowCanAcquireContactAuthorityDuringAutomation() {
         val active = MemoryUiAutomationGuard.beginAsyncAction(MemoryUiAutomationGuard.captureAutomationEpoch())
-        try { denied { begin() }; assertNull(coordinator.session()); assertFalse(journal.exists()) } finally { active.close() }
+        try { val value = begin(); assertNotNull(value); assertTrue(journal.exists()); assertFalse(MemoryUiAutomationGuard.isProtected()); io { coordinator.close(value, false, false) {} } } finally { active.close() }
         assertTrue(coordinator.canBegin()); assertFalse(MemoryUiAutomationGuard.isProtected())
     }
-    @Test fun reviewHoldsGlobalAdmissionAndJournalsNoContactOrSourceData() {
+    @Test fun reviewHoldsFamilyAdmissionAndJournalsNoContactOrSourceData() {
         val value = begin(); assertPrivateJournal("review", true)
-        assertTrue(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
-        denied { MemoryUiAutomationGuard.captureAutomationEpoch() }
-        denied { io { make().begin(proof.appId, request().copy(nonce = "e".repeat(64))) {} } }
+        assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
+        assertNotNull(MemoryUiAutomationGuard.captureAutomationEpoch())
+        denied { io { coordinator.begin(proof.appId, request().copy(nonce = "e".repeat(64))) {} } }
         assertEquals(Unit, io { coordinator.close(value, false, false) {} }); assertPrivateJournal("closed", false)
         assertFalse(MemoryUiAutomationGuard.isProtected()); denied { begin() }
     }
@@ -135,7 +136,7 @@ class FactoryContactCoordinatorTest {
             denied { begin() }; assertEquals("contacts", requested); assertFalse(journal.exists()); assertTrue(coordinator.canBegin())
         }
     }
-    @Test fun launchRequiresHumanRegistrationAndEveryLatestProofFieldUnchanged() {
+    @Test fun launchRequiresActiveOwnerRegistrationAndEveryLatestProofFieldUnchanged() {
         val value = begin(); denied { io { coordinator.prepareLaunch(value) { error("No human") } } }
         denied { io { coordinator.prepareLaunch(value) {} } }; register(value)
         val original = proof
@@ -159,7 +160,7 @@ class FactoryContactCoordinatorTest {
         value.pickerReturned = true; io { coordinator.selected(value) }; assertPrivateJournal("selected", true)
         denied { io { coordinator.selected(value) } }; denied { io { coordinator.prepareLaunch(value) {} } }
     }
-    @Test fun readPreparationRejectsUnownedCallbackAndRechecksHumanProofAndControl() {
+    @Test fun readPreparationRejectsUnownedCallbackAndRechecksLifecycleProofAndControl() {
         val value = begin(); register(value)
         denied { io { coordinator.prepareRead(value) {} } }
         io { coordinator.prepareLaunch(value) {} }; denied { io { coordinator.prepareRead(value) {} } }
@@ -171,7 +172,7 @@ class FactoryContactCoordinatorTest {
         value.registration!!.close(); denied { io { coordinator.prepareRead(value) {} } }
         assertTrue(coordinator.needsRecovery())
     }
-    @Test fun successfulApprovalReturnsOnlyExactNonceKindValueAndDurablyConsumesBeforeReturn() {
+    @Test fun validatedDeliveryReturnsOnlyExactNonceKindValueAndDurablyConsumesBeforeReturn() {
         val value = begin("phone"); select(value)
         val result = io { coordinator.deliver(value, PHONE) {} }
         assertEquals(setOf("nonce", "kind", "value"), result.extras!!.keySet())
@@ -181,16 +182,16 @@ class FactoryContactCoordinatorTest {
         assertTrue(FactoryInteractionAdmission.available()); assertFalse(MemoryUiAutomationGuard.isProtected())
         denied { io { coordinator.deliver(value, PHONE) {} } }; denied { begin() }
     }
-    @Test fun secondApprovalRechecksHumanAndAllSourceProofFieldsWithoutLeakingData() {
+    @Test fun deliveryRechecksLifecycleAndAllSourceProofFieldsWithoutLeakingData() {
         val value = begin("email"); select(value)
-        denied { io { coordinator.deliver(value, EMAIL) { error("No second human approval") } } }
+        denied { io { coordinator.deliver(value, EMAIL) { error("Inactive result owner") } } }
         val original = proof
         for (changed in listOf(proof.copy(appId = "example.other.app"), proof.copy(certificate = "f".repeat(64)), proof.copy(apk = "f".repeat(64)), proof.copy(version = 3), proof.copy(record = "f".repeat(64)))) {
             proof = changed; denied { io { coordinator.deliver(value, EMAIL) {} } }; assertEquals("selected", coordinator.status()); assertFalse(value.revoked.get())
         }
         proof = original; assertEquals(EMAIL, io { coordinator.deliver(value, EMAIL) {} }.getStringExtra("value")); assertPrivateJournal("closed", false)
     }
-    @Test fun secondApprovalRejectsInvalidValuesAndStillRequiresLiveRegistration() {
+    @Test fun deliveryRejectsInvalidValuesAndStillRequiresLiveRegistration() {
         val value = begin(); select(value)
         for (datum in listOf("", " ", "x".repeat(257), "one\ntwo", "one\u202Etwo", "one\u0000two", "\uD800")) {
             denied { io { coordinator.deliver(value, datum) {} } }; assertEquals("selected", coordinator.status())
@@ -201,7 +202,7 @@ class FactoryContactCoordinatorTest {
         val value = begin(); select(value); value.preparing = true
         denied { io { coordinator.deliver(value, PHONE) {} } }; denied { io { coordinator.close(value, false, true) {} } }
         value.revoke(); denied { io { coordinator.close(value, true, true) {} } }
-        assertTrue(coordinator.needsRecovery()); assertFalse(FactoryInteractionAdmission.available()); assertTrue(MemoryUiAutomationGuard.isProtected())
+        assertTrue(coordinator.needsRecovery()); assertFalse(FactoryInteractionAdmission.available()); assertFalse(MemoryUiAutomationGuard.isProtected())
         value.preparing = false; assertEquals(Unit, io { coordinator.close(value, true, true) {} }); assertTrue(FactoryInteractionAdmission.available())
     }
     @Test fun initialPreparationCannotBeClosedEvenByExplicitRecovery() {
@@ -212,7 +213,7 @@ class FactoryContactCoordinatorTest {
     }
     @Test fun unreturnedPickerRequiresHumanExternalClosureAndCancellationReturnsNoData() {
         val value = begin(); register(value); io { coordinator.prepareLaunch(value) {} }
-        denied { io { coordinator.close(value, false, false) {} } }; assertTrue(MemoryUiAutomationGuard.isProtected())
+        denied { io { coordinator.close(value, false, false) {} } }; assertFalse(MemoryUiAutomationGuard.isProtected())
         assertEquals(Unit, io { coordinator.close(value, false, true) {} }); assertPrivateJournal("closed", false)
         assertTrue(value.revoked.get()); assertNull(value.registration)
     }
@@ -223,7 +224,7 @@ class FactoryContactCoordinatorTest {
     }
     @Test fun exactFiveMinuteExpiryAndForeignSessionFailClosed() {
         val value = begin(); register(value)
-        val foreign = FactoryContactCoordinator.Session("foreign", proof, request(), value.expiresAt)
+        val foreign = FactoryContactCoordinator.Session("foreign", proof, request(), value.expiresAt, value.grant)
         denied { coordinator.requireActive(foreign) }; denied { io { coordinator.prepareLaunch(foreign) {} } }
         ShadowSystemClock.advanceBy(Duration.ofMinutes(5)); denied { coordinator.requireActive(value) }; denied { io { coordinator.prepareLaunch(value) {} } }
         assertFalse(value.attempted); assertFalse(FactoryInteractionAdmission.available())
@@ -248,17 +249,17 @@ class FactoryContactCoordinatorTest {
             denied { io { coordinator.prepareLaunch(value) {} } }; assertTrue(coordinator.needsRecovery())
         } finally { source.close() }
     }
-    @Test fun failedDurableBeginRetainsProtectionUntilHumanRecoveryPersists() {
+    @Test fun failedDurableBeginRetainsFamilyUntilRecoveryPersists() {
         root.writeText("Synthetic filesystem obstruction")
         denied { begin() }; assertTrue(coordinator.needsRecovery()); assertFalse(FactoryInteractionAdmission.available())
-        assertTrue(MemoryUiAutomationGuard.isProtected()); denied { io { coordinator.close(coordinator.session(), true, true) {} } }
+        assertFalse(MemoryUiAutomationGuard.isProtected()); denied { io { coordinator.close(coordinator.session(), true, true) {} } }
         assertTrue(coordinator.needsRecovery()); check(root.delete()); check(root.mkdirs())
         assertEquals(Unit, io { coordinator.close(coordinator.session(), true, true) {} }); assertEquals("closed_outcome_unknown", coordinator.status())
     }
     @Test fun failedDurableDeliveryNeverReturnsDataAndCannotReplay() {
         val value = begin(); select(value); check(root.deleteRecursively()); root.writeText("Synthetic delivery obstruction")
         denied { io { coordinator.deliver(value, PHONE) {} } }; assertTrue(coordinator.needsRecovery()); assertTrue(value.revoked.get())
-        assertTrue(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
+        assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
         check(root.delete()); check(root.mkdirs()); denied { io { coordinator.deliver(value, PHONE) {} } }
         io { coordinator.close(value, true, true) {} }; assertPrivateJournal("closed_outcome_unknown", false)
     }
@@ -266,7 +267,7 @@ class FactoryContactCoordinatorTest {
         for (old in listOf("review", "launch_pending", "selected", "outcome_unknown")) {
             root.mkdirs(); journal.writeText(saved(old, true)); val restored = make(); io { restored.restore() }
             assertNull(restored.session()); assertEquals("outcome_unknown", restored.status()); assertTrue(restored.needsRecovery())
-            assertTrue(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
+            assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
             denied { io { restored.close(null, true, false) {} } }; denied { io { restored.close(null, true, true) { error("No human") } } }
             assertEquals(Unit, io { restored.close(null, true, true) {} }); assertPrivateJournal("closed_outcome_unknown", false)
         }
@@ -276,7 +277,7 @@ class FactoryContactCoordinatorTest {
             JSONObject(saved("selected", true)).put("value", PHONE).toString(), JSONObject(saved("selected", true)).put("schemaVersion", 2).toString(),
             JSONObject(saved("selected", true)).put("open", "true").toString(), JSONObject(saved("selected", true)).put("nonce", "D".repeat(64)).toString())) {
             root.mkdirs(); journal.writeText(body); val restored = make(); io { restored.restore() }
-            assertTrue(restored.needsRecovery()); assertTrue(MemoryUiAutomationGuard.isProtected()); assertNull(restored.session())
+            assertTrue(restored.needsRecovery()); assertFalse(MemoryUiAutomationGuard.isProtected()); assertNull(restored.session())
             assertEquals(Unit, io { restored.close(null, true, true) {} }); assertEquals("closed_outcome_unknown", restored.status())
         }
     }
@@ -286,7 +287,7 @@ class FactoryContactCoordinatorTest {
         denied { io { restored.begin(proof.appId, request()) {} } }
         assertNotNull(io { restored.begin(proof.appId, request().copy(nonce = "e".repeat(64))) {} })
     }
-    @Test fun contactsAndExternalRecoveryKeepIndependentGuardsInEitherClosureOrder() {
+    @Test fun contactsAndExternalRecoveryKeepIndependentOwnersWithoutHumanGuards() {
         val externalRoot = File(context.noBackupFilesDir, "factory-external-launch")
         for (contactsFirst in listOf(true, false)) {
             root.mkdirs(); externalRoot.mkdirs(); journal.writeText(saved("selected", true)); File(externalRoot, "interaction.json").writeText(saved("launch_pending", true, "e".repeat(64)))
@@ -294,9 +295,9 @@ class FactoryContactCoordinatorTest {
             io { contacts.restore(); external.restore() }
             assertTrue(contacts.needsRecovery()); assertTrue(external.needsRecovery())
             if (contactsFirst) io { contacts.close(null, true, true) {} } else io { external.close(null, true, true) {} }
-            assertTrue(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
+            assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
             assertTrue(if (contactsFirst) external.needsRecovery() else contacts.needsRecovery())
-            denied { MemoryUiAutomationGuard.captureAutomationEpoch() }
+            assertNotNull(MemoryUiAutomationGuard.captureAutomationEpoch())
             if (contactsFirst) io { external.close(null, true, true) {} } else io { contacts.close(null, true, true) {} }
             assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available())
         }
@@ -308,6 +309,48 @@ class FactoryContactCoordinatorTest {
         invalid.forEach { assertFalse(FactoryContactCoordinator.consumeRecoveryToken(it)) }
         assertTrue(FactoryContactCoordinator.consumeRecoveryToken(token)); assertFalse(FactoryContactCoordinator.consumeRecoveryToken(token))
         assertFalse(FactoryContactCoordinator.consumeRecoveryToken(Intent().putExtra("nativeRecoveryToken", "forged")))
+    }
+    @Test fun configuredAskApprovesOnceThenAutomaticallyAllowsValidatedDelivery() {
+        policy.setDefaultMode(FactoryOperationPolicy.Mode.ASK)
+        val value = begin(); register(value)
+        assertTrue(value.grant.requiresApproval); assertFalse(MemoryUiAutomationGuard.isProtected())
+        denied { io { coordinator.prepareLaunch(value) {} } }
+        var approvals = 0
+        coordinator.approve(value) { approvals++ }; coordinator.approve(value) { error("Repeated approval") }
+        io { coordinator.prepareLaunch(value) {}; coordinator.verifyReady(value) {} }
+        value.pickerReturned = true
+        io { coordinator.prepareRead(value) {}; coordinator.selected(value) }
+        val result = io { coordinator.deliver(value, PHONE) {} }
+        assertEquals(PHONE, result.getStringExtra("value")); assertEquals(1, approvals)
+        value.grant.checkBeforeEffect(); value.grant.close()
+    }
+    @Test fun denyMakesNoJournalRegistrationProviderWorkOrLease() {
+        policy.setDefaultMode(FactoryOperationPolicy.Mode.DENY)
+        denied { begin() }; assertNull(coordinator.session()); assertFalse(journal.exists())
+        assertTrue(coordinator.canBegin()); assertFalse(MemoryUiAutomationGuard.isProtected())
+    }
+    @Test fun policyRevisionPreventsProviderReadAndFinalResultEvenAfterDurableConsumption() {
+        val value = begin(); select(value)
+        io { coordinator.deliver(value, PHONE) {} }; value.grant.checkBeforeEffect()
+        policy.setDefaultMode(FactoryOperationPolicy.Mode.DENY)
+        denied { value.grant.checkBeforeEffect() }; value.grant.close()
+    }
+    @Test fun revokedPolicyCannotReadOrReturnSelectedContactAndCleanupRemainsAllowed() {
+        val value = begin(); select(value)
+        policy.setDefaultMode(FactoryOperationPolicy.Mode.DENY)
+        denied { io { coordinator.deliver(value, PHONE) {} } }
+        denied { io { coordinator.prepareRead(value) {} } }
+        io { coordinator.close(value, false, true) {} }
+        assertTrue(coordinator.canBegin()); assertFalse(MemoryUiAutomationGuard.isProtected())
+    }
+    @Test fun validHistoricalUnknownAllowsFreshAllowRequestWithoutRestoringOldAuthority() {
+        root.mkdirs(); journal.writeText(saved("launch_pending", true))
+        val restored = make(); io { restored.restore() }
+        assertTrue(restored.canBegin()); assertNull(restored.session()); assertFalse(MemoryUiAutomationGuard.isProtected())
+        denied { io { restored.begin(proof.appId, request()) {} } }
+        val next = io { restored.begin(proof.appId, request().copy(nonce = "e".repeat(64))) {} }
+        assertFalse(next.attempted); assertFalse(next.pickerReturned); assertNull(next.registration)
+        assertPrivateJournal("review", true); io { restored.close(next, false, false) {} }
     }
     private fun saved(state: String, open: Boolean, nonce: String = NONCE) = JSONObject().put("schemaVersion", 1).put("state", state).put("open", open).put("nonce", nonce).toString()
     companion object {

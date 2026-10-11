@@ -76,7 +76,7 @@ class FactoryAudioPlayer internal constructor(private val platform: Platform) {
         return prepared
     }
 
-    /** Takes ownership even on refusal. [isStillAllowed] must check foreground, guard and generation. */
+    /** Takes ownership even on refusal. [isStillAllowed] must check foreground, policy grant and generation. */
     fun start(prepared: Prepared, isStillAllowed: () -> Boolean, onStopped: (StopResult) -> Unit): Boolean {
         platform.requireMain()
         if (current != null || retained.isNotEmpty() || focusNeedsCleanup || routesNeedCleanup) {

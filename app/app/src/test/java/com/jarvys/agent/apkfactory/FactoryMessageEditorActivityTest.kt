@@ -47,6 +47,7 @@ import java.util.concurrent.atomic.AtomicInteger
 @Config(sdk = [34], application = android.app.Application::class, shadows = [FactoryExternalLaunchPackageManagerShadow::class, FactoryFileShareOsShadow::class])
 class FactoryMessageEditorActivityTest {
     private val context: Context get() = ApplicationProvider.getApplicationContext()
+    private val policy = FactoryOperationPolicy.inMemory(FactoryOperationPolicy.Mode.ASK)
     private val root get() = File(context.noBackupFilesDir, "factory-external-launch")
     private var proof = FactoryDocumentCoordinator.Proof("example.factory.app", "a".repeat(64), "b".repeat(64), 2, "c".repeat(64))
     private lateinit var coordinator: FactoryExternalLaunchCoordinator
@@ -58,8 +59,8 @@ class FactoryMessageEditorActivityTest {
     private val nonce = "d".repeat(64)
     @Before fun setup() {
         FactoryStartupTestIsolation.releaseCompletedSharingStartup(); root.deleteRecursively()
-        FactoryExternalLaunchPackageManagerShadow.beforeQuery = null
-        coordinator = FactoryExternalLaunchCoordinator(context) { appId, capability ->
+        FactoryExternalLaunchPackageManagerShadow.beforeQuery = null; FactoryExternalLaunchPackageManagerShadow.useAndroidDefault = false
+        coordinator = FactoryExternalLaunchCoordinator(context, policy) { appId, capability ->
             check(appId == proof.appId); check(capability == spec.capability); verifiedCapabilities += capability; proof
         }
         FactoryExternalLaunchCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(null, coordinator)
@@ -74,8 +75,8 @@ class FactoryMessageEditorActivityTest {
         controllers.asReversed().forEach { runCatching { it.pause().stop().destroy() } }
         shadowOf(Looper.getMainLooper()).idle(); drain()
         coordinator.session()?.preparing = false
-        if (coordinator.needsRecovery()) worker { coordinator.close(coordinator.session(), true, true) {} }
-        else coordinator.session()?.let { worker { coordinator.close(it, false, true) {} } }
+        if (coordinator.needsRecovery()) worker { coordinator.close(coordinator.session(), true) {} }
+        else coordinator.session()?.let { worker { coordinator.close(it, false) {} } }
         source.close(); drain()
         FactoryExternalLaunchCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(null, null)
         assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available()); root.deleteRecursively()
@@ -84,7 +85,7 @@ class FactoryMessageEditorActivityTest {
         val executor = FactoryExternalLaunchCoordinator.WORKER; executor.prestartCoreThread(); val task = FutureTask(Callable(block))
         check(executor.queue.offer(task, 5, TimeUnit.SECONDS)); return task.get(5, TimeUnit.SECONDS)
     }
-    private fun drain() { worker {}; shadowOf(Looper.getMainLooper()).idle() }
+    private fun drain() { repeat(3) { worker {}; shadowOf(Looper.getMainLooper()).idle() } }
     private fun request(control: IBinder = source) = Intent(context, FactoryExternalLaunchRecordingActivity::class.java).putExtras(Bundle().apply {
         putInt("protocolVersion", 1); putString("nonce", nonce); putString("method", FactoryMessageEditorTestPackages.method(spec))
         putString("args", FactoryMessageEditorTestPackages.args(spec)); putBinder("control", control)
@@ -192,7 +193,7 @@ class FactoryMessageEditorActivityTest {
             assertEquals(spec.subject, exact.getStringExtra(Intent.EXTRA_SUBJECT)); assertEquals(spec.body, exact.getStringExtra(Intent.EXTRA_TEXT))
         } else { assertEquals(setOf("sms_body"), exact.extras!!.keySet()); assertEquals(spec.body, exact.getStringExtra("sms_body")) }
         button(activity, "open").performClick(); drain(); assertEquals(1, activity.launches.size)
-        button(activity, "close").performClick(); drain()
+        assertTrue(activity.isFinishing); assertNull(coordinator.session())
         assertEquals(Activity.RESULT_OK, shadowOf(activity).resultCode)
         val receipt = shadowOf(activity).resultIntent
         assertEquals(setOf("nonce", "launchRequested", "actionConfirmed"), receipt.extras!!.keySet())
