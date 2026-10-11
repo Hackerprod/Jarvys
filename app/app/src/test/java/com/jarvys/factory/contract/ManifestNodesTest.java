@@ -103,7 +103,7 @@ public class ManifestNodesTest {
         assertNotNull(biometrics); assertEquals(30, biometrics.minimumApi);
         assertEquals(24, CapabilityCatalog.MIN_APP_API);
         assertEquals(1, CapabilityCatalog.SCHEMA_VERSION); assertEquals(2, CapabilityCatalog.SDK_VERSION);
-        assertEquals(42, CapabilityCatalog.METHODS.size());
+        assertEquals(44, CapabilityCatalog.METHODS.size());
         assertEquals(list(CapabilityCatalog.Method.BIOMETRICS_AVAILABILITY,
                 CapabilityCatalog.Method.BIOMETRICS_AUTHENTICATE, CapabilityCatalog.Method.BIOMETRICS_CANCEL), biometrics.methods);
         assertEquals(Collections.singleton(CapabilityCatalog.BIOMETRIC_PERMISSION), biometrics.permissions);
@@ -148,6 +148,7 @@ public class ManifestNodesTest {
         assertEquals(1, CapabilityCatalog.SCHEMA_VERSION); assertEquals(2, CapabilityCatalog.SDK_VERSION);
         assertEquals(list(CapabilityCatalog.Method.DATABASE_INFO, CapabilityCatalog.Method.DATABASE_MIGRATE,
                 CapabilityCatalog.Method.DATABASE_TRANSACT, CapabilityCatalog.Method.DATABASE_SELECT,
+                CapabilityCatalog.Method.DATABASE_BACKUP_EXPORT, CapabilityCatalog.Method.DATABASE_BACKUP_IMPORT,
                 CapabilityCatalog.Method.DATABASE_CLOSE, CapabilityCatalog.Method.DATABASE_CANCEL), database.methods);
         assertTrue(database.permissions.isEmpty()); assertTrue(database.features.isEmpty());
         assertTrue(database.components.isEmpty()); assertTrue(database.intentFilters.isEmpty());

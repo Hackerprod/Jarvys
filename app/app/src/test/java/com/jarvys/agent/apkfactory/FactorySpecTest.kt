@@ -135,4 +135,38 @@ class FactorySpecTest {
         assertThrows(Exception::class.java) { presentation.runtimeConfig(broker()) }
     }
 
+    @Test fun backupPolicyIsOptionalCanonicalBoundedAndRequiresBothCapabilities() {
+        val old = FactorySpec.parse(spec())
+        val empty = FactorySpec.parse(spec().put("dataBackup", JSONObject().put("tables", JSONArray())))
+        assertTrue(old.dataBackupTables.isEmpty())
+        assertEquals(old.toJson().toString(), empty.toJson().toString())
+        assertArrayEquals(old.runtimeConfig(), empty.runtimeConfig())
+        assertFalse(old.toJson().has("dataBackup"))
+        assertEquals(spec().put("capabilities", JSONArray(listOf("export", "storage"))).toString(), old.toJson().toString())
+        val legacyConfig = JSONObject().put("schemaVersion", 1).put("appId", old.appId).put("name", old.name)
+            .put("entryPoint", "www/index.html").put("capabilities", JSONArray(old.capabilities)).toString().toByteArray(Charsets.UTF_8)
+        assertArrayEquals(legacyConfig, old.runtimeConfig())
+        val input = spec().put("capabilities", JSONArray(listOf("database", "documents")))
+            .put("dataBackup", JSONObject().put("tables", JSONArray(listOf("notes", "tasks"))))
+        val parsed = FactorySpec.parse(input)
+        assertEquals(listOf("notes", "tasks"), parsed.dataBackupTables)
+        assertEquals("[\"notes\",\"tasks\"]", parsed.toJson().getJSONObject("dataBackup").getJSONArray("tables").toString())
+        val runtime = com.jarvys.factory.runtime.FactoryConfig.parse(String(parsed.runtimeConfig(broker())), parsed.appId)
+        assertEquals(setOf("notes", "tasks"), runtime.dataBackupTables)
+        assertThrows(UnsupportedOperationException::class.java) { (parsed.dataBackupTables as MutableList<String>).add("other") }
+        for (policy in listOf<Any>(JSONObject.NULL, "notes", JSONArray(), JSONObject(),
+            JSONObject().put("tables", "notes"), JSONObject().put("tables", JSONArray()).put("all", true))) {
+            rejects { it.put("dataBackup", policy) }
+        }
+        for (tables in listOf(listOf<Any>("notes", "notes"), listOf("tasks", "notes"), listOf(1), listOf("id"),
+            listOf("sqlite_master"), listOf("factory_schema"), listOf("Notes"), (0..8).map { "table$it" })) {
+            rejects { it.put("capabilities", JSONArray(listOf("database", "documents"))).put("dataBackup", JSONObject().put("tables", JSONArray(tables))) }
+        }
+        for (caps in listOf(emptyList(), listOf("database"), listOf("documents"))) {
+            rejects { it.put("capabilities", JSONArray(caps)).put("dataBackup", JSONObject().put("tables", JSONArray(listOf("notes")))) }
+        }
+        val maximum = (0..7).map { "table$it" }
+        assertEquals(maximum, FactorySpec.parse(input.put("dataBackup", JSONObject().put("tables", JSONArray(maximum)))).dataBackupTables)
+    }
+
 }

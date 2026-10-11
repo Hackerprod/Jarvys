@@ -1,8 +1,8 @@
-# Factory guidance factory-guidance-v82 / database
+# Factory guidance factory-guidance-v83 / database
 
 Use with the always-loaded Factory core; this reference grants no tools or approvals.
-Historical v77 contract text below is preserved. Current v80: 20 capabilities/42 methods;
-sensors and biometrics extend it in their references, with all six methods UNAVAILABLE in preview.
+Historical v77 contract text below is preserved; the v83 selected-backup section supersedes its no-import/export restriction. Current v83: 20 capabilities/44 methods; selected SQLite backup is in the database reference.
+Sensors and biometrics extend the historical contract in their references, with all six methods UNAVAILABLE in preview.
 Only selected biometric profiles add USE_BIOMETRIC; template/nonbiometric profiles stay zero-permission.
 Historical totals/permission and pending-family statements below describe their original versions.
 
@@ -14,3 +14,19 @@ select({version,table,where?,afterId?,limit?}): AND equality: columns/null or id
 id:[A-Za-z0-9_-]{1,96}; table/column:[a-z][a-z0-9_]{0,31}, excluding id and sqlite_/factory_ prefixes. Typed scalars/nullable null; paired text/no NUL.
 Bounds:8 tables/16 columns+id/16 steps/64ops/10000 total rows;4KiB cell/16KiB serialized row/256KiB args/results; JSON depth8/tokens1024. 16MiB main DB excludes journal/temp/cache/cursor/JVM/RAM; no total-disk/RAM cap. Shrink pages on overflow.
 cancel(): rollbackConfirmed:false. Cancel/lost reply cannot undo/disprove crossed commit. Inspect state; no auto replay/reset. Handle errors/no SQL/value logs. No device durability/update proof.
+
+## Selected SQLite data backup (v83)
+
+The current catalog has 20 capabilities / 44 methods, SDK 2 and schema/protocol 1. database.backupExport and database.backupImport belong to database and also require documents. The existing six database methods remain unchanged. Both backup methods are UNAVAILABLE in preview before any database or document handle is allocated; ordinary preview database operations still work in ephemeral SQLite.
+
+Declare the optional factory.json policy dataBackup:{"tables":["notes","tasks"]}. Its only key is tables: at most eight database identifiers in ascending order, without duplicates. Absence or an empty list disables backup; it grants nothing implicitly. Nonempty policy requires both database and documents capabilities. Signing discloses this exact policy, and the receipt must match the embedded runtime configuration. No manifest permission, signing key or signing-identity backup format changes.
+
+- Jarvys.database.backupExport({version,tables,filename}) exports exactly the nonempty, sorted, unique selected subset of the declared tables. version is the exact current database version (1–1000); filename uses the existing simple document filename grammar. It does not export every declared table automatically.
+- Jarvys.database.backupImport({version,handle,tables,mode}) consumes one untouched document read handle. Open it with documents.open({mimeType:"application/json"}); the normal native selection and Use steps still apply. The file's table set must exactly match the explicit selection, within the declared policy. The same exact database version and selected-table schema must already exist. No migration occurs.
+- mode:"insertOnly" inserts rows only; any existing ID collision in any selected table rolls back the entire import. mode:"replaceSelectedTables" atomically deletes and replaces rows in selected tables only. Both preserve every unselected table. Target data or schema changes after native review produce a conflict, requiring a fresh review.
+
+The bounded format is canonical plaintext JSON, at most 1 MiB, named jarvys-sqlite-data with formatVersion:1. It contains selected table schemas and typed rows plus database version, package and certificate labels. It contains no SQL, ZIP, signing keys, preferences, arbitrary files or document contents. It is unencrypted. Package/certificate labels are compatibility checks, not authentication of a backup's author or contents; an attacker can rewrite them. Secrets are unsupported and cannot be reliably detected. Never claim that scanning or a label makes a backup safe.
+
+An installed generated app, current exact signed receipt and compatible pinned Jarvys host are required. Human native review shows all values and the exact operation, table selection, counts and consequences. Export then requires a separate provider disclosure and human destination choice: the selected provider may upload, cloud-sync or retain plaintext copies. Never automate review, confirmation or the picker. File selection or a matching label does not authorize restoring it.
+
+Export reports bytes/hash with providerCommitConfirmed:false and closeStatus:"close_requested"; it does not prove provider durability, upload completion or recoverability. Cancellation or failure may leave an empty or partial file. Import reports the native transaction result, not physical durability or a successful independent restore test. A cancellation, lost reply or timeout may occur after commit; inspect state and never automatically retry or claim rollback. database.cancel has its own single bounded control slot beside sensors.cancel and biometrics.cancel (16 ordinary requests plus three controls). The native backup lifetime is five minutes; SDK timeout is 310000 ms, allowing the terminal callback. Lifecycle revocation and cleanup remain authoritative; no background/resume permission is added.

@@ -86,4 +86,27 @@ public class FactoryConfigTest {
         reject(text("com.example.app", "www/index.html", "[\"presentation\",\"presentation\"]"), "com.example.app");
     }
 
+    @Test public void dataBackupPolicyDefaultsEmptyAndIsStrictImmutableAndBounded() throws Exception {
+        String base = text("com.example.app", "www/index.html", "[\"database\",\"documents\"]");
+        assertTrue(FactoryConfig.parsePreview(base).dataBackupTables.isEmpty());
+        org.json.JSONObject json = new org.json.JSONObject(base).put("dataBackup", new org.json.JSONObject().put("tables", new org.json.JSONArray("[\"notes\",\"tasks\"]")));
+        FactoryConfig parsed = FactoryConfig.parsePreview(json.toString());
+        assertEquals(new java.util.LinkedHashSet<>(java.util.Arrays.asList("notes", "tasks")), parsed.dataBackupTables);
+        assertThrows(UnsupportedOperationException.class, () -> parsed.dataBackupTables.add("other"));
+        for (String policy : new String[]{"null", "[]", "{}", "{\"tables\":null}", "{\"tables\":\"notes\"}",
+                "{\"tables\":[],\"all\":true}", "{\"tables\":[\"notes\",\"notes\"]}", "{\"tables\":[\"tasks\",\"notes\"]}",
+                "{\"tables\":[1]}", "{\"tables\":[\"id\"]}", "{\"tables\":[\"sqlite_master\"]}", "{\"tables\":[\"factory_schema\"]}",
+                "{\"tables\":[\"Notes\"]}", "{\"tables\":[\"a\",\"b\",\"c\",\"d\",\"e\",\"f\",\"g\",\"h\",\"i\"]}"}) {
+            String invalid = base.substring(0, base.length() - 1) + ",\"dataBackup\":" + policy + "}";
+            assertThrows(FactoryException.class, () -> FactoryConfig.parsePreview(invalid));
+        }
+        for (String caps : new String[]{"[]", "[\"database\"]", "[\"documents\"]"}) {
+            json.put("capabilities", new org.json.JSONArray(caps));
+            assertThrows(FactoryException.class, () -> FactoryConfig.parsePreview(json.toString()));
+            json.getJSONObject("dataBackup").put("tables", new org.json.JSONArray());
+            assertTrue(FactoryConfig.parsePreview(json.toString()).dataBackupTables.isEmpty());
+            json.getJSONObject("dataBackup").put("tables", new org.json.JSONArray("[\"notes\"]"));
+        }
+    }
+
 }

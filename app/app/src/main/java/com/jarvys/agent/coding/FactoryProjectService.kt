@@ -71,7 +71,7 @@ internal class FactoryProjectService(
             .put("supportedAbis", "Architecture-neutral JVM/Android code; physical device validation is still required")
             .put("scope_version", scope.version()).put("project_id", scope.id())
             .put("localUiLibraries", localUiLibraries())
-            .put("specFields", JSONArray(listOf("schemaVersion", "appId", "name", "versionCode", "versionName", "capabilities", "webDir", "icon")))
+            .put("specFields", JSONArray(listOf("schemaVersion", "appId", "name", "versionCode", "versionName", "capabilities", "webDir", "icon", "dataBackup")))
             .put("limits", JSONObject().put("websiteFiles", FactorySpec.MAX_WEB_FILES).put("websiteBytes", FactorySpec.MAX_WEB_BYTES)
                 .put("fileBytes", FactorySpec.MAX_FILE_BYTES).put("icon", "PNG, 48–1024 pixels per side, at most 1 MiB; or 192px geometric vector JSON"))
             .put("signing", "Explicit approval per sign. Existing non-exportable AndroidKeyStore identities stay unchanged. For a NEW recoverable identity or encrypted backup/import, open Settings > Factory identities yourself; never send passphrases or private keys to a tool or conversation. No silent rotation or shared key.")
@@ -148,6 +148,7 @@ internal class FactoryProjectService(
                 check(receipt.getString("manifestContract") == "closed-v1-current") { "Unsupported factory receipt manifest contract" }
                 TemplateApk.verify(bytes, expectedManifest)
             } else TemplateApk.verifyExistingV1(bytes, expectedManifest)
+            verifyRuntimeConfig(bytes, spec)
             // v1 receipts predate inventory storage; their exact artifact hash/project binding remains authoritative.
             if (receipt.has("dexSha256")) {
                 val saved = receipt.getJSONObject("dexSha256")
@@ -160,6 +161,7 @@ internal class FactoryProjectService(
             val signingScope = FactorySigningScope.fromPlan(manifest.plan)
             val lines = mutableListOf("App: ${spec.name} (${spec.appId}), version ${spec.versionName} / ${spec.versionCode}",
                 "Unsigned SHA-256: $expectedSha", "Output in this Coding project: $outputPath", "Declared capabilities: ${spec.capabilities.joinToString().ifEmpty { "none" }}",
+                "Declared data backup tables (SQLite rows only): ${spec.dataBackupTables.joinToString().ifEmpty { "none; data backup disabled" }}",
                 "Decoded Android permissions: ${manifest.permissions.joinToString().ifEmpty { "none" }}",
                 "Decoded exported components: ${manifest.plan.exportedComponents.joinToString()}",
                 "Decoded features/queries/allowed hosts: ${manifest.plan.features.joinToString().ifEmpty { "none" }} / ${manifest.plan.queries.joinToString().ifEmpty { "none" }} / ${manifest.plan.hosts.joinToString().ifEmpty { "none" }}",
@@ -283,6 +285,7 @@ internal class FactoryProjectService(
             check(receipt.getString("manifestContract") == "closed-v1-current")
             TemplateApk.verify(bytes, plan)
         } else TemplateApk.verifyExistingV1(bytes, plan)
+        verifyRuntimeConfig(bytes, spec)
         if (receipt.has("dexSha256")) {
             val inventory = receipt.getJSONObject("dexSha256")
             check(inventory.keys().asSequence().toSet() == manifest.dexSha256.keys && manifest.dexSha256.all { (name, hash) -> inventory.getString(name) == hash })
@@ -355,9 +358,7 @@ internal class FactoryProjectService(
             }
         }
         val runtimeConfig = config ?: error("Missing factory configuration")
-        val parsedConfig = com.jarvys.factory.runtime.FactoryConfig.parsePreview(String(runtimeConfig, Charsets.UTF_8))
-        check(parsedConfig.appId == spec.appId && parsedConfig.name == spec.name && parsedConfig.entryPoint == "www/index.html" &&
-            parsedConfig.capabilities == spec.capabilities.toSet()) { "Runtime configuration differs from build receipt" }
+        verifyRuntimeConfigBytes(runtimeConfig, spec)
         val sources = receipt.getJSONObject("sources")
         // Sorted length-delimited fields avoid JSONObject's unspecified serialization order.
         val canonicalSources = java.io.ByteArrayOutputStream().also { out ->
@@ -401,6 +402,28 @@ internal class FactoryProjectService(
         return metadata.put("mode", "functional_preview").put("state", "launch_requested")
             .put("notice", "One isolated preview with RAM app storage and a separate disposable browser profile replaces the previous preview. Native effects are simulated. Launch request is not proof of WebView rendering or installed-app behavior; use preview_status for bounded observed events.")
     }
+    private fun verifyRuntimeConfig(bytes: ByteArray, spec: FactorySpec) {
+        var config: ByteArray? = null
+        java.util.zip.ZipInputStream(bytes.inputStream()).use { zip ->
+            while (true) {
+                val entry = zip.nextEntry ?: break
+                if (entry.name == "assets/factory-app.json") {
+                    check(!entry.isDirectory && config == null) { "Duplicate or invalid factory configuration" }
+                    config = readBounded(zip, FactorySpec.MAX_SPEC_BYTES)
+                }
+                zip.closeEntry()
+            }
+        }
+        verifyRuntimeConfigBytes(config ?: error("Missing factory configuration"), spec)
+    }
+    private fun verifyRuntimeConfigBytes(bytes: ByteArray, spec: FactorySpec) {
+        val parsed = com.jarvys.factory.runtime.FactoryConfig.parsePreview(String(bytes, Charsets.UTF_8))
+        check(parsed.appId == spec.appId && parsed.name == spec.name && parsed.entryPoint == "www/index.html" &&
+            parsed.capabilities == spec.capabilities.toSet() && parsed.dataBackupTables == spec.dataBackupTables.toSet()) {
+            "Runtime configuration differs from build receipt"
+        }
+    }
+
     private fun publicReceipt(receipt: JSONObject): JSONObject = JSONObject().put("build_id", receipt.getString("buildId"))
         .put("output_path", receipt.getString("outputPath")).put("sha256", receipt.getString("apkSha256"))
         .put("bytes", receipt.getLong("apkBytes")).put("signed", receipt.getBoolean("signed"))

@@ -225,7 +225,7 @@ public class FactoryDispatcherTest {
     }
 
     @Test public void all1048576CapabilityPlansSelectOnlyBiometricPermissionAndDeduplicateHostVisibility() {
-        assertEquals(20, CapabilityCatalog.NAMES.size()); assertEquals(42, CapabilityCatalog.METHODS.size());
+        assertEquals(20, CapabilityCatalog.NAMES.size()); assertEquals(44, CapabilityCatalog.METHODS.size());
         for (int mask = 0; mask < 1048576; mask++) {
             java.util.List<String> selected = new java.util.ArrayList<>();
             for (int bit = 0; bit < CapabilityCatalog.NAMES.size(); bit++) if ((mask & (1 << bit)) != 0) selected.add(CapabilityCatalog.NAMES.get(bit));
@@ -366,4 +366,47 @@ public class FactoryDispatcherTest {
                 assertEquals(mode.equals("preview"),info.getJSONArray("unavailableMethods").toString().contains("\""+method+"\""));
         }
     }
+    @Test public void backupsAreDeniedByDefaultAndPreviewNeverAllocatesOrUsesDatabaseAdapter() throws Exception {
+        FactoryConfig empty = FactoryConfig.parsePreview(configuration("[\"database\",\"documents\"]"));
+        JSONObject declared = new JSONObject(configuration("[\"database\",\"documents\"]"))
+                .put("dataBackup", new JSONObject().put("tables", new JSONArray("[\"notes\",\"tasks\"]")));
+        FactoryConfig allowed = FactoryConfig.parsePreview(declared.toString());
+        BoundedStore store = new BoundedStore(new MemoryBackend());
+        for (String method : new String[]{"database.backupExport", "database.backupImport"}) {
+            JSONObject args = new JSONObject().put("version", 1).put("tables", new JSONArray("[\"notes\"]"));
+            if (method.equals("database.backupExport")) args.put("filename", "backup.json");
+            else args.put("handle", new String(new char[64]).replace('\0', 'a')).put("mode", "insertOnly");
+            FactoryDispatcher.Database forbidden = (wire, value) -> { throw new AssertionError("Database adapter invoked"); };
+            for (FactoryConfig config : new FactoryConfig[]{empty, allowed}) {
+                try { FactoryDispatcher.dispatch(request(method, args, config), config, store,
+                        FactoryDispatcher.previewMetadata("host", 35, 35), FactoryDispatcher.simulatedEffects(), forbidden); fail(); }
+                catch (FactoryException denied) { assertEquals("UNAVAILABLE", denied.code); }
+            }
+            try { FactoryDispatcher.dispatch(request(method, args, empty), empty, store,
+                    FactoryDispatcher.metadata("installed", "app", 35, 35), FactoryDispatcher.simulatedEffects(), forbidden); fail(); }
+            catch (FactoryException denied) { assertEquals("BACKUP_DENIED", denied.code); }
+            assertEquals("adapter", FactoryDispatcher.dispatch(request(method, args, allowed), allowed, store,
+                    FactoryDispatcher.metadata("installed", "app", 35, 35), FactoryDispatcher.simulatedEffects(),
+                    (wire, value) -> { assertEquals(method, wire); return "adapter"; }));
+            BridgeProtocol.Request mutation = request(method, args, allowed);
+            mutation.args.put("tables", new JSONArray("[\"secret\"]"));
+            try { FactoryDispatcher.dispatch(mutation, allowed, store,
+                    FactoryDispatcher.metadata("installed", "app", 35, 35), FactoryDispatcher.simulatedEffects(), forbidden); fail(); }
+            catch (FactoryException denied) { assertEquals("BACKUP_DENIED", denied.code); }
+        }
+        JSONObject info = (JSONObject) FactoryDispatcher.dispatch(request("runtime.info", new JSONObject(), allowed), allowed, store,
+                FactoryDispatcher.previewMetadata("host", 35, 35), FactoryDispatcher.simulatedEffects());
+        assertEquals(1, info.getInt("databaseBackupProtocolVersion"));
+        assertTrue(info.getBoolean("databaseBackupBrokerRequired"));
+        assertEquals("[\"database\",\"documents\"]", info.getJSONArray("databaseBackupRequires").toString());
+        assertEquals("[\"notes\",\"tasks\"]", info.getJSONArray("databaseBackupTables").toString());
+        assertEquals(1048576, info.getJSONObject("limits").getInt("databaseBackupBytes"));
+        assertEquals(8, info.getJSONObject("limits").getInt("databaseBackupTables"));
+        assertEquals(300000, info.getJSONObject("limits").getInt("databaseBackupLifetimeMs"));
+        assertTrue(info.getJSONArray("unavailableMethods").toString().contains("database.backupExport"));
+        assertTrue(info.getJSONArray("unavailableMethods").toString().contains("database.backupImport"));
+        assertFalse(info.getJSONArray("unavailableMethods").toString().contains("database.select"));
+        assertFalse(info.getJSONArray("unavailableCapabilities").toString().contains("database"));
+    }
+
 }

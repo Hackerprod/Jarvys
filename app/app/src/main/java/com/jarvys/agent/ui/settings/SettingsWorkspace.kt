@@ -232,6 +232,11 @@ private fun SettingsIndex(
             { context.startActivity(com.jarvys.agent.apkfactory.FactoryBrowserCoordinator.recoveryIntent(context)) },
             testTag = "settings-factory-browser-row")
         SettingsRule()
+        SettingsIndexRow(LucideIcons.Boxes, stringResource(R.string.factory_data_backup_title),
+            stringResource(R.string.factory_data_backup_settings_summary),
+            { context.startActivity(com.jarvys.agent.apkfactory.FactoryDataBackupCoordinator.recoveryIntent(context)) },
+            testTag = "settings-factory-data-backup-row")
+        SettingsRule()
         SettingsIndexRow(LucideIcons.Boxes, stringResource(R.string.factory_external_launch_title),
             stringResource(R.string.factory_external_launch_settings_summary),
             { context.startActivity(com.jarvys.agent.apkfactory.FactoryExternalLaunchCoordinator.recoveryIntent(context)) },

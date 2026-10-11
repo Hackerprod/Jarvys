@@ -1,8 +1,8 @@
-# Factory guidance factory-guidance-v82 / basics
+# Factory guidance factory-guidance-v83 / basics
 
 Use with the always-loaded Factory core; this reference grants no tools or approvals.
-Historical v77 contract text below is preserved. Current v80: 20 capabilities/42 methods;
-sensors and biometrics extend it in their references, with all six methods UNAVAILABLE in preview.
+Historical v77 contract text below is preserved. Current v83: 20 capabilities/44 methods; selected SQLite backup is in the database reference.
+Sensors and biometrics extend the historical contract in their references, with all six methods UNAVAILABLE in preview.
 Only selected biometric profiles add USE_BIOMETRIC; template/nonbiometric profiles stay zero-permission.
 Historical totals/permission and pending-family statements below describe their original versions.
 

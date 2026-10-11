@@ -1,0 +1,20 @@
+<resources>
+    <string name="factory_data_backup_title">Factory data backup</string>
+    <string name="factory_data_backup_settings_summary">Review an interrupted SQLite data backup</string>
+    <string name="factory_data_backup_disclosure">Review every value below. This is a plaintext, unencrypted data file. Arbitrary cells may contain secrets or private information; secret detection and secret backup are unsupported. Package and signer labels only establish compatibility and do not authenticate this file or prove who created it. Approval applies only to the exact tables, values and mode shown. Signing-identity backup is a separate feature.</string>
+    <string name="factory_data_backup_cloud_warning">The document provider you choose may upload or cloud-sync the exported plaintext file. Choose a destination appropriate for all of these values.</string>
+    <string name="factory_data_backup_acknowledgement">I reviewed all values and understand the plaintext, private-data and unauthenticated-file risks.</string>
+    <string name="factory_data_backup_exact_plan">Exact operation, tables, mode and compatibility labels</string>
+    <string name="factory_data_backup_row_counts">Rows by table: archive rows / current destination rows (imports)</string>
+    <string name="factory_data_backup_delete_warning">REPLACE SELECTED TABLES: Every existing row in each selected destination table will be deleted and replaced by the incoming rows, including when the incoming table is empty. Other tables are unchanged. The current destination row counts above are the deletion impact.</string>
+    <string name="factory_data_backup_archive_values">Complete canonical archive values (control and direction-changing characters are escaped)</string>
+    <string name="factory_data_backup_review_approve">Approve exact plan</string>
+    <string name="factory_data_backup_use">Use this destination for this exact export</string>
+    <string name="factory_data_backup_close">Cancel and close</string>
+    <string name="factory_data_backup_recover">I closed any old document task; acknowledge unknown outcome</string>
+    <string name="factory_data_backup_checking">Verifying the installed app and exact archive. Please wait.</string>
+    <string name="factory_data_backup_selected">Review the chosen destination. A separate confirmation is required before returning its temporary write permission.</string>
+    <string name="factory_data_backup_unknown">This review was interrupted or revoked. Its outcome is unknown and it will not be replayed. Close any previous document task yourself before acknowledging recovery.</string>
+    <string name="factory_data_backup_unavailable">This review is unavailable, expired or changed. No new approval can be given.</string>
+    <string name="factory_data_backup_picker_pending">The original document task has not reported its terminal result. Cancellation does not prove that another task has closed.</string>
+</resources>

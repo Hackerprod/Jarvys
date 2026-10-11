@@ -1,9 +1,10 @@
 # Local APK factory, SDK 2 (schema/protocol 1)
 
-Current v80 implementation: 20 capabilities / 42 methods; SDK 2 and schema/protocol 1.
-Local strong biometrics and its selective normal permission are documented at the end of this
-guide. Implementation/validation is in progress; v79 remains the latest completed delivery.
-Historical version sections retain their original scope and do not supersede the v80 contract.
+Current v83 contract: 20 capabilities / 44 methods; SDK 2 and schema/protocol 1.
+Selected SQLite data backup is documented at the end of this guide. Implementation and host
+validation do not establish physical device, provider durability or independent restore evidence.
+Historical version sections retain their original scope; the v83 backup contract overrides their
+previous statement that database import/export is unavailable.
 
 ## What it does
 
@@ -61,7 +62,7 @@ The compiled offline template and every generated profile without `biometrics` d
 
 ### Closed capability and manifest contract (UX42 F0a-1)
 
-Pure Java `:factory-contract` owns twenty capabilities and forty-two wire methods (including ungated, non-sensitive `runtime.info`). FactorySpec, FactoryConfig, bridge validation, dispatch and introspection share this catalog; native validation and handlers remain explicit switches. v67 adds SDK 2 document methods while schema and bridge protocol remain 1. Across 1,048,576 capability subsets, the 524,288 without `biometrics` retain zero Android permissions; the other 524,288 select exactly `android.permission.USE_BIOMETRIC`. All retain the same launcher component. These are catalog-derived combinations, not a claim of exhaustive APK build or physical validation. `documents`, `browser`, `maps`, `phone`, `email`, `sms`, `contacts` or `calendar` contributes the same deduplicated exact package visibility queries for `com.jarvys.agent` and `com.jarvys.agent.recoverytest`; it adds no generated-app permission, provider, service, receiver or Activity. This remains a bounded extension, not completion of Runtime2 or the broader selective-manifest roadmap.
+Pure Java `:factory-contract` owns twenty capabilities and forty-four wire methods (including ungated, non-sensitive `runtime.info`). FactorySpec, FactoryConfig, bridge validation, dispatch and introspection share this catalog; native validation and handlers remain explicit switches. v67 adds SDK 2 document methods while schema and bridge protocol remain 1. Across 1,048,576 capability subsets, the 524,288 without `biometrics` retain zero Android permissions; the other 524,288 select exactly `android.permission.USE_BIOMETRIC`. All retain the same launcher component. These are catalog-derived combinations, not a claim of exhaustive APK build or physical validation. `documents`, `browser`, `maps`, `phone`, `email`, `sms`, `contacts` or `calendar` contributes the same deduplicated exact package visibility queries for `com.jarvys.agent` and `com.jarvys.agent.recoverytest`; it adds no generated-app permission, provider, service, receiver or Activity. This remains a bounded extension, not completion of Runtime2 or the broader selective-manifest roadmap.
 
 `ManifestPlan` is an immutable, closed expected tree with exact names, namespaces, Android attribute resource IDs, types and values. It pins API 24/35/compile 36, the launcher, theme, backup/cleartext policy and compiled icon/backup references. Project JSON cannot supply XML, nodes or arbitrary manifest attributes. F0a-2 adds an immutable compiled construction vocabulary and deterministic typed AXML encoder, including bounded repeated permissions/features/private components/filters/package and intent queries/metadata. Apart from the two exact broker package queries and the v80 selective `USE_BIOMETRIC` declaration, these extra nodes remain host construction fixtures. Other contributions and project-defined nodes remain rejected. See [the construction scope and gates](../recovery/ux42-f0a2/README.md).
 
@@ -1011,3 +1012,19 @@ global rate failure discard buffered data. No auto-resume. Cleanup failure disab
 never claims hardware stopped. Light and accelerometer retain their original units/semantics.
 Synthetic host tests and binary review do not establish device availability, accuracy, timing,
 physical rotation/lifecycle behavior or installation acceptance.
+
+## Selected SQLite data backup (v83)
+
+The current catalog has 20 capabilities / 44 methods, SDK 2 and schema/protocol 1. database.backupExport and database.backupImport belong to database and also require documents. The existing six database methods remain unchanged. Both backup methods are UNAVAILABLE in preview before any database or document handle is allocated; ordinary preview database operations still work in ephemeral SQLite.
+
+Declare the optional factory.json policy dataBackup:{"tables":["notes","tasks"]}. Its only key is tables: at most eight database identifiers in ascending order, without duplicates. Absence or an empty list disables backup; it grants nothing implicitly. Nonempty policy requires both database and documents capabilities. Signing discloses this exact policy, and the receipt must match the embedded runtime configuration. No manifest permission, signing key or signing-identity backup format changes.
+
+- Jarvys.database.backupExport({version,tables,filename}) exports exactly the nonempty, sorted, unique selected subset of the declared tables. version is the exact current database version (1–1000); filename uses the existing simple document filename grammar. It does not export every declared table automatically.
+- Jarvys.database.backupImport({version,handle,tables,mode}) consumes one untouched document read handle. Open it with documents.open({mimeType:"application/json"}); the normal native selection and Use steps still apply. The file's table set must exactly match the explicit selection, within the declared policy. The same exact database version and selected-table schema must already exist. No migration occurs.
+- mode:"insertOnly" inserts rows only; any existing ID collision in any selected table rolls back the entire import. mode:"replaceSelectedTables" atomically deletes and replaces rows in selected tables only. Both preserve every unselected table. Target data or schema changes after native review produce a conflict, requiring a fresh review.
+
+The bounded format is canonical plaintext JSON, at most 1 MiB, named jarvys-sqlite-data with formatVersion:1. It contains selected table schemas and typed rows plus database version, package and certificate labels. It contains no SQL, ZIP, signing keys, preferences, arbitrary files or document contents. It is unencrypted. Package/certificate labels are compatibility checks, not authentication of a backup's author or contents; an attacker can rewrite them. Secrets are unsupported and cannot be reliably detected. Never claim that scanning or a label makes a backup safe.
+
+An installed generated app, current exact signed receipt and compatible pinned Jarvys host are required. Human native review shows all values and the exact operation, table selection, counts and consequences. Export then requires a separate provider disclosure and human destination choice: the selected provider may upload, cloud-sync or retain plaintext copies. Never automate review, confirmation or the picker. File selection or a matching label does not authorize restoring it.
+
+Export reports bytes/hash with providerCommitConfirmed:false and closeStatus:"close_requested"; it does not prove provider durability, upload completion or recoverability. Cancellation or failure may leave an empty or partial file. Import reports the native transaction result, not physical durability or a successful independent restore test. A cancellation, lost reply or timeout may occur after commit; inspect state and never automatically retry or claim rollback. database.cancel has its own single bounded control slot beside sensors.cancel and biometrics.cancel (16 ordinary requests plus three controls). The native backup lifetime is five minutes; SDK timeout is 310000 ms, allowing the terminal callback. Lifecycle revocation and cleanup remain authoritative; no background/resume permission is added.

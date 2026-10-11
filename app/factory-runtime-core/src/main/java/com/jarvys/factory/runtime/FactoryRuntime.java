@@ -61,6 +61,9 @@ public final class FactoryRuntime implements AutoCloseable {
     private static final int BROWSER_REQUEST = 46;
     private static final int EXTERNAL_REQUEST = 47;
     private static final int CONTACT_REQUEST = 48;
+    private static final int BACKUP_REQUEST_MIN = 0x1000, BACKUP_REQUEST_MAX = 0x7fff;
+    private static final java.util.concurrent.atomic.AtomicInteger BACKUP_REQUEST_SEQUENCE = new java.util.concurrent.atomic.AtomicInteger(BACKUP_REQUEST_MIN);
+    private static final java.util.concurrent.atomic.AtomicBoolean BACKUP_ADMISSION = new java.util.concurrent.atomic.AtomicBoolean();
     private static final long CONTACT_LIFETIME_MS = 300000;
     private static final long EXTERNAL_LIFETIME_MS = 300000;
     private static final long BROWSER_LIFETIME_MS = 300000;
@@ -80,6 +83,9 @@ public final class FactoryRuntime implements AutoCloseable {
     private SensorCapture sensors;
     private BiometricAuthentication biometrics;
     private volatile PrivateDatabase database;
+    private volatile BackupWork backup;
+    private long databaseControlWindow;
+    private int databaseControlCount;
     private volatile int generation;
     private volatile boolean destroyed;
     private Reply uiOwner;
@@ -203,6 +209,7 @@ public final class FactoryRuntime implements AutoCloseable {
         if(biometrics!=null) biometrics.cancel();
         retireDatabase();
         documents.revokeAll(); documents = new DocumentHandles();
+        cancelBackup("CANCELLED", "Backup authority ended. A restore may have committed or a partial export may remain.");
         cancelDocumentSelection(); cancelFileShare(); cancelPhotoSelection(); cancelAudioPlayback();
         cancelBrowserOpen(browserOpen, "CANCELLED", "Browser launch authority ended. A browser already opened may remain open.");
         cancelExternalLaunch(externalLaunch, "CANCELLED", "External launch authority ended. An external application already opened may remain open.");
@@ -394,7 +401,7 @@ public final class FactoryRuntime implements AutoCloseable {
 
     private void receive(String raw, JavaScriptReplyProxy proxy) {
         if (destroyed || !host.isActive()) return;
-        if(tryBiometricCancellation(raw,proxy) || trySensorCancellation(raw,proxy)) return;
+        if(tryDatabaseCancellation(raw,proxy) || tryBiometricCancellation(raw,proxy) || trySensorCancellation(raw,proxy)) return;
         long now = SystemClock.elapsedRealtime();
         if (now - rateWindow >= 10000) { rateWindow = now; rateCount = 0; }
         if (++rateCount > 80) {
@@ -403,6 +410,7 @@ public final class FactoryRuntime implements AutoCloseable {
             // Unparseable/oversized traffic retains this global failAll contract, never cancel authority.
             if(sensors!=null) sensors.cancel();
             if(biometrics!=null) biometrics.cancel();
+            cancelBackup("CANCELLED", "Backup response ended. A restore may have committed; inspect data before retrying.");
             safePost(proxy, BridgeProtocol.failure(null, "RATE_LIMITED", "Too many native requests; try again shortly.")); return;
         }
         final BridgeProtocol.Request request;
@@ -414,7 +422,9 @@ public final class FactoryRuntime implements AutoCloseable {
         Reply reply = new Reply(request.id, request.method, proxy, generation);
         pending.put(request.id, reply);
         host.onTrace(request.method, "requested");
-        if ("database".equals(request.operation.capability)) {
+        if (isBackupMethod(request.method)) {
+            dispatchBackup(request,reply);
+        } else if ("database".equals(request.operation.capability)) {
             dispatchDatabase(request,reply);
         } else if ("storage".equals(request.operation.capability)) {
             background(reply, () -> {
@@ -450,6 +460,310 @@ public final class FactoryRuntime implements AutoCloseable {
             reply.fail("NATIVE_ERROR", "The native operation could not be completed.");
         }
     }
+    private static boolean isBackupMethod(String method) {
+        return "database.backupExport".equals(method) || "database.backupImport".equals(method);
+    }
+    /** Authenticated, bounded cancellation bypasses normal request/pending admission. */
+    private boolean tryDatabaseCancellation(String raw, JavaScriptReplyProxy proxy) {
+        if(raw==null || raw.length()>1024 || raw.getBytes(StandardCharsets.UTF_8).length>1024) return false;
+        final BridgeProtocol.Request request;
+        try { request=BridgeProtocol.validate(BridgeProtocol.ORIGIN,true,raw,config); }
+        catch(FactoryException invalid) { return false; }
+        if(!"database.cancel".equals(request.method)) return false;
+        if(pending.containsKey(request.id)) { safePost(proxy,BridgeProtocol.failure(request.id,"BUSY","Duplicate request ID.")); return true; }
+        if(destroyed || !host.isSessionOpen() || !host.isActive()) return true;
+        long now=SystemClock.elapsedRealtime();
+        if(now-databaseControlWindow>=1000 || now<databaseControlWindow) { databaseControlWindow=now; databaseControlCount=0; }
+        if(++databaseControlCount>8) { safePost(proxy,BridgeProtocol.failure(request.id,"RATE_LIMITED","Database cancellation control limit reached.")); return true; }
+        PrivateDatabase selected=database; if(selected!=null) selected.cancel();
+        cancelBackup("CANCELLED","Backup cancellation requested. A restore may have committed or a partial export may remain.");
+        try { safePost(proxy,BridgeProtocol.success(request.id,PrivateDatabase.cancellation())); }
+        catch(Exception failed) { safePost(proxy,BridgeProtocol.failure(request.id,"DATABASE_ERROR","Cancellation outcome is unknown; inspect data before retrying.")); }
+        return true;
+    }
+    private void dispatchBackup(BridgeProtocol.Request request, Reply reply) {
+        try {
+            FactoryDispatcher.dispatch(request,config,store,metadata(),FactoryDispatcher.simulatedEffects(),
+                    (method,args)-> { beginBackup(request,reply); return DEFERRED; });
+        } catch(FactoryException failure) { reply.fail(failure.code,failure.getMessage()); }
+        catch(Exception failure) { reply.fail("BACKUP_UNAVAILABLE","Backup could not start; no automatic retry was attempted."); }
+    }
+    private void beginBackup(BridgeProtocol.Request request,Reply reply) throws Exception {
+        requireDocumentForeground();
+        if(host.isPreview()) throw new FactoryException("UNAVAILABLE","Backup is unavailable in preview.");
+        if(backup!=null) throw new FactoryException("BUSY","A backup interaction is still active.");
+        DocumentBrokerIdentity.verify(activity,config.documentBroker);
+        if(!claimUi(reply)) return;
+        final BackupWork work;
+        try { work=new BackupWork(request,reply); }
+        catch(Exception failed) { if(uiOwner==reply) uiOwner=null; throw failed; }
+        if(!BACKUP_ADMISSION.compareAndSet(false,true)) {
+            if(uiOwner==reply) uiOwner=null;
+            throw new FactoryException("BUSY","Previous backup work or cleanup is still active.");
+        }
+        backup=work;
+        main.postDelayed(work.tick,1000);
+        try {
+            work.admission=FileShareTransfer.reserve();
+            if(work.exporting) work.handles.cancelAll();
+            work.worker=true;
+            io.execute(()-> {
+                try {
+                    requireBackup(work,true);
+                    PrivateDatabase selected=database;
+                    if(selected==null) { selected=PrivateDatabase.installed(activity,config.appId); database=selected; }
+                    final PrivateDatabase owner=selected; final long ticket=owner.ticket();
+                    java.util.List<String> tables=new java.util.ArrayList<>();
+                    org.json.JSONArray values=work.args.getJSONArray("tables");
+                    for(int i=0;i<values.length();i++) tables.add(values.getString(i));
+                    String certificate=backupCertificate();
+                    if(work.exporting) {
+                        work.archive=owner.backupExport(config.appId,certificate,work.args.getInt("version"),tables,ticket,()->backupAuthority(work,true));
+                        requireBackup(work,true);
+                        work.handles.chargeBackupSnapshot(work.archive.bytes().length);
+                    } else {
+                        byte[] bytes=work.handles.snapshotForBackup(work.args.getString("handle"));
+                        try { requireBackup(work,true); work.archive=DatabaseBackupFormat.parse(bytes); }
+                        finally { java.util.Arrays.fill(bytes,(byte)0); }
+                        work.handles.cancelAll();
+                        if(!config.appId.equals(work.archive.appId) || !certificate.equals(work.archive.certificateSha256)
+                                || work.archive.version!=work.args.getInt("version") || !DatabaseBackupFormat.sameTables(work.archive,tables))
+                            throw new FactoryException("BACKUP_MISMATCH","Backup identity, version or exact selected tables do not match.");
+                        work.baseline=owner.backupBaseline(work.archive,ticket,()->backupAuthority(work,true));
+                    }
+                    requireBackup(work,true);
+                    String schema=DatabaseBackupFormat.sha256(DatabaseBackupFormat.canonical(work.archive.schema()));
+                    work.plan=DatabaseBackupPlan.create(work.nonce,work.deadline,work.exporting?"export":"import",work.archive,
+                            work.exporting?"export":work.args.getString("mode"),work.exporting?work.args.getString("filename"):"",
+                            schema,work.baseline==null?"":work.baseline.preimageSha256,
+                            work.baseline==null?new JSONObject():work.baseline.counts());
+                    work.control=new BackupReviewControl(work.nonce,uid->backupHostAllowed(work,uid));
+                    work.transfer=work.admission.complete(work.archive.bytes(),work.nonce,uid->backupHostAllowed(work,uid));
+                    main.post(()-> { work.worker=false; launchBackupWhenClean(work); });
+                } catch(Exception failure) {
+                    main.post(()-> { work.worker=false; failBackup(work,failure); });
+                }
+            });
+        } catch(Exception failure) { work.worker=false; failBackup(work,failure); }
+    }
+    private String backupCertificate() throws Exception {
+        android.content.pm.PackageInfo info=activity.getPackageManager().getPackageInfo(config.appId,
+                Build.VERSION.SDK_INT>=28?PackageManager.GET_SIGNING_CERTIFICATES:PackageManager.GET_SIGNATURES);
+        @SuppressWarnings("deprecation") android.content.pm.Signature[] signatures=Build.VERSION.SDK_INT>=28?info.signingInfo.getApkContentsSigners():info.signatures;
+        if(signatures==null || signatures.length!=1 || !config.appId.equals(info.packageName))
+            throw new FactoryException("BACKUP_UNAVAILABLE","Installed signing identity is unavailable.");
+        return DatabaseBackupFormat.sha256(signatures[0].toByteArray());
+    }
+    private boolean backupAuthority(BackupWork work,boolean foreground) {
+        return backup==work && !work.cancelled && !work.terminal && work.reply.current() && work.page==generation
+                && SystemClock.elapsedRealtime()<work.deadline && !activity.isDestroyed() && !activity.isFinishing()
+                && (!foreground || documentForeground);
+    }
+    private void requireBackup(BackupWork work,boolean foreground) throws FactoryException {
+        if(!backupAuthority(work,foreground)) throw new FactoryException("CANCELLED","Backup authority expired. A restore may have committed or a partial export may remain.");
+    }
+    private boolean backupHostAllowed(BackupWork work,int uid) {
+        try {
+            if(!backupAuthority(work,false)) return false;
+            DocumentBrokerIdentity.verify(activity,config.documentBroker);
+            String[] packages=activity.getPackageManager().getPackagesForUid(uid);
+            return packages!=null && packages.length==1 && config.documentBroker.packageName.equals(packages[0])
+                    && activity.getPackageManager().getApplicationInfo(config.documentBroker.packageName,0).uid==uid;
+        } catch(Exception denied) { return false; }
+    }
+    private void launchBackupWhenClean(BackupWork work) {
+        if(backup!=work || work.launched) return;
+        try {
+            requireBackup(work,true);
+            // Consumed input handles may still own a blocked close. Keep all admission until it ends.
+            if(documentResources.get()!=0) return;
+            DocumentBrokerIdentity.verify(activity,config.documentBroker);
+            Intent intent=new Intent().setComponent(new android.content.ComponentName(config.documentBroker.packageName,
+                    "com.jarvys.agent.apkfactory.FactoryDataBackupActivity"))
+                    .putExtra("protocolVersion",1).putExtra("plan",work.plan.json());
+            android.os.Bundle authority=new android.os.Bundle();
+            authority.putBinder("transfer",work.transfer); authority.putBinder("control",work.control); intent.putExtras(authority);
+            work.launched=true;
+            try { activity.startActivityForResult(intent,work.requestCode); }
+            catch(Exception failed) { work.launched=false; throw failed; }
+        } catch(Exception failure) { failBackup(work,failure); }
+    }
+    private void acceptBackup(BackupWork work) {
+        if(backup!=work || !work.returned || work.applying || work.worker) return;
+        if(work.cancelled || !work.reply.current()) { releaseDocumentGrant(work.result); work.result=null; finishBackup(work); return; }
+        if(!documentForeground) return;
+        final Intent result=work.result; work.result=null;
+        try {
+            requireBackup(work,true); DocumentBrokerIdentity.verify(activity,config.documentBroker);
+            if(work.resultCode!=Activity.RESULT_OK || result==null) throw new FactoryException("CANCELLED","Backup was not approved. A created empty file may remain.");
+            android.os.Bundle extras=result.getExtras();
+            if(extras==null || !extras.keySet().equals(new java.util.HashSet<>(java.util.Arrays.asList("nonce","planSha256","approved")))
+                    || !work.nonce.equals(extras.get("nonce")) || !work.plan.sha256().equals(extras.get("planSha256"))
+                    || !Boolean.TRUE.equals(extras.get("approved")) || result.getSelector()!=null)
+                throw new FactoryException("BACKUP_UNAVAILABLE","Backup approval did not match the exact native plan.");
+            if(work.exporting) {
+                Uri uri=result.getData(); int mode=Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
+                if(uri==null || !"content".equals(uri.getScheme()) || uri.getAuthority()==null || uri.getAuthority().isEmpty()
+                        || uri.getAuthority().contains("@") || uri.toString().length()>8192 || result.getFlags()!=mode
+                        || result.getClipData()==null || result.getClipData().getItemCount()!=1
+                        || !uri.equals(result.getClipData().getItemAt(0).getUri())
+                        || result.getClipData().getItemAt(0).getIntent()!=null || result.getClipData().getItemAt(0).getText()!=null
+                        || activity.checkUriPermission(uri,Process.myPid(),Process.myUid(),mode)!=PackageManager.PERMISSION_GRANTED)
+                    throw new FactoryException("PERMISSION_DENIED","Backup requires exactly one scoped native write grant.");
+                work.output=uri;
+            } else if(result.getData()!=null || result.getClipData()!=null || result.getFlags()!=0)
+                throw new FactoryException("PERMISSION_DENIED","Import approval must contain no document grant.");
+            work.applying=true; work.worker=true;
+            try { io.execute(()-> applyBackup(work)); }
+            catch(RejectedExecutionException full) { work.worker=false; throw full; }
+        } catch(Exception failure) { releaseDocumentGrant(result); work.output=null; failBackup(work,failure); }
+    }
+    private void applyBackup(BackupWork work) {
+        try {
+            requireBackup(work,true); DocumentBrokerIdentity.verify(activity,config.documentBroker);
+            final JSONObject result;
+            if(work.exporting) result=writeBackup(work);
+            else {
+                PrivateDatabase selected=database;
+                if(selected==null) { selected=PrivateDatabase.installed(activity,config.appId); database=selected; }
+                final PrivateDatabase owner=selected; final long ticket=owner.ticket();
+                result=owner.backupImport(work.archive,work.plan.mode,work.baseline,ticket,()->backupAuthority(work,true));
+            }
+            main.post(()-> {
+                work.worker=false; work.terminal=true;
+                if(!work.cancelled && documentForeground) work.reply.ok(result);
+                else work.reply.fail("CANCELLED","Backup response ended. The restore may have committed or the file may have been written.");
+                finishBackup(work);
+            });
+        } catch(Exception failure) { main.post(()-> { work.worker=false; failBackup(work,failure); }); }
+    }
+    private JSONObject writeBackup(BackupWork work) throws Exception {
+        final Uri uri=work.output;
+        final DocumentHandles handles=work.handles;
+        final DocumentHandles.Reservation reservation=handles.reserveWrite();
+        documentResources.incrementAndGet();
+        boolean streamOwnsResource=false; String token=null;
+        try {
+            requireBackup(work,true); reservation.beginOpen();
+            android.os.ParcelFileDescriptor descriptor=activity.getContentResolver().openFileDescriptor(uri,"w",work.signal);
+            if(descriptor==null) throw new IOException("Output unavailable");
+            OutputStream stream=new java.io.FilterOutputStream(new android.os.ParcelFileDescriptor.AutoCloseOutputStream(descriptor)) {
+                private void allowed() throws IOException {
+                    try { requireBackup(work,true); }
+                    catch(FactoryException denied) { throw new IOException("Backup authority ended"); }
+                    if(activity.checkUriPermission(uri,Process.myPid(),Process.myUid(),Intent.FLAG_GRANT_WRITE_URI_PERMISSION)!=PackageManager.PERMISSION_GRANTED)
+                        throw new IOException("Backup grant ended");
+                }
+                @Override public void write(int value)throws IOException { allowed(); out.write(value); }
+                @Override public void write(byte[] bytes,int offset,int count)throws IOException { allowed(); out.write(bytes,offset,count); }
+                @Override public void close()throws IOException {
+                    try { out.close(); }
+                    finally { releaseDocumentGrant(uri,Intent.FLAG_GRANT_WRITE_URI_PERMISSION); documentResources.decrementAndGet(); main.post(()->finishBackup(work)); }
+                }
+            };
+            streamOwnsResource=true; token=reservation.grantWrite(stream); work.internalHandle=token;
+            byte[] bytes=work.archive.bytes(); long offset=0;
+            try {
+                while(offset<bytes.length) {
+                    requireBackup(work,true);
+                    int count=Math.min(DocumentHandles.MAX_CHUNK_BYTES,bytes.length-(int)offset);
+                    byte[] chunk=java.util.Arrays.copyOfRange(bytes,(int)offset,(int)offset+count);
+                    handles.write(token,offset,android.util.Base64.encodeToString(chunk,android.util.Base64.NO_WRAP));
+                    java.util.Arrays.fill(chunk,(byte)0); offset+=count;
+                }
+                return new JSONObject().put("bytesWritten",bytes.length).put("sha256",work.archive.sha256)
+                        .put("providerCommitConfirmed",false).put("closeStatus","close_requested");
+            } finally { java.util.Arrays.fill(bytes,(byte)0); }
+        } finally {
+            work.output=null;
+            if(token!=null) { try { handles.close(token); } catch(FactoryException ignored) { } }
+            else reservation.cancel();
+            if(!streamOwnsResource) { reservation.abortOpen(); releaseDocumentGrant(uri,Intent.FLAG_GRANT_WRITE_URI_PERMISSION); documentResources.decrementAndGet(); }
+        }
+    }
+    private void failBackup(BackupWork work,Exception failure) {
+        if(backup!=work) return;
+        work.cancelled=true; work.terminal=true; work.handles.cancelAll();
+        if(work.control!=null) work.control.cancel();
+        if(work.transfer!=null) work.transfer.close();
+        if(work.admission!=null) work.admission.close();
+        cancelBackupProvider(work);
+        work.reply.fail(failure instanceof FactoryException?((FactoryException)failure).code:"BACKUP_UNAVAILABLE",
+                "Backup did not return a confirmed result. A restore may have committed or a partial export may remain; inspect before retrying.");
+        finishBackup(work);
+    }
+    private void cancelBackup(String code,String message) {
+        BackupWork work=backup; if(work==null) return;
+        work.cancelled=true;
+        if(work.control!=null) work.control.cancel();
+        if(work.transfer!=null) work.transfer.close();
+        if(work.admission!=null && !work.worker) work.admission.close();
+        cancelBackupProvider(work);
+        work.handles.cancelAll();
+        if(work.internalHandle!=null) try { work.handles.close(work.internalHandle); } catch(FactoryException ignored) { }
+        work.reply.fail(code,message); finishBackup(work);
+    }
+    /** Provider cancellation may invoke remote Binder; never execute it on lifecycle/main callbacks. */
+    private void cancelBackupProvider(BackupWork work) {
+        if(work.cancelScheduled) return;
+        work.cancelScheduled=true; documentResources.incrementAndGet();
+        try { DOCUMENT_CLEANUP.execute(()-> {
+            try { work.signal.cancel(); }
+            finally { documentResources.decrementAndGet(); main.post(()->finishBackup(work)); }
+        }); } catch(RejectedExecutionException saturated) {
+            // Retain admission: cancellation/cleanup was not verified, never spawn an unbounded fallback.
+            host.onTrace("database.cancel","cleanup_unconfirmed");
+        }
+    }
+    private void finishBackup(BackupWork work) {
+        if(backup!=work || work.worker || (!work.cancelled && !work.terminal)) return;
+        // Discard private snapshots before retaining only the callback tombstone.
+        work.archive=null; work.baseline=null; work.plan=null;
+        if(work.control!=null) { work.control.close(); work.control=null; }
+        if(work.transfer!=null) { work.transfer.close(); work.transfer=null; }
+        if(work.admission!=null) { work.admission.close(); work.admission=null; }
+        if(work.launched && !work.returned && !destroyed && !activity.isDestroyed()) return;
+        if(documentResources.get()!=0) return; // Blocked provider cleanup retains native admission.
+        if(work.output!=null) { releaseDocumentGrant(work.output,Intent.FLAG_GRANT_WRITE_URI_PERMISSION); work.output=null; return; }
+        if(work.control!=null) work.control.close();
+        if(work.transfer!=null) work.transfer.close();
+        if(work.admission!=null) work.admission.close();
+        work.archive=null; work.baseline=null; work.result=null;
+        main.removeCallbacks(work.tick);
+        if(uiOwner==work.reply) uiOwner=null;
+        backup=null; BACKUP_ADMISSION.set(false);
+    }
+    private final class BackupWork {
+        final Reply reply; final JSONObject args; final int page,requestCode;
+        final DocumentHandles handles;
+        final String nonce; final long deadline; final boolean exporting;
+        final android.os.CancellationSignal signal=new android.os.CancellationSignal();
+        volatile boolean cancelled,terminal,worker,launched,returned,applying,cancelScheduled;
+        volatile DatabaseBackupFormat.Archive archive;
+        volatile PrivateDatabase.Baseline baseline;
+        volatile DatabaseBackupPlan plan;
+        volatile FileShareTransfer transfer; volatile FileShareTransfer.Admission admission;
+        volatile BackupReviewControl control;
+        Intent result; int resultCode; volatile Uri output; volatile String internalHandle;
+        final Runnable tick=new Runnable() { public void run() {
+            if(backup!=BackupWork.this) return;
+            if(!cancelled && !terminal && !backupAuthority(BackupWork.this,false))
+                cancelBackup("CANCELLED","Backup authority ended. A restore may have committed or a partial export may remain.");
+            if(!cancelled && !launched && !worker && plan!=null) launchBackupWhenClean(BackupWork.this);
+            finishBackup(BackupWork.this);
+            if(backup==BackupWork.this) main.postDelayed(this,1000);
+        }};
+        BackupWork(BridgeProtocol.Request request,Reply reply)throws Exception {
+            this.reply=reply; this.page=generation; this.handles=documents; this.args=new JSONObject(request.args.toString());
+            requestCode=BACKUP_REQUEST_SEQUENCE.getAndIncrement();
+            if(requestCode>BACKUP_REQUEST_MAX) throw new FactoryException("BUSY","Backup callback identifiers are exhausted; restart the app before retrying.");
+            exporting="database.backupExport".equals(request.method);
+            byte[] bytes=new byte[32]; new java.security.SecureRandom().nextBytes(bytes);
+            StringBuilder value=new StringBuilder(); for(byte b:bytes) value.append(String.format(java.util.Locale.ROOT,"%02x",b&255));
+            nonce=value.toString(); deadline=SystemClock.elapsedRealtime()+300000;
+        }
+    }
+
     /** Database I/O never holds the preview lifecycle monitor or runs on the UI thread. */
     private void dispatchDatabase(BridgeProtocol.Request request, Reply reply) {
         if(!documentForeground || !reply.current()) { reply.fail("CANCELLED","Database requires the active foreground page."); return; }
@@ -681,13 +995,23 @@ public final class FactoryRuntime implements AutoCloseable {
     }
 
     private boolean claimUi(Reply reply) {
-        if (BiometricAuthentication.processUiBusy() || (biometrics!=null && biometrics.isUiBusy()) || presentationScheduled || uiOwner != null || export != null || documentSelection != null || fileShare != null || photoSelection != null || audioPlayback != null || browserOpen != null || externalLaunch != null || contactPick != null || !activity.hasWindowFocus() || activity.isFinishing()) {
+        if (BiometricAuthentication.processUiBusy() || (biometrics!=null && biometrics.isUiBusy()) || presentationScheduled || uiOwner != null || export != null || documentSelection != null || fileShare != null || photoSelection != null || audioPlayback != null || browserOpen != null || externalLaunch != null || contactPick != null || backup != null || BACKUP_ADMISSION.get() || !activity.hasWindowFocus() || activity.isFinishing()) {
             reply.fail("BUSY", "Another native prompt is open, or the application is not in the foreground."); return false;
         }
         uiOwner = reply; return true;
     }
 
     public void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if(requestCode >= BACKUP_REQUEST_MIN && requestCode <= BACKUP_REQUEST_MAX) {
+            BackupWork work=backup;
+            if(work==null || work.requestCode!=requestCode || work.returned || !work.launched) { releaseDocumentGrant(data); return; }
+            // A successful result without this operation's unguessable nonce is never its callback.
+            if(resultCode==Activity.RESULT_OK && (data==null || !work.nonce.equals(data.getStringExtra("nonce")))) { releaseDocumentGrant(data); return; }
+            work.returned=true; work.resultCode=resultCode;
+            if(work.cancelled || !work.reply.current()) { releaseDocumentGrant(data); finishBackup(work); }
+            else { work.result=data; if(documentForeground) acceptBackup(work); }
+            return;
+        }
         if (requestCode == CONTACT_REQUEST) {
             ContactPick work = contactPick;
             if (work == null || work.returned) return;
@@ -776,8 +1100,11 @@ public final class FactoryRuntime implements AutoCloseable {
         cancelPresentationRecreate();
         documentForeground = false;
         retireDatabase();
+        BackupWork preserving=backup;
+        if(preserving!=null && (!preserving.launched || preserving.returned))
+            cancelBackup("CANCELLED", "Backup ended in background. A restore may have committed or a partial file may remain.");
         for (Reply reply : new java.util.ArrayList<>(pending.values()))
-            if(reply.method.startsWith("database.")) reply.fail("CANCELLED","Database session ended. A prior commit is not undone.");
+            if(reply.method.startsWith("database.") && !(preserving!=null && preserving.launched && !preserving.returned && !preserving.cancelled && reply==preserving.reply)) reply.fail("CANCELLED","Database session ended. A prior commit is not undone.");
         ContactPick contact = contactPick;
         if (contact != null && (!contact.launched || contact.returned))
             cancelContactPick(contact, "CANCELLED", "Contact selection authority ended in background.");
@@ -803,6 +1130,7 @@ public final class FactoryRuntime implements AutoCloseable {
     }
     public void onResume() {
         documentForeground = true;
+        BackupWork returnedBackup=backup; if(returnedBackup!=null && returnedBackup.returned) acceptBackup(returnedBackup);
         ContactPick contact = contactPick;
         if (contact != null && contact.returned) finishContactPick(contact);
         ExternalLaunch external = externalLaunch;

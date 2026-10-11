@@ -174,6 +174,20 @@ public final class DocumentHandles {
     public byte[] snapshotForAudio(String token) throws FactoryException {
         return snapshot(token, 6 * 1024 * 1024, "AUDIO_TOO_LARGE");
     }
+    /** Consumes an untouched backup source, including a charged EOF probe. Never persists authority. */
+    public byte[] snapshotForBackup(String token) throws FactoryException {
+        return snapshot(token, 1024 * 1024, "BACKUP_TOO_LARGE");
+    }
+    /** Native SQLite snapshot accounting; later document writes are charged separately. */
+    public void chargeBackupSnapshot(int bytes) throws FactoryException {
+        synchronized(lock) {
+            expireLocked();
+            if(revoked) throw error("SESSION_REVOKED");
+            if(bytes < 1 || bytes > 1024 * 1024) throw error("BACKUP_TOO_LARGE");
+            if(bytes > MAX_SESSION_BYTES-charged) throw error("DOCUMENT_QUOTA");
+            charged += bytes;
+        }
+    }
     private byte[] snapshot(String token, int maximum, String tooLarge) throws FactoryException {
         final Entry entry;
         synchronized(lock) { entry=lookup(token,false,0); entry.busy=true; }

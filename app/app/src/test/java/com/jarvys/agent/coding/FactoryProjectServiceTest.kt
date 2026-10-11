@@ -312,6 +312,7 @@ class FactoryProjectServiceTest {
         assertEquals(1,f.requested);assertEquals(0,f.obtained);assertFalse(File(f.root,"signed.apk").exists())
         assertTrue(f.lastSummary!!.lines.any{it.contains("older window behavior")})
         assertTrue(f.lastSummary!!.lines.any{it=="Decoded Android permissions: none"})
+        assertTrue(f.lastSummary!!.lines.any { it == "Declared data backup tables (SQLite rows only): none; data backup disabled" })
         assertTrue(f.lastSummary!!.lines.any{it.contains("com.jarvys.factory.runtime.FactoryActivity")})
         assertEquals(sha,ProjectScope.sha256(File(f.root,"notes.apk").readBytes()))
     }
@@ -540,4 +541,60 @@ class FactoryProjectServiceTest {
         assertFalse(tool.canDelegate());assertFalse(tool.execute(mapOf("action" to "inspect","command" to "echo bad"),CancellationToken.cancellable()).success)
         assertTrue(tool.execute(mapOf("action" to "inspect"),CancellationToken.cancellable()).success)
     }
+    @Test fun receiptRuntimeVerificationRequiresExactlyTheDeclaredDataBackupPolicy() {
+        val f = Fixture()
+        val specJson = JSONObject(File(f.root, "factory.json").readText())
+            .put("capabilities", JSONArray(listOf("database", "documents")))
+            .put("dataBackup", JSONObject().put("tables", JSONArray(listOf("notes"))))
+        val spec = com.jarvys.agent.apkfactory.FactorySpec.parse(specJson)
+        val verifier = FactoryProjectService::class.java.getDeclaredMethod("verifyRuntimeConfigBytes",
+            ByteArray::class.java, com.jarvys.agent.apkfactory.FactorySpec::class.java).apply { isAccessible = true }
+        val runtime = JSONObject().put("schemaVersion", 1).put("appId", spec.appId).put("name", spec.name)
+            .put("entryPoint", "www/index.html").put("capabilities", JSONArray(spec.capabilities))
+            .put("dataBackup", JSONObject().put("tables", JSONArray(spec.dataBackupTables)))
+        verifier.invoke(f.service, runtime.toString().toByteArray(), spec)
+        for (tables in listOf(emptyList(), listOf("notes", "tasks"), listOf("other"))) {
+            runtime.put("dataBackup", JSONObject().put("tables", JSONArray(tables)))
+            val failure = assertThrows(java.lang.reflect.InvocationTargetException::class.java) {
+                verifier.invoke(f.service, runtime.toString().toByteArray(), spec)
+            }
+            assertTrue(failure.cause!!.message!!.contains("differs from build receipt"))
+        }
+        runtime.remove("dataBackup")
+        assertThrows(java.lang.reflect.InvocationTargetException::class.java) {
+            verifier.invoke(f.service, runtime.toString().toByteArray(), spec)
+        }
+        val legacy = com.jarvys.agent.apkfactory.FactorySpec.parse(specJson.apply { remove("dataBackup") })
+        verifier.invoke(f.service, runtime.toString().toByteArray(), legacy)
+        runtime.put("dataBackup", JSONObject().put("tables", JSONArray()))
+        verifier.invoke(f.service, runtime.toString().toByteArray(), legacy)
+    }
+
+    @Test fun signingDisclosesExactNonemptyDataBackupPolicyBeforeAnyIdentityUse() {
+        val f = Fixture()
+        val packageManager = f.context.packageManager
+        val own = packageManager.getPackageInfo(f.context.packageName, android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES)
+        val original = own.signingInfo
+        own.signingInfo = android.content.pm.SigningInfo().also {
+            org.robolectric.shadow.api.Shadow.extract<org.robolectric.shadows.ShadowSigningInfo>(it)
+                .setSignatures(arrayOf(android.content.pm.Signature(byteArrayOf(7, 12, 24, 42))))
+        }
+        org.robolectric.Shadows.shadowOf(packageManager).installPackage(own)
+        try {
+            f.spec("org.example.backup", 1, listOf("database", "documents"))
+            val spec = File(f.root, "factory.json")
+            spec.writeText(JSONObject(spec.readText()).put("dataBackup", JSONObject().put("tables", JSONArray(listOf("notes", "tasks")))).toString())
+            val build = f.build()
+            assertThrows(Exception::class.java) {
+                f.service.sign("notes.apk", build.getString("sha256"), "signed.apk", f.scope.version(), CancellationToken.cancellable())
+            }
+            assertEquals(1, f.requested)
+            assertEquals(0, f.obtained)
+            assertTrue(f.lastSummary!!.lines.any { it == "Declared data backup tables (SQLite rows only): notes, tasks" })
+        } finally {
+            own.signingInfo = original
+            org.robolectric.Shadows.shadowOf(packageManager).installPackage(own)
+        }
+    }
+
 }

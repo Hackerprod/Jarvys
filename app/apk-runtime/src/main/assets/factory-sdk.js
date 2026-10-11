@@ -45,10 +45,10 @@
       if (!bridge || typeof bridge.postMessage !== 'function') {
         reject(failure('BRIDGE_UNAVAILABLE', 'Open this application in its generated Android APK.')); return;
       }
-      var cancellation = method === 'sensors.cancel' || method === 'biometrics.cancel';
+      var cancellation = method === 'sensors.cancel' || method === 'biometrics.cancel' || method === 'database.cancel';
       var controlPending = false;
       if (cancellation) pending.forEach(function (entry) { if (entry.method === method) controlPending = true; });
-      if (pending.size >= (cancellation ? 18 : 16) || controlPending) {
+      if (pending.size >= (cancellation ? 19 : 16) || controlPending) {
         reject(failure('BUSY', 'Too many pending native requests.')); return;
       }
       var id = prefix + (++sequence).toString(36);
@@ -59,10 +59,12 @@
       } catch (error) { reject(error.code ? error : failure('INVALID_ARGUMENT', 'Arguments must be serializable JSON.')); return; }
       var timeout = /^(export|clipboard|share)\./.test(method) || /^(documents\.(open|create)|photos\.(pick|capture)|audio\.play|browser\.open|maps\.open|phone\.dial|email\.compose|sms\.compose|contacts\.pick|calendar\.insert)$/.test(method) ? 600000 : 30000;
       if (method === 'biometrics.authenticate') timeout = 90000;
+      var backup = method === 'database.backupExport' || method === 'database.backupImport';
+      if (backup) timeout = 310000;
       var timer = global.setTimeout(function () {
         if (!pending.has(id)) return;
         pending.delete(id);
-        reject(failure('TIMEOUT', 'Native response timed out. A system action already chosen may still finish.'));
+        reject(failure('TIMEOUT', backup ? 'Backup response timed out. The action may have completed. Inspect state; do not automatically retry.' : 'Native response timed out. A system action already chosen may still finish.'));
       }, timeout);
       pending.set(id, { resolve: resolve, reject: reject, timer: timer, method: method });
       try { bridge.postMessage(payload); }
@@ -100,6 +102,8 @@
       migrate: function (options) { return call('database.migrate', options); },
       transact: function (options) { return call('database.transact', options); },
       select: function (options) { return call('database.select', options); },
+      backupExport: function (options) { return call('database.backupExport', options); },
+      backupImport: function (options) { return call('database.backupImport', options); },
       close: function (options) { return call('database.close', options === undefined ? {} : options); },
       cancel: function (options) { return call('database.cancel', options === undefined ? {} : options); }
     }),

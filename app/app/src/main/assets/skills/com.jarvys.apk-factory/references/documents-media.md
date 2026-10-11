@@ -1,8 +1,8 @@
-# Factory guidance factory-guidance-v82 / documents-media
+# Factory guidance factory-guidance-v83 / documents-media
 
 Use with the always-loaded Factory core; this reference grants no tools or approvals.
-Historical v77 contract text below is preserved. Current v80: 20 capabilities/42 methods;
-sensors and biometrics extend it in their references, with all six methods UNAVAILABLE in preview.
+Historical v77 contract text below is preserved. Current v83: 20 capabilities/44 methods; selected SQLite backup is in the database reference.
+Sensors and biometrics extend the historical contract in their references, with all six methods UNAVAILABLE in preview.
 Only selected biometric profiles add USE_BIOMETRIC; template/nonbiometric profiles stay zero-permission.
 Historical totals/permission and pending-family statements below describe their original versions.
 
@@ -17,3 +17,9 @@ share.file({handle,filename,mimeType}): documents+share, untouched read handle. 
 ## Photos (v69)
 photos.pick({})/capture({}): photos+documents, same authenticated host. Human-only launch/Use; never automate. Opaque read handles: documents.read/close/share.file; 8 MiB JPEG/PNG, <=4096 per side/12 MP, 5min. Acquisition charges cumulative quota. Metadata/location retained. Camera: bounded write-only pipe; no seeking/reopen/thumbnail fallback. No gallery save/send; camera may retain copies. Close interrupted UI; Settings → Factory photos recovery. API24–29: provider FDs must be regular.
 audio.play({handle}): audio+documents; consumes untouched read handle (6 MiB, charged EOF/quota). Only canonical PCM16 WAV/44-byte header: mono/stereo, 8–48 kHz, whole frames, <=30 s. Host byte review; human Play once/current output/volume. No URI/path/codec/TTS/network/loop/resume/background. Native Close/recovery blocks automation; focus/lifecycle/route loss stops. documents.cancel: revocation request, no stop proof. {playbackAttempted,audibilityConfirmed:false}: no hearing proof. Selection may use cloud providers.
+
+## SQLite backup integration (v83)
+
+Read the database reference for the full backup policy and grammar. database.backupExport({version,tables,filename}) and database.backupImport({version,handle,tables,mode}) require database+documents and a nonempty explicit dataBackup.tables policy; default empty disables them. Import consumes an untouched read handle for canonical plaintext JSON <=1 MiB; export uses its own human-selected write destination. Table selections must be explicit, sorted and unique. These methods carry selected SQLite schemas/rows only, never document contents, preferences or signing keys. Same-package/certificate labels check compatibility, not authenticity. Secrets cannot be detected reliably and are unsupported.
+
+The exact current signed receipt and pinned host must pass verification before human review of all values. Export additionally discloses the destination provider and possible cloud sync/retention. Do not automate review or picker. No provider or physical durability is proved: providerCommitConfirmed:false, partial files possible. insertOnly rolls back all on any collision; replaceSelectedTables replaces only selected tables atomically, preserving unselected tables. Exact version/schema are required, no migration; changed targets after review fail conflict. Cancel/lost reply may follow commit; no automatic retry. Both backup methods are UNAVAILABLE in preview. Existing documents quotas, handle/session ownership, lifecycle revocation and cleanup rules still apply.

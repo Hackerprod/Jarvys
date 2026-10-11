@@ -1,0 +1,95 @@
+package com.jarvys.factory.runtime;
+
+import android.os.Binder;
+import android.os.IBinder;
+import android.os.Parcel;
+import android.os.Looper;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+/** Native-only terminal database-backup-review revocation. Contains no URI, document handle, archive, or database authority. */
+public final class BackupReviewControl extends Binder implements AutoCloseable {
+    public interface HostVerifier { boolean allowed(int uid); }
+    private static final String SOURCE="com.jarvys.factory.runtime.BackupReviewControl.v1";
+    private static final String TARGET="com.jarvys.factory.runtime.BackupReviewRevoke.v1";
+    private static final int CALL=IBinder.FIRST_CALL_TRANSACTION;
+    private static final int AUTHENTICATE=CALL+1;
+    private static final ThreadPoolExecutor SIGNALS=new ThreadPoolExecutor(1,1,0,TimeUnit.MILLISECONDS,
+            new ArrayBlockingQueue<>(1),r->{Thread t=new Thread(r,"factory-backup-revoke");t.setDaemon(true);return t;},new ThreadPoolExecutor.AbortPolicy());
+    private final String nonce;
+    private final HostVerifier host;
+    private boolean revoked, registered;
+    private IBinder callback;
+    private final IBinder.DeathRecipient callbackDeath=this::cancel;
+    public BackupReviewControl(String nonce,HostVerifier host) {
+        if(nonce==null || !nonce.matches("[a-f0-9]{64}") || host==null)throw new IllegalArgumentException();
+        this.nonce=nonce;this.host=host;
+    }
+    @Override protected boolean onTransact(int code,Parcel data,Parcel reply,int flags) {
+        if(code!=CALL || flags!=0 || reply==null || data.dataSize()>512 || data.hasFileDescriptors())return false;
+        try {
+            if (!host.allowed(Binder.getCallingUid())) return false;
+            data.enforceInterface(SOURCE);String received=data.readString();IBinder target=data.readStrongBinder();
+            if(!nonce.equals(received)||target==null||data.dataAvail()!=0)return false;
+            synchronized(this) { if(registered)return false; registered=true; }
+            Parcel challenge=Parcel.obtain(), answer=Parcel.obtain();
+            long identity=Binder.clearCallingIdentity();
+            try {
+                challenge.writeInterfaceToken(TARGET);challenge.writeString(nonce);
+                if(!target.transact(AUTHENTICATE,challenge,answer,0)||answer.dataSize()>512||answer.hasFileDescriptors())throw new SecurityException();
+                answer.readException();if(answer.readInt()!=1||answer.dataAvail()!=0)throw new SecurityException();
+                target.linkToDeath(callbackDeath,0);
+                synchronized(this) {
+                    if(!revoked)callback=target; else target.unlinkToDeath(callbackDeath,0);
+                    reply.writeNoException();reply.writeInt(revoked?1:0);
+                }
+                return true;
+            }finally{Binder.restoreCallingIdentity(identity);challenge.recycle();answer.recycle();}
+        }catch(Exception denied){cancel();return false;}
+    }
+    /** Terminal locally immediately; remote delivery/external closure is never claimed. */
+    public void cancel() {
+        final IBinder target;
+        synchronized(this){if(revoked)return;revoked=true;target=callback;callback=null;}
+        if(target!=null)try {target.unlinkToDeath(callbackDeath,0);}catch(Exception ignored){}
+        if(target!=null)try {SIGNALS.execute(()->{
+            Parcel data=Parcel.obtain();try{data.writeInterfaceToken(TARGET);data.writeString(nonce);target.transact(CALL,data,null,IBinder.FLAG_ONEWAY);}catch(Exception ignored){}finally{data.recycle();}
+        });}catch(RejectedExecutionException ignored){/* Host deadline/lifecycle remains the fail-safe. */}
+    }
+    @Override public void close(){cancel();}
+    public static final class Registration implements AutoCloseable {
+        private final AtomicBoolean revoked=new AtomicBoolean();
+        private final IBinder source; private final Runnable action; private final IBinder.DeathRecipient death;
+        private Registration(IBinder source,Runnable action){this.source=source;this.action=action;this.death=this::revoke;}
+        private void revoke(){if(revoked.compareAndSet(false,true))action.run();}
+        public boolean isRevoked(){return revoked.get();}
+        @Override public void close(){revoke();try{source.unlinkToDeath(death,0);}catch(Exception ignored){}}
+    }
+    /** Must run off main, after authenticating the installed source and before enabling backup review. */
+    public static Registration register(IBinder source,String nonce,HostVerifier verifiedSource,Runnable onRevoked)throws Exception {
+        if(Looper.myLooper()==Looper.getMainLooper())throw new IllegalStateException("Registration requires worker");
+        if(source==null||nonce==null||!nonce.matches("[a-f0-9]{64}")||verifiedSource==null||onRevoked==null)throw new IllegalArgumentException();
+        Registration registration=new Registration(source,onRevoked);
+        AtomicBoolean authenticated=new AtomicBoolean();
+        Binder callback=new Binder(){@Override protected boolean onTransact(int code,Parcel data,Parcel reply,int flags){
+            if(data.dataSize()>512||data.hasFileDescriptors())return false;
+            if(code==AUTHENTICATE ? flags!=0||reply==null : code!=CALL||flags!=IBinder.FLAG_ONEWAY)return false;
+            try {
+                if(!verifiedSource.allowed(Binder.getCallingUid()))return false;
+                data.enforceInterface(TARGET);if(!nonce.equals(data.readString())||data.dataAvail()!=0)return false;
+                if(code==AUTHENTICATE){if(!authenticated.compareAndSet(false,true))return false;reply.writeNoException();reply.writeInt(1);}
+                else registration.revoke();
+                return true;
+            }catch(RuntimeException denied){return false;}
+        }};
+        Parcel data=Parcel.obtain(),reply=Parcel.obtain();
+        try {
+            source.linkToDeath(registration.death,0);
+            data.writeInterfaceToken(SOURCE);data.writeString(nonce);data.writeStrongBinder(callback);
+            if(!source.transact(CALL,data,reply,0)||reply.dataSize()>512||reply.hasFileDescriptors())throw new IllegalStateException("Control unavailable");
+            reply.readException();if(!authenticated.get())throw new SecurityException("Unverified backup source");int state=reply.readInt();if(state<0||state>1||reply.dataAvail()!=0)throw new IllegalStateException("Invalid control reply");
+            if(state==1)registration.revoke();
+            return registration;
+        }catch(Exception failure){registration.close();throw failure;}finally{data.recycle();reply.recycle();}
+    }
+}

@@ -11,6 +11,9 @@ import android.os.OperationCanceledException;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.Arrays;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
@@ -25,7 +28,12 @@ public final class PrivateDatabase implements AutoCloseable {
     private final AtomicLong epoch=new AtomicLong();
     private volatile CancellationSignal active;
     private SQLiteDatabase database;
-    private PrivateDatabase(Context context) { this.context=context; }
+    private final BackupTransactionEnd backupTransactionEnd;
+    private PrivateDatabase(Context context) { this(context,SQLiteDatabase::endTransaction); }
+    private PrivateDatabase(Context context,BackupTransactionEnd end) { this.context=context; this.backupTransactionEnd=end; }
+    /** Failure-only test seam; production instances always call SQLiteDatabase.endTransaction directly. */
+    interface BackupTransactionEnd { void end(SQLiteDatabase database); }
+    static PrivateDatabase previewForBackupTest(BackupTransactionEnd end) { return new PrivateDatabase(null,end); }
     public static PrivateDatabase preview() { return new PrivateDatabase(null); }
     public static PrivateDatabase installed(Context context,String appId) throws FactoryException {
         if(context==null || !context.getPackageName().equals(appId))
@@ -40,7 +48,7 @@ public final class PrivateDatabase implements AutoCloseable {
     /** Invoke on the serialized database worker, after cancel. Preview close discards its RAM data. */
     @Override public synchronized void close() { if(database!=null) { database.close(); database=null; } }
     private void check(long ticket,BooleanSupplier current) throws FactoryException {
-        if(ticket!=epoch.get() || !current.getAsBoolean() || Thread.currentThread().isInterrupted())
+        if(ticket!=epoch.get() || current==null || !current.getAsBoolean() || ticket!=epoch.get() || Thread.currentThread().isInterrupted())
             throw new FactoryException("CANCELLED","Database operation cancelled. A prior commit is not undone.");
     }
     public synchronized Object execute(String method,JSONObject args,long ticket,BooleanSupplier current) throws Exception {
@@ -74,6 +82,176 @@ public final class PrivateDatabase implements AutoCloseable {
             // Never expose SQLite messages containing private values, filenames or generated SQL.
             throw new FactoryException("DATABASE_ERROR","Private database operation failed; inspect state before retrying.");
         } finally { active=null; }
+    }
+    /** Immutable review preimage. It remains valid across closing and reopening this app's database. */
+    public static final class Baseline {
+        public final String preimageSha256, schemaSha256;
+        private final String archiveSha256;
+        private final JSONObject selectedCounts;
+        private Baseline(String archiveSha256, String preimageSha256, String schemaSha256, JSONObject counts) {
+            this.archiveSha256=archiveSha256; this.preimageSha256=preimageSha256; this.schemaSha256=schemaSha256;
+            this.selectedCounts=(JSONObject)BackupJson.copy(counts);
+        }
+        public JSONObject counts() { return (JSONObject)BackupJson.copy(selectedCounts); }
+    }
+    private interface BackupWork<T> { T run(JSONObject schema,CancellationSignal signal) throws Exception; }
+    /** All archive rows are read under one SQLite snapshot, with no keyset/page query boundary. */
+    public synchronized DatabaseBackupFormat.Archive backupExport(String appId,String certificate,int version,List<String> tables,
+                                                                  long ticket,BooleanSupplier current) throws Exception {
+        if(tables==null) throw DatabaseRequest.invalid();
+        final List<String> selected=DatabaseBackupRequest.tables(new JSONArray(tables));
+        if(version<1 || version>1000) throw DatabaseRequest.invalid();
+        if(context!=null && !context.getPackageName().equals(appId)) throw backupIdentity();
+        return backupTransaction(ticket,current,(schema,signal)-> {
+            if(database.getVersion()!=version) throw versionConflict();
+            JSONObject selectedSchema=backupSchema(schema,selected), data=new JSONObject();
+            enforceRows(schema,signal); long encodedRows=0;
+            for(String name:selected) {
+                JSONObject columns=selectedSchema.getJSONObject(name); JSONArray rows=new JSONArray();
+                try(Cursor cursor=database.rawQuery(selectSql(name,columns)+" ORDER BY id COLLATE BINARY ASC",null,signal)) {
+                    while(cursor.moveToNext()) {
+                        check(ticket,current); JSONObject value=backupRow(cursor,columns);
+                        encodedRows+=DatabaseBackupFormat.canonical(value).length+1L;
+                        if(encodedRows>DatabaseBackupFormat.MAX_BYTES) throw BackupJson.tooLarge();
+                        rows.put(value);
+                    }
+                }
+                data.put(name,rows);
+            }
+            return DatabaseBackupFormat.create(appId,certificate,version,selectedSchema,data);
+        });
+    }
+    public synchronized Baseline backupBaseline(DatabaseBackupFormat.Archive archive,long ticket,BooleanSupplier current) throws Exception {
+        backupIdentity(archive);
+        return backupTransaction(ticket,current,(schema,signal)-> {
+            backupCompatible(archive,schema); enforceRows(schema,signal);
+            return backupSnapshot(archive,schema,signal,ticket,current);
+        });
+    }
+    public synchronized JSONObject backupImport(DatabaseBackupFormat.Archive archive,String mode,Baseline baseline,
+                                                  long ticket,BooleanSupplier current) throws Exception {
+        backupIdentity(archive); DatabaseBackupRequest.mode(mode);
+        if(baseline==null || !archive.sha256.equals(baseline.archiveSha256)) throw backupConflict();
+        return backupTransaction(ticket,current,(schema,signal)-> {
+            backupCompatible(archive,schema);
+            Baseline actual=backupSnapshot(archive,schema,signal,ticket,current);
+            if(!actual.preimageSha256.equals(baseline.preimageSha256) || !actual.schemaSha256.equals(baseline.schemaSha256) ||
+                    !Arrays.equals(DatabaseBackupFormat.canonical(actual.selectedCounts),DatabaseBackupFormat.canonical(baseline.selectedCounts)))
+                throw backupConflict();
+            JSONObject data=archive.data(), incomingSchema=archive.schema(), imported=new JSONObject();
+            if("insertOnly".equals(mode)) {
+                // Fail on every collision, including identical rows. Never silently update or skip a record.
+                for(String name:archive.tables) {
+                    JSONArray rows=data.getJSONArray(name);
+                    for(int i=0;i<rows.length();i++) {
+                        check(ticket,current);
+                        try(Cursor cursor=database.rawQuery("SELECT id FROM "+table(name)+" WHERE id=?",
+                                new String[]{rows.getJSONObject(i).getString("id")},signal)) {
+                            if(cursor.moveToFirst()) throw backupConflict();
+                        }
+                    }
+                }
+            } else {
+                for(String name:archive.tables) { check(ticket,current); database.delete(table(name),null,null); }
+            }
+            for(String name:archive.tables) {
+                JSONObject columns=incomingSchema.getJSONObject(name); JSONArray rows=data.getJSONArray(name);
+                for(int i=0;i<rows.length();i++) {
+                    check(ticket,current); JSONObject value=DatabaseBackupFormat.normalizeRow(rows.getJSONObject(i),columns);
+                    ContentValues content=new ContentValues(); content.put("id",value.getString("id"));
+                    for(String column:keys(columns)) put(content,column(column),value.get(column));
+                    database.insertOrThrow(table(name),null,content);
+                }
+                imported.put(name,rows.length());
+            }
+            enforceRows(schema,signal);
+            return new JSONObject().put("version",archive.version).put("mode",mode).put("tables",new JSONArray(archive.tables))
+                    .put("counts",imported).put("committed",true);
+        });
+    }
+    private <T> T backupTransaction(long ticket,BooleanSupplier current,BackupWork<T> work) throws Exception {
+        check(ticket,current); CancellationSignal signal=new CancellationSignal(); active=signal;
+        try {
+            check(ticket,current); open(); check(ticket,current); database.beginTransaction();
+            T result; Exception primaryFailure=null;
+            try {
+                result=work.run(readSchema(signal),signal);
+                check(ticket,current); // Last authority check immediately before the irreversible commit boundary.
+                database.setTransactionSuccessful();
+            } catch(Exception failure) {
+                primaryFailure=failure; throw failure;
+            } finally {
+                try { backupTransactionEnd.end(database); }
+                catch(RuntimeException endFailure) {
+                    // SQLITE_FULL can roll back natively before Android ends its transaction. Preserve
+                    // that primary failure without treating a failed end/commit acknowledgement as success.
+                    if(primaryFailure==null) throw endFailure;
+                    if(primaryFailure!=endFailure) primaryFailure.addSuppressed(endFailure);
+                }
+            }
+            // A result is never returned until endTransaction has completed successfully.
+            return result;
+        } catch(FactoryException failure) {
+            if("QUOTA_EXCEEDED".equals(failure.code))
+                throw new FactoryException("QUOTA_EXCEEDED","Private database quota exceeded; inspect state before retrying.");
+            throw failure;
+        } catch(OperationCanceledException cancelled) {
+            throw new FactoryException("CANCELLED","Database backup operation cancelled. A prior commit is not undone.");
+        } catch(SQLiteFullException full) {
+            throw new FactoryException("QUOTA_EXCEEDED","Private database quota exceeded; inspect state before retrying.");
+        } catch(SQLiteException failure) {
+            throw new FactoryException("DATABASE_ERROR","Database backup operation failed; commit state may be unknown. Inspect state before retrying.");
+        } finally { active=null; }
+    }
+    private void backupIdentity(DatabaseBackupFormat.Archive archive) throws FactoryException {
+        if(archive==null) throw DatabaseRequest.invalid();
+        if(context!=null && !context.getPackageName().equals(archive.appId)) throw backupIdentity();
+    }
+    private static FactoryException backupIdentity() {
+        return new FactoryException("SCHEMA_MISMATCH","Database backup package is incompatible with this application.");
+    }
+    private static JSONObject backupSchema(JSONObject schema,List<String> selected) throws Exception {
+        JSONObject result=new JSONObject();
+        for(String name:selected) result.put(name,BackupJson.copy(columns(schema,name)));
+        return result;
+    }
+    private void backupCompatible(DatabaseBackupFormat.Archive archive,JSONObject schema) throws Exception {
+        if(database.getVersion()!=archive.version) throw versionConflict();
+        if(!Arrays.equals(DatabaseBackupFormat.canonical(backupSchema(schema,archive.tables)),DatabaseBackupFormat.canonical(archive.schema())))
+            throw new FactoryException("SCHEMA_MISMATCH","Selected database schemas do not match the backup.");
+    }
+    /** Streams rows into SHA-256; a valid target preimage may be larger than the archive's 1 MiB bound. */
+    private Baseline backupSnapshot(DatabaseBackupFormat.Archive archive,JSONObject schema,CancellationSignal signal,
+                                    long ticket,BooleanSupplier current) throws Exception {
+        JSONObject selectedSchema=backupSchema(schema,archive.tables), counts=new JSONObject();
+        String schemaHash=DatabaseBackupFormat.sha256(DatabaseBackupFormat.canonical(selectedSchema));
+        MessageDigest digest=MessageDigest.getInstance("SHA-256"); long total=0;
+        digest.update(("{\"databaseVersion\":"+archive.version+",\"tables\":{").getBytes(StandardCharsets.US_ASCII));
+        boolean firstTable=true;
+        for(String name:archive.tables) {
+            check(ticket,current); if(!firstTable) digest.update((byte)','); firstTable=false;
+            digest.update(DatabaseBackupFormat.canonical(name)); digest.update(":{\"columns\":".getBytes(StandardCharsets.US_ASCII));
+            JSONObject columns=selectedSchema.getJSONObject(name); digest.update(DatabaseBackupFormat.canonical(columns));
+            digest.update(",\"rows\":[".getBytes(StandardCharsets.US_ASCII)); int count=0;
+            try(Cursor cursor=database.rawQuery(selectSql(name,columns)+" ORDER BY id COLLATE BINARY ASC",null,signal)) {
+                while(cursor.moveToNext()) {
+                    check(ticket,current); if(++total>DatabaseRequest.MAX_ROWS) throw quota();
+                    JSONObject value=backupRow(cursor,columns); if(count++>0) digest.update((byte)',');
+                    digest.update(DatabaseBackupFormat.canonical(value));
+                }
+            }
+            digest.update("]}".getBytes(StandardCharsets.US_ASCII)); counts.put(name,count);
+        }
+        digest.update("}}".getBytes(StandardCharsets.US_ASCII));
+        return new Baseline(archive.sha256,DatabaseBackupFormat.hex(digest.digest()),schemaHash,counts);
+    }
+    private static JSONObject backupRow(Cursor cursor,JSONObject columns) throws Exception {
+        JSONObject value=row(cursor,columns);
+        if(DatabaseRequest.bytes(value)>DatabaseRequest.MAX_ROW_BYTES) throw quota();
+        return DatabaseBackupFormat.normalizeRow(value,columns);
+    }
+    private static FactoryException backupConflict() {
+        return new FactoryException("BACKUP_CONFLICT","Selected database rows changed or an imported ID already exists; review a fresh import plan.");
     }
     public static JSONObject cancellation() throws Exception {
         return new JSONObject().put("cancelRequested",true).put("rollbackConfirmed",false);

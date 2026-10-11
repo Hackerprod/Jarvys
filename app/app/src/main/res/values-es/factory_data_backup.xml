@@ -1,0 +1,20 @@
+<resources>
+    <string name="factory_data_backup_title">Respaldo de datos de Factory</string>
+    <string name="factory_data_backup_settings_summary">Revisar un respaldo SQLite interrumpido</string>
+    <string name="factory_data_backup_disclosure">Revisa todos los valores de abajo. Este archivo contiene datos en texto sin cifrar. Cualquier celda puede incluir secretos o información privada; no se admite la detección ni el respaldo de secretos. Las etiquetas de paquete y firmante solo indican compatibilidad, no autentican el archivo ni prueban quién lo creó. La aprobación se limita a las tablas, valores y modo exactos mostrados. El respaldo de la identidad de firma es una función separada.</string>
+    <string name="factory_data_backup_cloud_warning">El proveedor de documentos que elijas puede subir o sincronizar el archivo sin cifrar en la nube. Elige un destino adecuado para todos estos valores.</string>
+    <string name="factory_data_backup_acknowledgement">Revisé todos los valores y comprendo los riesgos del texto sin cifrar, los datos privados y el archivo sin autenticar.</string>
+    <string name="factory_data_backup_exact_plan">Operación, tablas, modo y etiquetas de compatibilidad exactos</string>
+    <string name="factory_data_backup_row_counts">Filas por tabla: filas del archivo / filas actuales del destino (importación)</string>
+    <string name="factory_data_backup_delete_warning">REEMPLAZAR TABLAS SELECCIONADAS: Se eliminarán todas las filas actuales de cada tabla seleccionada y se reemplazarán con las filas entrantes, incluso si la tabla entrante está vacía. Las demás tablas no cambian. Los recuentos actuales de arriba indican cuántas filas se eliminarán.</string>
+    <string name="factory_data_backup_archive_values">Todos los valores canónicos del archivo (los caracteres de control y dirección se muestran escapados)</string>
+    <string name="factory_data_backup_review_approve">Aprobar el plan exacto</string>
+    <string name="factory_data_backup_use">Usar este destino para esta exportación exacta</string>
+    <string name="factory_data_backup_close">Cancelar y cerrar</string>
+    <string name="factory_data_backup_recover">Cerré cualquier tarea de documentos anterior; acepto el resultado desconocido</string>
+    <string name="factory_data_backup_checking">Verificando la aplicación instalada y el archivo exacto. Espera.</string>
+    <string name="factory_data_backup_selected">Revisa el destino elegido. Se necesita otra confirmación antes de devolver su permiso temporal de escritura.</string>
+    <string name="factory_data_backup_unknown">Esta revisión se interrumpió o revocó. Su resultado es desconocido y no se repetirá. Cierra cualquier tarea de documentos anterior antes de confirmar la recuperación.</string>
+    <string name="factory_data_backup_unavailable">Esta revisión no está disponible, venció o cambió. No se puede dar una nueva aprobación.</string>
+    <string name="factory_data_backup_picker_pending">La tarea de documentos original no ha comunicado su resultado final. Cancelarla no demuestra que otra tarea se haya cerrado.</string>
+</resources>

@@ -14,11 +14,13 @@ data class FactorySpec(
     val capabilities: List<String>,
     val webDir: String,
     val icon: String,
+    val dataBackupTables: List<String> = emptyList(),
 ) {
     fun runtimeConfig(documentBroker: JSONObject? = null): ByteArray {
         val config = JSONObject().put("schemaVersion", 1).put("appId", appId)
             .put("name", name).put("entryPoint", "www/index.html")
             .put("capabilities", JSONArray(capabilities))
+        if (dataBackupTables.isNotEmpty()) config.put("dataBackup", JSONObject().put("tables", JSONArray(dataBackupTables)))
         if (documentBroker != null) config.put("documentBroker", documentBroker)
         val text = config.toString()
         FactoryConfig.parse(text, appId)
@@ -28,6 +30,7 @@ data class FactorySpec(
     fun toJson(): JSONObject = JSONObject().put("schemaVersion", 1).put("appId", appId).put("name", name)
         .put("versionCode", versionCode).put("versionName", versionName)
         .put("capabilities", JSONArray(capabilities)).put("webDir", webDir).put("icon", icon)
+        .also { if (dataBackupTables.isNotEmpty()) it.put("dataBackup", JSONObject().put("tables", JSONArray(dataBackupTables))) }
 
     companion object {
         val CAPABILITIES: List<String> = CapabilityCatalog.NAMES
@@ -38,7 +41,7 @@ data class FactorySpec(
         private val APP_ID = Regex("[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+")
         @JvmStatic fun parse(json: JSONObject): FactorySpec {
             val fields = setOf("schemaVersion", "appId", "name", "versionCode", "versionName", "capabilities", "webDir", "icon")
-            require(json.keys().asSequence().toSet() == fields) { "factory.json must contain exactly ${fields.joinToString()}" }
+            require(json.keys().asSequence().toSet().let { it == fields || it == fields + "dataBackup" }) { "factory.json requires ${fields.joinToString()} and optional dataBackup" }
             require(integer(json, "schemaVersion") == 1) { "Unsupported factory schemaVersion" }
             val appId = string(json, "appId")
             require(APP_ID.matches(appId) && appId.split('.').size in 2..16 && appId.length <= 127 && !appId.startsWith("android.") &&
@@ -57,10 +60,25 @@ data class FactorySpec(
                 value
             }
             require(caps.distinct().size == caps.size) { "Duplicate capability" }
+            val backupTables = if (json.has("dataBackup")) {
+                val policy = json.opt("dataBackup")
+                require(policy is JSONObject && policy.keys().asSequence().toSet() == setOf("tables")) { "dataBackup must contain exactly tables" }
+                val tables = policy.opt("tables")
+                require(tables is JSONArray && tables.length() <= 8) { "dataBackup.tables must be an array of at most 8 tables" }
+                val selected = (0 until tables.length()).map { index ->
+                    val table = tables.opt(index)
+                    require(table is String && table.matches(Regex("[a-z][a-z0-9_]{0,31}")) && table != "id" &&
+                        !table.startsWith("sqlite_") && !table.startsWith("factory_")) { "Invalid backup table identifier" }
+                    table
+                }
+                require(selected == selected.distinct().sorted()) { "Backup tables must be sorted and unique" }
+                require(selected.isEmpty() || ("database" in caps && "documents" in caps)) { "Data backup requires database and documents capabilities" }
+                java.util.Collections.unmodifiableList(selected)
+            } else emptyList()
             val webDir = relativePath(string(json, "webDir"))
             val icon = relativePath(string(json, "icon"))
             require(icon.endsWith(".png", true) || icon.endsWith(".json", true)) { "Icon must be PNG or vector JSON" }
-            return FactorySpec(appId, name, version, versionName, CapabilityCatalog.select(caps), webDir, icon)
+            return FactorySpec(appId, name, version, versionName, CapabilityCatalog.select(caps), webDir, icon, backupTables)
         }
         fun relativePath(value: String): String {
             require(value.isNotBlank() && value.length <= 240 && !value.startsWith('/') && '\\' !in value &&

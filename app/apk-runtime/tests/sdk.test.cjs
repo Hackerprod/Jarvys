@@ -104,8 +104,8 @@ test('native rate limit immediately rejects outstanding requests', async () => {
 test('all SDK calls exactly match the catalog and explicit native validator/dispatch cases', async () => {
   const path = require('node:path');
   const catalog = fs.readFileSync(path.join(__dirname, '../../factory-contract/src/main/java/com/jarvys/factory/contract/CapabilityCatalog.java'), 'utf8');
-  const rows = [...catalog.matchAll(/\b([A-Z][A-Z_]+)\("([a-z]+\.[a-z]+)", (?:"[a-z]+"|null)\)/g)];
-  assert.equal(rows.length, 42);
+  const rows = [...catalog.matchAll(/\b([A-Z][A-Z_]+)\("([a-z]+\.[a-zA-Z]+)", (?:"[a-z]+"|null)\)/g)];
+  assert.equal(rows.length, 44);
   const env = environment();
   const args = { 'storage.get': ['key'], 'storage.set': ['key', 'value'], 'storage.remove': ['key'],
     'export.text': [{ filename: 'test.txt', text: 'hello' }], 'share.text': [{ text: 'hello' }],
@@ -326,11 +326,11 @@ test('calendar timeout and pagehide cannot become event saving or sync confirmat
   }
 });
 
-test('database exposes exactly six frozen methods with ordinary timeouts and lossless options', async () => {
+test('database preserves its six original methods with ordinary timeouts and lossless options', async () => {
   const env = environment();
   assert.equal(Object.isFrozen(env.api.database), true);
-  assert.deepEqual(Object.keys(env.api.database), ['info', 'migrate', 'transact', 'select', 'close', 'cancel']);
-  for (const method of Object.keys(env.api.database)) {
+  assert.deepEqual(Object.keys(env.api.database), ['info', 'migrate', 'transact', 'select', 'backupExport', 'backupImport', 'close', 'cancel']);
+  for (const method of ['info', 'migrate', 'transact', 'select', 'close', 'cancel']) {
     for (const options of [undefined, {}, null, {extra: 'native exact-key validation must see this'},
       {statements: [{sql: 'SELECT ? AS value', args: ['Café 東京 😀']}]}]) {
       const pending = env.api.database[method](options);
@@ -349,7 +349,7 @@ test('database exposes exactly six frozen methods with ordinary timeouts and los
 });
 
 test('database native denials reject every method and never resolve from late success', async () => {
-  for (const method of ['info', 'migrate', 'transact', 'select', 'close', 'cancel']) {
+  for (const method of ['info', 'migrate', 'transact', 'select', 'backupExport', 'backupImport', 'close', 'cancel']) {
     for (const code of ['CAPABILITY_DENIED', 'INVALID_ARGUMENT', 'CANCELLED', 'NATIVE_ERROR']) {
       const env = environment();
       const pending = env.api.database[method]({});
@@ -365,13 +365,13 @@ test('database native denials reject every method and never resolve from late su
 });
 
 test('database timeout, pagehide, and missing bridge are terminal for every method', async () => {
-  for (const method of ['info', 'migrate', 'transact', 'select', 'close', 'cancel']) {
+  for (const method of ['info', 'migrate', 'transact', 'select', 'backupExport', 'backupImport', 'close', 'cancel']) {
     await assert.rejects(environment(false).api.database[method]({}), {code: 'BRIDGE_UNAVAILABLE'});
     for (const event of ['timeout', 'pagehide']) {
       const env = environment();
       const pending = env.api.database[method]({});
       const rejected = assert.rejects(pending, {code: event === 'timeout' ? 'TIMEOUT' : 'PAGE_CLOSED'});
-      assert.equal(env.delays.at(-1), 30000);
+      assert.equal(env.delays.at(-1), method.startsWith('backup') ? 310000 : 30000);
       if (event === 'timeout') env.timers.values().next().value(); else env.handlers.get('pagehide')();
       await rejected;
       env.reply(env.sent.at(-1), {late: true});
@@ -656,4 +656,53 @@ test('per-ID biometric control rate limit preserves auth while global rate limit
   const result = await pending;
   assert.equal(result.unit, 'rad/s');
   assert.deepEqual(Array.from(result.samples[0].values), [-1, 2, -3]);
+});
+
+test('database backups preserve exact options and allow native five minute review plus callback time', async () => {
+  for (const method of ['backupExport', 'backupImport']) {
+    const env = environment();
+    const options = method === 'backupExport'
+      ? {version: 1, tables: ['notes'], filename: 'backup.json'}
+      : {version: 1, tables: ['notes'], handle: 'a'.repeat(64), mode: 'replaceSelectedTables'};
+    const promise = env.api.database[method](options);
+    assert.equal(env.sent[0].method, 'database.' + method);
+    assert.deepEqual(env.sent[0].args, options);
+    assert.equal(env.delays[0], 310000);
+    const rejected = assert.rejects(promise, error => error.code === 'TIMEOUT' &&
+      /may have completed/.test(error.message) && /do not automatically retry/.test(error.message));
+    env.timers.values().next().value();
+    await rejected;
+    env.reply(env.sent[0], {committed: true});
+    assert.equal(env.sent.length, 1, 'timeout never retries');
+  }
+});
+
+test('database backup wrappers never silently drop malformed or extra options', async () => {
+  const env = environment();
+  for (const method of ['backupExport', 'backupImport']) for (const options of [undefined, null, {}, {tables: ['notes'], extra: 'must reach native validator'}]) {
+    const promise = env.api.database[method](options);
+    const request = env.sent.at(-1);
+    assert.deepEqual(request.args, options);
+    env.reply(request, null); await promise;
+  }
+});
+
+test('three cancellation methods retain one reserved control each beside sixteen ordinary requests', async () => {
+  const env = environment();
+  const ordinary = Array.from({length: 16}, () => env.api.runtime.info());
+  const rejected = ordinary.map(promise => assert.rejects(promise, {code: 'PAGE_CLOSED'}));
+  const controls = [];
+  for (const group of ['sensors', 'biometrics', 'database']) {
+    controls.push(env.api[group].cancel());
+    assert.equal(env.sent.at(-1).method, group + '.cancel');
+    await assert.rejects(env.api[group].cancel(), {code: 'BUSY'});
+  }
+  assert.equal(env.sent.length, 19); assert.equal(env.timers.size, 19);
+  await assert.rejects(env.api.database.backupExport({version: 1, tables: ['notes'], filename: 'backup.json'}), {code: 'BUSY'});
+  for (let index = 0; index < controls.length; index++) {
+    env.reply(env.sent[16 + index], {cancelRequested: true, rollbackConfirmed: false});
+    assert.equal((await controls[index]).rollbackConfirmed, false);
+  }
+  assert.equal(env.timers.size, 16);
+  env.handlers.get('pagehide')(); await Promise.all(rejected);
 });

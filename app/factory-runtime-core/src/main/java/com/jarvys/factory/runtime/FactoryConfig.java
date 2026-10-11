@@ -17,6 +17,7 @@ public final class FactoryConfig {
     public final String entryPoint;
     public final Set<String> capabilities;
     public final DocumentBroker documentBroker;
+    public final Set<String> dataBackupTables;
     public static final class DocumentBroker {
         public final String packageName, certificateSha256;
         private DocumentBroker(String packageName, String certificateSha256) {
@@ -25,6 +26,10 @@ public final class FactoryConfig {
     }
 
     private FactoryConfig(String appId, String name, String entryPoint, Set<String> capabilities, DocumentBroker documentBroker) {
+        this(appId, name, entryPoint, capabilities, documentBroker, Collections.emptySet());
+    }
+    private FactoryConfig(String appId, String name, String entryPoint, Set<String> capabilities, DocumentBroker documentBroker, Set<String> dataBackupTables) {
+        this.dataBackupTables = Collections.unmodifiableSet(new LinkedHashSet<>(dataBackupTables));
         this.documentBroker = documentBroker;
         this.appId = appId; this.name = name; this.entryPoint = entryPoint;
         this.capabilities = Collections.unmodifiableSet(capabilities);
@@ -37,7 +42,7 @@ public final class FactoryConfig {
     private static FactoryConfig parseInternal(String text, String installedPackage) throws FactoryException {
         try {
             JSONObject object = StrictJson.object(text, 8192);
-            exactKeys(object, "schemaVersion", "appId", "name", "entryPoint", "capabilities", "documentBroker");
+            exactKeys(object, "schemaVersion", "appId", "name", "entryPoint", "capabilities", "documentBroker", "dataBackup");
             if (!(object.get("schemaVersion") instanceof Integer) || object.getInt("schemaVersion") != 1)
                 throw new FactoryException("INVALID_CONFIG", "Unsupported application configuration version.");
             String appId = string(object, "appId");
@@ -57,6 +62,24 @@ public final class FactoryConfig {
                 if (!(value instanceof String) || !SUPPORTED.contains(value) || !capabilities.add((String) value))
                     throw new FactoryException("INVALID_CONFIG", "Unknown or duplicate application capability.");
             }
+            Set<String> backupTables = new LinkedHashSet<>();
+            if (object.has("dataBackup")) {
+                JSONObject policy = object.getJSONObject("dataBackup");
+                exactKeys(policy, "tables");
+                JSONArray tables = policy.getJSONArray("tables");
+                if (tables.length() > 8) throw new FactoryException("INVALID_CONFIG", "Too many backup tables.");
+                String previous = null;
+                for (int i = 0; i < tables.length(); i++) {
+                    Object raw = tables.get(i);
+                    if (!(raw instanceof String)) throw new FactoryException("INVALID_CONFIG", "Backup table identifiers must be strings.");
+                    String table = DatabaseRequest.identifier((String) raw);
+                    if (previous != null && previous.compareTo(table) >= 0)
+                        throw new FactoryException("INVALID_CONFIG", "Backup table identifiers must be sorted and unique.");
+                    backupTables.add(table); previous = table;
+                }
+                if (!backupTables.isEmpty() && (!capabilities.contains("database") || !capabilities.contains("documents")))
+                    throw new FactoryException("INVALID_CONFIG", "Data backup requires database and documents capabilities.");
+            }
             DocumentBroker broker = null;
             if (object.has("documentBroker")) {
                 if (!capabilities.contains("documents") && !capabilities.contains("browser") && !capabilities.contains("maps") && !capabilities.contains("phone") && !capabilities.contains("email") && !capabilities.contains("sms") && !capabilities.contains("contacts") && !capabilities.contains("calendar")) throw new FactoryException("INVALID_CONFIG", "Host broker requires documents, browser, maps, phone, email, sms, contacts or calendar capability.");
@@ -69,7 +92,7 @@ public final class FactoryConfig {
             }
             if (installedPackage != null && (capabilities.contains("documents") || capabilities.contains("browser") || capabilities.contains("maps") || capabilities.contains("phone") || capabilities.contains("email") || capabilities.contains("sms") || capabilities.contains("contacts") || capabilities.contains("calendar")) && broker == null)
                 throw new FactoryException("INVALID_CONFIG", "Documents, browser, maps, phone, email, sms, contacts or calendar requires a pinned compatible Jarvys broker.");
-            return new FactoryConfig(appId, name, entry, capabilities, broker);
+            return new FactoryConfig(appId, name, entry, capabilities, broker, backupTables);
         } catch (JSONException e) {
             throw new FactoryException("INVALID_CONFIG", "Invalid application configuration.");
         }

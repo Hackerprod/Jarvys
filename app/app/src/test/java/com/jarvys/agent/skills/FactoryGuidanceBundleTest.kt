@@ -19,7 +19,7 @@ class FactoryGuidanceBundleTest {
     }
     @Test fun foregroundSensorsExtendTheVersionedCatalogWithoutChangingOriginalBudgets() {
         val bundle = load()
-        assertEquals("factory-guidance-v82", bundle.version)
+        assertEquals("factory-guidance-v83", bundle.version)
         assertEquals(listOf("basics", "documents-media", "external-actions", "contacts-calendar",
             "database", "presentation", "lifecycle", "sensors", "biometrics", "local-ui"), FactoryGuidanceBundle.NAMES)
         assertEquals(10, bundle.resources.size)
@@ -27,7 +27,7 @@ class FactoryGuidanceBundleTest {
         assertEquals(16384, FactoryGuidanceBundle.MAX_RESOURCE_BYTES)
         assertEquals(65536, FactoryGuidanceBundle.MAX_TOTAL_BYTES)
         assertTrue("Keep headroom below the complete core limit", core().toByteArray().size <= 7680)
-        assertTrue(core().contains("20 capabilities / 42 methods"))
+        assertTrue(core().contains("20 capabilities / 44 methods"))
         assertTrue(core().contains("- sensors:"))
         val sensors = bundle.resources.getValue("sensors")
         for (required in listOf("sensors.list()", "sensors.capture({kind,durationMs,intervalMs,maxSamples})",
@@ -66,7 +66,7 @@ class FactoryGuidanceBundleTest {
         assertThrows(IllegalArgumentException::class.java) { load { path, bytes -> if (path.endsWith("database.md")) ByteArray(16385) { 65 } else bytes } }
         assertThrows(IllegalArgumentException::class.java) { load { path, bytes -> if (path.endsWith("database.md")) byteArrayOf(0xc3.toByte()) else bytes } }
         assertThrows(java.io.IOException::class.java) { FactoryGuidanceBundle.load(core()) { throw java.io.IOException("missing") } }
-        assertThrows(IllegalArgumentException::class.java) { FactoryGuidanceBundle.load(core().replace("factory-guidance-v82", "factory-guidance-v77")) { File(root, it).inputStream() } }
+        assertThrows(IllegalArgumentException::class.java) { FactoryGuidanceBundle.load(core().replace("factory-guidance-v83", "factory-guidance-v77")) { File(root, it).inputStream() } }
         assertThrows(IllegalArgumentException::class.java) { FactoryGuidanceBundle.load(core() + "x".repeat(8192)) { File(root, it).inputStream() } }
     }
     @Test fun exactResourceBudgetWorksButAggregateBudgetCannotBeBypassedWithValidHashes() {
@@ -109,10 +109,25 @@ class FactoryGuidanceBundleTest {
 
     @Test fun unknownOrMissingManifestEntriesAndVersionMismatchAreRejected() {
         for (mutate in listOf<(String) -> String>(
-            { it.replace("factory-guidance-v82", "stale") },
+            { it.replace("factory-guidance-v83", "stale") },
             { it.replace("\"basics\":", "\"../basics\":") },
             { it.replace("\"version\":", "\"unknown\":") })) {
             assertThrows(Exception::class.java) { load { path, bytes -> if (path.endsWith("manifest.json")) mutate(bytes.toString(Charsets.UTF_8)).toByteArray() else bytes } }
         }
     }
+    @Test fun selectedDataBackupDocumentsDefaultDenialHumanReviewAndUncertainOutcomes() {
+        val bundle = load()
+        val database = bundle.resources.getValue("database")
+        val documents = bundle.resources.getValue("documents-media")
+        for (required in listOf("database.backupExport", "database.backupImport", "dataBackup", "default", "insertOnly", "replaceSelectedTables",
+            "1 MiB", "plaintext", "not authentication", "Secrets", "all values", "cloud-sync", "providerCommitConfirmed:false",
+            "partial file", "unselected", "conflict", "No migration", "310000", "UNAVAILABLE", "never automatically retry")) {
+            assertTrue("Missing backup contract: $required", database.contains(required, true))
+        }
+        assertTrue(documents.contains("default empty disables"))
+        assertTrue(documents.contains("untouched read handle"))
+        assertTrue(core().contains("20 capabilities / 44 methods"))
+        assertTrue(core().contains("dataBackup.tables defaults empty"))
+    }
+
 }

@@ -61,6 +61,11 @@ public final class BridgeProtocol {
                 case SENSORS_LIST:
                 case PRESENTATION_GET: case PRESENTATION_RESET: FactoryConfig.exactKeys(args); break;
                 case PRESENTATION_SET: FactoryPresentation.parse(args); break;
+                case DATABASE_BACKUP_EXPORT: case DATABASE_BACKUP_IMPORT:
+                    DatabaseBackupRequest.validate(method, args);
+                    if (!config.capabilities.contains("documents"))
+                        throw new FactoryException("CAPABILITY_DENIED", "Database backup also requires documents capability.");
+                    break;
                 case DATABASE_INFO: case DATABASE_MIGRATE: case DATABASE_TRANSACT: case DATABASE_SELECT: case DATABASE_CLOSE: case DATABASE_CANCEL:
                     DatabaseRequest.validate(method,args); break;
                 case RUNTIME_INFO: FactoryConfig.exactKeys(args); break;

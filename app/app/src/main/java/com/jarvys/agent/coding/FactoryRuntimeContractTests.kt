@@ -27,7 +27,7 @@ internal object FactoryRuntimeContractTests {
             FactoryDispatcher.Database { method, args -> database.execute(method, args, database.ticket()) { validate(); true } })
         try {
             val ordered = listOf("runtime.info", "storage.set", "storage.get", "storage.list", "storage.remove", "export.text", "share.text", "share.file", "clipboard.write", "haptics.perform", "device.info",
-                "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture", "audio.play", "browser.open", "maps.open", "phone.dial", "email.compose", "sms.compose", "contacts.pick", "calendar.insert", "database.info", "database.migrate", "database.transact", "database.select", "database.close", "database.cancel", "presentation.get", "presentation.set", "presentation.reset", "sensors.list", "sensors.capture", "sensors.cancel", "biometrics.availability", "biometrics.authenticate", "biometrics.cancel")
+                "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture", "audio.play", "browser.open", "maps.open", "phone.dial", "email.compose", "sms.compose", "contacts.pick", "calendar.insert", "database.info", "database.migrate", "database.transact", "database.select", "database.backupExport", "database.backupImport", "database.close", "database.cancel", "presentation.get", "presentation.set", "presentation.reset", "sensors.list", "sensors.capture", "sensors.cancel", "biometrics.availability", "biometrics.authenticate", "biometrics.cancel")
             check(ordered.toSet() == CapabilityCatalog.METHODS.keys) { "Synthetic contract cases must cover the compiled catalog" }
             for (method in ordered) {
                 val args = when (method) {
@@ -36,6 +36,8 @@ internal object FactoryRuntimeContractTests {
                     "presentation.set" -> JSONObject().put("theme", "dark").put("orientation", "portrait")
                     "database.migrate" -> JSONObject("""{"fromVersion":0,"toVersion":1,"steps":[{"kind":"createTable","table":"notes","columns":{"text":{"type":"text","nullable":false}}}]}""")
                     "database.transact" -> JSONObject("""{"version":1,"operations":[{"kind":"insert","table":"notes","id":"one","values":{"text":"synthetic"}}]}""")
+                    "database.backupExport" -> JSONObject().put("version", 1).put("tables", JSONArray(listOf("notes"))).put("filename", "backup.json")
+                    "database.backupImport" -> JSONObject().put("version", 1).put("tables", JSONArray(listOf("notes"))).put("handle", "0".repeat(64)).put("mode", "insertOnly")
                     "database.select" -> JSONObject("""{"version":1,"table":"notes"}""")
                     "email.compose" -> JSONObject().put("to", "fixture@example.invalid").put("subject", "Fixture").put("body", "Body")
                     "calendar.insert" -> JSONObject().put("title", "Synthetic calendar fixture").put("location", "").put("description", "").put("startTimeMillis", 0L).put("endTimeMillis", 3600000L).put("timeZone", "UTC").put("allDay", false)
@@ -58,11 +60,11 @@ internal object FactoryRuntimeContractTests {
                     else -> JSONObject()
                 }
                 val capability = CapabilityCatalog.METHODS.getValue(method).capability
-                if (capability != null && (capability !in config.capabilities || ((method == "share.file" || (capability == "photos" || capability == "audio")) && "documents" !in config.capabilities))) {
+                if (capability != null && (capability !in config.capabilities || ((method == "share.file" || method == "database.backupExport" || method == "database.backupImport" || (capability == "photos" || capability == "audio")) && "documents" !in config.capabilities))) {
                     assertion("$method:undeclared_denied") {
                         try { dispatch(method, args); false } catch (failure: FactoryException) { failure.code == "CAPABILITY_DENIED" }
                     }
-                } else if (capability == "biometrics" || capability == "sensors" || capability == "presentation" || capability == "maps" || capability == "phone" || capability == "email" || capability == "sms" || capability == "contacts" || capability == "calendar" || capability == "browser" || capability == "documents" || (capability == "photos" || capability == "audio") || method == "share.file") {
+                } else if (capability == "biometrics" || capability == "sensors" || capability == "presentation" || capability == "maps" || capability == "phone" || capability == "email" || capability == "sms" || capability == "contacts" || capability == "calendar" || capability == "browser" || capability == "documents" || (capability == "photos" || capability == "audio") || method == "share.file" || method == "database.backupExport" || method == "database.backupImport") {
                     assertion("$method:preview_unavailable") {
                         try { dispatch(method, args); false } catch (failure: FactoryException) { failure.code == "UNAVAILABLE" }
                     }

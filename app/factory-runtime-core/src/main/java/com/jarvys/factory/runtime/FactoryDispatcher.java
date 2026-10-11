@@ -53,13 +53,24 @@ public final class FactoryDispatcher {
         // Preserve sensor integer types before defensive JSON serialization.
         if(request.operation==CapabilityCatalog.Method.SENSORS_CAPTURE) SensorCapture.Request.parse(request.args);
         // Preserve database numeric types before the defensive envelope serialization.
-        if ("database".equals(request.operation.capability)) DatabaseRequest.validate(request.method,request.args);
+        boolean backup = request.operation == CapabilityCatalog.Method.DATABASE_BACKUP_EXPORT ||
+                request.operation == CapabilityCatalog.Method.DATABASE_BACKUP_IMPORT;
+        if (backup) DatabaseBackupRequest.validate(request.method, request.args);
+        else if ("database".equals(request.operation.capability)) DatabaseRequest.validate(request.method,request.args);
         // Preserve integer types before the defensive envelope serialization.
         if (request.operation == CapabilityCatalog.Method.CALENDAR_INSERT) ExternalLaunchRequest.parseCalendar(request.args);
         // Defense in depth for callers outside the WebView bridge, using the exact same validator.
         BridgeProtocol.validate(BridgeProtocol.ORIGIN, true,
                 new JSONObject().put("v", 1).put("id", request.id).put("method", request.method).put("args", request.args).toString(), config);
         switch (request.operation) {
+            case DATABASE_BACKUP_EXPORT: case DATABASE_BACKUP_IMPORT:
+                if ("preview".equals(metadata.mode())) throw new FactoryException("UNAVAILABLE", "Database backups require an installed generated app, current exact signed receipt and matching human-only Jarvys broker.");
+                JSONArray tables = request.args.getJSONArray("tables");
+                for (int index = 0; index < tables.length(); index++)
+                    if (!config.dataBackupTables.contains(tables.getString(index)))
+                        throw new FactoryException("BACKUP_DENIED", "Selected table is not declared for data backup.");
+                if (database == null) throw new FactoryException("UNAVAILABLE", "A private native database backup session is required.");
+                return database.perform(request.method, request.args);
             case DATABASE_INFO: case DATABASE_MIGRATE: case DATABASE_TRANSACT: case DATABASE_SELECT: case DATABASE_CLOSE: case DATABASE_CANCEL:
                 if(database==null) throw new FactoryException("UNAVAILABLE","A private native database session is required.");
                 return database.perform(request.method,request.args);
@@ -78,7 +89,7 @@ public final class FactoryDispatcher {
                         .put("unavailableCapabilities", new JSONArray("preview".equals(metadata.mode())
                                 ? java.util.Arrays.asList("documents", "photos", "audio", "browser", "maps", "phone", "email", "sms", "contacts", "calendar", "presentation", "sensors", "biometrics") : java.util.Collections.emptyList()))
                         .put("unavailableMethods", new JSONArray("preview".equals(metadata.mode())
-                                ? java.util.Arrays.asList("share.file", "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture", "audio.play", "browser.open", "maps.open", "phone.dial", "email.compose", "sms.compose", "contacts.pick", "calendar.insert", "presentation.get", "presentation.set", "presentation.reset", "sensors.list", "sensors.capture", "sensors.cancel", "biometrics.availability", "biometrics.authenticate", "biometrics.cancel")
+                                ? java.util.Arrays.asList("share.file", "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture", "audio.play", "browser.open", "maps.open", "phone.dial", "email.compose", "sms.compose", "contacts.pick", "calendar.insert", "presentation.get", "presentation.set", "presentation.reset", "sensors.list", "sensors.capture", "sensors.cancel", "biometrics.availability", "biometrics.authenticate", "biometrics.cancel", "database.backupExport", "database.backupImport")
                                 : java.util.Collections.emptyList()))
                         .put("biometricsProtocolVersion", 1).put("biometricsBrokerRequired", false)
                         .put("biometricsRequires", new JSONArray(java.util.Collections.singletonList("biometrics")))
@@ -97,6 +108,13 @@ public final class FactoryDispatcher {
                         .put("databaseProtocolVersion", 1).put("databaseBrokerRequired", false)
                         .put("databasePersistent", !"preview".equals(metadata.mode()))
                         .put("databaseRequires", new JSONArray(java.util.Collections.singletonList("database")))
+                        .put("databaseBackupProtocolVersion", 1).put("databaseBackupBrokerRequired", true)
+                        .put("databaseBackupRequires", new JSONArray(java.util.Arrays.asList("database", "documents")))
+                        .put("databaseBackupTables", new JSONArray(config.dataBackupTables))
+                        .put("databaseBackupFormat", "jarvys-sqlite-data").put("databaseBackupPlaintext", true)
+                        .put("databaseBackupCurrentSignedReceiptRequired", true)
+                        .put("databaseBackupModes", new JSONArray(java.util.Arrays.asList("insertOnly", "replaceSelectedTables")))
+                        .put("databaseBackupExactSchemaRequired", true).put("databaseBackupProviderDurabilityConfirmed", false)
                         .put("contactPickProtocolVersion", 1)
                         .put("contactsRequires", new JSONArray(java.util.Collections.singletonList("contacts")))
                         .put("contactsBrokerRequired", true)
@@ -161,6 +179,9 @@ public final class FactoryDispatcher {
                                 .put("mapsQueryCodePoints", com.jarvys.factory.contract.ExternalLaunchSpec.MAX_QUERY_CODE_POINTS)
                                 .put("mapsQueryBytes", com.jarvys.factory.contract.ExternalLaunchSpec.MAX_QUERY_BYTES)
                                 .put("phoneDigits", com.jarvys.factory.contract.ExternalLaunchSpec.MAX_PHONE_DIGITS)
+                                .put("databaseBackupArgumentBytes", DatabaseBackupRequest.MAX_ARGUMENT_BYTES)
+                                .put("databaseBackupBytes", 1024 * 1024).put("databaseBackupTables", 8)
+                                .put("databaseBackupLifetimeMs", 300000)
                                 .put("documentChunkBytes", 32768).put("documentBytes", 16 * 1024 * 1024)
                                 .put("documentSessionBytes", 32 * 1024 * 1024).put("documentHandles", 4)
                                 .put("fileShareBytes", 8 * 1024 * 1024).put("fileShareLifetimeMs", 300000)

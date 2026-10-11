@@ -31,6 +31,7 @@ public final class CapabilityCatalog {
         EMAIL_COMPOSE("email.compose", "email"), SMS_COMPOSE("sms.compose", "sms"), CONTACTS_PICK("contacts.pick", "contacts"), CALENDAR_INSERT("calendar.insert", "calendar"),
         DATABASE_INFO("database.info", "database"), DATABASE_MIGRATE("database.migrate", "database"),
         DATABASE_TRANSACT("database.transact", "database"), DATABASE_SELECT("database.select", "database"),
+        DATABASE_BACKUP_EXPORT("database.backupExport", "database"), DATABASE_BACKUP_IMPORT("database.backupImport", "database"),
         DATABASE_CLOSE("database.close", "database"), DATABASE_CANCEL("database.cancel", "database"),
         PRESENTATION_GET("presentation.get", "presentation"), PRESENTATION_SET("presentation.set", "presentation"),
         PRESENTATION_RESET("presentation.reset", "presentation"),
