@@ -187,10 +187,48 @@ class MemoryNavigationComposeTest {
         val undoNodes = compose.onAllNodesWithText(undoLabel).fetchSemanticsNodes().size
         val undoClicked = confirmDialogAction(undoLabel)
         awaitMemoryMutationReturn(nav, store, path, first, "undo", undoNodes, undoClicked)
-        scrollHomeToFiles()
+        val home = compose.onNodeWithTag("memory-home-list")
+        var restartSearch = true
         compose.waitUntil(5_000) {
-            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
-            runCatching { compose.onNodeWithText("Before undo").assertIsDisplayed() }.isSuccess
+            shadowOf(Looper.getMainLooper()).idle()
+            if (compose.onAllNodesWithTag("memory-home-list").fetchSemanticsNodes().size != 1) {
+                return@waitUntil false
+            }
+            // A loading/reloaded LazyColumn need not put this file at a fixed index.
+            // One real scroll per search step; never call Compose's unbounded scroll-to-node loop.
+            if (restartSearch) {
+                home.performScrollToIndex(0)
+                compose.mainClock.advanceTimeByFrame()
+                settleNativeFrames()
+                restartSearch = false
+                return@waitUntil false
+            }
+            if (compose.onAllNodesWithText("Before undo").fetchSemanticsNodes().size == 1) {
+                val scrolled = compose.onNodeWithText("Before undo").scrollDiscoveredNodeIntoView {
+                    val current = compose.onAllNodesWithText("Before undo").fetchSemanticsNodes()
+                    assertTrue("Restored memory title must be unique", current.size <= 1)
+                    current.singleOrNull()
+                }
+                if (scrolled == null) return@waitUntil false
+                return@waitUntil runCatching {
+                    compose.onNodeWithText("Before undo").assertIsDisplayed()
+                }.isSuccess
+            }
+            val node = home.fetchSemanticsNode()
+            val axis = node.config[SemanticsProperties.VerticalScrollAxisRange]
+            val before = axis.value()
+            assertFalse("Memory fixture expects normal vertical scrolling", axis.reverseScrolling)
+            if (before >= axis.maxValue()) {
+                // Reload may finish after reaching the end of the old list.
+                restartSearch = true
+            } else {
+                val delta = node.boundsInRoot.height * 0.8f
+                assertTrue("Memory home has no scroll viewport: ${node.boundsInRoot}", delta >= 1f)
+                scrollByAndSettle(node, delta)
+                val after = home.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()
+                assertTrue("Memory home made no scroll progress: before=$before after=$after delta=$delta", after != before)
+            }
+            false
         }
         compose.onNodeWithText("Before undo").assertIsDisplayed()
         compose.onAllNodesWithText("After undo").assertCountEquals(0)
@@ -577,8 +615,16 @@ class MemoryNavigationComposeTest {
      */
     private fun SemanticsNodeInteraction.scrollIntoView(): SemanticsNodeInteraction {
         awaitNode(this)
+        // Existing callers still fail immediately if a discovered node disappears.
+        return requireNotNull(scrollDiscoveredNodeIntoView { fetchSemanticsNode() }).assertIsDisplayed()
+    }
+
+    /** No explicit wait: null means the already-discovered node disappeared during a reload. */
+    private fun SemanticsNodeInteraction.scrollDiscoveredNodeIntoView(
+        nodeIfPresent: () -> SemanticsNode?,
+    ): SemanticsNodeInteraction? {
         repeat(3) { correction ->
-            val node = fetchSemanticsNode()
+            val node = nodeIfPresent() ?: return null
             val scroller = scrollParent(node)
             val viewport = scroller.boundsInRoot
             val top = node.positionInRoot.y
@@ -586,7 +632,7 @@ class MemoryNavigationComposeTest {
             val left = node.positionInRoot.x
             val right = left + node.size.width
             if (top >= viewport.top - 1f && bottom <= viewport.bottom + 1f &&
-                left >= viewport.left - 1f && right <= viewport.right + 1f) return assertIsDisplayed()
+                left >= viewport.left - 1f && right <= viewport.right + 1f) return this
             assertTrue("Memory control is taller than its scroll viewport: ${node.size} / $viewport",
                 node.size.height <= viewport.height + 1f)
             val axis = scroller.config[SemanticsProperties.VerticalScrollAxisRange]
@@ -599,12 +645,12 @@ class MemoryNavigationComposeTest {
             assertTrue("Memory scroll cannot advance: pass=$correction axis=$before/${axis.maxValue()} " +
                 "target=($left,$top,$right,$bottom) viewport=$viewport", abs(delta) >= 0.5f)
             scrollByAndSettle(scroller, delta)
-            val updated = fetchSemanticsNode()
+            val updated = nodeIfPresent() ?: return null
             val after = scrollParent(updated).config[SemanticsProperties.VerticalScrollAxisRange].value()
             assertTrue("Memory scroll made no progress: pass=$correction before=$before after=$after " +
                 "delta=$delta targetTop=${updated.positionInRoot.y}", after != before)
         }
-        val node = fetchSemanticsNode()
+        val node = nodeIfPresent() ?: return null
         val viewport = scrollParent(node).boundsInRoot
         assertTrue("Memory control remained clipped after three measured corrections: " +
             "position=${node.positionInRoot} size=${node.size} viewport=$viewport",
@@ -612,7 +658,7 @@ class MemoryNavigationComposeTest {
                 node.positionInRoot.y + node.size.height <= viewport.bottom + 1f &&
                 node.positionInRoot.x >= viewport.left - 1f &&
                 node.positionInRoot.x + node.size.width <= viewport.right + 1f)
-        return assertIsDisplayed()
+        return this
     }
 
     /** Page the actual lazy list with a bounded, progress-checked action per page. */
