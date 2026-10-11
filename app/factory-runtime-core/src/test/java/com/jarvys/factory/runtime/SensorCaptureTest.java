@@ -52,7 +52,7 @@ public class SensorCaptureTest {
             }
             JSONObject missing=args("light",100,100,1);missing.remove(key);assertThrows(Exception.class,()->SensorCapture.Request.parse(missing));
         }
-        for(String kind:new String[]{"gyroscope","magnetometer","step-counter","LIGHT",""})assertThrows(Exception.class,()->SensorCapture.Request.parse(args(kind,100,100,1)));
+        for(String kind:new String[]{"gyroscope_uncalibrated","magnetometer","step-counter","LIGHT",""})assertThrows(Exception.class,()->SensorCapture.Request.parse(args(kind,100,100,1)));
         for(String extra:new String[]{"frequencyHz","sensorId","background","persist","vendor"})assertThrows(Exception.class,()->SensorCapture.Request.parse(args("light",100,100,1).put(extra,true)));
         assertThrows(Exception.class,()->SensorCapture.Request.parse(args("light",5001,100,1)));
         assertThrows(Exception.class,()->SensorCapture.Request.parse(args("light",100,1001,1)));
@@ -61,8 +61,8 @@ public class SensorCaptureTest {
     }
     @Test public void inventoryExposesOnlyBoundedKindUnitsFrameAndAvailability()throws Exception{
         JSONObject result=capture.list();assertEquals(new HashSet<>(Arrays.asList("sensors","mode")),keys(result));
-        JSONArray sensors=result.getJSONArray("sensors");assertEquals(2,sensors.length());
-        for(int i=0;i<2;i++)assertEquals(new HashSet<>(Arrays.asList("kind","unit","frame","available")),keys(sensors.getJSONObject(i)));
+        JSONArray sensors=result.getJSONArray("sensors");assertEquals(3,sensors.length());
+        for(int i=0;i<3;i++)assertEquals(new HashSet<>(Arrays.asList("kind","unit","frame","available")),keys(sensors.getJSONObject(i)));
         assertEquals("lux",sensors.getJSONObject(0).getString("unit"));assertEquals("scalar",sensors.getJSONObject(0).getString("frame"));
         assertEquals("m/s2",sensors.getJSONObject(1).getString("unit"));assertEquals("device-natural",sensors.getJSONObject(1).getString("frame"));
         driver.available=false;assertFalse(capture.list().getJSONArray("sensors").getJSONObject(0).getBoolean("available"));
@@ -136,6 +136,62 @@ public class SensorCaptureTest {
         event.sensor=light;event.values[0]=42;listener.onSensorChanged(event);assertEquals(1,calls[0]);assertEquals(123456789L,timestamp[0]);assertEquals(42,values[0][0],0);
         adapter.unregister();assertFalse(shadow.hasListener(listener));assertTrue(shadow.getListeners().isEmpty());adapter.unregister();
         shadow.setForceListenersToFail(true);assertFalse(adapter.register("light",100000,(time,eventValues)->{}));adapter.unregister();assertTrue(shadow.getListeners().isEmpty());
+    }
+
+    @Test public void gyroscopeUsesAngularVelocityNaturalAxesAndCopiesExactlyThreeValues()throws Exception{
+        Result r=start("gyroscope",5000,100,2);float[] mutable={-1,2,-3,999};driver.events.sample(now,mutable);mutable[0]=99;
+        advance(100);emit(4,-5,6);assertEquals("gyroscope",driver.kind);assertEquals(100000,driver.intervalUs);
+        assertEquals("gyroscope",r.value.getString("kind"));assertEquals("rad/s",r.value.getString("unit"));assertEquals("device-natural",r.value.getString("frame"));
+        assertFalse(r.value.getBoolean("includesGravity"));assertFalse(r.value.getBoolean("simulated"));assertEquals("installed",r.value.getString("mode"));
+        assertEquals(2,r.samples().length());assertEquals(3,r.samples().getJSONObject(0).getJSONArray("values").length());
+        assertEquals(-1,r.samples().getJSONObject(0).getJSONArray("values").getDouble(0),0);assertEquals(-3,r.samples().getJSONObject(0).getJSONArray("values").getDouble(2),0);
+        assertEquals("sample_limit",r.value.getString("reason"));assertEquals(1,driver.unregisters);
+        JSONObject inventory=capture.list().getJSONArray("sensors").getJSONObject(2);assertEquals("gyroscope",inventory.getString("kind"));assertEquals("rad/s",inventory.getString("unit"));assertEquals("device-natural",inventory.getString("frame"));
+    }
+    @Test public void gyroscopeRejectsNonfiniteShortNullAndStaleSamples()throws Exception{
+        Result r=start("gyroscope",1000,100,50);driver.events.sample(now-1,new float[]{1,2,3});driver.events.sample(now+1,new float[]{1,2,3});
+        driver.events.sample(now,null);emit(1,2);advance(100);emit(Float.NaN,2,3);advance(100);emit(1,Float.POSITIVE_INFINITY,3);advance(100);emit(1,2,Float.NEGATIVE_INFINITY);
+        advance(100);emit(-1,-2,-3);advance(100);driver.events.sample(now-100000000L,new float[]{4,5,6});advance(500);
+        assertEquals(1,r.samples().length());assertEquals(400,r.samples().getJSONObject(0).getLong("elapsedMs"));assertEquals("duration",r.value.getString("reason"));
+    }
+    @Test public void gyroscopeFiftyFiniteSamplesRespectFullResultByteQuota()throws Exception{
+        Result r=start("gyroscope",5000,100,50);for(int i=0;i<50;i++){if(i>0)advance(100);emit(Float.MAX_VALUE,-Float.MAX_VALUE,Float.MIN_VALUE);}
+        assertEquals(50,r.samples().length());assertTrue(r.value.toString().getBytes(StandardCharsets.UTF_8).length<=16384);assertEquals(1,driver.unregisters);
+    }
+    @Test public void gyroscopeSharesRateBudgetWithBothOlderKindsAndAcrossCancel()throws Exception{
+        Result light=start("light",1000,100,1);emit(1);assertEquals(1,light.replies);
+        Result gyro=start("gyroscope",1000,100,1);emit(1,2,3);advance(99);emit(1,2,3);assertEquals(0,gyro.replies);advance(1);emit(1,2,3);assertEquals(1,gyro.replies);
+        Result accel=start("accelerometer",1000,100,1);emit(1,2,3);assertEquals(0,accel.replies);capture.cancel();
+        Result next=start("gyroscope",1000,100,1);emit(1,2,3);assertEquals(0,next.replies);advance(100);emit(1,2,3);assertEquals(1,next.replies);
+    }
+    @Test public void gyroscopeMissingHardwareAndRegistrationFailuresFailClosed()throws Exception{
+        driver.available=false;assertEquals("UNAVAILABLE",assertThrows(FactoryException.class,()->start("gyroscope",500,100,1)).code);assertEquals(0,driver.registrations);
+        assertFalse(capture.list().getJSONArray("sensors").getJSONObject(2).getBoolean("available"));driver.available=true;driver.registered=false;
+        Result denied=start("gyroscope",500,100,1);assertEquals("UNAVAILABLE",denied.error);assertEquals(1,driver.unregisters);
+        driver.throwRegister=true;Result failed=start("gyroscope",500,100,1);assertEquals("UNAVAILABLE",failed.error);assertEquals(2,driver.unregisters);
+    }
+    @Test public void gyroscopeCancelAndAuthorityRevokeDiscardDataAndRejectStaleCallbacks()throws Exception{
+        Result first=start("gyroscope",5000,100,50);emit(1,2,3);SensorCapture.Events stale=driver.events;assertTrue(capture.cancel());assertEquals("CANCELLED",first.error);assertNull(first.value);
+        advance(100);Result second=start("gyroscope",5000,100,50);stale.sample(now,new float[]{99,99,99});emit(4,5,6);active=false;advance(100);assertEquals("CANCELLED",second.error);assertNull(second.value);
+        active=true;advance(5000);assertEquals(2,driver.registrations);assertEquals(2,driver.unregisters);assertEquals(1,first.replies);assertEquals(1,second.replies);
+    }
+    @Test public void gyroscopeCleanupFailureDiscardsSuccessAndDisablesEveryKind()throws Exception{
+        driver.throwUnregister=true;Result r=start("gyroscope",500,100,1);emit(1,2,3);assertNull(r.value);assertEquals("UNAVAILABLE",r.error);
+        driver.throwUnregister=false;for(String kind:new String[]{"light","accelerometer","gyroscope"})assertEquals("UNAVAILABLE",assertThrows(FactoryException.class,()->start(kind,500,100,1)).code);
+        assertEquals("UNAVAILABLE",assertThrows(FactoryException.class,()->capture.cancellation()).code);assertEquals("UNAVAILABLE",assertThrows(FactoryException.class,()->capture.list()).code);assertEquals(1,driver.registrations);
+    }
+    @Test public void androidGyroscopeAdapterSelectsCalibratedTypeOnlyAndFiltersOtherEvents()throws Exception{
+        android.content.Context context=RuntimeEnvironment.getApplication();android.hardware.SensorManager manager=(android.hardware.SensorManager)context.getSystemService(android.content.Context.SENSOR_SERVICE);
+        org.robolectric.shadows.ShadowSensorManager shadow=Shadows.shadowOf(manager);SensorCapture.Driver adapter=SensorCapture.android(context,new Handler(Looper.getMainLooper()));
+        assertFalse(adapter.available("gyroscope"));
+        android.hardware.Sensor uncalibrated=org.robolectric.shadows.ShadowSensor.newInstance(android.hardware.Sensor.TYPE_GYROSCOPE_UNCALIBRATED);shadow.addSensor(uncalibrated);assertFalse(adapter.available("gyroscope"));
+        assertFalse(adapter.register("gyroscope",100000,(time,values)->{}));adapter.unregister();assertTrue(shadow.getListeners().isEmpty());
+        android.hardware.Sensor gyro=org.robolectric.shadows.ShadowSensor.newInstance(android.hardware.Sensor.TYPE_GYROSCOPE);shadow.addSensor(gyro);assertTrue(adapter.available("gyroscope"));
+        final int[] calls={0};final float[][] received={null};assertTrue(adapter.register("gyroscope",100000,(time,values)->{calls[0]++;received[0]=values.clone();}));
+        android.hardware.SensorEventListener listener=shadow.getListeners().get(0);assertTrue(shadow.hasListener(listener,gyro));assertFalse(shadow.hasListener(listener,uncalibrated));
+        android.hardware.SensorEvent event=org.robolectric.shadows.ShadowSensorManager.createSensorEvent(3);event.sensor=uncalibrated;listener.onSensorChanged(event);assertEquals(0,calls[0]);
+        event.sensor=gyro;event.values[0]=-1;event.values[1]=2;event.values[2]=-3;listener.onSensorChanged(event);assertEquals(1,calls[0]);assertArrayEquals(new float[]{-1,2,-3},received[0],0);
+        adapter.unregister();assertTrue(shadow.getListeners().isEmpty());
     }
 
 }

@@ -21,7 +21,7 @@ public final class SensorCapture {
         public static Request parse(JSONObject args) throws Exception {
             FactoryConfig.exactKeys(args,"kind","durationMs","intervalMs","maxSamples");
             String kind=FactoryConfig.string(args,"kind");
-            if(!kind.equals("light")&&!kind.equals("accelerometer")) throw new FactoryException("INVALID_ARGUMENT","Unsupported sensor kind.");
+            if(!kind.equals("light")&&!kind.equals("accelerometer")&&!kind.equals("gyroscope")) throw new FactoryException("INVALID_ARGUMENT","Unsupported sensor kind.");
             return new Request(kind,integer(args,"durationMs",100,MAX_DURATION_MS),integer(args,"intervalMs",MIN_INTERVAL_MS,1000),integer(args,"maxSamples",1,MAX_SAMPLES));
         }
         private static int integer(JSONObject args,String key,int min,int max)throws Exception {
@@ -45,7 +45,7 @@ public final class SensorCapture {
         final SensorManager manager=(SensorManager)context.getSystemService(Context.SENSOR_SERVICE);
         return new Driver() {
             SensorEventListener listener;
-            private Sensor sensor(String kind) { return manager==null?null:manager.getDefaultSensor(kind.equals("light")?Sensor.TYPE_LIGHT:Sensor.TYPE_ACCELEROMETER); }
+            private Sensor sensor(String kind) { return manager==null?null:manager.getDefaultSensor(kind.equals("light")?Sensor.TYPE_LIGHT:kind.equals("gyroscope")?Sensor.TYPE_GYROSCOPE:Sensor.TYPE_ACCELEROMETER); }
             public boolean available(String kind) { return sensor(kind)!=null; }
             public boolean register(String kind,int intervalUs,Events events) {
                 Sensor selected=sensor(kind);
@@ -76,11 +76,11 @@ public final class SensorCapture {
     JSONObject list()throws Exception {
         if(cleanupFailed) throw new FactoryException("UNAVAILABLE","Sensor cleanup is unconfirmed; restart the application.");
         JSONArray sensors=new JSONArray();
-        for(String kind:new String[]{"light","accelerometer"}) sensors.put(metadata(kind).put("available",driver.available(kind)));
+        for(String kind:new String[]{"light","accelerometer","gyroscope"}) sensors.put(metadata(kind).put("available",driver.available(kind)));
         return new JSONObject().put("sensors",sensors).put("mode","installed");
     }
     private static JSONObject metadata(String kind)throws Exception {
-        return new JSONObject().put("kind",kind).put("unit",kind.equals("light")?"lux":"m/s2")
+        return new JSONObject().put("kind",kind).put("unit",kind.equals("light")?"lux":kind.equals("gyroscope")?"rad/s":"m/s2")
                 .put("frame",kind.equals("light")?"scalar":"device-natural");
     }
     void capture(Request request,Authority authority,Sink sink)throws Exception {

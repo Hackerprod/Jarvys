@@ -19,7 +19,7 @@ class FactoryGuidanceBundleTest {
     }
     @Test fun foregroundSensorsExtendTheVersionedCatalogWithoutChangingOriginalBudgets() {
         val bundle = load()
-        assertEquals("factory-guidance-v81", bundle.version)
+        assertEquals("factory-guidance-v82", bundle.version)
         assertEquals(listOf("basics", "documents-media", "external-actions", "contacts-calendar",
             "database", "presentation", "lifecycle", "sensors", "biometrics", "local-ui"), FactoryGuidanceBundle.NAMES)
         assertEquals(10, bundle.resources.size)
@@ -31,7 +31,7 @@ class FactoryGuidanceBundleTest {
         assertTrue(core().contains("- sensors:"))
         val sensors = bundle.resources.getValue("sensors")
         for (required in listOf("sensors.list()", "sensors.capture({kind,durationMs,intervalMs,maxSamples})",
-            "sensors.cancel()", "100–5000", "100–1000", "1–50", "16 KiB", "10 Hz",
+            "sensors.cancel()", "100–5000", "100–1000", "1–50", "16 KiB", "10 Hz", "gyroscope", "rad/s", "right-hand", "TYPE_GYROSCOPE",
             "device-natural", "includesGravity", "simulated:false", "sample_limit", "elapsedMs",
             "CANCELLED", "UNAVAILABLE", "no automatic restart", "unregister failure")) {
             assertTrue("Missing sensor contract: $required", sensors.contains(required))
@@ -66,7 +66,7 @@ class FactoryGuidanceBundleTest {
         assertThrows(IllegalArgumentException::class.java) { load { path, bytes -> if (path.endsWith("database.md")) ByteArray(16385) { 65 } else bytes } }
         assertThrows(IllegalArgumentException::class.java) { load { path, bytes -> if (path.endsWith("database.md")) byteArrayOf(0xc3.toByte()) else bytes } }
         assertThrows(java.io.IOException::class.java) { FactoryGuidanceBundle.load(core()) { throw java.io.IOException("missing") } }
-        assertThrows(IllegalArgumentException::class.java) { FactoryGuidanceBundle.load(core().replace("factory-guidance-v81", "factory-guidance-v77")) { File(root, it).inputStream() } }
+        assertThrows(IllegalArgumentException::class.java) { FactoryGuidanceBundle.load(core().replace("factory-guidance-v82", "factory-guidance-v77")) { File(root, it).inputStream() } }
         assertThrows(IllegalArgumentException::class.java) { FactoryGuidanceBundle.load(core() + "x".repeat(8192)) { File(root, it).inputStream() } }
     }
     @Test fun exactResourceBudgetWorksButAggregateBudgetCannotBeBypassedWithValidHashes() {
@@ -109,7 +109,7 @@ class FactoryGuidanceBundleTest {
 
     @Test fun unknownOrMissingManifestEntriesAndVersionMismatchAreRejected() {
         for (mutate in listOf<(String) -> String>(
-            { it.replace("factory-guidance-v81", "stale") },
+            { it.replace("factory-guidance-v82", "stale") },
             { it.replace("\"basics\":", "\"../basics\":") },
             { it.replace("\"version\":", "\"unknown\":") })) {
             assertThrows(Exception::class.java) { load { path, bytes -> if (path.endsWith("manifest.json")) mutate(bytes.toString(Charsets.UTF_8)).toByteArray() else bytes } }

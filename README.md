@@ -24,6 +24,10 @@ The agent runtime runs in the Android app. **This does not mean the language mod
 
 This is an actively developed project with incremental, evidence-backed checkpoints.
 
+v82 gyroscope implementation is under validation. It extends existing bounded foreground
+capture with rad/s natural-device angular velocity, without new permissions. No final APK or
+physical-device acceptance is claimed yet. [Current evidence](recovery/factory-gyroscope/README.md).
+
 | Checkpoint | Status |
 | --- | --- |
 | **v72 · Factory maps and dialer** | Completed earlier delivery; host tests and independent APK audit passed. [Evidence](recovery/factory-actions/README.md) |

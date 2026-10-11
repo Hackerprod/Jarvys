@@ -644,3 +644,16 @@ test('per-ID biometric control rate limit preserves auth while global rate limit
   env.reply(authRequest, {authenticated: true});
   assert.equal(env.timers.size, 0);
 });
+
+ test('gyroscope capture forwards angular-velocity request and native metadata unchanged', async () => {
+  const env = environment();
+  const options = {kind: 'gyroscope', durationMs: 5000, intervalMs: 100, maxSamples: 50};
+  const pending = env.api.sensors.capture(options);
+  const request = env.sent.at(-1);
+  assert.equal(request.method, 'sensors.capture');
+  assert.deepEqual(request.args, options);
+  env.reply(request, {kind: 'gyroscope', unit: 'rad/s', frame: 'device-natural', includesGravity: false, samples: [{elapsedMs: 0, values: [-1, 2, -3]}], mode: 'installed', simulated: false, reason: 'duration'});
+  const result = await pending;
+  assert.equal(result.unit, 'rad/s');
+  assert.deepEqual(Array.from(result.samples[0].values), [-1, 2, -3]);
+});

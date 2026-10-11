@@ -986,3 +986,28 @@ Use native safe-area/IME insets once. A library is no promise of Android WebView
 compatibility or a physical rendering test. Existing device/OEM/installation gates remain.
 Exact archive integrity, licenses and extraction are in the bundled provenance and
 `recovery/factory-local-ui/README.md`; Pure includes normalize CSS and its full MIT notice.
+
+
+## Gyroscope extension (UX42 F1 v82)
+
+The existing foreground sensors contract now accepts `kind:"gyroscope"` alongside light and
+accelerometer. `runtime.info().sensorsKinds` and `sensors.list()` advertise all three fixed kinds.
+SDK 2, schema/sensors protocol 1, 20 capabilities and 42 methods are unchanged. No new Android
+permission, required hardware feature, broker, background subscription or network path is added.
+Older generated APK templates require a reviewed rebuild to obtain this additional kind.
+
+Android `TYPE_GYROSCOPE` supplies angular velocity in `rad/s` as copied finite `[x,y,z]` values,
+`frame:"device-natural"`, `includesGravity:false`. In the device's natural orientation, x points
+right, y toward the top and z outward from the screen; positive rotation follows the right-hand
+convention. Axes do not rotate with the display. This is not an orientation, pose, integrated
+angle or measurement-accuracy promise. No uncalibrated sensor fallback or six-value bias data.
+On API 24+ devices without the calibrated sensor, availability is false and capture rejects
+`UNAVAILABLE`; preview still rejects every sensor method, without synthetic hardware claims.
+
+All existing shared limits and lifecycle rules apply unchanged: 10 Hz across kinds/sequential
+captures, 100–5000 ms duration, 100–1000 ms interval, 1–50 samples, complete result at most 16 KiB.
+One capture at a time; cancel, pause, navigation/reset/destroy, focus/session/authority loss and
+global rate failure discard buffered data. No auto-resume. Cleanup failure disables capture and
+never claims hardware stopped. Light and accelerometer retain their original units/semantics.
+Synthetic host tests and binary review do not establish device availability, accuracy, timing,
+physical rotation/lifecycle behavior or installation acceptance.

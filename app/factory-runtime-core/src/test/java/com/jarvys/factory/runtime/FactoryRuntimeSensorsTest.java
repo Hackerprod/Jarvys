@@ -50,6 +50,10 @@ public class FactoryRuntimeSensorsTest {
     }
     void advance(int ms){now+=ms*1000000L;Shadows.shadowOf(Looper.getMainLooper()).idleFor(ms,TimeUnit.MILLISECONDS);}
     void invalidate()throws Exception{Method method=FactoryRuntime.class.getDeclaredMethod("invalidate");method.setAccessible(true);method.invoke(runtime);}
+    @Test public void runtimeInfoAdvertisesExactlyThreeBoundedKinds()throws Exception{
+        JSONObject info=request("runtime.info","{}").result();assertEquals("[\"light\",\"accelerometer\",\"gyroscope\"]",info.getJSONArray("sensorsKinds").toString());
+        assertEquals(10,info.getInt("sensorsMaxRateHz"));assertEquals(5000,info.getInt("sensorsMaxDurationMs"));assertEquals(50,info.getInt("sensorsMaxSamples"));assertEquals(16384,info.getInt("sensorsResultBytes"));
+    }
     @Test public void previewCannotListCaptureOrCancelInstalledSensors()throws Exception{
         host.preview=true;for(String method:new String[]{"list","capture","cancel"})assertEquals("UNAVAILABLE",request("sensors."+method,method.equals("capture")?arguments():"{}").error());assertEquals(0,driver.registrations);
     }
@@ -64,11 +68,11 @@ public class FactoryRuntimeSensorsTest {
         assertEquals(0,driver.registrations);
     }
     @Test public void pauseCancelsAndResumeNeverAutomaticallyRegisters()throws Exception{
-        Response capture=request("sensors.capture",arguments());driver.events.sample(now,new float[]{1});runtime.onPause();assertEquals("CANCELLED",capture.error());assertEquals(1,driver.unregisters);
+        Response capture=request("sensors.capture",arguments());driver.events.sample(now,new float[]{1,2,3});runtime.onPause();assertEquals("CANCELLED",capture.error());assertEquals(1,driver.unregisters);
         assertEquals("CANCELLED",request("sensors.capture",arguments()).error());runtime.onResume();advance(1000);assertEquals(1,driver.registrations);assertFalse(request("sensors.cancel","{}").result().getBoolean("cancelled"));
     }
     @Test public void navigationResetAndDestroyDiscardOldCallbacks()throws Exception{
-        Response capture=request("sensors.capture",arguments());SensorCapture.Events old=driver.events;invalidate();assertEquals(1,driver.unregisters);old.sample(now,new float[]{999});assertNull(capture.value);
+        Response capture=request("sensors.capture",arguments());SensorCapture.Events old=driver.events;invalidate();assertEquals(1,driver.unregisters);old.sample(now,new float[]{999,2,3});assertNull(capture.value);
         Response next=request("sensors.capture",arguments());runtime.reset();assertEquals(2,driver.unregisters);assertNull(next.value);
         Response last=request("sensors.capture",arguments());runtime.close();assertEquals(3,driver.unregisters);advance(5000);assertNull(last.value);assertEquals(3,driver.registrations);
     }
@@ -78,7 +82,7 @@ public class FactoryRuntimeSensorsTest {
         request("sensors.capture",arguments());host.session=false;advance(100);assertEquals(3,driver.unregisters);host.session=true;advance(500);assertEquals(3,driver.registrations);
     }
     @Test public void foregroundAndFocusAreRequiredForInventoryToo()throws Exception{
-        screen.focus=false;assertEquals("CANCELLED",request("sensors.list","{}").error());screen.focus=true;runtime.onPause();assertEquals("CANCELLED",request("sensors.list","{}").error());runtime.onResume();assertEquals(2,request("sensors.list","{}").result().getJSONArray("sensors").length());
+        screen.focus=false;assertEquals("CANCELLED",request("sensors.list","{}").error());screen.focus=true;runtime.onPause();assertEquals("CANCELLED",request("sensors.list","{}").error());runtime.onResume();assertEquals(3,request("sensors.list","{}").result().getJSONArray("sensors").length());
     }
     @Test public void cancellationIsIdempotentAndRejectsDuplicateCaptureId()throws Exception{
         Response capture=request("inflight","sensors.capture",arguments());assertEquals("BUSY",request("inflight","sensors.cancel","{}").error());assertEquals(0,driver.unregisters);assertNull(capture.value);
@@ -93,12 +97,12 @@ public class FactoryRuntimeSensorsTest {
         assertTrue(request("sensors.cancel","{}").result().getBoolean("cancelled"));assertEquals("CANCELLED",capture.error());assertEquals(1,driver.unregisters);
     }
     @Test public void globalRateFailureImmediatelyDiscardsAndUnregistersOrphanedCapture()throws Exception{
-        Response capture=request("sensors.capture",arguments());driver.events.sample(now,new float[]{42});
+        Response capture=request("sensors.capture",arguments());driver.events.sample(now,new float[]{42,2,3});
         SensorCapture.Events stale=driver.events;
         field("rateWindow").setLong(runtime,SystemClock.elapsedRealtime());field("rateCount").setInt(runtime,80);
         assertEquals("RATE_LIMITED",request("sensors.list","{}").error());
         assertEquals("CANCELLED",capture.error());assertEquals(1,capture.count);assertEquals(1,driver.unregisters);
-        stale.sample(now,new float[]{999});advance(5000);assertEquals(1,capture.count);assertEquals(1,driver.registrations);
+        stale.sample(now,new float[]{999,2,3});advance(5000);assertEquals(1,capture.count);assertEquals(1,driver.registrations);
         assertFalse(request("sensors.cancel","{}").result().getBoolean("cancelled"));
     }
     @Test public void globalRateFailurePreservesCleanupUncertaintyAndClosedLatch()throws Exception{
@@ -112,9 +116,9 @@ public class FactoryRuntimeSensorsTest {
         assertEquals("UNAVAILABLE",request("sensors.capture",arguments()).error());assertEquals(1,driver.registrations);
     }
     @Test public void malformedCancelCannotReleaseCaptureAndNewRequestStaysThrottledAfterReset()throws Exception{
-        Response first=request("sensors.capture",arguments().replace("\"maxSamples\":50","\"maxSamples\":1"));driver.events.sample(now,new float[]{1});assertEquals(1,first.result().getJSONArray("samples").length());runtime.reset();
-        Response second=request("sensors.capture",arguments().replace("\"maxSamples\":50","\"maxSamples\":1"));driver.events.sample(now,new float[]{2});assertNull(second.value);
-        assertEquals("INVALID_ARGUMENT",request("sensors.cancel","{\"background\":true}").error());assertEquals(1,driver.unregisters);advance(100);driver.events.sample(now,new float[]{2});assertEquals(1,second.result().getJSONArray("samples").length());
+        Response first=request("sensors.capture",arguments().replace("\"maxSamples\":50","\"maxSamples\":1"));driver.events.sample(now,new float[]{1,2,3});assertEquals(1,first.result().getJSONArray("samples").length());runtime.reset();
+        Response second=request("sensors.capture",arguments().replace("\"maxSamples\":50","\"maxSamples\":1"));driver.events.sample(now,new float[]{2,2,3});assertNull(second.value);
+        assertEquals("INVALID_ARGUMENT",request("sensors.cancel","{\"background\":true}").error());assertEquals(1,driver.unregisters);advance(100);driver.events.sample(now,new float[]{2,2,3});assertEquals(1,second.result().getJSONArray("samples").length());
     }
     @Test public void escapedMethodCancelBypassesSaturationAfterValidation()throws Exception{
         Response capture=request("sensors.capture",arguments());field("rateWindow").setLong(runtime,SystemClock.elapsedRealtime());field("rateCount").setInt(runtime,81);

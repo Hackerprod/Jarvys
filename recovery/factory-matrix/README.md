@@ -89,3 +89,13 @@ review scripts are in `reviewer-tools/`; their expected restoration location is 
 workspace's `FACTORY-MATRIX-validation/independent/`, alongside the existing v80 evidence.
 Their assertions require the actual frozen source/JUnit/guard/lint artifacts and cannot turn
 missing historical evidence into a fresh pass.
+
+## v82 gyroscope source re-review
+
+Independent review approved SensorCapture.java SHA-256
+`fc483b80bba74fd4226ae44ca499525553d55f3f601e08389d77944e7a4d3b7a` before its
+proof pin was changed. Request.parse adds only literal gyroscope kind acceptance; exact-key,
+string and integer validation stays deterministic, argument-only and side-effect-free. No new
+helper/dependency, capability observation, config escape or hidden state is introduced. Other
+22 pinned files and the exhaustive matrix method are unchanged. Fresh execution remains
+pending for this checkpoint; the original evidence above remains historical.

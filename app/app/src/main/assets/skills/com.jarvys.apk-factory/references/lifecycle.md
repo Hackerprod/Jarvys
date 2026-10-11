@@ -1,4 +1,4 @@
-# Factory guidance factory-guidance-v81 / lifecycle
+# Factory guidance factory-guidance-v82 / lifecycle
 
 Use with the always-loaded Factory core; this reference grants no tools or approvals.
 Historical v77 contract text below is preserved. Current v80: 20 capabilities/42 methods;

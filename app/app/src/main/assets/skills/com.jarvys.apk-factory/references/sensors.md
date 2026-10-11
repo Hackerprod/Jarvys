@@ -1,10 +1,10 @@
-# Factory guidance factory-guidance-v81 / sensors
+# Factory guidance factory-guidance-v82 / sensors
 
 Use with the always-loaded Factory core; this reference grants no tools or approvals.
-Historical v79 sensor contract below is preserved. Current v80 totals: 20 capabilities/42 methods;
+The v82 sensor contract extends the bounded v79 design. Current totals: 20 capabilities/42 methods;
 the biometrics reference adds local authentication and its one selective normal permission.
 
-## Bounded foreground sensors (v79)
+## Bounded foreground sensors (v82)
 
 `sensors` is the nineteenth capability; SDK 2/schema/protocol 1 stay unchanged. Its v79 totals
 were 19 capabilities/39 methods. Only installed generated apps with this declared capability
@@ -14,18 +14,18 @@ No other grant implies `sensors`. Preview rejects all three methods with `UNAVAI
 list and cancel; it provides no simulated readings. Older templates require a reviewed rebuild.
 
 - `sensors.list()` (or `{}`) returns `{sensors:[{kind,available,unit,frame}],mode:"installed"}`.
-  The fixed kinds are `light` (unit `lux`, frame `scalar`) and `accelerometer` (unit `m/s2`,
-  frame `device-natural`). Availability is a Boolean; it is not a promise of future samples.
+  The fixed kinds are `light` (unit `lux`, frame `scalar`), `accelerometer` (unit `m/s2`,
+  frame `device-natural`) and `gyroscope` (unit `rad/s`, frame `device-natural`). Availability is a Boolean; it is not a promise of future samples.
   No hardware names, vendors, IDs, accuracy, resolution or arbitrary sensor types are exposed.
 - `sensors.capture({kind,durationMs,intervalMs,maxSamples})` requires exactly all four keys.
-  `kind` is `light` or `accelerometer`. Duration is a typed JSON integer 100–5000 milliseconds,
+  `kind` is `light`, `accelerometer` or `gyroscope`. Duration is a typed JSON integer 100–5000 milliseconds,
   interval a typed JSON integer 100–1000 milliseconds, and maxSamples a typed JSON integer
   1–50. No strings, fractions, exponents, coercion, defaults or unknown keys.
   Only one capture may be active. Overlap fails rather than replacing the old operation.
 - A completed capture returns `{kind,unit,frame,includesGravity,reason,samples,mode:"installed",
   simulated:false}`. `reason` is `sample_limit` or `duration`. Each sample is
-  `{elapsedMs,values:[number]}` for light, or `{elapsedMs,values:[x,y,z]}` for accelerometer.
-  `includesGravity` is false for light and true for accelerometer. Values are copied finite
+  `{elapsedMs,values:[number]}` for light, or `{elapsedMs,values:[x,y,z]}` for accelerometer/gyroscope.
+  `includesGravity` is false for light/gyroscope and true for accelerometer. Values are copied finite
   numbers; event-owned arrays are not retained. The complete serialized result is at most
   16 KiB, not merely its samples array.
 - `sensors.cancel()` (or `{}`) rejects the active capture with `CANCELLED` and idempotently
@@ -41,6 +41,14 @@ list and cancel; it provides no simulated readings. Older templates require a re
 or the Android hardware-event timestamp. It cannot establish exact physical acquisition time.
 Accelerometer values include gravity and keep the device's natural coordinate frame, not
 screen-rotated/world coordinates. Do not claim calibrated measurement, pose or health inference.
+
+Gyroscope uses Android `TYPE_GYROSCOPE`, never the uncalibrated sensor. Its three values are
+angular velocity in radians per second around x/y/z: x toward the device's right, y toward its
+top and z outward from the screen in its natural orientation. Positive rotation follows the
+right-hand convention. Display rotation does not remap the axes. This is not orientation,
+pose, an angle, a fused rotation vector or a guarantee of calibrated accuracy/drift correction.
+API 24+ can lack this hardware; an uncalibrated sensor alone is not a fallback. Inventory then
+reports available:false and capture rejects UNAVAILABLE. No permission or broker is added.
 
 Output is throttled to at most 10 Hz, including across sequential captures and kind switches;
 intervalMs can lower that ceiling. A requested interval is not a guaranteed sample rate.
@@ -63,10 +71,12 @@ capabilities retain their own contracts and consent requirements.
 The runtime adds sensor denials to WebView Permissions-Policy. Actual WebView enforcement,
 physical output rates, sensor availability, lifecycle cleanup, rotation and ARM64 installation
 remain unverified without authorized device testing. Synthetic fixtures prove only their tested
-code paths, never hardware-stop guarantees. Remaining sensors, TTS/voice, biometrics, backup,
+code paths, never hardware-stop guarantees. Remaining sensors, TTS/voice, backup, additional adaptive
 local UI, F1/F2/F3, UX34 gates, UX44 documentary defaults and UX43-last stay pending.
 
-Official Android references checked October 10, 2026:
+Official Android references checked October 11, 2026:
 - [Sensors overview](https://developer.android.com/develop/sensors-and-location/sensors/sensors_overview)
 - [SensorEvent data and device coordinate frame](https://developer.android.com/reference/android/hardware/SensorEvent)
 - [SensorManager registration, rate hints and unregister](https://developer.android.com/reference/android/hardware/SensorManager)
+
+- [Motion sensors and gyroscope units](https://developer.android.com/develop/sensors-and-location/sensors/sensors_motion)

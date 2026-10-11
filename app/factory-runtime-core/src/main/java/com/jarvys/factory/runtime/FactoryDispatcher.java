@@ -86,7 +86,7 @@ public final class FactoryDispatcher {
                         .put("biometricsDeviceCredentialAllowed", false).put("biometricsForegroundOnly", true)
                         .put("biometricsLocalOnly", true).put("biometricsAuthorizesOtherActions", false)
                         .put("sensorsProtocolVersion", 1).put("sensorsBrokerRequired", false)
-                        .put("sensorsKinds",new JSONArray(java.util.Arrays.asList("light","accelerometer")))
+                        .put("sensorsKinds",new JSONArray(java.util.Arrays.asList("light","accelerometer","gyroscope")))
                         .put("sensorsForegroundOnly",true).put("sensorsMaxRateHz",10)
                         .put("sensorsMaxDurationMs",5000).put("sensorsMaxSamples",50).put("sensorsResultBytes",16384)
                         .put("presentationProtocolVersion", 1).put("presentationBrokerRequired", false)

@@ -1,4 +1,4 @@
-# Factory guidance factory-guidance-v81 / biometrics
+# Factory guidance factory-guidance-v82 / biometrics
 
 Use with the always-loaded Factory core; this reference grants no tools or approvals.
 
