@@ -23,7 +23,7 @@ Use `read_skill` skill_id="com.jarvys.apk-factory" for this core. Before impleme
 - database: private typed SQLite schema/transactions/paging/limits
 - presentation: per-app theme/orientation, persistence/recreation
 - lifecycle: spec/icons/build/sign/keys/preview/tests/install
-- sensors: foreground light/accelerometer/gyroscope, bounded capture/cancel and lifecycle limits
+- sensors: light/accelerometer/gyroscope, bounded capture/cancel and lifecycle limits
 - biometrics: API30+ strong OS authentication, selective permission, cancellation and receipt limits
 - local-ui: CSS, licenses and limits.
 Immutable references need no filesystem/shell/provider/external-document access. Unknown/stale/overbudget reads fail; never implement from partial guidance. Fetch the smaller family with sufficient context or report the blocker. Re-fetch after compaction/incomplete retention. Inspection defines availability; report mismatches and stop.
