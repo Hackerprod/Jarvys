@@ -30,7 +30,7 @@ public final class ManifestNodes {
             Set<String> keys = new HashSet<>();
             for (ManifestPlan.Attribute a : values) if (a == null || !keys.add(a.key())) fail("Duplicate attribute");
             this.attributes = Collections.unmodifiableList(values);
-            List<Element> checked = ordered(children);
+            List<Element> checked = ordered(children, name.equals("intent-filter") ? 34 : 32);
             this.children = preserveOrder ? Collections.unmodifiableList(new ArrayList<>(children)) : checked;
         }
     }
@@ -61,8 +61,9 @@ public final class ManifestNodes {
         if (!value.startsWith(prefix) || value.length() == prefix.length()) fail("Unexpected Android name");
         return value;
     }
-    static List<Element> ordered(List<Element> input) {
-        if (input == null || input.size() > 32) fail("Manifest sibling limit exceeded");
+    static List<Element> ordered(List<Element> input) { return ordered(input, 32); }
+    private static List<Element> ordered(List<Element> input, int maximum) {
+        if (input == null || input.size() > maximum) fail("Manifest sibling limit exceeded");
         List<Element> copy = new ArrayList<>(input); Set<String> keys = new HashSet<>();
         Set<String> componentNames = new HashSet<>(), authorities = new HashSet<>();
         for (Element e : copy) {
@@ -96,7 +97,7 @@ public final class ManifestNodes {
         return leaf("uses-feature", "feature:" + name, a("name", 0x01010003, 3, name), a("required", 0x0101028e, 18, required ? -1 : 0));
     }
     public static Element action(String name) {
-        if (!"android.speech.action.RECOGNIZE_SPEECH".equals(name)) androidName(name, "android.intent.action."); return leaf("action", "action:" + name, a("name", 0x01010003, 3, name));
+        if (!"android.speech.action.RECOGNIZE_SPEECH".equals(name) && !NotificationPolicy.EXACT_ACTION.equals(name)) androidName(name, "android.intent.action."); return leaf("action", "action:" + name, a("name", 0x01010003, 3, name));
     }
     public static Element category(String name) {
         androidName(name, "android.intent.category."); return leaf("category", "category:" + name, a("name", 0x01010003, 3, name));
@@ -106,7 +107,7 @@ public final class ManifestNodes {
         List<ManifestPlan.Attribute> attrs = new ArrayList<>();
         if (mimeType != null) {
             text(mimeType, 127);
-            if (!mimeType.matches("[a-z0-9][a-z0-9.+-]*/(?:[a-z0-9][a-z0-9.+-]*|\\*)") && !mimeType.equals("*/*")) fail("Invalid MIME type");
+            if (!IncomingSharePolicy.validMimePattern(mimeType)) fail("Invalid MIME type");
             attrs.add(a("mimeType", 0x01010026, 3, mimeType));
         }
         if (scheme != null) {
@@ -118,7 +119,7 @@ public final class ManifestNodes {
     public static Element intentFilter(List<Element> children) {
         kinds(children, "action", "category", "data");
         if (children.stream().noneMatch(e -> e.name.equals("action"))) fail("Intent filter needs an action");
-        List<Element> ordered = ordered(children);
+        List<Element> ordered = ordered(children, 34);
         StringBuilder key = new StringBuilder("filter:"); for (Element e : ordered) key.append(e.identity).append(';');
         return new Element("intent-filter", key.toString(), ordered);
     }
@@ -181,6 +182,12 @@ public final class ManifestNodes {
                 break;
             default: if (children == null || !children.isEmpty()) fail("Leaf node cannot have children");
         }
-        return new Element(name, name, children, true, attrs);
+        String identity = name;
+        if (name.equals("intent-filter")) {
+            StringBuilder key = new StringBuilder("filter:");
+            for (Element child : ordered(children, 34)) key.append(child.identity).append(';');
+            identity = key.toString();
+        }
+        return new Element(name, identity, children, true, attrs);
     }
 }

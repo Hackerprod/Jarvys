@@ -50,11 +50,11 @@ public final class ResourceBudgetsTest {
     @Test public void explicitVersionOnlyResolvesToLegacyAndSerializesCompletely() {
         ResourceBudgets value = ResourceBudgets.parse(Collections.singletonMap("version", 1));
         assertEquals(ResourceBudgets.legacy(), value);
-        assertEquals(Arrays.asList("version", "storage", "database", "documents", "audio", "sensors", "packaging"),
+        assertEquals(Arrays.asList("version", "storage", "database", "documents", "audio", "sensors", "packaging", "secrets", "notifications", "incomingShare"),
                 new ArrayList<>(value.toMap().keySet()));
         int count = 0;
         for (Object section : value.toMap().values()) if (section instanceof Map) count += ((Map<?, ?>) section).size();
-        assertEquals(25, count);
+        assertEquals(36, count);
     }
     @Test public void partialOverridesDoNotChangeOtherDefaultsOrFollowInputMutations() {
         Map<String, Object> input = declaration("database", "mainFileBytes", 256 * MIB);
@@ -168,4 +168,16 @@ public final class ResourceBudgetsTest {
         assertEquals(30000, ResourceBudgets.legacy().audio.durationMs);
         assertEquals(before, new ArrayList<>(ResourceBudgets.legacy().toMap().keySet()));
     }
+    @Test public void nativeServiceBudgetsResolveDefaultsAndValidateAggregateCapacity() {
+        ResourceBudgets value=ResourceBudgets.legacy();
+        assertEquals(32,value.secrets.entries); assertEquals(8192,value.secrets.valueBytes); assertEquals(512*1024,value.secrets.vaultBytes);
+        assertEquals(128,value.notifications.schedules); assertEquals(256,value.notifications.inboxEvents); assertEquals(1024,value.notifications.tombstones);
+        assertEquals(16,value.incomingShare.queuedEnvelopes); assertEquals(16,value.incomingShare.attachmentsPerEnvelope); assertEquals(1024*1024,value.incomingShare.queuedBytes);
+        rejected(declaration("secrets","vaultBytes",8193));
+        rejected(declaration("secrets","entries",257));
+        rejected(declaration("notifications","schedules",1025));
+        rejected(declaration("incomingShare","queuedBytes",1024));
+        assertEquals(32,ResourceBudgets.maxima().incomingShare.attachmentsPerEnvelope);
+    }
+
 }

@@ -2,6 +2,10 @@ package com.jarvys.agent.apkfactory
 
 import com.jarvys.factory.contract.ManifestPlan
 import com.jarvys.factory.contract.ResourceBudgets
+import com.jarvys.factory.contract.IncomingSharePolicy
+import com.jarvys.factory.runtime.IncomingSharePolicyJson
+import com.jarvys.factory.contract.NotificationPolicy
+import com.jarvys.factory.runtime.NotificationPolicyJson
 import com.jarvys.factory.runtime.ResourceBudgetsJson
 import org.json.JSONArray
 import org.json.JSONObject
@@ -25,19 +29,31 @@ internal data class FactorySigningScope private constructor(private val canonica
         }
         if (!before.has("queryActions")) changes += "Last-signed query action baseline unavailable: the legacy scope did not record query actions. Query action expansion cannot be determined."
         if (!after.has("queryActions")) changes += "Current query action scope unavailable: the legacy scope did not record query actions."
+        val oldIncoming = incomingShare(before); val currentIncoming = incomingShare(after)
+        if (oldIncoming != currentIncoming) changes += "Incoming sharing changes: ${incomingDescription(oldIncoming)} -> ${incomingDescription(currentIncoming)}"
+        val oldNotifications = notifications(before); val currentNotifications = notifications(after)
+        if (oldNotifications != currentNotifications) changes += "Notification scheduling changes: scheduling=${oldNotifications.scheduling}, exactAlarms=${oldNotifications.exactAlarms} -> scheduling=${currentNotifications.scheduling}, exactAlarms=${currentNotifications.exactAlarms}"
         val oldResources = resourceValues(previous.resources()); val currentResources = resourceValues(resources())
         for ((field, current) in currentResources) {
             val old = oldResources.getValue(field)
             if (old != current) changes += "Resource capacity changes ($field): $old -> $current"
         }
-        return changes.ifEmpty { listOf("Effective scope unchanged from the last signed APK (capabilities, permissions, exported components, features, queries, query actions, allowed hosts and resource capacities).") }
+        return changes.ifEmpty { listOf("Effective scope unchanged from the last signed APK (capabilities, permissions, exported components, features, queries, query actions, allowed hosts, incoming sharing, notification scheduling and resource capacities).") }
     }
     fun anchored(appId: String, fingerprint: String, version: Int, apkSha: String): JSONObject = JSONObject()
         .put("schemaVersion", 1).put("appId", appId).put("certificateSha256", fingerprint)
         .put("versionCode", version).put("apkSha256", apkSha).put("scope", toJson())
     companion object {
         private val LEGACY_FIELDS = listOf("capabilities", "permissions", "exportedComponents", "features", "queries", "allowedHosts")
-        private val CURRENT_FIELDS = LEGACY_FIELDS + listOf("queryActions", "resourceBudgets")
+        private val V3_FIELDS = LEGACY_FIELDS + listOf("queryActions", "resourceBudgets")
+        private val INCOMING_FIELDS = V3_FIELDS + "incomingShare"
+        private val CURRENT_FIELDS = INCOMING_FIELDS + "notifications"
+        private fun notifications(json: JSONObject): NotificationPolicy =
+            if (json.has("notifications")) NotificationPolicyJson.parse(json.getJSONObject("notifications")) else NotificationPolicy.disabled()
+        private fun incomingShare(json: JSONObject): IncomingSharePolicy? =
+            if (json.has("incomingShare") && !json.isNull("incomingShare")) IncomingSharePolicyJson.parse(json.getJSONObject("incomingShare")) else null
+        private fun incomingDescription(policy: IncomingSharePolicy?): String =
+            policy?.let { "MIME patterns [${it.mimeTypes.joinToString()}], ACTION_SEND, ACTION_SEND_MULTIPLE=${it.multiple}" } ?: "disabled"
         private fun values(array: JSONArray): Set<String> = (0 until array.length()).map { array.getString(it) }.toSet()
         private fun resourceValues(resources: ResourceBudgets): Map<String, Long> = buildMap {
             for ((section, value) in resources.toMap()) if (value is Map<*, *>) {
@@ -49,11 +65,13 @@ internal data class FactorySigningScope private constructor(private val canonica
             .put("capabilities", JSONArray(plan.capabilities)).put("permissions", JSONArray(plan.permissions))
             .put("exportedComponents", JSONArray(plan.exportedComponents)).put("features", JSONArray(plan.features))
             .put("queries", JSONArray(plan.queries)).put("allowedHosts", JSONArray(plan.hosts))
-            .put("queryActions", JSONArray(plan.queryActions)).put("resourceBudgets", ResourceBudgetsJson.toJson(resources)))
+            .put("queryActions", JSONArray(plan.queryActions)).put("resourceBudgets", ResourceBudgetsJson.toJson(resources))
+            .put("incomingShare", plan.incomingShare?.let { IncomingSharePolicyJson.toJson(it) } ?: JSONObject.NULL)
+            .put("notifications", NotificationPolicyJson.toJson(plan.notifications ?: NotificationPolicy.disabled())))
         private fun parse(json: JSONObject): FactorySigningScope {
             val fields = json.keys().asSequence().toSet()
             val legacy = fields == LEGACY_FIELDS.toSet()
-            require(legacy || fields == CURRENT_FIELDS.toSet())
+            require(legacy || fields == V3_FIELDS.toSet() || fields == INCOMING_FIELDS.toSet() || fields == CURRENT_FIELDS.toSet())
             val canonical = JSONObject()
             // Never add fields to old records: their canonical bytes authenticate retained history.
             for (field in if (legacy) LEGACY_FIELDS else LEGACY_FIELDS + "queryActions") {
@@ -71,12 +89,26 @@ internal data class FactorySigningScope private constructor(private val canonica
                 val declared = json.getJSONObject("resourceBudgets")
                 val resolved = ResourceBudgetsJson.toJson(ResourceBudgetsJson.parse(declared))
                 // Signed snapshots freeze every resolved value, even when the project used a partial declaration.
-                require(declared.keys().asSequence().toSet() == resolved.keys().asSequence().toSet())
-                for (section in resolved.keys().asSequence().filter { it != "version" }) {
-                    require(declared.getJSONObject(section).keys().asSequence().toSet() == resolved.getJSONObject(section).keys().asSequence().toSet())
+                val declaredSections = declared.keys().asSequence().toSet()
+                val originalSections = setOf("version", "storage", "database", "documents", "audio", "sensors", "packaging")
+                require(declaredSections.containsAll(originalSections))
+                // Preserve pre-service v1 scope bytes. New optional sections resolve their defaults
+                // when read, but must not be injected into an already-authenticated snapshot.
+                val retained = JSONObject()
+                for (section in resolved.keys().asSequence()) if (section in declaredSections) {
+                    if (section != "version") require(declared.getJSONObject(section).keys().asSequence().toSet() == resolved.getJSONObject(section).keys().asSequence().toSet())
+                    retained.put(section, resolved.get(section))
                 }
-                canonical.put("resourceBudgets", resolved)
+                canonical.put("resourceBudgets", retained)
             }
+            val incoming = incomingShare(json)
+            IncomingSharePolicy.validateSelection(values(canonical.getJSONArray("capabilities")), incoming)
+            // Do not append this field to old authenticated snapshots, even when disabled.
+            if (json.has("incomingShare")) canonical.put("incomingShare", incoming?.let { IncomingSharePolicyJson.toJson(it) } ?: JSONObject.NULL)
+            val notificationPolicy = notifications(json)
+            if (notificationPolicy.scheduling) NotificationPolicy.validateSelection(values(canonical.getJSONArray("capabilities")), notificationPolicy)
+            // Old snapshots keep their exact field set; absence means scheduling was disabled.
+            if (json.has("notifications")) canonical.put("notifications", NotificationPolicyJson.toJson(notificationPolicy))
             require(canonical.toString().toByteArray(Charsets.UTF_8).size <= 48 * 1024)
             return FactorySigningScope(canonical.toString())
         }

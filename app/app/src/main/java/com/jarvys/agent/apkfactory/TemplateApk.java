@@ -1,6 +1,8 @@
 package com.jarvys.agent.apkfactory;
 
 import com.jarvys.factory.contract.ManifestPlan;
+import com.jarvys.factory.contract.IncomingSharePolicy;
+import com.jarvys.factory.contract.NotificationPolicy;
 import com.jarvys.factory.contract.ManifestAudit;
 import com.jarvys.factory.contract.ManifestXml;
 import com.jarvys.factory.contract.CapabilityCatalog;
@@ -43,12 +45,24 @@ public final class TemplateApk {
         public final String appId, label, versionName;
         public final int versionCode;
         public final List<String> capabilities;
+        public final IncomingSharePolicy incomingShare;
+        public final NotificationPolicy notifications;
         public Spec(String appId, String label, int versionCode, String versionName) {
             this(appId, label, versionCode, versionName, Collections.<String>emptyList());
         }
         public Spec(String appId, String label, int versionCode, String versionName, Iterable<String> capabilities) {
+            this(appId, label, versionCode, versionName, capabilities, null);
+        }
+        public Spec(String appId, String label, int versionCode, String versionName, Iterable<String> capabilities, IncomingSharePolicy incomingShare) {
+            this(appId,label,versionCode,versionName,capabilities,incomingShare,null);
+        }
+        public Spec(String appId, String label, int versionCode, String versionName, Iterable<String> capabilities, IncomingSharePolicy incomingShare, NotificationPolicy notifications) {
             this.appId=appId; this.label=label; this.versionCode=versionCode; this.versionName=versionName;
             this.capabilities=CapabilityCatalog.select(capabilities);
+            IncomingSharePolicy.validateSelection(this.capabilities, incomingShare);
+            this.incomingShare=incomingShare;
+            NotificationPolicy.validateSelection(this.capabilities, notifications);
+            this.notifications=notifications;
         }
     }
     /** Derived only from the actual compiled resource table, never a project declaration. */
@@ -90,6 +104,11 @@ public final class TemplateApk {
         validateSpec(expected);
         return inspectFiles(readZip(apk,true), expected, ManifestPlan.Profile.CURRENT);
     }
+    /** Exact closed-v3-native-operations receipt layout, before incoming-share filters. */
+    public static ManifestInfo verifyExistingClosedV3(byte[] apk, Spec expected) throws IOException {
+        validateSpec(expected);
+        return inspectFiles(readZip(apk,true), expected, ManifestPlan.Profile.V3_BEFORE_INCOMING_SHARE);
+    }
     /** Exact closed-v2-clipboard-broker receipt layout, before native-operation declarations. */
     public static ManifestInfo verifyExistingClosedV2(byte[] apk, Spec expected) throws IOException {
         validateSpec(expected);
@@ -113,7 +132,7 @@ public final class TemplateApk {
     public static ManifestInfo verifyAgainstPlan(byte[] apk, ManifestPlan plan) throws IOException {
         Map<String,byte[]> files=readZip(apk,true);
         ManifestAudit.read(required(files,"AndroidManifest.xml")).verify(plan);
-        return inspectFiles(files,new Spec(plan.appId,plan.label,plan.versionCode,plan.versionName,plan.capabilities),plan.profile);
+        return inspectFiles(files,new Spec(plan.appId,plan.label,plan.versionCode,plan.versionName,plan.capabilities,plan.incomingShare,plan.notifications),plan.profile);
     }
     /** v2/v3 signing adds a signing block, but must not alter any ZIP entry, not even resources. */
     public static void verifyUnchangedPayload(byte[] unsigned, byte[] signed) throws IOException {
@@ -142,23 +161,41 @@ public final class TemplateApk {
         // Without caller expectations, infer only the closed declaration profile, not the full
         // capabilities of the APK. Explicit expectations always override this inspection hint.
         List<String> inferredCapabilities=new ArrayList<>();
+        IncomingSharePolicy inferredIncomingShare = null;
+        NotificationPolicy inferredNotifications = null;
         if(expected==null) {
             for(String permission:info.permissions) {
                 if(CapabilityCatalog.BIOMETRIC_PERMISSION.equals(permission)) inferredCapabilities.add("biometrics");
                 else if(CapabilityCatalog.INTERNET_PERMISSION.equals(permission)) inferredCapabilities.add("network");
-                else if(CapabilityCatalog.NOTIFICATION_PERMISSION.equals(permission)) inferredCapabilities.add("notifications");
+                else if(CapabilityCatalog.NOTIFICATION_PERMISSION.equals(permission) || NotificationPolicy.BOOT_PERMISSION.equals(permission) || NotificationPolicy.EXACT_PERMISSION.equals(permission)) {
+                    if(!inferredCapabilities.contains("notifications")) inferredCapabilities.add("notifications");
+                }
+                else if(CapabilityCatalog.RECORD_AUDIO_PERMISSION.equals(permission)) inferredCapabilities.add("recording");
+                else if(CapabilityCatalog.ACTIVITY_RECOGNITION_PERMISSION.equals(permission)) inferredCapabilities.add("steps");
+                else if(CapabilityCatalog.HIGH_RATE_SENSORS_PERMISSION.equals(permission)) inferredCapabilities.add("sensors");
                 else if(CapabilityCatalog.LOCATION_PERMISSIONS.contains(permission)) { if(!inferredCapabilities.contains("location")) inferredCapabilities.add("location"); }
                 else throw new IOException("Unapproved factory permission profile");
             }
             if(baseXml.queryActions.contains(CapabilityCatalog.TTS_SERVICE_ACTION)) inferredCapabilities.add("speech");
             if(baseXml.queryActions.contains(CapabilityCatalog.RECOGNIZE_SPEECH_ACTION)) inferredCapabilities.add("voiceRecognition");
             if(!baseXml.queryPackages.isEmpty()) inferredCapabilities.add("documents");
+            if(baseXml.filterActions.contains("android.intent.action.SEND")) {
+                inferredCapabilities.add("incomingShare");
+                try { inferredIncomingShare = new IncomingSharePolicy(baseXml.incomingMimeTypes,
+                        baseXml.filterActions.contains("android.intent.action.SEND_MULTIPLE")); }
+                catch (IllegalArgumentException error) { throw new IOException("Invalid incoming share manifest policy", error); }
+            }
+        }
+        if(expected==null && (!baseXml.receivers.isEmpty() || info.permissions.contains(NotificationPolicy.BOOT_PERMISSION) || info.permissions.contains(NotificationPolicy.EXACT_PERMISSION))) {
+            try { inferredNotifications = new NotificationPolicy(info.permissions.contains(NotificationPolicy.BOOT_PERMISSION), info.permissions.contains(NotificationPolicy.EXACT_PERMISSION)); }
+            catch (IllegalArgumentException error) { throw new IOException("Invalid notification scheduling manifest policy", error); }
         }
         ManifestPlan plan;
         try {
             plan=new ManifestPlan(expected==null?info.appId:expected.appId, expected==null?info.label:expected.label,
                 expected==null?info.versionCode:expected.versionCode, expected==null?info.versionName:expected.versionName,
-                info.iconResourceId,backupId,expected==null?inferredCapabilities:expected.capabilities,profile);
+                info.iconResourceId,backupId,expected==null?inferredCapabilities:expected.capabilities,
+                expected==null?inferredIncomingShare:expected.incomingShare,expected==null?inferredNotifications:expected.notifications,profile);
         } catch(IllegalArgumentException error) { throw new IOException("Invalid manifest plan identity",error); }
         decoded.verify(plan);
         Map<String,ResourceBinding> bindings=new TreeMap<>();
@@ -167,7 +204,7 @@ public final class TemplateApk {
         Map<String,String> inventory=dexInventory(zip);
         Map<String,byte[]> dexFiles=new TreeMap<>();
         for(String name:inventory.keySet()) dexFiles.put(name,zip.get(name));
-        Map<String,String> components=DexBindings.verify(dexFiles);
+        Map<String,String> components=DexBindings.verify(dexFiles,plan.notifications != null && plan.notifications.scheduling);
         return new ManifestInfo(info.appId,info.label,info.versionCode,info.versionName,info.iconResourceId,
             info.activityClass,plan.permissions,plan,inventory,bindings,components);
     }
@@ -219,7 +256,7 @@ public final class TemplateApk {
         String iconPath=resolveIconPath(required(files,"resources.arsc"),old.iconResourceId);
         check(files.containsKey(iconPath),"Referenced factory icon is missing");
         ManifestPlan expectedPlan=new ManifestPlan(spec.appId,spec.label,spec.versionCode,spec.versionName,
-            old.plan.iconResourceId,old.plan.backupResourceId,spec.capabilities);
+            old.plan.iconResourceId,old.plan.backupResourceId,spec.capabilities,spec.incomingShare,spec.notifications);
         files.put("AndroidManifest.xml",ManifestXml.encode(expectedPlan));
         files.put("resources.arsc",renamePackage(required(files,"resources.arsc"),spec.appId,old.iconResourceId));
         files.put(iconPath,iconPng.clone());
@@ -410,6 +447,9 @@ public final class TemplateApk {
         final List<String> permissions=new ArrayList<>();
         final Set<String> queryPackages=new java.util.LinkedHashSet<>();
         final Set<String> queryActions=new java.util.LinkedHashSet<>();
+        final Set<String> filterActions=new java.util.LinkedHashSet<>();
+        final Set<String> incomingMimeTypes=new java.util.TreeSet<>();
+        final Set<String> receivers=new java.util.LinkedHashSet<>();
         Xml(byte[] b) throws IOException {
             check(b.length<=1024*1024,"Manifest too large"); Chunk outer=new Chunk(b,0,b.length);
             check(outer.type==3 && outer.header==8 && outer.size==b.length,"Invalid binary XML");
@@ -438,9 +478,13 @@ public final class TemplateApk {
                 check(Arrays.asList("manifest","manifest/uses-sdk","manifest/uses-permission","manifest/application",
                     "manifest/application/activity","manifest/application/activity/intent-filter",
                     "manifest/application/activity/intent-filter/action","manifest/application/activity/intent-filter/category",
+                    "manifest/application/activity/intent-filter/data",
+                    "manifest/application/receiver","manifest/application/receiver/intent-filter","manifest/application/receiver/intent-filter/action",
                     "manifest/queries","manifest/queries/package","manifest/queries/intent","manifest/queries/intent/action").contains(path),"Unsupported template component "+path);
                 if (!path.equals("manifest/queries/package") && !path.equals("manifest/queries/intent")
-                        && !path.equals("manifest/queries/intent/action") && !path.equals("manifest/uses-permission")) check(seen.add(path),"Duplicate template element "+path);
+                        && !path.equals("manifest/queries/intent/action") && !path.equals("manifest/uses-permission")
+                        && !path.startsWith("manifest/application/activity/intent-filter") && !path.startsWith("manifest/application/receiver")) check(seen.add(path),"Duplicate template element "+path);
+                if(path.startsWith("manifest/application/activity/intent-filter")) seen.add(path);
                 check(u16(n,24)==20 && u16(n,26)==20 && c.size==36+20*u16(n,28),"Unsupported attribute layout");
                 Map<String,Attr> attrs=new LinkedHashMap<>();
                 for(int a=36;a<n.length;a+=20) { Attr v=new Attr(n,a,pool); check(attrs.put(v.ns+"|"+v.name,v)==null,"Duplicate attribute"); }
@@ -460,7 +504,9 @@ public final class TemplateApk {
                 if(path.equals("manifest/uses-permission")) {
                     String permission=attr(attrs,ANDROID,"name").text();
                     check(attrs.size()==1 && Arrays.asList(CapabilityCatalog.BIOMETRIC_PERMISSION,CapabilityCatalog.INTERNET_PERMISSION,
-                            CapabilityCatalog.NOTIFICATION_PERMISSION,CapabilityCatalog.COARSE_LOCATION_PERMISSION,CapabilityCatalog.FINE_LOCATION_PERMISSION).contains(permission) && !permissions.contains(permission),"Unapproved or duplicate permission");
+                            CapabilityCatalog.NOTIFICATION_PERMISSION,CapabilityCatalog.COARSE_LOCATION_PERMISSION,CapabilityCatalog.FINE_LOCATION_PERMISSION,
+                            CapabilityCatalog.RECORD_AUDIO_PERMISSION,CapabilityCatalog.ACTIVITY_RECOGNITION_PERMISSION,CapabilityCatalog.HIGH_RATE_SENSORS_PERMISSION,
+                            NotificationPolicy.BOOT_PERMISSION,NotificationPolicy.EXACT_PERMISSION).contains(permission) && !permissions.contains(permission),"Unapproved or duplicate permission");
                     permissions.add(permission);
                 }
                 if(path.equals("manifest/application")) {
@@ -472,8 +518,28 @@ public final class TemplateApk {
                     check(cleartext==0 || cleartext==-1,"Invalid cleartext setting");
                 }
                 if(path.equals("manifest/application/activity")) { activity=attr(attrs,ANDROID,"name"); check(attr(attrs,ANDROID,"exported").number()!=0,"Missing exported launcher"); }
-                if(path.equals("manifest/application/activity/intent-filter/action")) check("android.intent.action.MAIN".equals(attr(attrs,ANDROID,"name").text()),"Unexpected action");
-                if(path.endsWith("/category")) check("android.intent.category.LAUNCHER".equals(attr(attrs,ANDROID,"name").text()),"Unexpected category");
+                if(path.equals("manifest/application/receiver")) {
+                    String receiver=attr(attrs,ANDROID,"name").text();
+                    check(attrs.size()==2 && attr(attrs,ANDROID,"exported").number()==0 &&
+                            Arrays.asList(NotificationPolicy.ALARM_RECEIVER,NotificationPolicy.RECOVERY_RECEIVER).contains(receiver) && receivers.add(receiver), "Unexpected notification receiver");
+                }
+                if(path.equals("manifest/application/receiver/intent-filter")) check(attrs.isEmpty(), "Unexpected receiver filter attributes");
+                if(path.equals("manifest/application/receiver/intent-filter/action")) {
+                    String action=attr(attrs,ANDROID,"name").text();
+                    check(attrs.size()==1 && Arrays.asList("android.intent.action.BOOT_COMPLETED", "android.intent.action.MY_PACKAGE_REPLACED", NotificationPolicy.EXACT_ACTION).contains(action), "Unexpected notification recovery action");
+                }
+                if(path.equals("manifest/application/activity/intent-filter")) check(attrs.isEmpty(), "Unexpected filter attributes");
+                if(path.equals("manifest/application/activity/intent-filter/action")) {
+                    String action=attr(attrs,ANDROID,"name").text();
+                    check(attrs.size()==1 && Arrays.asList("android.intent.action.MAIN", "android.intent.action.SEND", "android.intent.action.SEND_MULTIPLE").contains(action)
+                            && filterActions.add(action), "Unexpected or duplicate action");
+                }
+                if(path.endsWith("/category")) check(attrs.size()==1 && Arrays.asList("android.intent.category.LAUNCHER", "android.intent.category.DEFAULT").contains(attr(attrs,ANDROID,"name").text()),"Unexpected category");
+                if(path.equals("manifest/application/activity/intent-filter/data")) {
+                    String mime=attr(attrs,ANDROID,"mimeType").text();
+                    check(attrs.size()==1 && IncomingSharePolicy.validMimePattern(mime), "Unexpected incoming share MIME data");
+                    incomingMimeTypes.add(mime);
+                }
             }
             check(!seen.contains("manifest/queries") || queryPackages.equals(CapabilityCatalog.DOCUMENT_BROKER_PACKAGES),
                 "Document broker queries must match the exact approved set");
@@ -490,6 +556,7 @@ public final class TemplateApk {
                     case "label": expected=0x01010001; break;
                     case "icon": expected=0x01010002; break;
                     case "name": expected=0x01010003; break;
+                    case "mimeType": expected=0x01010026; break;
                     case "exported": expected=0x01010010; break;
                     case "debuggable": expected=0x0101000f; break;
                     case "versionCode": expected=0x0101021b; break;

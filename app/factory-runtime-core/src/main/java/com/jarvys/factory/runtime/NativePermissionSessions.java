@@ -118,24 +118,8 @@ final class NativePermissionSessions implements AutoCloseable {
             } else throw new SecurityException();
         } catch (Exception unavailable) { fail(lease, "PERMISSION_DENIED", "Native operation is denied or its matching policy host is unavailable."); }
     }
-    private int verifyHost() throws Exception {
-        DocumentBrokerIdentity.verify(activity, config.documentBroker);
-        String name = config.documentBroker.packageName;
-        ProviderInfo provider = activity.getPackageManager().resolveContentProvider(name + ".factory.operations", 0);
-        int uid = activity.getPackageManager().getApplicationInfo(name, 0).uid;
-        if (provider == null || !name.equals(provider.packageName) || !provider.exported || !provider.enabled ||
-                provider.applicationInfo == null || provider.applicationInfo.uid != uid || !provider.applicationInfo.enabled ||
-                !"com.jarvys.agent.apkfactory.FactoryOperationAuthorizationProvider".equals(provider.name) || !verifiedUid(uid)) throw new SecurityException();
-        return uid;
-    }
-    private boolean verifiedUid(int uid) {
-        try {
-            DocumentBrokerIdentity.verify(activity, config.documentBroker);
-            String[] names = activity.getPackageManager().getPackagesForUid(uid);
-            return names != null && names.length == 1 && names[0].equals(config.documentBroker.packageName) &&
-                    activity.getPackageManager().getApplicationInfo(names[0], 0).uid == uid;
-        } catch (Exception unavailable) { return false; }
-    }
+    private int verifyHost() throws Exception { return NativeOperationHostIdentity.verify(activity, config.documentBroker); }
+    private boolean verifiedUid(int uid) { return NativeOperationHostIdentity.verifiedUid(activity, config.documentBroker, uid); }
     private void launchReview(Lease lease) {
         if (lease.ended.get()) return;
         if (closed || !foreground || !activity.hasWindowFocus() || !lease.callback.current() || review != null || !lease.callback.claimUi()) {

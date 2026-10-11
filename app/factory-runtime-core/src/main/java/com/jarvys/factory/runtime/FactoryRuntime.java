@@ -97,6 +97,13 @@ public final class FactoryRuntime implements AutoCloseable {
     private int rateCount;
     private Export export;
     private volatile DocumentHandles documents = new DocumentHandles();
+    private IncomingSharePayload.Policy incomingSharePolicy;
+    private IncomingShareInbox incomingShares;
+    private volatile IncomingPage incomingPage;
+    private final java.util.Set<IncomingTake> incomingTakes = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    // Copied strings only. This snapshot may cross the first page-start invalidation exactly once.
+    private IncomingSharePayload initialIncomingShare;
+    private boolean awaitingInitialIncomingPage;
     private boolean documentBudgetsInitialized;
     private volatile boolean documentForeground;
     private DocumentSelection documentSelection;
@@ -128,6 +135,7 @@ public final class FactoryRuntime implements AutoCloseable {
         public void run() {
             if (destroyed) return;
             documents.expire();
+            if (incomingShares != null) incomingShares.expire();
             PhotoSelection photo=photoSelection;
             if (photo != null && photo.copying && SystemClock.elapsedRealtime()-photo.copyStarted >= 300000) cancelPhotoSelection();
             FileShare share = fileShare;
@@ -184,13 +192,20 @@ public final class FactoryRuntime implements AutoCloseable {
             return new String(output.toByteArray(), StandardCharsets.UTF_8);
         }
     }
-    public boolean start() {
+    public boolean start() { return start(null); }
+    /** Only the Activity's fresh, non-restored initial Intent may enter this overload. */
+    public boolean start(Intent initialIntent) {
         if (destroyed || !host.isActive()) return false;
         if (webView != null) return true;
         try {
             config = host.isPreview() ? FactoryConfig.parsePreview(host.configuration())
                     : FactoryConfig.parse(host.configuration(), activity.getPackageName());
             store = new BoundedStore(host.storage(), config.resources);
+            initializeIncomingShares();
+            if (initialIntent != null) {
+                initialIncomingShare = copyIncomingShare(initialIntent);
+                awaitingInitialIncomingPage = initialIncomingShare != null;
+            }
             if (!documentBudgetsInitialized) { documents.revokeAll(); documents = new DocumentHandles(config.resources); documentBudgetsInitialized = true; }
             if(host.isPreview()) documentForeground=true; // Preview Activity closes its session on pause.
             main.removeCallbacks(expireDocuments);
@@ -214,6 +229,9 @@ public final class FactoryRuntime implements AutoCloseable {
     private void invalidate() {
         cancelPresentationRecreate();
         generation++; pending.clear(); uiOwner = null;
+        initialIncomingShare = null; awaitingInitialIncomingPage = false;
+        IncomingPage oldIncomingPage = incomingPage; incomingPage = null;
+        if (incomingShares != null && oldIncomingPage != null) incomingShares.endOwner(oldIncomingPage);
         if (nativeEffects != null) nativeEffects.close();
         if (nativePermissions != null) nativePermissions.close();
         if(sensors!=null) sensors.cancel();
@@ -318,7 +336,7 @@ public final class FactoryRuntime implements AutoCloseable {
             @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) {
                 if (view != webView || destroyed || !host.isActive()) return;
                 host.onTrace("page", "started");
-                synchronized (lifecycle) { invalidate(); }
+                synchronized (lifecycle) { incomingPageStarted(url); }
                 if (!AssetPolicy.navigationAllowed(url, true)) { view.stopLoading(); showError("Navigation outside this offline application was blocked."); }
             }
             @Override public void onPageFinished(WebView view, String url) {
@@ -496,6 +514,7 @@ public final class FactoryRuntime implements AutoCloseable {
         if(now-databaseControlWindow>=1000 || now<databaseControlWindow) { databaseControlWindow=now; databaseControlCount=0; }
         if(++databaseControlCount>8) { safePost(proxy,BridgeProtocol.failure(request.id,"RATE_LIMITED","Database cancellation control limit reached.")); return true; }
         if(documentsControl) {
+            cancelIncomingTakes();
             documents.cancelAll(); cancelDocumentSelection(); cancelFileShare(); cancelPhotoSelection(); cancelAudioPlayback();
         } else { PrivateDatabase selected=database; if(selected!=null) selected.cancel(); }
         cancelBackup("CANCELLED","Backup cancellation requested. A restore may have committed or a partial export may remain.");
@@ -885,12 +904,17 @@ public final class FactoryRuntime implements AutoCloseable {
     private void dispatchInstalledEffect(BridgeProtocol.Request request, Reply reply) throws Exception {
         if (!reply.current()) return;
         switch (request.operation) {
-            case VOICE_RECOGNITION_STATUS: case VOICE_RECOGNITION_RECOGNIZE: case VOICE_RECOGNITION_CANCEL:
+            case SECRETS_PUT: case SECRETS_CAPTURE: case SECRETS_GET: case SECRETS_LIST: case SECRETS_DESCRIBE: case SECRETS_REMOVE: case SECRETS_RESET: case SECRETS_REQUEST:
+                case VOICE_RECOGNITION_STATUS: case VOICE_RECOGNITION_RECOGNIZE: case VOICE_RECOGNITION_CANCEL:
                 case LOCATION_STATUS: case LOCATION_CURRENT: case LOCATION_CANCEL: case LOCATION_REQUEST_PERMISSION:
                 case RECORDING_STATUS: case RECORDING_RECORD: case RECORDING_STOP: case RECORDING_CANCEL: case RECORDING_REQUEST_PERMISSION:
                 case STEPS_STATUS: case STEPS_CURRENT: case STEPS_CANCEL: case STEPS_REQUEST_PERMISSION:
                 case SENSORS_SUBSCRIBE: case SENSORS_POLL: case SENSORS_UNSUBSCRIBE:
                 case NETWORK_REQUEST: case NETWORK_PROBE: case NETWORK_PING: case NETWORK_CANCEL:
+            case NOTIFICATIONS_SCHEDULE: case NOTIFICATIONS_RESUME_SCHEDULED: case NOTIFICATIONS_SCHEDULE_STATUS:
+            case NOTIFICATIONS_CANCEL_SCHEDULED: case NOTIFICATIONS_FORGET_SCHEDULED: case NOTIFICATIONS_POLL_ACTIONS:
+            case NOTIFICATIONS_ACK_ACTION: case NOTIFICATIONS_GENERATION_STATUS: case NOTIFICATIONS_FORGET_GENERATION:
+            case NOTIFICATIONS_REQUEST_EXACT_ALARM_ACCESS:
             case NOTIFICATIONS_STATUS: case NOTIFICATIONS_CHANNEL: case NOTIFICATIONS_SHOW: case NOTIFICATIONS_CANCEL: case NOTIFICATIONS_REQUEST_PERMISSION:
             case SPEECH_STATUS: case SPEECH_VOICES: case SPEECH_SPEAK: case SPEECH_STOP:
                 ensureNativeEffects();
@@ -921,6 +945,8 @@ public final class FactoryRuntime implements AutoCloseable {
                 playAudio(request, reply); break;
             case SHARE_FILE:
                 shareFile(request, reply); break;
+            case INCOMING_SHARE_LIST: case INCOMING_SHARE_TAKE: case INCOMING_SHARE_DISCARD:
+                incomingShareRequest(request, reply); break;
             case DOCUMENTS_OPEN: case DOCUMENTS_CREATE:
                 openDocument(request, reply); break;
             case DOCUMENTS_READ:
@@ -944,6 +970,7 @@ public final class FactoryRuntime implements AutoCloseable {
                 reply.ok(new JSONObject().put("status", "close_requested").put("providerCommitConfirmed", false)); break;
             case DOCUMENTS_CANCEL:
                 cancelBackup("CANCELLED","Backup cancellation requested. A restore may have committed or a partial export may remain.");
+                cancelIncomingTakes();
                 documents.cancelAll(); cancelDocumentSelection(); cancelFileShare(); cancelPhotoSelection(); cancelAudioPlayback();
                 reply.ok(new JSONObject().put("cancelled", true).put("rollbackConfirmed", false)
                         .put("pickerMayRemainOpen", documentSelection != null || photoSelection != null)); break;
@@ -958,6 +985,202 @@ public final class FactoryRuntime implements AutoCloseable {
             case EXPORT_TEXT:
                 authorizeTextEffect(request, reply); break;
             default: reply.fail("UNKNOWN_METHOD", "Native method is not implemented.");
+        }
+    }
+
+    private void initializeIncomingShares() {
+        if (incomingShares != null || config.incomingShare == null || host.isPreview()) return;
+        com.jarvys.factory.contract.ResourceBudgets.IncomingShare budget = config.resources.incomingShare;
+        IncomingSharePayload.Limits limits = new IncomingSharePayload.Limits(budget.queuedEnvelopes,
+                budget.attachmentsPerEnvelope, budget.textBytes, budget.queuedBytes);
+        incomingSharePolicy = new IncomingSharePayload.Policy(config.incomingShare.mimeTypes,
+                config.incomingShare.multiple, limits);
+        incomingShares = new IncomingShareInbox(limits, SystemClock::elapsedRealtime);
+    }
+    /** Stable source-page identity: ASK may pause the Activity without ending this owner. */
+    private final class IncomingPage implements IncomingShareInbox.Owner {
+        final int page = generation;
+        @Override public boolean current() {
+            return incomingPage == this && !destroyed && host.isSessionOpen() && page == generation
+                    && !activity.isDestroyed() && !activity.isFinishing();
+        }
+    }
+    /** Called under the lifecycle monitor, after the WebView identity has been checked. */
+    private void incomingPageStarted(String url) {
+        IncomingSharePayload initial = awaitingInitialIncomingPage ? initialIncomingShare : null;
+        invalidate(); // Never bind a copied launch payload to the generation being invalidated.
+        if (!AssetPolicy.navigationAllowed(url, true) || incomingShares == null) return;
+        IncomingPage owner = new IncomingPage(); incomingPage = owner;
+        if (initial != null) {
+            try { incomingShares.capture(owner, initial); }
+            catch (FactoryException rejected) { rejectIncomingShare(rejected.code); }
+        }
+    }
+    /** Fresh Android deliveries only. No original Intent, Bundle, ClipData or grant is retained. */
+    /** Record an inert own-app button event; no business action or JavaScript callback is executed. */
+    public void acceptNotificationAction(Intent intent) {
+        if (destroyed || config == null || host.isPreview() || !config.capabilities.contains("notifications")) return;
+        try {
+            if (NativeScheduledNotifications.actionToken(activity, intent) == null) return;
+            // Retain only the validated lookup identity, never arbitrary Android extras or Parcelables.
+            Intent snapshot = new Intent(intent.getAction()).setPackage(intent.getPackage())
+                    .setComponent(intent.getComponent()).setData(intent.getData());
+            android.content.Context application = activity.getApplicationContext();
+            NotificationScheduleEngine.Session session = new NotificationScheduleEngine.Session(FactoryNotificationServices.CLOCK, 8000);
+            Runnable expire = session::invalidate;
+            main.postDelayed(expire, 8000);
+            try {
+                io.execute(() -> {
+                    try { NotificationEffects.acceptAction(application, snapshot, session); }
+                    catch (FactoryException | RuntimeException unavailable) { main.post(() -> {
+                        if (!destroyed) host.onTrace("notifications.action", "unconfirmed");
+                    }); }
+                    finally { session.invalidate(); main.removeCallbacks(expire); }
+                });
+            } catch (RuntimeException busy) { session.invalidate(); main.removeCallbacks(expire); host.onTrace("notifications.action", "unconfirmed"); }
+        } catch (RuntimeException invalid) { host.onTrace("notifications.action", "rejected"); }
+    }
+
+    public void onNewIntent(Intent intent) {
+        IncomingSharePayload payload = copyIncomingShare(intent);
+        if (payload == null) return;
+        IncomingPage owner = incomingPage;
+        try {
+            if (incomingShares == null || owner == null || !owner.current())
+                throw new FactoryException("CANCELLED", "Incoming share page is unavailable.");
+            incomingShares.capture(owner, payload);
+        } catch (FactoryException rejected) { rejectIncomingShare(rejected.code); }
+    }
+    private IncomingSharePayload copyIncomingShare(Intent intent) {
+        if (intent == null || (!Intent.ACTION_SEND.equals(intent.getAction())
+                && !Intent.ACTION_SEND_MULTIPLE.equals(intent.getAction()))) return null;
+        try {
+            if (destroyed || !host.isSessionOpen() || incomingSharePolicy == null || host.isPreview())
+                throw new FactoryException("UNAVAILABLE", "Incoming sharing is unavailable.");
+            return IncomingShareCapture.capture(activity, intent, incomingSharePolicy);
+        } catch (FactoryException rejected) { rejectIncomingShare(rejected.code); return null; }
+    }
+    private void rejectIncomingShare(String code) {
+        // Never trace content, URI strings or sender-supplied labels.
+        host.onTrace("incomingShare.capture", "rejected");
+        if (!destroyed && !activity.isFinishing()) android.widget.Toast.makeText(activity,
+                "SHARE_QUEUE_FULL".equals(code) ? "The incoming share inbox is full. Please try again after clearing it."
+                        : "This share could not be received. Please reopen the app and share it again.",
+                android.widget.Toast.LENGTH_LONG).show();
+    }
+    private void incomingShareRequest(BridgeProtocol.Request request, Reply reply) throws Exception {
+        requireDocumentForeground();
+        IncomingPage owner = incomingPage;
+        if (incomingShares == null || owner == null || !owner.current())
+            throw new FactoryException("UNAVAILABLE", "Incoming sharing requires the current installed page.");
+        switch (request.operation) {
+            case INCOMING_SHARE_LIST:
+                IncomingShareRequest.list(request.args);
+                reply.ok(incomingShares.list(owner)); return;
+            case INCOMING_SHARE_DISCARD:
+                String discardedId = IncomingShareRequest.discard(request.args);
+                boolean discarded = incomingShares.discard(owner, discardedId);
+                for (IncomingTake work : new java.util.ArrayList<>(incomingTakes))
+                    if (!work.delivered && work.envelopeId.equals(discardedId))
+                        work.failed("CANCELLED", "Incoming share was discarded before delivery.");
+                reply.ok(new JSONObject().put("discarded", discarded)); return;
+            case INCOMING_SHARE_TAKE:
+                ensureNativeEffects();
+                IncomingShareRequest input = IncomingShareRequest.take(request.args);
+                IncomingShareInbox.Claim claim = incomingShares.claim(owner, input.id, input.attachmentIndices);
+                IncomingTake work = new IncomingTake(owner, input.id, claim, documents, reply);
+                try {
+                    // The native claim, not renderer-provided details, binds the exact content and indices.
+                    work.attach(nativePermissions.authorize("incomingShare.take", claim.authorizationDetails(), work));
+                } catch (Exception failed) { work.cancel(); throw failed; }
+                return;
+            default: throw new FactoryException("UNKNOWN_METHOD", "Incoming sharing method is unavailable.");
+        }
+    }
+    private void cancelIncomingTakes() {
+        for (IncomingTake work : new java.util.ArrayList<>(incomingTakes))
+            work.failed("CANCELLED", "Incoming share document access was cancelled.");
+    }
+    private final class IncomingTake implements NativePermissionSessions.Callback {
+        final IncomingPage owner;
+        final String envelopeId;
+        final IncomingShareInbox.Claim claim;
+        final DocumentHandles handles;
+        final Reply reply;
+        final android.os.CancellationSignal signal = new android.os.CancellationSignal();
+        final java.util.concurrent.atomic.AtomicBoolean cancellationQueued = new java.util.concurrent.atomic.AtomicBoolean();
+        volatile NativePermissionSessions.Lease lease;
+        volatile boolean delivered;
+        final Runnable timeout = () -> failed("TIMEOUT", "Incoming share selection expired before delivery.");
+        IncomingTake(IncomingPage owner, String envelopeId, IncomingShareInbox.Claim claim, DocumentHandles handles, Reply reply) {
+            this.owner = owner; this.envelopeId = envelopeId; this.claim = claim; this.handles = handles; this.reply = reply;
+            incomingTakes.add(this);
+            // One deadline inherited from capture; no renewal or zero-delay retry loop.
+            main.postDelayed(timeout, Math.max(1, claim.expiresAfterMs()));
+            // Called under the inbox lock: only enqueue, never call a provider or Binder here.
+            claim.onFinished(() -> main.post(this::finished));
+        }
+        void attach(NativePermissionSessions.Lease value) {
+            lease = value;
+            value.onCancelled(this::cancel);
+            if (!claim.current()) cancel();
+        }
+        @Override public boolean current() {
+            // Reply.current() ends after tryOk; disclosed streams still own the same native lease.
+            return owner.current() && claim.current() && (delivered || reply.live());
+        }
+        @Override public boolean claimUi() { return FactoryRuntime.this.claimUi(reply); }
+        @Override public void releaseUi() { if (uiOwner == reply) uiOwner = null; }
+        @Override public void ready(NativePermissionSessions.Lease value) {
+            if (lease == null) attach(value);
+            try {
+                value.check();
+                io.execute(() -> {
+                    try {
+                        claim.prepare(handles, value::check, IncomingShareStreams.opener(activity, value::check, signal));
+                        if (!main.post(this::deliver)) cancel();
+                    } catch (Exception failure) {
+                        String code = failure instanceof FactoryException ? ((FactoryException) failure).code
+                                : failure instanceof SecurityException ? "PERMISSION_DENIED" : "IO_ERROR";
+                        if (!main.post(() -> failed(code, "Incoming share could not be read under its current permission."))) cancel();
+                    }
+                });
+            } catch (RejectedExecutionException busy) { failed("BUSY", "Native operation queue is full."); }
+            catch (RuntimeException denied) { failed("PERMISSION_DENIED", "Incoming share permission is no longer available."); }
+        }
+        private void deliver() {
+            try {
+                if (!current() || !reply.current()) { cancel(); return; }
+                lease.check();
+                JSONObject result = claim.commit();
+                delivered = true; // Native-only state, at this controlled consumption/delivery boundary.
+                if (!reply.tryOk(result)) cancel(); // Never requeue committed content after an uncertain post.
+                main.removeCallbacks(timeout);
+            } catch (FactoryException failure) { failed(failure.code, failure.getMessage()); }
+            catch (RuntimeException failure) { failed("PERMISSION_DENIED", "Incoming share delivery authority ended."); }
+        }
+        @Override public void failed(String code, String message) {
+            cancel(); main.removeCallbacks(timeout); incomingTakes.remove(this); reply.fail(code, message);
+        }
+        void cancel() {
+            claim.close(); cancelProvider();
+            NativePermissionSessions.Lease value = lease;
+            if (value != null) value.close();
+        }
+        private void finished() {
+            NativePermissionSessions.Lease value = lease;
+            if (value != null) value.close();
+            cancelProvider();
+            // prepare() cancels before throwing. Do not race its specific HANDLE_LIMIT/IO error
+            // with a generic cancellation response. Discard, policy and expiry settle explicitly.
+            if (delivered || !reply.live()) { main.removeCallbacks(timeout); incomingTakes.remove(this); }
+        }
+        private void cancelProvider() {
+            if (!cancellationQueued.compareAndSet(false, true)) return;
+            try { DOCUMENT_CLEANUP.execute(() -> { try { signal.cancel(); } catch (RuntimeException ignored) { } }); }
+            catch (RejectedExecutionException busy) {
+                // Best effort only. Authority is already revoked; a blocked provider retains its reservation.
+            }
         }
     }
 
@@ -2323,6 +2546,7 @@ public final class FactoryRuntime implements AutoCloseable {
     @Override public void close() {
         synchronized (lifecycle) { if (destroyed) return; destroyed = true; invalidate(); host.resetStorage(); }
         main.removeCallbacks(expireDocuments);
+        if (incomingShares != null) incomingShares.close();
         documents.revokeAll();
         io.shutdown();
         disposeWebView();

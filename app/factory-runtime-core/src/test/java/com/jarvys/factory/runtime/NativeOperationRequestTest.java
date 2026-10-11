@@ -54,4 +54,36 @@ public class NativeOperationRequestTest {
         assertNotEquals(value.binding(NONCE), NativeOperationRequest.parse("network.ping", value.details().put("count", 2)).binding(NONCE));
         assertThrows(FactoryException.class, () -> NativeOperationRequest.parse("network.ping", "{\"host\":\"example.com\"}"));
     }
+    @Test public void secretMetadataBindingNeverIncludesPutValueAndBindsScope() throws Exception {
+        JSONObject scope = new JSONObject().put("origin", "https://example.com").put("methods", new org.json.JSONArray().put("GET")).put("header", "authorization").put("prefix", "Bearer ");
+        JSONObject metadata = new JSONObject().put("label", "Synthetic").put("scope", scope);
+        NativeOperationRequest request = NativeOperationRequest.parse("secrets.put", metadata);
+        assertEquals("secrets", request.capability);
+        assertEquals(request.binding(NONCE), NativeOperationRequest.parse("secrets.put", request.canonicalJson()).binding(NONCE));
+        assertThrows(FactoryException.class, () -> NativeOperationRequest.parse("secrets.put", request.details().put("value", "synthetic-not-a-real-secret")));
+        scope.put("methods", new org.json.JSONArray().put("POST"));
+        assertNotEquals(request.binding(NONCE), NativeOperationRequest.parse("secrets.put", metadata).binding(NONCE));
+    }
+    @Test public void secretBackedRequestBindsCompleteNetworkWithoutGrantingOtherOperations() throws Exception {
+        JSONObject details = new JSONObject().put("id", "sec_" + "a".repeat(32)).put("request", NetworkRequest.fromRequest(new JSONObject().put("url", "https://example.com")).authorizationDetails());
+        NativeOperationRequest request = NativeOperationRequest.parse("secrets.request", details);
+        assertEquals("secrets", request.capability);
+        details.getJSONObject("request").put("url", "https://example.com/other");
+        assertNotEquals(request.binding(NONCE), NativeOperationRequest.parse("secrets.request", details).binding(NONCE));
+        details.getJSONObject("request").put("url", "http://example.com");
+        assertThrows(FactoryException.class, () -> NativeOperationRequest.parse("secrets.request", details));
+    }
+    @Test public void incomingSelectionBindsOrderedIndicesAndRejectsInjectedProviderUri() throws Exception {
+        JSONObject details = new JSONObject().put("envelopeId", NONCE).put("action", "android.intent.action.SEND_MULTIPLE")
+            .put("declaredMimeType", "image/*").put("subject", "Untrusted").put("textPreview", "Hello")
+            .put("textPreviewTruncated", false).put("textBytes", 5).put("attachmentIndices", new org.json.JSONArray().put(0).put(2))
+            .put("attachmentCount", 2).put("contentSha256", NONCE);
+        NativeOperationRequest request = NativeOperationRequest.parse("incomingShare.take", details);
+        assertEquals("incomingShare", request.capability);
+        assertEquals(request.binding(NONCE), NativeOperationRequest.parse("incomingShare.take", request.canonicalJson()).binding(NONCE));
+        assertThrows(FactoryException.class, () -> NativeOperationRequest.parse("incomingShare.take", request.details().put("uri", "content://synthetic/item")));
+        assertThrows(FactoryException.class, () -> NativeOperationRequest.parse("incomingShare.take", request.details().put("attachmentIndices", new org.json.JSONArray().put(2).put(0))));
+        assertThrows(FactoryException.class, () -> NativeOperationRequest.parse("incomingShare.take", request.details().put("attachmentCount", 1)));
+    }
+
 }

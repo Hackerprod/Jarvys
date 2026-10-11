@@ -27,7 +27,8 @@ internal class FactoryOperationPolicy internal constructor(private val store: St
         NOTIFICATIONS_CHANNEL("notifications.channel"), NOTIFICATIONS_PERMISSION("notifications.requestPermission"),
         NOTIFICATIONS_SHOW("notifications.show"), NOTIFICATIONS_CANCEL("notifications.cancel"),
         SPEECH_VOICES("speech.voices"), SPEECH_SPEAK("speech.speak"), SPEECH_STOP("speech.stop"),
-        VOICE_RECOGNITION_RECOGNIZE("voiceRecognition.recognize"), LOCATION_CURRENT("location.current"), LOCATION_REQUEST_PERMISSION("location.requestPermission"), RECORDING_RECORD("recording.record"), RECORDING_REQUEST_PERMISSION("recording.requestPermission"), STEPS_CURRENT("steps.current"), STEPS_REQUEST_PERMISSION("steps.requestPermission"), SENSORS_SUBSCRIBE("sensors.subscribe")
+        VOICE_RECOGNITION_RECOGNIZE("voiceRecognition.recognize"), LOCATION_CURRENT("location.current"), LOCATION_REQUEST_PERMISSION("location.requestPermission"), RECORDING_RECORD("recording.record"), RECORDING_REQUEST_PERMISSION("recording.requestPermission"), STEPS_CURRENT("steps.current"), STEPS_REQUEST_PERMISSION("steps.requestPermission"), SENSORS_SUBSCRIBE("sensors.subscribe"),
+        SECRETS_PUT("secrets.put"), SECRETS_CAPTURE("secrets.capture"), SECRETS_GET("secrets.get"), SECRETS_LIST("secrets.list"), SECRETS_DESCRIBE("secrets.describe"), SECRETS_REMOVE("secrets.remove"), SECRETS_RESET("secrets.reset"), SECRETS_REQUEST("secrets.request"), INCOMING_SHARE_TAKE("incomingShare.take"), NOTIFICATIONS_SCHEDULE("notifications.schedule"), NOTIFICATIONS_REQUEST_EXACT_ALARM_ACCESS("notifications.requestExactAlarmAccess")
     }
     data class Subject private constructor(val kind: String, val appId: String, val identity: String) {
         val key: String get() = binding(kind, appId, identity)

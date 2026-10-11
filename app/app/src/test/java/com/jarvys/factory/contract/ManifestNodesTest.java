@@ -53,7 +53,7 @@ public class ManifestNodesTest {
         assertEquals(4,current.nodes.get(6).parentIndex);
     }
     @Test public void all1048576OriginalCapabilitySelectionsRetainSixCurrentManifestShapes() throws Exception {
-        assertEquals(27, CapabilityCatalog.NAMES.size());
+        assertEquals(29, CapabilityCatalog.NAMES.size());
         assertEquals(list("storage", "export", "share", "clipboard", "haptics", "device", "documents", "photos", "audio",
                 "browser", "maps", "phone", "email", "sms", "contacts", "calendar", "database", "presentation", "sensors", "biometrics"),
                 CapabilityCatalog.NAMES.subList(0, 20));
@@ -193,13 +193,18 @@ public class ManifestNodesTest {
     @Test public void nativeCatalogAndBrokerRequirementAreClosedImmutableAndValidateTheWholeSelection() {
         assertEquals(list(CapabilityCatalog.Method.NETWORK_REQUEST, CapabilityCatalog.Method.NETWORK_PROBE,
                 CapabilityCatalog.Method.NETWORK_PING, CapabilityCatalog.Method.NETWORK_CANCEL), CapabilityCatalog.CAPABILITIES.get("network").methods);
-        assertEquals(list(CapabilityCatalog.Method.NOTIFICATIONS_STATUS, CapabilityCatalog.Method.NOTIFICATIONS_CHANNEL,
+        assertEquals(list(CapabilityCatalog.Method.NOTIFICATIONS_SCHEDULE, CapabilityCatalog.Method.NOTIFICATIONS_RESUME_SCHEDULED,
+                CapabilityCatalog.Method.NOTIFICATIONS_SCHEDULE_STATUS, CapabilityCatalog.Method.NOTIFICATIONS_CANCEL_SCHEDULED,
+                CapabilityCatalog.Method.NOTIFICATIONS_FORGET_SCHEDULED, CapabilityCatalog.Method.NOTIFICATIONS_POLL_ACTIONS,
+                CapabilityCatalog.Method.NOTIFICATIONS_ACK_ACTION, CapabilityCatalog.Method.NOTIFICATIONS_GENERATION_STATUS,
+                CapabilityCatalog.Method.NOTIFICATIONS_FORGET_GENERATION, CapabilityCatalog.Method.NOTIFICATIONS_REQUEST_EXACT_ALARM_ACCESS,
+                CapabilityCatalog.Method.NOTIFICATIONS_STATUS, CapabilityCatalog.Method.NOTIFICATIONS_CHANNEL,
                 CapabilityCatalog.Method.NOTIFICATIONS_SHOW, CapabilityCatalog.Method.NOTIFICATIONS_CANCEL,
                 CapabilityCatalog.Method.NOTIFICATIONS_REQUEST_PERMISSION), CapabilityCatalog.CAPABILITIES.get("notifications").methods);
         assertEquals(list(CapabilityCatalog.Method.SPEECH_STATUS, CapabilityCatalog.Method.SPEECH_VOICES,
                 CapabilityCatalog.Method.SPEECH_SPEAK, CapabilityCatalog.Method.SPEECH_STOP), CapabilityCatalog.CAPABILITIES.get("speech").methods);
         List<String> brokerCaps = list("documents", "browser", "maps", "phone", "email", "sms", "contacts", "calendar",
-                "clipboard", "share", "export", "network", "notifications", "speech", "voiceRecognition", "location", "recording", "steps", "sensors");
+                "clipboard", "share", "export", "network", "notifications", "speech", "voiceRecognition", "location", "recording", "steps", "sensors", "secrets", "incomingShare");
         for (CapabilityCatalog.Capability capability : CapabilityCatalog.CAPABILITIES.values()) {
             assertEquals(brokerCaps.contains(capability.name), CapabilityCatalog.requiresHostBroker(list(capability.name)));
             assertEquals(brokerCaps.contains(capability.name) ? CapabilityCatalog.DOCUMENT_BROKER_PACKAGES : Collections.emptySet(), capability.queries);
@@ -231,7 +236,7 @@ public class ManifestNodesTest {
                 assertEquals(current.capabilities, legacy.capabilities);
             }
         }
-        for (ManifestPlan.Profile profile : ManifestPlan.Profile.values()) if (profile != ManifestPlan.Profile.CURRENT)
+        for (ManifestPlan.Profile profile : ManifestPlan.Profile.values()) if (profile != ManifestPlan.Profile.CURRENT && profile != ManifestPlan.Profile.V3_BEFORE_INCOMING_SHARE)
             for (String cap : list("network", "notifications", "speech", "voiceRecognition", "location", "recording", "steps"))
                 assertThrows(IllegalArgumentException.class, () -> new ManifestPlan("org.example.old", "old", 1, "1",
                         0x7f010000, 0x7f020000, list(cap), profile));
@@ -241,7 +246,7 @@ public class ManifestNodesTest {
         ManifestAudit.read(ManifestXml.encode(ancient)).verify(ancient);
     }
     @Test public void sensorManifestContributionsAreCurrentOnlyAndHistoricalBytesRemainExact() throws Exception {
-        for (ManifestPlan.Profile profile : ManifestPlan.Profile.values()) if (profile != ManifestPlan.Profile.CURRENT) {
+        for (ManifestPlan.Profile profile : ManifestPlan.Profile.values()) if (profile != ManifestPlan.Profile.CURRENT && profile != ManifestPlan.Profile.V3_BEFORE_INCOMING_SHARE) {
             List<List<String>> selections = new ArrayList<>(list(list("sensors"), list("sensors", "storage"),
                     list("sensors", "clipboard", "share", "export")));
             if (profile != ManifestPlan.Profile.V1_BEFORE_SAFE_AREA)
@@ -289,8 +294,8 @@ public class ManifestNodesTest {
         java.net.URL location = CapabilityCatalog.class.getProtectionDomain().getCodeSource().getLocation();
         try (java.net.URLClassLoader loader = new java.net.URLClassLoader(new java.net.URL[]{location}, null)) {
             Class<?> catalog = Class.forName(CapabilityCatalog.class.getName(), true, loader);
-            assertEquals(27, ((List<?>) catalog.getField("NAMES").get(null)).size());
-            assertEquals(78, ((java.util.Map<?, ?>) catalog.getField("METHODS").get(null)).size());
+            assertEquals(29, ((List<?>) catalog.getField("NAMES").get(null)).size());
+            assertEquals(99, ((java.util.Map<?, ?>) catalog.getField("METHODS").get(null)).size());
         }
         assertEquals("android.speech.action.RECOGNIZE_SPEECH", CapabilityCatalog.RECOGNIZE_SPEECH_ACTION);
         ManifestNodes.Element exact = ManifestNodes.queryIntent(CapabilityCatalog.RECOGNIZE_SPEECH_ACTION, null, null);
@@ -330,7 +335,7 @@ public class ManifestNodesTest {
         assertNotNull(biometrics); assertEquals(30, biometrics.minimumApi);
         assertEquals(24, CapabilityCatalog.MIN_APP_API);
         assertEquals(1, CapabilityCatalog.SCHEMA_VERSION); assertEquals(2, CapabilityCatalog.SDK_VERSION);
-        assertEquals(78, CapabilityCatalog.METHODS.size());
+        assertEquals(99, CapabilityCatalog.METHODS.size());
         assertEquals(list(CapabilityCatalog.Method.BIOMETRICS_AVAILABILITY,
                 CapabilityCatalog.Method.BIOMETRICS_AUTHENTICATE, CapabilityCatalog.Method.BIOMETRICS_CANCEL), biometrics.methods);
         assertEquals(Collections.singleton(CapabilityCatalog.BIOMETRIC_PERMISSION), biometrics.permissions);
@@ -559,20 +564,24 @@ public class ManifestNodesTest {
         assertThrows(UnsupportedOperationException.class, () -> presentation.methods.clear());
     }
 
-    @Test public void sensorsAreStandaloneImmutableAndAddNoPermissionsFeaturesOrQueries() throws Exception {
+    @Test public void sensorsKeepExplicitCurrentManifestWhileFiniteLegacyConfigNeedsNoHost() throws Exception {
         CapabilityCatalog.Capability sensors=CapabilityCatalog.CAPABILITIES.get("sensors");assertNotNull(sensors);
-        assertEquals(list(CapabilityCatalog.Method.SENSORS_LIST,CapabilityCatalog.Method.SENSORS_CAPTURE,CapabilityCatalog.Method.SENSORS_CANCEL),sensors.methods);
-        assertTrue(sensors.permissions.isEmpty());assertTrue(sensors.features.isEmpty());assertTrue(sensors.components.isEmpty());assertTrue(sensors.queries.isEmpty());
-        assertTrue(sensors.intentFilters.isEmpty());assertTrue(sensors.metadata.isEmpty());assertTrue(sensors.resources.isEmpty());assertTrue(sensors.dependencies.isEmpty());assertTrue(sensors.conflicts.isEmpty());assertTrue(sensors.manifestNodes.isEmpty());
-        ManifestPlan standalone=plan(list("sensors"));assertEquals(list("sensors"),standalone.capabilities);assertArrayEquals(ManifestXml.encode(plan(Collections.emptyList())),ManifestXml.encode(standalone));
+        assertEquals(list(CapabilityCatalog.Method.SENSORS_LIST,CapabilityCatalog.Method.SENSORS_CAPTURE,CapabilityCatalog.Method.SENSORS_CANCEL,
+                CapabilityCatalog.Method.SENSORS_SUBSCRIBE,CapabilityCatalog.Method.SENSORS_POLL,CapabilityCatalog.Method.SENSORS_UNSUBSCRIBE),sensors.methods);
+        assertEquals(Collections.singleton(CapabilityCatalog.HIGH_RATE_SENSORS_PERMISSION),sensors.permissions);
+        assertTrue(sensors.features.isEmpty());assertTrue(sensors.components.isEmpty());assertEquals(CapabilityCatalog.DOCUMENT_BROKER_PACKAGES,sensors.queries);
+        assertTrue(sensors.intentFilters.isEmpty());assertTrue(sensors.metadata.isEmpty());assertTrue(sensors.resources.isEmpty());assertTrue(sensors.dependencies.isEmpty());assertTrue(sensors.conflicts.isEmpty());
+        ManifestPlan standalone=plan(list("sensors"));assertEquals(list("sensors"),standalone.capabilities);
+        assertEquals(list(CapabilityCatalog.HIGH_RATE_SENSORS_PERMISSION),standalone.permissions);
+        assertFalse(CapabilityCatalog.requiresMandatoryHostBroker(list("sensors")));
         for(CapabilityCatalog.Method method:sensors.methods){assertEquals("sensors",method.capability);assertSame(method,CapabilityCatalog.METHODS.get(method.wireName));}
         assertThrows(UnsupportedOperationException.class,()->sensors.methods.clear());
     }
 
     @Test public void storageBackupExtendsExistingCapabilityWithoutManifestAuthority() {
         CapabilityCatalog.Capability storage = CapabilityCatalog.CAPABILITIES.get("storage");
-        assertEquals(23, CapabilityCatalog.NAMES.size());
-        assertEquals(78, CapabilityCatalog.METHODS.size());
+        assertEquals(29, CapabilityCatalog.NAMES.size());
+        assertEquals(99, CapabilityCatalog.METHODS.size());
         assertEquals(list(CapabilityCatalog.Method.STORAGE_GET, CapabilityCatalog.Method.STORAGE_SET,
                 CapabilityCatalog.Method.STORAGE_REMOVE, CapabilityCatalog.Method.STORAGE_LIST,
                 CapabilityCatalog.Method.STORAGE_BACKUP_EXPORT, CapabilityCatalog.Method.STORAGE_BACKUP_IMPORT), storage.methods);

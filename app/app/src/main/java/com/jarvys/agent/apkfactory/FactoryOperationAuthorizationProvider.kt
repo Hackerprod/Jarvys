@@ -15,8 +15,11 @@ import android.os.Looper
 import android.os.Parcel
 import android.os.SystemClock
 import com.jarvys.agent.MemoryUiAutomationGuard
+import com.jarvys.factory.contract.CapabilityCatalog
+import com.jarvys.factory.runtime.NativeBackgroundAuthorization
 import com.jarvys.factory.runtime.NativeOperationAuthorization
 import com.jarvys.factory.runtime.NativeOperationRequest
+import com.jarvys.factory.runtime.ResourceBudgetsJson
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.concurrent.ArrayBlockingQueue
@@ -38,8 +41,23 @@ open class FactoryOperationAuthorizationProvider : ContentProvider() {
         val caller = callingPackage ?: throw SecurityException("Missing native caller")
         val app = requireNotNull(context).applicationContext
         if (method == METHOD_GUARD_STATUS) return peerGuardStatus(app, caller, uid, arg, extras)
-        require(method == METHOD_ACQUIRE && arg == null)
-        require(extras != null && extras.keySet() == setOf("protocolVersion", "operation", "nonce", "details") && !extras.hasFileDescriptors())
+        if (method == METHOD_DESCRIBE_INSTALLED) return describeInstalled(app, caller, uid, arg, extras)
+        val background = method == METHOD_ACQUIRE_BACKGROUND
+        require((method == METHOD_ACQUIRE || background) && arg == null)
+        val expectedKeys = setOf("protocolVersion", "operation", "nonce", "details") + if (background) setOf("deadlineElapsedMs", "expectedSource") else emptySet()
+        require(extras != null && extras.keySet() == expectedKeys && !extras.hasFileDescriptors())
+        val started = SystemClock.elapsedRealtime()
+        val backgroundDeadline = if (background) {
+            @Suppress("DEPRECATION") val rawDeadline = extras.get("deadlineElapsedMs")
+            require(rawDeadline is Long && rawDeadline > started)
+            minOf(rawDeadline, started + 8_000L)
+        } else null
+        val acquisitionDeadline = if (backgroundDeadline != null) minOf(backgroundDeadline, started + 2_000L) else started + 30_000L
+        val expectedSource = if (background) {
+            @Suppress("DEPRECATION") val rawSource = extras.get("expectedSource")
+            require(rawSource is String)
+            NativeBackgroundAuthorization.SourceIdentity.parse(rawSource).also { require(it.appId == caller) }
+        } else null
         @Suppress("DEPRECATION") val version = extras.get("protocolVersion")
         @Suppress("DEPRECATION") val operation = extras.get("operation")
         @Suppress("DEPRECATION") val nonce = extras.get("nonce")
@@ -59,19 +77,32 @@ open class FactoryOperationAuthorizationProvider : ContentProvider() {
                 check(!cancelled.get())
                 requireCaller(app, caller, uid)
                 val before = sourceStamp(app, caller, uid)
-                val proof = verifiedCaller(app, caller, setOf(request.capability))
+                val requiredCapabilities = setOf(request.capability) + if (request.operation == "secrets.request") setOf("network") else emptySet()
+                val proof = verifiedCaller(app, caller, requiredCapabilities)
                 require(proof.appId == caller)
+                if (expectedSource != null) require(proof.appId == expectedSource.appId && proof.certificate == expectedSource.certificateSha256 &&
+                    proof.apk == expectedSource.apkSha256 && proof.record == expectedSource.recordSha256 && proof.version == expectedSource.versionCode) { "Installed source changed after description" }
                 val stamp = sourceStamp(app, caller, uid)
                 require(stamp == before && stamp.certificate == proof.certificate && stamp.version == proof.version)
-                val authority = FactoryDocumentCoordinator.captureTrustedAuthority(app, proof, setOf(request.capability))
+                val authority = FactoryDocumentCoordinator.captureTrustedAuthority(app, proof, requiredCapabilities)
                 trust = authority
                 check(!cancelled.get())
-                val binding = request.binding(nonce)
+                val binding = if (expectedSource == null) request.binding(nonce) else request.binding(nonce, expectedSource.bindingEvidence())
                 val policyBinding = request.binding(nonce, FactoryOperationPolicy.binding(proof.appId, proof.certificate, proof.apk, proof.version.toString(), proof.record))
-                grant = operationPolicy(app).acquire(FactoryOperationPolicy.Subject.installed(proof), selected, policyBinding)
+                check(SystemClock.elapsedRealtime() < acquisitionDeadline)
+                val policy = operationPolicy(app)
+                val subject = FactoryOperationPolicy.Subject.installed(proof)
+                if (background) {
+                    check(policy.isHealthy())
+                    val mode = policy.mode(subject, selected)
+                    if (mode != FactoryOperationPolicy.Mode.ALLOW_ALWAYS) throw BackgroundDecision(mode)
+                }
+                grant = policy.acquire(subject, selected, policyBinding)
+                // A change to ASK between the read and acquisition creates no background review UI.
+                if (background && grant.requiresApproval) throw BackgroundDecision(FactoryOperationPolicy.Mode.ASK)
                 check(!cancelled.get())
                 val value = Session(app, uid, caller, nonce, request, proof, grant, binding, stamp,
-                    { authority.requireCurrent() }, { authority.close() })
+                    { authority.requireCurrent() }, { authority.close() }, backgroundDeadline)
                 session = value
                 register(value)
                 value.attachRevocation()
@@ -86,8 +117,8 @@ open class FactoryOperationAuthorizationProvider : ContentProvider() {
             }
         }
         try {
-            val value = work.get(30, TimeUnit.SECONDS)
-            check(!cancelled.get())
+            val value = work.get(maxOf(0L, acquisitionDeadline - SystemClock.elapsedRealtime()), TimeUnit.MILLISECONDS)
+            check(!cancelled.get() && SystemClock.elapsedRealtime() < acquisitionDeadline)
             return Bundle().apply {
                 putInt("protocolVersion", 1); putString("nonce", value.nonce); putString("binding", value.binding)
                 putBinder("lease", value.lease); putInt("status", if (value.closed.get()) NativeOperationAuthorization.TERMINAL
@@ -97,7 +128,81 @@ open class FactoryOperationAuthorizationProvider : ContentProvider() {
         } catch (failure: Throwable) {
             // A worker finishing after timeout cannot publish an orphan grant or review token.
             cancelled.set(true); completed.get()?.close(); work.cancel(true)
+            if (work is Runnable) WORKER.remove(work)
+            if (failure is InterruptedException) Thread.currentThread().interrupt()
+            val decision = (failure as? java.util.concurrent.ExecutionException)?.cause ?: failure
+            if (background && decision is BackgroundDecision) return Bundle().apply {
+                putInt("protocolVersion", 1); putString("nonce", nonce); putString("binding", request.binding(nonce, requireNotNull(expectedSource).bindingEvidence()))
+                putString("decision", decision.mode.name)
+                putInt("status", if (decision.mode == FactoryOperationPolicy.Mode.ASK) NativeOperationAuthorization.PENDING else NativeOperationAuthorization.TERMINAL)
+            }
             throw SecurityException("Native operation authorization unavailable", failure)
+        }
+    }
+
+    private class BackgroundDecision(val mode: FactoryOperationPolicy.Mode) : RuntimeException()
+
+    /**
+     * Point-in-time installed source metadata for a cold receiver. This creates no operation grant,
+     * review, policy write, or reusable authority; every effect still needs its own fresh live lease.
+     */
+    private fun describeInstalled(app: Context, caller: String, uid: Int, arg: String?, extras: Bundle?): Bundle {
+        require(arg == null && extras != null && !extras.hasFileDescriptors() &&
+            extras.keySet() == setOf("protocolVersion", "nonce", "capability", "deadlineElapsedMs"))
+        @Suppress("DEPRECATION") val version = extras.get("protocolVersion")
+        @Suppress("DEPRECATION") val nonce = extras.get("nonce")
+        @Suppress("DEPRECATION") val capability = extras.get("capability")
+        @Suppress("DEPRECATION") val rawDeadline = extras.get("deadlineElapsedMs")
+        val started = SystemClock.elapsedRealtime()
+        require(version is Int && version == 1 && nonce is String && nonce.matches(HEX) &&
+            capability is String && capability in CapabilityCatalog.SUPPORTED && rawDeadline is Long && rawDeadline > started)
+        val deadline = minOf(rawDeadline, started + 2_000L)
+        requireCaller(app, caller, uid)
+        val cancelled = AtomicBoolean()
+        fun requireCurrent() {
+            check(!cancelled.get() && !Thread.currentThread().isInterrupted && SystemClock.elapsedRealtime() < deadline)
+        }
+        val work = try { WORKER.submit<Bundle> {
+            requireCurrent()
+            requireCaller(app, caller, uid)
+            val before = sourceStamp(app, caller, uid)
+            val capabilities = setOf(capability)
+            val proof = verifiedCaller(app, caller, capabilities)
+            requireCurrent()
+            require(proof.appId == caller && proof.certificate.matches(HEX) && proof.apk.matches(HEX) &&
+                proof.record.matches(HEX) && proof.version > 0)
+            val stamp = sourceStamp(app, caller, uid)
+            require(stamp == before && stamp.certificate == proof.certificate && stamp.version == proof.version)
+            // Capture re-authenticates the signed receipt and budgets under the signing identity
+            // lock. The temporary token is always closed, including interrupted or late workers.
+            FactoryDocumentCoordinator.captureTrustedAuthority(app, proof, capabilities).use { authority ->
+                requireCurrent()
+                authority.requireCurrent()
+                val result = Bundle().apply {
+                    putInt("protocolVersion", 1); putString("nonce", nonce); putString("capability", capability)
+                    putLong("deadlineElapsedMs", deadline); putString("appId", proof.appId)
+                    putString("certificateSha256", proof.certificate); putString("apkSha256", proof.apk)
+                    putString("recordSha256", proof.record); putLong("versionCode", proof.version)
+                    putString("resourceBudgets", ResourceBudgetsJson.toJson(proof.resources).toString())
+                }
+                check(sourceStamp(app, caller, uid) == stamp) { "Installed source changed" }
+                authority.requireCurrent()
+                requireCurrent()
+                result
+            }
+        } } catch (failure: Exception) {
+            cancelled.set(true)
+            throw SecurityException("Installed source verification unavailable", failure)
+        }
+        try {
+            val result = work.get(maxOf(0L, deadline - SystemClock.elapsedRealtime()), TimeUnit.MILLISECONDS)
+            requireCurrent()
+            return result
+        } catch (failure: Throwable) {
+            cancelled.set(true); work.cancel(true)
+            if (work is Runnable) WORKER.remove(work)
+            if (failure is InterruptedException) Thread.currentThread().interrupt()
+            throw SecurityException("Installed source verification unavailable", failure)
         }
     }
 
@@ -207,14 +312,15 @@ open class FactoryOperationAuthorizationProvider : ContentProvider() {
         val grant: FactoryOperationPolicy.Grant, val binding: String, private val stamp: SourceStamp,
         private val trusted: (FactoryDocumentCoordinator.Proof) -> Unit,
         private val closeTrust: () -> Unit = {},
+        private val hardDeadline: Long? = null,
     ) : AutoCloseable {
         val token = randomToken()
-        val deadline = SystemClock.elapsedRealtime() + LEASE_MS
+        val deadline = hardDeadline ?: (SystemClock.elapsedRealtime() + LEASE_MS)
         val closed = AtomicBoolean()
         val claimed = AtomicBoolean()
         private val subscription = AtomicReference<AutoCloseable?>()
         private val trustSubscription = AtomicReference<AutoCloseable?>()
-        private val expired = Runnable { if (!lease.isConnected || grant.requiresApproval) close() }
+        private val expired = Runnable { if (hardDeadline != null || !lease.isConnected || grant.requiresApproval) close() }
         val lease = NativeOperationAuthorization(nonce, binding, deadline,
             { callerUid -> callerUid == uid && runCatching { requireCaller(context, caller, uid); true }.getOrDefault(false) },
             object : NativeOperationAuthorization.Authority {
@@ -238,12 +344,12 @@ open class FactoryOperationAuthorizationProvider : ContentProvider() {
             if (closed.get()) trustSubscription.getAndSet(null)?.close()
         }
         fun requireCurrent() {
-            check(!closed.get() && ((!lease.isConnected || grant.requiresApproval).not() || SystemClock.elapsedRealtime() < deadline))
+            check(!closed.get() && (hardDeadline == null && (!lease.isConnected || grant.requiresApproval).not() || SystemClock.elapsedRealtime() < deadline))
             grant.requireCurrent()
             check(sourceStamp(context, caller, uid) == stamp) { "Installed native caller changed" }
             trusted(proof)
             grant.requireCurrent()
-            check(!closed.get() && ((!lease.isConnected || grant.requiresApproval).not() || SystemClock.elapsedRealtime() < deadline))
+            check(!closed.get() && (hardDeadline == null && (!lease.isConnected || grant.requiresApproval).not() || SystemClock.elapsedRealtime() < deadline))
         }
         fun approve(human: () -> Unit) {
             val pending = grant.requiresApproval
@@ -272,6 +378,8 @@ open class FactoryOperationAuthorizationProvider : ContentProvider() {
     companion object {
         const val AUTHORITY_SUFFIX = ".factory.operations"
         const val METHOD_ACQUIRE = "acquire"
+        const val METHOD_ACQUIRE_BACKGROUND = "acquire_background"
+        const val METHOD_DESCRIBE_INSTALLED = "describe_installed"
         const val METHOD_GUARD_STATUS = "guardStatus"
         const val ACTIVITY = "com.jarvys.agent.apkfactory.FactoryOperationApprovalActivity"
         internal const val GUARD_INTERFACE = "com.jarvys.agent.PeerUiAutomationGuard.v1"

@@ -32,12 +32,15 @@ public final class FactoryDispatcher {
     public static Effects simulatedEffects() {
         return (method, args) -> {
             switch (method) {
+                case SECRETS_PUT: case SECRETS_CAPTURE: case SECRETS_GET: case SECRETS_LIST: case SECRETS_DESCRIBE: case SECRETS_REMOVE: case SECRETS_RESET: case SECRETS_REQUEST:
+                case INCOMING_SHARE_LIST: case INCOMING_SHARE_TAKE: case INCOMING_SHARE_DISCARD:
                 case VOICE_RECOGNITION_STATUS: case VOICE_RECOGNITION_RECOGNIZE: case VOICE_RECOGNITION_CANCEL:
                 case LOCATION_STATUS: case LOCATION_CURRENT: case LOCATION_CANCEL: case LOCATION_REQUEST_PERMISSION:
                 case RECORDING_STATUS: case RECORDING_RECORD: case RECORDING_STOP: case RECORDING_CANCEL: case RECORDING_REQUEST_PERMISSION:
                 case STEPS_STATUS: case STEPS_CURRENT: case STEPS_CANCEL: case STEPS_REQUEST_PERMISSION:
                 case SENSORS_SUBSCRIBE: case SENSORS_POLL: case SENSORS_UNSUBSCRIBE:
                 case NETWORK_REQUEST: case NETWORK_PROBE: case NETWORK_PING: case NETWORK_CANCEL:
+                case NOTIFICATIONS_SCHEDULE: case NOTIFICATIONS_RESUME_SCHEDULED: case NOTIFICATIONS_SCHEDULE_STATUS: case NOTIFICATIONS_CANCEL_SCHEDULED: case NOTIFICATIONS_FORGET_SCHEDULED: case NOTIFICATIONS_POLL_ACTIONS: case NOTIFICATIONS_ACK_ACTION: case NOTIFICATIONS_GENERATION_STATUS: case NOTIFICATIONS_FORGET_GENERATION: case NOTIFICATIONS_REQUEST_EXACT_ALARM_ACCESS:
                 case NOTIFICATIONS_STATUS: case NOTIFICATIONS_CHANNEL: case NOTIFICATIONS_SHOW: case NOTIFICATIONS_CANCEL: case NOTIFICATIONS_REQUEST_PERMISSION:
                 case SPEECH_STATUS: case SPEECH_VOICES: case SPEECH_SPEAK: case SPEECH_STOP:
                     throw new FactoryException("UNAVAILABLE", "Native network, notifications, speech, recognition and location require an installed generated app and live Jarvys policy. ICMP also requires an available Android ping utility. Preview does not perform or simulate these effects.");
@@ -117,9 +120,9 @@ public final class FactoryDispatcher {
                         .put("simulatedCapabilities", new JSONArray("preview".equals(metadata.mode())
                                 ? java.util.Arrays.asList("export", "share", "clipboard", "haptics") : java.util.Collections.emptyList()))
                         .put("unavailableCapabilities", new JSONArray("preview".equals(metadata.mode())
-                                ? java.util.Arrays.asList("documents", "photos", "audio", "browser", "maps", "phone", "email", "sms", "contacts", "calendar", "presentation", "sensors", "biometrics", "network", "notifications", "speech", "voiceRecognition", "location", "recording", "steps") : java.util.Collections.emptyList()))
+                                ? java.util.Arrays.asList("documents", "photos", "audio", "browser", "maps", "phone", "email", "sms", "contacts", "calendar", "presentation", "sensors", "biometrics", "network", "notifications", "speech", "voiceRecognition", "location", "recording", "steps", "secrets", "incomingShare") : java.util.Collections.emptyList()))
                         .put("unavailableMethods", new JSONArray("preview".equals(metadata.mode())
-                                ? java.util.Arrays.asList("share.file", "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture", "audio.play", "browser.open", "maps.open", "phone.dial", "email.compose", "sms.compose", "contacts.pick", "calendar.insert", "presentation.get", "presentation.set", "presentation.reset", "sensors.list", "sensors.capture", "sensors.cancel", "biometrics.availability", "biometrics.authenticate", "biometrics.cancel", "database.backupExport", "database.backupImport", "storage.backupExport", "storage.backupImport", "network.request", "network.probe", "network.ping", "network.cancel", "notifications.status", "notifications.channel", "notifications.show", "notifications.cancel", "notifications.requestPermission", "speech.status", "speech.voices", "speech.speak", "speech.stop", "voiceRecognition.status", "voiceRecognition.recognize", "voiceRecognition.cancel", "location.status", "location.current", "location.cancel", "location.requestPermission", "recording.status", "recording.record", "recording.stop", "recording.cancel", "recording.requestPermission", "steps.status", "steps.current", "steps.cancel", "steps.requestPermission", "sensors.subscribe", "sensors.poll", "sensors.unsubscribe")
+                                ? java.util.Arrays.asList("share.file", "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture", "audio.play", "browser.open", "maps.open", "phone.dial", "email.compose", "sms.compose", "contacts.pick", "calendar.insert", "presentation.get", "presentation.set", "presentation.reset", "sensors.list", "sensors.capture", "sensors.cancel", "biometrics.availability", "biometrics.authenticate", "biometrics.cancel", "database.backupExport", "database.backupImport", "storage.backupExport", "storage.backupImport", "network.request", "network.probe", "network.ping", "network.cancel", "notifications.status", "notifications.channel", "notifications.show", "notifications.cancel", "notifications.requestPermission", "notifications.schedule", "notifications.resumeScheduled", "notifications.scheduleStatus", "notifications.cancelScheduled", "notifications.forgetScheduled", "notifications.pollActions", "notifications.ackAction", "notifications.generationStatus", "notifications.forgetGeneration", "notifications.requestExactAlarmAccess", "speech.status", "speech.voices", "speech.speak", "speech.stop", "voiceRecognition.status", "voiceRecognition.recognize", "voiceRecognition.cancel", "location.status", "location.current", "location.cancel", "location.requestPermission", "recording.status", "recording.record", "recording.stop", "recording.cancel", "recording.requestPermission", "steps.status", "steps.current", "steps.cancel", "steps.requestPermission", "sensors.subscribe", "sensors.poll", "sensors.unsubscribe", "secrets.put", "secrets.capture", "secrets.get", "secrets.list", "secrets.describe", "secrets.remove", "secrets.reset", "secrets.request", "incomingShare.list", "incomingShare.take", "incomingShare.discard")
                                 : java.util.Collections.emptyList()))
                         .put("biometricsProtocolVersion", 1).put("biometricsBrokerRequired", false)
                         .put("biometricsRequires", new JSONArray(java.util.Collections.singletonList("biometrics")))
@@ -235,12 +238,15 @@ public final class FactoryDispatcher {
                                 .put("audioSampleRateMin", 8000).put("audioSampleRateMax", 48000)
                                 .put("documentHandleLifetimeMs", config.resources.documents.leaseMs));
             case DEVICE_INFO: return metadata.deviceInfo().put("declaredAppId", config.appId);
+                case SECRETS_PUT: case SECRETS_CAPTURE: case SECRETS_GET: case SECRETS_LIST: case SECRETS_DESCRIBE: case SECRETS_REMOVE: case SECRETS_RESET: case SECRETS_REQUEST:
+                case INCOMING_SHARE_LIST: case INCOMING_SHARE_TAKE: case INCOMING_SHARE_DISCARD:
                 case VOICE_RECOGNITION_STATUS: case VOICE_RECOGNITION_RECOGNIZE: case VOICE_RECOGNITION_CANCEL:
                 case LOCATION_STATUS: case LOCATION_CURRENT: case LOCATION_CANCEL: case LOCATION_REQUEST_PERMISSION:
                 case RECORDING_STATUS: case RECORDING_RECORD: case RECORDING_STOP: case RECORDING_CANCEL: case RECORDING_REQUEST_PERMISSION:
                 case STEPS_STATUS: case STEPS_CURRENT: case STEPS_CANCEL: case STEPS_REQUEST_PERMISSION:
                 case SENSORS_SUBSCRIBE: case SENSORS_POLL: case SENSORS_UNSUBSCRIBE:
                 case NETWORK_REQUEST: case NETWORK_PROBE: case NETWORK_PING: case NETWORK_CANCEL:
+                case NOTIFICATIONS_SCHEDULE: case NOTIFICATIONS_RESUME_SCHEDULED: case NOTIFICATIONS_SCHEDULE_STATUS: case NOTIFICATIONS_CANCEL_SCHEDULED: case NOTIFICATIONS_FORGET_SCHEDULED: case NOTIFICATIONS_POLL_ACTIONS: case NOTIFICATIONS_ACK_ACTION: case NOTIFICATIONS_GENERATION_STATUS: case NOTIFICATIONS_FORGET_GENERATION: case NOTIFICATIONS_REQUEST_EXACT_ALARM_ACCESS:
                 case NOTIFICATIONS_STATUS: case NOTIFICATIONS_CHANNEL: case NOTIFICATIONS_SHOW: case NOTIFICATIONS_CANCEL: case NOTIFICATIONS_REQUEST_PERMISSION:
                 case SPEECH_STATUS: case SPEECH_VOICES: case SPEECH_SPEAK: case SPEECH_STOP:
             case BIOMETRICS_AVAILABILITY: case BIOMETRICS_AUTHENTICATE: case BIOMETRICS_CANCEL:

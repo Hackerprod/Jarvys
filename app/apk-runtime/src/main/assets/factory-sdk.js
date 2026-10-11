@@ -62,6 +62,7 @@
       if (method === 'audio.play') timeout = 610000;
       if (method === 'biometrics.authenticate') timeout = 90000;
       if (/^(network|notifications|location|steps)\./.test(method)) timeout = 420000;
+      if (/^(secrets|incomingShare)\./.test(method)) timeout = 600000;
       if (/^voiceRecognition\./.test(method)) timeout = 900000;
       if (/^recording\./.test(method)) timeout = 3900000;
       if (/^speech\./.test(method)) timeout = method === 'speech.speak' ? 86400000 : 420000;
@@ -83,6 +84,21 @@
   }
   var api = Object.freeze({
     runtime: Object.freeze({ info: function () { return call('runtime.info', {}); } }),
+    secrets: Object.freeze({
+      put: function (options) { return call('secrets.put', options); },
+      capture: function (options) { return call('secrets.capture', options); },
+      get: function (options) { return call('secrets.get', options); },
+      list: function (options) { return call('secrets.list', options === undefined ? {} : options); },
+      describe: function (options) { return call('secrets.describe', options); },
+      remove: function (options) { return call('secrets.remove', options); },
+      reset: function (options) { return call('secrets.reset', options === undefined ? {} : options); },
+      request: function (options) { return call('secrets.request', options); }
+    }),
+    incomingShare: Object.freeze({
+      list: function (options) { return call('incomingShare.list', options === undefined ? {} : options); },
+      take: function (options) { return call('incomingShare.take', options); },
+      discard: function (options) { return call('incomingShare.discard', options); }
+    }),
     network: Object.freeze({
       request: function (options) { return call('network.request', options); },
       probe: function (options) { return call('network.probe', options); },
@@ -90,6 +106,17 @@
       cancel: function (options) { return call('network.cancel', options === undefined ? {} : options); }
     }),
     notifications: Object.freeze({
+      schedule: function (options) { return call('notifications.schedule', options); },
+      resumeScheduled: function (options) { return call('notifications.resumeScheduled', options); },
+      scheduleStatus: function (options) { return call('notifications.scheduleStatus', options); },
+      cancelScheduled: function (options) { return call('notifications.cancelScheduled', options); },
+      forgetScheduled: function (options) { return call('notifications.forgetScheduled', options); },
+      pollActions: function (options) { return call('notifications.pollActions', options === undefined ? {} : options); },
+      ackAction: function (options) { return call('notifications.ackAction', options); },
+      generationStatus: function (options) { return call('notifications.generationStatus', options); },
+      forgetGeneration: function (options) { return call('notifications.forgetGeneration', options); },
+      requestExactAlarmAccess: function (options) { return call('notifications.requestExactAlarmAccess', options === undefined ? {} : options); },
+
       status: function (options) { return call('notifications.status', options === undefined ? {} : options); },
       channel: function (options) { return call('notifications.channel', options); },
       show: function (options) { return call('notifications.show', options); },

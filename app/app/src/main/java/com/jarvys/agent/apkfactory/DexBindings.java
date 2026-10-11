@@ -28,7 +28,13 @@ public final class DexBindings {
     }
 
     /** Input contains only canonical classes.dex, classes2.dex, ... with no gaps. */
-    public static Map<String,String> verify(Map<String,byte[]> dexFiles) throws IOException {
+    public static Map<String,String> verify(Map<String,byte[]> dexFiles) throws IOException { return verify(dexFiles, false); }
+    public static Map<String,String> verify(Map<String,byte[]> dexFiles, boolean notificationScheduling) throws IOException {
+        Map<String,String> required = new LinkedHashMap<>(REQUIRED);
+        if (notificationScheduling) {
+            required.put("L" + com.jarvys.factory.contract.NotificationPolicy.ALARM_RECEIVER.replace('.', '/') + ";", "Landroid/content/BroadcastReceiver;");
+            required.put("L" + com.jarvys.factory.contract.NotificationPolicy.RECOVERY_RECEIVER.replace('.', '/') + ";", "Landroid/content/BroadcastReceiver;");
+        }
         check(dexFiles!=null && !dexFiles.isEmpty() && dexFiles.size()<=32,"DEX entry count");
         Map<String,String> evidence=new LinkedHashMap<>();
         Set<String> definitions=new HashSet<>();
@@ -39,9 +45,9 @@ public final class DexBindings {
             check(bytes!=null,"Missing canonical DEX entry: "+path);
             total+=bytes.length;
             check(total<=MAX_TOTAL,"DEX total size");
-            new Reader(bytes).verify(path,definitions,evidence);
+            new Reader(bytes).verify(path,definitions,evidence,required);
         }
-        check(evidence.size()==REQUIRED.size(),"Required component class definition missing");
+        check(evidence.size()==required.size(),"Required component class definition missing");
         return Collections.unmodifiableMap(new LinkedHashMap<>(evidence));
     }
 
@@ -52,7 +58,7 @@ public final class DexBindings {
         long listItems;
         String[] names,descriptors;
         Reader(byte[] bytes) { b=bytes; }
-        void verify(String path,Set<String> definitions,Map<String,String> evidence) throws IOException {
+        void verify(String path,Set<String> definitions,Map<String,String> evidence,Map<String,String> required) throws IOException {
             check(b.length>=112 && b.length<=MAX_BYTES,"DEX size");
             check(b[0]=='d' && b[1]=='e' && b[2]=='x' && b[3]=='\n' && b[7]==0,"DEX magic");
             String version=""+(char)b[4]+(char)b[5]+(char)b[6];
@@ -110,7 +116,7 @@ public final class DexBindings {
                 typeList(integer(p+12),true);
                 if(u32(p+16)!=0xffffffffL) name(integer(p+16));
                 optionalData(integer(p+20),4); optionalData(integer(p+28),1);
-                String expected=REQUIRED.get(desc);
+                String expected=required.get(desc);
                 if(expected!=null) {
                     check((flags&7)==1 && (flags&(0x200|0x400|0x2000))==0,"Component is not public concrete class: "+desc);
                     check(expected.equals(superclass),"Component superclass mismatch: "+desc);

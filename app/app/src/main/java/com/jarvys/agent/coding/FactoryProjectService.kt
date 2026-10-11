@@ -74,7 +74,7 @@ internal class FactoryProjectService(
             .put("supportedAbis", "Architecture-neutral JVM/Android code; physical device validation is still required")
             .put("scope_version", scope.version()).put("project_id", scope.id())
             .put("localUiLibraries", localUiLibraries())
-            .put("specFields", JSONArray(listOf("schemaVersion", "appId", "name", "versionCode", "versionName", "capabilities", "webDir", "icon", "dataBackup", "resourceBudgets")))
+            .put("specFields", JSONArray(listOf("schemaVersion", "appId", "name", "versionCode", "versionName", "capabilities", "webDir", "icon", "dataBackup", "resourceBudgets", "incomingShare", "notifications")))
             .put("limits", JSONObject().put("websiteFiles", FactorySpec.MAX_WEB_FILES).put("websiteBytes", FactorySpec.MAX_WEB_BYTES)
                 .put("fileBytes", FactorySpec.MAX_FILE_BYTES).put("icon", "PNG, 48–1024 pixels per side, at most 1 MiB; or 192px geometric vector JSON"))
             .put("signing", "Signing follows Factory permissions: Allow always by default, Ask once, or Deny. Existing non-exportable AndroidKeyStore identities stay unchanged. For a NEW recoverable identity or encrypted backup/import, open Settings > Factory identities yourself; never send passphrases or private keys to a tool or conversation. No silent rotation or shared key.")
@@ -106,8 +106,8 @@ internal class FactoryProjectService(
             replacements["assets/factory-provenance.json"] = JSONObject().put("schemaVersion", 1).put("runtimeVersion", 1)
                 .put("templateSha256", ProjectScope.sha256(template)).put("sourceSha256", JSONObject(sources))
                 .put("renderedIconSha256", ProjectScope.sha256(icon)).put("localUiLibraries", localUiLibraries()).toString().toByteArray(Charsets.UTF_8)
-            val bytes = TemplateApk.build(template, TemplateApk.Spec(spec.appId, spec.name, spec.versionCode, spec.versionName, spec.capabilities), icon, replacements)
-            val manifest = TemplateApk.verify(bytes, TemplateApk.Spec(spec.appId, spec.name, spec.versionCode, spec.versionName, spec.capabilities))
+            val bytes = TemplateApk.build(template, TemplateApk.Spec(spec.appId, spec.name, spec.versionCode, spec.versionName, spec.capabilities, spec.incomingShare, spec.notifications), icon, replacements)
+            val manifest = TemplateApk.verify(bytes, TemplateApk.Spec(spec.appId, spec.name, spec.versionCode, spec.versionName, spec.capabilities, spec.incomingShare, spec.notifications))
             require(bytes.size <= MAX_APK_BYTES && bytes.size.toLong() <= spec.resources.packaging.apkBytes) { "Generated APK exceeds factory size limit" }
             FactoryUiAssets.fromApk(bytes)
             checkActive(token)
@@ -119,7 +119,7 @@ internal class FactoryProjectService(
             val receipt = JSONObject().put("schemaVersion", 1).put("buildId", id).put("state", "staged")
                 .put("projectIdentity", scope.durableIdentity()).put("projectId", scope.id()).put("outputPath", outputPath)
                 .put("apkSha256", sha).put("apkBytes", bytes.size).put("templateSha256", ProjectScope.sha256(template))
-                .put("manifestContract", "closed-v3-native-operations").put("renderedIconSha256", ProjectScope.sha256(icon)).put("dexSha256", JSONObject(manifest.dexSha256)).put("spec", spec.toJson()).put("sources", JSONObject(sources)).put("signed", false)
+                .put("manifestContract", "closed-v4-incoming-share").put("renderedIconSha256", ProjectScope.sha256(icon)).put("dexSha256", JSONObject(manifest.dexSha256)).put("spec", spec.toJson()).put("sources", JSONObject(sources)).put("signed", false)
             saveReceipt(sha, receipt)
             try {
                 FactoryProjectFiles.publish(scope, outputPath, staged, lease, token) { checkActive(token) }
@@ -148,7 +148,7 @@ internal class FactoryProjectService(
             val bytes = FactoryProjectFiles.read(scope, inputPath, MAX_APK_BYTES, token)
             check(ProjectScope.sha256(bytes) == expectedSha) { "Unsigned APK changed; build it again from inspected source" }
             val spec = FactorySpec.parse(receipt.getJSONObject("spec"))
-            val expectedManifest = TemplateApk.Spec(spec.appId, spec.name, spec.versionCode, spec.versionName, spec.capabilities)
+            val expectedManifest = TemplateApk.Spec(spec.appId, spec.name, spec.versionCode, spec.versionName, spec.capabilities, spec.incomingShare, spec.notifications)
             val manifest = verifyReceiptManifest(bytes, expectedManifest, receipt)
             verifyRuntimeConfig(bytes, spec)
             // v1 receipts predate inventory storage; their exact artifact hash/project binding remains authoritative.
@@ -172,6 +172,8 @@ internal class FactoryProjectService(
                 "Unsigned SHA-256: $expectedSha", "Output in this Coding project: $outputPath", "Declared capabilities: ${spec.capabilities.joinToString().ifEmpty { "none" }}",
                 "Declared data backup tables (SQLite rows only): ${spec.dataBackupTables.joinToString().ifEmpty { "none; data backup disabled" }}",
                 "Declared preference backup keys (string values only): ${spec.dataBackupKeys.joinToString().ifEmpty { "none; preference backup disabled" }}",
+                "Incoming sharing: ${spec.incomingShare?.let { "MIME patterns ${it.mimeTypes.joinToString()}; ACTION_SEND; ACTION_SEND_MULTIPLE=${it.multiple}; explicit documents capability; untrusted process-local inbox" } ?: "disabled"}",
+                "Notification scheduling: ${spec.notifications?.scheduling ?: false}; exact alarms: ${spec.notifications?.exactAlarms ?: false}; private receivers: ${manifest.plan.privateComponents.joinToString().ifEmpty { "none" }}",
                 "Resource budgets: ${spec.resources.canonicalText()}",
                 "Decoded Android permissions: ${manifest.permissions.joinToString().ifEmpty { "none" }}",
                 "Decoded exported components: ${manifest.plan.exportedComponents.joinToString()}",
@@ -315,7 +317,7 @@ internal class FactoryProjectService(
             FactoryOperationPolicy.Operation.INSTALL) != FactoryOperationPolicy.Mode.DENY) { "Factory installation is denied by the saved policy" }
         val bytes = FactoryProjectFiles.read(scope, inputPath, MAX_APK_BYTES, token)
         check(bytes.size.toLong() == receipt.getLong("apkBytes") && ProjectScope.sha256(bytes) == expectedSha) { "Signed APK changed" }
-        val plan = TemplateApk.Spec(spec.appId, spec.name, spec.versionCode, spec.versionName, spec.capabilities)
+        val plan = TemplateApk.Spec(spec.appId, spec.name, spec.versionCode, spec.versionName, spec.capabilities, spec.incomingShare, spec.notifications)
         val manifest = verifyReceiptManifest(bytes, plan, receipt)
         verifyRuntimeConfig(bytes, spec)
         if (receipt.has("dexSha256")) {
@@ -358,7 +360,7 @@ internal class FactoryProjectService(
         check(ProjectScope.sha256(bytes) == expectedSha && bytes.size.toLong() == receipt.getLong("apkBytes")) { "Factory APK changed" }
         val spec = FactorySpec.parse(receipt.getJSONObject("spec"))
         check(receipt.getString("templateSha256") == ProjectScope.sha256(template())) { "Runtime template changed; rebuild this app before preview or test" }
-        val manifest = verifyReceiptManifest(bytes, TemplateApk.Spec(spec.appId, spec.name, spec.versionCode, spec.versionName, spec.capabilities), receipt)
+        val manifest = verifyReceiptManifest(bytes, TemplateApk.Spec(spec.appId, spec.name, spec.versionCode, spec.versionName, spec.capabilities, spec.incomingShare, spec.notifications), receipt)
         val savedDex = receipt.getJSONObject("dexSha256")
         check(savedDex.keys().asSequence().toSet() == manifest.dexSha256.keys && manifest.dexSha256.all { (name, hash) -> savedDex.getString(name) == hash }) { "Runtime inventory differs from receipt" }
         val assets = sortedMapOf<String, ByteArray>()
@@ -437,7 +439,8 @@ internal class FactoryProjectService(
     private fun verifyReceiptManifest(bytes: ByteArray, spec: TemplateApk.Spec, receipt: JSONObject): TemplateApk.ManifestInfo =
         when (receipt.optString("manifestContract")) {
             "closed-v2-clipboard-broker" -> TemplateApk.verifyExistingClosedV2(bytes, spec)
-            "closed-v3-native-operations" -> TemplateApk.verify(bytes, spec)
+            "closed-v3-native-operations" -> TemplateApk.verifyExistingClosedV3(bytes, spec)
+            "closed-v4-incoming-share" -> TemplateApk.verify(bytes, spec)
             "closed-v1-current" -> TemplateApk.verifyExistingClosedV1(bytes, spec)
             "" -> TemplateApk.verifyExistingV1(bytes, spec)
             else -> error("Unsupported factory receipt manifest contract")
@@ -461,7 +464,8 @@ internal class FactoryProjectService(
         val parsed = com.jarvys.factory.runtime.FactoryConfig.parsePreview(String(bytes, Charsets.UTF_8))
         check(parsed.appId == spec.appId && parsed.name == spec.name && parsed.entryPoint == "www/index.html" &&
             parsed.capabilities == spec.capabilities.toSet() && parsed.dataBackupTables == spec.dataBackupTables.toSet() &&
-            parsed.dataBackupKeys == spec.dataBackupKeys.toSet() && parsed.resources == spec.resources) {
+            parsed.dataBackupKeys == spec.dataBackupKeys.toSet() && parsed.resources == spec.resources && parsed.incomingShare == spec.incomingShare &&
+            parsed.notifications == (spec.notifications ?: com.jarvys.factory.contract.NotificationPolicy.disabled())) {
             "Runtime configuration differs from build receipt"
         }
     }

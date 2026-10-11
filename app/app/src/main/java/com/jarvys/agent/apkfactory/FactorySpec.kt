@@ -2,6 +2,10 @@ package com.jarvys.agent.apkfactory
 
 import com.jarvys.factory.contract.CapabilityCatalog
 import com.jarvys.factory.contract.ResourceBudgets
+import com.jarvys.factory.contract.IncomingSharePolicy
+import com.jarvys.factory.runtime.IncomingSharePolicyJson
+import com.jarvys.factory.contract.NotificationPolicy
+import com.jarvys.factory.runtime.NotificationPolicyJson
 import com.jarvys.factory.runtime.ResourceBudgetsJson
 import com.jarvys.factory.runtime.FactoryConfig
 import org.json.JSONArray
@@ -19,12 +23,16 @@ data class FactorySpec(
     val dataBackupTables: List<String> = emptyList(),
     val dataBackupKeys: List<String> = emptyList(),
     val resources: ResourceBudgets = ResourceBudgets.legacy(),
+    val incomingShare: IncomingSharePolicy? = null,
+    val notifications: NotificationPolicy? = null,
 ) {
     fun runtimeConfig(documentBroker: JSONObject? = null): ByteArray {
         val config = JSONObject().put("schemaVersion", 1).put("appId", appId)
             .put("name", name).put("entryPoint", "www/index.html")
             .put("capabilities", JSONArray(capabilities)).put("resourceBudgets", ResourceBudgetsJson.toJson(resources))
         backupPolicy()?.let { config.put("dataBackup", it) }
+        incomingShare?.let { config.put("incomingShare", IncomingSharePolicyJson.toJson(it)) }
+        notifications?.let { config.put("notifications", NotificationPolicyJson.toJson(it)) }
         if (documentBroker != null) config.put("documentBroker", documentBroker)
         val text = config.toString()
         FactoryConfig.parse(text, appId)
@@ -35,7 +43,11 @@ data class FactorySpec(
         .put("versionCode", versionCode).put("versionName", versionName)
         .put("capabilities", JSONArray(capabilities)).put("webDir", webDir).put("icon", icon)
         .put("resourceBudgets", ResourceBudgetsJson.toJson(resources))
-        .also { json -> backupPolicy()?.let { json.put("dataBackup", it) } }
+        .also { json ->
+            backupPolicy()?.let { json.put("dataBackup", it) }
+            incomingShare?.let { json.put("incomingShare", IncomingSharePolicyJson.toJson(it)) }
+            notifications?.let { json.put("notifications", NotificationPolicyJson.toJson(it)) }
+        }
 
     private fun backupPolicy(): JSONObject? {
         if (dataBackupTables.isEmpty() && dataBackupKeys.isEmpty()) return null
@@ -54,7 +66,7 @@ data class FactorySpec(
         private val APP_ID = Regex("[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+")
         @JvmStatic fun parse(json: JSONObject): FactorySpec {
             val fields = setOf("schemaVersion", "appId", "name", "versionCode", "versionName", "capabilities", "webDir", "icon")
-            require(json.keys().asSequence().toSet().let { it.containsAll(fields) && it.all { key -> key in fields || key == "dataBackup" || key == "resourceBudgets" } }) { "factory.json requires ${fields.joinToString()} and optional dataBackup/resourceBudgets" }
+            require(json.keys().asSequence().toSet().let { it.containsAll(fields) && it.all { key -> key in fields || key == "dataBackup" || key == "resourceBudgets" || key == "incomingShare" || key == "notifications" } }) { "factory.json requires ${fields.joinToString()} and optional dataBackup/resourceBudgets/incomingShare/notifications" }
             require(integer(json, "schemaVersion") == 1) { "Unsupported factory schemaVersion" }
             val appId = string(json, "appId")
             require(APP_ID.matches(appId) && appId.split('.').size in 2..16 && appId.length <= 127 && !appId.startsWith("android.") &&
@@ -73,6 +85,10 @@ data class FactorySpec(
                 value
             }
             require(caps.distinct().size == caps.size) { "Duplicate capability" }
+            val incomingShare = if (json.has("incomingShare")) IncomingSharePolicyJson.parse(json.getJSONObject("incomingShare")) else null
+            IncomingSharePolicy.validateSelection(caps, incomingShare)
+            val notifications = if (json.has("notifications")) NotificationPolicyJson.parse(json.getJSONObject("notifications")) else null
+            NotificationPolicy.validateSelection(caps, notifications)
             val policy = if (json.has("dataBackup")) {
                 val value = json.opt("dataBackup")
                 require(value is JSONObject && value.length() > 0 &&
@@ -108,7 +124,7 @@ data class FactorySpec(
             val icon = relativePath(string(json, "icon"))
             require(icon.endsWith(".png", true) || icon.endsWith(".json", true)) { "Icon must be PNG or vector JSON" }
             val resources = if (json.has("resourceBudgets")) ResourceBudgetsJson.parse(json.getJSONObject("resourceBudgets")) else ResourceBudgets.legacy()
-            return FactorySpec(appId, name, version, versionName, CapabilityCatalog.select(caps), webDir, icon, backupTables, backupKeys, resources)
+            return FactorySpec(appId, name, version, versionName, CapabilityCatalog.select(caps), webDir, icon, backupTables, backupKeys, resources, incomingShare, notifications)
         }
         fun relativePath(value: String): String {
             require(value.isNotBlank() && value.length <= 240 && !value.startsWith('/') && '\\' !in value &&

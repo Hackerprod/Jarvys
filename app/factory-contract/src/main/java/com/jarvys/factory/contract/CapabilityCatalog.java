@@ -50,6 +50,7 @@ public final class CapabilityCatalog {
         BIOMETRICS_AVAILABILITY("biometrics.availability", "biometrics"),
         BIOMETRICS_AUTHENTICATE("biometrics.authenticate", "biometrics"), BIOMETRICS_CANCEL("biometrics.cancel", "biometrics"),
         NETWORK_REQUEST("network.request", "network"), NETWORK_PROBE("network.probe", "network"), NETWORK_PING("network.ping", "network"), NETWORK_CANCEL("network.cancel", "network"),
+        NOTIFICATIONS_SCHEDULE("notifications.schedule", "notifications"), NOTIFICATIONS_RESUME_SCHEDULED("notifications.resumeScheduled", "notifications"), NOTIFICATIONS_SCHEDULE_STATUS("notifications.scheduleStatus", "notifications"), NOTIFICATIONS_CANCEL_SCHEDULED("notifications.cancelScheduled", "notifications"), NOTIFICATIONS_FORGET_SCHEDULED("notifications.forgetScheduled", "notifications"), NOTIFICATIONS_POLL_ACTIONS("notifications.pollActions", "notifications"), NOTIFICATIONS_ACK_ACTION("notifications.ackAction", "notifications"), NOTIFICATIONS_GENERATION_STATUS("notifications.generationStatus", "notifications"), NOTIFICATIONS_FORGET_GENERATION("notifications.forgetGeneration", "notifications"), NOTIFICATIONS_REQUEST_EXACT_ALARM_ACCESS("notifications.requestExactAlarmAccess", "notifications"),
         NOTIFICATIONS_STATUS("notifications.status", "notifications"), NOTIFICATIONS_CHANNEL("notifications.channel", "notifications"),
         NOTIFICATIONS_SHOW("notifications.show", "notifications"), NOTIFICATIONS_CANCEL("notifications.cancel", "notifications"),
         NOTIFICATIONS_REQUEST_PERMISSION("notifications.requestPermission", "notifications"),
@@ -58,7 +59,9 @@ public final class CapabilityCatalog {
         VOICE_RECOGNITION_STATUS("voiceRecognition.status", "voiceRecognition"), VOICE_RECOGNITION_RECOGNIZE("voiceRecognition.recognize", "voiceRecognition"), VOICE_RECOGNITION_CANCEL("voiceRecognition.cancel", "voiceRecognition"),
         LOCATION_STATUS("location.status", "location"), LOCATION_CURRENT("location.current", "location"), LOCATION_CANCEL("location.cancel", "location"), LOCATION_REQUEST_PERMISSION("location.requestPermission", "location"),
         RECORDING_STATUS("recording.status", "recording"), RECORDING_RECORD("recording.record", "recording"), RECORDING_STOP("recording.stop", "recording"), RECORDING_CANCEL("recording.cancel", "recording"), RECORDING_REQUEST_PERMISSION("recording.requestPermission", "recording"),
-        STEPS_STATUS("steps.status", "steps"), STEPS_CURRENT("steps.current", "steps"), STEPS_CANCEL("steps.cancel", "steps"), STEPS_REQUEST_PERMISSION("steps.requestPermission", "steps");
+        STEPS_STATUS("steps.status", "steps"), STEPS_CURRENT("steps.current", "steps"), STEPS_CANCEL("steps.cancel", "steps"), STEPS_REQUEST_PERMISSION("steps.requestPermission", "steps"),
+        SECRETS_PUT("secrets.put", "secrets"), SECRETS_CAPTURE("secrets.capture", "secrets"), SECRETS_GET("secrets.get", "secrets"), SECRETS_LIST("secrets.list", "secrets"), SECRETS_DESCRIBE("secrets.describe", "secrets"), SECRETS_REMOVE("secrets.remove", "secrets"), SECRETS_RESET("secrets.reset", "secrets"), SECRETS_REQUEST("secrets.request", "secrets"),
+        INCOMING_SHARE_LIST("incomingShare.list", "incomingShare"), INCOMING_SHARE_TAKE("incomingShare.take", "incomingShare"), INCOMING_SHARE_DISCARD("incomingShare.discard", "incomingShare");
         public final String wireName;
         public final String capability;
         Method(String wireName, String capability) { this.wireName = wireName; this.capability = capability; }
@@ -133,7 +136,7 @@ public final class CapabilityCatalog {
     }
     public static final List<String> NAMES = Collections.unmodifiableList(Arrays.asList(
             "storage", "export", "share", "clipboard", "haptics", "device", "documents", "photos", "audio", "browser", "maps", "phone", "email", "sms", "contacts", "calendar", "database", "presentation", "sensors", "biometrics",
-            "network", "notifications", "speech", "voiceRecognition", "location", "recording", "steps"));
+            "network", "notifications", "speech", "voiceRecognition", "location", "recording", "steps", "secrets", "incomingShare"));
     public static final Set<String> SUPPORTED = Collections.unmodifiableSet(new LinkedHashSet<>(NAMES));
     public static final Map<String, Capability> CAPABILITIES;
     public static final Map<String, Method> METHODS;
@@ -179,7 +182,7 @@ public final class CapabilityCatalog {
         return name.equals("documents") || name.equals("browser") || name.equals("maps") || name.equals("phone")
                 || name.equals("email") || name.equals("sms") || name.equals("contacts") || name.equals("calendar")
                 || name.equals("clipboard") || name.equals("share") || name.equals("export")
-                || name.equals("network") || name.equals("notifications") || name.equals("speech") || name.equals("voiceRecognition") || name.equals("location") || name.equals("recording") || name.equals("steps") || name.equals("sensors");
+                || name.equals("network") || name.equals("notifications") || name.equals("speech") || name.equals("voiceRecognition") || name.equals("location") || name.equals("recording") || name.equals("steps") || name.equals("sensors") || name.equals("secrets") || name.equals("incomingShare");
     }
     /** Defensive, deterministic selection; no implied or future capabilities. */
     public static List<String> select(Iterable<String> requested) {

@@ -10,8 +10,10 @@ import java.util.Map;
 public final class ManifestPlan {
     public static final String ANDROID = "http://schemas.android.com/apk/res/android";
     public static final String ACTIVITY = "com.jarvys.factory.runtime.FactoryActivity";
-    public enum Profile { CURRENT, V2_BEFORE_NATIVE_OPERATIONS, V1_BEFORE_CLIPBOARD_BROKER, V1_BEFORE_SAFE_AREA }
+    public enum Profile { CURRENT, V3_BEFORE_INCOMING_SHARE, V2_BEFORE_NATIVE_OPERATIONS, V1_BEFORE_CLIPBOARD_BROKER, V1_BEFORE_SAFE_AREA }
     public final Profile profile;
+    public final IncomingSharePolicy incomingShare;
+    public final NotificationPolicy notifications;
     public final String appId, label, versionName;
     public final int versionCode, iconResourceId, backupResourceId;
     public final List<String> capabilities;
@@ -23,6 +25,7 @@ public final class ManifestPlan {
     public final List<String> queryActions;
     public final List<String> hosts = Collections.emptyList();
     public final List<String> exportedComponents = Collections.singletonList(ACTIVITY);
+    public final List<String> privateComponents;
 
     public static final class Attribute {
         public final String namespace, name;
@@ -55,6 +58,22 @@ public final class ManifestPlan {
     }
     public ManifestPlan(String appId, String label, int versionCode, String versionName,
                         int iconResourceId, int backupResourceId, Iterable<String> capabilities, Profile profile) {
+        this(appId,label,versionCode,versionName,iconResourceId,backupResourceId,capabilities,null,profile);
+    }
+    public ManifestPlan(String appId, String label, int versionCode, String versionName,
+                        int iconResourceId, int backupResourceId, Iterable<String> capabilities, IncomingSharePolicy incomingShare) {
+        this(appId,label,versionCode,versionName,iconResourceId,backupResourceId,capabilities,incomingShare,Profile.CURRENT);
+    }
+    public ManifestPlan(String appId, String label, int versionCode, String versionName,
+                        int iconResourceId, int backupResourceId, Iterable<String> capabilities, IncomingSharePolicy incomingShare, Profile profile) {
+        this(appId,label,versionCode,versionName,iconResourceId,backupResourceId,capabilities,incomingShare,null,profile);
+    }
+    public ManifestPlan(String appId, String label, int versionCode, String versionName,
+                        int iconResourceId, int backupResourceId, Iterable<String> capabilities, IncomingSharePolicy incomingShare, NotificationPolicy notifications) {
+        this(appId,label,versionCode,versionName,iconResourceId,backupResourceId,capabilities,incomingShare,notifications,Profile.CURRENT);
+    }
+    public ManifestPlan(String appId, String label, int versionCode, String versionName,
+                        int iconResourceId, int backupResourceId, Iterable<String> capabilities, IncomingSharePolicy incomingShare, NotificationPolicy notifications, Profile profile) {
         if (profile == null) throw new IllegalArgumentException("Missing manifest profile");
         this.profile = profile;
         if (appId == null || !appId.matches("[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*){1,15}") || appId.length() > 127)
@@ -65,7 +84,18 @@ public final class ManifestPlan {
         this.appId = appId; this.label = label; this.versionCode = versionCode; this.versionName = versionName;
         this.iconResourceId = iconResourceId; this.backupResourceId = backupResourceId;
         this.capabilities = CapabilityCatalog.select(capabilities);
-        if (profile != Profile.CURRENT && (this.capabilities.contains("network")
+        IncomingSharePolicy.validateSelection(this.capabilities, incomingShare);
+        if (profile != Profile.CURRENT && incomingShare != null)
+            throw new IllegalArgumentException("incomingShare has no historical manifest profile");
+        this.incomingShare = incomingShare;
+        NotificationPolicy.validateSelection(this.capabilities, notifications);
+        if (profile != Profile.CURRENT && ((notifications != null && notifications.scheduling) || this.capabilities.contains("secrets")))
+            throw new IllegalArgumentException("New native policy has no historical manifest profile");
+        this.notifications = notifications;
+        this.privateComponents = notifications != null && notifications.scheduling
+                ? Collections.unmodifiableList(java.util.Arrays.asList(NotificationPolicy.ALARM_RECEIVER, NotificationPolicy.RECOVERY_RECEIVER)) : Collections.emptyList();
+        boolean beforeNativeOperations = profile != Profile.CURRENT && profile != Profile.V3_BEFORE_INCOMING_SHARE;
+        if (beforeNativeOperations && (this.capabilities.contains("network")
                 || this.capabilities.contains("notifications") || this.capabilities.contains("speech")
                 || this.capabilities.contains("voiceRecognition") || this.capabilities.contains("location") || this.capabilities.contains("recording") || this.capabilities.contains("steps")))
             throw new IllegalArgumentException("Native operation capabilities have no historical manifest profile");
@@ -90,6 +120,11 @@ public final class ManifestPlan {
         result.add(new Node("manifest/application/activity/intent-filter", 3));
         result.add(new Node("manifest/application/activity/intent-filter/action", 4, a("name", 0x01010003, 3, "android.intent.action.MAIN")));
         result.add(new Node("manifest/application/activity/intent-filter/category", 4, a("name", 0x01010003, 3, "android.intent.category.LAUNCHER")));
+        if (incomingShare != null) {
+            incomingFilter(result, "android.intent.action.SEND", incomingShare);
+            if (incomingShare.multiple) incomingFilter(result, "android.intent.action.SEND_MULTIPLE", incomingShare);
+        }
+        if (notifications != null && notifications.scheduling) notificationReceivers(result, notifications);
         if (profile == Profile.V1_BEFORE_SAFE_AREA) {
             // Exact published v1 layout before UX35, only for previously receipted artifacts.
             result.set(3, without(result.get(3), "windowSoftInputMode"));
@@ -97,7 +132,7 @@ public final class ManifestPlan {
         // Legacy receipt profiles retain the complete historical declaration set. Clipboard
         // was local then; it must not acquire new broker queries when re-verifying old bytes.
         List<String> manifestCapabilities = new ArrayList<>(this.capabilities);
-        if (profile != Profile.CURRENT) {
+        if (beforeNativeOperations) {
             manifestCapabilities.remove("share"); manifestCapabilities.remove("export"); manifestCapabilities.remove("sensors");
         }
         if (profile == Profile.V1_BEFORE_CLIPBOARD_BROKER || profile == Profile.V1_BEFORE_SAFE_AREA)
@@ -138,11 +173,34 @@ public final class ManifestPlan {
                         a("name", 0x01010003, 3, host)));
             } else throw new IllegalArgumentException("Additional manifest declarations are not activated");
         }
+        if (notifications != null && notifications.scheduling) {
+            selectedPermissions.add(NotificationPolicy.BOOT_PERMISSION);
+            if (notifications.exactAlarms) selectedPermissions.add(NotificationPolicy.EXACT_PERMISSION);
+            result.add(new Node("manifest/uses-permission", 0, a("name", 0x01010003, 3, NotificationPolicy.BOOT_PERMISSION)));
+            if (notifications.exactAlarms) result.add(new Node("manifest/uses-permission", 0, a("name", 0x01010003, 3, NotificationPolicy.EXACT_PERMISSION)));
+        }
         permissions = Collections.unmodifiableList(selectedPermissions);
         queries = Collections.unmodifiableList(selectedQueries);
         queryActions = Collections.unmodifiableList(selectedQueryActions);
         nodes = Collections.unmodifiableList(result);
         root = tree(result, 0);
+    }
+    private static void notificationReceivers(List<Node> nodes, NotificationPolicy policy) {
+        String path = "manifest/application/receiver";
+        nodes.add(new Node(path, 2, a("name", 0x01010003, 3, NotificationPolicy.ALARM_RECEIVER), a("exported", 0x01010010, 18, 0)));
+        int receiver = nodes.size();
+        nodes.add(new Node(path, 2, a("name", 0x01010003, 3, NotificationPolicy.RECOVERY_RECEIVER), a("exported", 0x01010010, 18, 0)));
+        int filter = nodes.size(); nodes.add(new Node(path + "/intent-filter", receiver));
+        nodes.add(new Node(path + "/intent-filter/action", filter, a("name", 0x01010003, 3, "android.intent.action.BOOT_COMPLETED")));
+        nodes.add(new Node(path + "/intent-filter/action", filter, a("name", 0x01010003, 3, "android.intent.action.MY_PACKAGE_REPLACED")));
+        if (policy.exactAlarms) nodes.add(new Node(path + "/intent-filter/action", filter, a("name", 0x01010003, 3, NotificationPolicy.EXACT_ACTION)));
+    }
+    private static void incomingFilter(List<Node> nodes, String action, IncomingSharePolicy policy) {
+        int filter = nodes.size(); String path = "manifest/application/activity/intent-filter";
+        nodes.add(new Node(path, 3));
+        nodes.add(new Node(path + "/action", filter, a("name", 0x01010003, 3, action)));
+        nodes.add(new Node(path + "/category", filter, a("name", 0x01010003, 3, "android.intent.category.DEFAULT")));
+        for (String mime : policy.mimeTypes) nodes.add(new Node(path + "/data", filter, a("mimeType", 0x01010026, 3, mime)));
     }
     private static Node without(Node node, String name) {
         List<Attribute> attrs = new ArrayList<>(node.attributes.values());
@@ -157,6 +215,11 @@ public final class ManifestPlan {
                 (String)node.attributes.get(ANDROID + "|name").value, ManifestNodes.PermissionVariant.STANDARD, null);
         if (name.equals("queries")) return ManifestNodes.queries(children);
         if (node.path.equals("manifest/queries/intent")) return ManifestNodes.queryIntent((String)nodes.get(index + 1).attributes.get(ANDROID + "|name").value, null, null);
+        if (name.equals("receiver")) return ManifestNodes.privateComponent(ManifestNodes.ComponentKind.RECEIVER,
+                (String)node.attributes.get(ANDROID + "|name").value, children);
+        if (name.equals("action")) return ManifestNodes.action((String)node.attributes.get(ANDROID + "|name").value);
+        if (name.equals("category")) return ManifestNodes.category((String)node.attributes.get(ANDROID + "|name").value);
+        if (name.equals("data")) return ManifestNodes.data((String)node.attributes.get(ANDROID + "|mimeType").value, null);
         if (name.equals("package")) return ManifestNodes.queryPackage((String)node.attributes.values().iterator().next().value);
         return ManifestNodes.base(name, children, node.attributes.values().toArray(new Attribute[0]));
     }

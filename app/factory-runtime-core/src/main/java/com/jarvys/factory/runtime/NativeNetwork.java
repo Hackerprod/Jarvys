@@ -34,6 +34,12 @@ public final class NativeNetwork {
     public interface ConnectionFactory { HttpURLConnection open(URL url) throws IOException; }
     public interface CleartextPolicy { boolean permitted(String host); }
     public interface Clock { long nanoTime(); }
+    /** Trusted native code only. Called anew after ordinary headers for each actual connection. */
+    public interface HeaderInjector {
+        void inject(URL destination, String method, HeaderSink sink) throws FactoryException;
+    }
+    /** A synchronous, single-connection sink. Never retain it or pass it to JavaScript. */
+    public interface HeaderSink { void set(String name, String value) throws FactoryException; }
     private static final ScheduledThreadPoolExecutor DEADLINES = deadlines();
     private final ConnectionFactory connections;
     private final CleartextPolicy cleartext;
@@ -86,6 +92,12 @@ public final class NativeNetwork {
 
     public JSONObject execute(NetworkRequest request, NativeOperationAuthorization.Access authorization,
                               Cancellation cancellation) throws FactoryException {
+        return execute(request, authorization, cancellation, null);
+    }
+
+    /** Native credential path; the ordinary request grammar and plain-network behavior are unchanged. */
+    public JSONObject execute(NetworkRequest request, NativeOperationAuthorization.Access authorization,
+                              Cancellation cancellation, HeaderInjector injector) throws FactoryException {
         if (request == null || authorization == null || cancellation == null) throw new IllegalArgumentException();
         cancellation.begin();
         long started = clock.nanoTime();
@@ -93,7 +105,7 @@ public final class NativeNetwork {
         ScheduledFuture<?> timer = DEADLINES.schedule(() -> cancellation.cancel("TIMEOUT"), request.timeoutMs, TimeUnit.MILLISECONDS);
         try {
             check(authorization, cancellation, deadline);
-            JSONObject result = perform(request, authorization, cancellation, started, deadline);
+            JSONObject result = perform(request, authorization, cancellation, started, deadline, injector);
             check(authorization, cancellation, deadline);
             cancellation.complete();
             return result;
@@ -115,7 +127,7 @@ public final class NativeNetwork {
     }
 
     private JSONObject perform(NetworkRequest request, NativeOperationAuthorization.Access authorization,
-                               Cancellation cancellation, long started, long deadline) throws FactoryException, IOException {
+                               Cancellation cancellation, long started, long deadline, HeaderInjector injector) throws FactoryException, IOException {
         URL url = request.url;
         String method = request.method;
         byte[] body = request.bodyBytes();
@@ -124,6 +136,8 @@ public final class NativeNetwork {
         int redirects = 0;
         while (true) {
             check(authorization, cancellation, deadline);
+            if (injector != null && !"https".equalsIgnoreCase(url.getProtocol()))
+                throw new FactoryException("SECRET_SCOPE_MISMATCH", "Native credential requests require HTTPS.");
             if ("http".equalsIgnoreCase(url.getProtocol()) && !cleartext.permitted(url.getHost()))
                 throw new FactoryException("CLEARTEXT_NOT_PERMITTED", "Android configuration does not permit cleartext HTTP for this host.");
             // URL.openConnection may consult a system proxy; authorize even resource acquisition.
@@ -140,6 +154,8 @@ public final class NativeNetwork {
                 try { connection.setRequestMethod(method); }
                 catch (ProtocolException unsupported) { throw new FactoryException("UNSUPPORTED_METHOD", "This Android HTTP transport does not support the requested method."); }
                 for (Map.Entry<String, String> entry : headers.entrySet()) connection.setRequestProperty(entry.getKey(), entry.getValue());
+                if (injector != null) inject(connection, url, method, headers, request.maxHeaderBytes,
+                        injector, authorization, cancellation, deadline);
                 if (hasBody) {
                     connection.setDoOutput(true);
                     connection.setFixedLengthStreamingMode(body.length);
@@ -167,8 +183,9 @@ public final class NativeNetwork {
                     URL next;
                     try { next = NetworkRequest.parseUrl(new URL(url, location).toExternalForm()); }
                     catch (FactoryException | IOException invalid) { throw new FactoryException("INVALID_REDIRECT", "Redirect destination is not a supported HTTP URL."); }
-                    if ("https".equalsIgnoreCase(url.getProtocol()) && "http".equalsIgnoreCase(next.getProtocol()) && !request.allowHttpsDowngrade)
-                        throw new FactoryException("INSECURE_REDIRECT", "HTTPS downgrade needs allowHttpsDowngrade and Android cleartext support.");
+                    if ("https".equalsIgnoreCase(url.getProtocol()) && "http".equalsIgnoreCase(next.getProtocol()) && (injector != null || !request.allowHttpsDowngrade))
+                        throw new FactoryException("INSECURE_REDIRECT", injector != null ? "Native credential requests cannot downgrade HTTPS."
+                                : "HTTPS downgrade needs allowHttpsDowngrade and Android cleartext support.");
                     // A new origin never inherits app-supplied credentials or arbitrary custom headers.
                     // Call the destination explicitly when it needs its own headers.
                     if (!sameOrigin(url, next)) headers.clear();
@@ -211,6 +228,75 @@ public final class NativeNetwork {
                 return result;
             } finally { cancellation.detach(connection); disconnect(connection); }
         }
+    }
+
+    private void inject(HttpURLConnection connection, URL url, String method, Map<String, String> headers,
+                        int maxBytes, HeaderInjector injector, NativeOperationAuthorization.Access access,
+                        Cancellation cancellation, long deadline) throws FactoryException {
+        check(access, cancellation, deadline);
+        // Names/byte counts only: a decrypted value is never put in a reusable header collection.
+        final java.util.Set<String> names = new java.util.HashSet<>();
+        long count = 0;
+        for (Map.Entry<String, String> entry : headers.entrySet()) {
+            names.add(entry.getKey().toLowerCase(Locale.ROOT));
+            count += entry.getKey().length() + entry.getValue().length() + 4L;
+        }
+        final class Sink implements HeaderSink {
+            long bytes; boolean open = true; FactoryException rejected;
+            final Thread owner = Thread.currentThread();
+            Sink(long bytes) { this.bytes = bytes; }
+            @Override public synchronized void set(String name, String value) throws FactoryException {
+                if (!open || Thread.currentThread() != owner) throw new FactoryException("SECRET_INJECTION_FAILED", "Credential header sink has ended.");
+                if (rejected != null) throw rejected;
+                try {
+                    check(access, cancellation, deadline);
+                    if (name == null || !name.matches("[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}") || value == null)
+                        throw new FactoryException("SECRET_HEADER_INVALID", "Invalid native credential header.");
+                    String lower = name.toLowerCase(Locale.ROOT);
+                    if ("host".equals(lower) || "content-length".equals(lower) || "transfer-encoding".equals(lower)
+                            || "connection".equals(lower) || "proxy-connection".equals(lower) || "expect".equals(lower)
+                            || "upgrade".equals(lower) || "trailer".equals(lower) || "te".equals(lower)
+                            || "proxy-authorization".equals(lower) || "proxy-authenticate".equals(lower))
+                        throw new FactoryException("SECRET_HEADER_INVALID", "Invalid native credential header.");
+                    if (names.contains(lower))
+                        throw new FactoryException("SECRET_HEADER_COLLISION", "Credential header conflicts with an existing request header.");
+                    if (value.length() > maxBytes)
+                        throw new FactoryException("REQUEST_HEADERS_TOO_LARGE", "Combined request headers exceed maxHeaderBytes.");
+                    for (int i = 0; i < value.length(); i++)
+                        if (value.charAt(i) < 32 || value.charAt(i) > 126)
+                            throw new FactoryException("SECRET_HEADER_INVALID", "Invalid native credential header.");
+                    long next = bytes + name.length() + value.length() + 4L;
+                    if (next > maxBytes)
+                        throw new FactoryException("REQUEST_HEADERS_TOO_LARGE", "Combined request headers exceed maxHeaderBytes.");
+                    check(access, cancellation, deadline);
+                    connection.setRequestProperty(name, value);
+                    names.add(lower); bytes = next;
+                    check(access, cancellation, deadline);
+                } catch (FactoryException failure) { rejected = failure; throw failure; }
+                catch (SecurityException failure) { throw failure; }
+                catch (RuntimeException failure) {
+                    rejected = new FactoryException("SECRET_INJECTION_FAILED", "Native credential injection could not complete.");
+                    throw rejected;
+                }
+            }
+            synchronized void close() { open = false; }
+        }
+        Sink sink = new Sink(count);
+        try {
+            injector.inject(url, method, sink);
+            // A helper may sanitize a sink exception; retain the transport's fixed diagnostic only.
+            if (sink.rejected != null) throw sink.rejected;
+            check(access, cancellation, deadline);
+        } catch (FactoryException failure) {
+            check(access, cancellation, deadline);
+            throw sink.rejected == null ? failure : sink.rejected;
+        } catch (SecurityException failure) {
+            cancellation.cancel();
+            throw new SecurityException("Native credential authority ended.");
+        } catch (RuntimeException failure) {
+            check(access, cancellation, deadline);
+            throw new FactoryException("SECRET_INJECTION_FAILED", "Native credential injection could not complete.");
+        } finally { sink.close(); }
     }
 
     private byte[] read(InputStream stream, HttpURLConnection connection, NetworkRequest request,

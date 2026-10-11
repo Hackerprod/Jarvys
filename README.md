@@ -49,7 +49,7 @@ were independently verified. Physical-device acceptance remains open.
 | **v80 · Local strong biometrics** | Complete fresh host validation: 8,776 tests, SDK41, exact controlled-baseline lint and generated-profile/signature audit passed. All three final APK audits passed. ARM64 D7 v2/v3 delivery accepted 2026-10-11 03:34:08 UTC; signed payload and independently retrieved Library bytes verified. Physical installation/authentication remain unverified. API30+ strong human system prompt; local receipt authorizes no other action. Only selected biometric profiles add normal USE_BIOMETRIC. [Scope and evidence](recovery/factory-biometrics/README.md) |
 | **Factory test infrastructure** | Exhaustive subset assertions retained with reviewed compositional wire validation. The two bridge cases measured 38.437/42.347 s; 48 focused tests and exact five-diagnostic runtime lint passed. Production and delivered v80 APKs unchanged; no new full aggregate or device claim. [Proof and measured scope](recovery/factory-matrix/README.md) |
 | **v81 · Packaged local UI** | Host-validated fixed Pure.css 3.0.0 catalog, full license notices, responsive CSS and usable offline example. 2,398 fresh affected tests + SDK41, exact lint and independent three-APK audit passed; unrelated host suites remain historical. ARM64 D7 v2/v3 delivery accepted 2026-10-11 05:19:24 UTC; signed payload and retrieved Library bytes independently verified. No successful browser/WebView rendering or physical installation claim. [Scope and evidence](recovery/factory-local-ui/README.md) |
-| Broader Factory roadmap | Remaining F1 capabilities and F2/F3 are unfinished. Platform TTS is implemented with configurable policy. Recording, steps and foreground sensor subscriptions are integrated in development. App secrets, scheduled/action notifications, inbound sharing and broader streaming remain in progress or pending. |
+| Broader Factory roadmap | Remaining F1 capabilities and F2/F3 are unfinished. Platform TTS is implemented with configurable policy. Recording, steps and foreground sensor subscriptions are integrated in development. App secrets, scheduled/action notifications and inbound sharing are integrated in development; combined compilation and final validation remain pending. Broader streaming and scoped F3 work remain open. |
 
 This status is a **2026-10-11 snapshot**, not a live build badge. [Pending.md](Pending.md) is the current work queue; feature-specific evidence records distinguish passing, failed, interrupted and unrun checks.
 
@@ -62,7 +62,7 @@ This status is a **2026-10-11 snapshot**, not a live build badge. [Pending.md](P
 - OpenAI Codex sign-in, OpenAI API keys, OpenRouter, and custom **OpenAI Chat Completions-compatible** endpoints. Compatibility is a specific protocol mode, not a promise that every model or server supports every tool.
 - Context budgeting, conversation compaction, run checkpoints and explicit partial/interrupted outcomes.
 - STOP controls and a separate **Stop and send this message** flow for eligible active chats. Cancellation cannot undo an external effect that already happened.
-- Assistant speech controls; these are separate from the still-pending strict Factory TTS capability.
+- Assistant speech controls; Factory also exposes normal platform TTS through its configurable operation policy.
 
 See the [main-agent contract](app/MAIN_AGENT.md), [tool activity design](app/TOOL_ACTIVITY.md) and [continuous mission lifetime](app/CONTINUOUS_MISSIONS.md).
 

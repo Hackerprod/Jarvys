@@ -44,6 +44,13 @@ public final class BridgeProtocol {
                     raw.getBytes(StandardCharsets.UTF_8).length > 1024)
                 throw new FactoryException("INVALID_ARGUMENT", "Backup cancellation envelope exceeds 1 KiB.");
             switch (operation) {
+                case SECRETS_PUT: case SECRETS_CAPTURE: case SECRETS_GET: case SECRETS_LIST: case SECRETS_DESCRIBE: case SECRETS_REMOVE: case SECRETS_RESET: case SECRETS_REQUEST:
+                    if (operation == CapabilityCatalog.Method.SECRETS_REQUEST && !config.capabilities.contains("network")) throw new FactoryException("CAPABILITY_DENIED", "Secret-backed HTTP requests also require network capability.");
+                    try (SecretEffects.Prepared prepared = SecretEffects.prepare(method, args)) { /* Validate and clear temporary native copies. */ }
+                    break;
+                case INCOMING_SHARE_LIST: IncomingShareRequest.list(args); break;
+                case INCOMING_SHARE_TAKE: IncomingShareRequest.take(args); break;
+                case INCOMING_SHARE_DISCARD: IncomingShareRequest.discard(args); break;
                 case NETWORK_REQUEST: NetworkRequest.fromRequest(args); break;
                 case VOICE_RECOGNITION_STATUS: case VOICE_RECOGNITION_CANCEL: VoiceRecognitionRequest.parseEmpty(args); break;
                 case VOICE_RECOGNITION_RECOGNIZE: VoiceRecognitionRequest.parseRecognize(args); break;
@@ -60,7 +67,16 @@ public final class BridgeProtocol {
                 case NETWORK_CANCEL: FactoryConfig.exactKeys(args); break;
                 case NOTIFICATIONS_STATUS: NotificationRequest.parseStatus(args.toString()); break;
                 case NOTIFICATIONS_CHANNEL: NotificationRequest.parseChannel(args); break;
-                case NOTIFICATIONS_SHOW: NotificationRequest.parseShow(args); break;
+                case NOTIFICATIONS_SHOW: NotificationScheduleRequest.parseNotification(args); break;
+                case NOTIFICATIONS_SCHEDULE: NotificationScheduleRequest.parseSchedule(args); break;
+                case NOTIFICATIONS_RESUME_SCHEDULED: case NOTIFICATIONS_SCHEDULE_STATUS: case NOTIFICATIONS_CANCEL_SCHEDULED:
+                    NotificationScheduleRequest.parseScheduleId(args.toString()); break;
+                case NOTIFICATIONS_FORGET_SCHEDULED: NotificationScheduleControl.parseForget(args.toString()); break;
+                case NOTIFICATIONS_POLL_ACTIONS: NotificationScheduleRequest.parsePollActions(args.toString()); break;
+                case NOTIFICATIONS_ACK_ACTION: NotificationScheduleRequest.parseEventAck(args.toString()); break;
+                case NOTIFICATIONS_GENERATION_STATUS: NotificationScheduleControl.parseGenerationStatus(args.toString()); break;
+                case NOTIFICATIONS_FORGET_GENERATION: NotificationScheduleControl.parseForgetGeneration(args.toString()); break;
+                case NOTIFICATIONS_REQUEST_EXACT_ALARM_ACCESS: FactoryConfig.exactKeys(args); break;
                 case NOTIFICATIONS_CANCEL: NotificationRequest.parseCancel(args); break;
                 case NOTIFICATIONS_REQUEST_PERMISSION: NotificationRequest.parsePermission(args.toString()); break;
                 case SPEECH_STATUS: case SPEECH_STOP: FactoryConfig.exactKeys(args); break;

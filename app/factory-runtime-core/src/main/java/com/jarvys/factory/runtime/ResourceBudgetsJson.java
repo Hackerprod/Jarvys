@@ -11,7 +11,7 @@ public final class ResourceBudgetsJson {
     private ResourceBudgetsJson() { }
     public static ResourceBudgets parse(JSONObject object) throws FactoryException {
         try {
-            if (object == null || object.length() > 7) throw new IllegalArgumentException();
+            if (object == null || object.length() > 10) throw new IllegalArgumentException();
             Map<String, Object> root = new LinkedHashMap<>();
             Iterator<String> keys = object.keys();
             while (keys.hasNext()) {

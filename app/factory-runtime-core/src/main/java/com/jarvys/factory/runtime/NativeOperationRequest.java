@@ -8,6 +8,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Iterator;
+import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -36,6 +37,39 @@ public final class NativeOperationRequest {
         try {
             String capability;
             switch (operation == null ? "" : operation) {
+                case "secrets.put": case "secrets.capture":
+                    capability = "secrets";
+                    if (value.has("replaceId")) exact(value, "label", "scope", "replaceId"); else exact(value, "label", "scope");
+                    value = SecretRequest.parseCapture(value).authorizationDetails(); break;
+                case "secrets.get": case "secrets.describe": case "secrets.remove":
+                    capability = "secrets"; exact(value, "id"); SecretRequest.parseId(value); break;
+                case "secrets.list": case "secrets.reset": capability = "secrets"; exact(value); break;
+                case "secrets.request":
+                    capability = "secrets"; exact(value, "id", "request");
+                    SecretRequest.id(text(value, "id", 36, false));
+                    if (!(value.get("request") instanceof JSONObject)) throw invalid();
+                    validateNetwork(value.getJSONObject("request"), false);
+                    if (!"https".equalsIgnoreCase(NetworkRequest.parseUrl(text(value.getJSONObject("request"), "url", NetworkRequest.MAX_URL_BYTES, false)).getProtocol())) throw invalid();
+                    break;
+                case "incomingShare.take":
+                    capability = "incomingShare";
+                    exact(value, "envelopeId", "action", "declaredMimeType", "subject", "textPreview", "textPreviewTruncated", "textBytes", "attachmentIndices", "attachmentCount", "contentSha256");
+                    if (!text(value, "envelopeId", 64, false).matches("[a-f0-9]{64}") || !text(value, "contentSha256", 64, false).matches("[a-f0-9]{64}")) throw invalid();
+                    String action = text(value, "action", 64, false);
+                    if (!action.equals("android.intent.action.SEND") && !action.equals("android.intent.action.SEND_MULTIPLE")) throw invalid();
+                    String mime = text(value, "declaredMimeType", 127, false);
+                    if (!mime.equals("*/*") && !mime.matches("[a-z0-9][a-z0-9!#$&^_.+-]{0,62}/(\\*|[a-z0-9][a-z0-9!#$&^_.+-]{0,62})")) throw invalid();
+                    text(value, "subject", 1024, true); text(value, "textPreview", 2048, true); bool(value, "textPreviewTruncated");
+                    integer(value, "textBytes", 0, 262144);
+                    int count = integer(value, "attachmentCount", 0, 32);
+                    Object rawIndices = value.get("attachmentIndices"); if (!(rawIndices instanceof JSONArray)) throw invalid();
+                    JSONArray indices = (JSONArray) rawIndices; if (indices.length() != count) throw invalid();
+                    int previous = -1;
+                    for (int i = 0; i < count; i++) {
+                        Object rawIndex = indices.get(i); if (!(rawIndex instanceof Integer) && !(rawIndex instanceof Long)) throw invalid();
+                        long index = ((Number) rawIndex).longValue(); if (index <= previous || index >= 32) throw invalid(); previous = (int) index;
+                    }
+                    break;
                 case "voiceRecognition.recognize":
                     capability = "voiceRecognition"; exact(value, "language", "languageModel", "prompt", "maxResults", "preferOffline", "timeoutMs");
                     value = VoiceRecognitionRequest.parseRecognize(value).authorizationDetails(); break;
@@ -56,8 +90,19 @@ public final class NativeOperationRequest {
                     capability = "network"; exact(value, "host", "family", "count", "timeoutMs", "packetTimeoutMs", "intervalMs", "packetBytes", "maxOutputBytes");
                     value = NetworkPingRequest.parse(value).authorizationDetails(); break;
                 case "notifications.show":
-                    capability = "notifications"; exact(value, "id", "channelId", "title", "body", "priority");
-                    value = NotificationRequest.parseShow(value).authorizationDetails(); break;
+                    capability = "notifications";
+                    if (value.has("actions")) {
+                        exact(value, "id", "channelId", "title", "body", "priority", "actions");
+                        value = NotificationScheduleRequest.parseNotification(value).details();
+                    } else {
+                        exact(value, "id", "channelId", "title", "body", "priority");
+                        value = NotificationRequest.parseShow(value).authorizationDetails();
+                    }
+                    break;
+                case "notifications.schedule":
+                    capability = "notifications"; exact(value, "scheduleId", "atEpochMs", "expiresAtEpochMs", "precision", "allowWhileIdle", "notification");
+                    value = NotificationScheduleRequest.parseSchedule(value).authorizationDetails(); break;
+                case "notifications.requestExactAlarmAccess": capability = "notifications"; exact(value); break;
                 case "notifications.channel":
                     capability = "notifications"; exact(value, "id", "name", "description", "importance");
                     value = NotificationRequest.parseChannel(value).authorizationDetails(); break;
@@ -128,19 +173,31 @@ public final class NativeOperationRequest {
             return result.toString();
         } catch (java.security.NoSuchAlgorithmException impossible) { throw new AssertionError(impossible); }
     }
-    private static String canonical(JSONObject value) throws JSONException {
-        ArrayList<String> keys = new ArrayList<>(); for (Iterator<String> it = value.keys(); it.hasNext();) keys.add(it.next());
-        Collections.sort(keys); StringBuilder result = new StringBuilder("{");
-        for (String key : keys) {
-            if (result.length() > 1) result.append(',');
-            Object item = value.get(key); result.append(JSONObject.quote(key)).append(':');
-            if (item instanceof JSONObject) result.append(canonical((JSONObject) item));
-            else if (item instanceof String) result.append(JSONObject.quote((String) item));
-            else if (item instanceof Number) result.append(JSONObject.numberToString((Number) item));
-            else if (item instanceof Boolean) result.append(item.toString());
-            else throw new JSONException("Unsupported native disclosure value");
+    private static String canonical(JSONObject value) throws JSONException { return canonicalValue(value, 0); }
+    private static String canonicalValue(Object value, int depth) throws JSONException {
+        if (depth > 16) throw new JSONException("Native disclosure nesting exceeds bound");
+        if (value == null || value == JSONObject.NULL) return "null";
+        if (value instanceof JSONObject) {
+            JSONObject object = (JSONObject) value;
+            ArrayList<String> keys = new ArrayList<>(); for (Iterator<String> it = object.keys(); it.hasNext();) keys.add(it.next());
+            Collections.sort(keys); StringBuilder result = new StringBuilder("{");
+            for (String key : keys) {
+                if (result.length() > 1) result.append(',');
+                result.append(JSONObject.quote(key)).append(':').append(canonicalValue(object.get(key), depth + 1));
+            }
+            return result.append('}').toString();
         }
-        return result.append('}').toString();
+        if (value instanceof JSONArray) {
+            JSONArray array = (JSONArray) value; StringBuilder result = new StringBuilder("[");
+            for (int index = 0; index < array.length(); index++) {
+                if (index > 0) result.append(','); result.append(canonicalValue(array.get(index), depth + 1));
+            }
+            return result.append(']').toString();
+        }
+        if (value instanceof String) return JSONObject.quote((String) value);
+        if (value instanceof Number) return JSONObject.numberToString((Number) value);
+        if (value instanceof Boolean) return value.toString();
+        throw new JSONException("Unsupported native disclosure value");
     }
     private static void exact(JSONObject object, String... allowed) throws FactoryException {
         HashSet<String> keys = new HashSet<>(); for (Iterator<String> it = object.keys(); it.hasNext();) keys.add(it.next());

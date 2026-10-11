@@ -53,6 +53,33 @@ public class TemplateApkTest {
         assets.put("assets/factory-provenance.json", utf8("{\"testFixture\":true}"));
     }
 
+    @Test public void incomingPoliciesAreExactAuditedFiltersWithHistoricalIsolation() throws Exception {
+        for (boolean multiple : new boolean[]{false, true}) {
+            com.jarvys.factory.contract.IncomingSharePolicy policy = new com.jarvys.factory.contract.IncomingSharePolicy(Arrays.asList("image/*", "text/plain"), multiple);
+            TemplateApk.Spec requested = new TemplateApk.Spec(spec.appId, spec.label, 1, "1.0", Arrays.asList("documents", "incomingShare"), policy);
+            byte[] bytes = TemplateApk.build(template, requested, icon, assets);
+            TemplateApk.ManifestInfo verified = TemplateApk.verify(bytes, requested);
+            assertEquals(policy, verified.plan.incomingShare);
+            assertEquals(policy, TemplateApk.inspect(bytes).plan.incomingShare);
+            assertEquals(1, verified.plan.exportedComponents.size());
+            assertThrows(IOException.class, () -> TemplateApk.verifyExistingClosedV3(bytes, requested));
+            TemplateApk.Spec different = new TemplateApk.Spec(spec.appId, spec.label, 1, "1.0", requested.capabilities,
+                    new com.jarvys.factory.contract.IncomingSharePolicy(Arrays.asList("image/*", "text/plain"), !multiple));
+            assertThrows(IOException.class, () -> TemplateApk.verify(bytes, different));
+        }
+    }
+    @Test public void schedulingAuditBindsBothPrivateReceiversToPackagedDex() throws Exception {
+        for (boolean exact : new boolean[]{false, true}) {
+            com.jarvys.factory.contract.NotificationPolicy policy = new com.jarvys.factory.contract.NotificationPolicy(true, exact);
+            TemplateApk.Spec requested = new TemplateApk.Spec(spec.appId, spec.label, 1, "1.0", Collections.singletonList("notifications"), null, policy);
+            TemplateApk.ManifestInfo verified = TemplateApk.verify(TemplateApk.build(template, requested, icon, assets), requested);
+            assertEquals(policy, verified.plan.notifications);
+            assertTrue(verified.componentDex.containsKey(com.jarvys.factory.contract.NotificationPolicy.ALARM_RECEIVER));
+            assertTrue(verified.componentDex.containsKey(com.jarvys.factory.contract.NotificationPolicy.RECOVERY_RECEIVER));
+            assertEquals(Collections.singletonList(ManifestPlan.ACTIVITY), verified.plan.exportedComponents);
+            assertEquals(exact, verified.permissions.contains(com.jarvys.factory.contract.NotificationPolicy.EXACT_PERMISSION));
+        }
+    }
     @Test public void runtimeUiCatalogSurvivesButCannotBeReplacedByProjectAssets() throws Exception {
         Map<String,byte[]> original = com.jarvys.factory.runtime.FactoryUiAssets.fromApk(template);
         Map<String,byte[]> output = com.jarvys.factory.runtime.FactoryUiAssets.fromApk(build());

@@ -105,7 +105,7 @@ test('all SDK calls exactly match the catalog and explicit native validator/disp
   const path = require('node:path');
   const catalog = fs.readFileSync(path.join(__dirname, '../../factory-contract/src/main/java/com/jarvys/factory/contract/CapabilityCatalog.java'), 'utf8');
   const rows = [...catalog.matchAll(/\b([A-Z][A-Z_]+)\("([a-zA-Z]+\.[a-zA-Z]+)", (?:"[a-zA-Z]+"|null)\)/g)];
-  assert.equal(rows.length, 78);
+  assert.equal(rows.length, 99);
   const env = environment();
   const args = { 'storage.get': ['key'], 'storage.set': ['key', 'value'], 'storage.remove': ['key'],
     'export.text': [{ filename: 'test.txt', text: 'hello' }], 'share.text': [{ text: 'hello' }],
@@ -860,7 +860,7 @@ test('network denials timeout and page closure reject once without retrying targ
 test('notification and speech APIs are frozen and preserve native options and truthful receipts', async () => {
   const env = environment();
   assert.equal(Object.isFrozen(env.api.notifications), true); assert.equal(Object.isFrozen(env.api.speech), true);
-  assert.deepEqual(Object.keys(env.api.notifications), ['status', 'channel', 'show', 'cancel', 'requestPermission']);
+  assert.deepEqual(Object.keys(env.api.notifications), ['schedule','resumeScheduled','scheduleStatus','cancelScheduled','forgetScheduled','pollActions','ackAction','generationStatus','forgetGeneration','requestExactAlarmAccess','status', 'channel', 'show', 'cancel', 'requestPermission']);
   assert.deepEqual(Object.keys(env.api.speech), ['status', 'voices', 'speak', 'stop']);
   const cases = [
     ['notifications', 'status', undefined, {status: 'permission_required'}],
@@ -889,4 +889,33 @@ test('speech stop has independent bounded control admission while ordinary reque
   await assert.rejects(env.api.speech.stop(), {code: 'BUSY'});
   env.reply(env.sent.at(-1), {status: 'stop_requested', cancelled: false}); assert.equal((await stop).cancelled, false);
   assert.equal(env.timers.size, 16); env.handlers.get('pagehide')(); await Promise.all(rejected);
+});
+
+
+test('generic secrets and incoming-share APIs preserve typed options without retrying', async () => {
+  for (const [group, names] of [['secrets', ['put','capture','get','list','describe','remove','reset','request']], ['incomingShare', ['list','take','discard']]]) {
+    for (const name of names) {
+      const env = environment(); assert.equal(Object.isFrozen(env.api[group]), true);
+      const args = ['list','reset'].includes(name) ? undefined : {id:'synthetic', options:{nested:true}};
+      const pending = env.api[group][name](args); const request = env.sent.at(-1);
+      assert.equal(request.method, group+'.'+name); assert.deepEqual(request.args, args || {});
+      assert.equal(env.delays.at(-1), 600000);
+      const rejected = assert.rejects(pending, {code:'PERMISSION_DENIED'});
+      env.window.JarvysNative.onmessage({data:JSON.stringify({v:1,id:request.id,ok:false,error:{code:'PERMISSION_DENIED'}})});
+      await rejected; env.reply(request,{late:true}); assert.equal(env.sent.length,1);
+    }
+  }
+});
+
+test('notification scheduling and action inbox controls preserve requests and unknown outcomes', async () => {
+  const methods = ['schedule','resumeScheduled','scheduleStatus','cancelScheduled','forgetScheduled','pollActions','ackAction','generationStatus','forgetGeneration','requestExactAlarmAccess'];
+  for (const method of methods) {
+    const env = environment();
+    const options = ['pollActions','requestExactAlarmAccess'].includes(method) ? undefined : {scheduleId:'synthetic',generationId:'a'.repeat(64),acknowledgeDeliveryUnknown:true};
+    const pending = env.api.notifications[method](options); const request = env.sent.at(-1);
+    assert.equal(request.method, 'notifications.'+method); assert.deepEqual(request.args, options || {});
+    const outcome = {status:'delivery_unknown', displayed:false, receiptVerified:false};
+    env.reply(request,outcome); assert.deepEqual(JSON.parse(JSON.stringify(await pending)),outcome);
+    assert.equal(env.sent.length,1);
+  }
 });

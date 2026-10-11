@@ -16,9 +16,9 @@ class FactorySpecTest {
     @Test fun validSpecHasStableCapabilitiesAndExactRuntimeContract() {
         val value=FactorySpec.parse(spec())
         assertEquals(listOf("export","storage"),value.capabilities)
-        val config=JSONObject(String(value.runtimeConfig()))
+        val config=JSONObject(String(value.runtimeConfig(broker())))
         assertEquals("www/index.html",config.getString("entryPoint"))
-        assertEquals(setOf("schemaVersion","appId","name","entryPoint","capabilities"),config.keys().asSequence().toSet())
+        assertEquals(setOf("schemaVersion","appId","name","entryPoint","capabilities","resourceBudgets","documentBroker"),config.keys().asSequence().toSet())
     }
     @Test fun reservedAndInvalidPackageIdsAreRejected() {
         for(id in listOf("com.jarvys.agent","com.jarvys.factory.template","android.hidden","single","org.Example.x","org.a/evil","org..x","org."+"x".repeat(125))) rejects{it.put("appId",id)}
@@ -61,17 +61,18 @@ class FactorySpecTest {
         val value=FactorySpec.parse(spec().put("capabilities",JSONArray()))
         assertTrue(value.capabilities.isEmpty())
     }
-    @Test fun all1048576SelectionsUseImmutableCatalogWithOnlyTheSelectiveBiometricPermission() {
-        assertEquals(20, FactorySpec.CAPABILITIES.size)
+    @Test fun all1048576OriginalSelectionsRetainTheirExplicitCatalogContracts() {
+        assertEquals(29, FactorySpec.CAPABILITIES.size)
+        assertEquals(listOf("storage","export","share","clipboard","haptics","device","documents","photos","audio","browser","maps","phone","email","sms","contacts","calendar","database","presentation","sensors","biometrics"), FactorySpec.CAPABILITIES.take(20))
         var checked = 0
         for (mask in 0 until 1048576) {
-            val selected = FactorySpec.CAPABILITIES.filterIndexed { bit, _ -> mask and (1 shl bit) != 0 }
+            val selected = FactorySpec.CAPABILITIES.take(20).filterIndexed { bit, _ -> mask and (1 shl bit) != 0 }
             val value = FactorySpec.parse(spec().put("capabilities", JSONArray(selected.reversed())))
             assertEquals(selected.sorted(), value.capabilities)
-            assertEquals(1, JSONObject(String(value.runtimeConfig(if ("documents" in selected || "browser" in selected || "maps" in selected || "phone" in selected || "email" in selected || "sms" in selected || "contacts" in selected || "calendar" in selected || "clipboard" in selected) broker() else null))).getInt("schemaVersion"))
+            assertEquals(1, JSONObject(String(value.runtimeConfig(if (com.jarvys.factory.contract.CapabilityCatalog.requiresHostBroker(selected)) broker() else null))).getInt("schemaVersion"))
             for (name in selected) {
                 val capability = com.jarvys.factory.contract.CapabilityCatalog.CAPABILITIES[name]!!
-                assertEquals(if (name == "biometrics") setOf("android.permission.USE_BIOMETRIC") else emptySet<String>(), capability.permissions)
+                assertEquals(when(name) { "biometrics" -> setOf("android.permission.USE_BIOMETRIC"); "sensors" -> setOf("android.permission.HIGH_SAMPLING_RATE_SENSORS"); else -> emptySet<String>() }, capability.permissions)
                 assertEquals(if (name == "biometrics") 30 else 24, capability.minimumApi)
                 assertTrue(capability.features.isEmpty())
                 assertTrue(capability.components.isEmpty())
@@ -122,7 +123,7 @@ class FactorySpecTest {
         assertThrows(Exception::class.java) { docs.runtimeConfig() }
         val config = JSONObject(String(docs.runtimeConfig(broker())))
         assertEquals("com.jarvys.agent",config.getJSONObject("documentBroker").getString("packageName"))
-        assertThrows(Exception::class.java) { FactorySpec.parse(spec()).runtimeConfig(broker()) }
+        assertThrows(Exception::class.java) { FactorySpec.parse(spec().put("capabilities",JSONArray(listOf("storage")))).runtimeConfig(broker()) }
         assertThrows(Exception::class.java) { docs.runtimeConfig(broker().put("packageName","org.example.untrusted")) }
     }
 
@@ -140,12 +141,15 @@ class FactorySpecTest {
         val empty = FactorySpec.parse(spec().put("dataBackup", JSONObject().put("tables", JSONArray())))
         assertTrue(old.dataBackupTables.isEmpty())
         assertEquals(old.toJson().toString(), empty.toJson().toString())
-        assertArrayEquals(old.runtimeConfig(), empty.runtimeConfig())
+        assertArrayEquals(old.runtimeConfig(broker()), empty.runtimeConfig(broker()))
         assertFalse(old.toJson().has("dataBackup"))
-        assertEquals(spec().put("capabilities", JSONArray(listOf("export", "storage"))).toString(), old.toJson().toString())
+        assertEquals(spec().put("capabilities", JSONArray(listOf("export", "storage"))).put("resourceBudgets", com.jarvys.factory.runtime.ResourceBudgetsJson.toJson(old.resources)).toString(), old.toJson().toString())
         val legacyConfig = JSONObject().put("schemaVersion", 1).put("appId", old.appId).put("name", old.name)
             .put("entryPoint", "www/index.html").put("capabilities", JSONArray(old.capabilities)).toString().toByteArray(Charsets.UTF_8)
-        assertArrayEquals(legacyConfig, old.runtimeConfig())
+        val legacyRuntime = com.jarvys.factory.runtime.FactoryConfig.parsePreview(String(legacyConfig))
+        assertEquals(old.resources,legacyRuntime.resources)
+        assertNull(legacyRuntime.incomingShare); assertFalse(legacyRuntime.notifications.scheduling)
+        assertFalse(JSONObject(String(old.runtimeConfig(broker()))).has("incomingShare"))
         val input = spec().put("capabilities", JSONArray(listOf("database", "documents")))
             .put("dataBackup", JSONObject().put("tables", JSONArray(listOf("notes", "tasks"))))
         val parsed = FactorySpec.parse(input)
@@ -175,7 +179,7 @@ class FactorySpecTest {
         for (policy in listOf(JSONObject().put("keys", JSONArray()), JSONObject().put("tables", JSONArray()).put("keys", JSONArray()))) {
             val empty = FactorySpec.parse(spec().put("dataBackup", policy))
             assertEquals(old.toJson().toString(), empty.toJson().toString())
-            assertArrayEquals(old.runtimeConfig(), empty.runtimeConfig())
+            assertArrayEquals(old.runtimeConfig(broker()), empty.runtimeConfig(broker()))
         }
         val legacy = FactorySpec.parse(spec().put("capabilities", JSONArray(listOf("database", "documents")))
             .put("dataBackup", JSONObject().put("tables", JSONArray(listOf("notes")))))

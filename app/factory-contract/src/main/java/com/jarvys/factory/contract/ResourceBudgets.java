@@ -19,7 +19,7 @@ import java.util.Map;
 public final class ResourceBudgets {
     public static final int VERSION = 1;
     private static final long KIB = 1024L, MIB = 1024L * KIB, GIB = 1024L * MIB;
-    private static final String[] SECTIONS = {"storage", "database", "documents", "audio", "sensors", "packaging"};
+    private static final String[] SECTIONS = {"storage", "database", "documents", "audio", "sensors", "packaging", "secrets", "notifications", "incomingShare"};
 
     /** Fixed allocation/transport ceilings; these are not developer-editable policy settings. */
     public static final int BRIDGE_MESSAGE_BYTES = 512 * 1024;
@@ -58,7 +58,18 @@ public final class ResourceBudgets {
         PACKAGE_FILES("packaging", "sourceFiles", 128, 1, 128),
         PACKAGE_TOTAL("packaging", "totalSourceBytes", 8 * MIB, 1, 8 * MIB),
         PACKAGE_SINGLE("packaging", "singleSourceBytes", MIB, 1, MIB),
-        PACKAGE_APK("packaging", "apkBytes", 32 * MIB, 1, 32 * MIB);
+        PACKAGE_APK("packaging", "apkBytes", 32 * MIB, 1, 32 * MIB),
+        SECRET_ENTRIES("secrets", "entries", 32, 1, 256),
+        SECRET_VALUE("secrets", "valueBytes", 8192, 1, 32768),
+        SECRET_VAULT("secrets", "vaultBytes", 512 * KIB, 8193, 4 * MIB),
+        NOTIFICATION_SCHEDULES("notifications", "schedules", 128, 1, 1024),
+        NOTIFICATION_INBOX("notifications", "inboxEvents", 256, 1, 1024),
+        NOTIFICATION_TOMBSTONES("notifications", "tombstones", 1024, 1, 4096),
+        NOTIFICATION_STORAGE("notifications", "storageBytes", 4 * MIB, 64 * KIB, 16 * MIB),
+        INCOMING_ENVELOPES("incomingShare", "queuedEnvelopes", 16, 1, 64),
+        INCOMING_ATTACHMENTS("incomingShare", "attachmentsPerEnvelope", 16, 1, 32),
+        INCOMING_TEXT("incomingShare", "textBytes", 64 * KIB, 1, 256 * KIB),
+        INCOMING_BYTES("incomingShare", "queuedBytes", MIB, 1024, 8 * MIB);
 
         final String section, name;
         final long legacy, minimum, maximum;
@@ -106,6 +117,19 @@ public final class ResourceBudgets {
             minimumIntervalUs = count(values, Field.SENSOR_INTERVAL); bufferedSamples = count(values, Field.SENSOR_BUFFER);
         }
     }
+    public static final class Secrets {
+        public final int entries, valueBytes, vaultBytes;
+        private Secrets(long[] values) { entries=count(values,Field.SECRET_ENTRIES); valueBytes=count(values,Field.SECRET_VALUE); vaultBytes=count(values,Field.SECRET_VAULT); }
+    }
+    public static final class Notifications {
+        public final int schedules, inboxEvents, tombstones;
+        public final long storageBytes;
+        private Notifications(long[] values) { schedules=count(values,Field.NOTIFICATION_SCHEDULES); inboxEvents=count(values,Field.NOTIFICATION_INBOX); tombstones=count(values,Field.NOTIFICATION_TOMBSTONES); storageBytes=value(values,Field.NOTIFICATION_STORAGE); }
+    }
+    public static final class IncomingShare {
+        public final int queuedEnvelopes, attachmentsPerEnvelope, textBytes, queuedBytes;
+        private IncomingShare(long[] values) { queuedEnvelopes=count(values,Field.INCOMING_ENVELOPES); attachmentsPerEnvelope=count(values,Field.INCOMING_ATTACHMENTS); textBytes=count(values,Field.INCOMING_TEXT); queuedBytes=count(values,Field.INCOMING_BYTES); }
+    }
     public static final class Packaging {
         public final int sourceFiles;
         public final long totalSourceBytes, singleSourceBytes, apkBytes;
@@ -123,11 +147,17 @@ public final class ResourceBudgets {
     public final Audio audio;
     public final Sensors sensors;
     public final Packaging packaging;
+    public final Secrets secrets;
+    public final Notifications notifications;
+    public final IncomingShare incomingShare;
     private final Map<String, Object> canonical;
 
     private ResourceBudgets(long[] values) {
         storage = new Storage(values); database = new Database(values); documents = new Documents(values);
         audio = new Audio(values); sensors = new Sensors(values); packaging = new Packaging(values);
+        secrets = new Secrets(values); notifications = new Notifications(values); incomingShare = new IncomingShare(values);
+        require(secrets.vaultBytes >= secrets.valueBytes + 8192, "secrets.vaultBytes cannot hold one value and metadata");
+        require(incomingShare.textBytes <= incomingShare.queuedBytes, "incomingShare.textBytes exceeds queuedBytes");
         require(storage.valueBytes <= storage.totalBytes, "storage.valueBytes exceeds totalBytes");
         require(database.cellBytes <= database.rowBytes, "database.cellBytes exceeds rowBytes");
         require(database.mainFileBytes % 4096 == 0, "database.mainFileBytes must be a multiple of 4096");
