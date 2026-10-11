@@ -50,18 +50,20 @@ class FactoryApplicationStartupTest {
             val app = Instrumentation.newApplication(FactoryInstallApplication::class.java, context)
             assertEquals(FactoryInstallApplication::class.java, app.javaClass)
             app.onCreate()
-            assertTrue("Startup protection must precede queued filesystem work", MemoryUiAutomationGuard.isProtected())
-            assertFalse("Startup must reserve cross-broker admission immediately", FactoryInteractionAdmission.available())
+            assertFalse("Read-only startup must not create a global human-only surface", MemoryUiAutomationGuard.isProtected())
+            assertFalse("The sharing family keeps its actual cleanup resource slot", FactoryInteractionAdmission.available())
+            val sharing = FactoryFileShareCoordinator.get(context)
+            assertFalse(FactoryInteractionAdmission.available(sharing)); assertFalse(sharing.canBegin())
             assertTrue(FactoryFileShareCoordinator.startupPending())
-            assertTrue(runCatching { MemoryUiAutomationGuard.captureAutomationEpoch() }.isFailure)
-            assertFalse(FactoryDocumentCoordinator.get(context).canBegin())
+            assertTrue(runCatching { MemoryUiAutomationGuard.captureAutomationEpoch() }.isSuccess)
+            assertTrue(FactoryDocumentCoordinator.get(context).canBegin())
         } finally { unblock.countDown() }
         blocker.get(5, TimeUnit.SECONDS)
         // Completion barrier on the same worker, never cancellation or an arbitrary timing sleep.
         FactoryStartupTestIsolation.awaitSharingWorkerCompletion()
         assertFalse(FactoryFileShareCoordinator.startupPending())
     }
-    @Test fun cleanStartupBlocksSynchronouslyThenReleasesAfterRealCleanup() {
+    @Test fun cleanStartupReservesOwnFamilyUntilRealCleanup() {
         startup()
         val coordinator = FactoryFileShareCoordinator.get(context)
         assertFalse(coordinator.needsRecovery())
@@ -69,26 +71,26 @@ class FactoryApplicationStartupTest {
         assertFalse(MemoryUiAutomationGuard.isProtected())
         assertTrue(FactoryDocumentCoordinator.get(context).canBegin())
     }
-    @Test fun openJournalStartupRetainsProtectionAndNeverRestoresLaunchEvidence() {
+    @Test fun openJournalRetainsOwnRecoveryWithoutRestoringAuthority() {
         root.mkdirs()
         journal.writeText(JSONObject().put("schemaVersion", 1).put("state", "chooser_pending")
             .put("open", true).put("nonce", "a".repeat(64)).toString())
         startup()
         val coordinator = FactoryFileShareCoordinator.get(context)
-        assertTrue(coordinator.needsRecovery()); assertEquals("outcome_unknown", coordinator.status())
+        assertTrue(coordinator.needsRecovery()); assertFalse(coordinator.canBegin()); assertTrue(FactoryDocumentCoordinator.get(context).canBegin()); assertEquals("outcome_unknown", coordinator.status())
         assertFalse(coordinator.chooserOpened())
-        assertTrue(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
+        assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
         FactoryFileShareCoordinator.WORKER.submit { coordinator.acknowledgeRecovery {} }.get(10, TimeUnit.SECONDS)
         assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available())
     }
-    @Test fun malformedJournalStartupStaysProtectedUntilHumanRecovery() {
+    @Test fun malformedJournalBlocksOnlyItsFamilyUntilRecovery() {
         root.mkdirs(); journal.writeText("{")
         startup()
         val coordinator = FactoryFileShareCoordinator.get(context)
-        assertTrue(coordinator.needsRecovery()); assertTrue(MemoryUiAutomationGuard.isProtected())
+        assertTrue(coordinator.needsRecovery()); assertFalse(coordinator.canBegin()); assertTrue(FactoryDocumentCoordinator.get(context).canBegin()); assertFalse(MemoryUiAutomationGuard.isProtected())
         assertFalse(FactoryInteractionAdmission.available())
         assertTrue(runCatching { FactoryFileShareCoordinator.WORKER.submit { coordinator.acknowledgeRecovery { error("background") } }.get(10, TimeUnit.SECONDS) }.isFailure)
-        assertTrue(MemoryUiAutomationGuard.isProtected())
+        assertFalse(MemoryUiAutomationGuard.isProtected())
         FactoryFileShareCoordinator.WORKER.submit { coordinator.acknowledgeRecovery {} }.get(10, TimeUnit.SECONDS)
         assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available())
     }

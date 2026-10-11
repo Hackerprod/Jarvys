@@ -231,7 +231,7 @@ public class FactoryDispatcherTest {
             for (int bit = 0; bit < CapabilityCatalog.NAMES.size(); bit++) if ((mask & (1 << bit)) != 0) selected.add(CapabilityCatalog.NAMES.get(bit));
             com.jarvys.factory.contract.ManifestPlan plan = new com.jarvys.factory.contract.ManifestPlan(
                     "com.example.browser", "Browser fixture", 1, "1.0", 0x7f010001, 0x7f020001, selected);
-            boolean host = selected.contains("browser") || selected.contains("documents") || selected.contains("maps") || selected.contains("phone") || selected.contains("email") || selected.contains("sms") || selected.contains("contacts") || selected.contains("calendar");
+            boolean host = selected.contains("browser") || selected.contains("documents") || selected.contains("maps") || selected.contains("phone") || selected.contains("email") || selected.contains("sms") || selected.contains("contacts") || selected.contains("calendar") || selected.contains("clipboard");
             boolean biometric=selected.contains("biometrics");
             assertEquals(biometric?java.util.Collections.singletonList(CapabilityCatalog.BIOMETRIC_PERMISSION):java.util.Collections.emptyList(),plan.permissions);
             assertTrue(plan.features.isEmpty()); assertTrue(plan.hosts.isEmpty());

@@ -41,7 +41,7 @@ class FactoryContactApplicationStartupTest {
         val contacts = FactoryContactCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }.get(null) as? FactoryContactCoordinator
         if (contacts?.needsRecovery() == true) worker { contacts.close(null, true, true) {} }
         val external = FactoryExternalLaunchCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }.get(null) as? FactoryExternalLaunchCoordinator
-        if (external?.needsRecovery() == true) worker(FactoryExternalLaunchCoordinator.WORKER) { external.close(null, true, true) {} }
+        if (external?.needsRecovery() == true) worker(FactoryExternalLaunchCoordinator.WORKER) { external.close(null, true) {} }
         FactoryStartupTestIsolation.releaseCompletedSharingStartup()
         assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available())
         for (name in DIRECTORIES) File(context.noBackupFilesDir, name).deleteRecursively()
@@ -100,11 +100,11 @@ class FactoryContactApplicationStartupTest {
         FactoryStartupTestIsolation.awaitSharingWorkerCompletion()
         val contacts = contactsCreatedByApplication(); val external = externalCreatedByApplication()
         assertTrue(contacts.needsRecovery()); assertTrue(external.needsRecovery()); assertNull(contacts.session()); assertNull(external.session())
-        if (contactsFirst) worker { contacts.close(null, true, true) {} } else worker(FactoryExternalLaunchCoordinator.WORKER) { external.close(null, true, true) {} }
+        if (contactsFirst) worker { contacts.close(null, true, true) {} } else worker(FactoryExternalLaunchCoordinator.WORKER) { external.close(null, true) {} }
         assertTrue(if (contactsFirst) external.needsRecovery() else contacts.needsRecovery())
         assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
         assertTrue(runCatching { MemoryUiAutomationGuard.captureAutomationEpoch() }.isSuccess)
-        if (contactsFirst) worker(FactoryExternalLaunchCoordinator.WORKER) { external.close(null, true, true) {} } else worker { contacts.close(null, true, true) {} }
+        if (contactsFirst) worker(FactoryExternalLaunchCoordinator.WORKER) { external.close(null, true) {} } else worker { contacts.close(null, true, true) {} }
         assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available())
         for (directory in listOf(root, externalRoot)) {
             val saved = JSONObject(File(directory, "interaction.json").readText())

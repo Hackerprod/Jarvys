@@ -757,6 +757,9 @@ public final class FactoryRuntime implements AutoCloseable {
     }
     private void finishBackup(BackupWork work) {
         if(backup!=work || work.worker || (!work.cancelled && !work.terminal)) return;
+        // No worker can still use these private values. Keep only the small lease/tombstone
+        // while remote cancellation and provider close finish; they do not need the archive.
+        work.archive=null; work.baseline=null; work.storageBaseline=null; work.plan=null;
         // The live host authorization outlives the UI and all actual provider-close work.
         if(documentResources.get()!=0) return;
         if(work.authorization!=null && !work.authorizationClosed) {
@@ -771,7 +774,6 @@ public final class FactoryRuntime implements AutoCloseable {
             return;
         }
         work.authorization=null; work.authorizationBinder=null;
-        work.archive=null; work.baseline=null; work.storageBaseline=null; work.plan=null;
         if(work.control!=null) { work.control.close(); work.control=null; }
         if(work.transfer!=null) { work.transfer.close(); work.transfer=null; }
         if(work.admission!=null) { work.admission.close(); work.admission=null; }

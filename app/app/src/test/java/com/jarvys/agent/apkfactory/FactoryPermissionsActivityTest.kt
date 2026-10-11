@@ -4,6 +4,9 @@ import android.app.AlertDialog
 import android.content.ComponentName
 import android.content.Context
 import android.os.Looper
+import android.os.SystemClock
+import android.view.InputDevice
+import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.Button
@@ -143,6 +146,143 @@ class FactoryPermissionsActivityTest {
             assertTrue("Obscured authority list: $tag", dialog.listView.filterTouchesWhenObscured)
             dialog.dismiss()
         }
+    }
+
+    @Test
+    @Config(sdk = [29, 34])
+    fun fullyAndPartiallyObscuredButtonsCannotOpenAuthorityDialogsOrRevoke() {
+        observe(first); observe(second)
+        val grant = policy.acquire(first, FactoryOperationPolicy.Operation.INSTALL, FactoryOperationPolicy.binding("obscured buttons"))
+        val activity = launch()
+        for (tag in listOf("default", "app", "SIGN", "INSTALL", "revoke")) {
+            val control = button(activity, tag)
+            control.layout(0, 0, 600, 120)
+            for (flags in obscurationFlags) {
+                val touch = event(MotionEvent.ACTION_DOWN, flags, 20f, 20f)
+                try { assertFalse("Blocked $tag flags=$flags", control.onFilterTouchEventForSecurity(touch)) } finally { touch.recycle() }
+                gesture(control, 20f, 20f, flags)
+                drain(activity)
+                assertFalse(ShadowAlertDialog.getLatestAlertDialog()?.isShowing == true)
+                grant.checkBeforeEffect()
+                assertEquals(FactoryOperationPolicy.Mode.ALLOW_ALWAYS, policy.defaultMode())
+                assertNull(policy.overrideMode(first, FactoryOperationPolicy.Operation.SIGN))
+            }
+            for (flags in obscurationFlags) {
+                gesture(control, 20f, 20f, midGestureFlags = flags)
+                drain(activity)
+                assertFalse(ShadowAlertDialog.getLatestAlertDialog()?.isShowing == true)
+                grant.checkBeforeEffect()
+            }
+        }
+        val revoke = button(activity, "revoke")
+        val clean = event(MotionEvent.ACTION_DOWN, 0, 20f, 20f)
+        try { assertTrue(revoke.onFilterTouchEventForSecurity(clean)) } finally { clean.recycle() }
+        gesture(revoke, 20f, 20f)
+        drain(activity)
+        assertTrue("A clean touch still revokes", runCatching { grant.checkBeforeEffect() }.isFailure)
+    }
+
+    @Test
+    @Config(sdk = [29, 34])
+    fun defaultModeListRejectsFullPartialAndMidGestureOverlayButAcceptsCleanTouch() {
+        val activity = launch()
+        button(activity, "default").performClick()
+        val dialog = latestDialog()
+        for (flags in obscurationFlags) {
+            touchRow(dialog, 2, flags)
+            drain(activity)
+            assertTrue(dialog.isShowing)
+            assertEquals(FactoryOperationPolicy.Mode.ALLOW_ALWAYS, policy.defaultMode())
+            assertEquals(FactoryOperationPolicy.Mode.ALLOW_ALWAYS, FactoryOperationPolicy.persisted(context).defaultMode())
+        }
+        for (flags in obscurationFlags) {
+            touchRow(dialog, 2, midGestureFlags = flags)
+            drain(activity)
+            assertTrue(dialog.isShowing)
+            assertEquals(FactoryOperationPolicy.Mode.ALLOW_ALWAYS, policy.defaultMode())
+        }
+        touchRow(dialog, 2)
+        drain(activity)
+        assertFalse(dialog.isShowing)
+        assertEquals(FactoryOperationPolicy.Mode.DENY, FactoryOperationPolicy.persisted(context).defaultMode())
+    }
+
+    @Test
+    @Config(sdk = [29, 34])
+    fun appAndOverrideListsRejectOverlayTouchesAndCleanTouchEditsOnlySelectedCertificate() {
+        observe(first); observe(second)
+        val activity = launch()
+        button(activity, "app").performClick()
+        val apps = latestDialog()
+        for (flags in obscurationFlags) {
+            touchRow(apps, 1, flags)
+            drain(activity)
+            assertTrue(apps.isShowing)
+            assertTrue(button(activity, "app").text.contains("aaaaaaaaaaaaaaaa"))
+        }
+        for (flags in obscurationFlags) {
+            touchRow(apps, 1, midGestureFlags = flags)
+            drain(activity)
+            assertTrue(apps.isShowing)
+            assertTrue(button(activity, "app").text.contains("aaaaaaaaaaaaaaaa"))
+        }
+        touchRow(apps, 1)
+        drain(activity)
+        assertFalse(apps.isShowing)
+        assertTrue(button(activity, "app").text.contains("bbbbbbbbbbbbbbbb"))
+        button(activity, "SIGN").performClick()
+        val modes = latestDialog()
+        for (flags in obscurationFlags) {
+            touchRow(modes, 3, flags)
+            drain(activity)
+            assertTrue(modes.isShowing)
+            assertNull(policy.overrideMode(first, FactoryOperationPolicy.Operation.SIGN))
+            assertNull(policy.overrideMode(second, FactoryOperationPolicy.Operation.SIGN))
+        }
+        for (flags in obscurationFlags) {
+            touchRow(modes, 3, midGestureFlags = flags)
+            drain(activity)
+            assertNull(policy.overrideMode(second, FactoryOperationPolicy.Operation.SIGN))
+        }
+        touchRow(modes, 3)
+        drain(activity)
+        val persisted = FactoryOperationPolicy.persisted(context)
+        assertNull(persisted.overrideMode(first, FactoryOperationPolicy.Operation.SIGN))
+        assertEquals(FactoryOperationPolicy.Mode.DENY, persisted.overrideMode(second, FactoryOperationPolicy.Operation.SIGN))
+    }
+
+    private val obscurationFlags = listOf(MotionEvent.FLAG_WINDOW_IS_OBSCURED,
+        MotionEvent.FLAG_WINDOW_IS_PARTIALLY_OBSCURED,
+        MotionEvent.FLAG_WINDOW_IS_OBSCURED or MotionEvent.FLAG_WINDOW_IS_PARTIALLY_OBSCURED)
+    private fun event(action: Int, flags: Int, x: Float, y: Float): MotionEvent {
+        val now = SystemClock.uptimeMillis()
+        return MotionEvent.obtain(now, now, action, 1,
+            arrayOf(MotionEvent.PointerProperties().apply { id = 0; toolType = MotionEvent.TOOL_TYPE_FINGER }),
+            arrayOf(MotionEvent.PointerCoords().apply { this.x = x; this.y = y; pressure = 1f; size = 1f }),
+            0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, flags)
+    }
+    private fun gesture(view: View, x: Float, y: Float, flags: Int = 0, midGestureFlags: Int? = null,
+                        dispatch: (MotionEvent) -> Boolean = view::dispatchTouchEvent) {
+        val touches = if (midGestureFlags != null) listOf(MotionEvent.ACTION_DOWN to 0,
+            MotionEvent.ACTION_MOVE to midGestureFlags, MotionEvent.ACTION_UP to 0)
+            else listOf(MotionEvent.ACTION_DOWN to flags, MotionEvent.ACTION_UP to flags)
+        for ((action, obscuration) in touches) {
+            val touch = event(action, obscuration, x, y)
+            try { dispatch(touch) } finally { touch.recycle() }
+        }
+        shadowOf(Looper.getMainLooper()).idleFor(250, TimeUnit.MILLISECONDS)
+    }
+    private fun touchRow(dialog: AlertDialog, position: Int, flags: Int = 0, midGestureFlags: Int? = null) {
+        val window = dialog.window!!
+        val decor = window.decorView
+        decor.measure(View.MeasureSpec.makeMeasureSpec(720, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(720, View.MeasureSpec.EXACTLY))
+        decor.layout(0, 0, 720, 720)
+        val list = dialog.listView
+        val row = checkNotNull(list.getChildAt(position - list.firstVisiblePosition)) { "Dialog row $position must be laid out" }
+        val location = IntArray(2).also(list::getLocationInWindow)
+        gesture(list, location[0] + (row.left + row.right) / 2f, location[1] + (row.top + row.bottom) / 2f,
+            flags, midGestureFlags, checkNotNull(window.callback)::dispatchTouchEvent)
     }
 
     @Test fun revokeEndsCurrentSelectedAppRequestsWithoutChangingFuturePolicy() {

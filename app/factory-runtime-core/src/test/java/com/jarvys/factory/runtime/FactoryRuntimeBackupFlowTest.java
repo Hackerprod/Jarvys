@@ -174,8 +174,15 @@ public class FactoryRuntimeBackupFlowTest {
         activity.storageOwner = owner;
         DocumentBrokerIdentityTest.install(activity, activity.getPackageName(), new Signature(SOURCE_CERTIFICATE));
         DocumentBrokerIdentityTest.install(activity, DocumentBrokerIdentity.PRIMARY, new Signature(DocumentBrokerIdentityTest.CERTIFICATE));
-        activity.getPackageManager().getApplicationInfo(DocumentBrokerIdentity.PRIMARY,0).uid=android.os.Process.myUid();
+        int hostFlags=PackageManager.GET_SIGNATURES;
+        if(android.os.Build.VERSION.SDK_INT>=28) hostFlags|=PackageManager.GET_SIGNING_CERTIFICATES;
+        android.content.pm.PackageInfo hostInfo=activity.getPackageManager().getPackageInfo(DocumentBrokerIdentity.PRIMARY,hostFlags);
+        // PackageManager returns a copy. Reinstall the explicit synthetic UID so later
+        // mutual Binder authentication reads the same identity, without bypassing it.
+        hostInfo.applicationInfo.uid=android.os.Process.myUid();
+        Shadows.shadowOf(activity.getPackageManager()).installPackage(hostInfo);
         Shadows.shadowOf(activity.getPackageManager()).setPackagesForUid(android.os.Process.myUid(),DocumentBrokerIdentity.PRIMARY);
+        assertEquals(android.os.Process.myUid(),activity.getPackageManager().getApplicationInfo(DocumentBrokerIdentity.PRIMARY,0).uid);
         String configuration = new JSONObject(FactoryDispatcherTest.configuration("[\"database\",\"documents\"]"))
                 .put("appId", activity.getPackageName())
                 .put("dataBackup", new JSONObject().put("tables", new JSONArray().put("notes")))

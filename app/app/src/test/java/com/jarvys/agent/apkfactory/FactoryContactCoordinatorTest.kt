@@ -73,8 +73,8 @@ class FactoryContactCoordinatorTest {
             else owner.session()?.let { io { owner.close(it, false, true) {} } }
         }
         externalOwners.asReversed().forEach { owner ->
-            if (owner.needsRecovery()) io { owner.close(owner.session(), true, true) {} }
-            else owner.session()?.let { io { owner.close(it, false, true) {} } }
+            if (owner.needsRecovery()) io { owner.close(owner.session(), true) {} }
+            else owner.session()?.let { io { owner.close(it, false) {} } }
         }
         executor.shutdown(); assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS))
         assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available())
@@ -294,11 +294,11 @@ class FactoryContactCoordinatorTest {
             val contacts = make(); val external = FactoryExternalLaunchCoordinator(context) { _, _ -> proof }.also { externalOwners += it }
             io { contacts.restore(); external.restore() }
             assertTrue(contacts.needsRecovery()); assertTrue(external.needsRecovery())
-            if (contactsFirst) io { contacts.close(null, true, true) {} } else io { external.close(null, true, true) {} }
+            if (contactsFirst) io { contacts.close(null, true, true) {} } else io { external.close(null, true) {} }
             assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
             assertTrue(if (contactsFirst) external.needsRecovery() else contacts.needsRecovery())
             assertNotNull(MemoryUiAutomationGuard.captureAutomationEpoch())
-            if (contactsFirst) io { external.close(null, true, true) {} } else io { contacts.close(null, true, true) {} }
+            if (contactsFirst) io { external.close(null, true) {} } else io { contacts.close(null, true, true) {} }
             assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available())
         }
     }

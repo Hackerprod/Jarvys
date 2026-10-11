@@ -2,8 +2,11 @@ package com.jarvys.agent.apkfactory
 
 import android.app.AlertDialog
 import android.content.Context
+import android.os.Build
 import android.os.Bundle
+import android.view.MotionEvent
 import android.view.View
+import android.view.Window
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.LinearLayout
@@ -53,7 +56,16 @@ open class FactoryPermissionsActivity : ComponentActivity() {
     private fun label(text: String, size: Float = 16f) { column.addView(TextView(this).apply { this.text = text; textSize = size; setPadding(0, 10, 0, 10) }) }
     private fun ready() = resumed && !working && guard.isReadyForUser && !isDestroyed && !isFinishing
     private fun button(text: String, name: String, action: () -> Unit) {
-        column.addView(Button(this).apply {
+        column.addView(object : Button(this) {
+            private var rejectedGesture = false
+            override fun onFilterTouchEventForSecurity(event: MotionEvent): Boolean {
+                if (event.actionMasked == MotionEvent.ACTION_DOWN) rejectedGesture = false
+                val allowed = super.onFilterTouchEventForSecurity(event) && unoccluded(event)
+                if (!allowed && !rejectedGesture) cancelTouch(this, event)
+                rejectedGesture = rejectedGesture || !allowed
+                return !rejectedGesture
+            }
+        }.apply {
             this.text = text; tag = name; isEnabled = ready(); filterTouchesWhenObscured = true
             setOnClickListener { if (ready()) { guard.requireHumanUiInteraction(); action() } }
         })
@@ -78,9 +90,31 @@ open class FactoryPermissionsActivity : ComponentActivity() {
         }.setNegativeButton(android.R.string.cancel, null).show().also(::protectDialog)
     }
     private fun protectDialog(value: AlertDialog) {
-        value.window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        val window = value.window ?: return
+        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         value.listView?.filterTouchesWhenObscured = true
+        val original = checkNotNull(window.callback)
+        window.callback = object : Window.Callback by original {
+            private var rejectedGesture = false
+            override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+                if (event.actionMasked == MotionEvent.ACTION_DOWN) rejectedGesture = false
+                if (!unoccluded(event)) {
+                    // Intercept before ListView's platform security filter: otherwise a fully
+                    // obscured MOVE can be dropped before we cancel an earlier clean DOWN.
+                    if (!rejectedGesture) value.listView?.let { cancelTouch(it, event) }
+                    rejectedGesture = true
+                }
+                return rejectedGesture || original.dispatchTouchEvent(event)
+            }
+        }
     }
+    private fun cancelTouch(view: View, event: MotionEvent) {
+        val cancel = MotionEvent.obtain(event).apply { action = MotionEvent.ACTION_CANCEL }
+        try { view.onTouchEvent(cancel) } finally { cancel.recycle() }
+    }
+    private fun unoccluded(event: MotionEvent) =
+        event.flags and MotionEvent.FLAG_WINDOW_IS_OBSCURED == 0 &&
+            (Build.VERSION.SDK_INT < 29 || event.flags and MotionEvent.FLAG_WINDOW_IS_PARTIALLY_OBSCURED == 0)
     private fun render() {
         if (!::column.isInitialized) return
         column.removeAllViews()

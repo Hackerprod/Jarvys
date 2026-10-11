@@ -15,7 +15,7 @@ Coding execution uses its saved Coding setting, otherwise an explicitly saved le
 - Android document/photo/contact selection, source install grants, applicable PackageInstaller UI, and genuine biometric UI remain Android requirements. Jarvys does not synthesize or bypass those grants.
 - Package, UID, certificate, signing-key access, exact artifact and version continuity, document authorities, scoped data formats, and transaction integrity remain checked.
 - Signed caller validation currently relies on the latest signed artifact receipt. Supporting multiple retained signed artifacts requires an authenticated per-artifact capability history; simply dropping the latest-artifact check would discard that evidence. This checkpoint does not claim to remove that limitation.
-- The runtime is a packaged, precompiled DEX. It exposes the implemented SDK surface; it does not compile arbitrary Kotlin/Java or provide every Android API. Existing resource quotas are retained rather than replaced with unsafe unbounded buffers.
+- The runtime is a packaged, precompiled DEX. It exposes the implemented SDK surface; it does not compile arbitrary Kotlin/Java or provide every Android API. Existing generated APKs retain their packaged runtime; rebuilding adopts runtime-local additions such as the clipboard broker. Exact legacy manifest/receipt verification remains supported. Existing resource quotas are retained rather than replaced with unsafe unbounded buffers.
 - Local storage/haptics and direct runtime text-sharing/export paths are not separate entries in the 20-operation host policy. This is not a claim that every SDK method has a new individual setting.
 - Historical unknown outcomes remain unknown. Recovery can retire local state without a human-only global automation lock, but cannot claim an external Android screen closed or replay an uncertain write/commit.
 - An issued URI grant or an already-open file descriptor cannot be recalled retroactively. New file-sharing opens and metadata access recheck current authority; existing descriptors may remain usable until their owner closes them.
@@ -27,6 +27,7 @@ Coding execution uses its saved Coding setting, otherwise an explicitly saved le
 - First Full and Play production Kotlin/resource compilation passed on 2026-10-11, before subsequent review fixes. This is compile evidence, not final release validation.
 - JavaScript SDK: 48 fresh tests passed, no failures or omissions.
 - Independent review covered persisted authority failure, certificate migration, stale first-sign ownership, and callback revocation. Additional runtime/transaction and lifecycle review is being incorporated.
-- Focused native tests, final aggregate gates, lint comparison, generated DEX/APK audit, signing, and physical-device acceptance are not yet complete for this revision.
+- First focused attempt is preserved as failed: app test compilation exposed stale test calls; 1,418 runtime tests ran with 55 failures and no errors/skips. APK-runtime passed 92 tests. Diagnosed fixes address two synthetic UID fixture assignments, a clipboard-query expectation, and immediate cancellation snapshot disposal. The new permission editor also rejects full/partial overlay gestures. Fresh verification of these fixes is pending.
+- Final aggregate gates, lint comparison, generated DEX/APK audit, signing, and physical-device acceptance are not yet complete for this revision.
 
 Private execution evidence stays outside Git. This document records product scope and honest validation status, not private tool logs or credentials.
