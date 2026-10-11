@@ -133,9 +133,10 @@ public final class ResourceBudgetsTest {
         rejected(declaration("packaging", "apkBytes", MIB));
         rejected(declaration("sensors", "bufferedSamples", 49));
     }
-    @Test public void sensorMicrosecondsMustBeExactlyRepresentableByCurrentMillisAdapter() {
-        rejected(declaration("sensors", "minimumIntervalUs", 100001));
-        rejected(declaration("sensors", "minimumIntervalUs", 99999));
+    @Test public void sensorSubscriptionBudgetAcceptsRawMicrosecondsAndFastest() {
+        assertEquals(100001, ResourceBudgets.parse(declaration("sensors", "minimumIntervalUs", 100001)).sensors.minimumIntervalUs);
+        assertEquals(0, ResourceBudgets.parse(declaration("sensors", "minimumIntervalUs", 0)).sensors.minimumIntervalUs);
+        rejected(declaration("sensors", "minimumIntervalUs", -1));
         assertEquals(200000, ResourceBudgets.parse(declaration("sensors", "minimumIntervalUs", 200000)).sensors.minimumIntervalUs);
     }
     @Test public void streamingTotalsExceedSignedIntWithoutEnlargingChunks() {

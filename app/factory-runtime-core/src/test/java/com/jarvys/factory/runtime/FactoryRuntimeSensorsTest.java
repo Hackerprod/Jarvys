@@ -43,6 +43,12 @@ public class FactoryRuntimeSensorsTest {
     }
     @After public void cleanup()throws Exception{runtime.close();assertTrue(((ThreadPoolExecutor)field("io").get(runtime)).awaitTermination(10,TimeUnit.SECONDS));Shadows.shadowOf(Looper.getMainLooper()).idle();screen.finish();}
     String arguments(){return "{\"kind\":\"light\",\"durationMs\":5000,\"intervalMs\":100,\"maxSamples\":50}";}
+    String arguments(String method){
+        if(method.equals("capture"))return arguments();
+        if(method.equals("subscribe"))return "{\"kind\":\"light\",\"samplingPeriodUs\":100000}";
+        if(method.equals("poll")||method.equals("unsubscribe"))return "{\"subscriptionId\":\"12345678-1234-1234-1234-123456789abc\"}";
+        return "{}";
+    }
     Response request(String method,String args)throws Exception{return request("sensor"+(++sequence),method,args);}
     Response request(String id,String method,String args)throws Exception{
         Response response=new Response();Method receive=FactoryRuntime.class.getDeclaredMethod("receive",String.class,JavaScriptReplyProxy.class);receive.setAccessible(true);
@@ -52,15 +58,48 @@ public class FactoryRuntimeSensorsTest {
     void invalidate()throws Exception{Method method=FactoryRuntime.class.getDeclaredMethod("invalidate");method.setAccessible(true);method.invoke(runtime);}
     @Test public void runtimeInfoAdvertisesExactlyThreeBoundedKinds()throws Exception{
         JSONObject info=request("runtime.info","{}").result();assertEquals("[\"light\",\"accelerometer\",\"gyroscope\"]",info.getJSONArray("sensorsKinds").toString());
-        assertEquals(10,info.getInt("sensorsMaxRateHz"));assertEquals(5000,info.getInt("sensorsMaxDurationMs"));assertEquals(50,info.getInt("sensorsMaxSamples"));assertEquals(16384,info.getInt("sensorsResultBytes"));
+        assertEquals(10.0,info.getDouble("sensorsMaxRateHz"),0.0);assertEquals(5000,info.getInt("sensorsMaxDurationMs"));assertEquals(50,info.getInt("sensorsMaxSamples"));assertEquals(16384,info.getInt("sensorsResultBytes"));
+        assertEquals(2,info.getInt("sensorsProtocolVersion"));assertFalse(info.getBoolean("sensorsBrokerRequired"));assertTrue(info.getBoolean("sensorsForegroundOnly"));
+        assertTrue(info.getBoolean("sensorsSubscriptionBrokerRequired"));assertTrue(info.getBoolean("sensorsSubscriptionsForegroundOnly"));
+        assertEquals(100000,info.getInt("sensorsSubscriptionMinimumIntervalUs"));assertEquals(10.0,info.getDouble("sensorsSubscriptionRequestedRateCeilingHz"),0.0);
+        assertFalse(info.getBoolean("sensorsSubscriptionRateGuaranteed"));assertEquals(50,info.getInt("sensorsSubscriptionBufferSamples"));
     }
-    @Test public void previewCannotListCaptureOrCancelInstalledSensors()throws Exception{
-        host.preview=true;for(String method:new String[]{"list","capture","cancel"})assertEquals("UNAVAILABLE",request("sensors."+method,method.equals("capture")?arguments():"{}").error());assertEquals(0,driver.registrations);
+    @Test public void subscriptionRateHintsNeverRaiseTheFiniteCaptureCeilingOrPromiseHardwareRate()throws Exception{
+        for(int period:new int[]{0,4,5000,100000,250000,1000000}){
+            JSONObject config=new JSONObject(host.configuration()).put("resourceBudgets",new JSONObject().put("version",1)
+                    .put("sensors",new JSONObject().put("minimumIntervalUs",period)));
+            field("config").set(runtime,FactoryConfig.parse(config.toString(),screen.getPackageName()));
+            JSONObject info=request("runtime.info","{}").result();
+            assertEquals(period,info.getInt("sensorsSubscriptionMinimumIntervalUs"));assertFalse(info.getBoolean("sensorsSubscriptionRateGuaranteed"));
+            if(period==0)assertTrue(info.isNull("sensorsSubscriptionRequestedRateCeilingHz"));
+            else assertEquals(1000000.0/period,info.getDouble("sensorsSubscriptionRequestedRateCeilingHz"),0.0);
+            assertEquals(period==0?10.0:Math.min(10.0,1000000.0/period),info.getDouble("sensorsMaxRateHz"),0.0);
+            assertTrue(info.getDouble("sensorsMaxRateHz")<=10.0);assertFalse(info.getBoolean("sensorsBrokerRequired"));
+            assertTrue(info.getBoolean("sensorsSubscriptionBrokerRequired"));
+        }
+        assertEquals(0,driver.registrations);
+    }
+    @Test public void legacyUnpinnedSensorsStillCaptureButCannotAcquireASubscription()throws Exception{
+        assertNull(((FactoryConfig)field("config").get(runtime)).documentBroker);
+        assertEquals(3,request("sensors.list","{}").result().getJSONArray("sensors").length());
+        Response capture=request("sensors.capture",arguments().replace("\"maxSamples\":50","\"maxSamples\":1"));
+        driver.events.sample(now,new float[]{1,2,3});assertEquals(1,capture.result().getJSONArray("samples").length());
+        assertEquals(1,driver.registrations);assertEquals(1,driver.unregisters);
+        Response subscription=request("sensors.subscribe",arguments("subscribe"));
+        ((ThreadPoolExecutor)field("io").get(runtime)).submit(()->{}).get(10,TimeUnit.SECONDS);
+        Shadows.shadowOf(Looper.getMainLooper()).idle();
+        assertEquals("PERMISSION_DENIED",subscription.error());assertEquals(1,subscription.count);
+        assertEquals(1,driver.registrations);assertEquals(1,driver.unregisters);
+        Field subscriptions=NativeEffects.class.getDeclaredField("subscriptions");subscriptions.setAccessible(true);
+        assertNull(subscriptions.get(field("nativeEffects").get(runtime)));
+    }
+    @Test public void previewCannotListCaptureCancelOrSubscribeToInstalledSensors()throws Exception{
+        host.preview=true;for(String method:new String[]{"list","capture","cancel","subscribe","poll","unsubscribe"})assertEquals("UNAVAILABLE",request("sensors."+method,arguments(method)).error());assertEquals(0,driver.registrations);
     }
     @Test public void capabilityOriginAndMainFrameAreRequiredForEveryMethod()throws Exception{
         FactoryConfig enabled=(FactoryConfig)field("config").get(runtime);field("config").set(runtime,FactoryConfig.parse(host.configuration().replace("[\"sensors\"]","[]"),screen.getPackageName()));
-        for(String method:new String[]{"list","capture","cancel"}){
-            String name="sensors."+method,args=method.equals("capture")?arguments():"{}";assertEquals("CAPABILITY_DENIED",request(name,args).error());
+        for(String method:new String[]{"list","capture","cancel","subscribe","poll","unsubscribe"}){
+            String name="sensors."+method,args=arguments(method);assertEquals("CAPABILITY_DENIED",request(name,args).error());
             String raw=new JSONObject().put("v",1).put("id","source").put("method",name).put("args",new JSONObject(args)).toString();
             assertEquals("UNTRUSTED_SOURCE",assertThrows(FactoryException.class,()->BridgeProtocol.validate("https://evil.invalid",true,raw,enabled)).code);
             assertEquals("UNTRUSTED_SOURCE",assertThrows(FactoryException.class,()->BridgeProtocol.validate(BridgeProtocol.ORIGIN,false,raw,enabled)).code);

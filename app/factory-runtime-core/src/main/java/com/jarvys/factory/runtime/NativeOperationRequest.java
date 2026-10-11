@@ -39,6 +39,12 @@ public final class NativeOperationRequest {
                 case "voiceRecognition.recognize":
                     capability = "voiceRecognition"; exact(value, "language", "languageModel", "prompt", "maxResults", "preferOffline", "timeoutMs");
                     value = VoiceRecognitionRequest.parseRecognize(value).authorizationDetails(); break;
+                case "steps.current": capability = "steps"; exact(value, "timeoutMs"); value = StepsRequest.parseCurrent(value).authorizationDetails(); break;
+                case "steps.requestPermission": capability = "steps"; exact(value); break;
+                case "sensors.subscribe": capability = "sensors"; exact(value, "kind", "samplingPeriodUs"); value = SensorSubscriptionRequest.parseSubscribe(value).authorizationDetails(); break;
+                case "recording.record":
+                    capability = "recording"; exact(value, "format", "durationMs", "maxBytes", "sampleRate", "channels"); value = RecordingRequest.parseRecord(value).authorizationDetails(); break;
+                case "recording.requestPermission": capability = "recording"; exact(value); break;
                 case "location.current":
                     capability = "location"; exact(value, "provider", "timeoutMs", "maxAgeMs", "maxAccuracyMeters", "allowMock");
                     value = LocationRequest.parseCurrent(value).authorizationDetails(); break;

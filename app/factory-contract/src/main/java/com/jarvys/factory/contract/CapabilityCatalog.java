@@ -19,6 +19,9 @@ public final class CapabilityCatalog {
     public static final String INTERNET_PERMISSION = "android.permission.INTERNET";
     public static final String NOTIFICATION_PERMISSION = "android.permission.POST_NOTIFICATIONS";
     public static final String COARSE_LOCATION_PERMISSION = "android.permission.ACCESS_COARSE_LOCATION";
+    public static final String ACTIVITY_RECOGNITION_PERMISSION = "android.permission.ACTIVITY_RECOGNITION";
+    public static final String HIGH_RATE_SENSORS_PERMISSION = "android.permission.HIGH_SAMPLING_RATE_SENSORS";
+    public static final String RECORD_AUDIO_PERMISSION = "android.permission.RECORD_AUDIO";
     public static final String FINE_LOCATION_PERMISSION = "android.permission.ACCESS_FINE_LOCATION";
     public static final String RECOGNIZE_SPEECH_ACTION = "android.speech.action.RECOGNIZE_SPEECH";
     public static final String TTS_SERVICE_ACTION = "android.intent.action.TTS_SERVICE";
@@ -43,6 +46,7 @@ public final class CapabilityCatalog {
         PRESENTATION_GET("presentation.get", "presentation"), PRESENTATION_SET("presentation.set", "presentation"),
         PRESENTATION_RESET("presentation.reset", "presentation"),
         SENSORS_LIST("sensors.list", "sensors"), SENSORS_CAPTURE("sensors.capture", "sensors"), SENSORS_CANCEL("sensors.cancel", "sensors"),
+        SENSORS_SUBSCRIBE("sensors.subscribe", "sensors"), SENSORS_POLL("sensors.poll", "sensors"), SENSORS_UNSUBSCRIBE("sensors.unsubscribe", "sensors"),
         BIOMETRICS_AVAILABILITY("biometrics.availability", "biometrics"),
         BIOMETRICS_AUTHENTICATE("biometrics.authenticate", "biometrics"), BIOMETRICS_CANCEL("biometrics.cancel", "biometrics"),
         NETWORK_REQUEST("network.request", "network"), NETWORK_PROBE("network.probe", "network"), NETWORK_PING("network.ping", "network"), NETWORK_CANCEL("network.cancel", "network"),
@@ -52,7 +56,9 @@ public final class CapabilityCatalog {
         SPEECH_STATUS("speech.status", "speech"), SPEECH_VOICES("speech.voices", "speech"),
         SPEECH_SPEAK("speech.speak", "speech"), SPEECH_STOP("speech.stop", "speech"),
         VOICE_RECOGNITION_STATUS("voiceRecognition.status", "voiceRecognition"), VOICE_RECOGNITION_RECOGNIZE("voiceRecognition.recognize", "voiceRecognition"), VOICE_RECOGNITION_CANCEL("voiceRecognition.cancel", "voiceRecognition"),
-        LOCATION_STATUS("location.status", "location"), LOCATION_CURRENT("location.current", "location"), LOCATION_CANCEL("location.cancel", "location"), LOCATION_REQUEST_PERMISSION("location.requestPermission", "location");
+        LOCATION_STATUS("location.status", "location"), LOCATION_CURRENT("location.current", "location"), LOCATION_CANCEL("location.cancel", "location"), LOCATION_REQUEST_PERMISSION("location.requestPermission", "location"),
+        RECORDING_STATUS("recording.status", "recording"), RECORDING_RECORD("recording.record", "recording"), RECORDING_STOP("recording.stop", "recording"), RECORDING_CANCEL("recording.cancel", "recording"), RECORDING_REQUEST_PERMISSION("recording.requestPermission", "recording"),
+        STEPS_STATUS("steps.status", "steps"), STEPS_CURRENT("steps.current", "steps"), STEPS_CANCEL("steps.cancel", "steps"), STEPS_REQUEST_PERMISSION("steps.requestPermission", "steps");
         public final String wireName;
         public final String capability;
         Method(String wireName, String capability) { this.wireName = wireName; this.capability = capability; }
@@ -80,11 +86,14 @@ public final class CapabilityCatalog {
             boolean network = name.equals("network"), notifications = name.equals("notifications"), speech = name.equals("speech"), voice = name.equals("voiceRecognition"), location = name.equals("location");
             minimumApi = biometric ? 30 : MIN_APP_API;
             permissions = biometric ? Collections.singleton(BIOMETRIC_PERMISSION) : network ? Collections.singleton(INTERNET_PERMISSION)
-                    : notifications ? Collections.singleton(NOTIFICATION_PERMISSION) : location ? LOCATION_PERMISSIONS : Collections.emptySet();
+                    : notifications ? Collections.singleton(NOTIFICATION_PERMISSION) : location ? LOCATION_PERMISSIONS : name.equals("recording") ? Collections.singleton(RECORD_AUDIO_PERMISSION) : name.equals("steps") ? Collections.singleton(ACTIVITY_RECOGNITION_PERMISSION) : name.equals("sensors") ? Collections.singleton(HIGH_RATE_SENSORS_PERMISSION) : Collections.emptySet();
             List<ManifestNodes.Element> declarations = new ArrayList<>();
             if (biometric) declarations.add(BIOMETRIC_DECLARATION);
             if (network) declarations.add(INTERNET_DECLARATION);
             if (notifications) declarations.add(NOTIFICATION_DECLARATION);
+            if (name.equals("recording")) declarations.add(RECORD_AUDIO_DECLARATION);
+            if (name.equals("steps")) declarations.add(ACTIVITY_RECOGNITION_DECLARATION);
+            if (name.equals("sensors")) declarations.add(HIGH_RATE_SENSORS_DECLARATION);
             if (location) { declarations.add(COARSE_LOCATION_DECLARATION); declarations.add(FINE_LOCATION_DECLARATION); }
             if (broker) declarations.add(speech ? SPEECH_QUERIES : voice ? VOICE_QUERIES : DOCUMENT_QUERIES);
             manifestNodes = ManifestNodes.ordered(declarations);
@@ -106,6 +115,9 @@ public final class CapabilityCatalog {
     static final ManifestNodes.Element NOTIFICATION_DECLARATION = ManifestNodes.permission(
             NOTIFICATION_PERMISSION, ManifestNodes.PermissionVariant.STANDARD, null);
     public static final Set<String> LOCATION_PERMISSIONS = Collections.unmodifiableSet(new LinkedHashSet<>(Arrays.asList(COARSE_LOCATION_PERMISSION, FINE_LOCATION_PERMISSION)));
+    static final ManifestNodes.Element ACTIVITY_RECOGNITION_DECLARATION = ManifestNodes.permission(ACTIVITY_RECOGNITION_PERMISSION, ManifestNodes.PermissionVariant.STANDARD, null);
+    static final ManifestNodes.Element HIGH_RATE_SENSORS_DECLARATION = ManifestNodes.permission(HIGH_RATE_SENSORS_PERMISSION, ManifestNodes.PermissionVariant.STANDARD, null);
+    static final ManifestNodes.Element RECORD_AUDIO_DECLARATION = ManifestNodes.permission(RECORD_AUDIO_PERMISSION, ManifestNodes.PermissionVariant.STANDARD, null);
     static final ManifestNodes.Element COARSE_LOCATION_DECLARATION = ManifestNodes.permission(COARSE_LOCATION_PERMISSION, ManifestNodes.PermissionVariant.STANDARD, null);
     static final ManifestNodes.Element FINE_LOCATION_DECLARATION = ManifestNodes.permission(FINE_LOCATION_PERMISSION, ManifestNodes.PermissionVariant.STANDARD, null);
     static final ManifestNodes.Element SPEECH_QUERIES, VOICE_QUERIES, SPEECH_VOICE_QUERIES;
@@ -121,7 +133,7 @@ public final class CapabilityCatalog {
     }
     public static final List<String> NAMES = Collections.unmodifiableList(Arrays.asList(
             "storage", "export", "share", "clipboard", "haptics", "device", "documents", "photos", "audio", "browser", "maps", "phone", "email", "sms", "contacts", "calendar", "database", "presentation", "sensors", "biometrics",
-            "network", "notifications", "speech", "voiceRecognition", "location"));
+            "network", "notifications", "speech", "voiceRecognition", "location", "recording", "steps"));
     public static final Set<String> SUPPORTED = Collections.unmodifiableSet(new LinkedHashSet<>(NAMES));
     public static final Map<String, Capability> CAPABILITIES;
     public static final Map<String, Method> METHODS;
@@ -158,11 +170,16 @@ public final class CapabilityCatalog {
         for (String name : select(requested)) if (hostBrokerCapability(name)) required = true;
         return required;
     }
+    /** Legacy finite-sensor apps did not need a broker; only their new subscription API does. */
+    public static boolean requiresMandatoryHostBroker(Iterable<String> requested) {
+        for (String name : select(requested)) if (!name.equals("sensors") && hostBrokerCapability(name)) return true;
+        return false;
+    }
     private static boolean hostBrokerCapability(String name) {
         return name.equals("documents") || name.equals("browser") || name.equals("maps") || name.equals("phone")
                 || name.equals("email") || name.equals("sms") || name.equals("contacts") || name.equals("calendar")
                 || name.equals("clipboard") || name.equals("share") || name.equals("export")
-                || name.equals("network") || name.equals("notifications") || name.equals("speech") || name.equals("voiceRecognition") || name.equals("location");
+                || name.equals("network") || name.equals("notifications") || name.equals("speech") || name.equals("voiceRecognition") || name.equals("location") || name.equals("recording") || name.equals("steps") || name.equals("sensors");
     }
     /** Defensive, deterministic selection; no implied or future capabilities. */
     public static List<String> select(Iterable<String> requested) {

@@ -52,7 +52,7 @@ public final class ResourceBudgets {
         AUDIO_DURATION("audio", "durationMs", 30000, 1, 300000),
         SENSOR_DURATION("sensors", "captureDurationMs", 5000, 100, 300000),
         SENSOR_SAMPLES("sensors", "captureSamples", 50, 1, 50),
-        SENSOR_INTERVAL("sensors", "minimumIntervalUs", 100000, 100000, 1000000),
+        SENSOR_INTERVAL("sensors", "minimumIntervalUs", 100000, 0, 1000000),
         // V1 materializes a capture array. A streaming-ring adapter is required to raise this.
         SENSOR_BUFFER("sensors", "bufferedSamples", 50, 1, 50),
         PACKAGE_FILES("packaging", "sourceFiles", 128, 1, 128),
@@ -133,7 +133,6 @@ public final class ResourceBudgets {
         require(database.mainFileBytes % 4096 == 0, "database.mainFileBytes must be a multiple of 4096");
         require(documents.handleBytes <= documents.sessionBytes, "documents.handleBytes exceeds sessionBytes");
         require(sensors.captureSamples <= sensors.bufferedSamples, "sensors.captureSamples exceeds bufferedSamples");
-        require(sensors.minimumIntervalUs % 1000 == 0, "sensors.minimumIntervalUs must represent whole milliseconds");
         require(packaging.singleSourceBytes <= packaging.totalSourceBytes, "packaging.singleSourceBytes exceeds totalSourceBytes");
         require(packaging.totalSourceBytes <= packaging.apkBytes, "packaging.totalSourceBytes exceeds apkBytes");
         LinkedHashMap<String, Object> root = new LinkedHashMap<>(); root.put("version", VERSION);

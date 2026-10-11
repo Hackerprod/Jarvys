@@ -104,8 +104,8 @@ test('native rate limit immediately rejects outstanding requests', async () => {
 test('all SDK calls exactly match the catalog and explicit native validator/dispatch cases', async () => {
   const path = require('node:path');
   const catalog = fs.readFileSync(path.join(__dirname, '../../factory-contract/src/main/java/com/jarvys/factory/contract/CapabilityCatalog.java'), 'utf8');
-  const rows = [...catalog.matchAll(/\b([A-Z][A-Z_]+)\("([a-z]+\.[a-zA-Z]+)", (?:"[a-z]+"|null)\)/g)];
-  assert.equal(rows.length, 59);
+  const rows = [...catalog.matchAll(/\b([A-Z][A-Z_]+)\("([a-zA-Z]+\.[a-zA-Z]+)", (?:"[a-zA-Z]+"|null)\)/g)];
+  assert.equal(rows.length, 78);
   const env = environment();
   const args = { 'storage.get': ['key'], 'storage.set': ['key', 'value'], 'storage.remove': ['key'],
     'export.text': [{ filename: 'test.txt', text: 'hello' }], 'share.text': [{ text: 'hello' }],
@@ -190,12 +190,12 @@ test('photos exposes frozen empty-options methods and human-action timeouts', as
   }
 });
 
- test('audio uses an opaque handle and a human review timeout', async () => {
+ test('audio uses an opaque handle and declared playback lifetime', async () => {
   const env = environment(); assert.equal(Object.isFrozen(env.api.audio), true);
   const options = {handle: 'a'.repeat(64)};
   const promise = env.api.audio.play(options); const request = env.sent.at(-1);
   assert.equal(request.method, 'audio.play'); assert.deepEqual(request.args, options);
-  assert.equal(env.delays.at(-1), 600000);
+  assert.equal(env.delays.at(-1), 610000);
   env.reply(request, {playbackAttempted: true, audibilityConfirmed: false});
   const result = await promise; assert.equal(result.playbackAttempted, true); assert.equal(result.audibilityConfirmed, false);
 });
@@ -437,10 +437,10 @@ test('presentation timeout, pagehide, and absent bridge reject each method', asy
   }
 });
 
-test('sensors exposes exactly three frozen methods and forwards strict arguments unchanged', async () => {
+test('sensors exposes finite capture and streaming methods with unchanged arguments', async () => {
   const env = environment();
   assert.equal(Object.isFrozen(env.api.sensors), true);
-  assert.deepEqual(Object.keys(env.api.sensors), ['list', 'capture', 'cancel']);
+  assert.deepEqual(Object.keys(env.api.sensors), ['subscribe', 'poll', 'unsubscribe', 'list', 'capture', 'cancel']);
   for (const method of ['list', 'capture', 'cancel']) {
     for (const options of [undefined, {}, null, false, [], 'light',
       {kind: 'light', durationMs: 100, intervalMs: 100, maxSamples: 1},
@@ -452,7 +452,7 @@ test('sensors exposes exactly three frozen methods and forwards strict arguments
       assert.equal(request.v, 1);
       assert.equal(request.method, 'sensors.' + method);
       assert.deepEqual(request.args, method !== 'capture' && options === undefined ? {} : options);
-      assert.equal(env.delays.at(-1), 30000);
+      assert.equal(env.delays.at(-1), method === 'capture' ? 310000 : 30000);
       env.reply(request, {synthetic: true});
       assert.equal((await pending).synthetic, true);
       assert.equal(env.timers.size, 0);
@@ -483,7 +483,7 @@ test('sensors timeout, pagehide and absent bridge reject each method', async () 
       const env = environment();
       const pending = env.api.sensors[method]({});
       const rejected = assert.rejects(pending, {code: event === 'timeout' ? 'TIMEOUT' : 'PAGE_CLOSED'});
-      assert.equal(env.delays.at(-1), 30000);
+      assert.equal(env.delays.at(-1), method === 'capture' ? 310000 : 30000);
       if (event === 'timeout') env.timers.values().next().value(); else env.handlers.get('pagehide')();
       await rejected;
       env.reply(env.sent.at(-1), {late: true});

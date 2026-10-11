@@ -96,7 +96,7 @@ public final class FactoryRuntime implements AutoCloseable {
     private long rateWindow;
     private int rateCount;
     private Export export;
-    private DocumentHandles documents = new DocumentHandles();
+    private volatile DocumentHandles documents = new DocumentHandles();
     private boolean documentBudgetsInitialized;
     private volatile boolean documentForeground;
     private DocumentSelection documentSelection;
@@ -432,7 +432,7 @@ public final class FactoryRuntime implements AutoCloseable {
         boolean nativeControl = request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.NETWORK_CANCEL ||
                 request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.SPEECH_STOP ||
                 request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.VOICE_RECOGNITION_CANCEL ||
-                request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.LOCATION_CANCEL;
+                request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.LOCATION_CANCEL || request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.RECORDING_CANCEL || request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.RECORDING_STOP || request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.STEPS_CANCEL || request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.SENSORS_UNSUBSCRIBE;
         boolean duplicateControl = nativeControl && pending.values().stream().anyMatch(value -> value.method.equals(request.method));
         if (pending.size() >= (nativeControl ? MAX_PENDING + 4 : MAX_PENDING) || pending.containsKey(request.id) || duplicateControl) {
             safePost(proxy, BridgeProtocol.failure(request.id, "BUSY", "Too many pending requests or duplicate request ID.")); return;
@@ -887,15 +887,20 @@ public final class FactoryRuntime implements AutoCloseable {
         switch (request.operation) {
             case VOICE_RECOGNITION_STATUS: case VOICE_RECOGNITION_RECOGNIZE: case VOICE_RECOGNITION_CANCEL:
                 case LOCATION_STATUS: case LOCATION_CURRENT: case LOCATION_CANCEL: case LOCATION_REQUEST_PERMISSION:
+                case RECORDING_STATUS: case RECORDING_RECORD: case RECORDING_STOP: case RECORDING_CANCEL: case RECORDING_REQUEST_PERMISSION:
+                case STEPS_STATUS: case STEPS_CURRENT: case STEPS_CANCEL: case STEPS_REQUEST_PERMISSION:
+                case SENSORS_SUBSCRIBE: case SENSORS_POLL: case SENSORS_UNSUBSCRIBE:
                 case NETWORK_REQUEST: case NETWORK_PROBE: case NETWORK_PING: case NETWORK_CANCEL:
             case NOTIFICATIONS_STATUS: case NOTIFICATIONS_CHANNEL: case NOTIFICATIONS_SHOW: case NOTIFICATIONS_CANCEL: case NOTIFICATIONS_REQUEST_PERMISSION:
             case SPEECH_STATUS: case SPEECH_VOICES: case SPEECH_SPEAK: case SPEECH_STOP:
                 ensureNativeEffects();
                 nativeEffects.perform(request, new NativeEffects.Reply() {
                     public boolean current() { return reply.current(); }
+                    public boolean pageCurrent() { return !destroyed && host.isSessionOpen() && host.isActive() && reply.page == generation; }
                     public boolean claimUi() { return FactoryRuntime.this.claimUi(reply); }
                     public void releaseUi() { if (uiOwner == reply) uiOwner = null; }
                     public void ok(Object value) { reply.ok(value); }
+                    public boolean deliver(Object value) { return reply.tryOk(value); }
                     public void fail(String code, String message) { reply.fail(code, message); }
                 }); break;
             case BIOMETRICS_AVAILABILITY: case BIOMETRICS_AUTHENTICATE: case BIOMETRICS_CANCEL:
@@ -964,7 +969,7 @@ public final class FactoryRuntime implements AutoCloseable {
         if (nativeEffects != null && nativeEffects.isClosed() && (nativeEffects.hasPendingPermission() || nativeEffects.hasPendingActivity()))
             throw new FactoryException("BUSY", "A previous Android permission request is still returning.");
         if (nativePermissions == null || nativePermissions.isClosed()) nativePermissions = new NativePermissionSessions(activity, config, io, documentForeground);
-        if (nativeEffects == null || nativeEffects.isClosed()) nativeEffects = new NativeEffects(activity, config, nativePermissions, io, documentForeground);
+        if (nativeEffects == null || nativeEffects.isClosed()) nativeEffects = new NativeEffects(activity, config, nativePermissions, io, documentForeground, () -> documents);
     }
     public void onRequestPermissionsResult(int request, String[] permissions, int[] results) {
         if (nativeEffects != null) nativeEffects.onRequestPermissionsResult(request, permissions, results);
@@ -2274,7 +2279,16 @@ public final class FactoryRuntime implements AutoCloseable {
         Reply(String id, String method, JavaScriptReplyProxy proxy, int page) { this.id = id; this.method = method; this.proxy = proxy; this.page = page; }
         boolean live() { return !destroyed && host.isSessionOpen() && page == generation && pending.get(id) == this; }
         boolean current() { return live() && host.isActive() && live(); }
-        void ok(Object value) { if (current()) host.onTrace(method, value instanceof JSONObject && ((JSONObject) value).optBoolean("simulated") ? "simulated" : "success"); complete(BridgeProtocol.success(id, value)); }
+        void ok(Object value) { tryOk(value); }
+        boolean tryOk(Object value) {
+            if (!current()) return false;
+            String response = BridgeProtocol.success(id, value);
+            if (!current()) return false;
+            pending.remove(id);
+            boolean posted = safePost(proxy, response);
+            if (posted) { try { host.onTrace(method, value instanceof JSONObject && ((JSONObject) value).optBoolean("simulated") ? "simulated" : "success"); } catch (RuntimeException ignored) { /* Trace failure cannot undo an accepted post. */ } }
+            return posted; // Native bridge accepted the post; not proof of JavaScript consumption.
+        }
         void fail(String code, String message) { if (current()) host.onTrace(method, "error"); complete(BridgeProtocol.failure(id, code, message)); }
         void complete(String response) {
             if (!current()) return;
@@ -2288,11 +2302,12 @@ public final class FactoryRuntime implements AutoCloseable {
         boolean returned; int resultCode; Intent result;
         Export(Reply reply, String text) { this.reply = reply; this.text = text; }
     }
-    private void safePost(JavaScriptReplyProxy proxy, String response) {
-        if (destroyed || !host.isActive()) return;
+    private boolean safePost(JavaScriptReplyProxy proxy, String response) {
+        if (destroyed || !host.isActive()) return false;
         if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
-            try { proxy.postMessage(response); } catch (RuntimeException ignored) { /* originating frame was destroyed */ }
+            try { proxy.postMessage(response); return true; } catch (RuntimeException ignored) { /* originating frame was destroyed */ }
         }
+        return false;
     }
     private void showError(String message) {
         synchronized (lifecycle) { invalidate(); }

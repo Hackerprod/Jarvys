@@ -374,8 +374,9 @@ public final class DocumentHandles {
         if (stream == null) return;
         closing++;
         submitClose(() -> {
-            try { stream.close(); } catch (Exception ignored) { /* Best effort only. */ }
-            finally { synchronized(lock) { closing--; releaseAdmission(entry); } }
+            boolean confirmed = false;
+            try { stream.close(); confirmed = true; } catch (Exception ignored) { /* Retain capacity when cleanup is uncertain. */ }
+            finally { synchronized(lock) { closing--; if (confirmed) releaseAdmission(entry); } }
         });
     }
     private void submitClose(Runnable close) {

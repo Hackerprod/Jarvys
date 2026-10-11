@@ -231,4 +231,33 @@ public class DataResourceBudgetsTest {
         fails("DOCUMENT_IO",()->h.handles.write(broken,0,"AQID")); h.drain();
         String next=h.handles.grantWrite(new Sink()); fails("DOCUMENT_QUOTA",()->h.handles.write(next,0,"AA=="));
     }
+    @Test public void failedReadCloseRetainsAdmissionAcrossPageRenewal() throws Exception {
+        Harness h=handles(budget("documents","openHandles",1));
+        String token=h.handles.grantRead(new ByteArrayInputStream(new byte[0]) {
+            @Override public void close() throws IOException { throw new IOException("synthetic close failure"); }
+        });
+        h.handles.close(token); h.drain();
+        DocumentHandles next=h.handles.revokeAndRenew();
+        fails("HANDLE_LIMIT",()->next.reserveRead()); next.revokeAll(); h.drain();
+    }
+    @Test public void failedPoisonedWriteCloseRetainsAdmissionAcrossPageRenewal() throws Exception {
+        Harness h=handles(budget("documents","openHandles",1));
+        String token=h.handles.grantWrite(new OutputStream() {
+            public void write(int value) throws IOException { throw new IOException("synthetic write failure"); }
+            @Override public void close() throws IOException { throw new IOException("synthetic close failure"); }
+        });
+        fails("DOCUMENT_IO",()->h.handles.write(token,0,"AA==")); h.drain();
+        DocumentHandles next=h.handles.revokeAndRenew();
+        fails("HANDLE_LIMIT",()->next.reserveWrite()); next.revokeAll(); h.drain();
+    }
+    @Test public void failedStaleNativeOpenCloseRetainsAdmissionAcrossPageRenewal() throws Exception {
+        Harness h=handles(budget("documents","openHandles",1));
+        DocumentHandles.Reservation pending=h.handles.reserveRead(); pending.beginOpen();
+        DocumentHandles next=h.handles.revokeAndRenew();
+        fails("INVALID_HANDLE",()->pending.grantRead(new ByteArrayInputStream(new byte[0]) {
+            @Override public void close() throws IOException { throw new IOException("synthetic close failure"); }
+        })); h.drain();
+        fails("HANDLE_LIMIT",()->next.reserveRead()); next.revokeAll(); h.drain();
+    }
+
 }

@@ -29,20 +29,32 @@ public class NativeLocationTest {
     private final AtomicBoolean foreground = new AtomicBoolean(true), allowed = new AtomicBoolean(true);
     private final AtomicLong now = new AtomicLong(60000000000L);
     private final FakeBackend backend = new FakeBackend();
+    private final List<NativeLocation> helpers = new ArrayList<>();
+    private final List<FakeBackend> backends = new ArrayList<>();
     private Application context;
     private NativeLocation location;
     private Result result;
 
     @Before public void setup() throws Exception {
+        assertEquals("Previous synthetic test retained a registration", 0, NativeLocation.processRegistrations());
         context = RuntimeEnvironment.getApplication();
         PackageInfo own = context.getPackageManager().getPackageInfo(context.getPackageName(), PackageManager.GET_PERMISSIONS);
         own.requestedPermissions = new String[]{Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION};
         Shadows.shadowOf(context.getPackageManager()).installPackage(own);
         Shadows.shadowOf(context).grantPermissions(Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION);
-        location = new NativeLocation(context, context.getPackageName(), foreground::get, backend, now::get);
+        location = helper(backend);
         result = new Result();
     }
-    @After public void cleanup() { location.close(); idle(); }
+    @After public void cleanup() {
+        for (FakeBackend fake : backends) {
+            fake.failCancel = false;
+            fake.onCancel = null;
+            for (Request request : fake.requests) request.failCancel = false;
+        }
+        for (NativeLocation helper : helpers) helper.close();
+        idle();
+        assertEquals("Synthetic cleanup must release through its original owner", 0, NativeLocation.processRegistrations());
+    }
 
     @Test public void identityAndStatusNeverRegisterOrDiscloseCoordinates() throws Exception {
         assertThrows(IllegalArgumentException.class, () -> new NativeLocation(context, "another.package", foreground::get));
@@ -122,6 +134,7 @@ public class NativeLocationTest {
         assertFalse(result.value.getBoolean("acquiredBeforeRequest")); assertFalse(result.value.getBoolean("mock"));
         assertEquals(120.5, result.value.getDouble("altitudeMeters"), 0); assertEquals(2.5, result.value.getDouble("speedMetersPerSecond"), 0);
         assertEquals(1, nativeRequest.cancellations); assertFalse(location.status().has("latitude"));
+        assertEquals(0, NativeLocation.processRegistrations()); assertFalse(location.status().getBoolean("cleanupPending"));
     }
 
     @Test public void coarseOnlyGrantRemainsUsableWithoutClaimingPreciseAccuracy() throws Exception {
@@ -326,6 +339,204 @@ public class NativeLocationTest {
         assertEquals(12.25, result.value.getDouble("latitude"), 0);
     }
 
+    @Test public void cleanupFailureAfterResultCannotReportLocatedOrForgetTheOwner() throws Exception {
+        location.current(request(), ALLOW, result); idle(); Request first = backend.latest();
+        first.failCancel = true;
+        first.listener.location(fix(0, 10)); idle();
+        assertError("CLEANUP_FAILED"); assertEquals(1, first.cancellations);
+        assertEquals(1, NativeLocation.processRegistrations());
+        assertTrue(location.status().getBoolean("cleanupPending"));
+        assertEquals("CLEANUP_FAILED", location.status().getString("error"));
+        assertEquals("CLEANUP_FAILED", assertThrows(FactoryException.class,
+                () -> location.current(request(), ALLOW, new Result())).code);
+        first.listener.location(fix(0, 1)); first.listener.disabled(); idle();
+        assertEquals(1, result.calls); assertEquals(1, first.cancellations);
+        first.failCancel = false;
+        assertFalse(location.cancel().getBoolean("cleanupPending"));
+        assertEquals(2, first.cancellations); assertEquals(0, NativeLocation.processRegistrations());
+        location.cancel(); location.close(); location.close();
+        assertEquals(2, first.cancellations); assertEquals(1, result.calls);
+    }
+
+    @Test public void cancelReportsUnconfirmedCleanupAndOriginalHandleRetriesWithoutGrants() throws Exception {
+        NativeLocation.Handle handle = location.current(request(), access(), result); idle(); Request first = backend.latest();
+        first.failCancel = true; allowed.set(false); foreground.set(false);
+        Shadows.shadowOf(context).denyPermissions(Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION);
+        JSONObject cancellation = location.cancel(); idle();
+        assertTrue(cancellation.getBoolean("cancelled")); assertTrue(cancellation.getBoolean("cleanupPending"));
+        assertEquals("cleanup_failed", cancellation.getString("status")); assertError("CLEANUP_FAILED");
+        assertEquals(1, first.cancellations); assertEquals(1, NativeLocation.processRegistrations());
+        handle.cancel(); assertEquals(2, first.cancellations); assertEquals(1, NativeLocation.processRegistrations());
+        first.failCancel = false; handle.cancel(); handle.cancel(); idle();
+        assertEquals(3, first.cancellations); assertEquals(0, NativeLocation.processRegistrations());
+        assertEquals(1, result.calls); assertFalse(location.status().getBoolean("cleanupPending"));
+    }
+
+    @Test public void repeatedCloseRetriesRetainedOwnershipWithoutRedeliveringAnError() throws Exception {
+        location.current(request(), ALLOW, result); idle(); Request first = backend.latest(); first.failCancel = true;
+        location.close(); idle(); assertError("CLEANUP_FAILED");
+        assertEquals("closed", location.status().getString("status")); assertEquals(1, NativeLocation.processRegistrations());
+        first.failCancel = false; location.close(); location.close(); idle();
+        assertEquals(2, first.cancellations); assertEquals(0, NativeLocation.processRegistrations()); assertEquals(1, result.calls);
+    }
+
+    @Test public void partialRegistrationFailureKeepsOriginalCallbackAndCanRetryItsCleanup() throws Exception {
+        backend.failAfterRegistration = 1; backend.failCancel = true;
+        location.current(request(), ALLOW, result); idle(); Request partial = backend.latest();
+        assertError("CLEANUP_FAILED"); assertEquals(1, partial.cancellations); assertEquals(1, NativeLocation.processRegistrations());
+        partial.listener.location(fix(0, 1)); partial.listener.disabled(); idle(); assertEquals(1, result.calls);
+        backend.failCancel = false; location.cancel(); location.cancel();
+        assertEquals(2, partial.cancellations); assertEquals(0, NativeLocation.processRegistrations());
+        assertEquals(1, backend.preparations); assertEquals(1, backend.registrations);
+    }
+
+    @Test public void confirmedCleanupAfterPartialFailurePreservesOriginalFailure() throws Exception {
+        backend.failAfterRegistration = 1;
+        location.current(request(), ALLOW, result); idle();
+        assertError("LOCATION_UNAVAILABLE"); assertEquals(1, backend.latest().cancellations);
+        assertEquals(0, NativeLocation.processRegistrations());
+    }
+
+    @Test public void oneFailedAutoCleanupStillReleasesTheOtherProvider() throws Exception {
+        location.current(LocationRequest.parseCurrent("{}"), ALLOW, result); idle();
+        Request first = backend.requests.get(0), second = backend.requests.get(1); first.failCancel = true;
+        second.listener.location(fix(0, 10)); idle();
+        assertError("CLEANUP_FAILED"); assertEquals(1, first.cancellations); assertEquals(1, second.cancellations);
+        assertEquals(1, NativeLocation.processRegistrations());
+        first.failCancel = false; location.cancel();
+        assertEquals(2, first.cancellations); assertEquals(1, second.cancellations); assertEquals(0, NativeLocation.processRegistrations());
+    }
+
+    @Test public void failedSingleCancellationCannotAcquireFallbackUpdates() throws Exception {
+        Assume.assumeTrue(Build.VERSION.SDK_INT >= 30);
+        location.current(request(), ALLOW, result); idle(); Request first = backend.latest(); first.failCancel = true;
+        first.listener.location(fix(1000, 10)); idle();
+        assertError("CLEANUP_FAILED"); assertTrue(first.single); assertEquals(1, backend.requests.size());
+        assertEquals(1, first.cancellations); assertEquals(1, NativeLocation.processRegistrations());
+    }
+
+    @Test public void replacementHelpersCannotBypassEightHeldProcessAdmissions() throws Exception {
+        List<NativeLocation> retiredHelpers = new ArrayList<>();
+        List<Request> retained = new ArrayList<>();
+        for (int i = 0; i < NativeLocation.MAX_PROCESS_REGISTRATIONS; i++) {
+            FakeBackend fake = new FakeBackend(); fake.failCancel = true;
+            NativeLocation owner = helper(fake); retiredHelpers.add(owner);
+            Result failure = new Result(); owner.current(request(), ALLOW, failure); idle();
+            owner.close(); idle();
+            assertEquals("CLEANUP_FAILED", failure.error.code); retained.add(fake.latest());
+            assertEquals(i + 1, NativeLocation.processRegistrations());
+        }
+        FakeBackend replacementBackend = new FakeBackend(); NativeLocation replacement = helper(replacementBackend);
+        Result blocked = new Result(); replacement.current(request(), ALLOW, blocked); idle();
+        assertEquals("RESOURCE_LIMIT", blocked.error.code); assertEquals(1, blocked.calls);
+        assertEquals(0, replacementBackend.preparations); assertEquals(0, replacementBackend.registrations);
+        assertEquals(NativeLocation.MAX_PROCESS_REGISTRATIONS, NativeLocation.processRegistrations());
+        retained.get(0).backend.failCancel = false; retiredHelpers.get(0).close();
+        assertEquals(NativeLocation.MAX_PROCESS_REGISTRATIONS - 1, NativeLocation.processRegistrations());
+        Result accepted = new Result(); replacement.current(request(), ALLOW, accepted); idle();
+        assertEquals(1, replacementBackend.preparations); assertEquals(1, replacementBackend.registrations);
+        for (Request old : retained) { old.listener.location(fix(0, 1)); old.listener.disabled(); }
+        idle(); assertEquals(0, accepted.calls);
+        replacementBackend.latest().listener.location(fix(0, 10)); idle();
+        assertEquals(1, accepted.calls); assertNotNull(accepted.value);
+        assertEquals(NativeLocation.MAX_PROCESS_REGISTRATIONS - 1, NativeLocation.processRegistrations());
+    }
+
+    @Test public void admissionExistsBeforePreparationAndNativeRegistration() throws Exception {
+        backend.onPrepare = () -> assertEquals(1, NativeLocation.processRegistrations());
+        backend.onRegister = () -> assertEquals(1, NativeLocation.processRegistrations());
+        location.current(request(), ALLOW, result); idle(); location.cancel(); idle();
+        assertError("CANCELLED"); assertEquals(0, NativeLocation.processRegistrations());
+    }
+
+    @Test public void preparationFailureDoesNotPretendNativeAcquisitionOccurred() throws Exception {
+        backend.failPreparation = true;
+        location.current(request(), ALLOW, result); idle(); assertError("LOCATION_UNAVAILABLE");
+        assertEquals(0, backend.registrations); assertTrue(backend.requests.isEmpty());
+        assertEquals(0, NativeLocation.processRegistrations());
+    }
+
+    @Test public void authorizationIsRecheckedAfterPreparationBeforeNativeAcquisition() throws Exception {
+        backend.onPrepare = () -> allowed.set(false);
+        location.current(request(), access(), result); idle(); assertError("PERMISSION_DENIED");
+        assertEquals(1, backend.preparations); assertEquals(0, backend.registrations);
+        assertEquals(0, NativeLocation.processRegistrations());
+    }
+
+    @Test public void reentrantCloseDuringPartialStartFailureRetainsUncertainResource() throws Exception {
+        backend.onRegister = location::close; backend.failAfterRegistration = 1; backend.failCancel = true;
+        location.current(request(), ALLOW, result); idle(); assertError("CLEANUP_FAILED");
+        assertEquals(1, backend.latest().cancellations); assertEquals(1, NativeLocation.processRegistrations());
+        backend.failCancel = false; location.close(); location.close();
+        assertEquals(2, backend.latest().cancellations); assertEquals(0, NativeLocation.processRegistrations());
+    }
+
+    @Test public void cancellationReentrancyCannotReleaseAnInFlightAdmissionOrDuplicateDelivery() throws Exception {
+        location.current(request(), ALLOW, result); idle();
+        backend.onCancel = () -> {
+            location.close();
+            assertEquals(1, NativeLocation.processRegistrations());
+        };
+        backend.latest().listener.location(fix(0, 10)); idle();
+        assertError("CANCELLED"); assertEquals(1, backend.latest().cancellations);
+        assertEquals(0, NativeLocation.processRegistrations());
+    }
+
+    @Test public void reentrantCurrentCannotBypassPublishedTerminatingOwnership() throws Exception {
+        location.current(request(), ALLOW, result); idle(); backend.failCancel = true;
+        backend.onCancel = () -> {
+            FactoryException blocked = assertThrows(FactoryException.class,
+                    () -> location.current(request(), ALLOW, new Result()));
+            assertEquals("CLEANUP_FAILED", blocked.code);
+        };
+        location.cancel(); idle(); assertError("CLEANUP_FAILED");
+        assertEquals(1, backend.preparations); assertEquals(1, backend.registrations);
+        assertEquals(1, backend.requests.size()); assertEquals(1, NativeLocation.processRegistrations());
+    }
+
+    @Test public void platformCancellationFailureCannotBeClearedByALaterNoOp() {
+        int[] calls = {0};
+        NativeLocation.PlatformRegistration owner = new NativeLocation.PlatformRegistration() {
+            @Override void startNative() { }
+            @Override void cancelNative() { if (++calls[0] == 1) throw new IllegalStateException("transport already forgotten"); }
+        };
+        owner.start();
+        assertThrows(IllegalStateException.class, owner::cancel);
+        assertThrows(IllegalStateException.class, owner::cancel);
+        assertEquals("Do not mistake CancellationSignal/removeUpdates no-op for recovery", 1, calls[0]);
+    }
+
+    @Test public void partialPlatformRegistrationCannotClaimReleaseFromAnUnregisteredLocalToken() {
+        int[] calls = {0};
+        NativeLocation.PlatformRegistration owner = new NativeLocation.PlatformRegistration() {
+            @Override void startNative() { throw new IllegalStateException("registration outcome unknown"); }
+            @Override void cancelNative() { calls[0]++; }
+        };
+        assertThrows(IllegalStateException.class, owner::start);
+        assertThrows(IllegalStateException.class, owner::cancel);
+        assertThrows(IllegalStateException.class, owner::cancel);
+        assertEquals(1, calls[0]);
+    }
+
+    @Test public void platformSuccessfulCleanupIsIdempotentAndUnusedPreparationDoesNotRegister() {
+        int[] starts = {0}, stops = {0};
+        NativeLocation.PlatformRegistration owner = new NativeLocation.PlatformRegistration() {
+            @Override void startNative() { starts[0]++; }
+            @Override void cancelNative() { stops[0]++; }
+        };
+        owner.start(); owner.cancel(); owner.cancel(); assertEquals(1, starts[0]); assertEquals(1, stops[0]);
+        NativeLocation.PlatformRegistration unused = new NativeLocation.PlatformRegistration() {
+            @Override void startNative() { fail("Unused preparation must not start"); }
+            @Override void cancelNative() { fail("Unused preparation owns no native registration"); }
+        };
+        unused.cancel(); unused.cancel(); assertThrows(IllegalStateException.class, unused::start);
+    }
+
+    private NativeLocation helper(FakeBackend fake) {
+        NativeLocation helper = new NativeLocation(context, context.getPackageName(), foreground::get, fake, now::get);
+        helpers.add(helper); backends.add(fake); return helper;
+    }
+
     private LocationRequest.Current request() throws Exception { return LocationRequest.parseCurrent("{\"provider\":\"network\"}"); }
     private NativeOperationAuthorization.Access access() { return () -> { if (!allowed.get()) throw new SecurityException("synthetic-revocation"); }; }
     private Location fix(long ageMs, float accuracy) {
@@ -352,29 +563,42 @@ public class NativeLocationTest {
         final NativeLocation.Listener listener;
         final FakeBackend backend;
         int cancellations;
+        boolean acquired, stopped, failCancel;
         Request(String provider, boolean single, NativeLocation.Listener listener, FakeBackend backend) {
             this.provider = provider; this.single = single; this.listener = listener; this.backend = backend;
         }
-        @Override public void cancel() { cancellations++; if (backend.onCancel != null) backend.onCancel.run(); }
+        @Override public void start() {
+            if (++backend.registrations == backend.failRegistration) throw new IllegalStateException("synthetic-private-native-detail");
+            acquired = true; backend.requests.add(this);
+            if (backend.onRegister != null) backend.onRegister.run();
+            if (backend.registrations == backend.failAfterRegistration) throw new IllegalStateException("synthetic-partial-registration");
+            if (backend.synchronousFix != null) { listener.location(backend.synchronousFix); listener.location(backend.synchronousFix); }
+        }
+        @Override public void cancel() {
+            if (!acquired || stopped) return;
+            cancellations++;
+            if (backend.onCancel != null) backend.onCancel.run();
+            if (failCancel || backend.failCancel) throw new IllegalStateException("synthetic-cancellation-failed");
+            stopped = true;
+        }
     }
     private static final class FakeBackend implements NativeLocation.Backend {
         final List<Request> requests = new ArrayList<>();
-        boolean available = true, gpsEnabled = true, networkEnabled = true;
-        int registrations, failRegistration;
-        Runnable onRegister, onCancel, onDiscovery;
+        boolean available = true, gpsEnabled = true, networkEnabled = true, failCancel, failPreparation;
+        int preparations, registrations, failRegistration, failAfterRegistration;
+        Runnable onRegister, onCancel, onDiscovery, onPrepare;
         Location synchronousFix;
         @Override public boolean available() { return available; }
         @Override public boolean hasProvider(String provider) { if (onDiscovery != null) onDiscovery.run(); return true; }
         @Override public boolean enabled(String provider) { return "gps".equals(provider) ? gpsEnabled : networkEnabled; }
-        @Override public NativeLocation.Registration current(String provider, NativeLocation.Listener listener) { return register(provider, true, listener); }
-        @Override public NativeLocation.Registration updates(String provider, NativeLocation.Listener listener) { return register(provider, false, listener); }
+        @Override public NativeLocation.Registration current(String provider, NativeLocation.Listener listener) { return prepare(provider, true, listener); }
+        @Override public NativeLocation.Registration updates(String provider, NativeLocation.Listener listener) { return prepare(provider, false, listener); }
         Request latest() { return requests.get(requests.size() - 1); }
-        private Request register(String provider, boolean single, NativeLocation.Listener listener) {
-            if (++registrations == failRegistration) throw new IllegalStateException("synthetic-private-native-detail");
-            Request request = new Request(provider, single, listener, this); requests.add(request);
-            if (onRegister != null) onRegister.run();
-            if (synchronousFix != null) { listener.location(synchronousFix); listener.location(synchronousFix); }
-            return request;
+        private Request prepare(String provider, boolean single, NativeLocation.Listener listener) {
+            preparations++;
+            if (onPrepare != null) onPrepare.run();
+            if (failPreparation) throw new IllegalStateException("synthetic-preparation-failed");
+            return new Request(provider, single, listener, this);
         }
     }
 }

@@ -49,6 +49,11 @@ public final class BridgeProtocol {
                 case VOICE_RECOGNITION_RECOGNIZE: VoiceRecognitionRequest.parseRecognize(args); break;
                 case LOCATION_STATUS: case LOCATION_CANCEL: LocationRequest.parseEmpty(args); break;
                 case LOCATION_CURRENT: LocationRequest.parseCurrent(args); break;
+                case RECORDING_RECORD:
+                    RecordingRequest.parseRecord(args);
+                    if (!config.capabilities.contains("documents")) throw new FactoryException("CAPABILITY_DENIED", "Recording output also requires documents capability.");
+                    break;
+                case RECORDING_STATUS: case RECORDING_STOP: case RECORDING_CANCEL: case RECORDING_REQUEST_PERMISSION: RecordingRequest.parseEmpty(args.toString()); break;
                 case LOCATION_REQUEST_PERMISSION: LocationRequest.parsePermission(args); break;
                 case NETWORK_PROBE: NetworkRequest.fromProbe(args); break;
                 case NETWORK_PING: NetworkPingRequest.parse(args); break;
@@ -71,6 +76,12 @@ public final class BridgeProtocol {
                     FactoryConfig.exactKeys(args);break;
                 case BIOMETRICS_AVAILABILITY:
                     FactoryConfig.exactKeys(args);break;
+                case SENSORS_SUBSCRIBE: SensorSubscriptionRequest.parseSubscribe(args); break;
+                case SENSORS_POLL: case SENSORS_UNSUBSCRIBE: SensorSubscriptionRequest.parseHandle(args); break;
+                case STEPS_CURRENT: StepsRequest.parseCurrent(args); break;
+                case STEPS_STATUS: StepsRequest.parseStatus(args); break;
+                case STEPS_CANCEL: StepsRequest.parseCancel(args); break;
+                case STEPS_REQUEST_PERMISSION: StepsRequest.parsePermission(args); break;
                 case SENSORS_CAPTURE:
                     try { SensorCapture.Request.parse(args); }
                     catch(FactoryException e) { throw e; }

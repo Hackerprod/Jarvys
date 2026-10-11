@@ -96,7 +96,7 @@ public final class ManifestNodes {
         return leaf("uses-feature", "feature:" + name, a("name", 0x01010003, 3, name), a("required", 0x0101028e, 18, required ? -1 : 0));
     }
     public static Element action(String name) {
-        androidName(name, "android.intent.action."); return leaf("action", "action:" + name, a("name", 0x01010003, 3, name));
+        if (!"android.speech.action.RECOGNIZE_SPEECH".equals(name)) androidName(name, "android.intent.action."); return leaf("action", "action:" + name, a("name", 0x01010003, 3, name));
     }
     public static Element category(String name) {
         androidName(name, "android.intent.category."); return leaf("category", "category:" + name, a("name", 0x01010003, 3, name));

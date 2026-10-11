@@ -34,6 +34,9 @@ public final class FactoryDispatcher {
             switch (method) {
                 case VOICE_RECOGNITION_STATUS: case VOICE_RECOGNITION_RECOGNIZE: case VOICE_RECOGNITION_CANCEL:
                 case LOCATION_STATUS: case LOCATION_CURRENT: case LOCATION_CANCEL: case LOCATION_REQUEST_PERMISSION:
+                case RECORDING_STATUS: case RECORDING_RECORD: case RECORDING_STOP: case RECORDING_CANCEL: case RECORDING_REQUEST_PERMISSION:
+                case STEPS_STATUS: case STEPS_CURRENT: case STEPS_CANCEL: case STEPS_REQUEST_PERMISSION:
+                case SENSORS_SUBSCRIBE: case SENSORS_POLL: case SENSORS_UNSUBSCRIBE:
                 case NETWORK_REQUEST: case NETWORK_PROBE: case NETWORK_PING: case NETWORK_CANCEL:
                 case NOTIFICATIONS_STATUS: case NOTIFICATIONS_CHANNEL: case NOTIFICATIONS_SHOW: case NOTIFICATIONS_CANCEL: case NOTIFICATIONS_REQUEST_PERMISSION:
                 case SPEECH_STATUS: case SPEECH_VOICES: case SPEECH_SPEAK: case SPEECH_STOP:
@@ -102,6 +105,8 @@ public final class FactoryDispatcher {
                         .put("nativeNetworkProtocol", "http_https").put("nativeProbeIsIcmp", false)
                         .put("resourceBudgets", ResourceBudgetsJson.toJson(config.resources))
                         .put("resourceImplementationLimits", new JSONObject(com.jarvys.factory.contract.ResourceBudgets.implementationLimits()))
+                        .put("stepsForegroundOnly", true).put("stepsCounterScope", "since_boot_while_sensor_activated").put("stepsContinuousTracking", false)
+                        .put("recordingForegroundOnly", true).put("recordingOutput", "documents-read-handle").put("recordingFormat", "wav-pcm16")
                         .put("voiceRecognitionMayUseNetwork", true).put("locationForegroundOnly", true)
                         .put("nativePingProtocol", "icmp").put("platformPingUtilityRequired", true)
                         .put("nativeOperationsPolicy", "host_allow_ask_deny").put("speechEngineMayUseNetwork", true)
@@ -112,18 +117,22 @@ public final class FactoryDispatcher {
                         .put("simulatedCapabilities", new JSONArray("preview".equals(metadata.mode())
                                 ? java.util.Arrays.asList("export", "share", "clipboard", "haptics") : java.util.Collections.emptyList()))
                         .put("unavailableCapabilities", new JSONArray("preview".equals(metadata.mode())
-                                ? java.util.Arrays.asList("documents", "photos", "audio", "browser", "maps", "phone", "email", "sms", "contacts", "calendar", "presentation", "sensors", "biometrics", "network", "notifications", "speech", "voiceRecognition", "location") : java.util.Collections.emptyList()))
+                                ? java.util.Arrays.asList("documents", "photos", "audio", "browser", "maps", "phone", "email", "sms", "contacts", "calendar", "presentation", "sensors", "biometrics", "network", "notifications", "speech", "voiceRecognition", "location", "recording", "steps") : java.util.Collections.emptyList()))
                         .put("unavailableMethods", new JSONArray("preview".equals(metadata.mode())
-                                ? java.util.Arrays.asList("share.file", "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture", "audio.play", "browser.open", "maps.open", "phone.dial", "email.compose", "sms.compose", "contacts.pick", "calendar.insert", "presentation.get", "presentation.set", "presentation.reset", "sensors.list", "sensors.capture", "sensors.cancel", "biometrics.availability", "biometrics.authenticate", "biometrics.cancel", "database.backupExport", "database.backupImport", "storage.backupExport", "storage.backupImport", "network.request", "network.probe", "network.ping", "network.cancel", "notifications.status", "notifications.channel", "notifications.show", "notifications.cancel", "notifications.requestPermission", "speech.status", "speech.voices", "speech.speak", "speech.stop", "voiceRecognition.status", "voiceRecognition.recognize", "voiceRecognition.cancel", "location.status", "location.current", "location.cancel", "location.requestPermission")
+                                ? java.util.Arrays.asList("share.file", "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture", "audio.play", "browser.open", "maps.open", "phone.dial", "email.compose", "sms.compose", "contacts.pick", "calendar.insert", "presentation.get", "presentation.set", "presentation.reset", "sensors.list", "sensors.capture", "sensors.cancel", "biometrics.availability", "biometrics.authenticate", "biometrics.cancel", "database.backupExport", "database.backupImport", "storage.backupExport", "storage.backupImport", "network.request", "network.probe", "network.ping", "network.cancel", "notifications.status", "notifications.channel", "notifications.show", "notifications.cancel", "notifications.requestPermission", "speech.status", "speech.voices", "speech.speak", "speech.stop", "voiceRecognition.status", "voiceRecognition.recognize", "voiceRecognition.cancel", "location.status", "location.current", "location.cancel", "location.requestPermission", "recording.status", "recording.record", "recording.stop", "recording.cancel", "recording.requestPermission", "steps.status", "steps.current", "steps.cancel", "steps.requestPermission", "sensors.subscribe", "sensors.poll", "sensors.unsubscribe")
                                 : java.util.Collections.emptyList()))
                         .put("biometricsProtocolVersion", 1).put("biometricsBrokerRequired", false)
                         .put("biometricsRequires", new JSONArray(java.util.Collections.singletonList("biometrics")))
                         .put("biometricsMinimumApi", 30).put("biometricsClass", "strong")
                         .put("biometricsDeviceCredentialAllowed", false).put("biometricsForegroundOnly", true)
                         .put("biometricsLocalOnly", true).put("biometricsAuthorizesOtherActions", false)
-                        .put("sensorsProtocolVersion", 1).put("sensorsBrokerRequired", false)
+                        .put("sensorsProtocolVersion", 2).put("sensorsBrokerRequired", false)
+                        .put("sensorsSubscriptionBrokerRequired", true).put("sensorsSubscriptionsForegroundOnly", true)
+                        .put("sensorsSubscriptionMinimumIntervalUs", config.resources.sensors.minimumIntervalUs)
+                        .put("sensorsSubscriptionRequestedRateCeilingHz", config.resources.sensors.minimumIntervalUs == 0 ? JSONObject.NULL : 1000000.0 / config.resources.sensors.minimumIntervalUs)
+                        .put("sensorsSubscriptionRateGuaranteed", false).put("sensorsSubscriptionBufferSamples", config.resources.sensors.bufferedSamples)
                         .put("sensorsKinds",new JSONArray(java.util.Arrays.asList("light","accelerometer","gyroscope")))
-                        .put("sensorsForegroundOnly",true).put("sensorsMaxRateHz",10)
+                        .put("sensorsForegroundOnly",true).put("sensorsMaxRateHz",Math.min(10.0, config.resources.sensors.minimumIntervalUs == 0 ? 10.0 : 1000000.0/config.resources.sensors.minimumIntervalUs))
                         .put("sensorsMaxDurationMs",config.resources.sensors.captureDurationMs).put("sensorsMaxSamples",config.resources.sensors.captureSamples).put("sensorsResultBytes",16384)
                         .put("presentationProtocolVersion", 1).put("presentationBrokerRequired", false)
                         .put("presentationRequires", new JSONArray(java.util.Collections.singletonList("presentation")))
@@ -228,6 +237,9 @@ public final class FactoryDispatcher {
             case DEVICE_INFO: return metadata.deviceInfo().put("declaredAppId", config.appId);
                 case VOICE_RECOGNITION_STATUS: case VOICE_RECOGNITION_RECOGNIZE: case VOICE_RECOGNITION_CANCEL:
                 case LOCATION_STATUS: case LOCATION_CURRENT: case LOCATION_CANCEL: case LOCATION_REQUEST_PERMISSION:
+                case RECORDING_STATUS: case RECORDING_RECORD: case RECORDING_STOP: case RECORDING_CANCEL: case RECORDING_REQUEST_PERMISSION:
+                case STEPS_STATUS: case STEPS_CURRENT: case STEPS_CANCEL: case STEPS_REQUEST_PERMISSION:
+                case SENSORS_SUBSCRIBE: case SENSORS_POLL: case SENSORS_UNSUBSCRIBE:
                 case NETWORK_REQUEST: case NETWORK_PROBE: case NETWORK_PING: case NETWORK_CANCEL:
                 case NOTIFICATIONS_STATUS: case NOTIFICATIONS_CHANNEL: case NOTIFICATIONS_SHOW: case NOTIFICATIONS_CANCEL: case NOTIFICATIONS_REQUEST_PERMISSION:
                 case SPEECH_STATUS: case SPEECH_VOICES: case SPEECH_SPEAK: case SPEECH_STOP:

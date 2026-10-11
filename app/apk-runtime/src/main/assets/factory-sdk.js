@@ -45,7 +45,7 @@
       if (!bridge || typeof bridge.postMessage !== 'function') {
         reject(failure('BRIDGE_UNAVAILABLE', 'Open this application in its generated Android APK.')); return;
       }
-      var cancellation = method === 'sensors.cancel' || method === 'biometrics.cancel' || method === 'database.cancel' || method === 'documents.cancel' || method === 'network.cancel' || method === 'speech.stop' || method === 'voiceRecognition.cancel' || method === 'location.cancel';
+      var cancellation = method === 'sensors.cancel' || method === 'biometrics.cancel' || method === 'database.cancel' || method === 'documents.cancel' || method === 'network.cancel' || method === 'speech.stop' || method === 'voiceRecognition.cancel' || method === 'location.cancel' || method === 'recording.cancel' || method === 'recording.stop' || method === 'steps.cancel' || method === 'sensors.unsubscribe';
       var controlPending = false;
       if (cancellation) pending.forEach(function (entry) { if (entry.method === method) controlPending = true; });
       if (pending.size >= (cancellation ? 20 : 16) || controlPending) {
@@ -61,8 +61,9 @@
       if (method === 'sensors.capture') timeout = 310000;
       if (method === 'audio.play') timeout = 610000;
       if (method === 'biometrics.authenticate') timeout = 90000;
-      if (/^(network|notifications|location)\./.test(method)) timeout = 420000;
+      if (/^(network|notifications|location|steps)\./.test(method)) timeout = 420000;
       if (/^voiceRecognition\./.test(method)) timeout = 900000;
+      if (/^recording\./.test(method)) timeout = 3900000;
       if (/^speech\./.test(method)) timeout = method === 'speech.speak' ? 86400000 : 420000;
       var backup = method === 'database.backupExport' || method === 'database.backupImport' ||
         method === 'storage.backupExport' || method === 'storage.backupImport';
@@ -106,6 +107,19 @@
       recognize: function (options) { return call('voiceRecognition.recognize', options === undefined ? {} : options); },
       cancel: function (options) { return call('voiceRecognition.cancel', options === undefined ? {} : options); }
     }),
+    steps: Object.freeze({
+      status: function (options) { return call('steps.status', options === undefined ? {} : options); },
+      current: function (options) { return call('steps.current', options === undefined ? {} : options); },
+      cancel: function (options) { return call('steps.cancel', options === undefined ? {} : options); },
+      requestPermission: function (options) { return call('steps.requestPermission', options === undefined ? {} : options); }
+    }),
+    recording: Object.freeze({
+      status: function (options) { return call('recording.status', options === undefined ? {} : options); },
+      record: function (options) { return call('recording.record', options === undefined ? {} : options); },
+      stop: function (options) { return call('recording.stop', options === undefined ? {} : options); },
+      cancel: function (options) { return call('recording.cancel', options === undefined ? {} : options); },
+      requestPermission: function (options) { return call('recording.requestPermission', options === undefined ? {} : options); }
+    }),
     location: Object.freeze({
       status: function (options) { return call('location.status', options === undefined ? {} : options); },
       current: function (options) { return call('location.current', options === undefined ? {} : options); },
@@ -126,6 +140,9 @@
       cancel: function (options) { return call('biometrics.cancel', options === undefined ? {} : options); }
     }),
     sensors: Object.freeze({
+      subscribe: function (options) { return call('sensors.subscribe', options === undefined ? {} : options); },
+      poll: function (options) { return call('sensors.poll', options === undefined ? {} : options); },
+      unsubscribe: function (options) { return call('sensors.unsubscribe', options === undefined ? {} : options); } ,
       list: function (options) { return call('sensors.list', options === undefined ? {} : options); },
       capture: function (options) { return call('sensors.capture', options); },
       cancel: function (options) { return call('sensors.cancel', options === undefined ? {} : options); }

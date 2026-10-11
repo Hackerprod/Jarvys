@@ -114,7 +114,7 @@ public final class FactoryConfig {
                     throw new FactoryException("INVALID_CONFIG", "Invalid pinned document broker.");
                 broker = new DocumentBroker(host, certificate);
             }
-            if (installedPackage != null && CapabilityCatalog.requiresHostBroker(capabilities) && broker == null)
+            if (installedPackage != null && CapabilityCatalog.requiresMandatoryHostBroker(capabilities) && broker == null)
                 throw new FactoryException("INVALID_CONFIG", "Declared native policy or broker operations require a pinned compatible Jarvys host.");
             ResourceBudgets resources = object.has("resourceBudgets") ? ResourceBudgetsJson.parse(object.getJSONObject("resourceBudgets")) : ResourceBudgets.legacy();
             return new FactoryConfig(appId, name, entry, capabilities, broker, backupTables, backupKeys, resources);

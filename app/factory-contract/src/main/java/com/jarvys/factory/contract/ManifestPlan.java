@@ -67,7 +67,7 @@ public final class ManifestPlan {
         this.capabilities = CapabilityCatalog.select(capabilities);
         if (profile != Profile.CURRENT && (this.capabilities.contains("network")
                 || this.capabilities.contains("notifications") || this.capabilities.contains("speech")
-                || this.capabilities.contains("voiceRecognition") || this.capabilities.contains("location")))
+                || this.capabilities.contains("voiceRecognition") || this.capabilities.contains("location") || this.capabilities.contains("recording") || this.capabilities.contains("steps")))
             throw new IllegalArgumentException("Native operation capabilities have no historical manifest profile");
         List<Node> result = new ArrayList<>();
         result.add(new Node("manifest", -1,
@@ -98,7 +98,7 @@ public final class ManifestPlan {
         // was local then; it must not acquire new broker queries when re-verifying old bytes.
         List<String> manifestCapabilities = new ArrayList<>(this.capabilities);
         if (profile != Profile.CURRENT) {
-            manifestCapabilities.remove("share"); manifestCapabilities.remove("export");
+            manifestCapabilities.remove("share"); manifestCapabilities.remove("export"); manifestCapabilities.remove("sensors");
         }
         if (profile == Profile.V1_BEFORE_CLIPBOARD_BROKER || profile == Profile.V1_BEFORE_SAFE_AREA)
             manifestCapabilities.remove("clipboard");
@@ -109,10 +109,13 @@ public final class ManifestPlan {
                 throw new IllegalArgumentException("Additional manifest declarations are not activated");
             if (contribution == CapabilityCatalog.BIOMETRIC_DECLARATION || contribution == CapabilityCatalog.INTERNET_DECLARATION
                     || contribution == CapabilityCatalog.NOTIFICATION_DECLARATION || contribution == CapabilityCatalog.COARSE_LOCATION_DECLARATION
-                    || contribution == CapabilityCatalog.FINE_LOCATION_DECLARATION) {
+                    || contribution == CapabilityCatalog.FINE_LOCATION_DECLARATION || contribution == CapabilityCatalog.RECORD_AUDIO_DECLARATION || contribution == CapabilityCatalog.ACTIVITY_RECOGNITION_DECLARATION || contribution == CapabilityCatalog.HIGH_RATE_SENSORS_DECLARATION) {
                 String permission = contribution == CapabilityCatalog.BIOMETRIC_DECLARATION ? CapabilityCatalog.BIOMETRIC_PERMISSION
                         : contribution == CapabilityCatalog.INTERNET_DECLARATION ? CapabilityCatalog.INTERNET_PERMISSION
                         : contribution == CapabilityCatalog.COARSE_LOCATION_DECLARATION ? CapabilityCatalog.COARSE_LOCATION_PERMISSION
+                        : contribution == CapabilityCatalog.ACTIVITY_RECOGNITION_DECLARATION ? CapabilityCatalog.ACTIVITY_RECOGNITION_PERMISSION
+                        : contribution == CapabilityCatalog.HIGH_RATE_SENSORS_DECLARATION ? CapabilityCatalog.HIGH_RATE_SENSORS_PERMISSION
+                        : contribution == CapabilityCatalog.RECORD_AUDIO_DECLARATION ? CapabilityCatalog.RECORD_AUDIO_PERMISSION
                         : contribution == CapabilityCatalog.FINE_LOCATION_DECLARATION ? CapabilityCatalog.FINE_LOCATION_PERMISSION : CapabilityCatalog.NOTIFICATION_PERMISSION;
                 selectedPermissions.add(permission);
                 result.add(new Node("manifest/uses-permission", 0,

@@ -52,53 +52,68 @@ public class ManifestNodesTest {
         assertEquals(7, current.nodes.size()); assertEquals(-1,current.nodes.get(0).parentIndex);
         assertEquals(4,current.nodes.get(6).parentIndex);
     }
-    @Test public void all1048576OriginalCapabilitySelectionsRetainFourCurrentManifestShapes() throws Exception {
-        assertEquals(23, CapabilityCatalog.NAMES.size());
+    @Test public void all1048576OriginalCapabilitySelectionsRetainSixCurrentManifestShapes() throws Exception {
+        assertEquals(27, CapabilityCatalog.NAMES.size());
         assertEquals(list("storage", "export", "share", "clipboard", "haptics", "device", "documents", "photos", "audio",
                 "browser", "maps", "phone", "email", "sms", "contacts", "calendar", "database", "presentation", "sensors", "biometrics"),
                 CapabilityCatalog.NAMES.subList(0, 20));
         byte[][] profiles = {
             ManifestXml.encode(plan(Collections.emptyList())), ManifestXml.encode(plan(list("biometrics"))),
-            ManifestXml.encode(plan(list("documents"))), ManifestXml.encode(plan(list("biometrics", "documents")))
+            ManifestXml.encode(plan(list("documents"))), ManifestXml.encode(plan(list("biometrics", "documents"))),
+            ManifestXml.encode(plan(list("sensors"))), ManifestXml.encode(plan(list("biometrics", "sensors")))
         };
+        java.util.Set<Integer> shapes = new java.util.HashSet<>();
         int checked = 0;
         // Exhaustive original capability domain; native surface combinations are covered below.
         for (int mask=0; mask<(1 << 20); mask++) {
             List<String> caps = new ArrayList<>();
             for (int bit=0; bit<20; bit++) if ((mask & (1<<bit)) != 0) caps.add(CapabilityCatalog.NAMES.get(bit));
             ManifestPlan p = plan(caps);
-            boolean documents = caps.contains("documents") || caps.contains("browser") || caps.contains("maps") || caps.contains("phone") || caps.contains("email") || caps.contains("sms") || caps.contains("contacts") || caps.contains("calendar") || caps.contains("clipboard") || caps.contains("share") || caps.contains("export");
-            boolean biometrics = caps.contains("biometrics");
+            boolean sensors = caps.contains("sensors"), biometrics = caps.contains("biometrics");
+            boolean broker = sensors || caps.contains("documents") || caps.contains("browser") || caps.contains("maps") || caps.contains("phone") || caps.contains("email") || caps.contains("sms") || caps.contains("contacts") || caps.contains("calendar") || caps.contains("clipboard") || caps.contains("share") || caps.contains("export");
+            int shape = (biometrics ? 1 : 0) + (sensors ? 4 : broker ? 2 : 0);
             byte[] encoded = ManifestXml.encode(p);
-            assertArrayEquals(profiles[(biometrics ? 1 : 0) + (documents ? 2 : 0)], encoded);
+            assertArrayEquals(profiles[shape], encoded); shapes.add(shape);
             ManifestAudit.Document decoded = ManifestAudit.read(encoded);
             decoded.verify(p);
-            assertEquals((documents ? 1 : 0) + (biometrics ? 1 : 0), CapabilityCatalog.manifestContributions(caps).size());
-            assertEquals(7 + (documents ? 3 : 0) + (biometrics ? 1 : 0), p.nodes.size());
-            assertEquals(biometrics ? list(CapabilityCatalog.BIOMETRIC_PERMISSION) : Collections.emptyList(), p.permissions);
-            assertTrue(p.features.isEmpty()); assertTrue(p.hosts.isEmpty());
+            List<String> permissions = new ArrayList<>();
+            if (sensors) permissions.add(CapabilityCatalog.HIGH_RATE_SENSORS_PERMISSION);
+            if (biometrics) permissions.add(CapabilityCatalog.BIOMETRIC_PERMISSION);
+            assertEquals((broker ? 1 : 0) + permissions.size(), CapabilityCatalog.manifestContributions(caps).size());
+            assertEquals(7 + (broker ? 3 : 0) + permissions.size(), p.nodes.size());
+            assertEquals(permissions, p.permissions);
+            assertTrue(p.features.isEmpty()); assertTrue(p.hosts.isEmpty()); assertTrue(p.queryActions.isEmpty());
             assertEquals(list(ManifestPlan.ACTIVITY), p.exportedComponents);
             assertEquals(24, decoded.attribute("manifest/uses-sdk", ManifestPlan.ANDROID, "minSdkVersion").value);
-            assertEquals(documents ? 2 : 0, p.queries.size());
+            assertEquals(broker ? 2 : 0, p.queries.size());
             if (biometrics) {
-                ManifestPlan.Node permission = p.nodes.get(7);
+                ManifestPlan.Node permission = p.nodes.get(7 + (sensors ? 1 : 0));
                 assertEquals("manifest/uses-permission", permission.path); assertEquals(0, permission.parentIndex);
                 assertEquals(1, permission.attributes.size());
                 ManifestPlan.Attribute name = permission.attributes.get(ManifestPlan.ANDROID + "|name");
                 assertEquals(0x01010003, name.resourceId); assertEquals(3, name.type);
                 assertEquals(CapabilityCatalog.BIOMETRIC_PERMISSION, name.value);
-                assertThrows(IOException.class, () -> decoded.verify(plan(documents ? list("documents") : Collections.emptyList())));
+                assertThrows(IOException.class, () -> decoded.verify(plan(sensors ? list("sensors") : broker ? list("documents") : Collections.emptyList())));
             }
-            if (documents) {
+            if (sensors) {
+                ManifestPlan.Node permission = p.nodes.get(7);
+                assertEquals("manifest/uses-permission", permission.path); assertEquals(0, permission.parentIndex);
+                assertEquals(1, permission.attributes.size());
+                ManifestPlan.Attribute name = permission.attributes.get(ManifestPlan.ANDROID + "|name");
+                assertEquals(0x01010003, name.resourceId); assertEquals(3, name.type);
+                assertEquals(CapabilityCatalog.HIGH_RATE_SENSORS_PERMISSION, name.value);
+                assertThrows(IOException.class, () -> decoded.verify(plan(biometrics ? list("biometrics", "documents") : list("documents"))));
+            }
+            if (broker) {
                 assertEquals(new ArrayList<>(CapabilityCatalog.DOCUMENT_BROKER_PACKAGES), p.queries);
-                int queries = biometrics ? 8 : 7;
+                int queries = 7 + permissions.size();
                 assertEquals("manifest/queries", p.nodes.get(queries).path);
                 assertEquals(queries, p.nodes.get(queries + 1).parentIndex); assertEquals(queries, p.nodes.get(queries + 2).parentIndex);
                 assertThrows(IOException.class, () -> decoded.verify(plan(biometrics ? list("biometrics") : Collections.emptyList())));
             }
             checked++;
         }
-        assertEquals(1048576, checked);
+        assertEquals(1048576, checked); assertEquals(6, shapes.size());
         for (CapabilityCatalog.Capability c : CapabilityCatalog.CAPABILITIES.values()) assertThrows(UnsupportedOperationException.class, () -> c.manifestNodes.add(ManifestNodes.feature("android.hardware.camera", false)));
         assertThrows(IllegalArgumentException.class, () -> plan(list("camera")));
     }
@@ -135,26 +150,36 @@ public class ManifestNodesTest {
         ManifestAudit.read(ManifestXml.encode(ancient)).verify(ancient);
         assertThrows(IOException.class, () -> ManifestAudit.read(ManifestXml.encode(ancient)).verify(current));
     }
-    @Test public void all32NativeSurfaceBasisSelectionsHaveOnlyExactPermissionsVisibilityAndCleartext() throws Exception {
-        List<String> basis = list("biometrics", "documents", "network", "notifications", "speech");
+    @Test public void all1024NativeSurfaceBasisSelectionsHaveOnlyExactPermissionsVisibilityAndCleartext() throws Exception {
+        List<String> basis = list("biometrics", "documents", "network", "notifications", "speech",
+                "voiceRecognition", "location", "recording", "steps", "sensors");
         java.util.Set<String> shapes = new java.util.HashSet<>();
-        for (int mask = 0; mask < 32; mask++) {
+        for (int mask = 0; mask < (1 << basis.size()); mask++) {
             List<String> caps = new ArrayList<>();
             for (int bit = 0; bit < basis.size(); bit++) if ((mask & (1 << bit)) != 0) caps.add(basis.get(bit));
             ManifestPlan selected = plan(caps);
             boolean network = caps.contains("network"), notifications = caps.contains("notifications"), speech = caps.contains("speech");
-            boolean broker = caps.contains("documents") || network || notifications || speech;
-            List<String> permissions = new ArrayList<>();
+            boolean voice = caps.contains("voiceRecognition"), sensors = caps.contains("sensors");
+            boolean broker = caps.contains("documents") || network || notifications || speech || voice || sensors
+                    || caps.contains("location") || caps.contains("recording") || caps.contains("steps");
+            List<String> permissions = new ArrayList<>(), actions = new ArrayList<>();
             if (network) permissions.add(CapabilityCatalog.INTERNET_PERMISSION);
             if (notifications) permissions.add(CapabilityCatalog.NOTIFICATION_PERMISSION);
             if (caps.contains("biometrics")) permissions.add(CapabilityCatalog.BIOMETRIC_PERMISSION);
+            if (caps.contains("location")) permissions.addAll(list(CapabilityCatalog.COARSE_LOCATION_PERMISSION, CapabilityCatalog.FINE_LOCATION_PERMISSION));
+            if (caps.contains("recording")) permissions.add(CapabilityCatalog.RECORD_AUDIO_PERMISSION);
+            if (caps.contains("steps")) permissions.add(CapabilityCatalog.ACTIVITY_RECOGNITION_PERMISSION);
+            if (sensors) permissions.add(CapabilityCatalog.HIGH_RATE_SENSORS_PERMISSION);
+            Collections.sort(permissions);
+            if (speech) actions.add(CapabilityCatalog.TTS_SERVICE_ACTION);
+            if (voice) actions.add(CapabilityCatalog.RECOGNIZE_SPEECH_ACTION);
             byte[] encoded = ManifestXml.encode(selected);
             ManifestAudit.Document decoded = ManifestAudit.read(encoded); decoded.verify(selected);
             ManifestAudit.verifyTree(encoded, selected.root);
             assertEquals(permissions, selected.permissions);
             assertEquals(broker ? new ArrayList<>(CapabilityCatalog.DOCUMENT_BROKER_PACKAGES) : Collections.emptyList(), selected.queries);
-            assertEquals(speech ? list(CapabilityCatalog.TTS_SERVICE_ACTION) : Collections.emptyList(), selected.queryActions);
-            assertEquals(7 + permissions.size() + (broker ? 3 : 0) + (speech ? 2 : 0), selected.nodes.size());
+            assertEquals(actions, selected.queryActions);
+            assertEquals(7 + permissions.size() + (broker ? 3 : 0) + 2 * actions.size(), selected.nodes.size());
             assertEquals(permissions.size() + (broker ? 1 : 0), CapabilityCatalog.manifestContributions(caps).size());
             assertEquals(broker ? 1L : 0L, decoded.nodes.stream().filter(n -> n.path.equals("manifest/queries")).count());
             ManifestAudit.Attribute cleartext = decoded.attribute("manifest/application", ManifestPlan.ANDROID, "usesCleartextTraffic");
@@ -163,22 +188,24 @@ public class ManifestNodesTest {
             assertEquals(broker, CapabilityCatalog.requiresHostBroker(caps));
             shapes.add(java.util.Base64.getEncoder().encodeToString(encoded));
         }
-        assertEquals(18, shapes.size());
+        assertEquals(514, shapes.size());
     }
     @Test public void nativeCatalogAndBrokerRequirementAreClosedImmutableAndValidateTheWholeSelection() {
         assertEquals(list(CapabilityCatalog.Method.NETWORK_REQUEST, CapabilityCatalog.Method.NETWORK_PROBE,
-                CapabilityCatalog.Method.NETWORK_CANCEL), CapabilityCatalog.CAPABILITIES.get("network").methods);
+                CapabilityCatalog.Method.NETWORK_PING, CapabilityCatalog.Method.NETWORK_CANCEL), CapabilityCatalog.CAPABILITIES.get("network").methods);
         assertEquals(list(CapabilityCatalog.Method.NOTIFICATIONS_STATUS, CapabilityCatalog.Method.NOTIFICATIONS_CHANNEL,
                 CapabilityCatalog.Method.NOTIFICATIONS_SHOW, CapabilityCatalog.Method.NOTIFICATIONS_CANCEL,
                 CapabilityCatalog.Method.NOTIFICATIONS_REQUEST_PERMISSION), CapabilityCatalog.CAPABILITIES.get("notifications").methods);
         assertEquals(list(CapabilityCatalog.Method.SPEECH_STATUS, CapabilityCatalog.Method.SPEECH_VOICES,
                 CapabilityCatalog.Method.SPEECH_SPEAK, CapabilityCatalog.Method.SPEECH_STOP), CapabilityCatalog.CAPABILITIES.get("speech").methods);
         List<String> brokerCaps = list("documents", "browser", "maps", "phone", "email", "sms", "contacts", "calendar",
-                "clipboard", "share", "export", "network", "notifications", "speech");
+                "clipboard", "share", "export", "network", "notifications", "speech", "voiceRecognition", "location", "recording", "steps", "sensors");
         for (CapabilityCatalog.Capability capability : CapabilityCatalog.CAPABILITIES.values()) {
             assertEquals(brokerCaps.contains(capability.name), CapabilityCatalog.requiresHostBroker(list(capability.name)));
             assertEquals(brokerCaps.contains(capability.name) ? CapabilityCatalog.DOCUMENT_BROKER_PACKAGES : Collections.emptySet(), capability.queries);
-            assertEquals(capability.name.equals("speech") ? Collections.singleton(CapabilityCatalog.TTS_SERVICE_ACTION) : Collections.emptySet(), capability.queryActions);
+            assertEquals(capability.name.equals("speech") ? Collections.singleton(CapabilityCatalog.TTS_SERVICE_ACTION)
+                    : capability.name.equals("voiceRecognition") ? Collections.singleton(CapabilityCatalog.RECOGNIZE_SPEECH_ACTION) : Collections.emptySet(), capability.queryActions);
+            assertEquals(brokerCaps.contains(capability.name) && !capability.name.equals("sensors"), CapabilityCatalog.requiresMandatoryHostBroker(list(capability.name)));
             assertThrows(UnsupportedOperationException.class, () -> capability.queryActions.add("android.intent.action.VIEW"));
         }
         assertTrue(CapabilityCatalog.CAPABILITIES.get("speech").permissions.isEmpty());
@@ -205,13 +232,75 @@ public class ManifestNodesTest {
             }
         }
         for (ManifestPlan.Profile profile : ManifestPlan.Profile.values()) if (profile != ManifestPlan.Profile.CURRENT)
-            for (String cap : list("network", "notifications", "speech"))
+            for (String cap : list("network", "notifications", "speech", "voiceRecognition", "location", "recording", "steps"))
                 assertThrows(IllegalArgumentException.class, () -> new ManifestPlan("org.example.old", "old", 1, "1",
                         0x7f010000, 0x7f020000, list(cap), profile));
         ManifestPlan ancient = new ManifestPlan("org.example.old", "old", 1, "1", 0x7f010000, 0x7f020000,
                 list("clipboard", "share", "export"), ManifestPlan.Profile.V1_BEFORE_SAFE_AREA);
         assertEquals(7, ancient.nodes.size()); assertTrue(ancient.permissions.isEmpty()); assertTrue(ancient.queries.isEmpty());
         ManifestAudit.read(ManifestXml.encode(ancient)).verify(ancient);
+    }
+    @Test public void sensorManifestContributionsAreCurrentOnlyAndHistoricalBytesRemainExact() throws Exception {
+        for (ManifestPlan.Profile profile : ManifestPlan.Profile.values()) if (profile != ManifestPlan.Profile.CURRENT) {
+            List<List<String>> selections = new ArrayList<>(list(list("sensors"), list("sensors", "storage"),
+                    list("sensors", "clipboard", "share", "export")));
+            if (profile != ManifestPlan.Profile.V1_BEFORE_SAFE_AREA)
+                selections.addAll(list(list("sensors", "biometrics"), list("sensors", "documents"), list("sensors", "biometrics", "documents")));
+            for (List<String> caps : selections) {
+                ManifestPlan current = plan(caps);
+                ManifestPlan legacy = new ManifestPlan(current.appId, current.label, current.versionCode, current.versionName,
+                        current.iconResourceId, current.backupResourceId, caps, profile);
+                List<String> withoutSensors = new ArrayList<>(caps); withoutSensors.remove("sensors");
+                ManifestPlan historical = new ManifestPlan(current.appId, current.label, current.versionCode, current.versionName,
+                        current.iconResourceId, current.backupResourceId, withoutSensors, profile);
+                byte[] encoded = ManifestXml.encode(legacy);
+                assertArrayEquals(ManifestXml.encode(historical), encoded);
+                assertEquals(current.capabilities, legacy.capabilities);
+                assertFalse(legacy.permissions.contains(CapabilityCatalog.HIGH_RATE_SENSORS_PERMISSION));
+                assertEquals(historical.queries, legacy.queries); assertTrue(legacy.queryActions.isEmpty());
+                ManifestAudit.read(encoded).verify(legacy);
+                assertThrows(IOException.class, () -> ManifestAudit.read(encoded).verify(current));
+                assertThrows(IOException.class, () -> ManifestAudit.read(ManifestXml.encode(current)).verify(legacy));
+            }
+        }
+    }
+    @Test public void sensorsAddOnlyTheExactNormalPermissionAndPinnedHostVisibility() throws Exception {
+        CapabilityCatalog.Capability sensors = CapabilityCatalog.CAPABILITIES.get("sensors");
+        assertEquals(list(CapabilityCatalog.Method.SENSORS_LIST, CapabilityCatalog.Method.SENSORS_CAPTURE,
+                CapabilityCatalog.Method.SENSORS_CANCEL, CapabilityCatalog.Method.SENSORS_SUBSCRIBE,
+                CapabilityCatalog.Method.SENSORS_POLL, CapabilityCatalog.Method.SENSORS_UNSUBSCRIBE), sensors.methods);
+        assertEquals(Collections.singleton(CapabilityCatalog.HIGH_RATE_SENSORS_PERMISSION), sensors.permissions);
+        assertEquals(CapabilityCatalog.DOCUMENT_BROKER_PACKAGES, sensors.queries);
+        assertTrue(sensors.queryActions.isEmpty()); assertTrue(sensors.features.isEmpty()); assertTrue(sensors.components.isEmpty());
+        assertEquals(2, sensors.manifestNodes.size()); assertEquals(24, sensors.minimumApi);
+        ManifestPlan selected = plan(list("sensors"));
+        ManifestAudit.read(ManifestXml.encode(selected)).verify(selected);
+        for (ManifestNodes.Element permission : list(
+                ManifestNodes.permission(CapabilityCatalog.HIGH_RATE_SENSORS_PERMISSION, ManifestNodes.PermissionVariant.SDK_23, null),
+                ManifestNodes.permission(CapabilityCatalog.HIGH_RATE_SENSORS_PERMISSION, ManifestNodes.PermissionVariant.STANDARD, 35),
+                ManifestNodes.permission("android.permission.BODY_SENSORS", ManifestNodes.PermissionVariant.STANDARD, null))) {
+            List<ManifestNodes.Element> children = new ArrayList<>(selected.root.children);
+            children.set(children.size() - 2, permission);
+            byte[] changed = ManifestXml.encodeTree(ManifestNodes.base("manifest", children, selected.root.attributes.toArray(new ManifestPlan.Attribute[0])));
+            assertThrows(IOException.class, () -> ManifestAudit.read(changed).verify(selected));
+        }
+    }
+    @Test public void catalogInitializesFromAFreshLoaderWithOnlyTheExactSpeechRecognitionAction() throws Exception {
+        java.net.URL location = CapabilityCatalog.class.getProtectionDomain().getCodeSource().getLocation();
+        try (java.net.URLClassLoader loader = new java.net.URLClassLoader(new java.net.URL[]{location}, null)) {
+            Class<?> catalog = Class.forName(CapabilityCatalog.class.getName(), true, loader);
+            assertEquals(27, ((List<?>) catalog.getField("NAMES").get(null)).size());
+            assertEquals(78, ((java.util.Map<?, ?>) catalog.getField("METHODS").get(null)).size());
+        }
+        assertEquals("android.speech.action.RECOGNIZE_SPEECH", CapabilityCatalog.RECOGNIZE_SPEECH_ACTION);
+        ManifestNodes.Element exact = ManifestNodes.queryIntent(CapabilityCatalog.RECOGNIZE_SPEECH_ACTION, null, null);
+        assertEquals(CapabilityCatalog.RECOGNIZE_SPEECH_ACTION, ManifestAudit.read(ManifestXml.encodeTree(exact))
+                .attribute("intent/action", ManifestPlan.ANDROID, "name").value);
+        for (String action : list("android.speech.action.UNKNOWN", "android.speech.action.WEB_SEARCH",
+                "android.speech.action.RECOGNIZE_SPEECH.extra", "android.speech.action.RECOGNIZE_SPEECH\n")) {
+            assertThrows(IllegalArgumentException.class, () -> ManifestNodes.action(action));
+            assertThrows(IllegalArgumentException.class, () -> ManifestNodes.queryIntent(action, null, null));
+        }
     }
     @Test public void speechVisibilityRejectsBroaderIntentsAndNetworkRequiresItsExactBoolean() throws Exception {
         ManifestPlan speech = plan(list("speech"));
@@ -241,7 +330,7 @@ public class ManifestNodesTest {
         assertNotNull(biometrics); assertEquals(30, biometrics.minimumApi);
         assertEquals(24, CapabilityCatalog.MIN_APP_API);
         assertEquals(1, CapabilityCatalog.SCHEMA_VERSION); assertEquals(2, CapabilityCatalog.SDK_VERSION);
-        assertEquals(58, CapabilityCatalog.METHODS.size());
+        assertEquals(78, CapabilityCatalog.METHODS.size());
         assertEquals(list(CapabilityCatalog.Method.BIOMETRICS_AVAILABILITY,
                 CapabilityCatalog.Method.BIOMETRICS_AUTHENTICATE, CapabilityCatalog.Method.BIOMETRICS_CANCEL), biometrics.methods);
         assertEquals(Collections.singleton(CapabilityCatalog.BIOMETRIC_PERMISSION), biometrics.permissions);
@@ -263,7 +352,8 @@ public class ManifestNodesTest {
                 current.capabilities, ManifestPlan.Profile.V1_BEFORE_SAFE_AREA));
         for (CapabilityCatalog.Capability capability : CapabilityCatalog.CAPABILITIES.values()) if (capability != biometrics) {
             assertEquals(24, capability.minimumApi);
-            if (!capability.name.equals("network") && !capability.name.equals("notifications")) assertTrue(capability.permissions.isEmpty());
+            if (!list("network", "notifications", "location", "recording", "steps", "sensors").contains(capability.name))
+                assertTrue(capability.permissions.isEmpty());
         }
     }
     @Test public void biometricPermissionConstructionRejectsAllBroaderOrDifferentProductionDeclarations() throws Exception {
@@ -482,7 +572,7 @@ public class ManifestNodesTest {
     @Test public void storageBackupExtendsExistingCapabilityWithoutManifestAuthority() {
         CapabilityCatalog.Capability storage = CapabilityCatalog.CAPABILITIES.get("storage");
         assertEquals(23, CapabilityCatalog.NAMES.size());
-        assertEquals(58, CapabilityCatalog.METHODS.size());
+        assertEquals(78, CapabilityCatalog.METHODS.size());
         assertEquals(list(CapabilityCatalog.Method.STORAGE_GET, CapabilityCatalog.Method.STORAGE_SET,
                 CapabilityCatalog.Method.STORAGE_REMOVE, CapabilityCatalog.Method.STORAGE_LIST,
                 CapabilityCatalog.Method.STORAGE_BACKUP_EXPORT, CapabilityCatalog.Method.STORAGE_BACKUP_IMPORT), storage.methods);
