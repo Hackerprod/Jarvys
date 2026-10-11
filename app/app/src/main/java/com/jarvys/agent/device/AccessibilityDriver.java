@@ -61,7 +61,7 @@ public final class AccessibilityDriver extends BaseDeviceDriver {
     }
 
     public String getHierarchyXml() {
-        long epoch = MemoryUiAutomationGuard.captureAutomationEpoch();
+        MemoryUiAutomationGuard.AutomationEpoch epoch = captureEpoch();
         JSONObject result = HierarchyDumper.dump(requireConnected(), HierarchyDumper.DumpOptions.forSnapshot());
         if (!result.optBoolean("success", false)) {
             throw new IllegalStateException("UI hierarchy capture failed: " + result.optString("error", "unknown error"));
@@ -76,7 +76,7 @@ public final class AccessibilityDriver extends BaseDeviceDriver {
         requireGestureDuration(durationMs, "tap duration");
         if (times < 1) throw new IllegalArgumentException("tap times must be at least 1");
         if (delayMs < 0) throw new IllegalArgumentException("tap delay cannot be negative");
-        long epoch = MemoryUiAutomationGuard.captureAutomationEpoch();
+        MemoryUiAutomationGuard.AutomationEpoch epoch = captureEpoch();
         GestureController.ActionGate gate = action -> runAutomated(epoch, token, action);
         for (int i = 0; i < times; i++) {
             token.throwIfCancelled();
@@ -93,7 +93,7 @@ public final class AccessibilityDriver extends BaseDeviceDriver {
         requirePositive(durationMs, "long press duration");
         requireGestureDuration(durationMs, "long press duration");
         token.throwIfCancelled();
-        long epoch = MemoryUiAutomationGuard.captureAutomationEpoch();
+        MemoryUiAutomationGuard.AutomationEpoch epoch = captureEpoch();
         return GestureController.longPress(requireConnected(), x, y, durationMs,
                 durationMs + 5000L, action -> runAutomated(epoch, token, action));
     }
@@ -104,7 +104,7 @@ public final class AccessibilityDriver extends BaseDeviceDriver {
         requirePositive(durationMs, "swipe duration");
         requireGestureDuration(durationMs, "swipe duration");
         token.throwIfCancelled();
-        long epoch = MemoryUiAutomationGuard.captureAutomationEpoch();
+        MemoryUiAutomationGuard.AutomationEpoch epoch = captureEpoch();
         return GestureController.swipe(requireConnected(), startX, startY, endX, endY,
                 durationMs, durationMs + 5000L, action -> runAutomated(epoch, token, action));
     }
@@ -128,7 +128,7 @@ public final class AccessibilityDriver extends BaseDeviceDriver {
 
     @Override
     public boolean inputText(String text, boolean clearExisting, CancellationToken token) {
-        long epoch = MemoryUiAutomationGuard.captureAutomationEpoch();
+        MemoryUiAutomationGuard.AutomationEpoch epoch = captureEpoch();
         token.throwIfCancelled();
         AccessibilityNodeInfo input = HierarchyDumper.findInputNode(requireConnected());
         if (input == null) return false;
@@ -171,7 +171,7 @@ public final class AccessibilityDriver extends BaseDeviceDriver {
 
     @Override
     public boolean launchApp(String packageName, CancellationToken token) {
-        long epoch = MemoryUiAutomationGuard.captureAutomationEpoch();
+        MemoryUiAutomationGuard.AutomationEpoch epoch = captureEpoch();
         if (packageName == null || packageName.trim().isEmpty()) {
             throw new IllegalArgumentException("packageName is required");
         }
@@ -213,7 +213,7 @@ public final class AccessibilityDriver extends BaseDeviceDriver {
     }
 
     public boolean openLink(String url, CancellationToken token) {
-        long epoch = MemoryUiAutomationGuard.captureAutomationEpoch();
+        MemoryUiAutomationGuard.AutomationEpoch epoch = captureEpoch();
         if (url == null || url.trim().isEmpty()) throw new IllegalArgumentException("url is required");
         Intent view = new Intent(Intent.ACTION_VIEW, Uri.parse(url.trim()))
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -281,7 +281,7 @@ public final class AccessibilityDriver extends BaseDeviceDriver {
     }
 
     private boolean pressEnter(CancellationToken token) {
-        long epoch = MemoryUiAutomationGuard.captureAutomationEpoch();
+        MemoryUiAutomationGuard.AutomationEpoch epoch = captureEpoch();
         if (Build.VERSION.SDK_INT < 30) {
             throw unsupported("press_key(enter)", "ACTION_IME_ENTER requires Android 11/API 30+");
         }
@@ -298,7 +298,7 @@ public final class AccessibilityDriver extends BaseDeviceDriver {
     }
 
     private boolean deleteCharacter(CancellationToken token) {
-        long epoch = MemoryUiAutomationGuard.captureAutomationEpoch();
+        MemoryUiAutomationGuard.AutomationEpoch epoch = captureEpoch();
         AccessibilityNodeInfo input = HierarchyDumper.findInputNode(requireConnected());
         if (input == null) return false;
         try {
@@ -319,13 +319,19 @@ public final class AccessibilityDriver extends BaseDeviceDriver {
     }
 
     private boolean global(CancellationToken token, int action) {
-        long epoch = MemoryUiAutomationGuard.captureAutomationEpoch();
+        MemoryUiAutomationGuard.AutomationEpoch epoch = captureEpoch();
         final boolean[] result = {false};
         boolean invoked = runAutomated(epoch, token, () -> result[0] = requireConnected().performGlobalAction(action));
         return invoked && result[0];
     }
 
-    private static boolean runAutomated(long epoch, CancellationToken token, Runnable action) {
+    private MemoryUiAutomationGuard.AutomationEpoch captureEpoch() {
+        // Preserve the local fail-before-service boundary, then include the alternate host.
+        MemoryUiAutomationGuard.captureAutomationEpoch();
+        return MemoryUiAutomationGuard.captureAutomationEpoch(requireConnected());
+    }
+
+    private static boolean runAutomated(MemoryUiAutomationGuard.AutomationEpoch epoch, CancellationToken token, Runnable action) {
         final boolean[] allowed = {false};
         boolean active = token.runIfActive(() -> allowed[0] = MemoryUiAutomationGuard.runAutomated(epoch, action));
         return active && allowed[0];

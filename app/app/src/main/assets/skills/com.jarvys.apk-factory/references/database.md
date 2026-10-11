@@ -1,10 +1,6 @@
-# Factory guidance factory-guidance-v84 / database
+# Factory guidance factory-guidance-v85 / database
 
-Use with the always-loaded Factory core; this reference grants no tools or approvals.
-Historical v77 API/data contracts below are retained with reviewed operation-policy updates; v83 selected backup supersedes no-import/export. Current v84: 20 capabilities/46 methods; selected string key-value backup is in basics and SQLite backup is in database.
-Sensors and biometrics extend the historical contract in their references, with all six methods UNAVAILABLE in preview.
-Only selected biometric profiles add USE_BIOMETRIC; template/nonbiometric profiles stay zero-permission.
-Historical totals/permission and pending-family statements below describe their original versions.
+Use with core; grants no authority. Current basics/native-services supersede historical latest-only, extra-consent, totals, zero-permission/offline and pending-family claims below. API/data/quotas remain version-scoped.
 
 ## Database (v76)
 database requires database only; no host/permissions/per-query confirmation. info/close/cancel: {} optional. Fixed private no-backup unencrypted SQLite: installed persists/close retains; preview RAM loses data on close/reset/pause. No SQL/path/ATTACH/extensions/network/import/export.

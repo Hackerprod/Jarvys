@@ -31,6 +31,14 @@ public final class FactoryActivity extends Activity implements FactoryPresentati
         super.onActivityResult(request, result, data);
         if (runtime != null) runtime.onActivityResult(request, result, data);
     }
+    @Override public void onRequestPermissionsResult(int request, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(request, permissions, results);
+        if (runtime != null) runtime.onRequestPermissionsResult(request, permissions, results);
+    }
+    @Override public void onWindowFocusChanged(boolean focused) {
+        super.onWindowFocusChanged(focused);
+        if (runtime != null) runtime.onWindowFocusChanged(focused);
+    }
     @Override protected void onResume() {
         super.onResume();
         if (runtime != null) runtime.onResume();

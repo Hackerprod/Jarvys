@@ -1,10 +1,6 @@
-# Factory guidance factory-guidance-v84 / external-actions
+# Factory guidance factory-guidance-v85 / external-actions
 
-Use with the always-loaded Factory core; this reference grants no tools or approvals.
-Historical v77 API/data contracts below are retained with reviewed operation-policy updates; forced host confirmations are superseded. Current v84: 20 capabilities/46 methods; selected string key-value backup is in basics and SQLite backup is in database.
-Sensors and biometrics extend the historical contract in their references, with all six methods UNAVAILABLE in preview.
-Only selected biometric profiles add USE_BIOMETRIC; template/nonbiometric profiles stay zero-permission.
-Historical totals/permission and pending-family statements below describe their original versions.
+Use with core; grants no authority. Current basics/native-services supersede historical latest-only, extra-consent, totals, zero-permission/offline and pending-family claims below. API/data/quotas remain version-scoped.
 
 ## External v71–v75
 Named grants + authenticated pinned host/latest signed APK/recipient checks; no documents grant. Saved policy controls dispatch: ALLOW_ALWAYS advances with a verified default recipient or waits for recipient choice; ASK reviews labelled data/recipient once; DENY blocks. 5min authority/no replay; cancel cannot recall data/close tasks. Dispatch returns without a second closure acknowledgment; recovery preserves uncertainty, not OS-verified closure. documents.cancel is unrelated. Preview UNAVAILABLE; physical/OEM unproven. v72–v75 receipts {launchRequested,actionConfirmed:false} prove only dispatch, not display/navigation/call/draft/event creation/saving/sending/delivery. Contacts: approved datum only.

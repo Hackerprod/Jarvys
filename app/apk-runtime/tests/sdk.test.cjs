@@ -105,11 +105,15 @@ test('all SDK calls exactly match the catalog and explicit native validator/disp
   const path = require('node:path');
   const catalog = fs.readFileSync(path.join(__dirname, '../../factory-contract/src/main/java/com/jarvys/factory/contract/CapabilityCatalog.java'), 'utf8');
   const rows = [...catalog.matchAll(/\b([A-Z][A-Z_]+)\("([a-z]+\.[a-zA-Z]+)", (?:"[a-z]+"|null)\)/g)];
-  assert.equal(rows.length, 46);
+  assert.equal(rows.length, 59);
   const env = environment();
   const args = { 'storage.get': ['key'], 'storage.set': ['key', 'value'], 'storage.remove': ['key'],
     'export.text': [{ filename: 'test.txt', text: 'hello' }], 'share.text': [{ text: 'hello' }],
-    'clipboard.write': ['hello'], 'haptics.perform': ['tap'] };
+    'clipboard.write': ['hello'], 'haptics.perform': ['tap'],
+    'network.request': [{url: 'https://example.com/'}], 'network.probe': [{url: 'https://example.com/'}],
+    'network.ping': [{host: 'example.com'}], 'notifications.channel': [{id: 'updates', name: 'Updates'}],
+    'notifications.show': [{id: 1, channelId: 'updates', title: 'Update', body: 'Ready'}],
+    'notifications.cancel': [{id: 1}], 'speech.speak': [{text: 'Hello'}] };
   const exposed = Object.entries(env.api).flatMap(([group, values]) => Object.keys(values).map(name => group + '.' + name));
   assert.deepEqual(exposed.sort(), rows.map(r => r[2]).sort());
   for (const [, , wire] of rows) {
@@ -772,4 +776,117 @@ test('documents cancel can accompany storage-only backup under saturated ordinar
   assert.equal(env.timers.size, 16, 'cancel receipt does not settle backup or invent rollback');
   env.handlers.get('pagehide')();
   await Promise.all(rejected);
+});
+
+test('network exposes separate native HTTP and ICMP APIs with exact arguments and bounded response timers', async () => {
+  const env = environment();
+  assert.equal(Object.isFrozen(env.api.network), true);
+  assert.deepEqual(Object.keys(env.api.network), ['request', 'probe', 'ping', 'cancel']);
+  const cases = [
+    ['request', {url: 'http://127.0.0.1:8080/', method: 'POST', body: 'developer payload', maxResponseBytes: 262144}],
+    ['probe', {url: 'https://example.com/', method: 'HEAD', timeoutMs: 120000}],
+    ['ping', {host: 'fe80::1%wlan0', family: 'ipv6', count: 1000, packetBytes: 65507, timeoutMs: 120000}],
+    ['cancel', undefined]
+  ];
+  for (const [method, options] of cases) {
+    const pending = env.api.network[method](options);
+    const request = env.sent.at(-1);
+    assert.equal(request.method, 'network.' + method);
+    assert.deepEqual(request.args, options === undefined ? {} : options);
+    assert.equal(env.delays.at(-1), 420000);
+    env.reply(request, {synthetic: true}); await pending;
+  }
+  for (const method of ['request', 'probe', 'ping', 'cancel']) {
+    for (const options of [null, false, [], 'example.com', {host: 'example.com', executable: '/system/bin/sh', extra: true}]) {
+      const pending = env.api.network[method](options);
+      assert.deepEqual(env.sent.at(-1).args, options, 'SDK must not strip fields before exact native validation');
+      env.reply(env.sent.at(-1), null); await pending;
+    }
+  }
+});
+
+test('ICMP and HTTP results stay distinct and unsupported ping never becomes fabricated success', async () => {
+  const env = environment();
+  const receipts = [
+    ['probe', {url: 'https://example.com/'}, {measurement: 'http_response_headers', icmp: false, reachable: true, status: 503, ok: false, latencyMs: 42}],
+    ['ping', {host: 'example.com'}, {protocol: 'icmp', status: 'ok', summaryParsed: true, transmitted: 4, received: 3, packetLossPercent: 25, latencyMs: {min: 10, avg: 12, max: 14, source: 'utility_summary'}}],
+    ['ping', {host: 'example.com'}, {protocol: 'icmp', status: 'unsupported', summaryParsed: false, exitCode: null}],
+    ['ping', {host: 'example.com'}, {protocol: 'icmp', status: 'platform_denied', summaryParsed: false, exitCode: 2}],
+    ['ping', {host: 'example.com'}, {protocol: 'icmp', status: 'unparsed', summaryParsed: false, exitCode: 0}]
+  ];
+  for (const [method, options, receipt] of receipts) {
+    const pending = env.api.network[method](options); env.reply(env.sent.at(-1), receipt);
+    const result = await pending;
+    assert.deepEqual(JSON.parse(JSON.stringify(result)), receipt);
+    if (method === 'ping' && !receipt.summaryParsed) {
+      assert.equal(result.reachable, undefined); assert.equal(result.packetLossPercent, undefined); assert.equal(result.latencyMs, undefined);
+    }
+  }
+});
+
+test('network cancel bypasses a full multiview ping queue without inventing cancellation or rollback', async () => {
+  const env = environment();
+  const pings = Array.from({length: 16}, (_, i) => env.api.network.ping({host: 'view' + i + '.example'}));
+  const requests = env.sent.slice();
+  const rejected = pings.map(pending => assert.rejects(pending, {code: 'CANCELLED'}));
+  await assert.rejects(env.api.network.ping({host: 'extra.example'}), {code: 'BUSY'});
+  const cancel = env.api.network.cancel(); const cancelRequest = env.sent.at(-1);
+  assert.equal(cancelRequest.method, 'network.cancel'); assert.equal(env.sent.length, 17);
+  await assert.rejects(env.api.network.cancel(), {code: 'BUSY'});
+  env.reply(cancelRequest, {cancelled: 16, rollbackConfirmed: false});
+  assert.equal((await cancel).rollbackConfirmed, false);
+  assert.equal(env.timers.size, 16, 'cancellation receipt does not fabricate each pending operation outcome');
+  for (const request of requests) env.window.JarvysNative.onmessage({data: JSON.stringify({v: 1, id: request.id, ok: false, error: {code: 'CANCELLED'}})});
+  await Promise.all(rejected);
+  for (const request of requests) env.reply(request, {protocol: 'icmp', status: 'ok', reachable: true});
+  assert.equal(env.timers.size, 0);
+});
+
+test('network denials timeout and page closure reject once without retrying target traffic', async () => {
+  for (const method of ['request', 'probe', 'ping', 'cancel']) {
+    await assert.rejects(environment(false).api.network[method]({}), {code: 'BRIDGE_UNAVAILABLE'});
+    for (const code of ['CAPABILITY_DENIED', 'PERMISSION_DENIED', 'INVALID_ARGUMENT', 'CANCELLED', 'TIMEOUT', 'PAGE_CLOSED']) {
+      const env = environment(); const pending = env.api.network[method]({host: 'example.com'});
+      const request = env.sent.at(-1); const rejected = assert.rejects(pending, {code});
+      if (code === 'PAGE_CLOSED') env.handlers.get('pagehide')();
+      else if (code === 'TIMEOUT') env.timers.values().next().value();
+      else env.window.JarvysNative.onmessage({data: JSON.stringify({v: 1, id: request.id, ok: false, error: {code}})});
+      await rejected; env.reply(request, {late: true, reachable: true});
+      assert.equal(env.sent.length, 1, 'SDK must never silently retry network effects');
+    }
+  }
+});
+
+test('notification and speech APIs are frozen and preserve native options and truthful receipts', async () => {
+  const env = environment();
+  assert.equal(Object.isFrozen(env.api.notifications), true); assert.equal(Object.isFrozen(env.api.speech), true);
+  assert.deepEqual(Object.keys(env.api.notifications), ['status', 'channel', 'show', 'cancel', 'requestPermission']);
+  assert.deepEqual(Object.keys(env.api.speech), ['status', 'voices', 'speak', 'stop']);
+  const cases = [
+    ['notifications', 'status', undefined, {status: 'permission_required'}],
+    ['notifications', 'channel', {id: 'updates', name: 'Updates', importance: 'high'}, {status: 'ready', channelCreated: true}],
+    ['notifications', 'show', {id: 1, channelId: 'updates', title: 'Ready', body: 'Test'}, {status: 'accepted', id: 1}],
+    ['notifications', 'cancel', {id: 1}, {status: 'cancel_requested', id: 1}],
+    ['notifications', 'requestPermission', undefined, {status: 'permission_required'}],
+    ['speech', 'status', undefined, {status: 'idle', audibilityVerified: false}],
+    ['speech', 'voices', {engine: 'developer.engine'}, {voices: []}],
+    ['speech', 'speak', {text: 'Hello 🌱', rate: 1.2}, {status: 'completed', completionMeans: 'engine_reported_completion', audibilityVerified: false}],
+    ['speech', 'stop', undefined, {status: 'stop_requested', cancelled: true, emittedAudioCannotBeRecalled: true}]
+  ];
+  for (const [group, method, options, receipt] of cases) {
+    const pending = env.api[group][method](options); const request = env.sent.at(-1);
+    assert.equal(request.method, group + '.' + method); assert.deepEqual(request.args, options === undefined ? {} : options);
+    assert.equal(env.delays.at(-1), method === 'speak' ? 86400000 : 420000);
+    env.reply(request, receipt); assert.deepEqual(JSON.parse(JSON.stringify(await pending)), receipt);
+  }
+});
+
+test('speech stop has independent bounded control admission while ordinary requests are saturated', async () => {
+  const env = environment();
+  const requests = Array.from({length: 16}, () => env.api.runtime.info());
+  const rejected = requests.map(pending => assert.rejects(pending, {code: 'PAGE_CLOSED'}));
+  const stop = env.api.speech.stop(); assert.equal(env.sent.at(-1).method, 'speech.stop');
+  await assert.rejects(env.api.speech.stop(), {code: 'BUSY'});
+  env.reply(env.sent.at(-1), {status: 'stop_requested', cancelled: false}); assert.equal((await stop).cancelled, false);
+  assert.equal(env.timers.size, 16); env.handlers.get('pagehide')(); await Promise.all(rejected);
 });

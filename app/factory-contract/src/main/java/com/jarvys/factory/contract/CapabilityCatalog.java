@@ -16,6 +16,9 @@ public final class CapabilityCatalog {
     public static final int SDK_VERSION = 2;
     public static final int MIN_APP_API = 24;
     public static final String BIOMETRIC_PERMISSION = "android.permission.USE_BIOMETRIC";
+    public static final String INTERNET_PERMISSION = "android.permission.INTERNET";
+    public static final String NOTIFICATION_PERMISSION = "android.permission.POST_NOTIFICATIONS";
+    public static final String TTS_SERVICE_ACTION = "android.intent.action.TTS_SERVICE";
     public enum Method {
         RUNTIME_INFO("runtime.info", null),
         STORAGE_GET("storage.get", "storage"), STORAGE_SET("storage.set", "storage"),
@@ -38,7 +41,13 @@ public final class CapabilityCatalog {
         PRESENTATION_RESET("presentation.reset", "presentation"),
         SENSORS_LIST("sensors.list", "sensors"), SENSORS_CAPTURE("sensors.capture", "sensors"), SENSORS_CANCEL("sensors.cancel", "sensors"),
         BIOMETRICS_AVAILABILITY("biometrics.availability", "biometrics"),
-        BIOMETRICS_AUTHENTICATE("biometrics.authenticate", "biometrics"), BIOMETRICS_CANCEL("biometrics.cancel", "biometrics");
+        BIOMETRICS_AUTHENTICATE("biometrics.authenticate", "biometrics"), BIOMETRICS_CANCEL("biometrics.cancel", "biometrics"),
+        NETWORK_REQUEST("network.request", "network"), NETWORK_PROBE("network.probe", "network"), NETWORK_PING("network.ping", "network"), NETWORK_CANCEL("network.cancel", "network"),
+        NOTIFICATIONS_STATUS("notifications.status", "notifications"), NOTIFICATIONS_CHANNEL("notifications.channel", "notifications"),
+        NOTIFICATIONS_SHOW("notifications.show", "notifications"), NOTIFICATIONS_CANCEL("notifications.cancel", "notifications"),
+        NOTIFICATIONS_REQUEST_PERMISSION("notifications.requestPermission", "notifications"),
+        SPEECH_STATUS("speech.status", "speech"), SPEECH_VOICES("speech.voices", "speech"),
+        SPEECH_SPEAK("speech.speak", "speech"), SPEECH_STOP("speech.stop", "speech");
         public final String wireName;
         public final String capability;
         Method(String wireName, String capability) { this.wireName = wireName; this.capability = capability; }
@@ -47,13 +56,14 @@ public final class CapabilityCatalog {
         public final String name;
         public final int minimumApi;
         public final List<Method> methods;
-        // Closed compiled contributions: the biometric permission or exact shared broker queries.
+        // Only exact compiled permissions and package/intent visibility declarations.
         public final List<ManifestNodes.Element> manifestNodes;
         public final Set<String> permissions;
         public final Set<String> features = Collections.emptySet();
         public final Set<String> components = Collections.emptySet();
         public final Set<String> intentFilters = Collections.emptySet();
         public final Set<String> queries;
+        public final Set<String> queryActions;
         public final Set<String> metadata = Collections.emptySet();
         public final Set<String> resources = Collections.emptySet();
         public final Set<String> dependencies = Collections.emptySet();
@@ -61,11 +71,19 @@ public final class CapabilityCatalog {
         private Capability(String name) {
             this.name = name;
             boolean biometric = name.equals("biometrics");
-            boolean broker = name.equals("documents") || name.equals("browser") || name.equals("maps") || name.equals("phone") || name.equals("email") || name.equals("sms") || name.equals("contacts") || name.equals("calendar") || name.equals("clipboard");
+            boolean broker = hostBrokerCapability(name);
+            boolean network = name.equals("network"), notifications = name.equals("notifications"), speech = name.equals("speech");
             minimumApi = biometric ? 30 : MIN_APP_API;
-            permissions = biometric ? Collections.singleton(BIOMETRIC_PERMISSION) : Collections.emptySet();
-            manifestNodes = biometric ? Collections.singletonList(BIOMETRIC_DECLARATION) : broker ? Collections.singletonList(DOCUMENT_QUERIES) : Collections.emptyList();
+            permissions = biometric ? Collections.singleton(BIOMETRIC_PERMISSION) : network ? Collections.singleton(INTERNET_PERMISSION)
+                    : notifications ? Collections.singleton(NOTIFICATION_PERMISSION) : Collections.emptySet();
+            List<ManifestNodes.Element> declarations = new ArrayList<>();
+            if (biometric) declarations.add(BIOMETRIC_DECLARATION);
+            if (network) declarations.add(INTERNET_DECLARATION);
+            if (notifications) declarations.add(NOTIFICATION_DECLARATION);
+            if (broker) declarations.add(speech ? SPEECH_QUERIES : DOCUMENT_QUERIES);
+            manifestNodes = ManifestNodes.ordered(declarations);
             queries = broker ? DOCUMENT_BROKER_PACKAGES : Collections.emptySet();
+            queryActions = speech ? Collections.singleton(TTS_SERVICE_ACTION) : Collections.emptySet();
             List<Method> selected = new ArrayList<>();
             for (Method method : Method.values()) if (name.equals(method.capability)) selected.add(method);
             methods = Collections.unmodifiableList(selected);
@@ -77,8 +95,19 @@ public final class CapabilityCatalog {
             ManifestNodes.queryPackage("com.jarvys.agent"), ManifestNodes.queryPackage("com.jarvys.agent.recoverytest")));
     static final ManifestNodes.Element BIOMETRIC_DECLARATION = ManifestNodes.permission(
             BIOMETRIC_PERMISSION, ManifestNodes.PermissionVariant.STANDARD, null);
+    static final ManifestNodes.Element INTERNET_DECLARATION = ManifestNodes.permission(
+            INTERNET_PERMISSION, ManifestNodes.PermissionVariant.STANDARD, null);
+    static final ManifestNodes.Element NOTIFICATION_DECLARATION = ManifestNodes.permission(
+            NOTIFICATION_PERMISSION, ManifestNodes.PermissionVariant.STANDARD, null);
+    static final ManifestNodes.Element SPEECH_QUERIES;
+    static {
+        List<ManifestNodes.Element> queries = new ArrayList<>(DOCUMENT_QUERIES.children);
+        queries.add(ManifestNodes.queryIntent(TTS_SERVICE_ACTION, null, null));
+        SPEECH_QUERIES = ManifestNodes.queries(queries);
+    }
     public static final List<String> NAMES = Collections.unmodifiableList(Arrays.asList(
-            "storage", "export", "share", "clipboard", "haptics", "device", "documents", "photos", "audio", "browser", "maps", "phone", "email", "sms", "contacts", "calendar", "database", "presentation", "sensors", "biometrics"));
+            "storage", "export", "share", "clipboard", "haptics", "device", "documents", "photos", "audio", "browser", "maps", "phone", "email", "sms", "contacts", "calendar", "database", "presentation", "sensors", "biometrics",
+            "network", "notifications", "speech"));
     public static final Set<String> SUPPORTED = Collections.unmodifiableSet(new LinkedHashSet<>(NAMES));
     public static final Map<String, Capability> CAPABILITIES;
     public static final Map<String, Method> METHODS;
@@ -96,11 +125,29 @@ public final class CapabilityCatalog {
     /** Only compiled catalog entries contribute; project strings can never register declarations. */
     public static List<ManifestNodes.Element> manifestContributions(Iterable<String> requested) {
         List<ManifestNodes.Element> result = new ArrayList<>();
+        boolean broker = false, speech = false;
         for (String name : select(requested)) {
-            for (ManifestNodes.Element node : CAPABILITIES.get(name).manifestNodes)
-                if (!result.contains(node)) result.add(node);
+            for (ManifestNodes.Element node : CAPABILITIES.get(name).manifestNodes) {
+                if (node == DOCUMENT_QUERIES) broker = true;
+                else if (node == SPEECH_QUERIES) { broker = true; speech = true; }
+                else if (!result.contains(node)) result.add(node);
+            }
         }
+        // Exactly one queries element; speech adds its one service intent to the shared packages.
+        if (broker) result.add(speech ? SPEECH_QUERIES : DOCUMENT_QUERIES);
         return ManifestNodes.ordered(result);
+    }
+    /** Current runtime binding requirement; historical manifest profiles filter separately. */
+    public static boolean requiresHostBroker(Iterable<String> requested) {
+        boolean required = false;
+        for (String name : select(requested)) if (hostBrokerCapability(name)) required = true;
+        return required;
+    }
+    private static boolean hostBrokerCapability(String name) {
+        return name.equals("documents") || name.equals("browser") || name.equals("maps") || name.equals("phone")
+                || name.equals("email") || name.equals("sms") || name.equals("contacts") || name.equals("calendar")
+                || name.equals("clipboard") || name.equals("share") || name.equals("export")
+                || name.equals("network") || name.equals("notifications") || name.equals("speech");
     }
     /** Defensive, deterministic selection; no implied or future capabilities. */
     public static List<String> select(Iterable<String> requested) {

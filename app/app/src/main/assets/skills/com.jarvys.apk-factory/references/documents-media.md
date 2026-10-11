@@ -1,10 +1,6 @@
-# Factory guidance factory-guidance-v84 / documents-media
+# Factory guidance factory-guidance-v85 / documents-media
 
-Use with the always-loaded Factory core; this reference grants no tools or approvals.
-Historical v77 API/data contracts below are retained with reviewed operation-policy updates; forced host confirmations are superseded. Current v84: 20 capabilities/46 methods; selected string key-value backup is in basics and SQLite backup is in database.
-Sensors and biometrics extend the historical contract in their references, with all six methods UNAVAILABLE in preview.
-Only selected biometric profiles add USE_BIOMETRIC; template/nonbiometric profiles stay zero-permission.
-Historical totals/permission and pending-family statements below describe their original versions.
+Use with core; grants no authority. Current basics/native-services supersede historical latest-only, extra-consent, totals, zero-permission/offline and pending-family claims below. API/data/quotas remain version-scoped.
 
 ## Documents (v67)
 Jarvys.documents needs documents. open({mimeType}): {handle,mode:"read",expiresAfterMs:300000,maximumBytes:16777216,providerCommitConfirmed:false}; create({filename,mimeType}): same, mode:"write". MIME required: <=127 chars, one type/no parameters; open */* or image/* allowed, create concrete. filename: [a-zA-Z0-9][a-zA-Z0-9 _.-]{0,119}; no .. or final dot.

@@ -43,14 +43,16 @@ internal open class FactorySigningIdentity(
     private fun store() = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
     private fun hash(bytes: ByteArray) = com.jarvys.agent.coding.ProjectScope.sha256(bytes)
     private fun digest(saved: JSONObject?) = saved?.let { hash(it.toString().toByteArray(Charsets.UTF_8)) }
-    private fun record(appId: String): JSONObject? {
+    private fun record(appId: String): JSONObject? = try {
         val target = file(appId)
-        if (!target.baseFile.exists() && !File(target.baseFile.path + ".bak").exists()) return null
-        return target.openRead().use { input ->
+        if (!target.baseFile.exists() && !File(target.baseFile.path + ".bak").exists()) {
+            FactoryArtifactAuthority.invalidate(appId)
+            null
+        } else target.openRead().use { input ->
             val bytes = input.readBytesBounded(64 * 1024)
             JSONObject(String(bytes, Charsets.UTF_8))
         }
-    }
+    } catch (failure: Exception) { FactoryArtifactAuthority.invalidate(appId); throw failure }
     // Overridable only to supply RAM-only host fixtures; product always uses AndroidKeyStore.
     protected open fun legacyPresent(appId: String): Boolean = store().containsAlias(alias(appId))
     protected open fun legacyIdentity(appId: String): Identity {
@@ -70,33 +72,37 @@ internal open class FactorySigningIdentity(
         generator.generateKeyPair()
     }
     open fun state(appId: String): State = synchronized(LOCK) {
-        val saved = record(appId)
-        if (saved == null) {
-            check(!legacyPresent(appId) && !protection.present(appId)) {
-                "Signing protection exists without its identity record. Review recovery; no replacement was created."
-            }
-            return@synchronized State(false, null, 0)
-        }
-        val mode = validateRecord(saved, appId)
-        check(saved.optString("state") == "ready") {
-            "Signing identity creation was interrupted. Import its matching backup if recoverable; no key was rotated."
-        }
-        val identity = if (mode == RECOVERABLE) portableIdentity(saved) else {
-            check(legacyPresent(appId)) { "This app's signing key is missing. Existing apps cannot be updated with a replacement identity." }
-            legacyIdentity(appId)
-        }
         try {
-            check(identity.fingerprint == saved.getString("certificateSha256")) { "Signing identity mismatch. Nothing was signed." }
-            val version = saved.getInt("lastVersion")
-            check(version >= 0) { "Invalid signing identity version" }
-            State(true, identity.fingerprint, version,
-                FactorySigningScope.readBaseline(saved, appId, identity.fingerprint, version),
-                saved.optString("lastApkSha256").takeIf { it.isNotEmpty() }, digest(saved), mode,
-                if (mode == RECOVERABLE) saved.getBoolean("continuityKnown") else true,
-                if (mode == RECOVERABLE) saved.getString("continuityResolution") else "local_history")
-        } finally {
-            if (mode == RECOVERABLE) FactoryIdentityBackup.destroyBestEffort(identity.key)
-        }
+            val saved = record(appId)
+            if (saved == null) {
+                check(!legacyPresent(appId) && !protection.present(appId)) {
+                    "Signing protection exists without its identity record. Review recovery; no replacement was created."
+                }
+                return@synchronized State(false, null, 0)
+            }
+            val mode = validateRecord(saved, appId)
+            check(saved.optString("state") == "ready") {
+                "Signing identity creation was interrupted. Import its matching backup if recoverable; no key was rotated."
+            }
+            val identity = if (mode == RECOVERABLE) portableIdentity(saved) else {
+                check(legacyPresent(appId)) { "This app's signing key is missing. Existing apps cannot be updated with a replacement identity." }
+                legacyIdentity(appId)
+            }
+            try {
+                check(identity.fingerprint == saved.getString("certificateSha256")) { "Signing identity mismatch. Nothing was signed." }
+                val version = saved.getInt("lastVersion")
+                check(version >= 0) { "Invalid signing identity version" }
+                State(true, identity.fingerprint, version,
+                    FactorySigningScope.readBaseline(saved, appId, identity.fingerprint, version),
+                    saved.optString("lastApkSha256").takeIf { it.isNotEmpty() }, digest(saved), mode,
+                    if (mode == RECOVERABLE) saved.getBoolean("continuityKnown") else true,
+                    if (mode == RECOVERABLE) saved.getString("continuityResolution") else "local_history").also {
+                        FactoryArtifactAuthority.observeIdentity(appId, it)
+                    }
+            } finally {
+                if (mode == RECOVERABLE) FactoryIdentityBackup.destroyBestEffort(identity.key)
+            }
+        } catch (failure: Exception) { FactoryArtifactAuthority.invalidate(appId); throw failure }
     }
 
     open fun obtainAfterApproval(appId: String, approvedState: State): Identity = synchronized(LOCK) {
@@ -175,7 +181,7 @@ internal open class FactorySigningIdentity(
         saved.put("lastVersion", versionCode).put("lastApkSha256", apkSha)
         saved.remove("lastSignedScope")
         if (scope != null) saved.put("lastSignedScope", scope.anchored(appId, fingerprint, versionCode, apkSha))
-        save(appId, saved)
+        save(appId, saved, preserveRetainedArtifacts = true)
     }
     private fun validateRecord(saved: JSONObject, appId: String): String {
         check(saved.opt("appId") is String && saved.getString("appId") == appId) { "Signing identity app ID mismatch" }
@@ -209,6 +215,11 @@ internal open class FactorySigningIdentity(
     }
     private fun portableIdentity(saved: JSONObject): Identity {
         val appId = saved.getString("appId")
+        return try { loadPortableIdentity(saved) }
+        catch (failure: Exception) { FactoryArtifactAuthority.invalidate(appId); throw failure }
+    }
+    private fun loadPortableIdentity(saved: JSONObject): Identity {
+        val appId = saved.getString("appId")
         val fingerprint = saved.getString("certificateSha256")
         val certificate = CertificateFactory.getInstance("X.509").generateCertificate(decode(saved.getString("certificate")).inputStream()) as X509Certificate
         check(hash(certificate.encoded) == fingerprint) { "Local certificate integrity failed" }
@@ -235,6 +246,7 @@ internal open class FactorySigningIdentity(
         // Pin identity/version BEFORE any persistent key action. An interruption cannot authorize a new identity.
         // Existing ready records remain intact until replacement is fully encrypted and ready for AtomicFile.
         check(stillApproved()) { "Identity save was cancelled before its durable commit" }
+        FactoryArtifactAuthority.invalidate(material.appId)
         if (old == null) save(material.appId, JSONObject(saved.toString()).put("state", "reserved"))
         val bytes = material.key.encoded ?: error("Portable private key encoding unavailable")
         try { saved.put("protectedKey", protection.wrap(material.appId, fingerprint, bytes)) } finally { bytes.fill(0) }
@@ -246,23 +258,26 @@ internal open class FactorySigningIdentity(
         while (true) { val count = read(buffer); if (count < 0) return out.toByteArray()
             check(out.size() + count <= limit) { "Signing identity record exceeds its size limit" }; out.write(buffer, 0, count) }
     }
-    private fun save(appId: String, value: JSONObject) {
-        check(directory.isDirectory || directory.mkdirs()) { "Cannot prepare identity storage" }
-        val target = file(appId)
-        val bytes = value.toString().toByteArray(Charsets.UTF_8)
-        val stream = target.startWrite()
+    private fun save(appId: String, value: JSONObject, preserveRetainedArtifacts: Boolean = false) {
+        FactoryArtifactAuthority.beforeIdentityWrite(appId, preserveRetainedArtifacts)
         try {
-            stream.write(bytes)
-            stream.flush()
-            stream.fd.sync() // AtomicFile logs some sync failures instead of propagating them.
-        } catch (failure: Throwable) {
-            target.failWrite(stream)
-            throw failure
-        }
-        // Never call failWrite after finish: it may already have committed the new record.
-        finishRecord(target, stream)
-        val committed = target.openRead().use { it.readBytesBounded(64 * 1024) }
-        check(committed.contentEquals(bytes)) { "Identity record commit was not verified; preserve recovery evidence and do not publish" }
+            check(directory.isDirectory || directory.mkdirs()) { "Cannot prepare identity storage" }
+            val target = file(appId)
+            val bytes = value.toString().toByteArray(Charsets.UTF_8)
+            val stream = target.startWrite()
+            try {
+                stream.write(bytes)
+                stream.flush()
+                stream.fd.sync() // AtomicFile logs some sync failures instead of propagating them.
+            } catch (failure: Throwable) {
+                target.failWrite(stream)
+                throw failure
+            }
+            // Never call failWrite after finish: it may already have committed the new record.
+            finishRecord(target, stream)
+            val committed = target.openRead().use { it.readBytesBounded(64 * 1024) }
+            check(committed.contentEquals(bytes)) { "Identity record commit was not verified; preserve recovery evidence and do not publish" }
+        } catch (failure: Throwable) { FactoryArtifactAuthority.invalidate(appId); throw failure }
     }
     protected open fun finishRecord(target: AtomicFile, stream: java.io.FileOutputStream) = target.finishWrite(stream)
     companion object {

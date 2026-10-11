@@ -1,10 +1,6 @@
-# Factory guidance factory-guidance-v84 / basics
+# Factory guidance factory-guidance-v85 / basics
 
-Use with the always-loaded Factory core; this reference grants no tools or approvals.
-Historical v77 API/data contracts below are retained with reviewed operation-policy updates; forced host confirmations are superseded. Current v84: 20 capabilities/46 methods; selected string key-value backup is in basics and SQLite backup is in database.
-Sensors and biometrics extend the historical contract in their references, with all six methods UNAVAILABLE in preview.
-Only selected biometric profiles add USE_BIOMETRIC; template/nonbiometric profiles stay zero-permission.
-Historical totals/permission and pending-family statements below describe their original versions.
+Use with core; grants no authority. Current basics/native-services supersede historical latest-only, extra-consent, totals, zero-permission/offline and pending-family claims below. API/data/quotas remain version-scoped.
 
 # APK Factory
 HTML/CSS/JS, not a fixed notes application.
@@ -39,16 +35,22 @@ The configurable operations are exactly:
 - database.backupExport, database.backupImport
 - storage.backupExport, storage.backupImport
 - factory.sign, factory.install, clipboard.write
+- share.text, export.text
+- network.request, network.probe, network.ping
+- notifications.channel, notifications.requestPermission, notifications.show, notifications.cancel
+- speech.voices, speech.speak, speech.stop
 
 ALLOW_ALWAYS advances without a Jarvys approval prompt. ASK asks once for the exact request, then continues without duplicate Use, Play, all-values, sign or install confirmations. DENY prevents that operation's effects. Android document/photo/contact selection, recipient choice when no verified default exists, genuine Android grants, biometric authentication and installer consent remain when required. This is saved application authority, not a bypass for Android security. Capability declarations and backup table/key selections still constrain scope.
 
 Identity is appId plus authenticated certificate, never an Intent label. First signing uses a project-bound new-identity subject; explicit choices transfer to the resulting certificate. Atomic persisted policy revisions invalidate affected pending grants after a default/override change. “Revoke this app’s pending operations” persists revocation without changing future policy. Unreadable or failed policy persistence fails closed. A grant binds one exact request and cannot survive relevant policy revision, lifecycle or identity loss.
 
-New backup protocol v2 authenticates both Binder endpoints and checks live policy before each export write and import commit. Legacy backup protocol v1 remains authenticated, but its final host authorization is the last enforceable checkpoint; older DEX has no later callback. Already-open file descriptors cannot be revoked retroactively, nor can completed writes, clipboard copies, installation commits or recipient copies be undone. New share-file opens recheck authority; an already-open recipient descriptor may remain usable. Never claim cancellation proves rollback or external task closure.
+The generic host authorization provider authenticates the actual caller UID, package, certificate, version, APK hash and retained exact capability scope. A nonce/request/source-bound Binder lease authenticates both endpoints and checks live authority before native effects; pending ASK is not approval. Revocation, process death or a stale source ends the lease. Read-only status does not grant authority. No JavaScript flag, cached grant or Intent label substitutes for these checks.
 
-The latest signed APK receipt still authenticates an installed broker caller. Signing a newer APK can make the previously installed APK unavailable until updated; per-artifact trust history is deferred. Already-generated APKs retain their packaged DEX: rebuild/sign/install an update to obtain new clipboard and backup runtime behavior. No arbitrary compiler is added; a new app packages the precompiled, authenticated DEX unchanged.
+Signed-artifact history retains 64 recent exact receipts plus an older installed matching-certificate artifact when applicable. A retained installed version can remain authorized after a newer version is signed; latest-only admission is superseded. Verification still requires the exact installed hash/version/certificate and that artifact's declared capabilities, never the newest release's broader scope. Missing legacy history permits only existing exact-latest compatibility; damaged history, missing retained entries and unresolved identity fail closed. Retention is bounded, not perpetual trust. Already-generated APKs retain their packaged DEX and need a same-ID/key, increased-version update for new runtime behavior. Packaged precompiled DEX is supported; no Gradle compiler or arbitrary native compilation is added inside Jarvys.
 
-This is a 20-operation policy, not a switch for all 46 SDK methods. share.text, export.text, local storage, ordinary SQLite, haptics, device information, presentation, sensors and biometrics retain their direct runtime contracts. Clipboard uses the authenticated host in the new runtime; preview stays simulated with performed:false and never writes the system clipboard. Byte/file/row/rate/deadline budgets remain technical quotas, not permission settings. Dispatch, chooser return and cleaned-up audio need no invented success attestation; unknown outcomes still require reconciliation and are never replayed automatically.
+New backup protocol v2 authenticates both Binder endpoints and checks live policy before each export write and import commit. Legacy backup protocol v1 remains authenticated, but its final host authorization is the last enforceable checkpoint; older DEX has no later callback. Already-open file descriptors cannot be revoked retroactively, nor can completed writes, clipboard copies, installation commits, emitted speech, transmitted network bytes or recipient copies be undone. New share-file opens recheck authority; an already-open recipient descriptor may remain usable. Never claim cancellation proves rollback or external task closure.
+
+This is a 32-operation policy, not a switch for all 59 SDK methods. share.text and export.text now use the generic host lease before their existing chooser/document flows. Local storage, ordinary SQLite, haptics, device information, presentation, sensors and biometrics retain their direct runtime contracts. Clipboard preview stays simulated with performed:false and never writes the system clipboard. All network, notifications and speech methods reject UNAVAILABLE in preview before effects. Byte/file/row/rate/deadline budgets remain technical quotas, not permission settings. Dispatch, chooser return and cleaned-up audio need no invented success attestation; unknown outcomes still require reconciliation and are never replayed automatically.
 
 ## Selected string key-value backup (v84)
 

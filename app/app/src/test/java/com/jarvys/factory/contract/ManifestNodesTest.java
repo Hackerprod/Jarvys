@@ -52,18 +52,22 @@ public class ManifestNodesTest {
         assertEquals(7, current.nodes.size()); assertEquals(-1,current.nodes.get(0).parentIndex);
         assertEquals(4,current.nodes.get(6).parentIndex);
     }
-    @Test public void all1048576SelectionsEncodeOnlyTheExactSelectivePermissionAndQueryProfiles() throws Exception {
-        assertEquals(20, CapabilityCatalog.NAMES.size());
+    @Test public void all1048576OriginalCapabilitySelectionsRetainFourCurrentManifestShapes() throws Exception {
+        assertEquals(23, CapabilityCatalog.NAMES.size());
+        assertEquals(list("storage", "export", "share", "clipboard", "haptics", "device", "documents", "photos", "audio",
+                "browser", "maps", "phone", "email", "sms", "contacts", "calendar", "database", "presentation", "sensors", "biometrics"),
+                CapabilityCatalog.NAMES.subList(0, 20));
         byte[][] profiles = {
             ManifestXml.encode(plan(Collections.emptyList())), ManifestXml.encode(plan(list("biometrics"))),
             ManifestXml.encode(plan(list("documents"))), ManifestXml.encode(plan(list("biometrics", "documents")))
         };
         int checked = 0;
-        for (int mask=0; mask<(1 << CapabilityCatalog.NAMES.size()); mask++) {
+        // Exhaustive original capability domain; native surface combinations are covered below.
+        for (int mask=0; mask<(1 << 20); mask++) {
             List<String> caps = new ArrayList<>();
-            for (int bit=0; bit<CapabilityCatalog.NAMES.size(); bit++) if ((mask & (1<<bit)) != 0) caps.add(CapabilityCatalog.NAMES.get(bit));
+            for (int bit=0; bit<20; bit++) if ((mask & (1<<bit)) != 0) caps.add(CapabilityCatalog.NAMES.get(bit));
             ManifestPlan p = plan(caps);
-            boolean documents = caps.contains("documents") || caps.contains("browser") || caps.contains("maps") || caps.contains("phone") || caps.contains("email") || caps.contains("sms") || caps.contains("contacts") || caps.contains("calendar") || caps.contains("clipboard");
+            boolean documents = caps.contains("documents") || caps.contains("browser") || caps.contains("maps") || caps.contains("phone") || caps.contains("email") || caps.contains("sms") || caps.contains("contacts") || caps.contains("calendar") || caps.contains("clipboard") || caps.contains("share") || caps.contains("export");
             boolean biometrics = caps.contains("biometrics");
             byte[] encoded = ManifestXml.encode(p);
             assertArrayEquals(profiles[(biometrics ? 1 : 0) + (documents ? 2 : 0)], encoded);
@@ -131,12 +135,113 @@ public class ManifestNodesTest {
         ManifestAudit.read(ManifestXml.encode(ancient)).verify(ancient);
         assertThrows(IOException.class, () -> ManifestAudit.read(ManifestXml.encode(ancient)).verify(current));
     }
+    @Test public void all32NativeSurfaceBasisSelectionsHaveOnlyExactPermissionsVisibilityAndCleartext() throws Exception {
+        List<String> basis = list("biometrics", "documents", "network", "notifications", "speech");
+        java.util.Set<String> shapes = new java.util.HashSet<>();
+        for (int mask = 0; mask < 32; mask++) {
+            List<String> caps = new ArrayList<>();
+            for (int bit = 0; bit < basis.size(); bit++) if ((mask & (1 << bit)) != 0) caps.add(basis.get(bit));
+            ManifestPlan selected = plan(caps);
+            boolean network = caps.contains("network"), notifications = caps.contains("notifications"), speech = caps.contains("speech");
+            boolean broker = caps.contains("documents") || network || notifications || speech;
+            List<String> permissions = new ArrayList<>();
+            if (network) permissions.add(CapabilityCatalog.INTERNET_PERMISSION);
+            if (notifications) permissions.add(CapabilityCatalog.NOTIFICATION_PERMISSION);
+            if (caps.contains("biometrics")) permissions.add(CapabilityCatalog.BIOMETRIC_PERMISSION);
+            byte[] encoded = ManifestXml.encode(selected);
+            ManifestAudit.Document decoded = ManifestAudit.read(encoded); decoded.verify(selected);
+            ManifestAudit.verifyTree(encoded, selected.root);
+            assertEquals(permissions, selected.permissions);
+            assertEquals(broker ? new ArrayList<>(CapabilityCatalog.DOCUMENT_BROKER_PACKAGES) : Collections.emptyList(), selected.queries);
+            assertEquals(speech ? list(CapabilityCatalog.TTS_SERVICE_ACTION) : Collections.emptyList(), selected.queryActions);
+            assertEquals(7 + permissions.size() + (broker ? 3 : 0) + (speech ? 2 : 0), selected.nodes.size());
+            assertEquals(permissions.size() + (broker ? 1 : 0), CapabilityCatalog.manifestContributions(caps).size());
+            assertEquals(broker ? 1L : 0L, decoded.nodes.stream().filter(n -> n.path.equals("manifest/queries")).count());
+            ManifestAudit.Attribute cleartext = decoded.attribute("manifest/application", ManifestPlan.ANDROID, "usesCleartextTraffic");
+            assertEquals(18, cleartext.type); assertEquals(network ? -1 : 0, cleartext.value);
+            assertTrue(selected.features.isEmpty()); assertEquals(list(ManifestPlan.ACTIVITY), selected.exportedComponents);
+            assertEquals(broker, CapabilityCatalog.requiresHostBroker(caps));
+            shapes.add(java.util.Base64.getEncoder().encodeToString(encoded));
+        }
+        assertEquals(18, shapes.size());
+    }
+    @Test public void nativeCatalogAndBrokerRequirementAreClosedImmutableAndValidateTheWholeSelection() {
+        assertEquals(list(CapabilityCatalog.Method.NETWORK_REQUEST, CapabilityCatalog.Method.NETWORK_PROBE,
+                CapabilityCatalog.Method.NETWORK_CANCEL), CapabilityCatalog.CAPABILITIES.get("network").methods);
+        assertEquals(list(CapabilityCatalog.Method.NOTIFICATIONS_STATUS, CapabilityCatalog.Method.NOTIFICATIONS_CHANNEL,
+                CapabilityCatalog.Method.NOTIFICATIONS_SHOW, CapabilityCatalog.Method.NOTIFICATIONS_CANCEL,
+                CapabilityCatalog.Method.NOTIFICATIONS_REQUEST_PERMISSION), CapabilityCatalog.CAPABILITIES.get("notifications").methods);
+        assertEquals(list(CapabilityCatalog.Method.SPEECH_STATUS, CapabilityCatalog.Method.SPEECH_VOICES,
+                CapabilityCatalog.Method.SPEECH_SPEAK, CapabilityCatalog.Method.SPEECH_STOP), CapabilityCatalog.CAPABILITIES.get("speech").methods);
+        List<String> brokerCaps = list("documents", "browser", "maps", "phone", "email", "sms", "contacts", "calendar",
+                "clipboard", "share", "export", "network", "notifications", "speech");
+        for (CapabilityCatalog.Capability capability : CapabilityCatalog.CAPABILITIES.values()) {
+            assertEquals(brokerCaps.contains(capability.name), CapabilityCatalog.requiresHostBroker(list(capability.name)));
+            assertEquals(brokerCaps.contains(capability.name) ? CapabilityCatalog.DOCUMENT_BROKER_PACKAGES : Collections.emptySet(), capability.queries);
+            assertEquals(capability.name.equals("speech") ? Collections.singleton(CapabilityCatalog.TTS_SERVICE_ACTION) : Collections.emptySet(), capability.queryActions);
+            assertThrows(UnsupportedOperationException.class, () -> capability.queryActions.add("android.intent.action.VIEW"));
+        }
+        assertTrue(CapabilityCatalog.CAPABILITIES.get("speech").permissions.isEmpty());
+        assertFalse(CapabilityCatalog.requiresHostBroker(Collections.emptyList()));
+        assertThrows(IllegalArgumentException.class, () -> CapabilityCatalog.requiresHostBroker(list("network", "unknown")));
+        assertThrows(IllegalArgumentException.class, () -> CapabilityCatalog.requiresHostBroker(list("speech", "speech")));
+        assertThrows(IllegalArgumentException.class, () -> CapabilityCatalog.requiresHostBroker(null));
+        assertThrows(UnsupportedOperationException.class, () -> plan(list("speech")).queryActions.clear());
+    }
+    @Test public void historicalContractsDoNotAcquireNativeOrResidualBrokerDeclarations() throws Exception {
+        for (List<String> caps : list(list("export"), list("share"), list("export", "share"),
+                list("biometrics", "clipboard", "export", "share"), list("clipboard", "documents", "share"))) {
+            ManifestPlan current = plan(caps);
+            for (ManifestPlan.Profile profile : list(ManifestPlan.Profile.V2_BEFORE_NATIVE_OPERATIONS,
+                    ManifestPlan.Profile.V1_BEFORE_CLIPBOARD_BROKER)) {
+                List<String> historical = new ArrayList<>(caps); historical.remove("share"); historical.remove("export");
+                if (profile == ManifestPlan.Profile.V1_BEFORE_CLIPBOARD_BROKER) historical.remove("clipboard");
+                ManifestPlan legacy = new ManifestPlan(current.appId, current.label, current.versionCode, current.versionName,
+                        current.iconResourceId, current.backupResourceId, caps, profile);
+                assertArrayEquals(ManifestXml.encode(plan(historical)), ManifestXml.encode(legacy));
+                ManifestAudit.read(ManifestXml.encode(legacy)).verify(legacy);
+                assertTrue(legacy.queryActions.isEmpty());
+                assertEquals(current.capabilities, legacy.capabilities);
+            }
+        }
+        for (ManifestPlan.Profile profile : ManifestPlan.Profile.values()) if (profile != ManifestPlan.Profile.CURRENT)
+            for (String cap : list("network", "notifications", "speech"))
+                assertThrows(IllegalArgumentException.class, () -> new ManifestPlan("org.example.old", "old", 1, "1",
+                        0x7f010000, 0x7f020000, list(cap), profile));
+        ManifestPlan ancient = new ManifestPlan("org.example.old", "old", 1, "1", 0x7f010000, 0x7f020000,
+                list("clipboard", "share", "export"), ManifestPlan.Profile.V1_BEFORE_SAFE_AREA);
+        assertEquals(7, ancient.nodes.size()); assertTrue(ancient.permissions.isEmpty()); assertTrue(ancient.queries.isEmpty());
+        ManifestAudit.read(ManifestXml.encode(ancient)).verify(ancient);
+    }
+    @Test public void speechVisibilityRejectsBroaderIntentsAndNetworkRequiresItsExactBoolean() throws Exception {
+        ManifestPlan speech = plan(list("speech"));
+        for (ManifestNodes.Element extra : list(ManifestNodes.queryIntent("android.intent.action.VIEW", null, null),
+                ManifestNodes.queryIntent(CapabilityCatalog.TTS_SERVICE_ACTION, "text/plain", null))) {
+            List<ManifestNodes.Element> queries = new ArrayList<>(CapabilityCatalog.DOCUMENT_QUERIES.children); queries.add(extra);
+            List<ManifestNodes.Element> root = new ArrayList<>(speech.root.children); root.set(root.size() - 1, ManifestNodes.queries(queries));
+            byte[] wrong = ManifestXml.encodeTree(ManifestNodes.base("manifest", root, speech.root.attributes.toArray(new ManifestPlan.Attribute[0])));
+            assertThrows(IOException.class, () -> ManifestAudit.read(wrong).verify(speech));
+        }
+        ManifestPlan network = plan(list("network"));
+        byte[] encoded = ManifestXml.encode(network); int nameIndex = -1;
+        for (int p = 8; p < encoded.length; p += i32(encoded, p + 4)) if (u16(encoded, p) == 0x180)
+            for (int a = p + 8; a < p + i32(encoded, p + 4); a += 4) if (i32(encoded, a) == 0x010104ec) nameIndex = (a - p - 8) / 4;
+        assertTrue(nameIndex >= 0); boolean checked = false;
+        for (int p = 8; p < encoded.length; p += i32(encoded, p + 4)) if (u16(encoded, p) == 0x102)
+            for (int a = p + 36; a < p + i32(encoded, p + 4); a += 20) if (i32(encoded, a + 4) == nameIndex) {
+                byte[] wrongValue = encoded.clone(); put(wrongValue, a + 16, 0);
+                assertThrows(IOException.class, () -> ManifestAudit.read(wrongValue).verify(network));
+                byte[] wrongType = encoded.clone(); wrongType[a + 15] = 16;
+                assertThrows(IOException.class, () -> ManifestAudit.read(wrongType).verify(network)); checked = true;
+            }
+        assertTrue(checked);
+    }
     @Test public void biometricsHasOnlyTheExactNormalPermissionAndFunctionalApi30Floor() throws Exception {
         CapabilityCatalog.Capability biometrics = CapabilityCatalog.CAPABILITIES.get("biometrics");
         assertNotNull(biometrics); assertEquals(30, biometrics.minimumApi);
         assertEquals(24, CapabilityCatalog.MIN_APP_API);
         assertEquals(1, CapabilityCatalog.SCHEMA_VERSION); assertEquals(2, CapabilityCatalog.SDK_VERSION);
-        assertEquals(46, CapabilityCatalog.METHODS.size());
+        assertEquals(58, CapabilityCatalog.METHODS.size());
         assertEquals(list(CapabilityCatalog.Method.BIOMETRICS_AVAILABILITY,
                 CapabilityCatalog.Method.BIOMETRICS_AUTHENTICATE, CapabilityCatalog.Method.BIOMETRICS_CANCEL), biometrics.methods);
         assertEquals(Collections.singleton(CapabilityCatalog.BIOMETRIC_PERMISSION), biometrics.permissions);
@@ -157,7 +262,8 @@ public class ManifestNodesTest {
                 current.versionCode, current.versionName, current.iconResourceId, current.backupResourceId,
                 current.capabilities, ManifestPlan.Profile.V1_BEFORE_SAFE_AREA));
         for (CapabilityCatalog.Capability capability : CapabilityCatalog.CAPABILITIES.values()) if (capability != biometrics) {
-            assertEquals(24, capability.minimumApi); assertTrue(capability.permissions.isEmpty());
+            assertEquals(24, capability.minimumApi);
+            if (!capability.name.equals("network") && !capability.name.equals("notifications")) assertTrue(capability.permissions.isEmpty());
         }
     }
     @Test public void biometricPermissionConstructionRejectsAllBroaderOrDifferentProductionDeclarations() throws Exception {
@@ -375,8 +481,8 @@ public class ManifestNodesTest {
 
     @Test public void storageBackupExtendsExistingCapabilityWithoutManifestAuthority() {
         CapabilityCatalog.Capability storage = CapabilityCatalog.CAPABILITIES.get("storage");
-        assertEquals(20, CapabilityCatalog.NAMES.size());
-        assertEquals(46, CapabilityCatalog.METHODS.size());
+        assertEquals(23, CapabilityCatalog.NAMES.size());
+        assertEquals(58, CapabilityCatalog.METHODS.size());
         assertEquals(list(CapabilityCatalog.Method.STORAGE_GET, CapabilityCatalog.Method.STORAGE_SET,
                 CapabilityCatalog.Method.STORAGE_REMOVE, CapabilityCatalog.Method.STORAGE_LIST,
                 CapabilityCatalog.Method.STORAGE_BACKUP_EXPORT, CapabilityCatalog.Method.STORAGE_BACKUP_IMPORT), storage.methods);

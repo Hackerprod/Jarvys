@@ -26,7 +26,7 @@ public final class PerceptionEngine {
     }
 
     public ScreenData getScreenData(boolean skipSettling, CancellationToken token) {
-        final long epoch = MemoryUiAutomationGuard.captureAutomationEpoch();
+        final MemoryUiAutomationGuard.AutomationEpoch epoch = MemoryUiAutomationGuard.captureAutomationEpoch(accessibility);
         token.throwIfCancelled();
         if (!skipSettling) cancellableDelay(400L, token);
 

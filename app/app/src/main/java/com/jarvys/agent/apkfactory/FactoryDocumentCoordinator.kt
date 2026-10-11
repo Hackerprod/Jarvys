@@ -182,26 +182,32 @@ internal class FactoryDocumentCoordinator(context: Context, private val policy: 
         internal fun verifyInstalled(context: Context, appId: String, requiredCapabilities: Set<String> = setOf("documents")): Proof {
             require(context.packageName in HOSTS && appId !in HOSTS)
             val pm = context.packageManager
-            fun requireOnlyHost() {
-                for (host in HOSTS - context.packageName) {
-                    val absent = try { pm.getApplicationInfo(host, 0); false } catch (_: PackageManager.NameNotFoundException) { true }
-                    check(absent) { "Both Jarvys hosts are installed; document access is disabled" }
-                }
-            }
-            requireOnlyHost()
             val before = installedSnapshot(pm, appId)
             // Reject unknown/unsigned callers before spending I/O on their installed APK.
             val evidence = FactorySigningIdentity(context).state(appId)
-            verifyEvidence(appId, before.certificate, evidence.lastApkSha256 ?: error("Unknown signed APK"), before.version, evidence, requiredCapabilities)
+            FactorySignedArtifactHistory.authenticateIdentity(appId, before.certificate, evidence)
             val file = File(before.sourceDir)
             val originalLength = file.length()
             require(file.isFile && originalLength in 1..MAX_APK_BYTES)
             val apk = file.inputStream().use { hashApk(it) }
             require(file.length() == originalLength) { "Installed APK changed during verification" }
             require(evidence == FactorySigningIdentity(context).state(appId)) { "Signing evidence changed during verification" }
-            requireOnlyHost()
             require(before == installedSnapshot(pm, appId)) { "Installed package changed during verification" }
-            return verifyEvidence(appId, before.certificate, apk, before.version, evidence, requiredCapabilities)
+            return FactorySignedArtifactHistory(context).verify(appId, before.certificate, apk, before.version, evidence, requiredCapabilities)
+        }
+        /** Worker-thread only: issue a lock-free live token after rechecking the exact receipt. */
+        internal fun captureTrustedAuthority(context: Context, proof: Proof, requiredCapabilities: Set<String>): FactoryArtifactAuthority.Token = synchronized(FactorySigningIdentity.LOCK) {
+            require(context.packageName in HOSTS && proof.appId !in HOSTS)
+            val evidence = FactorySigningIdentity(context).state(proof.appId)
+            FactorySignedArtifactHistory(context).capture(proof, evidence, requiredCapabilities)
+        }
+        /** Worker-thread receipt recheck; never call this disk/key path from a live UI or stream CHECK. */
+        internal fun requireTrustedProof(context: Context, proof: Proof, requiredCapabilities: Set<String>) = synchronized(FactorySigningIdentity.LOCK) {
+            require(context.packageName in HOSTS && proof.appId !in HOSTS)
+            val evidence = FactorySigningIdentity(context).state(proof.appId)
+            check(FactorySignedArtifactHistory(context).verify(proof.appId, proof.certificate, proof.apk, proof.version, evidence, requiredCapabilities) == proof) {
+                "Signed artifact authority changed"
+            }
         }
         private const val MAX_APK_BYTES = 256L * 1024 * 1024
         private data class InstalledSnapshot(val sourceDir: String, val certificate: String, val version: Long, val uid: Int, val updated: Long)

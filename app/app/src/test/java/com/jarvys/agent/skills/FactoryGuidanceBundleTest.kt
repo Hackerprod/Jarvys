@@ -19,15 +19,15 @@ class FactoryGuidanceBundleTest {
     }
     @Test fun foregroundSensorsExtendTheVersionedCatalogWithoutChangingOriginalBudgets() {
         val bundle = load()
-        assertEquals("factory-guidance-v84", bundle.version)
+        assertEquals("factory-guidance-v85", bundle.version)
         assertEquals(listOf("basics", "documents-media", "external-actions", "contacts-calendar",
-            "database", "presentation", "lifecycle", "sensors", "biometrics", "local-ui"), FactoryGuidanceBundle.NAMES)
-        assertEquals(10, bundle.resources.size)
+            "database", "presentation", "lifecycle", "sensors", "biometrics", "local-ui", "native-services"), FactoryGuidanceBundle.NAMES)
+        assertEquals(11, bundle.resources.size)
         assertEquals(8192, FactoryGuidanceBundle.MAX_CORE_BYTES)
         assertEquals(16384, FactoryGuidanceBundle.MAX_RESOURCE_BYTES)
         assertEquals(65536, FactoryGuidanceBundle.MAX_TOTAL_BYTES)
         assertTrue("Keep headroom below the complete core limit", core().toByteArray().size <= 7680)
-        assertTrue(core().contains("20 capabilities / 46 methods"))
+        assertTrue(core().contains("23 capabilities / 59 methods"))
         assertTrue(core().contains("- sensors:"))
         val sensors = bundle.resources.getValue("sensors")
         for (required in listOf("sensors.list()", "sensors.capture({kind,durationMs,intervalMs,maxSamples})",
@@ -66,7 +66,7 @@ class FactoryGuidanceBundleTest {
         assertThrows(IllegalArgumentException::class.java) { load { path, bytes -> if (path.endsWith("database.md")) ByteArray(16385) { 65 } else bytes } }
         assertThrows(IllegalArgumentException::class.java) { load { path, bytes -> if (path.endsWith("database.md")) byteArrayOf(0xc3.toByte()) else bytes } }
         assertThrows(java.io.IOException::class.java) { FactoryGuidanceBundle.load(core()) { throw java.io.IOException("missing") } }
-        assertThrows(IllegalArgumentException::class.java) { FactoryGuidanceBundle.load(core().replace("factory-guidance-v84", "factory-guidance-v77")) { File(root, it).inputStream() } }
+        assertThrows(IllegalArgumentException::class.java) { FactoryGuidanceBundle.load(core().replace("factory-guidance-v85", "factory-guidance-v77")) { File(root, it).inputStream() } }
         assertThrows(IllegalArgumentException::class.java) { FactoryGuidanceBundle.load(core() + "x".repeat(8192)) { File(root, it).inputStream() } }
     }
     @Test fun exactResourceBudgetWorksButAggregateBudgetCannotBeBypassedWithValidHashes() {
@@ -76,6 +76,7 @@ class FactoryGuidanceBundleTest {
             val hashes = org.json.JSONObject()
             for (name in FactoryGuidanceBundle.NAMES) {
                 var text = File(root, "$prefix$name.md").readText()
+                if (!all && name != "basics") text = "# Factory guidance ${FactoryGuidanceBundle.VERSION} / $name\n\nBudget fixture.\n"
                 if (all || name == "basics") text += "x".repeat(size - text.toByteArray().size)
                 val bytes = text.toByteArray()
                 assets["$prefix$name.md"] = bytes
@@ -84,7 +85,7 @@ class FactoryGuidanceBundleTest {
             assets[prefix + "manifest.json"] = org.json.JSONObject().put("version", FactoryGuidanceBundle.VERSION).put("sha256", hashes).toString().toByteArray()
             return FactoryGuidanceBundle.load(core()) { ByteArrayInputStream(assets.getValue(it)) }
         }
-        // Pad the largest reference so the exact per-resource case remains below the total limit.
+        // Isolate the per-resource boundary with minimal sibling fixtures; test aggregate overflow separately.
         assertEquals(16384, synthetic(16384, false).resources.getValue("basics").toByteArray().size)
         val aggregate = assertThrows(IllegalArgumentException::class.java) { synthetic(16384, true) }
         assertEquals("Factory guidance bundle exceeds its byte budget", aggregate.message)
@@ -135,7 +136,7 @@ class FactoryGuidanceBundleTest {
 
     @Test fun unknownOrMissingManifestEntriesAndVersionMismatchAreRejected() {
         for (mutate in listOf<(String) -> String>(
-            { it.replace("factory-guidance-v84", "stale") },
+            { it.replace("factory-guidance-v85", "stale") },
             { it.replace("\"basics\":", "\"../basics\":") },
             { it.replace("\"version\":", "\"unknown\":") })) {
             assertThrows(Exception::class.java) { load { path, bytes -> if (path.endsWith("manifest.json")) mutate(bytes.toString(Charsets.UTF_8)).toByteArray() else bytes } }
@@ -152,7 +153,7 @@ class FactoryGuidanceBundleTest {
         }
         assertTrue(documents.contains("default empty disables"))
         assertTrue(documents.contains("untouched read handle"))
-        assertTrue(core().contains("20 capabilities / 46 methods"))
+        assertTrue(core().contains("23 capabilities / 59 methods"))
         assertTrue(core().contains("dataBackup.tables defaults empty"))
     }
 
@@ -181,14 +182,14 @@ class FactoryGuidanceBundleTest {
         val documentedOperations = policy.lineSequence().filter { it.startsWith("- ") }
             .flatMap { it.removePrefix("- ").split(", ").asSequence() }.toList()
         val implemented = com.jarvys.agent.apkfactory.FactoryOperationPolicy.Operation.entries.map { it.id }
-        assertEquals(20, implemented.size)
+        assertEquals(32, implemented.size)
         assertEquals(implemented.toSet(), documentedOperations.toSet())
-        assertEquals(20, documentedOperations.size)
+        assertEquals(32, documentedOperations.size)
         for (required in listOf("starts with ALLOW_ALWAYS", "ASK asks once", "DENY prevents",
             "appId plus authenticated certificate", "project-bound", "persisted policy revisions",
             "Already-open file descriptors cannot be revoked retroactively", "protocol v2", "protocol v1",
-            "before each export write and import commit", "last enforceable checkpoint", "latest signed APK receipt",
-            "per-artifact trust history is deferred", "share.text", "export.text", "local storage", "haptics",
+            "before each export write and import commit", "last enforceable checkpoint", "64 recent exact receipts",
+            "latest-only admission is superseded", "retained exact capability scope", "nonce/request/source-bound Binder lease", "share.text", "export.text", "Local storage", "haptics",
             "technical quotas", "Coding autonomy", "performed:false", "biometric authentication", "installer consent")) {
             assertTrue("Missing policy boundary: $required", policy.contains(required))
         }
@@ -198,6 +199,36 @@ class FactoryGuidanceBundleTest {
         assertTrue(core().contains("per-app arbitrary native compilation is not"))
         assertTrue(core().contains("Clipboard preview is simulated with performed:false"))
         assertFalse(core().contains("separate in-app approval"))
+    }
+
+
+    @Test fun nativeServicesDocumentActualPlatformEffectsAndNoSyntheticGuarantees() {
+        val native = load().resources.getValue("native-services")
+        assertTrue(core().contains("- native-services:"))
+        assertTrue(core().contains("Final global suite/audit/APK once"))
+        for (required in listOf("network.request", "network.probe", "network.ping", "network.cancel",
+            "http_response_headers", "icmp:false", "protocol:\"icmp\"", "summaryParsed", "utility_summary",
+            "/system/bin/ping", "never shell execution", "no support guarantee", "packetTimeoutMs", "65507", "outputTruncated",
+            "platform_denied", "INTERNET is process-wide", "usesCleartextTraffic=true", "TLS", "hostname",
+            "notifications.status", "channel({id,name,description?,importance?})", "show({id,channelId,title,body,priority?})",
+            "POST_NOTIFICATIONS", "requestPermission({})", "no schedule", "2147483647", "channelCreated",
+            "speech.status", "voices({engine?})", "speak({text,language?,engine?,voice?,rate?,pitch?,volume?})",
+            "android.intent.action.TTS_SERVICE", "surrogate pairs", "engine_reported_completion",
+            "networkMayBeUsed:true", "audibilityVerified:false", "android_preference_may_fallback", "emittedAudioCannotBeRecalled",
+            "UNAVAILABLE in preview before effects", "same ID/key", "positive finite", "262144")) {
+            assertTrue("Missing native service contract: $required", native.contains(required, true))
+        }
+        val policy = load().resources.getValue("basics")
+        for (required in listOf("32-operation policy", "64 recent exact receipts", "latest-only admission is superseded",
+            "damaged history", "No JavaScript flag", "share.text and export.text now use the generic host lease")) {
+            assertTrue("Missing native authority boundary: $required", policy.contains(required))
+        }
+        for (path in listOf("../APK_FACTORY.md", "../apk-runtime/docs/RUNTIME.md")) {
+            val documented = File(path).readText()
+            assertTrue(documented.contains("## Native network, notifications and speech (v85)"))
+            assertTrue(documented.contains("23 capabilities / 59"))
+            assertTrue(documented.contains("This document claims no completed validation or release"))
+        }
     }
 
 }

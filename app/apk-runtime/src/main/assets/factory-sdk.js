@@ -1,4 +1,4 @@
-/* Jarvys Factory SDK v2. Offline, Promise-only, capability-checked by the native runtime. */
+/* Jarvys Factory SDK v2. Promise-only, capability-checked by the native runtime. */
 (function (global) {
   'use strict';
   if (Object.prototype.hasOwnProperty.call(global, 'Jarvys')) return;
@@ -45,7 +45,7 @@
       if (!bridge || typeof bridge.postMessage !== 'function') {
         reject(failure('BRIDGE_UNAVAILABLE', 'Open this application in its generated Android APK.')); return;
       }
-      var cancellation = method === 'sensors.cancel' || method === 'biometrics.cancel' || method === 'database.cancel' || method === 'documents.cancel';
+      var cancellation = method === 'sensors.cancel' || method === 'biometrics.cancel' || method === 'database.cancel' || method === 'documents.cancel' || method === 'network.cancel' || method === 'speech.stop';
       var controlPending = false;
       if (cancellation) pending.forEach(function (entry) { if (entry.method === method) controlPending = true; });
       if (pending.size >= (cancellation ? 20 : 16) || controlPending) {
@@ -59,6 +59,8 @@
       } catch (error) { reject(error.code ? error : failure('INVALID_ARGUMENT', 'Arguments must be serializable JSON.')); return; }
       var timeout = /^(export|clipboard|share)\./.test(method) || /^(documents\.(open|create)|photos\.(pick|capture)|audio\.play|browser\.open|maps\.open|phone\.dial|email\.compose|sms\.compose|contacts\.pick|calendar\.insert)$/.test(method) ? 600000 : 30000;
       if (method === 'biometrics.authenticate') timeout = 90000;
+      if (/^(network|notifications)\./.test(method)) timeout = 420000;
+      if (/^speech\./.test(method)) timeout = method === 'speech.speak' ? 86400000 : 420000;
       var backup = method === 'database.backupExport' || method === 'database.backupImport' ||
         method === 'storage.backupExport' || method === 'storage.backupImport';
       if (backup) timeout = 310000;
@@ -77,6 +79,25 @@
   }
   var api = Object.freeze({
     runtime: Object.freeze({ info: function () { return call('runtime.info', {}); } }),
+    network: Object.freeze({
+      request: function (options) { return call('network.request', options); },
+      probe: function (options) { return call('network.probe', options); },
+      ping: function (options) { return call('network.ping', options); },
+      cancel: function (options) { return call('network.cancel', options === undefined ? {} : options); }
+    }),
+    notifications: Object.freeze({
+      status: function (options) { return call('notifications.status', options === undefined ? {} : options); },
+      channel: function (options) { return call('notifications.channel', options); },
+      show: function (options) { return call('notifications.show', options); },
+      cancel: function (options) { return call('notifications.cancel', options); },
+      requestPermission: function (options) { return call('notifications.requestPermission', options === undefined ? {} : options); }
+    }),
+    speech: Object.freeze({
+      status: function (options) { return call('speech.status', options === undefined ? {} : options); },
+      voices: function (options) { return call('speech.voices', options === undefined ? {} : options); },
+      speak: function (options) { return call('speech.speak', options); },
+      stop: function (options) { return call('speech.stop', options === undefined ? {} : options); }
+    }),
     storage: Object.freeze({
       get: function (key) { return call('storage.get', { key: key }); },
       set: function (key, value) { return call('storage.set', { key: key, value: value }); },

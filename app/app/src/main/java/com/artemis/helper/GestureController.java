@@ -49,7 +49,7 @@ public final class GestureController {
     }
 
     public static boolean doubleTap(AccessibilityService service, float x, float y, long timeoutMs) {
-        final long epoch = MemoryUiAutomationGuard.captureAutomationEpoch();
+        final MemoryUiAutomationGuard.AutomationEpoch epoch = MemoryUiAutomationGuard.captureAutomationEpoch(service);
         ActionGate gate = action -> MemoryUiAutomationGuard.runAutomated(epoch, action);
         if (!tap(service, x, y, 60L, timeoutMs, gate)) return false;
         try {
@@ -104,7 +104,7 @@ public final class GestureController {
      * IME does, which is the contract the host's send_text has always had.
      */
     public static boolean setText(AccessibilityService service, String text, boolean append) {
-        final long automationEpoch = MemoryUiAutomationGuard.captureAutomationEpoch();
+        final MemoryUiAutomationGuard.AutomationEpoch automationEpoch = MemoryUiAutomationGuard.captureAutomationEpoch(service);
         AccessibilityNodeInfo inputNode = HierarchyDumper.findInputNode(service);
         if (inputNode == null) {
             Log.w(TAG, "No editable/focused input node found for setText");
@@ -143,7 +143,7 @@ public final class GestureController {
     }
 
     public static boolean performGlobalAction(AccessibilityService service, String actionName) {
-        final long automationEpoch = MemoryUiAutomationGuard.captureAutomationEpoch();
+        final MemoryUiAutomationGuard.AutomationEpoch automationEpoch = MemoryUiAutomationGuard.captureAutomationEpoch(service);
         if (actionName == null) return false;
         int actionId;
         String lower = actionName.toLowerCase();
@@ -206,7 +206,7 @@ public final class GestureController {
             long timeoutMs,
             final ActionGate gate
     ) {
-        final long automationEpoch = MemoryUiAutomationGuard.captureAutomationEpoch();
+        final MemoryUiAutomationGuard.AutomationEpoch automationEpoch = MemoryUiAutomationGuard.captureAutomationEpoch(service);
         final CountDownLatch latch = new CountDownLatch(1);
         final AtomicBoolean result = new AtomicBoolean(false);
 
@@ -282,7 +282,7 @@ public final class GestureController {
      * set the clip here, then KEYCODE_PASTE over adb.
      */
     public static boolean setClipboard(final AccessibilityService service, final String text) {
-        final long automationEpoch = MemoryUiAutomationGuard.captureAutomationEpoch();
+        final MemoryUiAutomationGuard.AutomationEpoch automationEpoch = MemoryUiAutomationGuard.captureAutomationEpoch(service);
         final CountDownLatch latch = new CountDownLatch(1);
         final AtomicBoolean ok = new AtomicBoolean(false);
         MAIN_HANDLER.post(new Runnable() {

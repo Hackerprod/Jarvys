@@ -1,8 +1,6 @@
-# Factory guidance factory-guidance-v84 / local-ui
+# Factory guidance factory-guidance-v85 / local-ui
 
-Pure.css 3.0.0 is bundled in every new generated APK and exact Factory preview. It is CSS,
-not a native capability or JS API. Inspect `localUiLibraries` for paths, bytes, licenses and
-SHA-256. SDK2/schema1, 20 capabilities/42 methods remain unchanged.
+Use with core; grants no authority. Current basics/native-services supersede historical latest-only, extra-consent, totals, zero-permission/offline and pending-family claims below. API/data/quotas remain version-scoped.
 
 In HTML link /factory-ui/pure-3.0.0/pure-min.css, then
 /factory-ui/pure-3.0.0/grids-responsive-min.css, then your own local stylesheet.

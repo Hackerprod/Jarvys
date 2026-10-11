@@ -90,6 +90,11 @@ public final class TemplateApk {
         validateSpec(expected);
         return inspectFiles(readZip(apk,true), expected, ManifestPlan.Profile.CURRENT);
     }
+    /** Exact closed-v2-clipboard-broker receipt layout, before native-operation declarations. */
+    public static ManifestInfo verifyExistingClosedV2(byte[] apk, Spec expected) throws IOException {
+        validateSpec(expected);
+        return inspectFiles(readZip(apk,true), expected, ManifestPlan.Profile.V2_BEFORE_NATIVE_OPERATIONS);
+    }
     /** Exact closed-v1-current receipt layout: safe-area attributes, before clipboard broker queries. */
     public static ManifestInfo verifyExistingClosedV1(byte[] apk, Spec expected) throws IOException {
         validateSpec(expected);
@@ -138,11 +143,13 @@ public final class TemplateApk {
         // capabilities of the APK. Explicit expectations always override this inspection hint.
         List<String> inferredCapabilities=new ArrayList<>();
         if(expected==null) {
-            if(!info.permissions.isEmpty()) {
-                check(info.permissions.equals(Collections.singletonList(CapabilityCatalog.BIOMETRIC_PERMISSION)),
-                        "Unapproved factory permission profile");
-                inferredCapabilities.add("biometrics");
+            for(String permission:info.permissions) {
+                if(CapabilityCatalog.BIOMETRIC_PERMISSION.equals(permission)) inferredCapabilities.add("biometrics");
+                else if(CapabilityCatalog.INTERNET_PERMISSION.equals(permission)) inferredCapabilities.add("network");
+                else if(CapabilityCatalog.NOTIFICATION_PERMISSION.equals(permission)) inferredCapabilities.add("notifications");
+                else throw new IOException("Unapproved factory permission profile");
             }
+            if(baseXml.speechQuery) inferredCapabilities.add("speech");
             if(!baseXml.queryPackages.isEmpty()) inferredCapabilities.add("documents");
         }
         ManifestPlan plan;
@@ -205,7 +212,8 @@ public final class TemplateApk {
         ManifestInfo old=inspectFiles(files,null,ManifestPlan.Profile.CURRENT);
         check(TEMPLATE_PACKAGE.equals(old.appId) && "FACTORY_APP_LABEL".equals(old.label) &&
                 "FACTORY_VERSION".equals(old.versionName) && old.versionCode==1,"Template markers differ");
-        check(ACTIVITY.equals(old.activityClass) && old.permissions.isEmpty(),"Unexpected runtime or permissions");
+        check(ACTIVITY.equals(old.activityClass) && old.permissions.isEmpty() && old.plan.queries.isEmpty()
+                && old.plan.queryActions.isEmpty(),"Unexpected runtime, permissions or visibility declarations");
         String iconPath=resolveIconPath(required(files,"resources.arsc"),old.iconResourceId);
         check(files.containsKey(iconPath),"Referenced factory icon is missing");
         ManifestPlan expectedPlan=new ManifestPlan(spec.appId,spec.label,spec.versionCode,spec.versionName,
@@ -399,6 +407,7 @@ public final class TemplateApk {
         Attr appId,label,versionCode,versionName,icon,activity;
         final List<String> permissions=new ArrayList<>();
         final Set<String> queryPackages=new java.util.LinkedHashSet<>();
+        boolean speechQuery;
         Xml(byte[] b) throws IOException {
             check(b.length<=1024*1024,"Manifest too large"); Chunk outer=new Chunk(b,0,b.length);
             check(outer.type==3 && outer.header==8 && outer.size==b.length,"Invalid binary XML");
@@ -427,12 +436,16 @@ public final class TemplateApk {
                 check(Arrays.asList("manifest","manifest/uses-sdk","manifest/uses-permission","manifest/application",
                     "manifest/application/activity","manifest/application/activity/intent-filter",
                     "manifest/application/activity/intent-filter/action","manifest/application/activity/intent-filter/category",
-                    "manifest/queries","manifest/queries/package").contains(path),"Unsupported template component "+path);
-                if (!path.equals("manifest/queries/package")) check(seen.add(path),"Duplicate template element "+path);
+                    "manifest/queries","manifest/queries/package","manifest/queries/intent","manifest/queries/intent/action").contains(path),"Unsupported template component "+path);
+                if (!path.equals("manifest/queries/package") && !path.equals("manifest/uses-permission")) check(seen.add(path),"Duplicate template element "+path);
                 check(u16(n,24)==20 && u16(n,26)==20 && c.size==36+20*u16(n,28),"Unsupported attribute layout");
                 Map<String,Attr> attrs=new LinkedHashMap<>();
                 for(int a=36;a<n.length;a+=20) { Attr v=new Attr(n,a,pool); check(attrs.put(v.ns+"|"+v.name,v)==null,"Duplicate attribute"); }
-                if(path.equals("manifest/queries")) check(attrs.isEmpty(),"Queries cannot have attributes");
+                if(path.equals("manifest/queries") || path.equals("manifest/queries/intent")) check(attrs.isEmpty(),"Query containers cannot have attributes");
+                if(path.equals("manifest/queries/intent/action")) {
+                    check(attrs.size()==1 && CapabilityCatalog.TTS_SERVICE_ACTION.equals(attr(attrs,ANDROID,"name").text()),"Unapproved service visibility action");
+                    speechQuery=true;
+                }
                 if(path.equals("manifest/queries/package")) {
                     check(attrs.size()==1,"Query package must have exactly one attribute");
                     String host=attr(attrs,ANDROID,"name").text();
@@ -440,16 +453,22 @@ public final class TemplateApk {
                 }
                 if(path.equals("manifest")) { appId=attr(attrs,"","package"); versionCode=attr(attrs,ANDROID,"versionCode"); versionName=attr(attrs,ANDROID,"versionName"); }
                 if(path.equals("manifest/uses-sdk")) { check(attr(attrs,ANDROID,"minSdkVersion").number()>=24,"Unsupported min SDK"); }
-                if(path.equals("manifest/uses-permission")) permissions.add(attr(attrs,ANDROID,"name").text());
+                if(path.equals("manifest/uses-permission")) {
+                    String permission=attr(attrs,ANDROID,"name").text();
+                    check(attrs.size()==1 && Arrays.asList(CapabilityCatalog.BIOMETRIC_PERMISSION,CapabilityCatalog.INTERNET_PERMISSION,
+                            CapabilityCatalog.NOTIFICATION_PERMISSION).contains(permission) && !permissions.contains(permission),"Unapproved or duplicate permission");
+                    permissions.add(permission);
+                }
                 if(path.equals("manifest/application")) {
                     label=attr(attrs,ANDROID,"label"); icon=attr(attrs,ANDROID,"icon"); check(icon.type==1,"Icon must be a resource reference");
                     check(!attrs.containsKey(ANDROID+"|roundIcon"),"Unexpected round icon");
                     Attr debug=attrs.get(ANDROID+"|debuggable"); check(debug==null||attr(attrs,ANDROID,"debuggable").number()==0,"Debuggable template");
                     check(attr(attrs,ANDROID,"allowBackup").number()==0,"Backup-enabled template");
-                    check(attr(attrs,ANDROID,"usesCleartextTraffic").number()==0,"Cleartext-enabled template");
+                    int cleartext=attr(attrs,ANDROID,"usesCleartextTraffic").number();
+                    check(cleartext==0 || cleartext==-1,"Invalid cleartext setting");
                 }
                 if(path.equals("manifest/application/activity")) { activity=attr(attrs,ANDROID,"name"); check(attr(attrs,ANDROID,"exported").number()!=0,"Missing exported launcher"); }
-                if(path.endsWith("/action")) check("android.intent.action.MAIN".equals(attr(attrs,ANDROID,"name").text()),"Unexpected action");
+                if(path.equals("manifest/application/activity/intent-filter/action")) check("android.intent.action.MAIN".equals(attr(attrs,ANDROID,"name").text()),"Unexpected action");
                 if(path.endsWith("/category")) check("android.intent.category.LAUNCHER".equals(attr(attrs,ANDROID,"name").text()),"Unexpected category");
             }
             check(!seen.contains("manifest/queries") || queryPackages.equals(CapabilityCatalog.DOCUMENT_BROKER_PACKAGES),

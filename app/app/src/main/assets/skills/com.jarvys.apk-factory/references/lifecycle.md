@@ -1,10 +1,6 @@
-# Factory guidance factory-guidance-v84 / lifecycle
+# Factory guidance factory-guidance-v85 / lifecycle
 
-Use with the always-loaded Factory core; this reference grants no tools or approvals.
-Historical v77 API/data contracts below are retained with reviewed operation-policy updates; forced host confirmations are superseded. Current v84: 20 capabilities/46 methods; selected string key-value backup is in basics and SQLite backup is in database.
-Sensors and biometrics extend the historical contract in their references, with all six methods UNAVAILABLE in preview.
-Only selected biometric profiles add USE_BIOMETRIC; template/nonbiometric profiles stay zero-permission.
-Historical totals/permission and pending-family statements below describe their original versions.
+Use with core; grants no authority. Current basics/native-services supersede historical latest-only, extra-consent, totals, zero-permission/offline and pending-family claims below. API/data/quotas remain version-scoped.
 
 ## Project/build/sign
 factory.json: exact schemaVersion=1, appId/name, positive versionCode, versionName, supported capabilities, relative webDir/icon; entry index.html. Inspect identity/branding/type/size/path limits.

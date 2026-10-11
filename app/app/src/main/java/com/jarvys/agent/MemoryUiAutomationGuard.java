@@ -1,5 +1,7 @@
 package com.jarvys.agent;
 
+import android.content.Context;
+
 /** Process-local boundary between automated device tools and user-only memory surfaces.
  * Native callers must acquire a lease before rendering private content and gate every native action.
  * An interrupted in-flight automated action permanently taints that surface until it is closed.
@@ -41,15 +43,95 @@ public final class MemoryUiAutomationGuard {
 
     /** Remains open until actual completion/cancellation, even if the waiting tool times out. */
     public static final class Action implements AutoCloseable {
+        private final AutoCloseable peer;
         private boolean closed;
-        private Action() { }
+        private Action() { this(null); }
+        private Action(AutoCloseable peer) { this.peer = peer; }
         @Override public void close() {
             synchronized (MONITOR) {
                 if (closed) return;
                 closed = true;
                 activeActions--;
             }
+            // Peer IPC must never run while the local guard monitor is held.
+            if (peer != null) try { peer.close(); } catch (Exception ignored) { }
         }
+    }
+
+    /** Immutable local and alternate-host observation. A new capture never refreshes queued work. */
+    public static final class AutomationEpoch {
+        private final long local;
+        private final PeerUiAutomationClient.Proof peer;
+        private AutomationEpoch(long local, PeerUiAutomationClient.Proof peer) {
+            this.local = local;
+            this.peer = peer;
+        }
+    }
+
+    /** Device entry points require proof from every installed alternate Jarvys host. */
+    public static AutomationEpoch captureAutomationEpoch(Context context) {
+        long local = captureAutomationEpoch();
+        PeerUiAutomationClient.Proof peer = PeerUiAutomationClient.capture(context);
+        AutomationEpoch captured = new AutomationEpoch(local, peer);
+        requireAutomationEpoch(captured);
+        return captured;
+    }
+
+    static AutomationEpoch captureWithProof(PeerUiAutomationClient.Proof peer) {
+        AutomationEpoch captured = new AutomationEpoch(captureAutomationEpoch(), peer);
+        requireAutomationEpoch(captured);
+        return captured;
+    }
+
+    public static boolean isAutomationEpochValid(AutomationEpoch captured) {
+        return captured != null && isAutomationEpochValid(captured.local)
+                && captured.peer.isValid() && isAutomationEpochValid(captured.local);
+    }
+
+    public static void requireAutomationEpoch(AutomationEpoch captured) {
+        if (!isAutomationEpochValid(captured)) throw blocked();
+    }
+
+    public static boolean runAutomated(AutomationEpoch captured, Runnable action) {
+        if (action == null) throw new IllegalArgumentException("Action is required");
+        if (!isAutomationEpochValid(captured)) return false;
+        Action lease;
+        try { lease = beginAsyncAction(captured); }
+        catch (IllegalStateException unavailable) { return false; }
+        try { action.run(); }
+        finally { lease.close(); }
+        return true;
+    }
+
+    /** Keep both hosts' action leases until the actual terminal gesture callback, never a wait timeout. */
+    public static Action beginAsyncAction(AutomationEpoch captured) {
+        if (captured == null) throw blocked();
+        Action local = beginAsyncAction(captured.local);
+        AutoCloseable remote = null;
+        try {
+            remote = captured.peer.beginAction();
+            requireAutomationEpoch(captured);
+            final AutoCloseable ownedRemote = remote;
+            // Replace the temporary local lease without exposing an idle gap.
+            synchronized (MONITOR) { activeActions++; }
+            return new Action(ownedRemote);
+        } catch (RuntimeException failure) {
+            if (remote != null) try { remote.close(); } catch (Exception ignored) { }
+            throw blocked();
+        } finally { local.close(); }
+    }
+
+    /** Provider-only endpoints. These must remain strictly local to avoid recursive peer IPC. */
+    public static long[] localSnapshot() {
+        synchronized (MONITOR) { return new long[] {epoch, protectedSurfaces == 0 ? 0L : 1L}; }
+    }
+
+    public static boolean localIsAutomationEpochValid(long capturedEpoch) {
+        return isAutomationEpochValid(capturedEpoch);
+    }
+
+    public static Action localBeginAsyncAction(long capturedEpoch) {
+        return beginAsyncAction(capturedEpoch);
     }
 
     public static Lease enterProtectedSurface() {

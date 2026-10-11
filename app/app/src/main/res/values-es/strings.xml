@@ -1425,4 +1425,7 @@ Se desconoce cómo terminaron. No se repiten automáticamente. Revisa los cambio
     <string name="factory_calendar_timezone">Zona horaria solicitada</string>
     <string name="factory_calendar_all_day">Día completo solicitado</string>
     <string name="factory_calendar_description">Descripción</string>
+    <string name="factory_operation_review_title">¿Permitir esta operación?</string>
+    <string name="factory_operation_review_disclosure">Revisa la solicitud exacta de esta app instalada de Factory. Esta aprobación solo se aplica a esta solicitud.</string>
+    <string name="factory_operation_review_approve">Permitir una vez</string>
 </resources>

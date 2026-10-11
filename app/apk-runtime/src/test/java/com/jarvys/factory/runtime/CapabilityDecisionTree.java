@@ -94,8 +94,8 @@ final class CapabilityDecisionTree<T> {
         while (root != null && !Files.isRegularFile(root.resolve("factory-runtime-core/src/main/java/com/jarvys/factory/runtime/BridgeProtocol.java")))
             root = root.getParent();
         if (root == null) throw new AssertionError("Reviewed production source is required for the compositional proof");
-        requireSource(root, "factory-runtime-core/src/main/java/com/jarvys/factory/runtime/BridgeProtocol.java", "6b82caf8f4a44bb38c07dfb3be5d3c811d357d3cb2e8fb78ed5b4079fd2a9af3");
-        requireSource(root, "factory-runtime-core/src/main/java/com/jarvys/factory/runtime/FactoryConfig.java", "390cb1a1a6a9566e0480904cc39c9ae8e4de696bb47ac3223b14570b7771729d");
+        requireSource(root, "factory-runtime-core/src/main/java/com/jarvys/factory/runtime/BridgeProtocol.java", "a25efc79c4f9a3b67216ad620a0ae1688f904a5290f476d5c041f6a9a4a0822c");
+        requireSource(root, "factory-runtime-core/src/main/java/com/jarvys/factory/runtime/FactoryConfig.java", "f9d9969fe25283a7078e7a938829b0eacbdc1f52098f9b6723fab9a73cff8af0");
         requireSource(root, "factory-runtime-core/src/main/java/com/jarvys/factory/runtime/StrictJson.java", "4dcf0e05a36b8c65c388aac61cd7b48e60e9ddc3a077e0bba801da8697fe2456");
         requireSource(root, "factory-runtime-core/src/main/java/com/jarvys/factory/runtime/FactoryException.java", "03cc2dd0ce63975d9ba31e813df29bd08b6a6834cdef28be6f220a33f2a98331");
         requireSource(root, "factory-runtime-core/src/main/java/com/jarvys/factory/runtime/BiometricAuthentication.java", "58bde0dd6fb3741a6a5adac9fe53039f5b0ae9eb2cf947969c086fb1a74e86a4");
@@ -106,13 +106,17 @@ final class CapabilityDecisionTree<T> {
         requireSource(root, "factory-runtime-core/src/main/java/com/jarvys/factory/runtime/DatabaseRequest.java", "340f56f5c22bb2b9a94f884b51b7e5caa494ed1b4246b6e44d85c87bd68b6680");
         requireSource(root, "factory-runtime-core/src/main/java/com/jarvys/factory/runtime/ExternalLaunchRequest.java", "053527bf71f2eba9103de06b28b4ac3e837af9e26d8b474c1aceb891b969ee5e");
         requireSource(root, "factory-runtime-core/src/main/java/com/jarvys/factory/runtime/ContactPickRequest.java", "1decc696fa1407d15ca0b6112f21f21866a2970026974284e1f4d357b97937a6");
+        requireSource(root, "factory-runtime-core/src/main/java/com/jarvys/factory/runtime/NetworkRequest.java", "4481ad15ae155681588cfceb75fa0464bbc891a1ea5ab362410817ccfab9b5ba");
+        requireSource(root, "factory-runtime-core/src/main/java/com/jarvys/factory/runtime/NetworkPingRequest.java", "e1ec4c2265e1aacd7edfb0fe8d4716b1902ce5ef90f69e83f3a61af2d3f3106a");
+        requireSource(root, "factory-runtime-core/src/main/java/com/jarvys/factory/runtime/NotificationRequest.java", "296679b0e054f75653105b11b0cec5dd6b5c3b2701a77eadaf0083c2b3c8579d");
+        requireSource(root, "factory-runtime-core/src/main/java/com/jarvys/factory/runtime/SpeechRequest.java", "31933b6f416f70fd3b0a20e2677a219c7f0f815e1d727ec44ee4dbe9e586b696");
         requireSource(root, "factory-contract/src/main/java/com/jarvys/factory/contract/BrowserUrl.java", "d617912e9365b7b525cb8fddf5187f26f3db1dbfc42bf979bc328bbdbd58c8f3");
-        requireSource(root, "factory-contract/src/main/java/com/jarvys/factory/contract/CapabilityCatalog.java", "9bddae984116aabc80fd4fcd8479a9fda1b6e868155b0f5f80e6cc0430c1d8d2");
+        requireSource(root, "factory-contract/src/main/java/com/jarvys/factory/contract/CapabilityCatalog.java", "c405346f65beb3198c02ea52cbbe864f109e048dc8b339458449c4e71337bb51");
         requireSource(root, "factory-contract/src/main/java/com/jarvys/factory/contract/ContactPickSpec.java", "ffac2ad67a7d0f71c5dc7582d4e571a7755e921995e0f69389abf0fa883c3706");
         requireSource(root, "factory-contract/src/main/java/com/jarvys/factory/contract/ExternalLaunchSpec.java", "cfd9edef4ca7dff114597553c812a869c77e3fcdeca11c23b1c8e3a16ac35c1c");
         requireSource(root, "factory-contract/src/main/java/com/jarvys/factory/contract/ManifestAudit.java", "f57e086e96b8bf0bcfe75ef6dd6094b0648292154a8b705b248089b05c82fe89");
         requireSource(root, "factory-contract/src/main/java/com/jarvys/factory/contract/ManifestNodes.java", "3f3aa7d6636fcb15414cb3ceeac8a1d1cfb8644c0e5e3cee40c814979e2a5f72");
-        requireSource(root, "factory-contract/src/main/java/com/jarvys/factory/contract/ManifestPlan.java", "b8dffc602859b8458677ef9f59b7161a24759ca505176f63525cfe811be1ab66");
+        requireSource(root, "factory-contract/src/main/java/com/jarvys/factory/contract/ManifestPlan.java", "60a56323c9c2853d8f52545b9f12d4e02223df6374090deca8ea0e0a3e90a1dc");
         requireSource(root, "factory-contract/src/main/java/com/jarvys/factory/contract/ManifestXml.java", "1881c6578152731a6b318b4540bfe89452c3d7d1ae317b02b89a5f1d8c2b29cd");
         requireSource(root, "apk-runtime/build.gradle.kts", "a335e8c57225efc4393cc9e56fce5a92e5e17863b511b375c2f713a0bb1af03e");
         requireSource(root, "factory-runtime-core/build.gradle.kts", "95b84469bb9b88fdb3d7a93fab28c74513dd270a9f6d5e5f2aa5dc3825f353fc");

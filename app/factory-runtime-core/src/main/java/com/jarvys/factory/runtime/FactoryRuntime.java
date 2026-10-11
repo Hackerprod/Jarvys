@@ -82,6 +82,8 @@ public final class FactoryRuntime implements AutoCloseable {
     private BoundedStore store;
     private SensorCapture sensors;
     private BiometricAuthentication biometrics;
+    private NativePermissionSessions nativePermissions;
+    private NativeEffects nativeEffects;
     private volatile PrivateDatabase database;
     private volatile BackupWork backup;
     private long databaseControlWindow;
@@ -104,6 +106,10 @@ public final class FactoryRuntime implements AutoCloseable {
     private volatile ContactPick contactPick;
     private volatile ClipboardWrite clipboardWrite;
     private volatile PhotoSelection photoSelection;
+    private static final ThreadPoolExecutor EXPORT_IO = new ThreadPoolExecutor(0, 2, 30, TimeUnit.SECONDS,
+            new java.util.concurrent.SynchronousQueue<>(), runnable -> {
+                Thread thread = new Thread(runnable, "factory-text-export"); thread.setDaemon(true); return thread;
+            }, new ThreadPoolExecutor.AbortPolicy());
     private static final java.util.concurrent.Semaphore PHOTO_ADMISSION = new java.util.concurrent.Semaphore(1);
     private static final ThreadPoolExecutor PHOTO_IO = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
             new ArrayBlockingQueue<>(1), runnable -> {
@@ -206,6 +212,8 @@ public final class FactoryRuntime implements AutoCloseable {
     private void invalidate() {
         cancelPresentationRecreate();
         generation++; pending.clear(); uiOwner = null;
+        if (nativeEffects != null) nativeEffects.close();
+        if (nativePermissions != null) nativePermissions.close();
         if(sensors!=null) sensors.cancel();
         if(biometrics!=null) biometrics.cancel();
         retireDatabase();
@@ -412,13 +420,17 @@ public final class FactoryRuntime implements AutoCloseable {
             // Unparseable/oversized traffic retains this global failAll contract, never cancel authority.
             if(sensors!=null) sensors.cancel();
             if(biometrics!=null) biometrics.cancel();
+            if(nativePermissions!=null) nativePermissions.cancelAll();
             cancelBackup("CANCELLED", "Backup response ended. A restore may have committed or an export may have been written; inspect before retrying.");
             safePost(proxy, BridgeProtocol.failure(null, "RATE_LIMITED", "Too many native requests; try again shortly.")); return;
         }
         final BridgeProtocol.Request request;
         try { request = BridgeProtocol.validate(BridgeProtocol.ORIGIN, true, raw, config); }
         catch (FactoryException e) { safePost(proxy, BridgeProtocol.failure(BridgeProtocol.requestId(raw), e.code, e.getMessage())); return; }
-        if (pending.size() >= MAX_PENDING || pending.containsKey(request.id)) {
+        boolean nativeControl = request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.NETWORK_CANCEL ||
+                request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.SPEECH_STOP;
+        boolean duplicateControl = nativeControl && pending.values().stream().anyMatch(value -> value.method.equals(request.method));
+        if (pending.size() >= (nativeControl ? MAX_PENDING + 4 : MAX_PENDING) || pending.containsKey(request.id) || duplicateControl) {
             safePost(proxy, BridgeProtocol.failure(request.id, "BUSY", "Too many pending requests or duplicate request ID.")); return;
         }
         Reply reply = new Reply(request.id, request.method, proxy, generation);
@@ -869,6 +881,17 @@ public final class FactoryRuntime implements AutoCloseable {
     private void dispatchInstalledEffect(BridgeProtocol.Request request, Reply reply) throws Exception {
         if (!reply.current()) return;
         switch (request.operation) {
+            case NETWORK_REQUEST: case NETWORK_PROBE: case NETWORK_PING: case NETWORK_CANCEL:
+            case NOTIFICATIONS_STATUS: case NOTIFICATIONS_CHANNEL: case NOTIFICATIONS_SHOW: case NOTIFICATIONS_CANCEL: case NOTIFICATIONS_REQUEST_PERMISSION:
+            case SPEECH_STATUS: case SPEECH_VOICES: case SPEECH_SPEAK: case SPEECH_STOP:
+                ensureNativeEffects();
+                nativeEffects.perform(request, new NativeEffects.Reply() {
+                    public boolean current() { return reply.current(); }
+                    public boolean claimUi() { return FactoryRuntime.this.claimUi(reply); }
+                    public void releaseUi() { if (uiOwner == reply) uiOwner = null; }
+                    public void ok(Object value) { reply.ok(value); }
+                    public void fail(String code, String message) { reply.fail(code, message); }
+                }); break;
             case BIOMETRICS_AVAILABILITY: case BIOMETRICS_AUTHENTICATE: case BIOMETRICS_CANCEL:
                 biometricRequest(request,reply);break;
             case SENSORS_LIST: case SENSORS_CAPTURE: case SENSORS_CANCEL:
@@ -918,29 +941,134 @@ public final class FactoryRuntime implements AutoCloseable {
                 reply.ok(webView.performHapticFeedback(kind)); // Respects the user's system haptic setting.
                 break;
             case SHARE_TEXT:
-                if (!claimUi(reply)) break;
-                try {
-                    Intent share = new Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, request.args.getString("text"));
-                    if (request.args.has("title")) share.putExtra(Intent.EXTRA_SUBJECT, request.args.getString("title"));
-                    activity.startActivity(Intent.createChooser(share, "Share text"));
-                    reply.ok(new JSONObject().put("chooserOpened", true)); // Never claims delivery.
-                } catch (ActivityNotFoundException e) { reply.fail("UNAVAILABLE", "No text sharing application is available."); }
-                finally { if (uiOwner == reply) uiOwner = null; }
-                break;
+                authorizeTextEffect(request, reply); break;
             case CLIPBOARD_WRITE:
                 openClipboardWrite(request, reply); break;
             case EXPORT_TEXT:
-                if (!claimUi(reply)) break;
-                export = new Export(reply, request.args.getString("text"));
-                try {
-                    Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
-                            .setType(request.args.optString("mimeType", "text/plain"))
-                            .putExtra(Intent.EXTRA_TITLE, request.args.getString("filename"))
-                            .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-                    activity.startActivityForResult(intent, EXPORT_REQUEST);
-                } catch (ActivityNotFoundException e) { export = null; if (uiOwner == reply) uiOwner = null; reply.fail("UNAVAILABLE", "No system document picker is available."); }
-                break;
+                authorizeTextEffect(request, reply); break;
             default: reply.fail("UNKNOWN_METHOD", "Native method is not implemented.");
+        }
+    }
+
+    private void ensureNativeEffects() throws FactoryException {
+        if (host.isPreview()) throw new FactoryException("UNAVAILABLE", "Native effects are unavailable in preview.");
+        requireDocumentForeground();
+        if (nativePermissions != null && nativePermissions.isClosed() && nativePermissions.hasPendingReview())
+            throw new FactoryException("BUSY", "A previous native review is still returning.");
+        if (nativeEffects != null && nativeEffects.isClosed() && nativeEffects.hasPendingPermission())
+            throw new FactoryException("BUSY", "A previous Android permission request is still returning.");
+        if (nativePermissions == null || nativePermissions.isClosed()) nativePermissions = new NativePermissionSessions(activity, config, io, documentForeground);
+        if (nativeEffects == null || nativeEffects.isClosed()) nativeEffects = new NativeEffects(activity, config, nativePermissions, io, documentForeground);
+    }
+    public void onRequestPermissionsResult(int request, String[] permissions, int[] results) {
+        if (nativeEffects != null) nativeEffects.onRequestPermissionsResult(request, permissions, results);
+    }
+    public void onWindowFocusChanged(boolean focused) {
+        if (nativePermissions != null) nativePermissions.onWindowFocusChanged(focused);
+    }
+    private void authorizeTextEffect(BridgeProtocol.Request request, Reply reply) throws Exception {
+        ensureNativeEffects();
+        final boolean sharing = request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.SHARE_TEXT;
+        final String text = request.args.getString("text");
+        final String title = request.args.optString("title", "");
+        final String filename = request.args.optString("filename", "");
+        final String mime = request.args.optString("mimeType", "text/plain");
+        JSONObject details = sharing ? new JSONObject().put("text", text).put("title", title)
+                : new JSONObject().put("text", text).put("filename", filename).put("mimeType", mime);
+        nativePermissions.authorize(request.method, details, new NativePermissionSessions.Callback() {
+            public boolean current() { return reply.current(); }
+            public boolean claimUi() { return FactoryRuntime.this.claimUi(reply); }
+            public void releaseUi() { if (uiOwner == reply) uiOwner = null; }
+            public void failed(String code, String message) {
+                if (export != null && export.reply == reply) export.text = null;
+                reply.fail(code, message);
+            }
+            public void ready(NativePermissionSessions.Lease lease) {
+                if (!FactoryRuntime.this.claimUi(reply)) { lease.close(); return; }
+                try {
+                    lease.check();
+                    if (sharing) {
+                        Intent share = new Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text);
+                        if (!title.isEmpty()) share.putExtra(Intent.EXTRA_SUBJECT, title);
+                        lease.check(); activity.startActivity(Intent.createChooser(share, "Share text"));
+                        reply.ok(new JSONObject().put("chooserOpened", true).put("deliveryConfirmed", false));
+                        lease.close(); if (uiOwner == reply) uiOwner = null;
+                    } else {
+                        Export work = new Export(reply, text); work.lease = lease; export = work;
+                        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+                                .setType(mime).putExtra(Intent.EXTRA_TITLE, filename).addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                        lease.check(); lease.externalHandoff(true); activity.startActivityForResult(intent, EXPORT_REQUEST);
+                    }
+                } catch (Exception failed) {
+                    if (export != null && export.reply == reply) export = null;
+                    lease.close(); if (uiOwner == reply) uiOwner = null;
+                    reply.fail(failed instanceof SecurityException ? "PERMISSION_DENIED" : "UNAVAILABLE", "The text operation could not be opened.");
+                }
+            }
+        });
+    }
+    private void finishExport(Export work) {
+        if (export != work || !work.returned || !documentForeground) return;
+        export = null; if (uiOwner == work.reply) uiOwner = null;
+        if (work.lease != null) work.lease.externalHandoff(false);
+        if (!work.reply.current() || work.text == null) { if (work.lease != null) work.lease.close(); return; }
+        Intent result = work.result;
+        if (work.resultCode != Activity.RESULT_OK || result == null || result.getData() == null) {
+            if (work.lease != null) work.lease.close(); work.reply.fail("CANCELLED", "Export cancelled; a picker-created empty file may remain."); return;
+        }
+        Uri uri = result.getData();
+        if (!"content".equals(uri.getScheme()) || activity.checkUriPermission(uri, Process.myPid(), Process.myUid(), Intent.FLAG_GRANT_WRITE_URI_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
+            if (work.lease != null) work.lease.close(); work.reply.fail("PERMISSION_DENIED", "The document picker did not grant write access."); return;
+        }
+        try {
+            EXPORT_IO.execute(() -> {
+                boolean deliveryPosted = false;
+                try {
+                    if (work.lease == null) throw new SecurityException("Missing export authority");
+                    work.lease.check(); String value = work.text; if (value == null) throw new SecurityException();
+                    byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+                    work.lease.check();
+                    OutputStream output = activity.getContentResolver().openOutputStream(uri, "wt");
+                    if (output == null) throw new IOException("No output stream");
+                    work.output.set(output);
+                    work.lease.onCancelled(() -> closeExportOutput(work, true));
+                    try {
+                        work.lease.check();
+                        for (int at = 0; at < bytes.length; at += BridgeProtocol.MAX_DOCUMENT_CHUNK_BYTES) {
+                            work.lease.check(); output.write(bytes, at, Math.min(BridgeProtocol.MAX_DOCUMENT_CHUNK_BYTES, bytes.length - at));
+                        }
+                        work.lease.check(); output.flush();
+                    } finally { closeExportOutput(work, false); }
+                    JSONObject receipt = new JSONObject().put("saved", true).put("bytesWritten", bytes.length).put("providerCommitConfirmed", false);
+                    deliveryPosted = main.post(() -> {
+                        try {
+                            work.lease.check();
+                            work.reply.ok(receipt);
+                        } catch (Exception revoked) {
+                            work.reply.fail("PERMISSION_DENIED", "Export authority ended after writing; the file may already exist.");
+                        } finally { work.lease.close(); }
+                    });
+                } catch (SecurityException denied) {
+                    main.post(() -> work.reply.fail("PERMISSION_DENIED", "Export authority ended; an empty or partial file may remain."));
+                } catch (Exception failed) {
+                    main.post(() -> work.reply.fail("IO_ERROR", "Export could not finish; an empty or partial file may remain."));
+                } finally { work.text = null; if (!deliveryPosted && work.lease != null) work.lease.close(); }
+            });
+        } catch (RejectedExecutionException busy) {
+            if (work.lease != null) work.lease.close(); work.reply.fail("BUSY", "Native export worker is busy.");
+        }
+    }
+
+    private void closeExportOutput(Export work, boolean asynchronously) {
+        OutputStream output = work.output.getAndSet(null);
+        if (output == null) return;
+        Runnable close = () -> { try { output.close(); } catch (IOException ignored) { /* No rollback/durability claim. */ } };
+        if (asynchronously) {
+            try { DOCUMENT_CLEANUP.execute(close); }
+            catch (RejectedExecutionException full) { work.output.compareAndSet(null, output); }
+        } else {
+            try { output.close(); }
+            catch (IOException failure) { throw new java.io.UncheckedIOException("Export close failed; durability is unknown.", failure); }
         }
     }
 
@@ -1031,13 +1159,14 @@ public final class FactoryRuntime implements AutoCloseable {
     }
 
     private boolean claimUi(Reply reply) {
-        if (BiometricAuthentication.processUiBusy() || (biometrics!=null && biometrics.isUiBusy()) || presentationScheduled || uiOwner != null || export != null || documentSelection != null || fileShare != null || photoSelection != null || audioPlayback != null || browserOpen != null || externalLaunch != null || contactPick != null || clipboardWrite != null || backup != null || BACKUP_ADMISSION.get() || !activity.hasWindowFocus() || activity.isFinishing()) {
+        if ((nativePermissions != null && nativePermissions.hasPendingReview()) || (nativeEffects != null && nativeEffects.hasPendingPermission()) || BiometricAuthentication.processUiBusy() || (biometrics!=null && biometrics.isUiBusy()) || presentationScheduled || uiOwner != null || export != null || documentSelection != null || fileShare != null || photoSelection != null || audioPlayback != null || browserOpen != null || externalLaunch != null || contactPick != null || clipboardWrite != null || backup != null || BACKUP_ADMISSION.get() || !activity.hasWindowFocus() || activity.isFinishing()) {
             reply.fail("BUSY", "Another native prompt is open, or the application is not in the foreground."); return false;
         }
         uiOwner = reply; return true;
     }
 
     public void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (nativePermissions != null && nativePermissions.onActivityResult(requestCode, resultCode, data)) return;
         if(requestCode==CLIPBOARD_REQUEST) {
             ClipboardWrite work=clipboardWrite;
             if(work==null || work.returned || !work.launched) return;
@@ -1117,27 +1246,16 @@ public final class FactoryRuntime implements AutoCloseable {
             return;
         }
         if (requestCode != EXPORT_REQUEST) return;
-        Export work = export; export = null;
-        if (work != null && uiOwner == work.reply) uiOwner = null;
-        if (work == null || !work.reply.current()) return;
-        if (resultCode != Activity.RESULT_OK || data == null || data.getData() == null) { work.reply.fail("CANCELLED", "Export cancelled."); return; }
-        Uri uri = data.getData();
-        if (!"content".equals(uri.getScheme()) || activity.checkUriPermission(uri, Process.myPid(), Process.myUid(), Intent.FLAG_GRANT_WRITE_URI_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
-            work.reply.fail("PERMISSION_DENIED", "The document picker did not grant write access."); return;
-        }
-        background(work.reply, () -> {
-            if (!work.reply.current()) return null;
-            try (OutputStream output = activity.getContentResolver().openOutputStream(uri, "wt")) {
-                if (output == null) throw new IOException("No output stream");
-                if (!work.reply.current()) return null;
-                output.write(work.text.getBytes(StandardCharsets.UTF_8)); output.flush();
-            }
-            return new JSONObject().put("saved", true);
-        });
+        Export work = export;
+        if (work == null || work.returned) return;
+        work.returned = true; work.resultCode = resultCode; work.result = data;
+        if (documentForeground) finishExport(work);
     }
 
     /** Pause always revokes existing handles. The external broker alone may retain a picker tombstone. */
     public void onPause() {
+        if (nativeEffects != null) nativeEffects.onPause();
+        if (nativePermissions != null) nativePermissions.onPause();
         if(sensors!=null) sensors.cancel();
         if(biometrics!=null) biometrics.cancel();
         cancelPresentationRecreate();
@@ -1175,6 +1293,9 @@ public final class FactoryRuntime implements AutoCloseable {
     }
     public void onResume() {
         documentForeground = true;
+        if (nativePermissions != null) nativePermissions.onResume();
+        if (nativeEffects != null) nativeEffects.onResume();
+        if (export != null && export.returned) finishExport(export);
         ClipboardWrite copied=clipboardWrite; if(copied!=null && copied.returned) finishClipboardWrite(copied);
         BackupWork returnedBackup=backup; if(returnedBackup!=null && returnedBackup.returned) acceptBackup(returnedBackup);
         ContactPick contact = contactPick;
@@ -2150,7 +2271,10 @@ public final class FactoryRuntime implements AutoCloseable {
         }
     }
     private final class Export {
-        final Reply reply; String text;
+        final Reply reply; volatile String text;
+        NativePermissionSessions.Lease lease;
+        final java.util.concurrent.atomic.AtomicReference<OutputStream> output = new java.util.concurrent.atomic.AtomicReference<>();
+        boolean returned; int resultCode; Intent result;
         Export(Reply reply, String text) { this.reply = reply; this.text = text; }
     }
     private void safePost(JavaScriptReplyProxy proxy, String response) {

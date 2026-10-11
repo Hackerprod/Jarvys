@@ -68,6 +68,16 @@ class FactoryProjectServiceTest {
         val policy = FactoryOperationPolicy.inMemory(mode)
         val service:FactoryProjectService
         init {
+            // Every current export build embeds the real host pin contract; this is a synthetic test certificate only.
+            val packageManager = context.packageManager
+            val own = packageManager.getPackageInfo(context.packageName, android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES)
+            own.signingInfo = android.content.pm.SigningInfo().also {
+                org.robolectric.shadow.api.Shadow.extract<org.robolectric.shadows.ShadowSigningInfo>(it)
+                    .setSignatures(arrayOf(android.content.pm.Signature(byteArrayOf(7, 12, 24, 42))))
+            }
+            org.robolectric.Shadows.shadowOf(packageManager).installPackage(own)
+            // Keep the host-private history shared within this sandbox, including successive signing fixtures.
+            // Robolectric supplies a fresh host data directory for each independently simulated installation/test.
             gate=ApprovalGate(presenter=object:ApprovalPresenter {
                 override fun show(id:String,summary:ApprovalSummary) {
                     lastSummary=summary;requested++;assertFalse(summary.allowAlwaysAvailable)
@@ -424,7 +434,7 @@ class FactoryProjectServiceTest {
         "apk-factory/builds/${f.scope.id()}/$sha-${ProjectScope.sha256("notes.apk".toByteArray())}.json")
     private fun legacyReceipt(f:Fixture,keepCurrentContract:Boolean):String {
         val built=f.build();val oldSha=built.getString("sha256");val file=File(f.root,"notes.apk")
-        val legacy=com.jarvys.agent.apkfactory.TemplateApkTest.legacyArtifactFixture(file.readBytes())
+        val legacy=com.jarvys.agent.apkfactory.TemplateApkTest.legacyArtifactFixture(file.readBytes(), TemplateApk.Spec("org.example.notebook", "Mi cuaderno", 1, "1.0", listOf("storage", "export")))
         val sha=ProjectScope.sha256(legacy);file.writeBytes(legacy)
         val receipt=JSONObject(receiptFile(f,oldSha).readText()).put("apkSha256",sha).put("apkBytes",legacy.size)
         if(!keepCurrentContract) {receipt.remove("manifestContract");receipt.remove("dexSha256")}

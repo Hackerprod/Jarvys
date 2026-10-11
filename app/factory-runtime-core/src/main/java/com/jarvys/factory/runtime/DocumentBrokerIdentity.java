@@ -8,7 +8,7 @@ import android.os.Build;
 import org.json.JSONObject;
 import java.security.MessageDigest;
 
-/** Build-owned pinning for the bounded human-only host broker. No caller-controlled package names. */
+/** Build-owned pinning for the exact policy host. No caller-controlled package names. */
 public final class DocumentBrokerIdentity {
     public static final String PRIMARY = "com.jarvys.agent";
     public static final String RECOVERY = "com.jarvys.agent.recoverytest";
@@ -35,12 +35,7 @@ public final class DocumentBrokerIdentity {
     public static void verify(Context context, FactoryConfig.DocumentBroker broker) throws FactoryException {
         try {
             if (broker == null || !certificate(context, broker.packageName).equals(broker.certificateSha256))
-                throw new FactoryException("UNAVAILABLE", "Install the matching Jarvys host before requesting native review.");
-            String other = PRIMARY.equals(broker.packageName) ? RECOVERY : PRIMARY;
-            try {
-                context.getPackageManager().getPackageInfo(other, 0);
-                throw new FactoryException("UNAVAILABLE", "Native review requires a single installed Jarvys host; two hosts cannot share human-only protection.");
-            } catch (PackageManager.NameNotFoundException absent) { /* expected single host */ }
+                throw new FactoryException("UNAVAILABLE", "Install the matching Jarvys host before requesting native operations.");
         } catch (FactoryException e) { throw e; }
         catch (Exception e) { throw new FactoryException("UNAVAILABLE", "The matching Jarvys host broker could not be verified."); }
     }

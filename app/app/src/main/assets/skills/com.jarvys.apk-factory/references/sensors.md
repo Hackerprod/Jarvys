@@ -1,8 +1,6 @@
-# Factory guidance factory-guidance-v84 / sensors
+# Factory guidance factory-guidance-v85 / sensors
 
-Use with the always-loaded Factory core; this reference grants no tools or approvals.
-The v82 sensor contract extends the bounded v79 design. Current totals: 20 capabilities/42 methods;
-the biometrics reference adds local authentication and its one selective normal permission.
+Use with core; grants no authority. Current basics/native-services supersede historical latest-only, extra-consent, totals, zero-permission/offline and pending-family claims below. API/data/quotas remain version-scoped.
 
 ## Bounded foreground sensors (v82)
 

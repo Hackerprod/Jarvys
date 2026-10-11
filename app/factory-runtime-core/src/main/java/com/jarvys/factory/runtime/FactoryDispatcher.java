@@ -32,6 +32,10 @@ public final class FactoryDispatcher {
     public static Effects simulatedEffects() {
         return (method, args) -> {
             switch (method) {
+                case NETWORK_REQUEST: case NETWORK_PROBE: case NETWORK_PING: case NETWORK_CANCEL:
+                case NOTIFICATIONS_STATUS: case NOTIFICATIONS_CHANNEL: case NOTIFICATIONS_SHOW: case NOTIFICATIONS_CANCEL: case NOTIFICATIONS_REQUEST_PERMISSION:
+                case SPEECH_STATUS: case SPEECH_VOICES: case SPEECH_SPEAK: case SPEECH_STOP:
+                    throw new FactoryException("UNAVAILABLE", "Native network, notifications and speech require an installed generated app and live Jarvys policy. ICMP also requires an available Android ping utility. Preview does not perform or simulate these effects.");
                 case BIOMETRICS_AVAILABILITY: case BIOMETRICS_AUTHENTICATE: case BIOMETRICS_CANCEL:
                 case SENSORS_LIST: case SENSORS_CAPTURE: case SENSORS_CANCEL:
                 case PRESENTATION_GET: case PRESENTATION_SET: case PRESENTATION_RESET:
@@ -90,17 +94,22 @@ public final class FactoryDispatcher {
             case STORAGE_REMOVE: store.remove(request.args.getString("key")); return null;
             case STORAGE_LIST: return new JSONArray(store.list());
             case RUNTIME_INFO:
-                return new JSONObject().put("sdkVersion", CapabilityCatalog.SDK_VERSION).put("offline", true)
-                        .put("offlineScope", "embedded_webview").put("browserMayUseExternalNetwork", true)
+                return new JSONObject().put("sdkVersion", CapabilityCatalog.SDK_VERSION).put("offline", !config.capabilities.contains("network"))
+                        .put("offlineScope", "embedded_webview_configuration_not_process_isolation")
+                        .put("processInternetPermission", config.capabilities.contains("network"))
+                        .put("nativeNetworkProtocol", "http_https").put("nativeProbeIsIcmp", false)
+                        .put("nativePingProtocol", "icmp").put("platformPingUtilityRequired", true)
+                        .put("nativeOperationsPolicy", "host_allow_ask_deny").put("speechEngineMayUseNetwork", true)
+                        .put("notificationAcceptedMeansDelivered", false).put("browserMayUseExternalNetwork", true)
                         .put("externalRecipientsMayUseNetwork", true)
                         .put("externalActionConfirmed", false)
                         .put("mode", metadata.mode()).put("declaredAppId", config.appId).put("hostAppId", metadata.hostAppId())
                         .put("simulatedCapabilities", new JSONArray("preview".equals(metadata.mode())
                                 ? java.util.Arrays.asList("export", "share", "clipboard", "haptics") : java.util.Collections.emptyList()))
                         .put("unavailableCapabilities", new JSONArray("preview".equals(metadata.mode())
-                                ? java.util.Arrays.asList("documents", "photos", "audio", "browser", "maps", "phone", "email", "sms", "contacts", "calendar", "presentation", "sensors", "biometrics") : java.util.Collections.emptyList()))
+                                ? java.util.Arrays.asList("documents", "photos", "audio", "browser", "maps", "phone", "email", "sms", "contacts", "calendar", "presentation", "sensors", "biometrics", "network", "notifications", "speech") : java.util.Collections.emptyList()))
                         .put("unavailableMethods", new JSONArray("preview".equals(metadata.mode())
-                                ? java.util.Arrays.asList("share.file", "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture", "audio.play", "browser.open", "maps.open", "phone.dial", "email.compose", "sms.compose", "contacts.pick", "calendar.insert", "presentation.get", "presentation.set", "presentation.reset", "sensors.list", "sensors.capture", "sensors.cancel", "biometrics.availability", "biometrics.authenticate", "biometrics.cancel", "database.backupExport", "database.backupImport", "storage.backupExport", "storage.backupImport")
+                                ? java.util.Arrays.asList("share.file", "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture", "audio.play", "browser.open", "maps.open", "phone.dial", "email.compose", "sms.compose", "contacts.pick", "calendar.insert", "presentation.get", "presentation.set", "presentation.reset", "sensors.list", "sensors.capture", "sensors.cancel", "biometrics.availability", "biometrics.authenticate", "biometrics.cancel", "database.backupExport", "database.backupImport", "storage.backupExport", "storage.backupImport", "network.request", "network.probe", "network.ping", "network.cancel", "notifications.status", "notifications.channel", "notifications.show", "notifications.cancel", "notifications.requestPermission", "speech.status", "speech.voices", "speech.speak", "speech.stop")
                                 : java.util.Collections.emptyList()))
                         .put("biometricsProtocolVersion", 1).put("biometricsBrokerRequired", false)
                         .put("biometricsRequires", new JSONArray(java.util.Collections.singletonList("biometrics")))
@@ -119,18 +128,18 @@ public final class FactoryDispatcher {
                         .put("databaseProtocolVersion", 1).put("databaseBrokerRequired", false)
                         .put("databasePersistent", !"preview".equals(metadata.mode()))
                         .put("databaseRequires", new JSONArray(java.util.Collections.singletonList("database")))
-                        .put("databaseBackupProtocolVersion", 1).put("databaseBackupBrokerRequired", true)
+                        .put("signedArtifactHistoryRequired", true).put("databaseBackupProtocolVersion", 2).put("databaseBackupBrokerRequired", true)
                         .put("databaseBackupRequires", new JSONArray(java.util.Arrays.asList("database", "documents")))
                         .put("databaseBackupTables", new JSONArray(config.dataBackupTables))
                         .put("databaseBackupFormat", "jarvys-sqlite-data").put("databaseBackupPlaintext", true)
-                        .put("databaseBackupCurrentSignedReceiptRequired", true)
+                        .put("databaseBackupCurrentSignedReceiptRequired", false)
                         .put("databaseBackupModes", new JSONArray(java.util.Arrays.asList("insertOnly", "replaceSelectedTables")))
                         .put("databaseBackupExactSchemaRequired", true).put("databaseBackupProviderDurabilityConfirmed", false)
-                        .put("storageBackupProtocolVersion", 1).put("storageBackupBrokerRequired", true)
+                        .put("storageBackupProtocolVersion", 2).put("storageBackupBrokerRequired", true)
                         .put("storageBackupRequires", new JSONArray(java.util.Arrays.asList("storage", "documents")))
                         .put("storageBackupKeys", new JSONArray(config.dataBackupKeys))
                         .put("storageBackupFormat", "jarvys-preferences-data").put("storageBackupPlaintext", true)
-                        .put("storageBackupCurrentSignedReceiptRequired", true)
+                        .put("storageBackupCurrentSignedReceiptRequired", false)
                         .put("storageBackupModes", new JSONArray(java.util.Arrays.asList("insertOnly", "replaceSelectedKeys")))
                         .put("storageBackupScope", "string_key_value_store")
                         .put("storageBackupProviderDurabilityConfirmed", false)
@@ -212,6 +221,9 @@ public final class FactoryDispatcher {
                                 .put("audioSampleRateMin", 8000).put("audioSampleRateMax", 48000)
                                 .put("documentHandleLifetimeMs", 300000));
             case DEVICE_INFO: return metadata.deviceInfo().put("declaredAppId", config.appId);
+                case NETWORK_REQUEST: case NETWORK_PROBE: case NETWORK_PING: case NETWORK_CANCEL:
+                case NOTIFICATIONS_STATUS: case NOTIFICATIONS_CHANNEL: case NOTIFICATIONS_SHOW: case NOTIFICATIONS_CANCEL: case NOTIFICATIONS_REQUEST_PERMISSION:
+                case SPEECH_STATUS: case SPEECH_VOICES: case SPEECH_SPEAK: case SPEECH_STOP:
             case BIOMETRICS_AVAILABILITY: case BIOMETRICS_AUTHENTICATE: case BIOMETRICS_CANCEL:
                 case SENSORS_LIST: case SENSORS_CAPTURE: case SENSORS_CANCEL:
                 case PRESENTATION_GET: case PRESENTATION_SET: case PRESENTATION_RESET:

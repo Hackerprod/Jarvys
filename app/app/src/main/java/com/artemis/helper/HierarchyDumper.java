@@ -117,7 +117,7 @@ public final class HierarchyDumper {
      * Dumps the hierarchy as a JSON response containing the requested representations.
      */
     public static JSONObject dump(AccessibilityService service, DumpOptions options) {
-        long epoch = MemoryUiAutomationGuard.captureAutomationEpoch();
+        MemoryUiAutomationGuard.AutomationEpoch epoch = MemoryUiAutomationGuard.captureAutomationEpoch(service);
         JSONObject result = dumpUnchecked(service, options);
         MemoryUiAutomationGuard.requireAutomationEpoch(epoch);
         return result;
@@ -201,7 +201,7 @@ public final class HierarchyDumper {
             final AtomicReference<Bitmap> bitmapRef,
             final AtomicInteger errorRef,
             final CountDownLatch latch,
-            final boolean allowRetry, final long epoch, final AtomicBoolean accepting) {
+            final boolean allowRetry, final MemoryUiAutomationGuard.AutomationEpoch epoch, final AtomicBoolean accepting) {
         if (!accepting.get() || !MemoryUiAutomationGuard.isAutomationEpochValid(epoch)) {
             latch.countDown();
             return;
@@ -278,7 +278,7 @@ public final class HierarchyDumper {
      * normalizes coordinates against the very image it is looking at.
      */
     public static JSONObject dumpAtomicSnapshot(AccessibilityService service, DumpOptions options) {
-        final long epoch = MemoryUiAutomationGuard.captureAutomationEpoch();
+        final MemoryUiAutomationGuard.AutomationEpoch epoch = MemoryUiAutomationGuard.captureAutomationEpoch(service);
         long startTime = System.currentTimeMillis();
         final AtomicReference<Bitmap> bitmapRef = new AtomicReference<>(null);
         final AtomicInteger errorRef = new AtomicInteger(0);
@@ -340,7 +340,7 @@ public final class HierarchyDumper {
      * Dumps the hierarchy directly as a raw standard UIAutomator XML string.
      */
     public static String dumpXml(AccessibilityService service, DumpOptions options) {
-        long epoch = MemoryUiAutomationGuard.captureAutomationEpoch();
+        MemoryUiAutomationGuard.AutomationEpoch epoch = MemoryUiAutomationGuard.captureAutomationEpoch(service);
         String result = dumpXmlUnchecked(service, options);
         MemoryUiAutomationGuard.requireAutomationEpoch(epoch);
         return result;
@@ -404,7 +404,7 @@ public final class HierarchyDumper {
     }
 
     public static List<A11yNode> captureRootSnapshots(AccessibilityService service) {
-        long epoch = MemoryUiAutomationGuard.captureAutomationEpoch();
+        MemoryUiAutomationGuard.AutomationEpoch epoch = MemoryUiAutomationGuard.captureAutomationEpoch(service);
         List<A11yNode> result = captureRootSnapshots(
                 service, DisplayUtils.getDisplayInfo(service), DumpOptions.forSnapshot(), new DumpStats());
         MemoryUiAutomationGuard.requireAutomationEpoch(epoch);
@@ -808,7 +808,7 @@ public final class HierarchyDumper {
      * Window roots are enumerated once and recycled; only the returned node stays alive.
      */
     public static AccessibilityNodeInfo findInputNode(AccessibilityService service) {
-        long epoch = MemoryUiAutomationGuard.captureAutomationEpoch();
+        MemoryUiAutomationGuard.AutomationEpoch epoch = MemoryUiAutomationGuard.captureAutomationEpoch(service);
         AccessibilityNodeInfo result = findInputNodeUnchecked(service);
         if (!MemoryUiAutomationGuard.isAutomationEpochValid(epoch)) {
             safeRecycle(result);

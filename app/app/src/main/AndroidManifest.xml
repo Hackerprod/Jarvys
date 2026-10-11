@@ -75,6 +75,10 @@
             </intent-filter>
         </activity>
 
+        <provider android:name="com.jarvys.agent.apkfactory.FactoryOperationAuthorizationProvider"
+            android:authorities="${applicationId}.factory.operations" android:exported="true" />
+        <activity android:name="com.jarvys.agent.apkfactory.FactoryOperationApprovalActivity"
+            android:exported="true" android:excludeFromRecents="true" android:windowSoftInputMode="adjustResize" />
         <activity android:name="com.jarvys.agent.apkfactory.FactoryPermissionsActivity" android:exported="false" android:windowSoftInputMode="adjustResize" />
         <activity android:name="com.jarvys.agent.apkfactory.FactoryClipboardActivity" android:exported="true" android:excludeFromRecents="true" android:noHistory="false" android:windowSoftInputMode="adjustResize" />
 

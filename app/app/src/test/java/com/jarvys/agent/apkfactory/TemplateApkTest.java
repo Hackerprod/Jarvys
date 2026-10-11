@@ -98,7 +98,7 @@ public class TemplateApkTest {
     }
 
 
-    @Test public void all1048576SelectionsHaveOnlyTheExactSelectivePermissionAndQueryProfiles() throws Exception {
+    @Test public void all1048576OriginalCapabilitySelectionsRetainFourCurrentManifestShapes() throws Exception {
         byte[] apk=build();
         com.jarvys.factory.contract.ManifestPlan base=TemplateApk.inspect(apk).plan;
         com.jarvys.factory.contract.ManifestAudit.Document decoded=com.jarvys.factory.contract.ManifestAudit.read(unzip(apk).get("AndroidManifest.xml"));
@@ -108,13 +108,13 @@ public class TemplateApkTest {
         ManifestAudit.Document biometricDecoded=ManifestAudit.read(unzip(biometric).get("AndroidManifest.xml"));
         byte[] combined=TemplateApk.build(template,new TemplateApk.Spec(spec.appId,spec.label,spec.versionCode,spec.versionName,Arrays.asList("biometrics","documents")),icon,assets);
         ManifestAudit.Document combinedDecoded=ManifestAudit.read(unzip(combined).get("AndroidManifest.xml"));
-        assertEquals(20, com.jarvys.factory.contract.CapabilityCatalog.NAMES.size());
+        assertEquals(23, com.jarvys.factory.contract.CapabilityCatalog.NAMES.size());
         int checked=0;
         for(int mask=0;mask<1048576;mask++) {
             List<String> requested=new ArrayList<>();
-            for(int bit=0;bit<com.jarvys.factory.contract.CapabilityCatalog.NAMES.size();bit++) if((mask&(1<<bit))!=0) requested.add(com.jarvys.factory.contract.CapabilityCatalog.NAMES.get(bit));
+            for(int bit=0;bit<20;bit++) if((mask&(1<<bit))!=0) requested.add(com.jarvys.factory.contract.CapabilityCatalog.NAMES.get(bit));
             com.jarvys.factory.contract.ManifestPlan plan=new com.jarvys.factory.contract.ManifestPlan(spec.appId,spec.label,spec.versionCode,spec.versionName,base.iconResourceId,base.backupResourceId,requested);
-            boolean hasQueries=requested.contains("documents") || requested.contains("browser") || requested.contains("maps") || requested.contains("phone") || requested.contains("email") || requested.contains("sms") || requested.contains("contacts") || requested.contains("calendar") || requested.contains("clipboard");
+            boolean hasQueries=requested.contains("documents") || requested.contains("browser") || requested.contains("maps") || requested.contains("phone") || requested.contains("email") || requested.contains("sms") || requested.contains("contacts") || requested.contains("calendar") || requested.contains("clipboard") || requested.contains("share") || requested.contains("export");
             boolean hasBiometrics=requested.contains("biometrics");
             (hasBiometrics ? (hasQueries ? combinedDecoded : biometricDecoded) : (hasQueries ? documentDecoded : decoded)).verify(plan);
             assertEquals(hasBiometrics ? Collections.singletonList(CapabilityCatalog.BIOMETRIC_PERMISSION) : Collections.emptyList(),plan.permissions);
@@ -146,7 +146,8 @@ public class TemplateApkTest {
                     .put("sha256",com.jarvys.agent.coding.ProjectScope.sha256(artifacts[index])));
         }
         FactoryApkEvidence.write("manifest-profiles.json",utf8(new org.json.JSONObject().put("schemaVersion",1)
-                .put("testFixtureOnly",true).put("exhaustiveSelections",checked).put("profiles",profiles).toString()));
+                .put("testFixtureOnly",true).put("exhaustiveSelections",checked)
+                .put("capabilityDomain",new org.json.JSONArray(CapabilityCatalog.NAMES.subList(0,20))).put("profiles",profiles).toString()));
     }
     @Test public void typedExternalOnlyAndCombinedAppsBuildWithOneSharedZeroPermissionQueryProfile() throws Exception {
         byte[] browserManifest = null;
@@ -162,6 +163,46 @@ public class TemplateApkTest {
             if (browserManifest == null) browserManifest = actual; else assertArrayEquals(browserManifest,actual);
             assertStoredEntriesAligned(generated);
         }
+    }
+    @Test public void all32NativeSurfaceBasisArtifactsPreserveDexAndExactDeclarations() throws Exception {
+        List<String> basis = Arrays.asList("biometrics", "documents", "network", "notifications", "speech");
+        Map<String,String> originalDex = TemplateApk.inspect(template).dexSha256;
+        java.util.Set<String> shapes = new java.util.HashSet<>();
+        org.json.JSONArray profiles = new org.json.JSONArray();
+        for (int mask = 0; mask < 32; mask++) {
+            List<String> caps = new ArrayList<>();
+            for (int bit = 0; bit < basis.size(); bit++) if ((mask & (1 << bit)) != 0) caps.add(basis.get(bit));
+            TemplateApk.Spec selected = new TemplateApk.Spec(spec.appId, spec.label, spec.versionCode, spec.versionName, caps);
+            byte[] generated = TemplateApk.build(template, selected, icon, assets);
+            TemplateApk.ManifestInfo info = TemplateApk.verify(generated, selected);
+            TemplateApk.ManifestInfo inspected = TemplateApk.inspect(generated);
+            assertEquals(originalDex, info.dexSha256); assertEquals(info.dexSha256, inspected.dexSha256);
+            assertEquals(info.permissions, inspected.permissions); assertEquals(info.plan.queries, inspected.plan.queries);
+            assertEquals(info.plan.queryActions, inspected.plan.queryActions);
+            assertEquals(caps.contains("speech") ? Collections.singletonList(CapabilityCatalog.TTS_SERVICE_ACTION) : Collections.emptyList(), info.plan.queryActions);
+            List<String> permissions = new ArrayList<>();
+            if (caps.contains("network")) permissions.add(CapabilityCatalog.INTERNET_PERMISSION);
+            if (caps.contains("notifications")) permissions.add(CapabilityCatalog.NOTIFICATION_PERMISSION);
+            if (caps.contains("biometrics")) permissions.add(CapabilityCatalog.BIOMETRIC_PERMISSION);
+            assertEquals(permissions, info.permissions);
+            byte[] manifest = unzip(generated).get("AndroidManifest.xml");
+            ManifestAudit.Document decoded = ManifestAudit.read(manifest); decoded.verify(info.plan);
+            assertEquals(caps.contains("network") ? -1 : 0,
+                    decoded.attribute("manifest/application", ManifestPlan.ANDROID, "usesCleartextTraffic").value);
+            assertStoredEntriesAligned(generated);
+            String shape = com.jarvys.agent.coding.ProjectScope.sha256(manifest);
+            if (shapes.add(shape)) {
+                String filename = "profile-native-" + mask + "-unsigned.apk";
+                FactoryApkEvidence.write(filename, generated);
+                profiles.put(new org.json.JSONObject().put("file", filename).put("capabilities", new org.json.JSONArray(caps))
+                        .put("permissions", new org.json.JSONArray(info.permissions)).put("queries", new org.json.JSONArray(info.plan.queries))
+                        .put("queryActions", new org.json.JSONArray(info.plan.queryActions)).put("nodeCount", info.plan.nodes.size())
+                        .put("sha256", com.jarvys.agent.coding.ProjectScope.sha256(generated)));
+            }
+        }
+        assertEquals(18, shapes.size());
+        FactoryApkEvidence.write("native-manifest-profiles.json", utf8(new org.json.JSONObject().put("schemaVersion", 1)
+                .put("testFixtureOnly", true).put("surfaceBasisSelections", 32).put("profiles", profiles).toString()));
     }
     @Test public void documentQueriesRemainAnExactZeroPermissionAdditiveProfile() throws Exception {
         TemplateApk.Spec docs = new TemplateApk.Spec(spec.appId,spec.label,1,"1.0",Collections.singletonList("documents"));
@@ -588,6 +629,39 @@ public class TemplateApkTest {
         assertEquals(new ArrayList<>(CapabilityCatalog.DOCUMENT_BROKER_PACKAGES), oldMixed.plan.queries);
         assertEquals(Collections.singletonList(CapabilityCatalog.BIOMETRIC_PERMISSION), oldMixed.plan.permissions);
     }
+    @Test public void closedV2PreservesOldShareExportAndRejectsNativeOrUnexpectedDeclarations() throws Exception {
+        for (List<String> caps : Arrays.asList(Collections.singletonList("share"), Collections.singletonList("export"),
+                Arrays.asList("export", "share"), Arrays.asList("clipboard", "share"))) {
+            TemplateApk.Spec selected = new TemplateApk.Spec(spec.appId, spec.label, spec.versionCode, spec.versionName, caps);
+            byte[] current = TemplateApk.build(template, selected, icon, assets);
+            byte[] historical = legacyClosedV2ArtifactFixture(current, selected);
+            TemplateApk.ManifestInfo accepted = TemplateApk.verifyExistingClosedV2(historical, selected);
+            assertEquals(ManifestPlan.Profile.V2_BEFORE_NATIVE_OPERATIONS, accepted.plan.profile);
+            assertEquals(TemplateApk.verify(current, selected).dexSha256, accepted.dexSha256);
+            assertTrue(accepted.permissions.isEmpty()); assertTrue(accepted.plan.queryActions.isEmpty());
+            if (!caps.contains("clipboard")) {
+                assertTrue(accepted.plan.queries.isEmpty());
+                rejects(() -> TemplateApk.verify(historical, selected));
+                rejects(() -> TemplateApk.verifyExistingClosedV2(current, selected));
+            } else assertEquals(new ArrayList<>(CapabilityCatalog.DOCUMENT_BROKER_PACKAGES), accepted.plan.queries);
+            Map<String, byte[]> files = unzip(historical);
+            files.put("AndroidManifest.xml", renamePoolString(files.get("AndroidManifest.xml"), "android.intent.action.MAIN", "android.intent.action.VIEW"));
+            rejects(() -> TemplateApk.verifyExistingClosedV2(alignedZip(files), selected));
+        }
+        for (String cap : Arrays.asList("network", "notifications", "speech")) {
+            TemplateApk.Spec selected = new TemplateApk.Spec(spec.appId, spec.label, spec.versionCode, spec.versionName, Collections.singletonList(cap));
+            byte[] generated = TemplateApk.build(template, selected, icon, assets);
+            rejects(() -> TemplateApk.verifyExistingClosedV2(generated, selected));
+            rejects(() -> TemplateApk.verifyExistingClosedV1(generated, selected));
+            rejects(() -> TemplateApk.verifyExistingV1(generated, selected));
+            rejects(() -> TemplateApk.verify(generated, spec));
+        }
+        TemplateApk.Spec speech = new TemplateApk.Spec(spec.appId, spec.label, spec.versionCode, spec.versionName, Collections.singletonList("speech"));
+        Map<String, byte[]> wrongSpeech = unzip(TemplateApk.build(template, speech, icon, assets));
+        wrongSpeech.put("AndroidManifest.xml", renamePoolString(wrongSpeech.get("AndroidManifest.xml"), CapabilityCatalog.TTS_SERVICE_ACTION, "android.intent.action.SEND"));
+        rejects(() -> TemplateApk.verify(alignedZip(wrongSpeech), speech));
+        rejects(() -> TemplateApk.inspect(alignedZip(wrongSpeech)));
+    }
     @Test public void legacyV1LayoutIsAcceptedOnlyThroughExplicitReceiptCompatibility() throws Exception {
         Map<String,byte[]> files=unzip(build());
         byte[] old=removeAttributeById(files.get("AndroidManifest.xml"),0x0101022b);files.put("AndroidManifest.xml",old);
@@ -604,10 +678,17 @@ public class TemplateApkTest {
     }
     /** Exact old-current manifest, preserving safe-area fields, DEX, resources and assets. */
     public static byte[] legacyClosedV1ArtifactFixture(byte[] current, TemplateApk.Spec expected) throws IOException {
+        return legacyContractArtifactFixture(current, expected, ManifestPlan.Profile.V1_BEFORE_CLIPBOARD_BROKER);
+    }
+    /** Exact old clipboard-broker contract; share/export did not yet contribute visibility. */
+    public static byte[] legacyClosedV2ArtifactFixture(byte[] current, TemplateApk.Spec expected) throws IOException {
+        return legacyContractArtifactFixture(current, expected, ManifestPlan.Profile.V2_BEFORE_NATIVE_OPERATIONS);
+    }
+    private static byte[] legacyContractArtifactFixture(byte[] current, TemplateApk.Spec expected, ManifestPlan.Profile profile) throws IOException {
         TemplateApk.ManifestInfo verified = TemplateApk.verify(current, expected);
         ManifestPlan legacy = new ManifestPlan(expected.appId, expected.label, expected.versionCode,
                 expected.versionName, verified.plan.iconResourceId, verified.plan.backupResourceId,
-                expected.capabilities, ManifestPlan.Profile.V1_BEFORE_CLIPBOARD_BROKER);
+                expected.capabilities, profile);
         Map<String, byte[]> files = unzip(current);
         files.put("AndroidManifest.xml", ManifestXml.encode(legacy));
         return alignedZip(files);
@@ -617,6 +698,12 @@ public class TemplateApkTest {
         // Historical apps did not bundle the v81 library. Signing must not require it.
         files.keySet().removeIf(name -> name.startsWith("assets/factory-ui/"));
         files.put("AndroidManifest.xml",removeAttributeById(files.get("AndroidManifest.xml"),0x0101022b));
+        return alignedZip(files);
+    }
+    /** Ancient fixture with its exact approved capabilities, before any broker declarations. */
+    public static byte[] legacyArtifactFixture(byte[] current, TemplateApk.Spec expected) throws IOException {
+        Map<String, byte[]> files = unzip(legacyContractArtifactFixture(current, expected, ManifestPlan.Profile.V1_BEFORE_SAFE_AREA));
+        files.keySet().removeIf(name -> name.startsWith("assets/factory-ui/"));
         return alignedZip(files);
     }
     private static byte[] removeAttributeById(byte[] xml,int id) throws IOException {

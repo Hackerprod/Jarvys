@@ -10,7 +10,7 @@ import java.util.Map;
 public final class ManifestPlan {
     public static final String ANDROID = "http://schemas.android.com/apk/res/android";
     public static final String ACTIVITY = "com.jarvys.factory.runtime.FactoryActivity";
-    public enum Profile { CURRENT, V1_BEFORE_CLIPBOARD_BROKER, V1_BEFORE_SAFE_AREA }
+    public enum Profile { CURRENT, V2_BEFORE_NATIVE_OPERATIONS, V1_BEFORE_CLIPBOARD_BROKER, V1_BEFORE_SAFE_AREA }
     public final Profile profile;
     public final String appId, label, versionName;
     public final int versionCode, iconResourceId, backupResourceId;
@@ -20,6 +20,7 @@ public final class ManifestPlan {
     public final List<String> permissions;
     public final List<String> features = Collections.emptyList();
     public final List<String> queries;
+    public final List<String> queryActions;
     public final List<String> hosts = Collections.emptyList();
     public final List<String> exportedComponents = Collections.singletonList(ACTIVITY);
 
@@ -64,6 +65,9 @@ public final class ManifestPlan {
         this.appId = appId; this.label = label; this.versionCode = versionCode; this.versionName = versionName;
         this.iconResourceId = iconResourceId; this.backupResourceId = backupResourceId;
         this.capabilities = CapabilityCatalog.select(capabilities);
+        if (profile != Profile.CURRENT && (this.capabilities.contains("network")
+                || this.capabilities.contains("notifications") || this.capabilities.contains("speech")))
+            throw new IllegalArgumentException("Native operation capabilities have no historical manifest profile");
         List<Node> result = new ArrayList<>();
         result.add(new Node("manifest", -1,
             a("package", 0, 3, appId), a("versionCode", 0x0101021b, 16, versionCode),
@@ -76,7 +80,8 @@ public final class ManifestPlan {
             a("theme", 0x01010000, 1, 0x01030241), a("label", 0x01010001, 3, label),
             a("icon", 0x01010002, 1, iconResourceId), a("allowBackup", 0x01010280, 18, 0),
             a("supportsRtl", 0x010103af, 18, -1), a("extractNativeLibs", 0x010104ea, 18, 0),
-            a("usesCleartextTraffic", 0x010104ec, 18, 0),
+            // Selecting network explicitly permits plaintext HTTP. TLS validation is never bypassed.
+            a("usesCleartextTraffic", 0x010104ec, 18, this.capabilities.contains("network") ? -1 : 0),
             a("appComponentFactory", 0x0101057a, 3, "androidx.core.app.CoreComponentFactory"),
             a("dataExtractionRules", 0x0101063e, 1, backupResourceId)));
         result.add(new Node("manifest/application/activity", 2, a("name", 0x01010003, 3, ACTIVITY),
@@ -91,27 +96,41 @@ public final class ManifestPlan {
         // Legacy receipt profiles retain the complete historical declaration set. Clipboard
         // was local then; it must not acquire new broker queries when re-verifying old bytes.
         List<String> manifestCapabilities = new ArrayList<>(this.capabilities);
+        if (profile != Profile.CURRENT) {
+            manifestCapabilities.remove("share"); manifestCapabilities.remove("export");
+        }
         if (profile == Profile.V1_BEFORE_CLIPBOARD_BROKER || profile == Profile.V1_BEFORE_SAFE_AREA)
             manifestCapabilities.remove("clipboard");
         List<ManifestNodes.Element> contributions = CapabilityCatalog.manifestContributions(manifestCapabilities);
-        List<String> selectedPermissions = new ArrayList<>(), selectedQueries = new ArrayList<>();
+        List<String> selectedPermissions = new ArrayList<>(), selectedQueries = new ArrayList<>(), selectedQueryActions = new ArrayList<>();
         for (ManifestNodes.Element contribution : contributions) {
             if (profile == Profile.V1_BEFORE_SAFE_AREA)
                 throw new IllegalArgumentException("Additional manifest declarations are not activated");
-            if (contribution == CapabilityCatalog.BIOMETRIC_DECLARATION) {
-                selectedPermissions.add(CapabilityCatalog.BIOMETRIC_PERMISSION);
+            if (contribution == CapabilityCatalog.BIOMETRIC_DECLARATION || contribution == CapabilityCatalog.INTERNET_DECLARATION
+                    || contribution == CapabilityCatalog.NOTIFICATION_DECLARATION) {
+                String permission = contribution == CapabilityCatalog.BIOMETRIC_DECLARATION ? CapabilityCatalog.BIOMETRIC_PERMISSION
+                        : contribution == CapabilityCatalog.INTERNET_DECLARATION ? CapabilityCatalog.INTERNET_PERMISSION : CapabilityCatalog.NOTIFICATION_PERMISSION;
+                selectedPermissions.add(permission);
                 result.add(new Node("manifest/uses-permission", 0,
-                        a("name", 0x01010003, 3, CapabilityCatalog.BIOMETRIC_PERMISSION)));
-            } else if (contribution == CapabilityCatalog.DOCUMENT_QUERIES) {
+                        a("name", 0x01010003, 3, permission)));
+            } else if (contribution == CapabilityCatalog.DOCUMENT_QUERIES || contribution == CapabilityCatalog.SPEECH_QUERIES) {
                 selectedQueries.addAll(CapabilityCatalog.DOCUMENT_BROKER_PACKAGES);
                 int queryIndex = result.size();
                 result.add(new Node("manifest/queries", 0));
+                if (contribution == CapabilityCatalog.SPEECH_QUERIES) {
+                    selectedQueryActions.add(CapabilityCatalog.TTS_SERVICE_ACTION);
+                    int intentIndex = result.size();
+                    result.add(new Node("manifest/queries/intent", queryIndex));
+                    result.add(new Node("manifest/queries/intent/action", intentIndex,
+                            a("name", 0x01010003, 3, CapabilityCatalog.TTS_SERVICE_ACTION)));
+                }
                 for (String host : selectedQueries) result.add(new Node("manifest/queries/package", queryIndex,
                         a("name", 0x01010003, 3, host)));
             } else throw new IllegalArgumentException("Additional manifest declarations are not activated");
         }
         permissions = Collections.unmodifiableList(selectedPermissions);
         queries = Collections.unmodifiableList(selectedQueries);
+        queryActions = Collections.unmodifiableList(selectedQueryActions);
         nodes = Collections.unmodifiableList(result);
         root = tree(result, 0);
     }
@@ -127,6 +146,7 @@ public final class ManifestPlan {
         if (name.equals("uses-permission")) return ManifestNodes.permission(
                 (String)node.attributes.get(ANDROID + "|name").value, ManifestNodes.PermissionVariant.STANDARD, null);
         if (name.equals("queries")) return ManifestNodes.queries(children);
+        if (node.path.equals("manifest/queries/intent")) return ManifestNodes.queryIntent(CapabilityCatalog.TTS_SERVICE_ACTION, null, null);
         if (name.equals("package")) return ManifestNodes.queryPackage((String)node.attributes.values().iterator().next().value);
         return ManifestNodes.base(name, children, node.attributes.values().toArray(new Attribute[0]));
     }

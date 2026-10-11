@@ -1,6 +1,6 @@
-# Factory guidance factory-guidance-v84 / biometrics
+# Factory guidance factory-guidance-v85 / biometrics
 
-Use with the always-loaded Factory core; this reference grants no tools or approvals.
+Use with core; grants no authority. Current basics/native-services supersede historical latest-only, extra-consent, totals, zero-permission/offline and pending-family claims below. API/data/quotas remain version-scoped.
 
 ## Local strong biometric authentication (v80)
 

@@ -43,6 +43,18 @@ public final class BridgeProtocol {
                     raw.getBytes(StandardCharsets.UTF_8).length > 1024)
                 throw new FactoryException("INVALID_ARGUMENT", "Backup cancellation envelope exceeds 1 KiB.");
             switch (operation) {
+                case NETWORK_REQUEST: NetworkRequest.fromRequest(args); break;
+                case NETWORK_PROBE: NetworkRequest.fromProbe(args); break;
+                case NETWORK_PING: NetworkPingRequest.parse(args); break;
+                case NETWORK_CANCEL: FactoryConfig.exactKeys(args); break;
+                case NOTIFICATIONS_STATUS: NotificationRequest.parseStatus(args.toString()); break;
+                case NOTIFICATIONS_CHANNEL: NotificationRequest.parseChannel(args); break;
+                case NOTIFICATIONS_SHOW: NotificationRequest.parseShow(args); break;
+                case NOTIFICATIONS_CANCEL: NotificationRequest.parseCancel(args); break;
+                case NOTIFICATIONS_REQUEST_PERMISSION: NotificationRequest.parsePermission(args.toString()); break;
+                case SPEECH_STATUS: case SPEECH_STOP: FactoryConfig.exactKeys(args); break;
+                case SPEECH_VOICES: SpeechRequest.parseVoices(args); break;
+                case SPEECH_SPEAK: SpeechRequest.parseSpeak(args); break;
                 case BIOMETRICS_AUTHENTICATE:
                     try { BiometricAuthentication.Request.parse(args); }
                     catch(FactoryException e) { throw e; }

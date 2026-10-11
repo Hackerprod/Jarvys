@@ -10,13 +10,13 @@ class FactoryGuidanceBundle private constructor(val version: String, resources: 
     val resources: Map<String, String> = Collections.unmodifiableMap(LinkedHashMap(resources))
 
     companion object {
-        const val VERSION = "factory-guidance-v84"
+        const val VERSION = "factory-guidance-v85"
         const val MAX_CORE_BYTES = 8 * 1024
         const val MAX_RESOURCE_BYTES = 16 * 1024
         const val MAX_TOTAL_BYTES = 64 * 1024
         const val MAX_RESOURCES = 16
         val NAMES: List<String> = Collections.unmodifiableList(listOf(
-            "basics", "documents-media", "external-actions", "contacts-calendar", "database", "presentation", "lifecycle", "sensors", "biometrics", "local-ui"))
+            "basics", "documents-media", "external-actions", "contacts-calendar", "database", "presentation", "lifecycle", "sensors", "biometrics", "local-ui", "native-services"))
         private const val ROOT = "skills/com.jarvys.apk-factory/references/"
 
         /** Loader is supplied by AssetManager in production; tests use synthetic bounded streams. */

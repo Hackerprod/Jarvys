@@ -77,11 +77,14 @@ public class DocumentBrokerIdentityTest {
         install(context, DocumentBrokerIdentity.PRIMARY, new Signature(CERTIFICATE), new Signature(new byte[] {3}));
         unavailable(configuration(DocumentBrokerIdentity.PRIMARY, digest()).documentBroker);
     }
-    @Test public void twoInstalledHostsFailEvenWhenBothCertificatesMatch() throws Exception {
+    @Test public void twoInstalledHostsRetainTheExplicitCertificatePin() throws Exception {
         Context context = RuntimeEnvironment.getApplication();
         install(context, DocumentBrokerIdentity.PRIMARY, new Signature(CERTIFICATE));
         install(context, DocumentBrokerIdentity.RECOVERY, new Signature(CERTIFICATE));
-        unavailable(configuration(DocumentBrokerIdentity.PRIMARY, digest()).documentBroker);
+        DocumentBrokerIdentity.verify(context, configuration(DocumentBrokerIdentity.PRIMARY, digest()).documentBroker);
+        DocumentBrokerIdentity.verify(context, configuration(DocumentBrokerIdentity.RECOVERY, digest()).documentBroker);
+        install(context, DocumentBrokerIdentity.RECOVERY, new Signature(new byte[] {99}));
+        DocumentBrokerIdentity.verify(context, configuration(DocumentBrokerIdentity.PRIMARY, digest()).documentBroker);
         unavailable(configuration(DocumentBrokerIdentity.RECOVERY, digest()).documentBroker);
     }
 }

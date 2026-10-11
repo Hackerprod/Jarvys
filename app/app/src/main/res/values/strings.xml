@@ -1425,4 +1425,7 @@ Their exit results are unknown. Do not repeat them automatically. Review project
     <string name="factory_calendar_timezone">Timezone (requested)</string>
     <string name="factory_calendar_all_day">All day (requested)</string>
     <string name="factory_calendar_description">Description</string>
+    <string name="factory_operation_review_title">Allow this operation?</string>
+    <string name="factory_operation_review_disclosure">Review the exact request from this installed Factory app. This approval applies only to this request.</string>
+    <string name="factory_operation_review_approve">Allow once</string>
 </resources>

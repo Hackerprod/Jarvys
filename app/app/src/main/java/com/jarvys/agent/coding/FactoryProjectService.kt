@@ -9,6 +9,7 @@ import com.jarvys.agent.apkfactory.FactoryJson
 import com.jarvys.agent.apkfactory.FactoryIcon
 import com.jarvys.agent.apkfactory.FactoryApkSigner
 import com.jarvys.agent.apkfactory.FactorySigningScope
+import com.jarvys.agent.apkfactory.FactorySignedArtifactHistory
 import com.jarvys.agent.apkfactory.FactorySigningIdentity
 import com.jarvys.factory.runtime.FactoryUiAssets
 import com.jarvys.agent.apkfactory.FactorySpec
@@ -77,7 +78,7 @@ internal class FactoryProjectService(
             .put("limits", JSONObject().put("websiteFiles", FactorySpec.MAX_WEB_FILES).put("websiteBytes", FactorySpec.MAX_WEB_BYTES)
                 .put("fileBytes", FactorySpec.MAX_FILE_BYTES).put("icon", "PNG, 48–1024 pixels per side, at most 1 MiB; or 192px geometric vector JSON"))
             .put("signing", "Signing follows Factory permissions: Allow always by default, Ask once, or Deny. Existing non-exportable AndroidKeyStore identities stay unchanged. For a NEW recoverable identity or encrypted backup/import, open Settings > Factory identities yourself; never send passphrases or private keys to a tool or conversation. No silent rotation or shared key.")
-            .put("unsupported", "Native APIs outside the listed template capabilities require a reviewed template update; network and microphone APIs are not implemented in this runtime; photo capture delegates to Android. Full installation follows Factory permissions and actual Android installer requirements.")
+            .put("unsupported", "Native APIs outside the listed template capabilities require a reviewed template update; HTTP(S), ICMP utility probing, notifications and platform speech are available through their listed capabilities; microphone APIs are not implemented; photo capture delegates to Android. Full installation follows Factory permissions and actual Android installer requirements.")
     }
     fun build(specPath: String, outputPath: String, expectedVersion: Long, token: CancellationToken): JSONObject {
         checkActive(token)
@@ -98,7 +99,7 @@ internal class FactoryProjectService(
             val replacements = sortedMapOf<String, ByteArray>()
             web.forEach { (path, bytes) -> replacements["assets/www/$path"] = bytes }
             replacements["assets/factory-app.json"] = spec.runtimeConfig(
-                if ("documents" in spec.capabilities || "clipboard" in spec.capabilities || "browser" in spec.capabilities || "maps" in spec.capabilities || "phone" in spec.capabilities || "email" in spec.capabilities || "sms" in spec.capabilities || "contacts" in spec.capabilities || "calendar" in spec.capabilities) com.jarvys.factory.runtime.DocumentBrokerIdentity.buildBinding(context) else null
+                if (com.jarvys.factory.contract.CapabilityCatalog.requiresHostBroker(spec.capabilities)) com.jarvys.factory.runtime.DocumentBrokerIdentity.buildBinding(context) else null
             )
             replacements["assets/factory-provenance.json"] = JSONObject().put("schemaVersion", 1).put("runtimeVersion", 1)
                 .put("templateSha256", ProjectScope.sha256(template)).put("sourceSha256", JSONObject(sources))
@@ -116,7 +117,7 @@ internal class FactoryProjectService(
             val receipt = JSONObject().put("schemaVersion", 1).put("buildId", id).put("state", "staged")
                 .put("projectIdentity", scope.durableIdentity()).put("projectId", scope.id()).put("outputPath", outputPath)
                 .put("apkSha256", sha).put("apkBytes", bytes.size).put("templateSha256", ProjectScope.sha256(template))
-                .put("manifestContract", "closed-v2-clipboard-broker").put("renderedIconSha256", ProjectScope.sha256(icon)).put("dexSha256", JSONObject(manifest.dexSha256)).put("spec", spec.toJson()).put("sources", JSONObject(sources)).put("signed", false)
+                .put("manifestContract", "closed-v3-native-operations").put("renderedIconSha256", ProjectScope.sha256(icon)).put("dexSha256", JSONObject(manifest.dexSha256)).put("spec", spec.toJson()).put("sources", JSONObject(sources)).put("signed", false)
             saveReceipt(sha, receipt)
             try {
                 FactoryProjectFiles.publish(scope, outputPath, staged, lease, token) { checkActive(token) }
@@ -211,6 +212,8 @@ internal class FactoryProjectService(
                     lease.validate()
                     permission.checkBeforeEffect()
                     check(identities.state(spec.appId) == approvedState) { "Signing identity changed before key creation" }
+                    // Save the prior exact signed scope before its monotonic identity receipt advances.
+                    FactorySignedArtifactHistory(context).preserveLatest(spec.appId, approvedState)
                     if (policySubject.certificate == null) operationPolicy.prepareBootstrapBinding(policySubject)
                     permission.checkBeforeEffect()
                     identities.obtainAfterApproval(spec.appId, approvedState)
@@ -243,6 +246,11 @@ internal class FactoryProjectService(
                         lease.validate()
                         permission.checkBeforeEffect()
                         identities.recordSigned(spec.appId, certificate, spec.versionCode, signedSha, signingScope)
+                        // Failure retains the consumed version and staging; no partially recorded artifact is published.
+                        try { FactorySignedArtifactHistory(context).recordCurrent(spec.appId, identities.state(spec.appId)) }
+                        catch (failure: Exception) {
+                            throw IOException("Signature recorded but exact artifact history was not confirmed. Staging was preserved; do not sign this version again.", failure)
+                        }
                         try {
                             FactoryProjectFiles.publish(scope, outputPath, output, lease, token) { checkActive(token); permission.checkBeforeEffect() }
                             signed.put("state", "published")
@@ -424,7 +432,8 @@ internal class FactoryProjectService(
     /** Exact historical profiles are selected only by this project's authenticated receipt. */
     private fun verifyReceiptManifest(bytes: ByteArray, spec: TemplateApk.Spec, receipt: JSONObject): TemplateApk.ManifestInfo =
         when (receipt.optString("manifestContract")) {
-            "closed-v2-clipboard-broker" -> TemplateApk.verify(bytes, spec)
+            "closed-v2-clipboard-broker" -> TemplateApk.verifyExistingClosedV2(bytes, spec)
+            "closed-v3-native-operations" -> TemplateApk.verify(bytes, spec)
             "closed-v1-current" -> TemplateApk.verifyExistingClosedV1(bytes, spec)
             "" -> TemplateApk.verifyExistingV1(bytes, spec)
             else -> error("Unsupported factory receipt manifest contract")
