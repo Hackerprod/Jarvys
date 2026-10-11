@@ -1,0 +1,108 @@
+{
+  "sourceCommit": "3e586193ee5cedd4de5d82bbf736373cee9118a1",
+  "appTree": "37ecee34e59ce70539f2796a8dd549438d24f6f0",
+  "frozenInputs": 1141,
+  "versionCode": 82,
+  "versionName": "1.2.75-FACTORY-GYROSCOPE",
+  "scope": "Additional bounded gyroscope kind, existing sensors grant/quotas; no new capability, method, permission, SDK or schema",
+  "tests": {
+    "freshTotal": 2604,
+    "fullDebugAffected": 170,
+    "playDebugAffected": 170,
+    "runtimeDebug": 87,
+    "runtimeRelease": 87,
+    "coreDebug": 1045,
+    "coreRelease": 1045,
+    "sdk": 42,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "guardedWorkers": 8,
+    "recordedBlockedJavaHttpAttempts": 2,
+    "blockedAttemptAttribution": "Unknown URL/test/cause; no zero-egress claim",
+    "exhaustiveMatrixInstances": 10,
+    "subsetsPerMatrixInstance": 1048576,
+    "gyroscopeLifecycleInstances": 84,
+    "unrelatedHostSuites": "6,340 cases in 739 variant suites retained as historical context with unchanged test-source, dependency-declaration and retained toolchain bindings. Shared production/assets changed; no complete resolved-classpath inventory or transfer of prior outcomes to v82 claimed. Not included in fresh total.",
+    "mainWallSeconds": 1693.5701053142548,
+    "supplementWallSeconds": 559.9890563488007
+  },
+  "lint": [
+    {
+      "module": "app",
+      "variant": "fullDebug",
+      "diagnostics": 321,
+      "same": true,
+      "sha256": "4fdc50061aa5fab01e23e6d142a228d7ee975bb85ba46806b3c662fa1e824e30",
+      "added": 0,
+      "removed": 0
+    },
+    {
+      "module": "app",
+      "variant": "playDebug",
+      "diagnostics": 311,
+      "same": true,
+      "sha256": "49d6312b88a1e4c1fc9054c6699eb0d584e1b9afbaaccd51cd3da88fb84771b6",
+      "added": 0,
+      "removed": 0
+    },
+    {
+      "module": "apk-runtime",
+      "variant": "release",
+      "diagnostics": 5,
+      "same": true,
+      "sha256": "09c8e68175418fd966fbc2687ff252710191ed817a015ed2141993f428c3a637",
+      "added": 0,
+      "removed": 0
+    },
+    {
+      "module": "factory-runtime-core",
+      "variant": "release",
+      "diagnostics": 4,
+      "same": true,
+      "sha256": "d2cc379a8f5fd9b19d54e7b637aa930cc862a2ff0a78bc238fa4207310e8a282",
+      "added": 0,
+      "removed": 0
+    }
+  ],
+  "artifacts": [
+    {
+      "variant": "full-debug",
+      "sha256": "46dee70ee4e6465cde32d4267e67592ac16e72ece6bbf2f74801a9ae19ad3032",
+      "bytes": 35307135
+    },
+    {
+      "variant": "play-debug",
+      "sha256": "9facea063b8084820ad59f4feb4df8d9c4ed3c54b81bf78f59ce43b6539c5997",
+      "bytes": 33695413
+    },
+    {
+      "variant": "full-release",
+      "sha256": "abdd47bfd4963b87365eca952639e8d8514aa9c51c19c1df2b544691db473fea",
+      "bytes": 27585796
+    }
+  ],
+  "auditStatus": "Final independent three-APK approval passed",
+  "deliveryStatus": "Not signed or delivered yet",
+  "limitations": [
+    "Synthetic host evidence only; no physical sensor, installation, ARM64 or WebView acceptance",
+    "No measurement accuracy, hardware-stop or zero-network guarantee"
+  ],
+  "retainedAttempts": [
+    "Initial run SIGINT interrupted before correcting guidance headroom; no success claimed",
+    "SDK cross-realm assertion corrected before source freeze",
+    "Coordinator failed closed before freeze JSON was available; restarted with unchanged source",
+    "Final freeze JSON written9seconds after launch; all1141 app input bytes predate launch and hash-match"
+  ],
+  "evidenceBindings": {
+    "source-purity-review.json": "52453686fbee2190ef8432d3c71e9337761bc7a0ccb33940f0946ddf6af60fce",
+    "early-template-review.json": "e579465a12c62aa36db0f6d7a2111ba7736516a8490498389ccbb25f279a4e98",
+    "historical-app-reuse-review-v82.json": "5616b3c0f1fe9480e5ddb6f4a38a2025eb421a5f767442edbef1614157975deb",
+    "sdk-review-v82.json": "b6a0b0912e54fec70a5aa15549d3310078196d020ab58351b0e5333cd7da6417",
+    "execution-review-v82.json": "a5e52b7d0b3b694df6d769709b728d2b0bd4cc5a82b98a81661fdcc8756083e7",
+    "lint-review-v82.json": "9aec1c14a5b976b2eb658514bf5c44aed6a7349ef0680cd83a3fc72456e9b5c3",
+    "build-review-v82.json": "bd73637ef9ea22e6a49eb42430693c9ccdb91ecd16909c826e78fe3c80fb8497",
+    "reviewer-final-three-apk-approval.json": "d2ae1b4724368e7e7e4a40354a653a5ed753cab5f8ae1b9199cf811c753b8f8d"
+  },
+  "lintBoundary": "Exact retained diagnostic equivalence with known legacy errors and existing abortOnError=false, not lint-clean; no new suppression."
+}

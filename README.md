@@ -24,9 +24,10 @@ The agent runtime runs in the Android app. **This does not mean the language mod
 
 This is an actively developed project with incremental, evidence-backed checkpoints.
 
-v82 gyroscope implementation is under validation. It extends existing bounded foreground
-capture with rad/s natural-device angular velocity, without new permissions. No final APK or
-physical-device acceptance is claimed yet. [Current evidence](recovery/factory-gyroscope/README.md).
+v82 gyroscope passed staged host validation: 2,604 fresh JUnit cases, SDK42, exact retained
+lint diagnostics and independent three-APK/DEX/template audits. It adds bounded rad/s capture
+without new permissions. Signed delivery is pending; physical-device acceptance remains open.
+[Scope and evidence](recovery/factory-gyroscope/README.md).
 
 | Checkpoint | Status |
 | --- | --- |

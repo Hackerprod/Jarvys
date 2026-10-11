@@ -97,5 +97,6 @@ Independent review approved SensorCapture.java SHA-256
 proof pin was changed. Request.parse adds only literal gyroscope kind acceptance; exact-key,
 string and integer validation stays deterministic, argument-only and side-effect-free. No new
 helper/dependency, capability observation, config escape or hidden state is introduced. Other
-22 pinned files and the exhaustive matrix method are unchanged. Fresh execution remains
-pending for this checkpoint; the original evidence above remains historical.
+22 pinned files and the exhaustive matrix method are unchanged. Fresh v82 execution passed all 10 exhaustive 2^20 matrix instances across the
+main and supplemental gates, including both FactorySpec instances. The original evidence
+above remains historical. See [v82 evidence](../factory-gyroscope/README.md).
