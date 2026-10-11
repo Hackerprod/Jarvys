@@ -1,0 +1,115 @@
+{
+  "sourceCommit": "c0005a1e1f7decea8ba660dae805dea8bbc19ec9",
+  "sourceTree": "d46c7b706153015aca334cf7710cda857cfb48a9",
+  "appTree": "d179b3f740d979c15e3c2b49c35b603a66d664fb",
+  "frozenInputs": 1140,
+  "versionCode": 81,
+  "versionName": "1.2.74-FACTORY-LOCAL-UI",
+  "scope": "Fixed runtime-owned Pure.css 3.0.0 assets; no new capability, method, permission, schema or SDK",
+  "tests": {
+    "freshTotal": 2398,
+    "fullDebugAffected": 137,
+    "playDebugAffected": 137,
+    "runtimeDebug": 86,
+    "runtimeRelease": 86,
+    "coreDebug": 976,
+    "coreRelease": 976,
+    "sdk": 41,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "guardedWorkers": 6,
+    "recordedBlockedJavaHttpAttempts": 2,
+    "blockedAttemptAttribution": "Unknown URL/test/cause; no general zero-egress claim",
+    "unrelatedHostSuites": "Historical baseline only; not freshly rerun",
+    "wallSeconds": 1296.0440328121185
+  },
+  "lint": [
+    {
+      "module": "app",
+      "variant": "fullDebug",
+      "diagnostics": 321,
+      "same": true,
+      "sha256": "4fdc50061aa5fab01e23e6d142a228d7ee975bb85ba46806b3c662fa1e824e30",
+      "added": 0,
+      "removed": 0
+    },
+    {
+      "module": "app",
+      "variant": "playDebug",
+      "diagnostics": 311,
+      "same": true,
+      "sha256": "49d6312b88a1e4c1fc9054c6699eb0d584e1b9afbaaccd51cd3da88fb84771b6",
+      "added": 0,
+      "removed": 0
+    },
+    {
+      "module": "apk-runtime",
+      "variant": "release",
+      "diagnostics": 5,
+      "same": true,
+      "sha256": "09c8e68175418fd966fbc2687ff252710191ed817a015ed2141993f428c3a637",
+      "added": 0,
+      "removed": 0
+    },
+    {
+      "module": "factory-runtime-core",
+      "variant": "release",
+      "diagnostics": 4,
+      "same": true,
+      "sha256": "d2cc379a8f5fd9b19d54e7b637aa930cc862a2ff0a78bc238fa4207310e8a282",
+      "added": 0,
+      "removed": 0
+    }
+  ],
+  "artifacts": [
+    {
+      "variant": "full-debug",
+      "sha256": "2648fd135c3acea15be63590cd738319048b08f2869ea4b73175a718172c5e37",
+      "bytes": 35307327
+    },
+    {
+      "variant": "play-debug",
+      "sha256": "239bb9e4ffadb649464e4d8d21e9d563a45ca634ae0e8286ab3158bd30e6962a",
+      "bytes": 33695549
+    },
+    {
+      "variant": "full-release",
+      "sha256": "e3b9fe81a81b0fd691cbfef59b3eba1117ab0a93f14e4fe28d764a0c319c6757",
+      "bytes": 27585920
+    }
+  ],
+  "retainedPreflight": {
+    "tests": 144,
+    "failures": 1,
+    "reason": "New guidance discovery exceeded unchanged 7680-byte headroom assertion",
+    "correction": "Compact discovery prose, no assertion weakening; final parsed core 7676 bytes"
+  },
+  "rendering": "Chromium startup blocked before page load at process_singleton socket permission; no successful visual, interaction, Android WebView or physical test",
+  "binaryAudit": "All three exact unsigned APKs independently approved",
+  "delivery": {
+    "acceptedAtUtc": "2026-10-11T05:19:24.403737Z",
+    "bytes": 19385510,
+    "sha256": "539204b0f246a7b048516f17d519a04f2044b3fa23f6ef5c01876e319fd46128",
+    "signer": "Existing D7 test certificate",
+    "schemes": [
+      "v2",
+      "v3"
+    ],
+    "retainedEntriesIdentical": 255,
+    "nonArm64LibrariesRemoved": 9,
+    "signatureEntriesAdded": 3,
+    "independentlyRetrievedLibraryVersion": 0,
+    "persistedLibraryBytesMatch": true,
+    "downloadInstallationOrPhysicalAcceptance": false
+  },
+  "reviewReceiptHashes": {
+    "source-review-c0005a1.json": "eca7c0c5e27c752d1e3f02eed47a0eb45c6146a8015df3a43724d93ffd8091d3",
+    "execution-review-c0005a1.json": "8fe2a6793a1c232b3b10ef15301d065ca51977229c5d9adb89a4c6b1504a3c57",
+    "lint-review-c0005a1.json": "0a2bde7dde6b6cc4cf66120a5d43d01307f909d4c4fff71d672c9ab7fbf4eea6",
+    "build-review-c0005a1.json": "07d53eb82bbc1c4eb9bef7157f0e848ef3c73d3cd8ab77e4fe2c8c63ad6f116a",
+    "reviewer-final-three-apk-approval.json": "b4b6b2605944fe38abf5bd3d7ec3d9289465628168a4bfb6b59bfd8b1a0f63a3",
+    "reviewer-signed-library-binding.json": "b5c1973263849e0f0e6aa17dcd3aa56af3d5445fc5c446fb6dddb2609043159e"
+  },
+  "build": "Three fresh packaging tasks, compile/resource cache reuse; not a clean rebuild"
+}
