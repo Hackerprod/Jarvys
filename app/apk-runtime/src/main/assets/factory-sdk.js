@@ -45,7 +45,7 @@
       if (!bridge || typeof bridge.postMessage !== 'function') {
         reject(failure('BRIDGE_UNAVAILABLE', 'Open this application in its generated Android APK.')); return;
       }
-      var cancellation = method === 'sensors.cancel' || method === 'biometrics.cancel' || method === 'database.cancel' || method === 'documents.cancel' || method === 'network.cancel' || method === 'speech.stop' || method === 'voiceRecognition.cancel' || method === 'location.cancel' || method === 'recording.cancel' || method === 'recording.stop' || method === 'steps.cancel' || method === 'sensors.unsubscribe';
+      var cancellation = /^(nfc\.cancel|bluetooth\.(stopScan|unsubscribe|disconnect|cancel)|jobs\.cancel)$/.test(method) || method === 'sensors.cancel' || method === 'biometrics.cancel' || method === 'database.cancel' || method === 'documents.cancel' || method === 'network.cancel' || method === 'speech.stop' || method === 'voiceRecognition.cancel' || method === 'location.cancel' || method === 'recording.cancel' || method === 'recording.stop' || method === 'steps.cancel' || method === 'sensors.unsubscribe';
       var controlPending = false;
       if (cancellation) pending.forEach(function (entry) { if (entry.method === method) controlPending = true; });
       if (pending.size >= (cancellation ? 20 : 16) || controlPending) {
@@ -58,11 +58,13 @@
         if (new TextEncoder().encode(payload).length > MAX_MESSAGE_BYTES) throw failure('TOO_LARGE', 'Native request exceeds 512 KiB.');
       } catch (error) { reject(error.code ? error : failure('INVALID_ARGUMENT', 'Arguments must be serializable JSON.')); return; }
       var timeout = /^(export|clipboard|share)\./.test(method) || /^(documents\.(open|create)|photos\.(pick|capture)|audio\.play|browser\.open|maps\.open|phone\.dial|email\.compose|sms\.compose|contacts\.pick|calendar\.insert)$/.test(method) ? 600000 : 30000;
+      if (/^(nfc|bluetooth|widgets|jobs)\./.test(method)) timeout = 620000;
       if (method === 'sensors.capture') timeout = 310000;
       if (method === 'audio.play') timeout = 610000;
       if (method === 'biometrics.authenticate') timeout = 90000;
       if (/^(network|notifications|location|steps)\./.test(method)) timeout = 420000;
       if (/^(secrets|incomingShare)\./.test(method)) timeout = 600000;
+      if (method === 'network.upload' || method === 'network.download') timeout = 86700000;
       if (/^voiceRecognition\./.test(method)) timeout = 900000;
       if (/^recording\./.test(method)) timeout = 3900000;
       if (/^speech\./.test(method)) timeout = method === 'speech.speak' ? 86400000 : 420000;
@@ -100,6 +102,8 @@
       discard: function (options) { return call('incomingShare.discard', options); }
     }),
     network: Object.freeze({
+      upload: function (options) { return call('network.upload', options); },
+      download: function (options) { return call('network.download', options); },
       request: function (options) { return call('network.request', options); },
       probe: function (options) { return call('network.probe', options); },
       ping: function (options) { return call('network.ping', options); },
@@ -158,6 +162,7 @@
       set: function (key, value) { return call('storage.set', { key: key, value: value }); },
       remove: function (key) { return call('storage.remove', { key: key }); },
       list: function () { return call('storage.list', {}); },
+      listPage: function (options) { return call('storage.listPage', options === undefined ? {} : options); },
       backupExport: function (options) { return call('storage.backupExport', options); },
       backupImport: function (options) { return call('storage.backupImport', options); }
     }),
@@ -214,6 +219,46 @@
       file: function (options) { return call('share.file', options); } }),
     clipboard: Object.freeze({ write: function (text) { return call('clipboard.write', { text: text }); } }),
     haptics: Object.freeze({ perform: function (kind) { return call('haptics.perform', { kind: kind === undefined ? 'tap' : kind }); } }),
+    nfc: Object.freeze({
+      status: function (options) { return call('nfc.status', options === undefined ? {} : options); },
+      read: function (options) { return call('nfc.read', options === undefined ? {} : options); },
+      write: function (options) { return call('nfc.write', options === undefined ? {} : options); },
+      cancel: function (options) { return call('nfc.cancel', options === undefined ? {} : options); }
+    }),
+    bluetooth: Object.freeze({
+      status: function (options) { return call('bluetooth.status', options === undefined ? {} : options); },
+      requestPermissions: function (options) { return call('bluetooth.requestPermissions', options === undefined ? {} : options); },
+      scan: function (options) { return call('bluetooth.scan', options === undefined ? {} : options); },
+      poll: function (options) { return call('bluetooth.poll', options === undefined ? {} : options); },
+      stopScan: function (options) { return call('bluetooth.stopScan', options === undefined ? {} : options); },
+      connect: function (options) { return call('bluetooth.connect', options === undefined ? {} : options); },
+      services: function (options) { return call('bluetooth.services', options === undefined ? {} : options); },
+      read: function (options) { return call('bluetooth.read', options === undefined ? {} : options); },
+      write: function (options) { return call('bluetooth.write', options === undefined ? {} : options); },
+      requestMtu: function (options) { return call('bluetooth.requestMtu', options === undefined ? {} : options); },
+      subscribe: function (options) { return call('bluetooth.subscribe', options === undefined ? {} : options); },
+      unsubscribe: function (options) { return call('bluetooth.unsubscribe', options === undefined ? {} : options); },
+      disconnect: function (options) { return call('bluetooth.disconnect', options === undefined ? {} : options); },
+      cancel: function (options) { return call('bluetooth.cancel', options === undefined ? {} : options); }
+    }),
+    widgets: Object.freeze({
+      availability: function (options) { return call('widgets.availability', options === undefined ? {} : options); },
+      list: function (options) { return call('widgets.list', options === undefined ? {} : options); },
+      read: function (options) { return call('widgets.read', options === undefined ? {} : options); },
+      requestPin: function (options) { return call('widgets.requestPin', options === undefined ? {} : options); },
+      update: function (options) { return call('widgets.update', options === undefined ? {} : options); },
+      remove: function (options) { return call('widgets.remove', options === undefined ? {} : options); },
+      pollActions: function (options) { return call('widgets.pollActions', options === undefined ? {} : options); },
+      acknowledgeAction: function (options) { return call('widgets.acknowledgeAction', options === undefined ? {} : options); }
+    }),
+    jobs: Object.freeze({
+      enqueueHttp: function (options) { return call('jobs.enqueueHttp', options === undefined ? {} : options); },
+      status: function (options) { return call('jobs.status', options === undefined ? {} : options); },
+      cancel: function (options) { return call('jobs.cancel', options === undefined ? {} : options); },
+      readResult: function (options) { return call('jobs.readResult', options === undefined ? {} : options); },
+      forget: function (options) { return call('jobs.forget', options === undefined ? {} : options); },
+      resume: function (options) { return call('jobs.resume', options === undefined ? {} : options); }
+    }),
     device: Object.freeze({ info: function () { return call('device.info', {}); } })
   });
   Object.defineProperty(global, 'Jarvys', { value: api, configurable: false, writable: false, enumerable: true });

@@ -218,6 +218,96 @@ public final class DocumentHandles {
         public final boolean providerCommitConfirmed=false;
         private CloseResult() {}
     }
+    /** Native-only exclusive claim; preserves the original guarded provider stream, never unwraps it.
+     * Reserves remaining capacity before any transfer traffic. Unused reservation is refunded,
+     * but an uncertain provider call remains fully charged. No provider is opened by a claim.
+     */
+    Transfer claimTransfer(String token, boolean write, long offset, long maximum) throws FactoryException {
+        synchronized (lock) {
+            Entry entry = lookup(token, write, offset);
+            if (maximum < 0 || maximum > budget.handleBytes - entry.charged
+                    || maximum > budget.sessionBytes - ledger.charged
+                    || maximum > budget.handleBytes - offset) throw error("DOCUMENT_QUOTA");
+            if (maximum != 0) { chargeSession(maximum); entry.charged = add(entry.charged, maximum); }
+            entry.busy = true;
+            return new Transfer(entry, maximum, offset);
+        }
+    }
+    final class Transfer implements AutoCloseable {
+        private final Entry entry;
+        private final long initialOffset;
+        private long remaining, confirmed;
+        private int inFlight;
+        private boolean closed, uncertain;
+        private Transfer(Entry entry, long maximum, long offset) {
+            this.entry = entry; remaining = maximum; initialOffset = offset;
+        }
+        void check() throws FactoryException {
+            synchronized (lock) { if (closed) throw error("INVALID_HANDLE"); finishCheck(entry); }
+        }
+        final class Progress {
+            final long confirmedBytes, nextOffset;
+            final boolean positionUncertain;
+            private Progress() { confirmedBytes = confirmed; nextOffset = initialOffset + confirmed; positionUncertain = uncertain || inFlight != 0; }
+        }
+        Progress progress() { synchronized (lock) { return new Progress(); } }
+        private void start(int count, boolean write) throws FactoryException {
+            synchronized (lock) {
+                check();
+                if (write != entry.write) throw error("WRONG_MODE");
+                if (count < 1 || count > MAX_CHUNK_BYTES || count > remaining || inFlight != 0) throw error("INVALID_CHUNK");
+                remaining -= count; inFlight = count;
+            }
+        }
+        private void settled(int count) throws FactoryException {
+            synchronized (lock) {
+                int unused = inFlight - count;
+                // A cancellation may already have released the unused reservation. The current
+                // call's unused portion is then refunded separately, only after its true result.
+                if (closed) refundTransfer(unused); else remaining += unused;
+                inFlight = 0; confirmed += count; entry.offset += count;
+                check();
+            }
+        }
+        int read(byte[] buffer, int count) throws FactoryException {
+            if (buffer == null || count > buffer.length) throw error("INVALID_CHUNK");
+            start(count, false);
+            final int actual;
+            try { actual = ((InputStream) entry.stream).read(buffer, 0, count); }
+            catch (Exception failure) { failed(); throw error("DOCUMENT_IO"); }
+            if (actual < -1 || actual == 0 || actual > count) { failed(); throw error("DOCUMENT_IO"); }
+            settled(Math.max(0, actual));
+            if (actual == -1) synchronized (lock) { entry.eof = true; }
+            return actual;
+        }
+        void write(byte[] buffer, int count) throws FactoryException {
+            if (buffer == null || count > buffer.length) throw error("INVALID_CHUNK");
+            start(count, true);
+            try { ((OutputStream) entry.stream).write(buffer, 0, count); }
+            catch (Exception failure) { failed(); throw error("DOCUMENT_IO"); }
+            settled(count);
+        }
+        private void failed() {
+            synchronized (lock) { uncertain = true; inFlight = 0; cancel(); }
+        }
+        /** Cancellation retires only this handle; provider close remains bounded/asynchronous. */
+        void cancel() {
+            synchronized (lock) { release(); remove(entry); }
+        }
+        private void refundTransfer(long count) {
+            if (count < 0 || count > entry.charged || count > ledger.charged) throw new IllegalStateException("Invalid transfer accounting");
+            entry.charged -= count; ledger.charged -= count;
+        }
+        private void release() {
+            if (closed) return;
+            refundTransfer(remaining); remaining = 0; closed = true;
+            entry.busy = false;
+        }
+        /** Success leaves the sequential handle usable at its next known offset. No flush/commit claim. */
+        @Override public void close() {
+            synchronized (lock) { if (inFlight != 0) { cancel(); return; } release(); }
+        }
+    }
     /** The request must fit the remaining quota. At the exact limit, close rather than
      * probing EOF: proving EOF would require an unauthorized extra provider read. */
     public ReadResult read(String token,long offset,int maxBytes) throws FactoryException {
@@ -354,6 +444,17 @@ public final class DocumentHandles {
         synchronized(lock) {
             revoked=true; nativeByteAuthority=new Object();
             for (Entry entry:new ArrayList<>(entries.values())) remove(entry);
+        }
+    }
+    public static final class Metadata {
+        public final long expiresAfterMs, maximumBytes;
+        private Metadata(long remaining,long maximum) { expiresAfterMs=remaining; maximumBytes=maximum; }
+    }
+    public Metadata metadata(String token) throws FactoryException {
+        synchronized(lock) {
+            expireLocked(); Entry entry=entries.get(token);
+            if(revoked || entry==null || entry.opening || entry.stream==null) throw error("INVALID_HANDLE");
+            return new Metadata(Math.max(0,budget.leaseMs-(clock.millis()-entry.created)),budget.handleBytes);
         }
     }
     public void expire() { synchronized(lock) { expireLocked(); } }

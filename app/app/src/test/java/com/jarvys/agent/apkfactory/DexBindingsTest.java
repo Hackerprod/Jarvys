@@ -120,11 +120,30 @@ public class DexBindingsTest {
         try { DexBindings.verify(input); fail("Expected rejection: "+message); }
         catch(IOException expected) { assertTrue(expected.getMessage(),expected.getMessage().contains(message)); }
     }
-    private static byte[] fixture(boolean activity,boolean factory) throws Exception {
+    @Test public void genericNativeComponentsRequireConcreteDefinitionsAndExactSuperclasses() throws Exception {
+        Map<String,String> extras=new LinkedHashMap<>();
+        extras.put("Lcom/jarvys/factory/runtime/FactoryWidgetProvider;","Landroid/appwidget/AppWidgetProvider;");
+        extras.put("Lcom/jarvys/factory/runtime/FactoryWidgetActionReceiver;","Landroid/content/BroadcastReceiver;");
+        extras.put("Lcom/jarvys/factory/runtime/FactoryHttpJobService;","Landroid/app/job/JobService;");
+        Map<String,String> evidence=DexBindings.verify(files(fixture(true,true,extras)),false,true,true);
+        assertEquals(5,evidence.size());
+        for(String descriptor:extras.keySet()) {
+            Map<String,String> missing=new LinkedHashMap<>(extras);missing.remove(descriptor);
+            assertThrows(IOException.class,()->DexBindings.verify(files(fixture(true,true,missing)),false,true,true));
+            Map<String,String> wrong=new LinkedHashMap<>(extras);wrong.put(descriptor,"Landroid/app/Activity;");
+            assertThrows(IOException.class,()->DexBindings.verify(files(fixture(true,true,wrong)),false,true,true));
+        }
+        assertThrows(IOException.class,()->DexBindings.verify(files(fixture(true,true)),false,true,false));
+        assertThrows(IOException.class,()->DexBindings.verify(files(fixture(true,true)),false,false,true));
+        assertEquals(2,DexBindings.verify(files(fixture(true,true))).size());
+    }
+    private static byte[] fixture(boolean activity,boolean factory) throws Exception { return fixture(activity,factory,Collections.emptyMap()); }
+    private static byte[] fixture(boolean activity,boolean factory,Map<String,String> extras) throws Exception {
         List<String> types=new ArrayList<>(new TreeSet<>(Arrays.asList(ACTIVITY,FACTORY,"Landroid/app/Activity;","Landroid/app/AppComponentFactory;","V")));
+        TreeSet<String> allTypes=new TreeSet<>(types);allTypes.addAll(extras.keySet());allTypes.addAll(extras.values());types=new ArrayList<>(allTypes);
         TreeSet<String> pool=new TreeSet<>(types); pool.add("<init>");
         List<String> strings=new ArrayList<>(pool), defined=new ArrayList<>();
-        for(String t:types) if((t.equals(ACTIVITY) && activity) || (t.equals(FACTORY) && factory)) defined.add(t);
+        for(String t:types) if((t.equals(ACTIVITY) && activity) || (t.equals(FACTORY) && factory) || extras.containsKey(t)) defined.add(t);
         int stringOff=112,typeOff=stringOff+strings.size()*4,protoOff=typeOff+types.size()*4;
         int methodOff=protoOff+12,classOff=methodOff+defined.size()*8,data=classOff+defined.size()*32;
         ByteArrayOutputStream out=new ByteArrayOutputStream(); out.write(new byte[data]);
@@ -154,7 +173,7 @@ public class DexBindingsTest {
             String desc=defined.get(i); int m=methodOff+i*8,c=classOff+i*32;
             b[m]=(byte)types.indexOf(desc); put(b,m+4,strings.indexOf("<init>"));
             put(b,c,types.indexOf(desc)); put(b,c+4,1);
-            put(b,c+8,types.indexOf(desc.equals(ACTIVITY)?"Landroid/app/Activity;":"Landroid/app/AppComponentFactory;"));
+            put(b,c+8,types.indexOf(extras.containsKey(desc)?extras.get(desc):desc.equals(ACTIVITY)?"Landroid/app/Activity;":"Landroid/app/AppComponentFactory;"));
             put(b,c+16,-1); put(b,c+24,classData[i]);
         }
         resign(b); return b;

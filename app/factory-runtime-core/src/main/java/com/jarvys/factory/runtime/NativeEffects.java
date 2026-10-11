@@ -38,10 +38,22 @@ final class NativeEffects implements AutoCloseable {
     private final NativeNetwork network;
     private final Supplier<DocumentHandles> documents;
     private final Map<String, Job> jobs = new ConcurrentHashMap<>();
+    private static final java.util.concurrent.ScheduledThreadPoolExecutor HTTP_WATCH = httpWatch();
+    private static final ThreadPoolExecutor HTTP_CLEANUP = new ThreadPoolExecutor(2, 2, 30, TimeUnit.SECONDS,
+            new ArrayBlockingQueue<Runnable>(32), task -> { Thread thread = new Thread(task, "factory-http-job-close"); thread.setDaemon(true); return thread; },
+            new ThreadPoolExecutor.AbortPolicy());
+    static { HTTP_CLEANUP.allowCoreThreadTimeOut(true); }
+    private static java.util.concurrent.ScheduledThreadPoolExecutor httpWatch() {
+        java.util.concurrent.ScheduledThreadPoolExecutor executor = new java.util.concurrent.ScheduledThreadPoolExecutor(1,
+                task -> { Thread thread = new Thread(task, "factory-http-job-lifetime"); thread.setDaemon(true); return thread; });
+        executor.setRemoveOnCancelPolicy(true); return executor;
+    }
     private NativeSpeech speech;
     private NativeVoiceRecognition recognition;
     private NativeLocation location;
     private NativeSteps steps;
+    private NativeNfc nfc;
+    private NativeBleEffects bluetooth;
     private SensorSubscriptions subscriptions;
     private final Map<String, Job> subscriptionJobs = new ConcurrentHashMap<>();
     private RecordingEffects recording;
@@ -63,6 +75,13 @@ final class NativeEffects implements AutoCloseable {
         volatile NativePermissionSessions.Lease lease;
         volatile Runnable cancellation;
         volatile NotificationScheduleEngine.Session notificationSession;
+        volatile HttpJobEngine.Session httpSession;
+        volatile String httpJobId;
+        volatile java.util.concurrent.ScheduledFuture<?> httpTimeout;
+        void endHttpSession() {
+            if (httpSession != null) httpSession.stop();
+            java.util.concurrent.ScheduledFuture<?> timer = httpTimeout; if (timer != null) timer.cancel(false);
+        }
         volatile boolean ownData;
         Job(String id, String method, Reply reply) { this.id = id; this.method = method; this.reply = reply; }
         boolean current() { return !closed && !done.get() && (retained ? reply.pageCurrent() : reply.current()) && jobs.get(key) == this; }
@@ -70,6 +89,7 @@ final class NativeEffects implements AutoCloseable {
         void checkAuthority() {
             if (!foreground || !current()) throw new SecurityException("Native page ownership ended.");
             if (notificationSession != null) notificationSession.check();
+            if (httpSession != null) httpSession.check();
             if (!ownData) {
                 if (lease == null) throw new SecurityException("Native operation has no live grant.");
                 lease.check();
@@ -92,6 +112,7 @@ final class NativeEffects implements AutoCloseable {
                     if (!done.compareAndSet(false, true)) return;
                     jobs.remove(key, this);
                     if (notificationSession != null) notificationSession.invalidate();
+                    endHttpSession();
                     if (lease != null) lease.close();
                     if (speechOwner == this) speechOwner = null;
                     reply.ok(result);
@@ -143,6 +164,7 @@ final class NativeEffects implements AutoCloseable {
             if (!done.compareAndSet(false, true)) return;
             jobs.remove(key, this);
             if (notificationSession != null) notificationSession.invalidate();
+            endHttpSession();
             Runnable action = cancellation; if (action != null) try { action.run(); } catch (RuntimeException ignored) { }
             if (lease != null) lease.close();
             main.post(() -> { if ((permissionJob != this || permissionReturned) && !(recognitionUiJob == this && hasPendingActivity()) && exactAlarmJob != this && !pendingPolicyReview()) reply.releaseUi(); reply.fail(code, message); });
@@ -179,8 +201,42 @@ final class NativeEffects implements AutoCloseable {
         networkIo.allowCoreThreadTimeOut(true);
     }
     void perform(BridgeProtocol.Request request, Reply reply) throws Exception {
-        if (closed || !foreground || !reply.current()) throw new FactoryException("UNAVAILABLE", "Native operations require the foreground application.");
+        boolean nfcCleanup = request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.NFC_CANCEL;
+        if (closed || (nfcCleanup ? !reply.pageCurrent() : !foreground || !reply.current()))
+            throw new FactoryException("UNAVAILABLE", "Native operations require the foreground application; cleanup still requires the current page.");
         switch (request.operation) {
+            case BLUETOOTH_STATUS: case BLUETOOTH_REQUEST_PERMISSIONS: case BLUETOOTH_SCAN:
+            case BLUETOOTH_POLL: case BLUETOOTH_STOP_SCAN: case BLUETOOTH_CONNECT:
+            case BLUETOOTH_SERVICES: case BLUETOOTH_READ: case BLUETOOTH_WRITE:
+            case BLUETOOTH_REQUEST_MTU: case BLUETOOTH_SUBSCRIBE: case BLUETOOTH_UNSUBSCRIBE:
+            case BLUETOOTH_DISCONNECT: case BLUETOOTH_CANCEL:
+                bluetooth().perform(request.method, request.args, reply); return;
+            case JOBS_ENQUEUE_HTTP: case JOBS_STATUS: case JOBS_CANCEL:
+            case JOBS_RESUME: case JOBS_READ_RESULT: case JOBS_FORGET:
+                performHttpJob(request, reply); return;
+            case WIDGETS_AVAILABILITY: case WIDGETS_LIST: case WIDGETS_READ:
+            case WIDGETS_REQUEST_PIN: case WIDGETS_UPDATE: case WIDGETS_REMOVE:
+            case WIDGETS_POLL_ACTIONS: case WIDGETS_ACKNOWLEDGE_ACTION:
+                performWidgets(request, reply); return;
+            case NFC_STATUS:
+                NfcRequest.empty(request.args); reply.ok(nfc().status()); return;
+            case NFC_CANCEL:
+                NfcRequest.empty(request.args); cancelNfc(reply); return;
+            case NFC_READ: case NFC_WRITE:
+                NfcRequest.Operation nfcOperation = request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.NFC_WRITE
+                        ? NfcRequest.write(request.args, nfcLimits()) : NfcRequest.read(request.args, nfcLimits());
+                for (Job pending : new ArrayList<>(jobs.values()))
+                    if (isNfcOperation(pending.method) && !pending.done.get())
+                        throw new FactoryException("BUSY", "This page already owns a pending or active NFC operation.");
+                authorize(request, reply, nfcOperation.authorizationDetails(), job -> {
+                    NfcSessionMachine.Handle handle = nfc().execute(nfcOperation, job::checkAuthority, new NfcSessionMachine.Callback() {
+                        public void complete(JSONObject result) { job.complete(result); }
+                        public void error(FactoryException failure) { job.fail(failure); }
+                    });
+                    job.cancellation = handle::cancel;
+                    job.lease.onCancelled(handle::cancel);
+                    if (!job.current() || !foreground) handle.cancel();
+                }); return;
             case SECRETS_PUT: case SECRETS_CAPTURE: case SECRETS_GET: case SECRETS_LIST:
             case SECRETS_DESCRIBE: case SECRETS_REMOVE: case SECRETS_RESET: case SECRETS_REQUEST:
                 SecretEffects.Prepared prepared = SecretEffects.prepare(request.method, request.args);
@@ -334,6 +390,16 @@ final class NativeEffects implements AutoCloseable {
             case NOTIFICATIONS_STATUS:
                 reply.ok(notificationEffects().status(NotificationRequest.parseStatus(request.args.toString()))); return;
             case SPEECH_STATUS: reply.ok(speech().status()); return;
+            case NETWORK_UPLOAD: case NETWORK_DOWNLOAD:
+                NetworkTransferRequest transfer = request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.NETWORK_UPLOAD
+                        ? NetworkTransferRequest.upload(request.args, config.resources) : NetworkTransferRequest.download(request.args, config.resources);
+                final DocumentHandles transferDocuments = documents.get();
+                if (transferDocuments == null) throw new FactoryException("UNAVAILABLE", "The current page document registry is unavailable.");
+                authorize(request, reply, transfer.authorizationDetails(), job -> {
+                    NativeNetwork.Cancellation cancellation = new NativeNetwork.Cancellation(); job.cancellation = cancellation::cancel;
+                    job.lease.onCancelled(cancellation::cancel);
+                    job.worker(networkIo, value -> value.complete(NativeEffects.this.network.executeTransfer(transfer, transferDocuments, value.lease, cancellation)));
+                }); return;
             case NETWORK_REQUEST: case NETWORK_PROBE:
                 NetworkRequest network = request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.NETWORK_PROBE
                         ? NetworkRequest.fromProbe(request.args) : NetworkRequest.fromRequest(request.args);
@@ -428,6 +494,117 @@ final class NativeEffects implements AutoCloseable {
             public void complete(JSONObject value) { job.complete(value); }
             public void error(FactoryException error) { job.fail(error); }
         };
+    }
+    /** An inert inbox operation owns no remote grant; resume reviews only its durable stored payload. */
+    private void performHttpJob(BridgeProtocol.Request request, Reply reply) throws Exception {
+        NativeHttpJobs.validate(request.method, request.args);
+        if (!config.capabilities.contains("jobs") || !config.capabilities.contains("network"))
+            throw new FactoryException("CAPABILITY_REQUIRED", "Finite HTTP jobs require jobs and network capabilities.");
+        Job job = new Job(request.id, request.method, reply); job.ownData = true;
+        HttpJobEngine.Session session = new HttpJobEngine.Session(FactoryHttpJobServices.CLOCK, HttpJobEngine.Session.MAX_LIFETIME_MS);
+        job.httpSession = session; job.httpJobId = request.args.getString("jobId");
+        job.cancellation = () -> {
+            session.stop();
+            try { HTTP_CLEANUP.execute(session.cancellation::cancel); }
+            catch (java.util.concurrent.RejectedExecutionException busy) { /* Checks are fenced; NativeNetwork's independent deadline remains bounded. */ }
+        };
+        jobs.put(job.key, job);
+        job.httpTimeout = HTTP_WATCH.schedule(() -> job.fail("TIMEOUT", "Finite job page session ended; a committed HTTP effect may already have occurred."),
+                HttpJobEngine.Session.MAX_LIFETIME_MS, TimeUnit.MILLISECONDS);
+        // Policy IPC uses io. Never wait for that IPC while occupying the same executor.
+        job.worker(networkIo, current -> {
+            JSONObject result = NativeHttpJobs.execute(activity, config, request.method, request.args,
+                    (row, source, mode, active) -> acquireHttpJobAuthority(current, row, source, mode, active), session);
+            if ("jobs.cancel".equals(request.method)) {
+                for (Job pending : new ArrayList<>(jobs.values()))
+                    if (pending != current && "jobs.resume".equals(pending.method) && current.httpJobId.equals(pending.httpJobId))
+                        pending.fail("CANCELLED", "This HTTP job was cancelled; an external effect may already have occurred.");
+            }
+            current.complete(result);
+        });
+    }
+    /** Bounded cancellable worker-to-main rendezvous; the exact existing ASK flow owns UI and grant. */
+    private HttpJobEngine.Decision acquireHttpJobAuthority(Job job, HttpJobEngine.Row row, HttpJobEngine.Source source,
+                                                          HttpJobEngine.Mode mode, HttpJobEngine.Session session) throws FactoryException {
+        if (mode == HttpJobEngine.Mode.BACKGROUND_NO_UI || !source.owner.equals(row.source.owner))
+            throw new FactoryException("PERMISSION_DENIED", "Foreground job authority does not match the stored owner.");
+        session.check();
+        final JSONObject details = row.request.authorizationDetails("foreground_now", mode == HttpJobEngine.Mode.FOREGROUND_REPLAY);
+        final java.util.concurrent.CountDownLatch ready = new java.util.concurrent.CountDownLatch(1);
+        final java.util.concurrent.atomic.AtomicReference<NativePermissionSessions.Lease> grant = new java.util.concurrent.atomic.AtomicReference<>();
+        final AtomicBoolean awaiting = new AtomicBoolean(true);
+        if (!main.post(() -> {
+            if (!awaiting.get() || !session.active() || !job.current()) { ready.countDown(); return; }
+            try {
+                job.checkAuthority(); job.ownData = false;
+                authorize(job, "jobs.enqueueHttp", details, approved -> {
+                    NativePermissionSessions.Lease lease = approved.lease;
+                    if (!awaiting.get() || !session.active() || !approved.current()) {
+                        lease.close(); ready.countDown();
+                        approved.fail("CANCELLED", "Finite job review outlived its page session."); return;
+                    }
+                    lease.onCancelled(approved.cancellation); grant.set(lease); ready.countDown();
+                });
+            } catch (Exception failure) { job.fail(failure); ready.countDown(); }
+        })) throw new FactoryException("CANCELLED", "Foreground job review could not reach the UI thread.");
+        try {
+            while (!ready.await(50, TimeUnit.MILLISECONDS)) {
+                session.check();
+                // Its own pending ASK may temporarily pause the application. No HTTP runs here.
+                if (!job.current()) throw new FactoryException("CANCELLED", "Foreground job review ended.");
+            }
+            session.check();
+            NativePermissionSessions.Lease lease = grant.get();
+            if (lease == null || !job.current()) throw new FactoryException("PERMISSION_DENIED", "No current foreground job grant was received.");
+            job.checkAuthority(); lease.check();
+            return new HttpJobEngine.Decision(HttpJobEngine.Policy.ALLOW, new HttpJobEngine.Lease() {
+                private final AtomicBoolean released = new AtomicBoolean();
+                public void check() {
+                    if (released.get()) throw new SecurityException("Borrowed job grant ended");
+                    session.check(); job.checkAuthority(); lease.check(); session.check();
+                }
+                public void close() {
+                    // The Job retains the real live lease through final result delivery and owns cleanup.
+                    released.set(true);
+                }
+            });
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt(); throw new FactoryException("CANCELLED", "Foreground job review worker was interrupted.");
+        } finally { awaiting.set(false); }
+    }
+    /** Widget policy is one operation even though the public API has three effect methods. */
+    private void performWidgets(BridgeProtocol.Request request, Reply reply) throws Exception {
+        WidgetModel.Limits limits = WidgetModel.Limits.fromJson(ResourceBudgetsJson.toJson(config.resources).getJSONObject("widgets"));
+        NativeWidgetEffects.Prepared prepared = NativeWidgetEffects.prepare(request.method, request.args, limits);
+        Job job = new Job(request.id, request.method, reply);
+        job.ownData = !prepared.requiresAuthorization();
+        jobs.put(job.key, job);
+        Work execute = approved -> approved.worker(io, current -> {
+            long deadline = android.os.SystemClock.elapsedRealtime() + 8000L;
+            Object result = prepared.execute(activity, deadline, () -> foreground && !closed && current.current(),
+                    prepared.requiresAuthorization() ? current::checkAuthority : null);
+            current.complete(result);
+        });
+        if (prepared.requiresAuthorization()) authorize(job, prepared.policyOperation(), prepared.authorizationDetails(), execute);
+        else execute.run(job);
+    }
+    private NfcRequest.Limits nfcLimits() {
+        return new NfcRequest.Limits(config.resources.nfc.messageBytes, config.resources.nfc.records, config.resources.nfc.timeoutMs);
+    }
+    private NativeNfc nfc() {
+        if (nfc == null) nfc = new NativeNfc(activity, config.appId, () -> foreground && !closed, nfcLimits());
+        return nfc;
+    }
+    private static boolean isNfcOperation(String method) { return "nfc.read".equals(method) || "nfc.write".equals(method); }
+    private void cancelNfc(Reply reply) throws Exception {
+        ArrayList<Job> owned = new ArrayList<>();
+        for (Job job : new ArrayList<>(jobs.values())) if (isNfcOperation(job.method) && !job.done.get()) owned.add(job);
+        JSONObject result = nfc().cancel();
+        // Closing pending leases is essential: an ASK accepted after cancel must never start RF.
+        for (Job job : owned) job.fail("CANCELLED", "NFC operation cancelled; a write already started may have changed the tag.");
+        result.put("cancelledRequests", owned.size());
+        if (!owned.isEmpty()) result.put("cancelled", true);
+        reply.ok(result);
     }
     private void ownSpeech(Job job, NativeSpeech owner) {
         speechOwner = job;
@@ -582,6 +759,7 @@ final class NativeEffects implements AutoCloseable {
         catch (Exception failed) { permissionJob = null; permissionNames = null; job.lease.externalHandoff(false); job.reply.releaseUi(); job.fail(failed); }
     }
     boolean onRequestPermissionsResult(int request, String[] names, int[] grants) {
+        if (bluetooth != null && bluetooth.onRequestPermissionsResult(request, names, grants)) return true;
         if (request != NOTIFICATION_PERMISSION_REQUEST) return false;
         Job job = permissionJob; if (job == null || permissionReturned) return true;
         permissionReturned = true;
@@ -597,8 +775,21 @@ final class NativeEffects implements AutoCloseable {
         job.worker(io, value -> value.complete("location.requestPermission".equals(value.method) ? location().status()
                 : "recording.requestPermission".equals(value.method) ? recordingStatus() : "steps.requestPermission".equals(value.method) ? steps().status() : notifications().status(null))); // Re-read OS truth, not callback's Boolean.
     }
+    private NativeBleEffects bluetooth() throws FactoryException {
+        if (bluetooth == null) {
+            if (config.bluetooth == null) throw new FactoryException("INVALID_CONFIG", "Bluetooth requires its signed privacy declaration.");
+            com.jarvys.factory.contract.ResourceBudgets.Bluetooth b = config.resources.bluetooth;
+            BleCentral.Limits limits = new BleCentral.Limits(b.connections, b.discoveredDevices, b.queuedOperations,
+                    b.bufferedEvents, b.pollEvents, b.services, b.attributes, b.subscriptions, b.valueBytes,
+                    b.scanDurationMs, b.operationTimeoutMs);
+            bluetooth = new NativeBleEffects(activity, permissions, limits,
+                    config.bluetooth.neverForLocation() ? BlePermissions.ScanPrivacy.NEVER_FOR_LOCATION : BlePermissions.ScanPrivacy.FULL,
+                    foreground);
+        }
+        return bluetooth;
+    }
     boolean isClosed() { return closed; }
-    boolean hasPendingPermission() { return permissionJob != null && !permissionReturned; }
+    boolean hasPendingPermission() { return permissionJob != null && !permissionReturned || bluetooth != null && bluetooth.hasPendingPermission(); }
     boolean hasPendingActivity() { return exactAlarmJob != null || (recognition != null && recognition.hasPendingActivity()); }
     boolean onActivityResult(int request, int result, Intent data) {
         if (request != NativeVoiceRecognition.REQUEST_CODE) return false;
@@ -606,10 +797,13 @@ final class NativeEffects implements AutoCloseable {
         return true;
     }
     void onWindowFocusChanged(boolean focused) { if (recognition != null) recognition.onWindowFocusChanged(focused); }
-    void onPause() { foreground = false; if (recognition != null) recognition.onPause(); if (location != null) location.cancel(); if (recording != null) recording.cancel(); if (steps != null) steps.cancel();
+    void onPause() { foreground = false; if (bluetooth != null) bluetooth.onPause(); if (recognition != null) recognition.onPause(); if (location != null) location.cancel(); if (recording != null) recording.cancel(); if (steps != null) steps.cancel(); if (nfc != null) nfc.cancel();
         if (exactAlarmJob != null) exactAlarmPaused = true;
         for (Job job : new ArrayList<>(jobs.values())) if (job.method.startsWith("notifications.") && job != exactAlarmJob && job != permissionJob && !job.pendingPolicyReview())
             job.fail("CANCELLED", "Notification page operation ended in background; committed schedules and prior effects are not undone.");
+        for (Job job : new ArrayList<>(jobs.values()))
+            if ((isNfcOperation(job.method) || job.method.startsWith("widgets.") || job.method.startsWith("jobs.")) && !job.pendingPolicyReview())
+                job.fail("CANCELLED", "Native NFC/widget/job page operation ended in background; earlier effects are not undone.");
         // Only this exact job's pending ASK review may cross its own activity handoff. No admitted
         // secret operation (including input capture) may retain authority while the app is paused.
         for (Job job : new ArrayList<>(jobs.values())) if (job.method.startsWith("secrets.") && !job.pendingPolicyReview())
@@ -617,7 +811,7 @@ final class NativeEffects implements AutoCloseable {
         if (secrets != null) secrets.cancelAll();
         for (Job job : new ArrayList<>(subscriptionJobs.values())) job.fail("CANCELLED", "Sensor subscriptions require the foreground page.");
         if (subscriptions != null) subscriptions.cancelAll(); }
-    void onResume() { foreground = true; finishPermission(); finishExactAlarmAccess(); if (recognition != null) recognition.onResume(); }
+    void onResume() { foreground = true; if (bluetooth != null) bluetooth.onResume(); finishPermission(); finishExactAlarmAccess(); if (recognition != null) recognition.onResume(); }
     @Override public void close() {
         closed = true;
         for (Job job : new ArrayList<>(jobs.values())) job.fail("CANCELLED", "Native operation page ended; earlier effects are not undone.");
@@ -625,6 +819,8 @@ final class NativeEffects implements AutoCloseable {
         if (recognition != null) recognition.close();
         if (location != null) location.close();
         if (steps != null) steps.close();
+        if (nfc != null) nfc.close();
+        if (bluetooth != null) bluetooth.close();
         if (subscriptions != null) subscriptions.close();
         if (recording != null) recording.close();
         if (secrets != null) secrets.close();

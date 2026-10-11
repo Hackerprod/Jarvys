@@ -66,13 +66,31 @@ public final class NativeNetwork {
         private boolean started, completed;
         private String reason;
         private HttpURLConnection active;
+        private DocumentHandles.Transfer document;
+        private TransferProgress transferProgress;
         public void cancel() { cancel("CANCELLED"); }
         @Override public void close() { cancel(); }
         public synchronized boolean isCancelled() { return reason != null; }
         private void cancel(String code) {
-            HttpURLConnection connection;
-            synchronized (this) { if (completed || reason != null) return; reason = code; connection = active; }
+            HttpURLConnection connection; DocumentHandles.Transfer selected;
+            synchronized (this) {
+                if (completed || reason != null) return;
+                reason = code; connection = active; selected = document;
+                if (transferProgress != null) { transferProgress.error = code; transferProgress.complete = false; }
+            }
+            // Retire provider authority first; its close is asynchronous and capacity stays charged
+            // until cleanup is confirmed. No arbitrary blocking provider close on deadline threads.
+            if (selected != null) selected.cancel();
             disconnect(connection);
+        }
+        private void attachDocument(DocumentHandles.Transfer value) throws FactoryException {
+            synchronized (this) { if (reason == null) { document = value; return; } }
+            value.cancel(); check();
+        }
+        private synchronized void detachDocument() { document = null; }
+        /** Native-only diagnostics. A revoked job must not deliver response contents to its renderer. */
+        public synchronized JSONObject transferProgress() throws FactoryException {
+            return transferProgress == null ? null : transferProgress.snapshot();
         }
         private synchronized void begin() throws FactoryException {
             if (started) throw new FactoryException("INVALID_ARGUMENT", "Cancellation belongs to one network operation.");
@@ -124,6 +142,197 @@ public final class NativeNetwork {
             cancellation.complete();
             return result;
         } finally { timer.cancel(false); cancellation.finish(); }
+    }
+
+    /** HTTP body transfer through one existing opaque document handle; never opens a provider.
+     * Uses the same platform TLS, connection factory, authorization, and cancellation machinery.
+     * No credential injector is accepted: credential scope/replay is not implied by network access.
+     */
+    public JSONObject executeTransfer(NetworkTransferRequest request, DocumentHandles documents,
+                                      NativeOperationAuthorization.Access authorization, Cancellation cancellation) throws FactoryException {
+        if (request == null || documents == null || authorization == null || cancellation == null) throw new IllegalArgumentException();
+        cancellation.begin();
+        long started = clock.nanoTime(), deadline = started + TimeUnit.MILLISECONDS.toNanos(request.timeoutMs);
+        ScheduledFuture<?> timer = DEADLINES.schedule(() -> cancellation.cancel("TIMEOUT"), request.timeoutMs, TimeUnit.MILLISECONDS);
+        TransferProgress progress = new TransferProgress(request);
+        synchronized (cancellation) { cancellation.transferProgress = progress; }
+        DocumentHandles.Transfer document = null;
+        try {
+            check(authorization, cancellation, deadline);
+            document = documents.claimTransfer(request.handle, !request.upload, request.offset, request.upload ? request.length : request.maxBytes);
+            progress.document = document;
+            cancellation.attachDocument(document);
+            checkTransfer(authorization, cancellation, deadline, document);
+            try { performTransfer(request, document, authorization, cancellation, started, deadline, progress); }
+            catch (IOException failure) {
+                checkTransfer(authorization, cancellation, deadline, document);
+                progress.error = failure instanceof SSLException ? "TLS_ERROR" : failure instanceof UnknownHostException ? "DNS_ERROR"
+                        : failure instanceof SocketTimeoutException ? "TIMEOUT" : failure instanceof ProtocolException ? "NETWORK_PROTOCOL_ERROR" : "NETWORK_ERROR";
+            } catch (FactoryException failure) { progress.error = failure.code; }
+            // This is deliberately not checkTransfer: an I/O failure may have poisoned the handle,
+            // but an authorized caller still needs the honest partial result. Authority never renews.
+            check(authorization, cancellation, deadline);
+            progress.elapsedMs = elapsed(started);
+            JSONObject result = progress.snapshot();
+            cancellation.complete();
+            return result;
+        } catch (FactoryException failure) { progress.complete = false; progress.error = failure.code; throw failure; }
+        catch (RuntimeException denied) { progress.complete = false; progress.error = "PERMISSION_DENIED"; throw denied; }
+        finally {
+            progress.elapsedMs = elapsed(started);
+            timer.cancel(false); cancellation.detachDocument();
+            if (document != null) document.close();
+            cancellation.finish();
+        }
+    }
+
+    private void performTransfer(NetworkTransferRequest request, DocumentHandles.Transfer document,
+                                 NativeOperationAuthorization.Access access, Cancellation cancellation,
+                                 long started, long deadline, TransferProgress progress) throws FactoryException, IOException {
+        NetworkRequest http = request.http;
+        URL url = http.url; String method = http.method;
+        Map<String, String> headers = new LinkedHashMap<>(http.headers);
+        byte[] inline = request.upload ? null : http.bodyBytes();
+        boolean hasBody = request.upload || http.hasBody();
+        byte[] chunk = new byte[8192];
+        int redirects = 0;
+        while (true) {
+            checkTransfer(access, cancellation, deadline, document);
+            if ("http".equalsIgnoreCase(url.getProtocol()) && !cleartext.permitted(url.getHost()))
+                throw new FactoryException("CLEARTEXT_NOT_PERMITTED", "Android configuration does not permit cleartext HTTP for this host.");
+            checkTransfer(access, cancellation, deadline, document);
+            HttpURLConnection connection = connections.open(url);
+            if (connection == null) throw new IOException();
+            cancellation.attach(connection);
+            try {
+                checkTransfer(access, cancellation, deadline, document);
+                connection.setInstanceFollowRedirects(false); connection.setUseCaches(false);
+                connection.setConnectTimeout(remaining(request.connectTimeoutMs, deadline));
+                connection.setReadTimeout(remaining(request.readTimeoutMs, deadline));
+                try { connection.setRequestMethod(method); }
+                catch (ProtocolException unsupported) { throw new FactoryException("UNSUPPORTED_METHOD", "This Android HTTP transport does not support the requested method."); }
+                for (Map.Entry<String, String> header : headers.entrySet()) connection.setRequestProperty(header.getKey(), header.getValue());
+                if (hasBody) {
+                    connection.setDoOutput(true);
+                    connection.setFixedLengthStreamingMode(request.upload ? request.length : (long) inline.length);
+                    checkTransfer(access, cancellation, deadline, document);
+                    progress.requestMayHaveReachedPeer = true;
+                    try (OutputStream output = connection.getOutputStream()) {
+                        long sent = 0, length = request.upload ? request.length : inline.length;
+                        while (sent < length) {
+                            checkTransfer(access, cancellation, deadline, document);
+                            int wanted = (int) Math.min(chunk.length, length - sent), count;
+                            if (request.upload) {
+                                count = document.read(chunk, wanted);
+                                if (count == -1) throw new FactoryException("TRANSFER_SOURCE_EOF", "Upload source ended before its declared length.");
+                            } else { count = wanted; System.arraycopy(inline, (int) sent, chunk, 0, count); }
+                            checkTransfer(access, cancellation, deadline, document);
+                            progress.networkWriteUncertain = true;
+                            output.write(chunk, 0, count);
+                            progress.requestBytesWritten += count; sent += count;
+                            progress.networkWriteUncertain = false;
+                            checkTransfer(access, cancellation, deadline, document);
+                        }
+                        checkTransfer(access, cancellation, deadline, document);
+                        output.flush();
+                    }
+                }
+                checkTransfer(access, cancellation, deadline, document);
+                progress.requestMayHaveReachedPeer = true;
+                int status = connection.getResponseCode();
+                checkTransfer(access, cancellation, deadline, document);
+                if (status < 100 || status > 599) throw new IOException();
+                progress.status = status; progress.url = url.toExternalForm(); progress.method = method;
+                progress.headers = responseHeaders(connection.getHeaderFields(), http.maxHeaderBytes);
+                progress.redirects = redirects; progress.latencyMs = elapsed(started);
+                if (isRedirect(status) && !"manual".equals(http.redirect)) {
+                    if (request.upload) throw new FactoryException("UPLOAD_REDIRECT_NOT_REPLAYABLE", "Upload may already have been sent; reopen a source and explicitly call the new destination.");
+                    if ("error".equals(http.redirect)) throw new FactoryException("REDIRECT_DISALLOWED", "Request returned a redirect.");
+                    if (redirects >= http.maxRedirects) throw new FactoryException("TOO_MANY_REDIRECTS", "Network redirect limit reached.");
+                    String location = connection.getHeaderField("Location");
+                    if (location == null || location.isEmpty()) throw new FactoryException("INVALID_REDIRECT", "Redirect has no destination.");
+                    URL next;
+                    try { next = NetworkRequest.parseUrl(new URL(url, location).toExternalForm()); }
+                    catch (FactoryException | IOException invalid) { throw new FactoryException("INVALID_REDIRECT", "Redirect destination is not a supported HTTP URL."); }
+                    if ("https".equalsIgnoreCase(url.getProtocol()) && "http".equalsIgnoreCase(next.getProtocol()) && !http.allowHttpsDowngrade)
+                        throw new FactoryException("INSECURE_REDIRECT", "HTTPS downgrade needs allowHttpsDowngrade and Android cleartext support.");
+                    if (!sameOrigin(url, next)) headers.clear();
+                    if ((status == 303 && !"HEAD".equals(method)) || ((status == 301 || status == 302) && "POST".equals(method))) {
+                        method = "GET"; hasBody = false; headers.remove("content-type"); headers.remove("content-encoding");
+                    }
+                    checkTransfer(access, cancellation, deadline, document);
+                    url = next; redirects++; continue;
+                }
+                if (!request.upload && !"HEAD".equals(method) && status != 204 && status != 304) {
+                    checkTransfer(access, cancellation, deadline, document);
+                    InputStream stream = status >= 400 ? connection.getErrorStream() : connection.getInputStream();
+                    if (stream != null) try (InputStream input = stream) {
+                        while (progress.responseBytesRead < request.maxBytes) {
+                            checkTransfer(access, cancellation, deadline, document);
+                            connection.setReadTimeout(remaining(request.readTimeoutMs, deadline));
+                            int wanted = (int) Math.min(chunk.length, request.maxBytes - progress.responseBytesRead);
+                            progress.responseReadUncertain = true;
+                            int count = input.read(chunk, 0, wanted);
+                            if (count < -1 || count == 0 || count > wanted) throw new IOException();
+                            progress.responseReadUncertain = false;
+                            if (count == -1) { progress.eofConfirmed = true; break; }
+                            progress.responseBytesRead += count;
+                            checkTransfer(access, cancellation, deadline, document);
+                            document.write(chunk, count);
+                            checkTransfer(access, cancellation, deadline, document);
+                        }
+                        if (!progress.eofConfirmed) {
+                            progress.limitReached = true;
+                            throw new FactoryException("TRANSFER_LIMIT_REACHED", "Transfer stopped at maxBytes; no additional byte was read to prove EOF.");
+                        }
+                    }
+                    else throw new FactoryException("RESPONSE_BODY_UNAVAILABLE", "Response body stream was not available; EOF cannot be confirmed.");
+                } else if (!request.upload) progress.eofConfirmed = true;
+                checkTransfer(access, cancellation, deadline, document);
+                progress.complete = true;
+                return;
+            } finally { cancellation.detach(connection); disconnect(connection); }
+        }
+    }
+
+    private void checkTransfer(NativeOperationAuthorization.Access access, Cancellation cancellation, long deadline,
+                               DocumentHandles.Transfer document) throws FactoryException {
+        check(access, cancellation, deadline); document.check(); check(access, cancellation, deadline);
+    }
+
+    private static final class TransferProgress {
+        final NetworkTransferRequest request;
+        volatile DocumentHandles.Transfer document;
+        volatile long requestBytesWritten, responseBytesRead;
+        volatile boolean networkWriteUncertain, responseReadUncertain, requestMayHaveReachedPeer, complete, eofConfirmed, limitReached;
+        volatile int status, redirects;
+        volatile String url, method, error;
+        volatile JSONObject headers = new JSONObject();
+        volatile double elapsedMs, latencyMs;
+        TransferProgress(NetworkTransferRequest request) { this.request = request; url = request.http.url.toExternalForm(); method = request.http.method; }
+        JSONObject snapshot() throws FactoryException {
+            try {
+                DocumentHandles.Transfer selected = document;
+                DocumentHandles.Transfer.Progress state = selected == null ? null : selected.progress();
+                long bytes = state == null ? 0 : state.confirmedBytes;
+                boolean unknown = state != null && state.positionUncertain;
+                JSONObject result = new JSONObject().put("operation", request.upload ? "network.upload" : "network.download")
+                        .put("url", url).put("method", method).put("status", status).put("headers", new JSONObject(headers.toString()))
+                        .put("ok", complete && status >= 200 && status < 300).put("complete", complete).put("redirects", redirects)
+                        .put("elapsedMs", elapsedMs).put("latencyMs", latencyMs).put("offset", request.offset)
+                        .put("documentBytesRead", request.upload ? bytes : 0).put("documentBytesWritten", request.upload ? 0 : bytes)
+                        .put("confirmedNextOffset", request.offset + bytes).put("nextOffset", unknown ? JSONObject.NULL : request.offset + bytes)
+                        .put("documentPositionUncertain", unknown).put("requestBytesWritten", requestBytesWritten)
+                        .put("requestBytesAreLocalWriteAcknowledgements", true).put("requestWriteUncertain", networkWriteUncertain)
+                        .put("requestMayHaveReachedPeer", requestMayHaveReachedPeer).put("remoteCommitConfirmed", false)
+                        .put("responseBytesRead", responseBytesRead).put("responseReadUncertain", responseReadUncertain)
+                        .put("eofConfirmed", eofConfirmed).put("limitReached", limitReached)
+                        .put("providerCommitConfirmed", false).put("atomicReplacement", false).put("rollbackConfirmed", false)
+                        .put("partialEffectsPossible", requestMayHaveReachedPeer || bytes != 0 || unknown);
+                if (error != null) result.put("error", error);
+                return result;
+            } catch (Exception invalid) { throw new FactoryException("UNAVAILABLE", "Transfer result unavailable."); }
+        }
     }
 
     private JSONObject perform(NetworkRequest request, NativeOperationAuthorization.Access authorization,

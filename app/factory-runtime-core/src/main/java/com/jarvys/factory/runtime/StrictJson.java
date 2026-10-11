@@ -11,13 +11,19 @@ final class StrictJson {
     private final String source;
     private int at;
     private int tokens;
-    private StrictJson(String source) { this.source = source; }
+    private final int maxDepth, maxTokens;
+    private StrictJson(String source, int maxDepth, int maxTokens) { this.source = source; this.maxDepth = maxDepth; this.maxTokens = maxTokens; }
 
     static JSONObject object(String source, int maxBytes) throws FactoryException {
+        return object(source, maxBytes, 8, 1024);
+    }
+    /** Explicit bounded transport envelope; original callers retain depth 8 / 1024 tokens. */
+    static JSONObject object(String source, int maxBytes, int maxDepth, int maxTokens) throws FactoryException {
+        if (maxDepth < 1 || maxDepth > 32 || maxTokens < 1 || maxTokens > 32768) throw new IllegalArgumentException("Invalid JSON envelope bounds");
         if (source == null || source.length() > maxBytes || source.getBytes(StandardCharsets.UTF_8).length > maxBytes)
             throw new FactoryException("TOO_LARGE", "JSON exceeds the size limit.");
         try {
-            StrictJson parser = new StrictJson(source);
+            StrictJson parser = new StrictJson(source, maxDepth, maxTokens);
             parser.space();
             if (parser.at == source.length() || source.charAt(parser.at) != '{') throw new IllegalArgumentException();
             parser.value(0);
@@ -42,7 +48,7 @@ final class StrictJson {
         return false;
     }
     private void value(int depth) throws JSONException {
-        if (depth > 8 || ++tokens > 1024) throw new IllegalArgumentException();
+        if (depth > maxDepth || ++tokens > maxTokens) throw new IllegalArgumentException();
         space();
         if (at == source.length()) throw new IllegalArgumentException();
         char c = source.charAt(at);

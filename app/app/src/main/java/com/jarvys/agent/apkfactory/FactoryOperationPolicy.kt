@@ -14,6 +14,8 @@ import org.json.JSONObject
 internal class FactoryOperationPolicy internal constructor(private val store: Store) {
     enum class Mode { ALLOW_ALWAYS, ASK, DENY }
     enum class Operation(val id: String) {
+        NFC_READ("nfc.read"), NFC_WRITE("nfc.write"), WIDGETS_MANAGE("widgets.manage"), JOBS_ENQUEUE_HTTP("jobs.enqueueHttp"),
+        BLUETOOTH_REQUEST_PERMISSIONS("bluetooth.requestPermissions"), BLUETOOTH_SCAN("bluetooth.scan"), BLUETOOTH_CONNECT("bluetooth.connect"), BLUETOOTH_SERVICES("bluetooth.services"), BLUETOOTH_READ("bluetooth.read"), BLUETOOTH_WRITE("bluetooth.write"), BLUETOOTH_REQUEST_MTU("bluetooth.requestMtu"), BLUETOOTH_SUBSCRIBE("bluetooth.subscribe"),
         DOCUMENT_OPEN("documents.open"), DOCUMENT_CREATE("documents.create"),
         PHOTO_PICK("photos.pick"), PHOTO_CAPTURE("photos.capture"), AUDIO_PLAY("audio.play"),
         BROWSER_OPEN("browser.open"), CONTACT_PICK("contacts.pick"), FILE_SHARE("share.file"),
@@ -23,7 +25,7 @@ internal class FactoryOperationPolicy internal constructor(private val store: St
         STORAGE_BACKUP_EXPORT("storage.backupExport"), STORAGE_BACKUP_IMPORT("storage.backupImport"),
         SIGN("factory.sign"), INSTALL("factory.install"), CLIPBOARD_WRITE("clipboard.write"),
         SHARE_TEXT("share.text"), EXPORT_TEXT("export.text"),
-        NETWORK_REQUEST("network.request"), NETWORK_PROBE("network.probe"), NETWORK_PING("network.ping"),
+        NETWORK_UPLOAD("network.upload"), NETWORK_DOWNLOAD("network.download"), NETWORK_REQUEST("network.request"), NETWORK_PROBE("network.probe"), NETWORK_PING("network.ping"),
         NOTIFICATIONS_CHANNEL("notifications.channel"), NOTIFICATIONS_PERMISSION("notifications.requestPermission"),
         NOTIFICATIONS_SHOW("notifications.show"), NOTIFICATIONS_CANCEL("notifications.cancel"),
         SPEECH_VOICES("speech.voices"), SPEECH_SPEAK("speech.speak"), SPEECH_STOP("speech.stop"),

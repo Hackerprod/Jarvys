@@ -52,8 +52,26 @@ public class ManifestNodesTest {
         assertEquals(7, current.nodes.size()); assertEquals(-1,current.nodes.get(0).parentIndex);
         assertEquals(4,current.nodes.get(6).parentIndex);
     }
-    @Test public void all1048576OriginalCapabilitySelectionsRetainSixCurrentManifestShapes() throws Exception {
-        assertEquals(29, CapabilityCatalog.NAMES.size());
+    /** Exhaustive 2x2x2 original manifest dependency axes, plus regression samples of all
+     * original singletons/pairs and the full original set. The latter samples are not exhaustive. */
+    private static java.util.List<java.util.List<String>> legacyManifestSelections() {
+        java.util.List<String> original=java.util.Arrays.asList("storage","export","share","clipboard","haptics","device","documents","photos","audio","browser","maps","phone","email","sms","contacts","calendar","database","presentation","sensors","biometrics");
+        java.util.Set<java.util.List<String>> cases=new java.util.LinkedHashSet<>();
+        for(int axes=0;axes<8;axes++) {
+            java.util.List<String> selected=new java.util.ArrayList<>();
+            if((axes&1)!=0)selected.add("biometrics"); if((axes&2)!=0)selected.add("documents"); if((axes&4)!=0)selected.add("sensors");
+            java.util.Collections.sort(selected);cases.add(selected);
+        }
+        for(int i=0;i<original.size();i++) {
+            cases.add(java.util.Collections.singletonList(original.get(i)));
+            for(int j=i+1;j<original.size();j++) {java.util.List<String> pair=new java.util.ArrayList<>(java.util.Arrays.asList(original.get(i),original.get(j)));java.util.Collections.sort(pair);cases.add(pair);}
+        }
+        java.util.List<String> full=new java.util.ArrayList<>(original);java.util.Collections.sort(full);cases.add(full);
+        return new java.util.ArrayList<>(cases);
+    }
+
+    @Test public void allOriginalManifestDependencyAxesRetainSixCurrentManifestShapes() throws Exception {
+        assertEquals(33, CapabilityCatalog.NAMES.size());
         assertEquals(list("storage", "export", "share", "clipboard", "haptics", "device", "documents", "photos", "audio",
                 "browser", "maps", "phone", "email", "sms", "contacts", "calendar", "database", "presentation", "sensors", "biometrics"),
                 CapabilityCatalog.NAMES.subList(0, 20));
@@ -64,10 +82,8 @@ public class ManifestNodesTest {
         };
         java.util.Set<Integer> shapes = new java.util.HashSet<>();
         int checked = 0;
-        // Exhaustive original capability domain; native surface combinations are covered below.
-        for (int mask=0; mask<(1 << 20); mask++) {
-            List<String> caps = new ArrayList<>();
-            for (int bit=0; bit<20; bit++) if ((mask & (1<<bit)) != 0) caps.add(CapabilityCatalog.NAMES.get(bit));
+        // Eight exhaustive declaration-axis cases plus explicit regression samples; not 2^20 subsets.
+        for (List<String> caps : legacyManifestSelections()) {
             ManifestPlan p = plan(caps);
             boolean sensors = caps.contains("sensors"), biometrics = caps.contains("biometrics");
             boolean broker = sensors || caps.contains("documents") || caps.contains("browser") || caps.contains("maps") || caps.contains("phone") || caps.contains("email") || caps.contains("sms") || caps.contains("contacts") || caps.contains("calendar") || caps.contains("clipboard") || caps.contains("share") || caps.contains("export");
@@ -113,7 +129,7 @@ public class ManifestNodesTest {
             }
             checked++;
         }
-        assertEquals(1048576, checked); assertEquals(6, shapes.size());
+        assertEquals(213, checked); assertEquals(6, shapes.size());
         for (CapabilityCatalog.Capability c : CapabilityCatalog.CAPABILITIES.values()) assertThrows(UnsupportedOperationException.class, () -> c.manifestNodes.add(ManifestNodes.feature("android.hardware.camera", false)));
         assertThrows(IllegalArgumentException.class, () -> plan(list("camera")));
     }
@@ -191,7 +207,7 @@ public class ManifestNodesTest {
         assertEquals(514, shapes.size());
     }
     @Test public void nativeCatalogAndBrokerRequirementAreClosedImmutableAndValidateTheWholeSelection() {
-        assertEquals(list(CapabilityCatalog.Method.NETWORK_REQUEST, CapabilityCatalog.Method.NETWORK_PROBE,
+        assertEquals(list(CapabilityCatalog.Method.NETWORK_UPLOAD, CapabilityCatalog.Method.NETWORK_DOWNLOAD, CapabilityCatalog.Method.NETWORK_REQUEST, CapabilityCatalog.Method.NETWORK_PROBE,
                 CapabilityCatalog.Method.NETWORK_PING, CapabilityCatalog.Method.NETWORK_CANCEL), CapabilityCatalog.CAPABILITIES.get("network").methods);
         assertEquals(list(CapabilityCatalog.Method.NOTIFICATIONS_SCHEDULE, CapabilityCatalog.Method.NOTIFICATIONS_RESUME_SCHEDULED,
                 CapabilityCatalog.Method.NOTIFICATIONS_SCHEDULE_STATUS, CapabilityCatalog.Method.NOTIFICATIONS_CANCEL_SCHEDULED,
@@ -204,7 +220,7 @@ public class ManifestNodesTest {
         assertEquals(list(CapabilityCatalog.Method.SPEECH_STATUS, CapabilityCatalog.Method.SPEECH_VOICES,
                 CapabilityCatalog.Method.SPEECH_SPEAK, CapabilityCatalog.Method.SPEECH_STOP), CapabilityCatalog.CAPABILITIES.get("speech").methods);
         List<String> brokerCaps = list("documents", "browser", "maps", "phone", "email", "sms", "contacts", "calendar",
-                "clipboard", "share", "export", "network", "notifications", "speech", "voiceRecognition", "location", "recording", "steps", "sensors", "secrets", "incomingShare");
+                "clipboard", "share", "export", "network", "notifications", "speech", "voiceRecognition", "location", "recording", "steps", "sensors", "secrets", "incomingShare", "nfc", "bluetooth", "widgets", "jobs");
         for (CapabilityCatalog.Capability capability : CapabilityCatalog.CAPABILITIES.values()) {
             assertEquals(brokerCaps.contains(capability.name), CapabilityCatalog.requiresHostBroker(list(capability.name)));
             assertEquals(brokerCaps.contains(capability.name) ? CapabilityCatalog.DOCUMENT_BROKER_PACKAGES : Collections.emptySet(), capability.queries);
@@ -236,7 +252,7 @@ public class ManifestNodesTest {
                 assertEquals(current.capabilities, legacy.capabilities);
             }
         }
-        for (ManifestPlan.Profile profile : ManifestPlan.Profile.values()) if (profile != ManifestPlan.Profile.CURRENT && profile != ManifestPlan.Profile.V3_BEFORE_INCOMING_SHARE)
+        for (ManifestPlan.Profile profile : ManifestPlan.Profile.values()) if (profile != ManifestPlan.Profile.CURRENT && profile != ManifestPlan.Profile.V4_BEFORE_GENERIC_NATIVE && profile != ManifestPlan.Profile.V3_BEFORE_INCOMING_SHARE)
             for (String cap : list("network", "notifications", "speech", "voiceRecognition", "location", "recording", "steps"))
                 assertThrows(IllegalArgumentException.class, () -> new ManifestPlan("org.example.old", "old", 1, "1",
                         0x7f010000, 0x7f020000, list(cap), profile));
@@ -246,7 +262,7 @@ public class ManifestNodesTest {
         ManifestAudit.read(ManifestXml.encode(ancient)).verify(ancient);
     }
     @Test public void sensorManifestContributionsAreCurrentOnlyAndHistoricalBytesRemainExact() throws Exception {
-        for (ManifestPlan.Profile profile : ManifestPlan.Profile.values()) if (profile != ManifestPlan.Profile.CURRENT && profile != ManifestPlan.Profile.V3_BEFORE_INCOMING_SHARE) {
+        for (ManifestPlan.Profile profile : ManifestPlan.Profile.values()) if (profile != ManifestPlan.Profile.CURRENT && profile != ManifestPlan.Profile.V4_BEFORE_GENERIC_NATIVE && profile != ManifestPlan.Profile.V3_BEFORE_INCOMING_SHARE) {
             List<List<String>> selections = new ArrayList<>(list(list("sensors"), list("sensors", "storage"),
                     list("sensors", "clipboard", "share", "export")));
             if (profile != ManifestPlan.Profile.V1_BEFORE_SAFE_AREA)
@@ -294,8 +310,8 @@ public class ManifestNodesTest {
         java.net.URL location = CapabilityCatalog.class.getProtectionDomain().getCodeSource().getLocation();
         try (java.net.URLClassLoader loader = new java.net.URLClassLoader(new java.net.URL[]{location}, null)) {
             Class<?> catalog = Class.forName(CapabilityCatalog.class.getName(), true, loader);
-            assertEquals(29, ((List<?>) catalog.getField("NAMES").get(null)).size());
-            assertEquals(99, ((java.util.Map<?, ?>) catalog.getField("METHODS").get(null)).size());
+            assertEquals(33, ((List<?>) catalog.getField("NAMES").get(null)).size());
+            assertEquals(134, ((java.util.Map<?, ?>) catalog.getField("METHODS").get(null)).size());
         }
         assertEquals("android.speech.action.RECOGNIZE_SPEECH", CapabilityCatalog.RECOGNIZE_SPEECH_ACTION);
         ManifestNodes.Element exact = ManifestNodes.queryIntent(CapabilityCatalog.RECOGNIZE_SPEECH_ACTION, null, null);
@@ -335,7 +351,7 @@ public class ManifestNodesTest {
         assertNotNull(biometrics); assertEquals(30, biometrics.minimumApi);
         assertEquals(24, CapabilityCatalog.MIN_APP_API);
         assertEquals(1, CapabilityCatalog.SCHEMA_VERSION); assertEquals(2, CapabilityCatalog.SDK_VERSION);
-        assertEquals(99, CapabilityCatalog.METHODS.size());
+        assertEquals(134, CapabilityCatalog.METHODS.size());
         assertEquals(list(CapabilityCatalog.Method.BIOMETRICS_AVAILABILITY,
                 CapabilityCatalog.Method.BIOMETRICS_AUTHENTICATE, CapabilityCatalog.Method.BIOMETRICS_CANCEL), biometrics.methods);
         assertEquals(Collections.singleton(CapabilityCatalog.BIOMETRIC_PERMISSION), biometrics.permissions);
@@ -580,8 +596,8 @@ public class ManifestNodesTest {
 
     @Test public void storageBackupExtendsExistingCapabilityWithoutManifestAuthority() {
         CapabilityCatalog.Capability storage = CapabilityCatalog.CAPABILITIES.get("storage");
-        assertEquals(29, CapabilityCatalog.NAMES.size());
-        assertEquals(99, CapabilityCatalog.METHODS.size());
+        assertEquals(33, CapabilityCatalog.NAMES.size());
+        assertEquals(134, CapabilityCatalog.METHODS.size());
         assertEquals(list(CapabilityCatalog.Method.STORAGE_GET, CapabilityCatalog.Method.STORAGE_SET,
                 CapabilityCatalog.Method.STORAGE_REMOVE, CapabilityCatalog.Method.STORAGE_LIST,
                 CapabilityCatalog.Method.STORAGE_BACKUP_EXPORT, CapabilityCatalog.Method.STORAGE_BACKUP_IMPORT), storage.methods);

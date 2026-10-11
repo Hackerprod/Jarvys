@@ -60,6 +60,18 @@ public final class NativeBackgroundAuthorization {
     /** Call from a bounded receiver worker. current must independently expire the receiver session. */
     public static Result acquire(Context context, FactoryConfig config, NativeOperationRequest request, SourceIdentity expectedSource,
                                  long receiverDeadlineElapsedMs, BooleanSupplier current) throws FactoryException {
+        return acquireInternal(context,config,request,expectedSource,receiverDeadlineElapsedMs,current,false);
+    }
+    /** Finite scheduled HTTP only; receiver leases retain their separate eight-second limit. */
+    public static Result acquireFiniteHttpJob(Context context, FactoryConfig config, NativeOperationRequest request,
+                                             SourceIdentity expectedSource, long deadlineElapsedMs, BooleanSupplier current) throws FactoryException {
+        if (config == null || request == null || !"jobs.enqueueHttp".equals(request.operation) ||
+                !"scheduled".equals(request.details().optString("executionMode")) || !config.capabilities.contains("network"))
+            throw new IllegalArgumentException("Finite scheduled HTTP request required");
+        return acquireInternal(context,config,request,expectedSource,deadlineElapsedMs,current,true);
+    }
+    private static Result acquireInternal(Context context, FactoryConfig config, NativeOperationRequest request, SourceIdentity expectedSource,
+                                          long receiverDeadlineElapsedMs, BooleanSupplier current, boolean finiteHttpJob) throws FactoryException {
         if (context == null || config == null || request == null || expectedSource == null || !config.appId.equals(expectedSource.appId) || current == null || !config.appId.equals(context.getPackageName()))
             throw new IllegalArgumentException("Installed background policy dependencies required");
         NativeOperationAuthorization.Client client=null;
@@ -75,6 +87,7 @@ public final class NativeBackgroundAuthorization {
             String nonce=nonceValue.toString(),binding=request.binding(nonce,expectedSource.bindingEvidence());
             Bundle input=new Bundle(); input.putInt("protocolVersion",1);input.putString("operation",request.operation);
             input.putString("nonce",nonce);input.putString("details",request.canonicalJson());input.putLong("deadlineElapsedMs",receiverDeadlineElapsedMs);input.putString("expectedSource",expectedSource.canonicalJson());
+            if(finiteHttpJob) input.putString("leaseKind","finite_http_job");
             requireCurrent(current,deadline);
             Bundle result=context.getContentResolver().call(Uri.parse("content://"+config.documentBroker.packageName+".factory.operations"),"acquire_background",null,input);
             // Even a late ALLOW reply must be connected only for immediate cleanup, not abandoned.

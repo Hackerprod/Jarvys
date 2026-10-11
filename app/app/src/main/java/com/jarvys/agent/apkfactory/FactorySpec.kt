@@ -1,5 +1,8 @@
 package com.jarvys.agent.apkfactory
 
+import com.jarvys.factory.contract.BluetoothPolicy
+import com.jarvys.factory.contract.F3ManifestPolicy
+import com.jarvys.factory.runtime.BluetoothPolicyJson
 import com.jarvys.factory.contract.CapabilityCatalog
 import com.jarvys.factory.contract.ResourceBudgets
 import com.jarvys.factory.contract.IncomingSharePolicy
@@ -25,6 +28,7 @@ data class FactorySpec(
     val resources: ResourceBudgets = ResourceBudgets.legacy(),
     val incomingShare: IncomingSharePolicy? = null,
     val notifications: NotificationPolicy? = null,
+    val bluetooth: BluetoothPolicy? = null,
 ) {
     fun runtimeConfig(documentBroker: JSONObject? = null): ByteArray {
         val config = JSONObject().put("schemaVersion", 1).put("appId", appId)
@@ -33,6 +37,7 @@ data class FactorySpec(
         backupPolicy()?.let { config.put("dataBackup", it) }
         incomingShare?.let { config.put("incomingShare", IncomingSharePolicyJson.toJson(it)) }
         notifications?.let { config.put("notifications", NotificationPolicyJson.toJson(it)) }
+        bluetooth?.let { config.put("bluetooth", BluetoothPolicyJson.toJson(it)) }
         if (documentBroker != null) config.put("documentBroker", documentBroker)
         val text = config.toString()
         FactoryConfig.parse(text, appId)
@@ -47,6 +52,7 @@ data class FactorySpec(
             backupPolicy()?.let { json.put("dataBackup", it) }
             incomingShare?.let { json.put("incomingShare", IncomingSharePolicyJson.toJson(it)) }
             notifications?.let { json.put("notifications", NotificationPolicyJson.toJson(it)) }
+            bluetooth?.let { json.put("bluetooth", BluetoothPolicyJson.toJson(it)) }
         }
 
     private fun backupPolicy(): JSONObject? {
@@ -66,7 +72,7 @@ data class FactorySpec(
         private val APP_ID = Regex("[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+")
         @JvmStatic fun parse(json: JSONObject): FactorySpec {
             val fields = setOf("schemaVersion", "appId", "name", "versionCode", "versionName", "capabilities", "webDir", "icon")
-            require(json.keys().asSequence().toSet().let { it.containsAll(fields) && it.all { key -> key in fields || key == "dataBackup" || key == "resourceBudgets" || key == "incomingShare" || key == "notifications" } }) { "factory.json requires ${fields.joinToString()} and optional dataBackup/resourceBudgets/incomingShare/notifications" }
+            require(json.keys().asSequence().toSet().let { it.containsAll(fields) && it.all { key -> key in fields || key == "dataBackup" || key == "resourceBudgets" || key == "incomingShare" || key == "notifications" || key == "bluetooth" } }) { "factory.json requires ${fields.joinToString()} and optional dataBackup/resourceBudgets/incomingShare/notifications/bluetooth" }
             require(integer(json, "schemaVersion") == 1) { "Unsupported factory schemaVersion" }
             val appId = string(json, "appId")
             require(APP_ID.matches(appId) && appId.split('.').size in 2..16 && appId.length <= 127 && !appId.startsWith("android.") &&
@@ -89,6 +95,9 @@ data class FactorySpec(
             IncomingSharePolicy.validateSelection(caps, incomingShare)
             val notifications = if (json.has("notifications")) NotificationPolicyJson.parse(json.getJSONObject("notifications")) else null
             NotificationPolicy.validateSelection(caps, notifications)
+            val bluetooth = if (json.has("bluetooth")) BluetoothPolicyJson.parse(json.getJSONObject("bluetooth")) else null
+            BluetoothPolicy.validateSelection(caps, bluetooth)
+            F3ManifestPolicy.validateSelection(caps)
             val policy = if (json.has("dataBackup")) {
                 val value = json.opt("dataBackup")
                 require(value is JSONObject && value.length() > 0 &&
@@ -124,7 +133,7 @@ data class FactorySpec(
             val icon = relativePath(string(json, "icon"))
             require(icon.endsWith(".png", true) || icon.endsWith(".json", true)) { "Icon must be PNG or vector JSON" }
             val resources = if (json.has("resourceBudgets")) ResourceBudgetsJson.parse(json.getJSONObject("resourceBudgets")) else ResourceBudgets.legacy()
-            return FactorySpec(appId, name, version, versionName, CapabilityCatalog.select(caps), webDir, icon, backupTables, backupKeys, resources, incomingShare, notifications)
+            return FactorySpec(appId, name, version, versionName, CapabilityCatalog.select(caps), webDir, icon, backupTables, backupKeys, resources, incomingShare, notifications, bluetooth)
         }
         fun relativePath(value: String): String {
             require(value.isNotBlank() && value.length <= 240 && !value.startsWith('/') && '\\' !in value &&

@@ -26,9 +26,41 @@ public final class CapabilityCatalog {
     public static final String RECOGNIZE_SPEECH_ACTION = "android.speech.action.RECOGNIZE_SPEECH";
     public static final String TTS_SERVICE_ACTION = "android.intent.action.TTS_SERVICE";
     public enum Method {
+        NFC_STATUS("nfc.status", "nfc"),
+        NFC_READ("nfc.read", "nfc"),
+        NFC_WRITE("nfc.write", "nfc"),
+        NFC_CANCEL("nfc.cancel", "nfc"),
+        BLUETOOTH_STATUS("bluetooth.status", "bluetooth"),
+        BLUETOOTH_REQUEST_PERMISSIONS("bluetooth.requestPermissions", "bluetooth"),
+        BLUETOOTH_SCAN("bluetooth.scan", "bluetooth"),
+        BLUETOOTH_POLL("bluetooth.poll", "bluetooth"),
+        BLUETOOTH_STOP_SCAN("bluetooth.stopScan", "bluetooth"),
+        BLUETOOTH_CONNECT("bluetooth.connect", "bluetooth"),
+        BLUETOOTH_SERVICES("bluetooth.services", "bluetooth"),
+        BLUETOOTH_READ("bluetooth.read", "bluetooth"),
+        BLUETOOTH_WRITE("bluetooth.write", "bluetooth"),
+        BLUETOOTH_REQUEST_MTU("bluetooth.requestMtu", "bluetooth"),
+        BLUETOOTH_SUBSCRIBE("bluetooth.subscribe", "bluetooth"),
+        BLUETOOTH_UNSUBSCRIBE("bluetooth.unsubscribe", "bluetooth"),
+        BLUETOOTH_DISCONNECT("bluetooth.disconnect", "bluetooth"),
+        BLUETOOTH_CANCEL("bluetooth.cancel", "bluetooth"),
+        WIDGETS_AVAILABILITY("widgets.availability", "widgets"),
+        WIDGETS_LIST("widgets.list", "widgets"),
+        WIDGETS_READ("widgets.read", "widgets"),
+        WIDGETS_REQUEST_PIN("widgets.requestPin", "widgets"),
+        WIDGETS_UPDATE("widgets.update", "widgets"),
+        WIDGETS_REMOVE("widgets.remove", "widgets"),
+        WIDGETS_POLL_ACTIONS("widgets.pollActions", "widgets"),
+        WIDGETS_ACKNOWLEDGE_ACTION("widgets.acknowledgeAction", "widgets"),
+        JOBS_ENQUEUE_HTTP("jobs.enqueueHttp", "jobs"),
+        JOBS_STATUS("jobs.status", "jobs"),
+        JOBS_CANCEL("jobs.cancel", "jobs"),
+        JOBS_READ_RESULT("jobs.readResult", "jobs"),
+        JOBS_FORGET("jobs.forget", "jobs"),
+        JOBS_RESUME("jobs.resume", "jobs"),
         RUNTIME_INFO("runtime.info", null),
         STORAGE_GET("storage.get", "storage"), STORAGE_SET("storage.set", "storage"),
-        STORAGE_REMOVE("storage.remove", "storage"), STORAGE_LIST("storage.list", "storage"),
+        STORAGE_REMOVE("storage.remove", "storage"), STORAGE_LIST("storage.list", "storage"), STORAGE_LIST_PAGE("storage.listPage", "storage"),
         STORAGE_BACKUP_EXPORT("storage.backupExport", "storage"), STORAGE_BACKUP_IMPORT("storage.backupImport", "storage"),
         EXPORT_TEXT("export.text", "export"), SHARE_TEXT("share.text", "share"), SHARE_FILE("share.file", "share"),
         CLIPBOARD_WRITE("clipboard.write", "clipboard"), HAPTICS_PERFORM("haptics.perform", "haptics"),
@@ -49,7 +81,7 @@ public final class CapabilityCatalog {
         SENSORS_SUBSCRIBE("sensors.subscribe", "sensors"), SENSORS_POLL("sensors.poll", "sensors"), SENSORS_UNSUBSCRIBE("sensors.unsubscribe", "sensors"),
         BIOMETRICS_AVAILABILITY("biometrics.availability", "biometrics"),
         BIOMETRICS_AUTHENTICATE("biometrics.authenticate", "biometrics"), BIOMETRICS_CANCEL("biometrics.cancel", "biometrics"),
-        NETWORK_REQUEST("network.request", "network"), NETWORK_PROBE("network.probe", "network"), NETWORK_PING("network.ping", "network"), NETWORK_CANCEL("network.cancel", "network"),
+        NETWORK_UPLOAD("network.upload", "network"), NETWORK_DOWNLOAD("network.download", "network"), NETWORK_REQUEST("network.request", "network"), NETWORK_PROBE("network.probe", "network"), NETWORK_PING("network.ping", "network"), NETWORK_CANCEL("network.cancel", "network"),
         NOTIFICATIONS_SCHEDULE("notifications.schedule", "notifications"), NOTIFICATIONS_RESUME_SCHEDULED("notifications.resumeScheduled", "notifications"), NOTIFICATIONS_SCHEDULE_STATUS("notifications.scheduleStatus", "notifications"), NOTIFICATIONS_CANCEL_SCHEDULED("notifications.cancelScheduled", "notifications"), NOTIFICATIONS_FORGET_SCHEDULED("notifications.forgetScheduled", "notifications"), NOTIFICATIONS_POLL_ACTIONS("notifications.pollActions", "notifications"), NOTIFICATIONS_ACK_ACTION("notifications.ackAction", "notifications"), NOTIFICATIONS_GENERATION_STATUS("notifications.generationStatus", "notifications"), NOTIFICATIONS_FORGET_GENERATION("notifications.forgetGeneration", "notifications"), NOTIFICATIONS_REQUEST_EXACT_ALARM_ACCESS("notifications.requestExactAlarmAccess", "notifications"),
         NOTIFICATIONS_STATUS("notifications.status", "notifications"), NOTIFICATIONS_CHANNEL("notifications.channel", "notifications"),
         NOTIFICATIONS_SHOW("notifications.show", "notifications"), NOTIFICATIONS_CANCEL("notifications.cancel", "notifications"),
@@ -136,7 +168,7 @@ public final class CapabilityCatalog {
     }
     public static final List<String> NAMES = Collections.unmodifiableList(Arrays.asList(
             "storage", "export", "share", "clipboard", "haptics", "device", "documents", "photos", "audio", "browser", "maps", "phone", "email", "sms", "contacts", "calendar", "database", "presentation", "sensors", "biometrics",
-            "network", "notifications", "speech", "voiceRecognition", "location", "recording", "steps", "secrets", "incomingShare"));
+            "network", "notifications", "speech", "voiceRecognition", "location", "recording", "steps", "secrets", "incomingShare", "nfc", "bluetooth", "widgets", "jobs"));
     public static final Set<String> SUPPORTED = Collections.unmodifiableSet(new LinkedHashSet<>(NAMES));
     public static final Map<String, Capability> CAPABILITIES;
     public static final Map<String, Method> METHODS;
@@ -182,7 +214,7 @@ public final class CapabilityCatalog {
         return name.equals("documents") || name.equals("browser") || name.equals("maps") || name.equals("phone")
                 || name.equals("email") || name.equals("sms") || name.equals("contacts") || name.equals("calendar")
                 || name.equals("clipboard") || name.equals("share") || name.equals("export")
-                || name.equals("network") || name.equals("notifications") || name.equals("speech") || name.equals("voiceRecognition") || name.equals("location") || name.equals("recording") || name.equals("steps") || name.equals("sensors") || name.equals("secrets") || name.equals("incomingShare");
+                || name.equals("network") || name.equals("notifications") || name.equals("speech") || name.equals("voiceRecognition") || name.equals("location") || name.equals("recording") || name.equals("steps") || name.equals("sensors") || name.equals("secrets") || name.equals("incomingShare") || name.equals("nfc") || name.equals("bluetooth") || name.equals("widgets") || name.equals("jobs");
     }
     /** Defensive, deterministic selection; no implied or future capabilities. */
     public static List<String> select(Iterable<String> requested) {

@@ -111,7 +111,7 @@ class FactorySigningScopeTest {
             .map { current.toJson().getJSONArray("queryActions").getString(it) })
         assertTrue(plan.queryActions.isNotEmpty())
         assertEquals(budgets, current.resources())
-        assertEquals(10, current.toJson().getJSONObject("resourceBudgets").length())
+        assertEquals(14, current.toJson().getJSONObject("resourceBudgets").length())
         val reloaded = read(record().put("lastSignedScope", current.anchored(appId, fingerprint, 1, sha)))!!
         assertEquals(current, reloaded)
         assertEquals(budgets, reloaded.resources())
@@ -142,11 +142,12 @@ class FactorySigningScopeTest {
     @Test fun preServiceResourceScopePreservesAuthenticatedCanonicalBytes() {
         val prior = scope().toJson()
         val resources = prior.getJSONObject("resourceBudgets")
-        for (section in listOf("secrets", "notifications", "incomingShare")) resources.remove(section)
-        prior.remove("incomingShare"); prior.remove("notifications")
-        val original = prior.toString()
+        for (section in listOf("secrets", "notifications", "incomingShare", "nfc", "bluetooth", "widgets", "jobs")) resources.remove(section)
+        prior.remove("incomingShare"); prior.remove("notifications"); prior.remove("bluetooth"); prior.remove("privateComponents")
+        val historic = JSONObject(prior.toString())
+        val original = historic.toString()
         val saved = record()
-        saved.getJSONObject("lastSignedScope").put("scope", prior)
+        saved.getJSONObject("lastSignedScope").put("scope", historic)
         val loaded = read(saved)!!
         assertEquals(original, loaded.toJson().toString())
         assertEquals(32, loaded.resources().secrets.entries)

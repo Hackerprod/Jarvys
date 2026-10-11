@@ -254,8 +254,8 @@ public final class PrivateDatabase implements AutoCloseable {
             digest.update(",\"rows\":[".getBytes(StandardCharsets.US_ASCII)); int count=0;
             try(Cursor cursor=database.rawQuery(selectSql(name,columns)+" ORDER BY id COLLATE BINARY ASC",null,signal)) {
                 while(cursor.moveToNext()) {
-                    check(ticket,current); if(++total>DatabaseRequest.MAX_ROWS) throw quota();
-                    JSONObject value=backupRow(cursor,columns); if(count++>0) digest.update((byte)',');
+                    check(ticket,current); if(++total>DatabaseRequest.HARD_MAX_ROWS) throw quota();
+                    JSONObject value=DatabaseBackupFormat.normalizeCurrentRow(row(cursor,columns),columns); if(count++>0) digest.update((byte)',');
                     digest.update(DatabaseBackupFormat.canonical(value));
                 }
             }
@@ -309,7 +309,8 @@ public final class PrivateDatabase implements AutoCloseable {
     private JSONObject readSchema(CancellationSignal signal) throws Exception {
         try(Cursor cursor=database.rawQuery("SELECT schema_json FROM factory_schema WHERE id=1",null,signal)) {
             if(!cursor.moveToFirst()) throw corrupt();
-            JSONObject schema=StrictJson.object(cursor.getString(0),ResourceBudgets.DATABASE_SCHEMA_BYTES);
+            JSONObject schema=StrictJson.object(cursor.getString(0),ResourceBudgets.DATABASE_SCHEMA_BYTES,8,
+                    1+DatabaseRequest.HARD_MAX_TABLES*(1+3*DatabaseRequest.HARD_MAX_COLUMNS));
             if(schema.length()>DatabaseRequest.HARD_MAX_TABLES) throw corrupt();
             for(String table:keys(schema)) { DatabaseRequest.identifier(table); DatabaseRequest.columns(schema.getJSONObject(table)); }
             int version=database.getVersion();
@@ -440,16 +441,16 @@ public final class PrivateDatabase implements AutoCloseable {
         int limit=Math.min(args.has("limit")?args.getInt("limit"):50,budget.selectPageRows);
         sql.append(" ORDER BY id COLLATE BINARY ASC LIMIT ?"); binds.add(Integer.toString(limit+1));
         JSONArray rows=new JSONArray(); boolean more=false; String last=null; long encodedBytes=2;
-        final long rowPageBytes=ResourceBudgets.DATABASE_RESPONSE_BYTES-1024L;
+        final long rowPageBytes=DatabaseRequest.HARD_MAX_ROW_BYTES+2L;
         try(Cursor cursor=database.rawQuery(sql.toString(),binds.toArray(new String[0]),signal)) {
             while(cursor.moveToNext()) {
                 check(ticket,current);
                 if(rows.length()==limit) { more=true; break; }
                 JSONObject row=row(cursor,columns);
                 int rowBytes=DatabaseRequest.bytes(row);
-                if(rowBytes>DatabaseRequest.MAX_ROW_BYTES) throw quota();
+                if(rowBytes>DatabaseRequest.HARD_MAX_ROW_BYTES) throw quota();
                 long next=add(encodedBytes,(long)rowBytes+(rows.length()==0?0:1));
-                if(next>rowPageBytes) { more=true; break; }
+                if(next>rowPageBytes) { if(rows.length()==0) throw quota(); more=true; break; }
                 rows.put(row); encodedBytes=next; last=cursor.getString(0);
             }
         }
@@ -475,7 +476,7 @@ public final class PrivateDatabase implements AutoCloseable {
     }
     private void admitRow(JSONObject before,JSONObject after) throws Exception {
         int next=DatabaseRequest.bytes(after);
-        if(next>DatabaseRequest.MAX_ROW_BYTES || (next>budget.rowBytes && (before==null || next>DatabaseRequest.bytes(before)))) throw quota();
+        if(next>DatabaseRequest.HARD_MAX_ROW_BYTES || (next>budget.rowBytes && (before==null || next>DatabaseRequest.bytes(before)))) throw quota();
         for(String key:keys(after)) {
             if("id".equals(key) || !(after.get(key) instanceof String)) continue;
             int bytes=after.getString(key).getBytes(StandardCharsets.UTF_8).length;

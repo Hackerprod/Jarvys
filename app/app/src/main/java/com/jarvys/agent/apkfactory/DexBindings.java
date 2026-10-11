@@ -30,7 +30,15 @@ public final class DexBindings {
     /** Input contains only canonical classes.dex, classes2.dex, ... with no gaps. */
     public static Map<String,String> verify(Map<String,byte[]> dexFiles) throws IOException { return verify(dexFiles, false); }
     public static Map<String,String> verify(Map<String,byte[]> dexFiles, boolean notificationScheduling) throws IOException {
+        return verify(dexFiles, notificationScheduling, false, false);
+    }
+    public static Map<String,String> verify(Map<String,byte[]> dexFiles, boolean notificationScheduling, boolean widgets, boolean jobs) throws IOException {
         Map<String,String> required = new LinkedHashMap<>(REQUIRED);
+        if (widgets) {
+            required.put("L" + com.jarvys.factory.contract.F3ManifestPolicy.WIDGET_PROVIDER.replace('.', '/') + ";", "Landroid/appwidget/AppWidgetProvider;");
+            required.put("L" + com.jarvys.factory.contract.F3ManifestPolicy.WIDGET_ACTION_RECEIVER.replace('.', '/') + ";", "Landroid/content/BroadcastReceiver;");
+        }
+        if (jobs) required.put("L" + com.jarvys.factory.contract.F3ManifestPolicy.JOB_SERVICE.replace('.', '/') + ";", "Landroid/app/job/JobService;");
         if (notificationScheduling) {
             required.put("L" + com.jarvys.factory.contract.NotificationPolicy.ALARM_RECEIVER.replace('.', '/') + ";", "Landroid/content/BroadcastReceiver;");
             required.put("L" + com.jarvys.factory.contract.NotificationPolicy.RECOVERY_RECEIVER.replace('.', '/') + ";", "Landroid/content/BroadcastReceiver;");

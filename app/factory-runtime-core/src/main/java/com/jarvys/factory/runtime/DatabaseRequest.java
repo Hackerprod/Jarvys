@@ -17,6 +17,13 @@ public final class DatabaseRequest {
     public static final int MAX_ROWS=10000, MAX_CELL_BYTES=4096, MAX_ROW_BYTES=16384;
     public static final int MAX_ARGUMENT_BYTES=262144, MAX_RESULT_BYTES=262144, MAX_SELECT_ROWS=100;
     public static final long MAX_DATABASE_BYTES=16L*1024*1024, MAX_SAFE_INTEGER=9007199254740991L;
+    // Complete rows must fit one byte-bounded response, including pagination metadata and envelope.
+    public static final int HARD_MAX_ROW_BYTES=MAX_RESULT_BYTES-1024, HARD_MAX_CELL_BYTES=HARD_MAX_ROW_BYTES;
+    // The smallest row {"id":"a"} plus its separator is eleven bytes.
+    public static final int HARD_MAX_SELECT_ROWS=HARD_MAX_ROW_BYTES/11;
+    // Bridge grammar: seven envelope/container tokens, then at least four tokens per delete operation.
+    // Inserts and updates can hit the fixed byte/token envelope before this count is reached.
+    public static final int HARD_MAX_OPERATIONS=(8192-7)/4;
     public static void validate(String method, JSONObject args) throws FactoryException {
         try {
             if (args.toString().getBytes(StandardCharsets.UTF_8).length>MAX_ARGUMENT_BYTES) throw invalid();
@@ -40,7 +47,7 @@ public final class DatabaseRequest {
                     break;
                 case "database.transact":
                     exact(args,"version","operations"); integer(args,"version",1,1000);
-                    JSONArray operations=args.getJSONArray("operations"); array(operations,MAX_OPERATIONS);
+                    JSONArray operations=args.getJSONArray("operations"); array(operations,HARD_MAX_OPERATIONS);
                     for(int i=0;i<operations.length();i++) {
                         JSONObject operation=operations.getJSONObject(i); String kind=string(operation,"kind");
                         identifier(string(operation,"table")); id(string(operation,"id"));
@@ -56,7 +63,7 @@ public final class DatabaseRequest {
                     identifier(string(args,"table"));
                     if(args.has("where")) {
                         JSONObject where=args.getJSONObject("where");
-                        if(where.length()>HARD_MAX_COLUMNS || bytes(where)>MAX_ROW_BYTES) throw invalid();
+                        if(where.length()>HARD_MAX_COLUMNS || bytes(where)>HARD_MAX_ROW_BYTES) throw invalid();
                         for(Iterator<String> it=where.keys();it.hasNext();) {
                             String key=it.next();
                             if("id".equals(key)) id(string(where,key));
@@ -64,7 +71,7 @@ public final class DatabaseRequest {
                         }
                     }
                     if(args.has("afterId")) id(string(args,"afterId"));
-                    if(args.has("limit")) integer(args,"limit",1,MAX_SELECT_ROWS);
+                    if(args.has("limit")) integer(args,"limit",1,HARD_MAX_SELECT_ROWS);
                     break;
                 default: throw invalid();
             }
@@ -80,12 +87,13 @@ public final class DatabaseRequest {
         if(!(value.get("nullable") instanceof Boolean)) throw invalid();
     }
     static void values(JSONObject values) throws JSONException,FactoryException {
-        if(values.length()>HARD_MAX_COLUMNS || bytes(values)>MAX_ROW_BYTES) throw invalid();
+        if(values.length()>HARD_MAX_COLUMNS || bytes(values)>HARD_MAX_ROW_BYTES) throw invalid();
         for(Iterator<String> it=values.keys();it.hasNext();) { String key=it.next(); identifier(key); scalar(values.get(key)); }
     }
-    static void scalar(Object value) throws FactoryException {
+    static void scalar(Object value) throws FactoryException { scalar(value,HARD_MAX_CELL_BYTES); }
+    static void scalar(Object value,int maxCellBytes) throws FactoryException {
         if(value==JSONObject.NULL || value instanceof Boolean) return;
-        if(value instanceof String) { text((String)value,MAX_CELL_BYTES); return; }
+        if(value instanceof String) { text((String)value,maxCellBytes); return; }
         if(value instanceof Integer || value instanceof Long) {
             long number=((Number)value).longValue(); if(number < -MAX_SAFE_INTEGER || number>MAX_SAFE_INTEGER) throw invalid(); return;
         }
@@ -94,8 +102,9 @@ public final class DatabaseRequest {
         }
         throw invalid();
     }
-    static void typed(Object value,JSONObject definition) throws JSONException,FactoryException {
-        scalar(value);
+    static void typed(Object value,JSONObject definition) throws JSONException,FactoryException { typed(value,definition,HARD_MAX_CELL_BYTES); }
+    static void typed(Object value,JSONObject definition,int maxCellBytes) throws JSONException,FactoryException {
+        scalar(value,maxCellBytes);
         if(value==JSONObject.NULL) { if(!definition.getBoolean("nullable")) throw invalid(); return; }
         String type=definition.getString("type");
         boolean valid="text".equals(type)?value instanceof String:"boolean".equals(type)?value instanceof Boolean:

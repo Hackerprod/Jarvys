@@ -31,12 +31,50 @@ public final class NativeOperationRequest {
         return parseValue(operation, details);
     }
     public static NativeOperationRequest parse(String operation, String details) throws FactoryException {
-        return parseValue(operation, StrictJson.object(details, MAX_BYTES));
+        return parseValue(operation, StrictJson.object(details, MAX_BYTES, "widgets.manage".equals(operation) ? 24 : 8, "widgets.manage".equals(operation) ? 8192 : operation != null && operation.startsWith("nfc.") ? 4096 : 1024));
     }
     private static NativeOperationRequest parseValue(String operation, JSONObject value) throws FactoryException {
         try {
             String capability;
             switch (operation == null ? "" : operation) {
+                case "bluetooth.requestPermissions": case "bluetooth.scan": case "bluetooth.connect": case "bluetooth.services": case "bluetooth.read": case "bluetooth.requestMtu": case "bluetooth.subscribe":
+                    capability="bluetooth";
+                    BleRequest ble=BleRequest.parse(operation,value);
+                    try { value=ble.authorizationDetails(); } finally { ble.clear(); }
+                    break;
+                case "bluetooth.write":
+                    capability="bluetooth"; exact(value,"connectionId","attributeId","writeType","byteLength","valueSha256");
+                    for(String key:new String[]{"connectionId","attributeId"}) if(!text(value,key,36,false).matches("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}")) throw invalid();
+                    String writeType=text(value,"writeType",16,false);
+                    if(!writeType.equals("response")&&!writeType.equals("noResponse")) throw invalid();
+                    integer(value,"byteLength",0,512);
+                    if(!text(value,"valueSha256",64,false).matches("[a-f0-9]{64}")) throw invalid();
+                    break;
+                case "nfc.read":
+                    capability = "nfc"; exact(value,"timeoutMs");
+                    value = NfcRequest.read(value,new NfcRequest.Limits(131072,256,300000)).authorizationDetails(); break;
+                case "nfc.write":
+                    capability = "nfc"; exact(value,"timeoutMs","allowFormat","records");
+                    value = NfcRequest.write(value,new NfcRequest.Limits(131072,256,300000)).authorizationDetails(); break;
+                case "widgets.manage":
+                    capability = "widgets"; exact(value,"action","widgetIds","model","acknowledgeUnknown");
+                    value = WidgetRequest.parse(value,WidgetModel.Limits.ceiling()).authorizationDetails(); break;
+                case "jobs.enqueueHttp":
+                    capability = "jobs"; exact(value,"jobId","request","constraints","executionMode","replayPossible");
+                    if (!text(value,"jobId",36,false).matches("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}")) throw invalid();
+                    String execution = text(value,"executionMode",32,false);
+                    if (!execution.equals("scheduled") && !execution.equals("foreground_now")) throw invalid();
+                    if (bool(value,"replayPossible") && !execution.equals("foreground_now")) throw invalid();
+                    validateNetwork(value.getJSONObject("request"),false);
+                    JSONObject constraints=value.getJSONObject("constraints");
+                    if (constraints.has("overrideDeadlineMs")) exact(constraints,"network","requiresCharging","minimumLatencyMs","overrideDeadlineMs");
+                    else exact(constraints,"network","requiresCharging","minimumLatencyMs");
+                    String network=text(constraints,"network",16,false);
+                    if (!network.equals("any") && !network.equals("unmetered")) throw invalid();
+                    bool(constraints,"requiresCharging");
+                    long latency=longInteger(constraints,"minimumLatencyMs",0,2592000000L);
+                    if (constraints.has("overrideDeadlineMs") && longInteger(constraints,"overrideDeadlineMs",0,2592000000L)<latency) throw invalid();
+                    break;
                 case "secrets.put": case "secrets.capture":
                     capability = "secrets";
                     if (value.has("replaceId")) exact(value, "label", "scope", "replaceId"); else exact(value, "label", "scope");
@@ -84,6 +122,8 @@ public final class NativeOperationRequest {
                     value = LocationRequest.parseCurrent(value).authorizationDetails(); break;
                 case "location.requestPermission":
                     capability = "location"; exact(value, "precision"); value = LocationRequest.parsePermission(value).authorizationDetails(); break;
+                case "network.upload": case "network.download":
+                    capability = "network"; validateTransfer(value, "network.upload".equals(operation)); break;
                 case "network.request": case "network.probe":
                     capability = "network"; validateNetwork(value, "network.probe".equals(operation)); break;
                 case "network.ping":
@@ -126,7 +166,40 @@ public final class NativeOperationRequest {
             return new NativeOperationRequest(operation, capability, value);
         } catch (JSONException | IllegalArgumentException failure) { throw invalid(); }
     }
+    private static void validateTransfer(JSONObject value, boolean upload) throws FactoryException, JSONException {
+        String[] common = {"url", "method", "headers", "bodyBytes", "redirect", "maxRedirects", "allowHttpsDowngrade", "hasBody",
+                "connectTimeoutMs", "readTimeoutMs", "timeoutMs", "maxHeaderBytes", "operation", "handle", "offset", "maxBytes", "documentMode", "atomicReplacement", "bodySource"};
+        java.util.ArrayList<String> keys = new java.util.ArrayList<>(Arrays.asList(common));
+        Collections.addAll(keys, upload ? new String[]{"length", "contentSnapshotBound", "redirectReplayAllowed"}
+                : new String[]{"bodySha256", "bodyPreview", "bodyPreviewTruncated", "bodyEncoding", "maxRequestBytes"});
+        exact(value, keys.toArray(new String[0]));
+        if (!text(value, "operation", 32, false).equals(upload ? "network.upload" : "network.download") ||
+                !text(value, "handle", 64, false).matches("[a-f0-9]{64}") ||
+                !text(value, "documentMode", 8, false).equals(upload ? "read" : "write") || bool(value, "atomicReplacement") ||
+                !text(value, "bodySource", 32, false).equals(upload ? "document_handle" : "inline")) throw invalid();
+        long offset = longInteger(value, "offset", 0, BridgeProtocol.MAX_DOCUMENT_POSITION);
+        long maximum = longInteger(value, "maxBytes", 1, BridgeProtocol.MAX_DOCUMENT_POSITION);
+        JSONObject network = new JSONObject(value.toString());
+        for (String key : new String[]{"operation","handle","offset","maxBytes","documentMode","atomicReplacement","bodySource"}) network.remove(key);
+        if (upload) {
+            long length = longInteger(value, "length", 0, maximum);
+            if (length > BridgeProtocol.MAX_DOCUMENT_POSITION - offset || longInteger(value,"bodyBytes",0,BridgeProtocol.MAX_DOCUMENT_POSITION) != length ||
+                    !bool(value,"hasBody") || bool(value,"contentSnapshotBound") || bool(value,"redirectReplayAllowed")) throw invalid();
+            network.remove("length"); network.remove("contentSnapshotBound"); network.remove("redirectReplayAllowed");
+            network.put("bodyBytes",0).put("bodySha256","e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+                    .put("bodyPreview","").put("bodyPreviewTruncated",false).put("bodyEncoding","base64").put("maxRequestBytes",0);
+        } else if (maximum > BridgeProtocol.MAX_DOCUMENT_POSITION - offset) throw invalid();
+        network.put("probe",false).put("responseType","text").put("maxResponseBytes",0);
+        validateNetwork(network,false,86400000);
+    }
+    private static long longInteger(JSONObject value, String key, long minimum, long maximum) throws FactoryException, JSONException {
+        Object raw=value.get(key); if (!(raw instanceof Integer) && !(raw instanceof Long)) throw invalid();
+        long number=((Number)raw).longValue(); if(number<minimum || number>maximum) throw invalid(); return number;
+    }
     private static void validateNetwork(JSONObject value, boolean probe) throws FactoryException, JSONException {
+        validateNetwork(value, probe, NetworkRequest.MAX_TIMEOUT_MS);
+    }
+    private static void validateNetwork(JSONObject value, boolean probe, int timeoutMaximum) throws FactoryException, JSONException {
         exact(value, "url", "method", "headers", "bodyBytes", "bodySha256", "probe", "redirect", "maxRedirects",
                 "allowHttpsDowngrade", "bodyPreview", "bodyPreviewTruncated", "bodyEncoding", "responseType",
                 "connectTimeoutMs", "readTimeoutMs", "timeoutMs", "maxRequestBytes", "maxResponseBytes", "maxHeaderBytes", "hasBody");
@@ -144,7 +217,7 @@ public final class NativeOperationRequest {
         int responseLimit = integer(value, "maxResponseBytes", 0, NetworkRequest.MAX_BODY_BYTES);
         int headerLimit = integer(value, "maxHeaderBytes", 256, NetworkRequest.MAX_HEADER_BYTES);
         integer(value, "maxRedirects", 0, NetworkRequest.MAX_REDIRECTS);
-        for (String key : new String[]{"connectTimeoutMs", "readTimeoutMs", "timeoutMs"}) integer(value, key, 1, NetworkRequest.MAX_TIMEOUT_MS);
+        for (String key : new String[]{"connectTimeoutMs", "readTimeoutMs", "timeoutMs"}) integer(value, key, 1, timeoutMaximum);
         if (bodyBytes > requestLimit || (probe && (hasBody || bodyBytes != 0 || responseLimit != 0))) throw invalid();
         Object rawHeaders = value.get("headers");
         if (!(rawHeaders instanceof JSONObject)) throw invalid();
@@ -175,7 +248,7 @@ public final class NativeOperationRequest {
     }
     private static String canonical(JSONObject value) throws JSONException { return canonicalValue(value, 0); }
     private static String canonicalValue(Object value, int depth) throws JSONException {
-        if (depth > 16) throw new JSONException("Native disclosure nesting exceeds bound");
+        if (depth > 32) throw new JSONException("Native disclosure nesting exceeds bound");
         if (value == null || value == JSONObject.NULL) return "null";
         if (value instanceof JSONObject) {
             JSONObject object = (JSONObject) value;

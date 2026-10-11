@@ -44,13 +44,17 @@ open class FactoryOperationAuthorizationProvider : ContentProvider() {
         if (method == METHOD_DESCRIBE_INSTALLED) return describeInstalled(app, caller, uid, arg, extras)
         val background = method == METHOD_ACQUIRE_BACKGROUND
         require((method == METHOD_ACQUIRE || background) && arg == null)
-        val expectedKeys = setOf("protocolVersion", "operation", "nonce", "details") + if (background) setOf("deadlineElapsedMs", "expectedSource") else emptySet()
+        val finiteHttpJob = background && extras?.containsKey("leaseKind") == true
+        if (finiteHttpJob) require(extras?.getString("leaseKind") == "finite_http_job")
+        val expectedKeys = setOf("protocolVersion", "operation", "nonce", "details") +
+            (if (background) setOf("deadlineElapsedMs", "expectedSource") else emptySet()) +
+            (if (finiteHttpJob) setOf("leaseKind") else emptySet())
         require(extras != null && extras.keySet() == expectedKeys && !extras.hasFileDescriptors())
         val started = SystemClock.elapsedRealtime()
-        val backgroundDeadline = if (background) {
+        var backgroundDeadline = if (background) {
             @Suppress("DEPRECATION") val rawDeadline = extras.get("deadlineElapsedMs")
             require(rawDeadline is Long && rawDeadline > started)
-            minOf(rawDeadline, started + 8_000L)
+            minOf(rawDeadline, started + if (finiteHttpJob) 305_000L else 8_000L)
         } else null
         val acquisitionDeadline = if (backgroundDeadline != null) minOf(backgroundDeadline, started + 2_000L) else started + 30_000L
         val expectedSource = if (background) {
@@ -65,6 +69,15 @@ open class FactoryOperationAuthorizationProvider : ContentProvider() {
         require(version is Int && version == 1 && operation is String && nonce is String && nonce.matches(HEX) && details is String)
         requireCaller(app, caller, uid)
         val request = NativeOperationRequest.parse(operation, details)
+        if (finiteHttpJob) {
+            require(request.operation == "jobs.enqueueHttp")
+            val disclosure = request.details()
+            require(disclosure.getString("executionMode") == "scheduled" && !disclosure.getBoolean("replayPossible"))
+            val timeout = disclosure.getJSONObject("request").getLong("timeoutMs")
+            require(timeout in 1L..300_000L)
+            backgroundDeadline = minOf(requireNotNull(backgroundDeadline), started + timeout + 5_000L)
+        }
+        val leaseDeadline = backgroundDeadline
         val selected = FactoryOperationPolicy.Operation.entries.singleOrNull { it.id == request.operation }
             ?: throw SecurityException("Unsupported native operation")
         val cancelled = AtomicBoolean()
@@ -77,7 +90,11 @@ open class FactoryOperationAuthorizationProvider : ContentProvider() {
                 check(!cancelled.get())
                 requireCaller(app, caller, uid)
                 val before = sourceStamp(app, caller, uid)
-                val requiredCapabilities = setOf(request.capability) + if (request.operation == "secrets.request") setOf("network") else emptySet()
+                val requiredCapabilities = setOf(request.capability) + when (request.operation) {
+                    "secrets.request", "jobs.enqueueHttp" -> setOf("network")
+                    "network.upload", "network.download" -> setOf("documents")
+                    else -> emptySet()
+                }
                 val proof = verifiedCaller(app, caller, requiredCapabilities)
                 require(proof.appId == caller)
                 if (expectedSource != null) require(proof.appId == expectedSource.appId && proof.certificate == expectedSource.certificateSha256 &&
@@ -102,7 +119,7 @@ open class FactoryOperationAuthorizationProvider : ContentProvider() {
                 if (background && grant.requiresApproval) throw BackgroundDecision(FactoryOperationPolicy.Mode.ASK)
                 check(!cancelled.get())
                 val value = Session(app, uid, caller, nonce, request, proof, grant, binding, stamp,
-                    { authority.requireCurrent() }, { authority.close() }, backgroundDeadline)
+                    { authority.requireCurrent() }, { authority.close() }, leaseDeadline)
                 session = value
                 register(value)
                 value.attachRevocation()

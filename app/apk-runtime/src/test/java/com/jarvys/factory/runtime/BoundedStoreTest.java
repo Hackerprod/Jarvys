@@ -59,7 +59,7 @@ public class BoundedStoreTest {
         for (int i = 0; i < 15; i++) store.set("k" + i, big);
         try { store.set("overflow", big); fail(); } catch (FactoryException e) { assertEquals("QUOTA_EXCEEDED", e.code); }
         assertNull(store.get("overflow")); assertEquals(15, store.list().size());
-        try { store.set("tooBig", big + "x"); fail(); } catch (FactoryException e) { assertEquals("INVALID_ARGUMENT", e.code); }
+        try { store.set("tooBig", big + "x"); fail(); } catch (FactoryException e) { assertEquals("QUOTA_EXCEEDED", e.code); }
     }
     @Test public void failedDurableWriteReportsFailure() throws Exception {
         BoundedStore store = new BoundedStore(new BoundedStore.Backend() {

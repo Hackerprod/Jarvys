@@ -11,14 +11,14 @@ public final class ResourceBudgetsJson {
     private ResourceBudgetsJson() { }
     public static ResourceBudgets parse(JSONObject object) throws FactoryException {
         try {
-            if (object == null || object.length() > 10) throw new IllegalArgumentException();
+            if (object == null || object.length() > 14) throw new IllegalArgumentException();
             Map<String, Object> root = new LinkedHashMap<>();
             Iterator<String> keys = object.keys();
             while (keys.hasNext()) {
                 String key = keys.next(); Object value = object.get(key);
                 if (value instanceof JSONObject) {
                     JSONObject section = (JSONObject) value;
-                    if (section.length() > 8) throw new IllegalArgumentException();
+                    if (section.length() > 16) throw new IllegalArgumentException();
                     Map<String, Object> fields = new LinkedHashMap<>(); Iterator<String> names = section.keys();
                     while (names.hasNext()) { String name = names.next(); fields.put(name, section.get(name)); }
                     value = fields;

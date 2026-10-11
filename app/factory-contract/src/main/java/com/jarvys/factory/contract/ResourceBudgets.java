@@ -19,7 +19,7 @@ import java.util.Map;
 public final class ResourceBudgets {
     public static final int VERSION = 1;
     private static final long KIB = 1024L, MIB = 1024L * KIB, GIB = 1024L * MIB;
-    private static final String[] SECTIONS = {"storage", "database", "documents", "audio", "sensors", "packaging", "secrets", "notifications", "incomingShare"};
+    private static final String[] SECTIONS = {"storage", "database", "documents", "audio", "sensors", "packaging", "secrets", "notifications", "incomingShare", "nfc", "bluetooth", "widgets", "jobs"};
 
     /** Fixed allocation/transport ceilings; these are not developer-editable policy settings. */
     public static final int BRIDGE_MESSAGE_BYTES = 512 * 1024;
@@ -31,18 +31,18 @@ public final class ResourceBudgets {
     public static final int GLOBAL_DOCUMENT_SLOTS = 128;
 
     private enum Field {
-        STORAGE_TOTAL("storage", "totalBytes", MIB, 1, MIB),
-        STORAGE_ENTRIES("storage", "entries", 256, 1, 256),
-        STORAGE_VALUE("storage", "valueBytes", 64 * KIB, 1, 64 * KIB),
+        STORAGE_TOTAL("storage", "totalBytes", MIB, 1, 16 * MIB),
+        STORAGE_ENTRIES("storage", "entries", 256, 1, 65536),
+        STORAGE_VALUE("storage", "valueBytes", 64 * KIB, 1, BRIDGE_MESSAGE_BYTES - 1024),
         DATABASE_MAIN("database", "mainFileBytes", 16 * MIB, 4096, GIB),
         DATABASE_ROWS("database", "rows", 10000, 1, 1000000),
         // At most 512 bounded column definitions keep the closed schema below 64 KiB.
         DATABASE_TABLES("database", "tables", 8, 1, 16),
         DATABASE_COLUMNS("database", "columnsPerTable", 16, 1, 32),
-        DATABASE_CELL("database", "cellBytes", 4096, 1, 4096),
-        DATABASE_ROW("database", "rowBytes", 16384, 1, 16384),
-        DATABASE_PAGE("database", "selectPageRows", 100, 1, 100),
-        DATABASE_BATCH("database", "batchOperations", 64, 1, 64),
+        DATABASE_CELL("database", "cellBytes", 4096, 1, DATABASE_RESPONSE_BYTES - 1024),
+        DATABASE_ROW("database", "rowBytes", 16384, 1, DATABASE_RESPONSE_BYTES - 1024),
+        DATABASE_PAGE("database", "selectPageRows", 100, 1, (DATABASE_RESPONSE_BYTES - 1024) / 11),
+        DATABASE_BATCH("database", "batchOperations", 64, 1, (8192 - 7) / 4),
         DOCUMENT_HANDLES("documents", "openHandles", 4, 1, 16),
         DOCUMENT_HANDLE_BYTES("documents", "handleBytes", 16 * MIB, 1, 4 * GIB),
         DOCUMENT_SESSION_BYTES("documents", "sessionBytes", 32 * MIB, 1, 16 * GIB),
@@ -69,7 +69,33 @@ public final class ResourceBudgets {
         INCOMING_ENVELOPES("incomingShare", "queuedEnvelopes", 16, 1, 64),
         INCOMING_ATTACHMENTS("incomingShare", "attachmentsPerEnvelope", 16, 1, 32),
         INCOMING_TEXT("incomingShare", "textBytes", 64 * KIB, 1, 256 * KIB),
-        INCOMING_BYTES("incomingShare", "queuedBytes", MIB, 1024, 8 * MIB);
+        INCOMING_BYTES("incomingShare", "queuedBytes", MIB, 1024, 8 * MIB),
+        NFC_RECORDS("nfc", "records", 16, 1, 256),
+        NFC_MESSAGE_BYTES("nfc", "messageBytes", 8192, 3, 131072),
+        NFC_TIMEOUT_MS("nfc", "timeoutMs", 30000, 1000, 300000),
+        BLUETOOTH_CONNECTIONS("bluetooth", "connections", 4, 1, 16),
+        BLUETOOTH_DISCOVERED_DEVICES("bluetooth", "discoveredDevices", 128, 1, 1024),
+        BLUETOOTH_QUEUED_OPERATIONS("bluetooth", "queuedOperations", 32, 1, 256),
+        BLUETOOTH_BUFFERED_EVENTS("bluetooth", "bufferedEvents", 128, 1, 2048),
+        BLUETOOTH_POLL_EVENTS("bluetooth", "pollEvents", 32, 1, 256),
+        BLUETOOTH_SERVICES("bluetooth", "services", 64, 1, 256),
+        BLUETOOTH_ATTRIBUTES("bluetooth", "attributes", 512, 1, 4096),
+        BLUETOOTH_SUBSCRIPTIONS("bluetooth", "subscriptions", 16, 1, 256),
+        BLUETOOTH_VALUE_BYTES("bluetooth", "valueBytes", 512, 1, 512),
+        BLUETOOTH_SCAN_DURATION_MS("bluetooth", "scanDurationMs", 30000, 1, 300000),
+        BLUETOOTH_OPERATION_TIMEOUT_MS("bluetooth", "operationTimeoutMs", 30000, 1, 300000),
+        WIDGETS_INSTANCES("widgets", "instances", 16, 1, 128),
+        WIDGETS_NODES("widgets", "nodes", 64, 1, 256),
+        WIDGETS_DEPTH("widgets", "depth", 6, 1, 8),
+        WIDGETS_ACTIONS("widgets", "actions", 16, 0, 64),
+        WIDGETS_MODEL_BYTES("widgets", "modelBytes", 16384, 256, 131072),
+        WIDGETS_ACTION_DATA_BYTES("widgets", "actionDataBytes", 2048, 2, 16384),
+        WIDGETS_INBOX_EVENTS("widgets", "inboxEvents", 64, 1, 1024),
+        WIDGETS_STORAGE_BYTES("widgets", "storageBytes", 1048576, 65536, 16777216),
+        WIDGETS_IMAGE_BYTES("widgets", "imageBytes", 262144, 1, 2097152),
+        WIDGETS_IMAGE_PIXELS("widgets", "imagePixels", 262144, 1, 1048576),
+        JOBS_RECORDS("jobs", "records", 32, 1, 1024),
+        JOBS_STORAGE_BYTES("jobs", "storageBytes", 8388608, 1048576, 67108864);
 
         final String section, name;
         final long legacy, minimum, maximum;
@@ -130,6 +156,52 @@ public final class ResourceBudgets {
         public final int queuedEnvelopes, attachmentsPerEnvelope, textBytes, queuedBytes;
         private IncomingShare(long[] values) { queuedEnvelopes=count(values,Field.INCOMING_ENVELOPES); attachmentsPerEnvelope=count(values,Field.INCOMING_ATTACHMENTS); textBytes=count(values,Field.INCOMING_TEXT); queuedBytes=count(values,Field.INCOMING_BYTES); }
     }
+    public static final class Nfc {
+        public final int records, messageBytes, timeoutMs;
+        private Nfc(long[] values) {
+            records=count(values,Field.NFC_RECORDS);
+            messageBytes=count(values,Field.NFC_MESSAGE_BYTES);
+            timeoutMs=count(values,Field.NFC_TIMEOUT_MS);
+        }
+    }
+    public static final class Bluetooth {
+        public final int connections, discoveredDevices, queuedOperations, bufferedEvents, pollEvents, services, attributes, subscriptions, valueBytes, scanDurationMs, operationTimeoutMs;
+        private Bluetooth(long[] values) {
+            connections=count(values,Field.BLUETOOTH_CONNECTIONS);
+            discoveredDevices=count(values,Field.BLUETOOTH_DISCOVERED_DEVICES);
+            queuedOperations=count(values,Field.BLUETOOTH_QUEUED_OPERATIONS);
+            bufferedEvents=count(values,Field.BLUETOOTH_BUFFERED_EVENTS);
+            pollEvents=count(values,Field.BLUETOOTH_POLL_EVENTS);
+            services=count(values,Field.BLUETOOTH_SERVICES);
+            attributes=count(values,Field.BLUETOOTH_ATTRIBUTES);
+            subscriptions=count(values,Field.BLUETOOTH_SUBSCRIPTIONS);
+            valueBytes=count(values,Field.BLUETOOTH_VALUE_BYTES);
+            scanDurationMs=count(values,Field.BLUETOOTH_SCAN_DURATION_MS);
+            operationTimeoutMs=count(values,Field.BLUETOOTH_OPERATION_TIMEOUT_MS);
+        }
+    }
+    public static final class Widgets {
+        public final int instances, nodes, depth, actions, modelBytes, actionDataBytes, inboxEvents, storageBytes, imageBytes, imagePixels;
+        private Widgets(long[] values) {
+            instances=count(values,Field.WIDGETS_INSTANCES);
+            nodes=count(values,Field.WIDGETS_NODES);
+            depth=count(values,Field.WIDGETS_DEPTH);
+            actions=count(values,Field.WIDGETS_ACTIONS);
+            modelBytes=count(values,Field.WIDGETS_MODEL_BYTES);
+            actionDataBytes=count(values,Field.WIDGETS_ACTION_DATA_BYTES);
+            inboxEvents=count(values,Field.WIDGETS_INBOX_EVENTS);
+            storageBytes=count(values,Field.WIDGETS_STORAGE_BYTES);
+            imageBytes=count(values,Field.WIDGETS_IMAGE_BYTES);
+            imagePixels=count(values,Field.WIDGETS_IMAGE_PIXELS);
+        }
+    }
+    public static final class Jobs {
+        public final int records, storageBytes;
+        private Jobs(long[] values) {
+            records=count(values,Field.JOBS_RECORDS);
+            storageBytes=count(values,Field.JOBS_STORAGE_BYTES);
+        }
+    }
     public static final class Packaging {
         public final int sourceFiles;
         public final long totalSourceBytes, singleSourceBytes, apkBytes;
@@ -150,12 +222,24 @@ public final class ResourceBudgets {
     public final Secrets secrets;
     public final Notifications notifications;
     public final IncomingShare incomingShare;
+    public final Nfc nfc;
+    public final Bluetooth bluetooth;
+    public final Widgets widgets;
+    public final Jobs jobs;
     private final Map<String, Object> canonical;
 
     private ResourceBudgets(long[] values) {
         storage = new Storage(values); database = new Database(values); documents = new Documents(values);
         audio = new Audio(values); sensors = new Sensors(values); packaging = new Packaging(values);
         secrets = new Secrets(values); notifications = new Notifications(values); incomingShare = new IncomingShare(values);
+        nfc = new Nfc(values);
+        bluetooth = new Bluetooth(values);
+        widgets = new Widgets(values);
+        jobs = new Jobs(values);
+        require(bluetooth.pollEvents <= bluetooth.bufferedEvents, "bluetooth.pollEvents exceeds bufferedEvents");
+        require(widgets.actions <= widgets.nodes, "widgets.actions exceeds nodes");
+        require(widgets.actionDataBytes <= widgets.modelBytes, "widgets.actionDataBytes exceeds modelBytes");
+        require(widgets.modelBytes <= widgets.storageBytes, "widgets.modelBytes exceeds storageBytes");
         require(secrets.vaultBytes >= secrets.valueBytes + 8192, "secrets.vaultBytes cannot hold one value and metadata");
         require(incomingShare.textBytes <= incomingShare.queuedBytes, "incomingShare.textBytes exceeds queuedBytes");
         require(storage.valueBytes <= storage.totalBytes, "storage.valueBytes exceeds totalBytes");
@@ -232,7 +316,7 @@ public final class ResourceBudgets {
         values.put("databaseSchemaBytes", (long) DATABASE_SCHEMA_BYTES);
         values.put("sensorResultBytes", (long) SENSOR_RESULT_BYTES);
         values.put("globalDocumentSlots", (long) GLOBAL_DOCUMENT_SLOTS);
-        values.put("wholeStorePayloadBytes", MIB); values.put("wholeAudioPayloadBytes", 6 * MIB);
+        values.put("wholeStorePayloadBytes", 16 * MIB); values.put("wholeStoreEntries", 65536L); values.put("storageResultBytes", (long) BRIDGE_MESSAGE_BYTES - 1024); values.put("wholeAudioPayloadBytes", 6 * MIB);
         values.put("wholeWebsitePayloadBytes", 8 * MIB); values.put("wholeApkPayloadBytes", 32 * MIB);
         return Collections.unmodifiableMap(values);
     }

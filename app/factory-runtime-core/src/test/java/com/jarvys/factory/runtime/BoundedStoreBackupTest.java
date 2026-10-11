@@ -59,7 +59,7 @@ public class BoundedStoreBackupTest {
         assertNotEquals(absent.preimageSha256,empty.preimageSha256);assertTrue(empty.present().getBoolean("theme"));
         assertEquals("BACKUP_CONFLICT",assertThrows(FactoryException.class,()->store.backupImport(archive,"replaceSelectedKeys",absent,()->true)).code);
         store.set("theme","light");assertEquals("BACKUP_CONFLICT",assertThrows(FactoryException.class,()->store.backupImport(archive,"replaceSelectedKeys",empty,()->true)).code);
-        BoundedStore.BackupBaseline present=baseline(store,archive);store.remove("theme");assertEquals("BACKUP_CONFLICT",assertThrows(FactoryException.class,()->store.backupImport(archive,"replaceSelectedKeys",present,()->true)).code);assertEquals(0,backend.writes);
+        BoundedStore.BackupBaseline present=baseline(store,archive);store.remove("theme");assertEquals("BACKUP_CONFLICT",assertThrows(FactoryException.class,()->store.backupImport(archive,"replaceSelectedKeys",present,()->true)).code);assertEquals(2,backend.writes); // Only the two ordinary sets wrote.
     }
     @Test public void baselineIsBoundToArchiveAndBackend() throws Exception {
         Backend backend=new Backend();BoundedStore store=new BoundedStore(backend);StorageBackupFormat.Archive archive=archive();BoundedStore.BackupBaseline baseline=baseline(store,archive);
@@ -72,11 +72,11 @@ public class BoundedStoreBackupTest {
     @Test public void quotaUsesFreshCompleteMapAfterReviewAndAllFailuresAreAtomic() throws Exception {
         Backend backend=new Backend();BoundedStore store=new BoundedStore(backend);StorageBackupFormat.Archive archive=archive();
         for(int i=0;i<255;i++)backend.values.put("k"+i,"x");BoundedStore.BackupBaseline baseline=baseline(store,archive);store.set("last","x");
-        assertEquals("QUOTA_EXCEEDED",assertThrows(FactoryException.class,()->store.backupImport(archive,"insertOnly",baseline,()->true)).code);assertEquals(0,backend.writes);assertFalse(backend.values.containsKey("theme"));assertEquals(256,backend.values.size());
+        assertEquals("QUOTA_EXCEEDED",assertThrows(FactoryException.class,()->store.backupImport(archive,"insertOnly",baseline,()->true)).code);assertEquals(1,backend.writes);assertFalse(backend.values.containsKey("theme"));assertEquals(256,backend.values.size());
         backend.values.clear();for(int i=0;i<16;i++)backend.values.put("k"+i,repeat("x",65000));
         StorageBackupFormat.Archive large=StorageBackupFormatTest.archive(new JSONObject().put("theme",repeat("x",10000)));
         BoundedStore.BackupBaseline largeBaseline=baseline(store,large);
-        assertEquals("QUOTA_EXCEEDED",assertThrows(FactoryException.class,()->store.backupImport(large,"insertOnly",largeBaseline,()->true)).code);assertEquals(0,backend.writes);assertFalse(backend.values.containsKey("theme"));
+        assertEquals("QUOTA_EXCEEDED",assertThrows(FactoryException.class,()->store.backupImport(large,"insertOnly",largeBaseline,()->true)).code);assertEquals(1,backend.writes);assertFalse(backend.values.containsKey("theme"));
         backend.values.clear();backend.values.put("theme",repeat("x",65536));store.backupImport(archive,"replaceSelectedKeys",baseline(store,archive),()->true);assertEquals("dark",backend.values.get("theme"));
     }
     @Test public void cancellationBeforeMutationPreventsWriteAndAfterCommitDoesNotClaimRollback() throws Exception {

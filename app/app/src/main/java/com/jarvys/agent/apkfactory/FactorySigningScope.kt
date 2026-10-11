@@ -1,5 +1,7 @@
 package com.jarvys.agent.apkfactory
 
+import com.jarvys.factory.contract.BluetoothPolicy
+import com.jarvys.factory.runtime.BluetoothPolicyJson
 import com.jarvys.factory.contract.ManifestPlan
 import com.jarvys.factory.contract.ResourceBudgets
 import com.jarvys.factory.contract.IncomingSharePolicy
@@ -33,6 +35,12 @@ internal data class FactorySigningScope private constructor(private val canonica
         if (oldIncoming != currentIncoming) changes += "Incoming sharing changes: ${incomingDescription(oldIncoming)} -> ${incomingDescription(currentIncoming)}"
         val oldNotifications = notifications(before); val currentNotifications = notifications(after)
         if (oldNotifications != currentNotifications) changes += "Notification scheduling changes: scheduling=${oldNotifications.scheduling}, exactAlarms=${oldNotifications.exactAlarms} -> scheduling=${currentNotifications.scheduling}, exactAlarms=${currentNotifications.exactAlarms}"
+        val oldBluetooth = bluetooth(before); val currentBluetooth = bluetooth(after)
+        if (oldBluetooth != currentBluetooth) changes += "Bluetooth scan privacy changes: ${oldBluetooth?.scanPrivacy ?: "disabled"} -> ${currentBluetooth?.scanPrivacy ?: "disabled"}"
+        if (before.has("privateComponents") && after.has("privateComponents")) {
+            val old = values(before.getJSONArray("privateComponents")); val current = values(after.getJSONArray("privateComponents"))
+            if (old != current) changes += "Private native components changed: ${old.sorted().joinToString()} -> ${current.sorted().joinToString()}"
+        }
         val oldResources = resourceValues(previous.resources()); val currentResources = resourceValues(resources())
         for ((field, current) in currentResources) {
             val old = oldResources.getValue(field)
@@ -47,7 +55,10 @@ internal data class FactorySigningScope private constructor(private val canonica
         private val LEGACY_FIELDS = listOf("capabilities", "permissions", "exportedComponents", "features", "queries", "allowedHosts")
         private val V3_FIELDS = LEGACY_FIELDS + listOf("queryActions", "resourceBudgets")
         private val INCOMING_FIELDS = V3_FIELDS + "incomingShare"
-        private val CURRENT_FIELDS = INCOMING_FIELDS + "notifications"
+        private val V4_FIELDS = INCOMING_FIELDS + "notifications"
+        private val CURRENT_FIELDS = V4_FIELDS + listOf("bluetooth", "privateComponents")
+        private fun bluetooth(json: JSONObject): BluetoothPolicy? =
+            if (json.has("bluetooth") && !json.isNull("bluetooth")) BluetoothPolicyJson.parse(json.getJSONObject("bluetooth")) else null
         private fun notifications(json: JSONObject): NotificationPolicy =
             if (json.has("notifications")) NotificationPolicyJson.parse(json.getJSONObject("notifications")) else NotificationPolicy.disabled()
         private fun incomingShare(json: JSONObject): IncomingSharePolicy? =
@@ -67,14 +78,16 @@ internal data class FactorySigningScope private constructor(private val canonica
             .put("queries", JSONArray(plan.queries)).put("allowedHosts", JSONArray(plan.hosts))
             .put("queryActions", JSONArray(plan.queryActions)).put("resourceBudgets", ResourceBudgetsJson.toJson(resources))
             .put("incomingShare", plan.incomingShare?.let { IncomingSharePolicyJson.toJson(it) } ?: JSONObject.NULL)
-            .put("notifications", NotificationPolicyJson.toJson(plan.notifications ?: NotificationPolicy.disabled())))
+            .put("notifications", NotificationPolicyJson.toJson(plan.notifications ?: NotificationPolicy.disabled()))
+            .put("bluetooth", plan.bluetooth?.let { BluetoothPolicyJson.toJson(it) } ?: JSONObject.NULL)
+            .put("privateComponents", JSONArray(plan.privateComponents)))
         private fun parse(json: JSONObject): FactorySigningScope {
             val fields = json.keys().asSequence().toSet()
             val legacy = fields == LEGACY_FIELDS.toSet()
-            require(legacy || fields == V3_FIELDS.toSet() || fields == INCOMING_FIELDS.toSet() || fields == CURRENT_FIELDS.toSet())
+            require(legacy || fields == V3_FIELDS.toSet() || fields == INCOMING_FIELDS.toSet() || fields == V4_FIELDS.toSet() || fields == CURRENT_FIELDS.toSet())
             val canonical = JSONObject()
             // Never add fields to old records: their canonical bytes authenticate retained history.
-            for (field in if (legacy) LEGACY_FIELDS else LEGACY_FIELDS + "queryActions") {
+            for (field in (if (legacy) LEGACY_FIELDS else LEGACY_FIELDS + "queryActions") + listOfNotNull("privateComponents".takeIf { json.has(it) })) {
                 val array = json.getJSONArray(field)
                 require(array.length() <= 128)
                 val items = (0 until array.length()).map {
@@ -109,6 +122,10 @@ internal data class FactorySigningScope private constructor(private val canonica
             if (notificationPolicy.scheduling) NotificationPolicy.validateSelection(values(canonical.getJSONArray("capabilities")), notificationPolicy)
             // Old snapshots keep their exact field set; absence means scheduling was disabled.
             if (json.has("notifications")) canonical.put("notifications", NotificationPolicyJson.toJson(notificationPolicy))
+            val bluetoothPolicy = bluetooth(json)
+            BluetoothPolicy.validateSelection(values(canonical.getJSONArray("capabilities")), bluetoothPolicy)
+            // Absence in historical signing scopes must remain absent; do not change authenticated bytes.
+            if (json.has("bluetooth")) canonical.put("bluetooth", bluetoothPolicy?.let { BluetoothPolicyJson.toJson(it) } ?: JSONObject.NULL)
             require(canonical.toString().toByteArray(Charsets.UTF_8).size <= 48 * 1024)
             return FactorySigningScope(canonical.toString())
         }

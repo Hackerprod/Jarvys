@@ -1,5 +1,7 @@
 package com.jarvys.agent.apkfactory;
 
+import com.jarvys.factory.contract.BluetoothPolicy;
+import com.jarvys.factory.contract.F3ManifestPolicy;
 import com.jarvys.factory.contract.ManifestPlan;
 import com.jarvys.factory.contract.IncomingSharePolicy;
 import com.jarvys.factory.contract.NotificationPolicy;
@@ -47,6 +49,7 @@ public final class TemplateApk {
         public final List<String> capabilities;
         public final IncomingSharePolicy incomingShare;
         public final NotificationPolicy notifications;
+        public final BluetoothPolicy bluetooth;
         public Spec(String appId, String label, int versionCode, String versionName) {
             this(appId, label, versionCode, versionName, Collections.<String>emptyList());
         }
@@ -57,12 +60,18 @@ public final class TemplateApk {
             this(appId,label,versionCode,versionName,capabilities,incomingShare,null);
         }
         public Spec(String appId, String label, int versionCode, String versionName, Iterable<String> capabilities, IncomingSharePolicy incomingShare, NotificationPolicy notifications) {
+            this(appId,label,versionCode,versionName,capabilities,incomingShare,notifications,null);
+        }
+        public Spec(String appId, String label, int versionCode, String versionName, Iterable<String> capabilities, IncomingSharePolicy incomingShare, NotificationPolicy notifications, BluetoothPolicy bluetooth) {
             this.appId=appId; this.label=label; this.versionCode=versionCode; this.versionName=versionName;
             this.capabilities=CapabilityCatalog.select(capabilities);
             IncomingSharePolicy.validateSelection(this.capabilities, incomingShare);
             this.incomingShare=incomingShare;
             NotificationPolicy.validateSelection(this.capabilities, notifications);
             this.notifications=notifications;
+            BluetoothPolicy.validateSelection(this.capabilities, bluetooth);
+            F3ManifestPolicy.validateSelection(this.capabilities);
+            this.bluetooth=bluetooth;
         }
     }
     /** Derived only from the actual compiled resource table, never a project declaration. */
@@ -104,6 +113,11 @@ public final class TemplateApk {
         validateSpec(expected);
         return inspectFiles(readZip(apk,true), expected, ManifestPlan.Profile.CURRENT);
     }
+    /** Exact prior closed-v4-incoming-share contract, including its notification scheduling declarations. */
+    public static ManifestInfo verifyExistingClosedV4(byte[] apk, Spec expected) throws IOException {
+        validateSpec(expected);
+        return inspectFiles(readZip(apk,true), expected, ManifestPlan.Profile.V4_BEFORE_GENERIC_NATIVE);
+    }
     /** Exact closed-v3-native-operations receipt layout, before incoming-share filters. */
     public static ManifestInfo verifyExistingClosedV3(byte[] apk, Spec expected) throws IOException {
         validateSpec(expected);
@@ -132,7 +146,7 @@ public final class TemplateApk {
     public static ManifestInfo verifyAgainstPlan(byte[] apk, ManifestPlan plan) throws IOException {
         Map<String,byte[]> files=readZip(apk,true);
         ManifestAudit.read(required(files,"AndroidManifest.xml")).verify(plan);
-        return inspectFiles(files,new Spec(plan.appId,plan.label,plan.versionCode,plan.versionName,plan.capabilities,plan.incomingShare,plan.notifications),plan.profile);
+        return inspectFiles(files,new Spec(plan.appId,plan.label,plan.versionCode,plan.versionName,plan.capabilities,plan.incomingShare,plan.notifications,plan.bluetooth),plan.profile);
     }
     /** v2/v3 signing adds a signing block, but must not alter any ZIP entry, not even resources. */
     public static void verifyUnchangedPayload(byte[] unsigned, byte[] signed) throws IOException {
@@ -163,17 +177,29 @@ public final class TemplateApk {
         List<String> inferredCapabilities=new ArrayList<>();
         IncomingSharePolicy inferredIncomingShare = null;
         NotificationPolicy inferredNotifications = null;
+        BluetoothPolicy inferredBluetooth = null;
+        if (expected == null && info.permissions.contains(F3ManifestPolicy.BLUETOOTH_SCAN_PERMISSION)) {
+            inferredCapabilities.add("bluetooth");
+            inferredBluetooth = new BluetoothPolicy(baseXml.scanNeverForLocation ? "neverForLocation" : "full");
+        }
+        if (expected == null && baseXml.receivers.contains(F3ManifestPolicy.WIDGET_PROVIDER)) inferredCapabilities.add("widgets");
+        if (expected == null && baseXml.services.contains(F3ManifestPolicy.JOB_SERVICE)) inferredCapabilities.add("jobs");
         if(expected==null) {
             for(String permission:info.permissions) {
                 if(CapabilityCatalog.BIOMETRIC_PERMISSION.equals(permission)) inferredCapabilities.add("biometrics");
                 else if(CapabilityCatalog.INTERNET_PERMISSION.equals(permission)) inferredCapabilities.add("network");
-                else if(CapabilityCatalog.NOTIFICATION_PERMISSION.equals(permission) || NotificationPolicy.BOOT_PERMISSION.equals(permission) || NotificationPolicy.EXACT_PERMISSION.equals(permission)) {
+                else if(CapabilityCatalog.NOTIFICATION_PERMISSION.equals(permission) || NotificationPolicy.EXACT_PERMISSION.equals(permission)) {
                     if(!inferredCapabilities.contains("notifications")) inferredCapabilities.add("notifications");
                 }
                 else if(CapabilityCatalog.RECORD_AUDIO_PERMISSION.equals(permission)) inferredCapabilities.add("recording");
                 else if(CapabilityCatalog.ACTIVITY_RECOGNITION_PERMISSION.equals(permission)) inferredCapabilities.add("steps");
                 else if(CapabilityCatalog.HIGH_RATE_SENSORS_PERMISSION.equals(permission)) inferredCapabilities.add("sensors");
-                else if(CapabilityCatalog.LOCATION_PERMISSIONS.contains(permission)) { if(!inferredCapabilities.contains("location")) inferredCapabilities.add("location"); }
+                else if(CapabilityCatalog.LOCATION_PERMISSIONS.contains(permission)) {
+                    // BLE-only location declarations follow Bluetooth permissions; independent location precedes them.
+                    if((inferredBluetooth == null || info.permissions.indexOf(permission) < info.permissions.indexOf(F3ManifestPolicy.BLUETOOTH_PERMISSION)) && !inferredCapabilities.contains("location")) inferredCapabilities.add("location");
+                }
+                else if(F3ManifestPolicy.NFC_PERMISSION.equals(permission)) inferredCapabilities.add("nfc");
+                else if(Arrays.asList(F3ManifestPolicy.BLUETOOTH_PERMISSION,F3ManifestPolicy.BLUETOOTH_ADMIN_PERMISSION,F3ManifestPolicy.BLUETOOTH_SCAN_PERMISSION,F3ManifestPolicy.BLUETOOTH_CONNECT_PERMISSION,F3ManifestPolicy.NETWORK_STATE_PERMISSION,NotificationPolicy.BOOT_PERMISSION).contains(permission)) { /* Closed plan below verifies exact selector-dependent declarations. */ }
                 else throw new IOException("Unapproved factory permission profile");
             }
             if(baseXml.queryActions.contains(CapabilityCatalog.TTS_SERVICE_ACTION)) inferredCapabilities.add("speech");
@@ -186,7 +212,7 @@ public final class TemplateApk {
                 catch (IllegalArgumentException error) { throw new IOException("Invalid incoming share manifest policy", error); }
             }
         }
-        if(expected==null && (!baseXml.receivers.isEmpty() || info.permissions.contains(NotificationPolicy.BOOT_PERMISSION) || info.permissions.contains(NotificationPolicy.EXACT_PERMISSION))) {
+        if(expected==null && (baseXml.receivers.contains(NotificationPolicy.ALARM_RECEIVER) || baseXml.receivers.contains(NotificationPolicy.RECOVERY_RECEIVER) || info.permissions.contains(NotificationPolicy.EXACT_PERMISSION))) {
             try { inferredNotifications = new NotificationPolicy(info.permissions.contains(NotificationPolicy.BOOT_PERMISSION), info.permissions.contains(NotificationPolicy.EXACT_PERMISSION)); }
             catch (IllegalArgumentException error) { throw new IOException("Invalid notification scheduling manifest policy", error); }
         }
@@ -195,16 +221,19 @@ public final class TemplateApk {
             plan=new ManifestPlan(expected==null?info.appId:expected.appId, expected==null?info.label:expected.label,
                 expected==null?info.versionCode:expected.versionCode, expected==null?info.versionName:expected.versionName,
                 info.iconResourceId,backupId,expected==null?inferredCapabilities:expected.capabilities,
-                expected==null?inferredIncomingShare:expected.incomingShare,expected==null?inferredNotifications:expected.notifications,profile);
+                expected==null?inferredIncomingShare:expected.incomingShare,expected==null?inferredNotifications:expected.notifications,
+                expected==null?inferredBluetooth:expected.bluetooth,
+                (expected==null?inferredCapabilities:expected.capabilities).contains("widgets") ? findResourceId(resources,"xml","factory_widget_info") : 0,profile);
         } catch(IllegalArgumentException error) { throw new IOException("Invalid manifest plan identity",error); }
         decoded.verify(plan);
         Map<String,ResourceBinding> bindings=new TreeMap<>();
         bindings.put("icon",new ResourceBinding(info.iconResourceId,"drawable","factory_icon",iconPath));
         bindings.put("backup",new ResourceBinding(backupId,"xml","factory_backup_rules",backupPath));
+        if (plan.capabilities.contains("widgets")) auditWidgetResources(zip, resources, bindings);
         Map<String,String> inventory=dexInventory(zip);
         Map<String,byte[]> dexFiles=new TreeMap<>();
         for(String name:inventory.keySet()) dexFiles.put(name,zip.get(name));
-        Map<String,String> components=DexBindings.verify(dexFiles,plan.notifications != null && plan.notifications.scheduling);
+        Map<String,String> components=DexBindings.verify(dexFiles,plan.notifications != null && plan.notifications.scheduling,plan.capabilities.contains("widgets"),plan.capabilities.contains("jobs"));
         return new ManifestInfo(info.appId,info.label,info.versionCode,info.versionName,info.iconResourceId,
             info.activityClass,plan.permissions,plan,inventory,bindings,components);
     }
@@ -256,7 +285,8 @@ public final class TemplateApk {
         String iconPath=resolveIconPath(required(files,"resources.arsc"),old.iconResourceId);
         check(files.containsKey(iconPath),"Referenced factory icon is missing");
         ManifestPlan expectedPlan=new ManifestPlan(spec.appId,spec.label,spec.versionCode,spec.versionName,
-            old.plan.iconResourceId,old.plan.backupResourceId,spec.capabilities,spec.incomingShare,spec.notifications);
+            old.plan.iconResourceId,old.plan.backupResourceId,spec.capabilities,spec.incomingShare,spec.notifications,spec.bluetooth,
+            spec.capabilities.contains("widgets") ? findResourceId(required(files,"resources.arsc"),"xml","factory_widget_info") : 0);
         files.put("AndroidManifest.xml",ManifestXml.encode(expectedPlan));
         files.put("resources.arsc",renamePackage(required(files,"resources.arsc"),spec.appId,old.iconResourceId));
         files.put(iconPath,iconPng.clone());
@@ -450,6 +480,8 @@ public final class TemplateApk {
         final Set<String> filterActions=new java.util.LinkedHashSet<>();
         final Set<String> incomingMimeTypes=new java.util.TreeSet<>();
         final Set<String> receivers=new java.util.LinkedHashSet<>();
+        final Set<String> services=new java.util.LinkedHashSet<>();
+        boolean scanNeverForLocation;
         Xml(byte[] b) throws IOException {
             check(b.length<=1024*1024,"Manifest too large"); Chunk outer=new Chunk(b,0,b.length);
             check(outer.type==3 && outer.header==8 && outer.size==b.length,"Invalid binary XML");
@@ -475,14 +507,14 @@ public final class TemplateApk {
                     stack.remove(stack.size()-1); if(stack.isEmpty()) rootClosed=true; continue;
                 }
                 check(!rootClosed && namespaces==1 && c.size>=36,"Invalid element order"); stack.add(name); StringBuilder pathBuilder=new StringBuilder(); for(String part:stack) { if(pathBuilder.length()>0) pathBuilder.append('/'); pathBuilder.append(part); } String path=pathBuilder.toString();
-                check(Arrays.asList("manifest","manifest/uses-sdk","manifest/uses-permission","manifest/application",
+                check(Arrays.asList("manifest","manifest/uses-sdk","manifest/uses-permission","manifest/uses-feature","manifest/application",
                     "manifest/application/activity","manifest/application/activity/intent-filter",
                     "manifest/application/activity/intent-filter/action","manifest/application/activity/intent-filter/category",
                     "manifest/application/activity/intent-filter/data",
-                    "manifest/application/receiver","manifest/application/receiver/intent-filter","manifest/application/receiver/intent-filter/action",
+                    "manifest/application/receiver","manifest/application/receiver/intent-filter","manifest/application/receiver/intent-filter/action","manifest/application/receiver/meta-data","manifest/application/service",
                     "manifest/queries","manifest/queries/package","manifest/queries/intent","manifest/queries/intent/action").contains(path),"Unsupported template component "+path);
                 if (!path.equals("manifest/queries/package") && !path.equals("manifest/queries/intent")
-                        && !path.equals("manifest/queries/intent/action") && !path.equals("manifest/uses-permission")
+                        && !path.equals("manifest/queries/intent/action") && !path.equals("manifest/uses-permission") && !path.equals("manifest/uses-feature")
                         && !path.startsWith("manifest/application/activity/intent-filter") && !path.startsWith("manifest/application/receiver")) check(seen.add(path),"Duplicate template element "+path);
                 if(path.startsWith("manifest/application/activity/intent-filter")) seen.add(path);
                 check(u16(n,24)==20 && u16(n,26)==20 && c.size==36+20*u16(n,28),"Unsupported attribute layout");
@@ -503,12 +535,20 @@ public final class TemplateApk {
                 if(path.equals("manifest/uses-sdk")) { check(attr(attrs,ANDROID,"minSdkVersion").number()>=24,"Unsupported min SDK"); }
                 if(path.equals("manifest/uses-permission")) {
                     String permission=attr(attrs,ANDROID,"name").text();
-                    check(attrs.size()==1 && Arrays.asList(CapabilityCatalog.BIOMETRIC_PERMISSION,CapabilityCatalog.INTERNET_PERMISSION,
+                    check(attrs.size()>=1 && attrs.size()<=2 && Arrays.asList(CapabilityCatalog.BIOMETRIC_PERMISSION,CapabilityCatalog.INTERNET_PERMISSION,
                             CapabilityCatalog.NOTIFICATION_PERMISSION,CapabilityCatalog.COARSE_LOCATION_PERMISSION,CapabilityCatalog.FINE_LOCATION_PERMISSION,
                             CapabilityCatalog.RECORD_AUDIO_PERMISSION,CapabilityCatalog.ACTIVITY_RECOGNITION_PERMISSION,CapabilityCatalog.HIGH_RATE_SENSORS_PERMISSION,
-                            NotificationPolicy.BOOT_PERMISSION,NotificationPolicy.EXACT_PERMISSION).contains(permission) && !permissions.contains(permission),"Unapproved or duplicate permission");
+                            NotificationPolicy.BOOT_PERMISSION,NotificationPolicy.EXACT_PERMISSION,F3ManifestPolicy.NFC_PERMISSION,
+                            F3ManifestPolicy.BLUETOOTH_PERMISSION,F3ManifestPolicy.BLUETOOTH_ADMIN_PERMISSION,F3ManifestPolicy.BLUETOOTH_SCAN_PERMISSION,
+                            F3ManifestPolicy.BLUETOOTH_CONNECT_PERMISSION,F3ManifestPolicy.NETWORK_STATE_PERMISSION).contains(permission) && !permissions.contains(permission),"Unapproved or duplicate permission");
+                    for (String key : attrs.keySet()) check(Arrays.asList(ANDROID+"|name",ANDROID+"|maxSdkVersion",ANDROID+"|usesPermissionFlags").contains(key),"Unknown permission attribute");
+                    if (attrs.containsKey(ANDROID+"|maxSdkVersion")) check(attr(attrs,ANDROID,"maxSdkVersion").number()==30 && Arrays.asList(F3ManifestPolicy.BLUETOOTH_PERMISSION,F3ManifestPolicy.BLUETOOTH_ADMIN_PERMISSION,CapabilityCatalog.COARSE_LOCATION_PERMISSION,CapabilityCatalog.FINE_LOCATION_PERMISSION).contains(permission),"Invalid permission API bound");
+                    if (attrs.containsKey(ANDROID+"|usesPermissionFlags")) {
+                        check(F3ManifestPolicy.BLUETOOTH_SCAN_PERMISSION.equals(permission) && attr(attrs,ANDROID,"usesPermissionFlags").number()==0x10000,"Invalid Bluetooth scan flag"); scanNeverForLocation=true;
+                    }
                     permissions.add(permission);
                 }
+                if(path.equals("manifest/uses-feature")) check(attrs.size()==2 && Arrays.asList(F3ManifestPolicy.NFC_FEATURE,F3ManifestPolicy.BLE_FEATURE).contains(attr(attrs,ANDROID,"name").text()) && attr(attrs,ANDROID,"required").number()==0,"Unapproved hardware feature");
                 if(path.equals("manifest/application")) {
                     label=attr(attrs,ANDROID,"label"); icon=attr(attrs,ANDROID,"icon"); check(icon.type==1,"Icon must be a resource reference");
                     check(!attrs.containsKey(ANDROID+"|roundIcon"),"Unexpected round icon");
@@ -520,13 +560,21 @@ public final class TemplateApk {
                 if(path.equals("manifest/application/activity")) { activity=attr(attrs,ANDROID,"name"); check(attr(attrs,ANDROID,"exported").number()!=0,"Missing exported launcher"); }
                 if(path.equals("manifest/application/receiver")) {
                     String receiver=attr(attrs,ANDROID,"name").text();
-                    check(attrs.size()==2 && attr(attrs,ANDROID,"exported").number()==0 &&
-                            Arrays.asList(NotificationPolicy.ALARM_RECEIVER,NotificationPolicy.RECOVERY_RECEIVER).contains(receiver) && receivers.add(receiver), "Unexpected notification receiver");
+                    boolean widget = Arrays.asList(F3ManifestPolicy.WIDGET_PROVIDER,F3ManifestPolicy.WIDGET_ACTION_RECEIVER).contains(receiver);
+                    check(attrs.size()==(widget?3:2) && attr(attrs,ANDROID,"exported").number()==0 &&
+                            (widget || Arrays.asList(NotificationPolicy.ALARM_RECEIVER,NotificationPolicy.RECOVERY_RECEIVER).contains(receiver)) && receivers.add(receiver), "Unexpected native receiver");
+                    if(widget) check(attr(attrs,ANDROID,"enabled").number()==-1,"Widget receiver disabled");
                 }
                 if(path.equals("manifest/application/receiver/intent-filter")) check(attrs.isEmpty(), "Unexpected receiver filter attributes");
                 if(path.equals("manifest/application/receiver/intent-filter/action")) {
                     String action=attr(attrs,ANDROID,"name").text();
-                    check(attrs.size()==1 && Arrays.asList("android.intent.action.BOOT_COMPLETED", "android.intent.action.MY_PACKAGE_REPLACED", NotificationPolicy.EXACT_ACTION).contains(action), "Unexpected notification recovery action");
+                    check(attrs.size()==1 && Arrays.asList("android.intent.action.BOOT_COMPLETED", "android.intent.action.MY_PACKAGE_REPLACED", NotificationPolicy.EXACT_ACTION, F3ManifestPolicy.WIDGET_ACTION).contains(action), "Unexpected notification recovery action");
+                }
+                if(path.equals("manifest/application/receiver/meta-data")) check(attrs.size()==2 && F3ManifestPolicy.WIDGET_METADATA.equals(attr(attrs,ANDROID,"name").text()) && attr(attrs,ANDROID,"resource").type==1,"Unexpected widget metadata");
+                if(path.equals("manifest/application/service")) {
+                    check(attrs.size()==5 && F3ManifestPolicy.JOB_SERVICE.equals(attr(attrs,ANDROID,"name").text()) && services.add(F3ManifestPolicy.JOB_SERVICE) &&
+                        attr(attrs,ANDROID,"exported").number()==0 && attr(attrs,ANDROID,"enabled").number()==-1 && attr(attrs,ANDROID,"directBootAware").number()==0 &&
+                        F3ManifestPolicy.JOB_PERMISSION.equals(attr(attrs,ANDROID,"permission").text()),"Unexpected JobService declaration");
                 }
                 if(path.equals("manifest/application/activity/intent-filter")) check(attrs.isEmpty(), "Unexpected filter attributes");
                 if(path.equals("manifest/application/activity/intent-filter/action")) {
@@ -553,6 +601,13 @@ public final class TemplateApk {
             if(ANDROID.equals(ns)) {
                 int expected;
                 switch(name) {
+                    case "maxSdkVersion": expected=0x01010271; break;
+                    case "usesPermissionFlags": expected=0x01010644; break;
+                    case "required": expected=0x0101028e; break;
+                    case "enabled": expected=0x0101000e; break;
+                    case "directBootAware": expected=0x01010505; break;
+                    case "permission": expected=0x01010006; break;
+                    case "resource": expected=0x01010025; break;
                     case "label": expected=0x01010001; break;
                     case "icon": expected=0x01010002; break;
                     case "name": expected=0x01010003; break;
@@ -657,6 +712,174 @@ public final class TemplateApk {
         check(pools==1 && packages==1,"Missing resource package");
     }
     /** Resolve the template's single drawable/factory_icon through ARSC, even after AAPT path shortening. */
+    /** Resolve a compiled own-package symbol; never accept a project-supplied resource number. */
+    private static int findResourceId(byte[] b, String wantedType, String wantedName) throws IOException {
+        int found=0, matches=0;
+        for(int p=12;p<b.length;) {
+            Chunk c=new Chunk(b,p,b.length);
+            if(c.type==0x200) {
+                Chunk tc=new Chunk(b,p+small(b,p+268),p+c.size),kc=new Chunk(b,p+small(b,p+276),p+c.size);
+                Pool types=new Pool(Arrays.copyOfRange(b,tc.offset,tc.offset+tc.size));
+                Pool keys=new Pool(Arrays.copyOfRange(b,kc.offset,kc.offset+kc.size));
+                for(int q=p+c.header;q<p+c.size;) {
+                    Chunk child=new Chunk(b,q,p+c.size);
+                    if(child.type==0x201 && wantedType.equals(types.get((b[q+8]&255)-1))) {
+                        int count=small(b,q+12),start=small(b,q+16);
+                        for(int i=0;i<count;i++) {
+                            long relative=u32(b,q+child.header+4*i); if(relative==0xffffffffL) continue;
+                            int entry=q+start+(int)relative;
+                            if(wantedName.equals(keys.get(small(b,entry+4)))) {
+                                int id=0x7f000000|((b[q+8]&255)<<16)|i;
+                                check(found==0 || found==id,"Ambiguous compiled resource symbol"); found=id; matches++;
+                                if(wantedType.equals("id")) {
+                                    check(u16(b,entry)==8 && (u16(b,entry+2)&~6)==0,"Invalid widget ID entry");
+                                    int value=entry+8;
+                                    check(u16(b,value)==8 && b[value+2]==0 && (b[value+3]==16 || b[value+3]==18) && integer(b,value+4)==0,"Invalid widget ID value");
+                                    int config=small(b,q+20); for(int r=4;r<config;r++) check(b[q+20+r]==0,"Qualified widget ID unsupported");
+                                }
+                            }
+                        }
+                    }
+                    q+=child.size;
+                }
+            }
+            p+=c.size;
+        }
+        check(found!=0 && matches==1,"Missing or qualified compiled resource: "+wantedType+"/"+wantedName);
+        return found;
+    }
+    private static void auditWidgetResources(Map<String,byte[]> zip, byte[] resources, Map<String,ResourceBinding> bindings) throws IOException {
+        int children=findResourceId(resources,"id","factory_widget_children"), content=findResourceId(resources,"id","factory_widget_content");
+        bindings.put("widget.children",new ResourceBinding(children,"id","factory_widget_children",null));
+        bindings.put("widget.content",new ResourceBinding(content,"id","factory_widget_content",null));
+        Map<String,Integer> ids=new LinkedHashMap<>();
+        for(String name:Arrays.asList("root","row","column","text","image","progress","button","empty")) {
+            String symbol="factory_widget_"+name; int id=findResourceId(resources,"layout",symbol);
+            String path=resolveResourcePath(resources,id,"layout",symbol,".xml");
+            bindings.put("widget."+name,new ResourceBinding(id,"layout",symbol,path)); ids.put(name,id);
+            auditWidgetXml(required(zip,path),name,children,content,0);
+        }
+        int id=findResourceId(resources,"xml","factory_widget_info");
+        String path=resolveResourcePath(resources,id,"xml","factory_widget_info",".xml");
+        bindings.put("widget.info",new ResourceBinding(id,"xml","factory_widget_info",path));
+        auditWidgetXml(required(zip,path),"info",children,content,ids.get("empty"));
+    }
+    /** Compiled RemoteViews resources are closed single-node XML, not a project layout language. */
+    private static void auditWidgetXml(byte[] bytes, String kind, int children, int content, int empty) throws IOException {
+        check(bytes.length<=16384,"Widget XML too large"); Chunk root=new Chunk(bytes,0,bytes.length);
+        check(root.type==3 && root.header==8 && root.size==bytes.length,"Invalid widget binary XML");
+        Pool pool=null; int[] attributeIds=null; Map<String,Attr> attrs=null; String element=null;
+        boolean namespace=false, endedNamespace=false, closed=false;
+        for(int p=8;p<bytes.length;) {
+            Chunk c=new Chunk(bytes,p,bytes.length); byte[] node=Arrays.copyOfRange(bytes,p,p+c.size); p+=c.size;
+            if(c.type==1) { check(pool==null && c.offset==8,"Invalid widget string pool"); pool=new Pool(node); continue; }
+            check(pool!=null,"Missing widget string pool");
+            if(c.type==0x180) {
+                check(attributeIds==null && !namespace && attrs==null && c.header==8 && (c.size-8)/4<=pool.strings.size(),"Invalid widget attribute map");
+                attributeIds=new int[(c.size-8)/4]; for(int i=0;i<attributeIds.length;i++) attributeIds[i]=integer(node,8+4*i); continue;
+            }
+            check(attributeIds!=null && c.header==16 && c.size>=24 && integer(node,12)==NONE,"Invalid widget XML node");
+            if(c.type==0x100 || c.type==0x101) {
+                check(c.size==24 && "android".equals(pool.get(integer(node,16))) && ANDROID.equals(pool.get(integer(node,20))),"Invalid widget namespace");
+                if(c.type==0x100) { check(!namespace && !endedNamespace && attrs==null,"Misplaced widget namespace"); namespace=true; }
+                else { check(namespace && closed,"Incomplete widget XML"); namespace=false; endedNamespace=true; }
+                continue;
+            }
+            check(namespace && !endedNamespace && integer(node,16)==NONE,"Invalid widget element namespace");
+            String name=pool.get(integer(node,20));
+            if(c.type==0x103) { check(c.size==24 && attrs!=null && !closed && name.equals(element),"Invalid widget end element"); closed=true; continue; }
+            check(c.type==0x102 && attrs==null && !closed && c.size>=36,"Widget layouts must be closed single-node resources");
+            check(u16(node,24)==20 && u16(node,26)==20 && u16(node,28)<=16 && c.size==36+20*u16(node,28),"Invalid widget attribute layout");
+            check(u16(node,30)<=u16(node,28) && u16(node,32)==0 && u16(node,34)<=u16(node,28),"Invalid widget special attribute indexes");
+            attrs=new LinkedHashMap<>(); element=name;
+            for(int pos=36;pos<node.length;pos+=20) {
+                Attr attr=new Attr(node,pos,pool);
+                check(attrs.put(attr.name,attr)==null && (ANDROID.equals(attr.ns) || (attr.ns.isEmpty() && attr.name.equals("style"))),"Invalid widget attribute identity");
+                int expected=widgetAttributeId(attr.name), actual=attr.nameIndex<attributeIds.length?attributeIds[attr.nameIndex]:0;
+                check(expected==actual,"Widget Android attribute binding differs: "+attr.name);
+                if(attr.type!=3) check(integer(node,pos+8)==NONE,"Unexpected raw widget numeric attribute");
+            }
+        }
+        check(closed && endedNamespace && !namespace && attrs!=null,"Incomplete widget resource");
+        if(kind.equals("info")) {
+            check("appwidget-provider".equals(element),"Invalid widget metadata root");
+            widgetFields(attrs,"minWidth","minHeight","minResizeWidth","minResizeHeight","initialLayout","previewLayout","resizeMode","widgetCategory","updatePeriodMillis");
+            widgetDimension(attrs,"minWidth",180,1); widgetDimension(attrs,"minHeight",80,1); widgetDimension(attrs,"minResizeWidth",110,1); widgetDimension(attrs,"minResizeHeight",40,1);
+            widgetValue(attrs,"initialLayout",1,empty); widgetValue(attrs,"previewLayout",1,empty);
+            widgetInteger(attrs,"resizeMode",3); widgetInteger(attrs,"widgetCategory",1); widgetInteger(attrs,"updatePeriodMillis",0); return;
+        }
+        String expectedElement=Arrays.asList("root","row","column").contains(kind)?"LinearLayout":kind.equals("image")?"ImageView":kind.equals("progress")?"ProgressBar":kind.equals("button")?"Button":"TextView";
+        check(expectedElement.equals(element),"Unapproved RemoteViews element");
+        if(!kind.equals("empty")) widgetValue(attrs,"id",1,Arrays.asList("root","row","column").contains(kind)?children:content);
+        if(kind.equals("root") || kind.equals("row") || kind.equals("column")) {
+            widgetInteger(attrs,"layout_width",-1); widgetInteger(attrs,"layout_height",kind.equals("root")?-1:-2);
+            widgetInteger(attrs,"orientation",kind.equals("row")?0:1);
+            if(kind.equals("root")) { widgetFields(attrs,"id","layout_width","layout_height","orientation","padding","background"); widgetDimension(attrs,"padding",12,1); widgetColor(attrs,"background",0xfff4f6fa); }
+            else widgetFields(attrs,"id","layout_width","layout_height","orientation");
+        } else if(kind.equals("image")) {
+            widgetFields(attrs,"id","layout_width","layout_height","padding","scaleType"); widgetDimension(attrs,"layout_width",128,1); widgetDimension(attrs,"layout_height",96,1); widgetDimension(attrs,"padding",4,1); widgetInteger(attrs,"scaleType",3);
+        } else if(kind.equals("progress")) {
+            widgetFields(attrs,"id","style","layout_width","layout_height","max","progress","indeterminate"); widgetValue(attrs,"style",2,16842872);
+            widgetDimension(attrs,"layout_width",120,1); widgetDimension(attrs,"layout_height",24,1); widgetInteger(attrs,"max",100); widgetInteger(attrs,"progress",0); widgetValue(attrs,"indeterminate",18,0);
+        } else if(kind.equals("button")) {
+            widgetFields(attrs,"id","layout_width","layout_height","minHeight","textColor","textAllCaps","maxLines","ellipsize");
+            widgetInteger(attrs,"layout_width",-2); widgetInteger(attrs,"layout_height",-2); widgetDimension(attrs,"minHeight",48,1); widgetColor(attrs,"textColor",0xff162030); widgetValue(attrs,"textAllCaps",18,0); widgetInteger(attrs,"maxLines",2); widgetInteger(attrs,"ellipsize",3);
+        } else if(kind.equals("text")) {
+            widgetFields(attrs,"id","layout_width","layout_height","padding","textSize","textColor","maxLines","ellipsize");
+            widgetInteger(attrs,"layout_width",-2); widgetInteger(attrs,"layout_height",-2); widgetDimension(attrs,"padding",4,1); widgetDimension(attrs,"textSize",16,2); widgetColor(attrs,"textColor",0xff162030); widgetInteger(attrs,"maxLines",6); widgetInteger(attrs,"ellipsize",3);
+        } else {
+            check(kind.equals("empty"),"Unknown widget layout"); widgetFields(attrs,"layout_width","layout_height","text","textSize","textColor","padding");
+            widgetInteger(attrs,"layout_width",-1); widgetInteger(attrs,"layout_height",-2); widgetDimension(attrs,"textSize",16,2); widgetDimension(attrs,"padding",12,1); widgetColor(attrs,"textColor",0xff162030);
+            check("Open the app to configure this widget".equals(attrs.get("text").text()),"Widget initial text differs");
+        }
+    }
+    private static void widgetFields(Map<String,Attr> attrs,String... names) throws IOException { check(attrs.keySet().equals(new HashSet<>(Arrays.asList(names))),"Widget attribute set differs"); }
+    private static void widgetValue(Map<String,Attr> attrs,String name,int type,int value) throws IOException {
+        Attr attr=attrs.get(name); check(attr!=null && attr.type==type && attr.data==value,"Widget value differs: "+name);
+    }
+    private static void widgetInteger(Map<String,Attr> attrs,String name,int value) throws IOException {
+        Attr attr=attrs.get(name); check(attr!=null && (attr.type==16 || attr.type==17) && attr.data==value,"Widget integer differs: "+name);
+    }
+    private static void widgetColor(Map<String,Attr> attrs,String name,int value) throws IOException {
+        Attr attr=attrs.get(name); check(attr!=null && attr.type>=28 && attr.type<=31 && attr.data==value,"Widget color differs: "+name);
+    }
+    private static void widgetDimension(Map<String,Attr> attrs,String name,int value,int unit) throws IOException {
+        Attr attr=attrs.get(name); check(attr!=null && attr.type==5 && (attr.data&15)==unit,"Widget dimension differs: "+name);
+        float[] radix={1f/256,1f/32768,1f/8388608,1f/2147483648f};
+        check((attr.data&0xffffff00)*radix[(attr.data>>4)&3]==value,"Widget dimension value differs: "+name);
+    }
+    private static int widgetAttributeId(String name) throws IOException {
+        switch(name) {
+            case "style": return 0;
+            case "id": return 16842960;
+            case "layout_width": return 16842996;
+            case "layout_height": return 16842997;
+            case "orientation": return 16842948;
+            case "padding": return 16842965;
+            case "background": return 16842964;
+            case "text": return 16843087;
+            case "textSize": return 16842901;
+            case "textColor": return 16842904;
+            case "maxLines": return 16843091;
+            case "ellipsize": return 16842923;
+            case "textAllCaps": return 16843660;
+            case "scaleType": return 16843037;
+            case "max": return 16843062;
+            case "progress": return 16843063;
+            case "indeterminate": return 16843065;
+            case "minWidth": return 16843071;
+            case "minHeight": return 16843072;
+            case "minResizeWidth": return 16843669;
+            case "minResizeHeight": return 16843670;
+            case "initialLayout": return 16843345;
+            case "previewLayout": return 16844327;
+            case "resizeMode": return 16843619;
+            case "widgetCategory": return 16843716;
+            case "updatePeriodMillis": return 16843344;
+            default: throw new IOException("Unknown widget attribute");
+        }
+    }
+
     private static String resolveIconPath(byte[] b,int iconId) throws IOException {
         return resolveResourcePath(b,iconId,"drawable","factory_icon",".png");
     }

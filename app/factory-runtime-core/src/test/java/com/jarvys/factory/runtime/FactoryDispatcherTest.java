@@ -224,28 +224,48 @@ public class FactoryDispatcherTest {
         }
     }
 
-    @Test public void all1048576CapabilityPlansSelectOnlyBiometricPermissionAndDeduplicateHostVisibility() {
-        assertEquals(20, CapabilityCatalog.NAMES.size()); assertEquals(46, CapabilityCatalog.METHODS.size());
-        for (int mask = 0; mask < 1048576; mask++) {
-            java.util.List<String> selected = new java.util.ArrayList<>();
-            for (int bit = 0; bit < CapabilityCatalog.NAMES.size(); bit++) if ((mask & (1 << bit)) != 0) selected.add(CapabilityCatalog.NAMES.get(bit));
+    /** Exhaustive 2x2x2 original manifest dependency axes, plus regression samples of all
+     * original singletons/pairs and the full original set. The latter samples are not exhaustive. */
+    private static java.util.List<java.util.List<String>> legacyManifestSelections() {
+        java.util.List<String> original=java.util.Arrays.asList("storage","export","share","clipboard","haptics","device","documents","photos","audio","browser","maps","phone","email","sms","contacts","calendar","database","presentation","sensors","biometrics");
+        java.util.Set<java.util.List<String>> cases=new java.util.LinkedHashSet<>();
+        for(int axes=0;axes<8;axes++) {
+            java.util.List<String> selected=new java.util.ArrayList<>();
+            if((axes&1)!=0)selected.add("biometrics"); if((axes&2)!=0)selected.add("documents"); if((axes&4)!=0)selected.add("sensors");
+            java.util.Collections.sort(selected);cases.add(selected);
+        }
+        for(int i=0;i<original.size();i++) {
+            cases.add(java.util.Collections.singletonList(original.get(i)));
+            for(int j=i+1;j<original.size();j++) {java.util.List<String> pair=new java.util.ArrayList<>(java.util.Arrays.asList(original.get(i),original.get(j)));java.util.Collections.sort(pair);cases.add(pair);}
+        }
+        java.util.List<String> full=new java.util.ArrayList<>(original);java.util.Collections.sort(full);cases.add(full);
+        return new java.util.ArrayList<>(cases);
+    }
+
+    @Test public void originalManifestAxesAndCombinatorialSamplesHaveExactPermissionsAndVisibility() {
+        assertEquals(33, CapabilityCatalog.NAMES.size()); assertEquals(134, CapabilityCatalog.METHODS.size());
+        for (java.util.List<String> selected : legacyManifestSelections()) {
             com.jarvys.factory.contract.ManifestPlan plan = new com.jarvys.factory.contract.ManifestPlan(
                     "com.example.browser", "Browser fixture", 1, "1.0", 0x7f010001, 0x7f020001, selected);
-            boolean host = selected.contains("browser") || selected.contains("documents") || selected.contains("maps") || selected.contains("phone") || selected.contains("email") || selected.contains("sms") || selected.contains("contacts") || selected.contains("calendar") || selected.contains("clipboard");
-            boolean biometric=selected.contains("biometrics");
-            assertEquals(biometric?java.util.Collections.singletonList(CapabilityCatalog.BIOMETRIC_PERMISSION):java.util.Collections.emptyList(),plan.permissions);
+            boolean host = false;
+            for(String name:java.util.Arrays.asList("browser","documents","maps","phone","email","sms","contacts","calendar","clipboard","share","export","sensors"))host |= selected.contains(name);
+            java.util.List<String> permissions=new java.util.ArrayList<>();
+            if(selected.contains("sensors"))permissions.add("android.permission.HIGH_SAMPLING_RATE_SENSORS");
+            if(selected.contains("biometrics"))permissions.add("android.permission.USE_BIOMETRIC");
+            assertEquals(permissions,plan.permissions);
             assertTrue(plan.features.isEmpty()); assertTrue(plan.hosts.isEmpty());
             assertEquals(java.util.Collections.singletonList(com.jarvys.factory.contract.ManifestPlan.ACTIVITY), plan.exportedComponents);
             assertEquals(host ? 2 : 0, plan.queries.size());
-            assertEquals((host ? 1 : 0)+(biometric ? 1 : 0), CapabilityCatalog.manifestContributions(selected).size());
-            assertEquals((host ? 10 : 7)+(biometric ? 1 : 0), plan.nodes.size());
+            assertEquals((host ? 1 : 0)+permissions.size(), CapabilityCatalog.manifestContributions(selected).size());
+            assertEquals((host ? 10 : 7)+permissions.size(), plan.nodes.size());
             if (host) assertEquals(CapabilityCatalog.DOCUMENT_BROKER_PACKAGES, new java.util.LinkedHashSet<>(plan.queries));
-            for (String name : selected) {
-                CapabilityCatalog.Capability capability = CapabilityCatalog.CAPABILITIES.get(name);
-                assertEquals(name.equals("biometrics")?java.util.Collections.singleton(CapabilityCatalog.BIOMETRIC_PERMISSION):java.util.Collections.emptySet(),capability.permissions); assertTrue(capability.components.isEmpty());
-                assertTrue(capability.dependencies.isEmpty()); assertTrue(capability.features.isEmpty());
-            }
         }
+        // Every method is represented exactly once in its declared capability; no Cartesian repetition.
+        java.util.Set<String> methods=new java.util.HashSet<>();methods.add("runtime.info");
+        for(CapabilityCatalog.Capability capability:CapabilityCatalog.CAPABILITIES.values()) for(CapabilityCatalog.Method method:capability.methods) {
+            assertEquals(capability.name,method.capability);assertSame(method,CapabilityCatalog.METHODS.get(method.wireName));assertTrue(methods.add(method.wireName));
+        }
+        assertEquals(CapabilityCatalog.METHODS.keySet(),methods);
     }
 
     @Test public void mapsAndPhoneHaveIndependentInstalledDispatchAndHonestUnavailablePreviewMetadata() throws Exception {

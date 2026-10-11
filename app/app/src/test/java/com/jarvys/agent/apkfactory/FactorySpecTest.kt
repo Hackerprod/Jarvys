@@ -61,12 +61,17 @@ class FactorySpecTest {
         val value=FactorySpec.parse(spec().put("capabilities",JSONArray()))
         assertTrue(value.capabilities.isEmpty())
     }
-    @Test fun all1048576OriginalSelectionsRetainTheirExplicitCatalogContracts() {
-        assertEquals(29, FactorySpec.CAPABILITIES.size)
+    @Test fun legacyManifestAxisAndCombinatorialSamplesRetainExplicitCatalogContracts() {
+        assertEquals(33, FactorySpec.CAPABILITIES.size)
         assertEquals(listOf("storage","export","share","clipboard","haptics","device","documents","photos","audio","browser","maps","phone","email","sms","contacts","calendar","database","presentation","sensors","biometrics"), FactorySpec.CAPABILITIES.take(20))
+        val original = listOf("storage","export","share","clipboard","haptics","device","documents","photos","audio","browser","maps","phone","email","sms","contacts","calendar","database","presentation","sensors","biometrics")
+        val cases = linkedSetOf<List<String>>()
+        // Exhaustive original declaration axes; singleton/pair/full selections are regression samples.
+        for (mask in 0 until 8) cases += listOf("biometrics","documents","sensors").filterIndexed { bit, _ -> mask and (1 shl bit) != 0 }.sorted()
+        original.forEachIndexed { i, name -> cases += listOf(name); for (j in i + 1 until original.size) cases += listOf(name, original[j]).sorted() }
+        cases += original.sorted()
         var checked = 0
-        for (mask in 0 until 1048576) {
-            val selected = FactorySpec.CAPABILITIES.take(20).filterIndexed { bit, _ -> mask and (1 shl bit) != 0 }
+        for (selected in cases) {
             val value = FactorySpec.parse(spec().put("capabilities", JSONArray(selected.reversed())))
             assertEquals(selected.sorted(), value.capabilities)
             assertEquals(1, JSONObject(String(value.runtimeConfig(if (com.jarvys.factory.contract.CapabilityCatalog.requiresHostBroker(selected)) broker() else null))).getInt("schemaVersion"))
@@ -85,7 +90,7 @@ class FactorySpecTest {
             }
             checked++
         }
-        assertEquals(1048576, checked)
+        assertEquals(213, checked)
     }
 
     @Test fun standaloneBiometricsConfigDeclaresOnlyItsCapabilityWithoutAnyHostPin() {

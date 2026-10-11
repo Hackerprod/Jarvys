@@ -1,6 +1,6 @@
 # Local APK factory, SDK 2 (schema/protocol 1)
 
-Current development source contract: 29 capabilities / 99 methods; SDK 2 and schema/protocol 1. No new APK release is implied.
+Current development source contract: 33 capabilities / 134 methods; SDK 2 and schema/protocol 1. No new APK release is implied.
 Selected SQLite and string key-value backups are documented at the end of this guide. Implementation and host
 validation do not establish physical device, provider durability or independent restore evidence.
 Versioned technical sections retain their API/data scope; the current operation-policy section
@@ -10,6 +10,21 @@ no-import/export restrictions within explicit table/key selections only.
 Current source additions are documented in [Native network, notifications and speech (v85)](#native-network-notifications-and-speech-v85). This implementation batch permits compilation and small directed checks only; the final global suite, audit and APK generation/release remain deferred until the batch is complete. This document claims no completed validation or release. Historical versioned sections preserve API/data anchors. Their latest-only admission, forced extra host confirmation, old capability totals, blanket zero-permission/offline and pending TTS/network/notification statements are superseded by the current policy and native-services sections. No unimplemented Android family is implied.
 
 
+
+## Generic hardware, widgets and finite jobs in development
+
+The current source adds NFC NDEF, Bluetooth LE central, RemoteViews widgets and finite HTTP jobs through the same SDK and operation policy. These are bounded generic Android building blocks. They do not activate arbitrary Java classes, native libraries, a background JavaScript engine or app-specific workflows. Source integration and focused tests are not a rebuilt-template, release or physical-device acceptance claim.
+
+- `nfc.status/read/write/cancel`: foreground reader mode; exact typed NDEF records (`tnf`, `typeHex`, `idHex`, `payloadHex`). Read and write are separate policies. Optional formatting must be explicit; cancellation after writing starts may leave changed contents. Normal NFC manifest permission, optional hardware feature, no invented runtime permission prompt.
+- `bluetooth.status/requestPermissions/scan/poll/stopScan/connect/services/read/write/requestMtu/subscribe/unsubscribe/disconnect/cancel`: generic GATT central with opaque page-owned handles, paginated services/attributes, serialized operations and bounded event queues. Explicit signed `bluetooth:{version:1,scanPrivacy:"full"|"neverForLocation"}` selects real Android permission semantics; neverForLocation can filter beacon results. Actual Android pairing/authentication UI may occur. No-response writes follow the callback-confirmed MTU; initial MTU23 allows20 data bytes. Poll retains original live grants through accepted delivery. Raw UUID/profile payloads are developer data, never predefined business commands.
+- `widgets.availability/list/read/requestPin/update/remove/pollActions/acknowledgeAction`: generic compiled RemoteViews row/column/text/image/progress/button trees. Effects share `widgets.manage`; native launcher pinning remains an Android flow. Remove clears owned configuration, not launcher placement. Repeatable actions create native events per accepted Intent delivery; optional oncePerGeneration deduplicates. Events do not execute app code or grant external effects. Unknown updates are never blindly replayed.
+- `jobs.enqueueHttp/status/cancel/readResult/forget/resume`: durable one-shot typed HTTP requests through JobScheduler, with network/charging/delay constraints. Requires jobs+network. ASK in background waits without UI; foreground resume explicitly chooses execution now and must acknowledge an uncertain prior dispatch where applicable. Existing NetworkRequest timeout bounds apply; no background document handles or arbitrary scripts are persisted. Results and admission status are distinct from successful remote delivery.
+
+All four use signed `resourceBudgets` sections and explicit bounded native lifetime/cleanup. NFC/tag capability, Bluetooth stack, launcher support and Android background scheduling can independently be unavailable. Current foreground capture/location/recording APIs do not become continuous background APIs merely because jobs exists. Local model inference remains contingent on a chosen engine/model/license/ABI and measured device budget; remote model HTTP protocols compose network and scoped secrets without a provider-specific runtime.
+
+### Streaming document HTTP
+
+`network.upload` and `network.download` require network+documents. They transfer sequential native handles in bounded blocks with long offsets, explicit maximum bytes, deadlines and cancellation. Upload binds the selected handle/length, not a promise that a mutable provider is an immutable content snapshot; automatic redirect replay is refused. Download resolves redirects before writing. Reaching the explicit byte cap without EOF confirmation reports a partial limit result. Cancellation cannot undo bytes already sent or written, and uncertain provider positions retire the handle. Document metadata reports its actual signed capacity and remaining native lease.
 
 ## Generic app services in development
 

@@ -1,5 +1,7 @@
 package com.jarvys.factory.runtime;
 
+import com.jarvys.factory.contract.BluetoothPolicy;
+import com.jarvys.factory.contract.F3ManifestPolicy;
 import com.jarvys.factory.contract.CapabilityCatalog;
 import com.jarvys.factory.contract.ResourceBudgets;
 import com.jarvys.factory.contract.IncomingSharePolicy;
@@ -25,6 +27,7 @@ public final class FactoryConfig {
     public final ResourceBudgets resources;
     public final IncomingSharePolicy incomingShare;
     public final NotificationPolicy notifications;
+    public final BluetoothPolicy bluetooth;
     public static final class DocumentBroker {
         public final String packageName, certificateSha256;
         private DocumentBroker(String packageName, String certificateSha256) {
@@ -36,10 +39,11 @@ public final class FactoryConfig {
         this(appId, name, entryPoint, capabilities, documentBroker, Collections.emptySet(), Collections.emptySet());
     }
     private FactoryConfig(String appId, String name, String entryPoint, Set<String> capabilities, DocumentBroker documentBroker, Set<String> dataBackupTables, Set<String> dataBackupKeys) {
-        this(appId, name, entryPoint, capabilities, documentBroker, dataBackupTables, dataBackupKeys, ResourceBudgets.legacy(), null, null);
+        this(appId, name, entryPoint, capabilities, documentBroker, dataBackupTables, dataBackupKeys, ResourceBudgets.legacy(), null, null, null);
     }
-    private FactoryConfig(String appId, String name, String entryPoint, Set<String> capabilities, DocumentBroker documentBroker, Set<String> dataBackupTables, Set<String> dataBackupKeys, ResourceBudgets resources, IncomingSharePolicy incomingShare, NotificationPolicy notifications) {
+    private FactoryConfig(String appId, String name, String entryPoint, Set<String> capabilities, DocumentBroker documentBroker, Set<String> dataBackupTables, Set<String> dataBackupKeys, ResourceBudgets resources, IncomingSharePolicy incomingShare, NotificationPolicy notifications, BluetoothPolicy bluetooth) {
         this.resources = resources;
+        this.bluetooth = bluetooth;
         this.incomingShare = incomingShare;
         this.notifications = notifications == null ? NotificationPolicy.disabled() : notifications;
         this.dataBackupTables = Collections.unmodifiableSet(new LinkedHashSet<>(dataBackupTables));
@@ -56,7 +60,7 @@ public final class FactoryConfig {
     private static FactoryConfig parseInternal(String text, String installedPackage) throws FactoryException {
         try {
             JSONObject object = StrictJson.object(text, 8192);
-            exactKeys(object, "schemaVersion", "appId", "name", "entryPoint", "capabilities", "documentBroker", "dataBackup", "resourceBudgets", "incomingShare", "notifications");
+            exactKeys(object, "schemaVersion", "appId", "name", "entryPoint", "capabilities", "documentBroker", "dataBackup", "resourceBudgets", "incomingShare", "notifications", "bluetooth");
             if (!(object.get("schemaVersion") instanceof Integer) || object.getInt("schemaVersion") != 1)
                 throw new FactoryException("INVALID_CONFIG", "Unsupported application configuration version.");
             String appId = string(object, "appId");
@@ -82,6 +86,9 @@ public final class FactoryConfig {
             catch (IllegalArgumentException invalid) { throw new FactoryException("INVALID_CONFIG", invalid.getMessage()); }
             NotificationPolicy notifications = object.has("notifications") ? NotificationPolicyJson.parse(object.getJSONObject("notifications")) : null;
             try { NotificationPolicy.validateSelection(capabilities, notifications); }
+            catch (IllegalArgumentException invalid) { throw new FactoryException("INVALID_CONFIG", invalid.getMessage()); }
+            BluetoothPolicy bluetooth = object.has("bluetooth") ? BluetoothPolicyJson.parse(object.getJSONObject("bluetooth")) : null;
+            try { BluetoothPolicy.validateSelection(capabilities, bluetooth); F3ManifestPolicy.validateSelection(capabilities); }
             catch (IllegalArgumentException invalid) { throw new FactoryException("INVALID_CONFIG", invalid.getMessage()); }
             Set<String> backupTables = new LinkedHashSet<>();
             Set<String> backupKeys = new LinkedHashSet<>();
@@ -130,7 +137,7 @@ public final class FactoryConfig {
             if (installedPackage != null && CapabilityCatalog.requiresMandatoryHostBroker(capabilities) && broker == null)
                 throw new FactoryException("INVALID_CONFIG", "Declared native policy or broker operations require a pinned compatible Jarvys host.");
             ResourceBudgets resources = object.has("resourceBudgets") ? ResourceBudgetsJson.parse(object.getJSONObject("resourceBudgets")) : ResourceBudgets.legacy();
-            return new FactoryConfig(appId, name, entry, capabilities, broker, backupTables, backupKeys, resources, incomingShare, notifications);
+            return new FactoryConfig(appId, name, entry, capabilities, broker, backupTables, backupKeys, resources, incomingShare, notifications, bluetooth);
         } catch (JSONException e) {
             throw new FactoryException("INVALID_CONFIG", "Invalid application configuration.");
         }

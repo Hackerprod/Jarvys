@@ -13,6 +13,11 @@ final class PreferencesBackend implements BoundedStore.Backend {
     }
     /** Test seam for commit uncertainty; installed hosts use the package-scoped Context constructor. */
     PreferencesBackend(SharedPreferences preferences) { this.preferences = preferences; }
+    @Override public String get(String key) {
+        try { return preferences.getString(key, null); }
+        catch (ClassCastException unsupported) { return null; }
+    }
+    @Override public boolean removeSelected(String key) { return preferences.edit().remove(key).commit(); }
     @Override public Map<String, String> read() {
         Map<String, String> result = new HashMap<>();
         for (Map.Entry<String, ?> entry : preferences.getAll().entrySet()) {

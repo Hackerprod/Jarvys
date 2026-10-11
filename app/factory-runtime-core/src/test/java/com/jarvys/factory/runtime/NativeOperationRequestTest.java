@@ -86,4 +86,6 @@ public class NativeOperationRequestTest {
         assertThrows(FactoryException.class, () -> NativeOperationRequest.parse("incomingShare.take", request.details().put("attachmentCount", 1)));
     }
 
+
+
 }

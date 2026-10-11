@@ -29,7 +29,7 @@ public final class BridgeProtocol {
     public static Request validate(String origin, boolean mainFrame, String raw, FactoryConfig config) throws FactoryException {
         if (!trustedSender(origin, mainFrame)) throw new FactoryException("UNTRUSTED_SOURCE", "Only the trusted main frame can call native APIs.");
         try {
-            JSONObject request = StrictJson.object(raw, MAX_MESSAGE_BYTES);
+            JSONObject request = StrictJson.object(raw, MAX_MESSAGE_BYTES, 24, 8192);
             FactoryConfig.exactKeys(request, "v", "id", "method", "args");
             if (!(request.get("v") instanceof Integer) || request.getInt("v") != 1)
                 throw new FactoryException("INVALID_REQUEST", "Unsupported bridge version.");
@@ -44,6 +44,21 @@ public final class BridgeProtocol {
                     raw.getBytes(StandardCharsets.UTF_8).length > 1024)
                 throw new FactoryException("INVALID_ARGUMENT", "Backup cancellation envelope exceeds 1 KiB.");
             switch (operation) {
+                case BLUETOOTH_STATUS: case BLUETOOTH_REQUEST_PERMISSIONS: case BLUETOOTH_SCAN: case BLUETOOTH_POLL: case BLUETOOTH_STOP_SCAN: case BLUETOOTH_CONNECT: case BLUETOOTH_SERVICES: case BLUETOOTH_READ: case BLUETOOTH_WRITE: case BLUETOOTH_REQUEST_MTU: case BLUETOOTH_SUBSCRIBE: case BLUETOOTH_UNSUBSCRIBE: case BLUETOOTH_DISCONNECT: case BLUETOOTH_CANCEL:
+                    BleRequest ble=BleRequest.parse(method,args);
+                    try {
+                        if (operation==CapabilityCatalog.Method.BLUETOOTH_SCAN && ble.durationMs>config.resources.bluetooth.scanDurationMs) throw new FactoryException("INVALID_ARGUMENT","Scan exceeds signed duration budget.");
+                        if (operation==CapabilityCatalog.Method.BLUETOOTH_WRITE && ble.authorizationDetails().getInt("byteLength")>config.resources.bluetooth.valueBytes) throw new FactoryException("INVALID_ARGUMENT","Write exceeds signed value budget.");
+                    } finally { ble.clear(); }
+                    break;
+                case JOBS_ENQUEUE_HTTP: case JOBS_STATUS: case JOBS_CANCEL: case JOBS_READ_RESULT: case JOBS_FORGET: case JOBS_RESUME:
+                    if(!config.capabilities.contains("network")) throw new FactoryException("CAPABILITY_DENIED","Finite HTTP jobs require network capability.");
+                    NativeHttpJobs.validate(method,args); break;
+                case NFC_STATUS: case NFC_CANCEL: NfcRequest.empty(args); break;
+                case NFC_READ: NfcRequest.read(args,new NfcRequest.Limits(config.resources.nfc.messageBytes,config.resources.nfc.records,config.resources.nfc.timeoutMs)); break;
+                case NFC_WRITE: NfcRequest.write(args,new NfcRequest.Limits(config.resources.nfc.messageBytes,config.resources.nfc.records,config.resources.nfc.timeoutMs)); break;
+                case WIDGETS_AVAILABILITY: case WIDGETS_LIST: case WIDGETS_READ: case WIDGETS_REQUEST_PIN: case WIDGETS_UPDATE: case WIDGETS_REMOVE: case WIDGETS_POLL_ACTIONS: case WIDGETS_ACKNOWLEDGE_ACTION:
+                    NativeWidgetEffects.prepare(method,args,WidgetModel.Limits.fromJson(ResourceBudgetsJson.toJson(config.resources).getJSONObject("widgets"))); break;
                 case SECRETS_PUT: case SECRETS_CAPTURE: case SECRETS_GET: case SECRETS_LIST: case SECRETS_DESCRIBE: case SECRETS_REMOVE: case SECRETS_RESET: case SECRETS_REQUEST:
                     if (operation == CapabilityCatalog.Method.SECRETS_REQUEST && !config.capabilities.contains("network")) throw new FactoryException("CAPABILITY_DENIED", "Secret-backed HTTP requests also require network capability.");
                     try (SecretEffects.Prepared prepared = SecretEffects.prepare(method, args)) { /* Validate and clear temporary native copies. */ }
@@ -51,6 +66,11 @@ public final class BridgeProtocol {
                 case INCOMING_SHARE_LIST: IncomingShareRequest.list(args); break;
                 case INCOMING_SHARE_TAKE: IncomingShareRequest.take(args); break;
                 case INCOMING_SHARE_DISCARD: IncomingShareRequest.discard(args); break;
+                case NETWORK_UPLOAD: case NETWORK_DOWNLOAD:
+                    if (!config.capabilities.contains("documents")) throw new FactoryException("CAPABILITY_DENIED", "HTTP document transfers also require documents capability.");
+                    if (operation == CapabilityCatalog.Method.NETWORK_UPLOAD) NetworkTransferRequest.upload(args, config.resources);
+                    else NetworkTransferRequest.download(args, config.resources);
+                    break;
                 case NETWORK_REQUEST: NetworkRequest.fromRequest(args); break;
                 case VOICE_RECOGNITION_STATUS: case VOICE_RECOGNITION_CANCEL: VoiceRecognitionRequest.parseEmpty(args); break;
                 case VOICE_RECOGNITION_RECOGNIZE: VoiceRecognitionRequest.parseRecognize(args); break;
@@ -122,12 +142,8 @@ public final class BridgeProtocol {
                 case DATABASE_INFO: case DATABASE_MIGRATE: case DATABASE_TRANSACT: case DATABASE_SELECT: case DATABASE_CLOSE: case DATABASE_CANCEL:
                     DatabaseRequest.validate(method,args); break;
                 case RUNTIME_INFO: FactoryConfig.exactKeys(args); break;
-                case STORAGE_GET: case STORAGE_REMOVE:
-                    FactoryConfig.exactKeys(args, "key"); key(args); break;
-                case STORAGE_SET:
-                    FactoryConfig.exactKeys(args, "key", "value"); key(args);
-                    text(args, "value", MAX_VALUE_BYTES, true); break;
-                case STORAGE_LIST: FactoryConfig.exactKeys(args); break;
+                case STORAGE_GET: case STORAGE_REMOVE: case STORAGE_SET: case STORAGE_LIST: case STORAGE_LIST_PAGE:
+                    StorageRequest.validate(method,args); break;
                 case EXPORT_TEXT:
                     FactoryConfig.exactKeys(args, "filename", "text", "mimeType");
                     String filename = text(args, "filename", 120, false);
@@ -256,7 +272,7 @@ public final class BridgeProtocol {
     }
     static String requestId(String raw) {
         try {
-            Object value = StrictJson.object(raw, MAX_MESSAGE_BYTES).opt("id");
+            Object value = StrictJson.object(raw, MAX_MESSAGE_BYTES, 24, 8192).opt("id");
             return value instanceof String && ((String) value).matches("[a-zA-Z0-9_-]{1,64}") ? (String) value : null;
         } catch (FactoryException ignored) { return null; }
     }

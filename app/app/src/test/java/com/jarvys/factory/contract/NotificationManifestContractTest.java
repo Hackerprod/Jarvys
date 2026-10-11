@@ -42,7 +42,7 @@ public class NotificationManifestContractTest {
     @Test public void allMaximumIncomingAndSchedulingContributionsFitTheClosedAudit() throws Exception {
         java.util.List<String> mimes=new java.util.ArrayList<>();for(int i=0;i<32;i++)mimes.add(String.format("application/x-%02d",i));
         ManifestPlan p=new ManifestPlan("org.example.all","All",1,"1",0x7f010001,0x7f020001,CapabilityCatalog.NAMES,
-                new IncomingSharePolicy(mimes,true),new NotificationPolicy(true,true));
+                new IncomingSharePolicy(mimes,true),new NotificationPolicy(true,true),new BluetoothPolicy("full"),0x7f020002);
         ManifestAudit.read(ManifestXml.encode(p)).verify(p);
         assertTrue(p.nodes.size()<ManifestXml.MAX_NODES);
     }

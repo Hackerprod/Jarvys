@@ -85,10 +85,17 @@ public final class ManifestNodes {
         for (Element e : values) if (e == null || !Arrays.asList(names).contains(e.name)) fail("Invalid manifest child");
     }
     public static Element permission(String name, PermissionVariant variant, Integer maxSdkVersion) {
+        return permission(name, variant, maxSdkVersion, false);
+    }
+    public static Element permission(String name, PermissionVariant variant, Integer maxSdkVersion, boolean neverForLocation) {
         androidName(name, "android.permission.");
         if (variant == null || (maxSdkVersion != null && (maxSdkVersion < 24 || maxSdkVersion > 36))) fail("Invalid permission API bound");
         List<ManifestPlan.Attribute> attrs = new ArrayList<>(); attrs.add(a("name", 0x01010003, 3, name));
         if (maxSdkVersion != null) attrs.add(a("maxSdkVersion", 0x01010271, 16, maxSdkVersion));
+        if (neverForLocation) {
+            if (!F3ManifestPolicy.BLUETOOTH_SCAN_PERMISSION.equals(name) || variant != PermissionVariant.STANDARD || maxSdkVersion != null) fail("Invalid Bluetooth scan assertion");
+            attrs.add(a("usesPermissionFlags", 0x01010644, 17, 0x10000));
+        }
         return leaf(variant == PermissionVariant.STANDARD ? "uses-permission" : "uses-permission-sdk-23",
             "permission:" + name, attrs.toArray(new ManifestPlan.Attribute[0]));
     }
@@ -97,7 +104,7 @@ public final class ManifestNodes {
         return leaf("uses-feature", "feature:" + name, a("name", 0x01010003, 3, name), a("required", 0x0101028e, 18, required ? -1 : 0));
     }
     public static Element action(String name) {
-        if (!"android.speech.action.RECOGNIZE_SPEECH".equals(name) && !NotificationPolicy.EXACT_ACTION.equals(name)) androidName(name, "android.intent.action."); return leaf("action", "action:" + name, a("name", 0x01010003, 3, name));
+        if (!"android.speech.action.RECOGNIZE_SPEECH".equals(name) && !NotificationPolicy.EXACT_ACTION.equals(name) && !F3ManifestPolicy.WIDGET_ACTION.equals(name)) androidName(name, "android.intent.action."); return leaf("action", "action:" + name, a("name", 0x01010003, 3, name));
     }
     public static Element category(String name) {
         androidName(name, "android.intent.category."); return leaf("category", "category:" + name, a("name", 0x01010003, 3, name));
@@ -128,6 +135,17 @@ public final class ManifestNodes {
         kinds(children, "meta-data", "intent-filter");
         return new Element(kind.name().toLowerCase(java.util.Locale.ROOT), "component:" + className, children,
             a("name", 0x01010003, 3, className), a("exported", 0x01010010, 18, 0));
+    }
+    static Element enabledWidgetReceiver(String className, List<Element> children) {
+        if (!F3ManifestPolicy.WIDGET_PROVIDER.equals(className) && !F3ManifestPolicy.WIDGET_ACTION_RECEIVER.equals(className)) fail("Invalid widget component");
+        kinds(children, "meta-data", "intent-filter");
+        return new Element("receiver", "component:" + className, children, a("name", 0x01010003, 3, className),
+            a("exported", 0x01010010, 18, 0), a("enabled", 0x0101000e, 18, -1));
+    }
+    static Element jobService() {
+        return leaf("service", "component:" + F3ManifestPolicy.JOB_SERVICE, a("name", 0x01010003, 3, F3ManifestPolicy.JOB_SERVICE),
+            a("exported", 0x01010010, 18, 0), a("enabled", 0x0101000e, 18, -1), a("directBootAware", 0x01010505, 18, 0),
+            a("permission", 0x01010006, 3, F3ManifestPolicy.JOB_PERMISSION));
     }
     /** Authorities cannot be shared between independently named applications. No path grants here. */
     public static Element privateProvider(String className, String appId, String suffix, boolean grantUriPermissions, List<Element> metadata) {

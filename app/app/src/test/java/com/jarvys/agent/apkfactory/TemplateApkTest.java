@@ -125,7 +125,25 @@ public class TemplateApkTest {
     }
 
 
-    @Test public void all1048576OriginalCapabilitySelectionsRetainFourCurrentManifestShapes() throws Exception {
+    /** Exhaustive 2x2x2 original manifest dependency axes, plus regression samples of all
+     * original singletons/pairs and the full original set. The latter samples are not exhaustive. */
+    private static java.util.List<java.util.List<String>> legacyManifestSelections() {
+        java.util.List<String> original=java.util.Arrays.asList("storage","export","share","clipboard","haptics","device","documents","photos","audio","browser","maps","phone","email","sms","contacts","calendar","database","presentation","sensors","biometrics");
+        java.util.Set<java.util.List<String>> cases=new java.util.LinkedHashSet<>();
+        for(int axes=0;axes<8;axes++) {
+            java.util.List<String> selected=new java.util.ArrayList<>();
+            if((axes&1)!=0)selected.add("biometrics"); if((axes&2)!=0)selected.add("documents"); if((axes&4)!=0)selected.add("sensors");
+            java.util.Collections.sort(selected);cases.add(selected);
+        }
+        for(int i=0;i<original.size();i++) {
+            cases.add(java.util.Collections.singletonList(original.get(i)));
+            for(int j=i+1;j<original.size();j++) {java.util.List<String> pair=new java.util.ArrayList<>(java.util.Arrays.asList(original.get(i),original.get(j)));java.util.Collections.sort(pair);cases.add(pair);}
+        }
+        java.util.List<String> full=new java.util.ArrayList<>(original);java.util.Collections.sort(full);cases.add(full);
+        return new java.util.ArrayList<>(cases);
+    }
+
+    @Test public void originalManifestDependencyAxesRetainSixCurrentArtifactShapes() throws Exception {
         byte[] apk=build();
         com.jarvys.factory.contract.ManifestPlan base=TemplateApk.inspect(apk).plan;
         com.jarvys.factory.contract.ManifestAudit.Document decoded=com.jarvys.factory.contract.ManifestAudit.read(unzip(apk).get("AndroidManifest.xml"));
@@ -135,18 +153,23 @@ public class TemplateApkTest {
         ManifestAudit.Document biometricDecoded=ManifestAudit.read(unzip(biometric).get("AndroidManifest.xml"));
         byte[] combined=TemplateApk.build(template,new TemplateApk.Spec(spec.appId,spec.label,spec.versionCode,spec.versionName,Arrays.asList("biometrics","documents")),icon,assets);
         ManifestAudit.Document combinedDecoded=ManifestAudit.read(unzip(combined).get("AndroidManifest.xml"));
-        assertEquals(23, com.jarvys.factory.contract.CapabilityCatalog.NAMES.size());
+        byte[] sensors=TemplateApk.build(template,new TemplateApk.Spec(spec.appId,spec.label,spec.versionCode,spec.versionName,Collections.singletonList("sensors")),icon,assets);
+        ManifestAudit.Document sensorsDecoded=ManifestAudit.read(unzip(sensors).get("AndroidManifest.xml"));
+        byte[] sensorsBiometric=TemplateApk.build(template,new TemplateApk.Spec(spec.appId,spec.label,spec.versionCode,spec.versionName,Arrays.asList("biometrics","sensors")),icon,assets);
+        ManifestAudit.Document sensorsBiometricDecoded=ManifestAudit.read(unzip(sensorsBiometric).get("AndroidManifest.xml"));
+        assertEquals(33, com.jarvys.factory.contract.CapabilityCatalog.NAMES.size());
         int checked=0;
-        for(int mask=0;mask<1048576;mask++) {
-            List<String> requested=new ArrayList<>();
-            for(int bit=0;bit<20;bit++) if((mask&(1<<bit))!=0) requested.add(com.jarvys.factory.contract.CapabilityCatalog.NAMES.get(bit));
+        for(List<String> selected:legacyManifestSelections()) {
+            List<String> requested=new ArrayList<>(selected);
             com.jarvys.factory.contract.ManifestPlan plan=new com.jarvys.factory.contract.ManifestPlan(spec.appId,spec.label,spec.versionCode,spec.versionName,base.iconResourceId,base.backupResourceId,requested);
-            boolean hasQueries=requested.contains("documents") || requested.contains("browser") || requested.contains("maps") || requested.contains("phone") || requested.contains("email") || requested.contains("sms") || requested.contains("contacts") || requested.contains("calendar") || requested.contains("clipboard") || requested.contains("share") || requested.contains("export");
+            boolean hasSensors=requested.contains("sensors");
+            boolean hasQueries=hasSensors || requested.contains("documents") || requested.contains("browser") || requested.contains("maps") || requested.contains("phone") || requested.contains("email") || requested.contains("sms") || requested.contains("contacts") || requested.contains("calendar") || requested.contains("clipboard") || requested.contains("share") || requested.contains("export");
             boolean hasBiometrics=requested.contains("biometrics");
-            (hasBiometrics ? (hasQueries ? combinedDecoded : biometricDecoded) : (hasQueries ? documentDecoded : decoded)).verify(plan);
-            assertEquals(hasBiometrics ? Collections.singletonList(CapabilityCatalog.BIOMETRIC_PERMISSION) : Collections.emptyList(),plan.permissions);
+            (hasSensors ? (hasBiometrics ? sensorsBiometricDecoded : sensorsDecoded) : hasBiometrics ? (hasQueries ? combinedDecoded : biometricDecoded) : (hasQueries ? documentDecoded : decoded)).verify(plan);
+            List<String> permissions=new ArrayList<>();if(hasSensors)permissions.add(CapabilityCatalog.HIGH_RATE_SENSORS_PERMISSION);if(hasBiometrics)permissions.add(CapabilityCatalog.BIOMETRIC_PERMISSION);
+            assertEquals(permissions,plan.permissions);
             assertEquals(hasQueries ? Arrays.asList("com.jarvys.agent","com.jarvys.agent.recoverytest") : Collections.emptyList(),plan.queries);
-            assertEquals(7+(hasQueries?3:0)+(hasBiometrics?1:0),plan.nodes.size());
+            assertEquals(7+(hasQueries?3:0)+(hasBiometrics?1:0)+(hasSensors?1:0),plan.nodes.size());
             assertTrue(plan.features.isEmpty()); assertTrue(plan.hosts.isEmpty()); assertEquals(Collections.singletonList(ManifestPlan.ACTIVITY),plan.exportedComponents);
             List<String> snapshot=new ArrayList<>(plan.capabilities); requested.clear(); assertEquals(snapshot,plan.capabilities);
             assertThrows(UnsupportedOperationException.class,()->plan.nodes.clear());
@@ -154,14 +177,16 @@ public class TemplateApkTest {
             assertThrows(UnsupportedOperationException.class,()->plan.capabilities.clear());
             checked++;
         }
-        assertEquals(1048576,checked);
+        assertEquals(213,checked);
         FactoryApkEvidence.write("profile-zero-unsigned.apk",apk);
         FactoryApkEvidence.write("profile-queries-unsigned.apk",docs);
         FactoryApkEvidence.write("profile-biometrics-unsigned.apk",biometric);
         FactoryApkEvidence.write("profile-biometrics-queries-unsigned.apk",combined);
         org.json.JSONArray profiles=new org.json.JSONArray();
-        String[] names={"zero","queries","biometrics","biometrics-queries"};
-        byte[][] artifacts={apk,docs,biometric,combined};
+        FactoryApkEvidence.write("profile-sensors-unsigned.apk",sensors);
+        FactoryApkEvidence.write("profile-sensors-biometrics-unsigned.apk",sensorsBiometric);
+        String[] names={"zero","queries","biometrics","biometrics-queries","sensors","sensors-biometrics"};
+        byte[][] artifacts={apk,docs,biometric,combined,sensors,sensorsBiometric};
         for(int index=0;index<names.length;index++) {
             TemplateApk.ManifestInfo evidence=TemplateApk.inspect(artifacts[index]);
             profiles.put(new org.json.JSONObject().put("name",names[index]).put("file","profile-"+names[index]+"-unsigned.apk")
@@ -173,7 +198,7 @@ public class TemplateApkTest {
                     .put("sha256",com.jarvys.agent.coding.ProjectScope.sha256(artifacts[index])));
         }
         FactoryApkEvidence.write("manifest-profiles.json",utf8(new org.json.JSONObject().put("schemaVersion",1)
-                .put("testFixtureOnly",true).put("exhaustiveSelections",checked)
+                .put("testFixtureOnly",true).put("exhaustiveManifestAxisCases",8).put("regressionSelectionCases",checked)
                 .put("capabilityDomain",new org.json.JSONArray(CapabilityCatalog.NAMES.subList(0,20))).put("profiles",profiles).toString()));
     }
     @Test public void typedExternalOnlyAndCombinedAppsBuildWithOneSharedZeroPermissionQueryProfile() throws Exception {

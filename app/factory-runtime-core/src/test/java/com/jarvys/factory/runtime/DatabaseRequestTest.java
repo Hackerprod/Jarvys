@@ -55,8 +55,8 @@ public class DatabaseRequestTest {
         DatabaseRequest.scalar("日本語 🌱");
         DatabaseRequest.scalar(repeat("é", 2048));
         DatabaseRequest.scalar(repeat("🌱", 1024));
-        invalid(() -> DatabaseRequest.scalar(repeat("é", 2049)));
-        invalid(() -> DatabaseRequest.scalar(repeat("x", 4097)));
+        invalid(() -> DatabaseRequest.scalar(repeat("é", DatabaseRequest.HARD_MAX_CELL_BYTES / 2 + 1)));
+        invalid(() -> DatabaseRequest.scalar(repeat("x", DatabaseRequest.HARD_MAX_CELL_BYTES + 1)));
         invalid(() -> DatabaseRequest.scalar("a\0b"));
         invalid(() -> DatabaseRequest.scalar("\uD800"));
         invalid(() -> DatabaseRequest.scalar("\uDC00"));
@@ -125,7 +125,7 @@ public class DatabaseRequestTest {
         invalid(() -> DatabaseRequest.validate("database.transact", new JSONObject(args.toString()).put("operations", new JSONArray().put(bad))));
         JSONObject delete = new JSONObject().put("kind", "delete").put("table", "notes").put("id", "one");
         JSONArray operations = new JSONArray();
-        for (int i = 0; i < 64; i++) operations.put(delete);
+        for (int i = 0; i < DatabaseRequest.HARD_MAX_OPERATIONS; i++) operations.put(delete);
         args.put("operations", operations);
         DatabaseRequest.validate("database.transact", args);
         operations.put(delete);
@@ -133,9 +133,9 @@ public class DatabaseRequestTest {
     }
     @Test public void selectionAndByteBounds() throws Exception {
         DatabaseRequest.validate("database.select", selection().put("limit", 100).put("afterId", "z"));
-        for (Object limit : new Object[]{0, 101, 1.0, "1", true, JSONObject.NULL}) invalid(() -> DatabaseRequest.validate("database.select", selection().put("limit", limit)));
+        for (Object limit : new Object[]{0, DatabaseRequest.HARD_MAX_SELECT_ROWS + 1, 1.0, "1", true, JSONObject.NULL}) invalid(() -> DatabaseRequest.validate("database.select", selection().put("limit", limit)));
         JSONObject values = new JSONObject();
-        for (int i = 0; i < 4; i++) values.put("c" + i, repeat("x", 4096));
+        for (int i = 0; i < 4; i++) values.put("c" + i, repeat("x", DatabaseRequest.HARD_MAX_ROW_BYTES / 4));
         invalid(() -> DatabaseRequest.values(values));
         JSONObject huge = selection().put("where", new JSONObject().put("title", repeat("x", DatabaseRequest.MAX_ARGUMENT_BYTES)));
         invalid(() -> DatabaseRequest.validate("database.select", huge));

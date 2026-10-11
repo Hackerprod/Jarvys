@@ -105,7 +105,7 @@ test('all SDK calls exactly match the catalog and explicit native validator/disp
   const path = require('node:path');
   const catalog = fs.readFileSync(path.join(__dirname, '../../factory-contract/src/main/java/com/jarvys/factory/contract/CapabilityCatalog.java'), 'utf8');
   const rows = [...catalog.matchAll(/\b([A-Z][A-Z_]+)\("([a-zA-Z]+\.[a-zA-Z]+)", (?:"[a-zA-Z]+"|null)\)/g)];
-  assert.equal(rows.length, 99);
+  assert.equal(rows.length, 134);
   const env = environment();
   const args = { 'storage.get': ['key'], 'storage.set': ['key', 'value'], 'storage.remove': ['key'],
     'export.text': [{ filename: 'test.txt', text: 'hello' }], 'share.text': [{ text: 'hello' }],
@@ -719,7 +719,7 @@ test('storage backup API preserves exact options with five minute review and exp
       {keys: ['settings'], extra: 'native exact-key validator must see this'}]) {
       const env = environment();
       assert.equal(Object.isFrozen(env.api.storage), true);
-      assert.deepEqual(Object.keys(env.api.storage), ['get', 'set', 'remove', 'list', 'backupExport', 'backupImport']);
+      assert.deepEqual(Object.keys(env.api.storage), ['get', 'set', 'remove', 'list', 'listPage', 'backupExport', 'backupImport']);
       const pending = env.api.storage[method](options);
       const request = env.sent.at(-1);
       assert.equal(request.method, 'storage.' + method);
@@ -781,7 +781,7 @@ test('documents cancel can accompany storage-only backup under saturated ordinar
 test('network exposes separate native HTTP and ICMP APIs with exact arguments and bounded response timers', async () => {
   const env = environment();
   assert.equal(Object.isFrozen(env.api.network), true);
-  assert.deepEqual(Object.keys(env.api.network), ['request', 'probe', 'ping', 'cancel']);
+  assert.deepEqual(Object.keys(env.api.network), ['upload', 'download', 'request', 'probe', 'ping', 'cancel']);
   const cases = [
     ['request', {url: 'http://127.0.0.1:8080/', method: 'POST', body: 'developer payload', maxResponseBytes: 262144}],
     ['probe', {url: 'https://example.com/', method: 'HEAD', timeoutMs: 120000}],
@@ -918,4 +918,48 @@ test('notification scheduling and action inbox controls preserve requests and un
     env.reply(request,outcome); assert.deepEqual(JSON.parse(JSON.stringify(await pending)),outcome);
     assert.equal(env.sent.length,1);
   }
+});
+
+
+test('document HTTP transfer wrappers preserve long bounds and never infer completion', async () => {
+  for (const method of ['upload','download']) {
+    const env = environment(); const options = {url:'https://example.com',handle:'a'.repeat(64),maxBytes:4294967296,offset:0};
+    const pending = env.api.network[method](options); const request=env.sent.at(-1);
+    assert.equal(request.method,'network.'+method); assert.deepEqual(request.args,options); assert.equal(env.delays.at(-1),86700000);
+    const outcome={complete:false,eofConfirmed:false,partialEffectsPossible:true,providerCommitConfirmed:false};
+    env.reply(request,outcome); assert.deepEqual(JSON.parse(JSON.stringify(await pending)),outcome); assert.equal(env.sent.length,1);
+  }
+});
+
+
+test('generic hardware and persistent-service SDK APIs forward data and reserve cleanup capacity', async () => {
+  const env = environment();
+  for (const [group, method, args] of [
+    ['nfc','write',{records:[{tnf:1,typeHex:'54',idHex:'',payloadHex:'02656e4869'}]}],
+    ['bluetooth','write',{connectionId:'c',attributeId:'a',valueBase64:'AQ==',writeType:'response'}],
+    ['widgets','update',{widgetIds:[7],model:{root:{type:'text',text:'Generic'}}}],
+    ['jobs','enqueueHttp',{jobId:'j',request:{url:'https://example.com/'}}]
+  ]) {
+    const promise=env.api[group][method](args);
+    assert.deepEqual(env.sent.at(-1).args,args);
+    assert.equal(env.delays.at(-1),620000);
+    env.reply(env.sent.at(-1),{accepted:true}); await promise;
+  }
+  const pending=Array.from({length:16},()=>env.api.device.info());
+  for(const [group,method,args] of [['nfc','cancel',{}],['bluetooth','disconnect',{connectionId:'c'}],['jobs','cancel',{jobId:'j'}]]) {
+    const promise=env.api[group][method](args); assert.equal(env.sent.at(-1).method,group+'.'+method);
+    env.reply(env.sent.at(-1),{cancelled:true}); await promise;
+  }
+  env.sent.filter(row=>row.method==='device.info').forEach(row=>env.reply(row,{}));
+  await Promise.all(pending);
+});
+
+test('storage keyset pages preserve optional cursor while legacy list remains argument-free', async () => {
+  const env=environment();
+  const first=env.api.storage.listPage({afterKey:'a',limit:17});
+  assert.deepEqual(env.sent.at(-1).args,{afterKey:'a',limit:17});
+  env.reply(env.sent.at(-1),{keys:['b'],hasMore:false,nextAfterKey:null,snapshotAcrossPages:false});
+  assert.equal((await first).snapshotAcrossPages,false);
+  const old=env.api.storage.list(); assert.deepEqual(env.sent.at(-1).args,{});
+  env.reply(env.sent.at(-1),['a','b']); assert.deepEqual(Array.from(await old),['a','b']);
 });

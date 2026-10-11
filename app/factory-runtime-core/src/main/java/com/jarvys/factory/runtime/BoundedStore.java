@@ -11,6 +11,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeSet;
 import java.util.function.BooleanSupplier;
 
 /** Synchronous storage core. Activity runs it on a single worker, never on the UI thread. */
@@ -23,6 +24,11 @@ public final class BoundedStore {
     public interface Backend {
         default Object transactionLock() { return TRANSACTION_LOCK; }
         Map<String, String> read();
+        default String get(String key) { return read().get(key); }
+        default boolean removeSelected(String key) throws FactoryException {
+            Map<String, String> complete = new HashMap<>(readForBackup()); complete.remove(key);
+            return replace(complete);
+        }
         boolean replace(Map<String, String> values);
         /** Backup reads must not silently discard entries with unsupported native types. */
         default Map<String, String> readForBackup() throws FactoryException { return read(); }
@@ -39,28 +45,71 @@ public final class BoundedStore {
         if (backend == null || budgets == null) throw new IllegalArgumentException();
         this.backend = backend; this.budget = budgets.storage;
     }
-    public String get(String key) {
-        synchronized (backend.transactionLock()) { return backend.read().get(key); }
-    }
-    public List<String> list() {
+    public String get(String key) throws FactoryException {
         synchronized (backend.transactionLock()) {
-            List<String> keys = new ArrayList<>(backend.read().keySet()); Collections.sort(keys); return keys;
+            String value = backend.get(key);
+            if (value != null) StorageRequest.checkResultValue(value);
+            return value;
+        }
+    }
+    /** Historical all-keys API: complete sorted results or an explicit error, never truncation. */
+    public List<String> list() throws FactoryException {
+        synchronized (backend.transactionLock()) {
+            List<String> keys = new ArrayList<>(); long encoded = 2;
+            for (String key : backend.read().keySet()) {
+                encoded += StorageRequest.encodedStringBytes(key) + (keys.isEmpty() ? 0 : 1);
+                if (encoded > StorageRequest.MAX_RESULT_BYTES) throw StorageRequest.listTooLarge();
+                keys.add(key);
+            }
+            Collections.sort(keys); return keys;
+        }
+    }
+    /** Keyset page over one locked read; later pages deliberately do not promise a snapshot. */
+    public JSONObject listPage(String afterKey, int limit) throws Exception {
+        StorageRequest.page(afterKey, limit);
+        synchronized (backend.transactionLock()) {
+            // Retain only the lowest requested keys plus one lookahead, not a second whole-store map.
+            TreeSet<String> selected = new TreeSet<>();
+            for (String key : backend.read().keySet()) {
+                try { StorageRequest.key(key); }
+                catch (FactoryException unsupported) { throw new FactoryException("STORAGE_ERROR", "Storage contains an unsupported key for pagination."); }
+                if (afterKey != null && key.compareTo(afterKey) <= 0) continue;
+                selected.add(key);
+                if (selected.size() > limit + 1) selected.pollLast();
+            }
+            JSONArray keys = new JSONArray(); long encoded = 2; String last = null; boolean more = false;
+            for (String key : selected) {
+                long next = encoded + StorageRequest.encodedStringBytes(key) + (keys.length() == 0 ? 0 : 1);
+                if (keys.length() == limit || next > StorageRequest.MAX_RESULT_BYTES - 256) { more = true; break; }
+                keys.put(key); last = key; encoded = next;
+            }
+            // Invalid external native entries must not produce an unusable continuation or an empty loop.
+            if (more && last == null) throw StorageRequest.listTooLarge();
+            return new JSONObject().put("keys", keys).put("hasMore", more)
+                    .put("nextAfterKey", more ? last : JSONObject.NULL).put("snapshotAcrossPages", false);
         }
     }
     public void set(String key, String value) throws FactoryException {
         synchronized (backend.transactionLock()) {
-            if (key == null || value == null || !key.matches("[a-zA-Z0-9_.:-]{1,96}") || bytes(value) > BridgeProtocol.MAX_VALUE_BYTES)
-                throw new FactoryException("INVALID_ARGUMENT", "Storage entry exceeds the supported limits.");
-            Map<String, String> before = backend.read();
-            Map<String, String> values = new HashMap<>(before); values.put(key, value);
-            checkValueQuota(before.get(key), value); checkQuota(before, values);
-            if (!backend.replace(values)) throw new FactoryException("STORAGE_ERROR", "Could not persist application data.");
+            StorageRequest.key(key); StorageRequest.value(value);
+            Map<String, String> before = backend.readForBackup();
+            String previous = before.get(key);
+            checkValueQuota(previous, value);
+            if (!before.containsKey(key) && before.size() >= budget.entries)
+                throw new FactoryException("QUOTA_EXCEEDED", "Storage entry limit reached.");
+            long current = totalBytes(before);
+            long next = current - (previous == null ? 0 : bytes(previous)) + bytes(value)
+                    + (before.containsKey(key) ? 0 : bytes(key));
+            if (next > budget.totalBytes && next > current)
+                throw new FactoryException("QUOTA_EXCEEDED", "Application storage limit reached.");
+            if (!backend.putSelected(Collections.singletonMap(key, value)))
+                throw new FactoryException("STORAGE_ERROR", "Could not persist application data; inspect state before retrying.");
         }
     }
     public void remove(String key) throws FactoryException {
         synchronized (backend.transactionLock()) {
-            Map<String, String> values = new HashMap<>(backend.read()); values.remove(key);
-            if (!backend.replace(values)) throw new FactoryException("STORAGE_ERROR", "Could not persist application data.");
+            StorageRequest.key(key);
+            if (!backend.removeSelected(key)) throw new FactoryException("STORAGE_ERROR", "Could not persist application data; inspect state before retrying.");
         }
     }
     /** The preimage includes every selected key's presence, including keys absent at review time. */

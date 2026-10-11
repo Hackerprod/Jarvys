@@ -100,19 +100,27 @@ public final class DatabaseBackupFormat {
     }
     /** A full persisted row, including explicit null cells. Real columns always use the finite-double form. */
     static JSONObject normalizeRow(JSONObject source, JSONObject columns) throws JSONException, FactoryException {
+        return normalizeRow(source, columns, DatabaseRequest.MAX_CELL_BYTES, DatabaseRequest.MAX_ROW_BYTES);
+    }
+    /** Review hashes stream current live rows; this does not broaden the version-one archive grammar. */
+    static JSONObject normalizeCurrentRow(JSONObject source, JSONObject columns) throws JSONException, FactoryException {
+        return normalizeRow(source, columns, DatabaseRequest.HARD_MAX_CELL_BYTES, DatabaseRequest.HARD_MAX_ROW_BYTES);
+    }
+    private static JSONObject normalizeRow(JSONObject source, JSONObject columns, int maxCellBytes, int maxRowBytes)
+            throws JSONException, FactoryException {
         if (source.length() != columns.length() + 1 || !source.has("id")) throw DatabaseRequest.invalid();
         JSONObject row = new JSONObject().put("id", DatabaseRequest.id(DatabaseRequest.string(source, "id")));
         for (String name : BackupJson.keys(columns)) {
             if (!source.has(name)) throw DatabaseRequest.invalid();
             JSONObject definition = columns.getJSONObject(name); Object value = source.get(name);
-            DatabaseRequest.typed(value, definition);
+            DatabaseRequest.typed(value, definition, maxCellBytes);
             if (value != JSONObject.NULL && "real".equals(definition.getString("type"))) {
                 double real = ((Number) value).doubleValue(); value = real == 0.0 ? 0.0 : real;
             }
             row.put(name, value);
         }
         // Use the same typed database row quota, independent of JSON's defensive presentation escapes.
-        if (DatabaseRequest.bytes(row) > DatabaseRequest.MAX_ROW_BYTES) throw DatabaseRequest.invalid();
+        if (DatabaseRequest.bytes(row) > maxRowBytes) throw DatabaseRequest.invalid();
         return row;
     }
     public static byte[] canonical(Object value) throws FactoryException { return BackupJson.canonical(value); }

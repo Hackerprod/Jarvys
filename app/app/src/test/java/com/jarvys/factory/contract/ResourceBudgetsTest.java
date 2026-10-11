@@ -50,11 +50,11 @@ public final class ResourceBudgetsTest {
     @Test public void explicitVersionOnlyResolvesToLegacyAndSerializesCompletely() {
         ResourceBudgets value = ResourceBudgets.parse(Collections.singletonMap("version", 1));
         assertEquals(ResourceBudgets.legacy(), value);
-        assertEquals(Arrays.asList("version", "storage", "database", "documents", "audio", "sensors", "packaging", "secrets", "notifications", "incomingShare"),
+        assertEquals(Arrays.asList("version", "storage", "database", "documents", "audio", "sensors", "packaging", "secrets", "notifications", "incomingShare", "nfc", "bluetooth", "widgets", "jobs"),
                 new ArrayList<>(value.toMap().keySet()));
         int count = 0;
         for (Object section : value.toMap().values()) if (section instanceof Map) count += ((Map<?, ?>) section).size();
-        assertEquals(36, count);
+        assertEquals(62, count);
     }
     @Test public void partialOverridesDoNotChangeOtherDefaultsOrFollowInputMutations() {
         Map<String, Object> input = declaration("database", "mainFileBytes", 256 * MIB);
@@ -113,7 +113,7 @@ public final class ResourceBudgetsTest {
         assertEquals(256, ResourceBudgets.parse(declaration("storage", "entries", 256L)).storage.entries);
     }
     @Test public void negativeZeroOverflowAndOverCeilingValuesAreRejected() {
-        for (long value : new long[] {Long.MIN_VALUE, -1, 0, 257, Long.MAX_VALUE})
+        for (long value : new long[] {Long.MIN_VALUE, -1, 0, 65537, Long.MAX_VALUE})
             rejected(declaration("storage", "entries", value));
         rejected(declaration("documents", "handleBytes", 4 * GIB + 1));
         rejected(declaration("database", "mainFileBytes", GIB + 4096));
@@ -148,7 +148,7 @@ public final class ResourceBudgetsTest {
     }
     @Test public void materializedPayloadCapsStayDistinctFromStreamTotals() {
         ResourceBudgets value = ResourceBudgets.maxima();
-        assertEquals(MIB, value.storage.totalBytes); assertEquals(6 * MIB, value.audio.sourceBytes);
+        assertEquals(16 * MIB, value.storage.totalBytes); assertEquals(6 * MIB, value.audio.sourceBytes);
         assertEquals(8 * MIB, value.packaging.totalSourceBytes); assertEquals(32 * MIB, value.packaging.apkBytes);
         assertEquals(300000, value.audio.durationMs); assertEquals(300000, value.sensors.captureDurationMs);
         assertEquals(50, value.sensors.bufferedSamples);
@@ -160,7 +160,7 @@ public final class ResourceBudgetsTest {
         // {type,nullable} definition. Actual schema validation still checks serialized bytes.
         long maximumEncoded = 2L + value.tables * (36L + value.columnsPerTable * 80L);
         assertTrue(maximumEncoded < ResourceBudgets.DATABASE_SCHEMA_BYTES);
-        assertTrue(value.rowBytes + 1024 < ResourceBudgets.DATABASE_RESPONSE_BYTES);
+        assertEquals(ResourceBudgets.DATABASE_RESPONSE_BYTES, value.rowBytes + 1024);
     }
     @Test public void defaultsNeverDependOnSuppliedSectionsOrMutableGlobalData() {
         List<String> before = new ArrayList<>(ResourceBudgets.legacy().toMap().keySet());
@@ -178,6 +178,22 @@ public final class ResourceBudgetsTest {
         rejected(declaration("notifications","schedules",1025));
         rejected(declaration("incomingShare","queuedBytes",1024));
         assertEquals(32,ResourceBudgets.maxima().incomingShare.attachmentsPerEnvelope);
+    }
+
+    @Test public void genericHardwareAndJobBudgetsAreClosedAndConfigurable() {
+        ResourceBudgets value=ResourceBudgets.legacy();
+        assertEquals(8192,value.nfc.messageBytes); assertEquals(16,value.nfc.records); assertEquals(30000,value.nfc.timeoutMs);
+        assertEquals(4,value.bluetooth.connections); assertEquals(512,value.bluetooth.valueBytes); assertEquals(32,value.bluetooth.pollEvents);
+        assertEquals(16,value.widgets.instances); assertEquals(64,value.widgets.nodes); assertEquals(6,value.widgets.depth);
+        assertEquals(32,value.jobs.records); assertEquals(8*MIB,value.jobs.storageBytes);
+        assertEquals(131072,ResourceBudgets.parse(declaration("nfc","messageBytes",131072)).nfc.messageBytes);
+        assertEquals(0,ResourceBudgets.parse(declaration("widgets","actions",0)).widgets.actions);
+        assertEquals(1024,ResourceBudgets.parse(declaration("jobs","records",1024)).jobs.records);
+        rejected(declaration("nfc","messageBytes",2)); rejected(declaration("nfc","timeoutMs",999));
+        rejected(declaration("bluetooth","valueBytes",513)); rejected(declaration("bluetooth","bufferedEvents",1));
+        rejected(declaration("widgets","nodes",1)); rejected(declaration("widgets","modelBytes",255));
+        rejected(declaration("jobs","records",1025));
+        assertEquals(ResourceBudgets.maxima(),ResourceBudgets.parse(ResourceBudgets.maxima().toMap()));
     }
 
 }

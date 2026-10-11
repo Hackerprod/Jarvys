@@ -447,7 +447,8 @@ public final class FactoryRuntime implements AutoCloseable {
         final BridgeProtocol.Request request;
         try { request = BridgeProtocol.validate(BridgeProtocol.ORIGIN, true, raw, config); }
         catch (FactoryException e) { safePost(proxy, BridgeProtocol.failure(BridgeProtocol.requestId(raw), e.code, e.getMessage())); return; }
-        boolean nativeControl = request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.NETWORK_CANCEL ||
+        boolean nativeControl = request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.NFC_CANCEL || request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.BLUETOOTH_STOP_SCAN || request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.BLUETOOTH_UNSUBSCRIBE || request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.BLUETOOTH_DISCONNECT || request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.BLUETOOTH_CANCEL || request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.JOBS_CANCEL ||
+                request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.NETWORK_CANCEL ||
                 request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.SPEECH_STOP ||
                 request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.VOICE_RECOGNITION_CANCEL ||
                 request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.LOCATION_CANCEL || request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.RECORDING_CANCEL || request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.RECORDING_STOP || request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.STEPS_CANCEL || request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.SENSORS_UNSUBSCRIBE;
@@ -904,13 +905,14 @@ public final class FactoryRuntime implements AutoCloseable {
     private void dispatchInstalledEffect(BridgeProtocol.Request request, Reply reply) throws Exception {
         if (!reply.current()) return;
         switch (request.operation) {
+                case NFC_STATUS: case NFC_READ: case NFC_WRITE: case NFC_CANCEL: case BLUETOOTH_STATUS: case BLUETOOTH_REQUEST_PERMISSIONS: case BLUETOOTH_SCAN: case BLUETOOTH_POLL: case BLUETOOTH_STOP_SCAN: case BLUETOOTH_CONNECT: case BLUETOOTH_SERVICES: case BLUETOOTH_READ: case BLUETOOTH_WRITE: case BLUETOOTH_REQUEST_MTU: case BLUETOOTH_SUBSCRIBE: case BLUETOOTH_UNSUBSCRIBE: case BLUETOOTH_DISCONNECT: case BLUETOOTH_CANCEL: case WIDGETS_AVAILABILITY: case WIDGETS_LIST: case WIDGETS_READ: case WIDGETS_REQUEST_PIN: case WIDGETS_UPDATE: case WIDGETS_REMOVE: case WIDGETS_POLL_ACTIONS: case WIDGETS_ACKNOWLEDGE_ACTION: case JOBS_ENQUEUE_HTTP: case JOBS_STATUS: case JOBS_CANCEL: case JOBS_READ_RESULT: case JOBS_FORGET: case JOBS_RESUME:
             case SECRETS_PUT: case SECRETS_CAPTURE: case SECRETS_GET: case SECRETS_LIST: case SECRETS_DESCRIBE: case SECRETS_REMOVE: case SECRETS_RESET: case SECRETS_REQUEST:
                 case VOICE_RECOGNITION_STATUS: case VOICE_RECOGNITION_RECOGNIZE: case VOICE_RECOGNITION_CANCEL:
                 case LOCATION_STATUS: case LOCATION_CURRENT: case LOCATION_CANCEL: case LOCATION_REQUEST_PERMISSION:
                 case RECORDING_STATUS: case RECORDING_RECORD: case RECORDING_STOP: case RECORDING_CANCEL: case RECORDING_REQUEST_PERMISSION:
                 case STEPS_STATUS: case STEPS_CURRENT: case STEPS_CANCEL: case STEPS_REQUEST_PERMISSION:
                 case SENSORS_SUBSCRIBE: case SENSORS_POLL: case SENSORS_UNSUBSCRIBE:
-                case NETWORK_REQUEST: case NETWORK_PROBE: case NETWORK_PING: case NETWORK_CANCEL:
+                case NETWORK_UPLOAD: case NETWORK_DOWNLOAD: case NETWORK_REQUEST: case NETWORK_PROBE: case NETWORK_PING: case NETWORK_CANCEL:
             case NOTIFICATIONS_SCHEDULE: case NOTIFICATIONS_RESUME_SCHEDULED: case NOTIFICATIONS_SCHEDULE_STATUS:
             case NOTIFICATIONS_CANCEL_SCHEDULED: case NOTIFICATIONS_FORGET_SCHEDULED: case NOTIFICATIONS_POLL_ACTIONS:
             case NOTIFICATIONS_ACK_ACTION: case NOTIFICATIONS_GENERATION_STATUS: case NOTIFICATIONS_FORGET_GENERATION:
@@ -2398,8 +2400,9 @@ public final class FactoryRuntime implements AutoCloseable {
                     if (work.cancelled || !documentForeground || !work.reply.current()) {
                         handles.close(handle); throw new FactoryException("CANCELLED", "Document access expired.");
                     }
+                    DocumentHandles.Metadata metadata = handles.metadata(handle);
                     JSONObject response = new JSONObject().put("handle", handle).put("mode", work.write ? "write" : "read")
-                            .put("expiresAfterMs", 300000).put("maximumBytes", 16 * 1024 * 1024)
+                            .put("expiresAfterMs", metadata.expiresAfterMs).put("maximumBytes", metadata.maximumBytes)
                             .put("providerCommitConfirmed", false);
                     main.post(() -> {
                         if (work.cancelled || !documentForeground) {
