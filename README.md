@@ -17,6 +17,8 @@
 > Development checkpoint: Factory v84 configurable autonomy is implemented as a reviewed development checkpoint; the current batch adds native HTTP(S), actual Android-utility ICMP ping, notifications, platform speech and retained signed-artifact authority, with one global validation and APK delivery at the end. These new source additions are not yet execution-validated. The packaged-DEX runtime now has a shared per-app/per-operation ALLOW_ALWAYS / ASK / DENY policy, defaulting to ALLOW_ALWAYS. This source checkpoint is not a validated APK release; see [Pending.md](Pending.md) and [Factory guidance](app/APK_FACTORY.md) for scope and remaining technical limits.
 
 
+The [multiview ICMP ping example](app/examples/factory-ping-multiview/) demonstrates native ping, local history, notifications and contact-assisted sharing. Its offline controller tests pass; device/WebView acceptance remains pending.
+
 ## What is Jarvys?
 
 Jarvys brings a tool-using AI workspace to Android: persistent conversations, configurable model providers, specialist agents, project files, connectors, scheduled work and optional phone interaction. Its native interface is built with Kotlin, Java and Jetpack Compose.

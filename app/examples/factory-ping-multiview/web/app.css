@@ -1,0 +1,34 @@
+:root { color-scheme: light dark; font-family: system-ui, sans-serif; line-height: 1.5; color: #14353b; background: #f2f8f7; }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; }
+main { max-width: 54rem; margin: auto; padding: 1.25rem; }
+h1 { margin: .2rem 0; font-size: clamp(2rem, 7vw, 3rem); line-height: 1.15; }
+h2 { margin-top: 1.5rem; }
+.eyebrow { font-weight: 700; font-size: .78rem; letter-spacing: .13em; }
+nav, .actions { display: flex; flex-wrap: wrap; gap: .65rem; margin: 1rem 0; }
+button { min-height: 2.75rem; padding: .65rem 1rem; border-radius: .6rem; border: 1px solid #507777; background: #fff; color: #14353b; cursor: pointer; font: inherit; }
+button.primary, nav button[aria-current] { background: #185950; color: #fff; border-color: #185950; }
+button:disabled { opacity: .5; cursor: default; }
+button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 3px solid #a56200; outline-offset: 3px; }
+input:not([type=checkbox]), select { width: 100%; max-width: 32rem; min-height: 2.8rem; margin: .4rem 0 .8rem; padding: .55rem; color: inherit; background: #fff; border: 1px solid #507777; border-radius: .35rem; font: inherit; }
+label { display: block; }
+label.check { display: flex; align-items: flex-start; gap: .65rem; margin: 1rem 0; }
+input[type=checkbox] { flex: none; width: 1.2rem; height: 1.2rem; margin-top: .15rem; }
+.panel, .notice { padding: 1rem; margin: 1rem 0; border-radius: .7rem; background: #e1efec; border: 1px solid #b3ccc6; }
+#status { font-weight: 600; overflow-wrap: anywhere; }
+#warning { border-color: #ac782c; background: #fff0d6; }
+#history-list { padding-left: 1.4rem; }
+#history-list li { margin: 1rem 0; overflow-wrap: anywhere; }
+#history-list button { display: block; margin-top: .4rem; }
+p, pre { overflow-wrap: anywhere; }
+pre { white-space: pre-wrap; font-size: .9rem; max-height: 22rem; overflow: auto; }
+footer { border-top: 1px solid #b3ccc6; margin-top: 2rem; padding-top: 1rem; font-size: .85rem; }
+@media (prefers-color-scheme: dark) {
+  :root { background: #102124; color: #e0efec; }
+  button, input:not([type=checkbox]), select { background: #183438; color: #e0efec; border-color: #83a6a0; }
+  button.primary, nav button[aria-current] { background: #86d9c7; color: #102124; border-color: #86d9c7; }
+  .panel, .notice { background: #193438; border-color: #52736c; }
+  #warning { background: #44331a; }
+  button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline-color: #ffcc80; }
+}

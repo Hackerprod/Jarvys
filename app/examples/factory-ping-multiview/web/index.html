@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ping Notebook</title>
+  <link rel="stylesheet" href="/factory-ui/pure-3.0.0/pure-min.css">
+  <link rel="stylesheet" href="/www/app.css">
+  <script src="/factory-sdk.js" defer></script>
+  <script src="/www/model.js" defer></script>
+  <script src="/www/app.js" defer></script>
+</head>
+<body><main>
+  <header><p class="eyebrow">FACTORY · PACKAGED DEX</p><h1>Ping Notebook</h1>
+    <p>Real ICMP, one foreground run at a time. No automatic monitoring or retries.</p></header>
+  <nav aria-label="Views">
+    <button type="button" data-view="main" aria-current="page">Ping</button>
+    <button type="button" data-view="history">History</button>
+    <button type="button" data-view="settings">Settings</button>
+  </nav>
+  <p id="runtime" class="notice">Checking the packaged runtime…</p>
+  <p id="status" role="status" aria-live="polite">Loading local data…</p>
+  <p id="warning" class="notice" role="status" aria-live="polite" hidden></p>
+  <section id="view-main" aria-labelledby="title-main">
+    <h2 id="title-main" tabindex="-1">Run a ping</h2>
+    <form id="ping-form" class="pure-form pure-form-stacked">
+      <label for="host">Domain or IP address</label>
+      <input id="host" name="host" maxlength="1024" placeholder="example.com or 192.0.2.1" required autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="host-help">
+      <p id="host-help">A host only, without a URL or command. DNS and ICMP traffic go to the host you enter. Use a destination you are allowed to test.</p>
+      <div class="actions"><button id="run" type="submit" class="primary" disabled>Start ICMP ping</button>
+        <button id="cancel" type="button" disabled>Cancel run</button></div>
+    </form>
+    <article id="result" class="panel" hidden>
+      <h3>Selected result</h3><p id="result-summary"></p><p id="result-details"></p>
+      <details id="raw-details" hidden><summary>Utility output (this session only)</summary><pre id="raw-output"></pre></details>
+      <p>Missing statistics stay unknown. No reply can mean filtering or packet loss; it does not prove the host is down.</p>
+    </article>
+    <section class="panel" aria-labelledby="share-heading">
+      <h3 id="share-heading">Share the selected summary</h3>
+      <p>The phone number is kept only on this screen. Check it before opening a message. No message is sent automatically.</p>
+      <label for="recipient">Recipient phone number</label>
+      <input id="recipient" type="tel" maxlength="256" autocomplete="off" placeholder="+15550100">
+      <div class="actions"><button id="pick-contact" type="button" disabled>Pick a phone contact</button>
+        <button id="sms" type="button" disabled>Open SMS draft</button>
+        <button id="whatsapp" type="button" disabled>Open WhatsApp link</button>
+        <button id="share" type="button" disabled>Choose sharing app</button></div>
+      <p>WhatsApp requires +country code and digits. Opening its link shares this number and summary with wa.me and your external browser; WhatsApp availability is not guaranteed. The chooser can offer WhatsApp when installed, but does not preselect a contact. Message apps may sync drafts.</p>
+    </section>
+  </section>
+  <section id="view-history" aria-labelledby="title-history" hidden>
+    <h2 id="title-history" tabindex="-1">Local history</h2>
+    <p id="history-note">Up to 30 recent summaries in this installed app's private storage. No contact numbers or raw output are saved.</p>
+    <p id="history-empty">No runs yet.</p><ol id="history-list"></ol>
+    <button id="clear-history" type="button" disabled>Clear local history…</button>
+    <div id="clear-confirm" class="panel" hidden><p>Delete this app's saved summaries? This cannot be undone.</p>
+      <button id="confirm-clear" type="button">Delete summaries</button><button id="keep-history" type="button">Keep history</button></div>
+  </section>
+  <section id="view-settings" aria-labelledby="title-settings" hidden>
+    <h2 id="title-settings" tabindex="-1">Run settings</h2>
+    <form id="settings-form" class="pure-form pure-form-stacked">
+      <label for="family">Address family</label><select id="family"><option value="auto">Automatic</option><option value="ipv4">IPv4</option><option value="ipv6">IPv6</option></select>
+      <label for="count">Packet count (1–20)</label><input id="count" type="number" min="1" max="20" step="1" required>
+      <label for="timeoutMs">Overall deadline, milliseconds (1,000–60,000)</label><input id="timeoutMs" type="number" min="1000" max="60000" step="1" required>
+      <label for="packetTimeoutMs">Utility final-response wait, milliseconds (1,000–10,000)</label><input id="packetTimeoutMs" type="number" min="1000" max="10000" step="1" required>
+      <label for="intervalMs">Packet interval, milliseconds (200–5,000)</label><input id="intervalMs" type="number" min="200" max="5000" step="1" required>
+      <label for="packetBytes">Payload bytes (0–1,400)</label><input id="packetBytes" type="number" min="0" max="1400" step="1" required>
+      <p>These are conservative example limits. The deadline may expire before all packets finish. Android utility flags and payload support vary by device. The final-response wait rounds up to whole seconds.</p>
+      <label class="check"><input id="notify" type="checkbox"> Request an own-app notification after each finished run</label>
+      <label class="check"><input id="haptics" type="checkbox"> Request brief haptic feedback after each finished run</label>
+      <p>Notifications can expose a host and summary on the lock screen. Haptics respect system settings and are not guaranteed.</p>
+      <button id="save-settings" type="submit" class="primary" disabled>Save settings</button>
+    </form>
+    <section class="panel"><h3>Android notifications</h3>
+      <p>Saving the option does not grant Android permission. Use setup to request it explicitly. This example only posts immediately while open; it has no scheduled or background service.</p>
+      <div class="actions"><button id="notification-setup" type="button" disabled>Set up Android notifications</button>
+        <button id="notification-status" type="button" disabled>Check permission and channel</button>
+        <button id="notification-cancel" type="button" disabled>Remove this app's last notification</button></div>
+      <p id="notification-info" role="status">Not checked. A native acceptance receipt never proves display or delivery.</p>
+    </section>
+  </section>
+  <footer>Local UI + the compiled Factory SDK. Native features require an installed, signed generated APK and a compatible authenticated Jarvys host. Preview cannot run ICMP or notifications.</footer>
+</main></body></html>
