@@ -14,7 +14,7 @@
 
 ---
 
-> Development checkpoint: Factory v84 configurable autonomy is being implemented and tested. The packaged-DEX runtime now has a shared per-app/per-operation ALLOW_ALWAYS / ASK / DENY policy, defaulting to ALLOW_ALWAYS. This source checkpoint is not a validated APK release; see [Pending.md](Pending.md) and [Factory guidance](app/APK_FACTORY.md) for scope and remaining technical limits.
+> Development checkpoint: Factory v84 configurable autonomy is implemented as a reviewed development checkpoint; remaining Factory functionality is being completed in a batch, with one global validation and APK delivery at the end. The packaged-DEX runtime now has a shared per-app/per-operation ALLOW_ALWAYS / ASK / DENY policy, defaulting to ALLOW_ALWAYS. This source checkpoint is not a validated APK release; see [Pending.md](Pending.md) and [Factory guidance](app/APK_FACTORY.md) for scope and remaining technical limits.
 
 
 ## What is Jarvys?

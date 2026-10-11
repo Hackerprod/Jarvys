@@ -1,6 +1,6 @@
 # Factory configurable autonomy, v84 development checkpoint
 
-Status: implementation and validation in progress. No APK from this revision has been signed or delivered. The earlier preferences-backup checkpoint was paused and is not release evidence for these changes.
+Status: reviewed implementation checkpoint; development continues in a larger batch under the user-requested single final validation workflow. No APK from this revision has been signed or delivered. The earlier preferences-backup checkpoint was paused and is not release evidence for these changes.
 
 ## Implemented authority model
 
@@ -29,6 +29,7 @@ Coding execution uses its saved Coding setting, otherwise an explicitly saved le
 - Independent review covered persisted authority failure, certificate migration, stale first-sign ownership, and callback revocation. Additional runtime/transaction and lifecycle review is being incorporated.
 - First focused attempt is preserved as failed: app test compilation exposed stale test calls; 1,418 runtime tests ran with 55 failures and no errors/skips. APK-runtime passed 92 tests. Diagnosed fixes address two synthetic UID fixture assignments, a clipboard-query expectation, and immediate cancellation snapshot disposal. The new permission editor also rejects full/partial overlay gestures. Those fixes passed fresh verification in the second focused attempt.
 - Second focused attempt completed 2,626 fresh tests: runtime core 1,371 and APK-runtime 92 passed; Full host ran 1,163 with 15 failures, no errors or omissions. Twelve failures are stale cross-family startup/recovery expectations; three API variants expose one browser-default identity-drift fallback bug. The exact-recipient correction and owner-local fixture updates are now independently reviewed; the next gate is pending. Four guarded test workers completed with no blocked network attempts.
-- Final aggregate gates, lint comparison, generated DEX/APK audit, signing, and physical-device acceptance are not yet complete for this revision.
+- Corrected Full host scope completed 1,209 tests with no failures/errors/skips; the final-source JavaScript SDK rerun passed 48 tests. Play production and unit-test compilation completed, then its newly started test execution was deliberately interrupted when the user requested batch development with one final global validation. Play tests are incomplete.
+- Lint comparison, generated DEX/APK audit and delivery were not started for this checkpoint. They are deferred to the final batch validation, rather than repeated after each small implementation. Physical-device acceptance remains unverified.
 
 Private execution evidence stays outside Git. This document records product scope and honest validation status, not private tool logs or credentials.
