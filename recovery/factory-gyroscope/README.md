@@ -79,7 +79,16 @@ Approval receipt SHA-256:
 `d2ae1b4724368e7e7e4a40354a653a5ed753cab5f8ae1b9199cf811c753b8f8d`.
 Unsigned FullRelease: 27,585,796 bytes, SHA-256
 `abdd47bfd4963b87365eca952639e8d8514aa9c51c19c1df2b544691db473fea`.
-No signing or delivery claim yet.
+Signed ARM64 test APK native attachment accepted October 11, 2026 at 06:46:44 UTC:
+`Jarvys-Factory-gyroscope-full-v82-arm64-test.apk`, 19,385,510 bytes, SHA-256
+`91f0e570b4b62026ca3ae4ae480b3b7f7babdbdea2852f40a3fcb9b393e16294`.
+Independent verification checked D7 test-identity v2/v3 signatures, ZIP CRC and 16 KiB ZIP
+alignment. All 255 retained payload entries match the approved unsigned release; exactly
+nine non-ARM64 libraries were omitted. Actual persisted Library bytes were independently
+retrieved and match the signed artifact byte-for-byte. Signed/Library receipt SHA-256:
+`521d99dce0c3d199ef5d99ca457f4d299b5e5455ba6ddf16a83abf2a746a1b45`.
+Native acceptance does not establish download, installation/update, data retention, physical
+sensor behavior or ELF 16 KiB page compatibility.
 
 ## Acceptance still open
 

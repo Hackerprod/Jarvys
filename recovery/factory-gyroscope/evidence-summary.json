@@ -83,7 +83,7 @@
     }
   ],
   "auditStatus": "Final independent three-APK approval passed",
-  "deliveryStatus": "Not signed or delivered yet",
+  "deliveryStatus": "Native attachment accepted; signed and independently retrieved persisted Library bytes verified. Download/installation/physical acceptance not established.",
   "limitations": [
     "Synthetic host evidence only; no physical sensor, installation, ARM64 or WebView acceptance",
     "No measurement accuracy, hardware-stop or zero-network guarantee"
@@ -102,7 +102,19 @@
     "execution-review-v82.json": "a5e52b7d0b3b694df6d769709b728d2b0bd4cc5a82b98a81661fdcc8756083e7",
     "lint-review-v82.json": "9aec1c14a5b976b2eb658514bf5c44aed6a7349ef0680cd83a3fc72456e9b5c3",
     "build-review-v82.json": "bd73637ef9ea22e6a49eb42430693c9ccdb91ecd16909c826e78fe3c80fb8497",
-    "reviewer-final-three-apk-approval.json": "d2ae1b4724368e7e7e4a40354a653a5ed753cab5f8ae1b9199cf811c753b8f8d"
+    "reviewer-final-three-apk-approval.json": "d2ae1b4724368e7e7e4a40354a653a5ed753cab5f8ae1b9199cf811c753b8f8d",
+    "reviewer-signed-library-binding.json": "521d99dce0c3d199ef5d99ca457f4d299b5e5455ba6ddf16a83abf2a746a1b45"
   },
-  "lintBoundary": "Exact retained diagnostic equivalence with known legacy errors and existing abortOnError=false, not lint-clean; no new suppression."
+  "lintBoundary": "Exact retained diagnostic equivalence with known legacy errors and existing abortOnError=false, not lint-clean; no new suppression.",
+  "delivery": {
+    "acceptedAtUtc": "2026-10-11T06:46:44.373468Z",
+    "filename": "Jarvys-Factory-gyroscope-full-v82-arm64-test.apk",
+    "bytes": 19385510,
+    "sha256": "91f0e570b4b62026ca3ae4ae480b3b7f7babdbdea2852f40a3fcb9b393e16294",
+    "signer": "D7 test identity; v2/v3 verified",
+    "retainedPayloadEntries": 255,
+    "expectedNonArm64EntriesRemoved": 9,
+    "persistedLibraryBytesIndependentlyVerified": true,
+    "limitations": "Accepted native send is not download, installation, physical sensor behavior or ELF16KiB compatibility"
+  }
 }

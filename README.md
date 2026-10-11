@@ -26,7 +26,8 @@ This is an actively developed project with incremental, evidence-backed checkpoi
 
 v82 gyroscope passed staged host validation: 2,604 fresh JUnit cases, SDK42, exact retained
 lint diagnostics and independent three-APK/DEX/template audits. It adds bounded rad/s capture
-without new permissions. Signed delivery is pending; physical-device acceptance remains open.
+without new permissions. Signed ARM64 test APK delivery was accepted; persisted Library bytes
+were independently verified. Physical-device acceptance remains open.
 [Scope and evidence](recovery/factory-gyroscope/README.md).
 
 | Checkpoint | Status |
