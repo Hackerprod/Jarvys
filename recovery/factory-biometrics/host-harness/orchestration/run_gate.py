@@ -22,7 +22,7 @@ if kind in ('baseline-build','build'):args+=['-I',str(V/'fresh-apks.init.gradle'
 if kind in ('baseline-prepare','baseline','lint'):
  args+=['-I',str(H/'fresh-lint.init.gradle'),'-I',str(V/'library-lint.init.gradle'),':app:lintReportFullDebug',':app:lintReportPlayDebug',':apk-runtime:lintReportRelease',':factory-runtime-core:lintReportRelease','-x',':apk-runtime:lintVitalRelease']
 elif kind=='aggregate':
- args+=['-I',str(H/'fresh-tests.init.gradle'),'-I',str(V/'factory-evidence.init.gradle'),':app:testFullDebugUnitTest',':app:testPlayDebugUnitTest',':apk-runtime:testDebugUnitTest',':apk-runtime:testReleaseUnitTest',':factory-runtime-core:testDebugUnitTest',':factory-runtime-core:testReleaseUnitTest']
+ args+=['--continue','-I',str(H/'fresh-tests.init.gradle'),'-I',str(V/'factory-evidence.init.gradle'),':app:testFullDebugUnitTest',':app:testPlayDebugUnitTest',':apk-runtime:testDebugUnitTest',':apk-runtime:testReleaseUnitTest',':factory-runtime-core:testDebugUnitTest',':factory-runtime-core:testReleaseUnitTest']
 else:args+=[':app:assembleFullDebug',':app:assemblePlayDebug',':app:assembleFullRelease']
 prior=set((H/'runs').glob('*'));rc=subprocess.run([sys.executable,str(H/'run_gradle_gate.py'),'v80-restored-'+kind,*args],cwd=project/'app').returncode
 created=set((H/'runs').glob('*'))-prior;assert len(created)==1;run=created.pop();(out/(kind+'-run.txt')).write_text(str(run)+'\n')

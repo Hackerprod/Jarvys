@@ -32,8 +32,10 @@
   },
   "run_gate.py": {
     "source_relative_path": "FACTORY-BIOMETRICS-v80-validation/run_gate.py",
-    "source_sha256": "72bcc155ef5dcddd7f5805368159c7d37295ad447746640e10645acbb6fa3cf1",
-    "packaged_sha256": "72bcc155ef5dcddd7f5805368159c7d37295ad447746640e10645acbb6fa3cf1",
-    "unchanged_logic": true
+    "source_sha256": "68e207ac2d2dc1bebfadc3201f6fccaa66eab7df01407cd7e878144520b80472",
+    "packaged_sha256": "68e207ac2d2dc1bebfadc3201f6fccaa66eab7df01407cd7e878144520b80472",
+    "unchanged_logic": true,
+    "historical_source_sha256": "72bcc155ef5dcddd7f5805368159c7d37295ad447746640e10645acbb6fa3cf1",
+    "historical_adaptation": "Independent review approved aggregate-only --continue; the coordinator adopted packaged runner 68e207ac2d2dc1bebfadc3201f6fccaa66eab7df01407cd7e878144520b80472 after the second failed aggregate ended. This binding now identifies the actual active source; prior failures and checks remain unchanged."
   }
 }

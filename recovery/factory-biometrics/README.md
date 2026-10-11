@@ -89,3 +89,18 @@ The candidate Gradle lint run succeeded; its wrapper initially rejected the hist
 counts. After independent approval, only those four reference constants were calibrated and
 the exact-multiset comparator was rerun successfully. This was not another Gradle lint run.
 Full aggregate tests, three-APK comparison, signing and delivery remain open.
+
+### Test corrections before the final aggregate
+
+Two complete FullDebug attempts each ran 3,528 tests with one failure; the remaining five
+aggregate tasks did not run after those failures. The first exposed a stale preview expectation:
+42 wire methods plus three host checks produce 45 observations. The corrected test also requires
+the exact three biometric preview-denial observations and a biometric-only capability subset.
+Its focused Full/Play checks passed 14+14 cases. The second exposed a possible IO-to-UI
+synchronization race in an unchanged memory-review test: persisted approval could be observed
+before the UI completed approval and re-enabled navigation. The reviewed test now waits for the
+existing success indicator and enabled tab before continuing, retaining the same 10-second
+bound and every duplicate-grant assertion. The timeout does not prove its precise interleaving.
+Both changes affect tests only; production inputs remain identical. The next aggregate uses
+`--continue` solely to collect results from all six independent tasks when dependencies permit; any failure still rejects
+the gate. A complete all-green aggregate, fresh final-source lint and APK audits remain required.

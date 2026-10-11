@@ -10,7 +10,7 @@ import re
 import subprocess
 
 BASELINE = '5c177d32cfc1b13209a54131753f98cec3582d42'
-CANDIDATE_APP_TREE = 'ff2791d1e7c808d2edc4f9fa2902b3c6eb9637d8'
+CANDIDATE_APP_TREE = '119dac1fee793fa306656438447f491cad0a7cb0'
 GUIDANCE = 'app/src/main/assets/skills/com.jarvys.apk-factory/'
 HOST_ASSETS = 'app/src/main/assets/'
 SDK = 'apk-runtime/src/main/assets/factory-sdk.js'

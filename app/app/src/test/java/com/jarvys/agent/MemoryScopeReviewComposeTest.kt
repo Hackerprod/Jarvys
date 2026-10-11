@@ -162,6 +162,8 @@ class MemoryScopeReviewComposeTest {
         consent()
         compose.onNodeWithTag("memory-scope-approve").performClick()
         waitFor { stores.root.listSharedPersonalForUser().size == 1 }
+        waitForNode("memory-scope-status")
+        compose.onNodeWithTag("memory-scope-tab-CURRENT_CHAT").assertIsEnabled()
         tab("CURRENT_CHAT")
         review("local.md")
         consent()

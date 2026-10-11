@@ -14,10 +14,15 @@
   "lint_metadata_snapshot.py": "6f2f0326044c7f04b170fc4795925ab253c0dd0d60ed69206eca93e462fd6d91",
   "test_lint_metadata_snapshot.py": "8d612aa166cf81cc035f1783fe6ea8f308d45a5b6e1847580b78b265949fee4f",
   "README-LINT-METADATA.md": "e7236bc5a47b8bd9c5f1471664e91c1bfed03e916fc8d005eee1c777e44f9d90",
-  "derive_expected_scope.py": "c32271253e5ba1bc3b12f405f3857e8e89fecd3458f225b5f749ff6c9a64fee8",
+  "derive_expected_scope.py": "55d8d59b74cda73c55d101144e87065d13b3756203d10de1ecc1228759d17363",
   "reconcile_delivered_v79_template.py": "e3d8790604442297a777f9c8ba6e400d4afd41d299e3d45420a437b2082e208d",
   "profile_payloads.py": "b9cd459984d98fae36aa4edbd8c16a68d1c0a1c70ed038506c08b4bb5bd4aef3",
   "test_profile_payloads.py": "826e82817a045fb5bd005bd67f90314cb504958544e1374611a11b501bf33499",
   "review_profile_payloads.py": "075a8e6a97e4d1174a279531020511bbcc4c8225c3c8f2ec99a2005f859cf7a2",
-  "test_ordinal_finalizer.py": "2bec613987efd55a47635b321785417170cd2316e35dcceecbfc32577acdb385"
+  "test_ordinal_finalizer.py": "2bec613987efd55a47635b321785417170cd2316e35dcceecbfc32577acdb385",
+  "final-surface-peer/final_host_surface.py": "827ab8ecc51587bf1850bfa99a493425950ef9339ef3e288e9268a9b2396a3b9",
+  "final-surface-peer/profile_producer_binding.py": "f560bb29fbba57298df04d44a43e2558d00acd28ed994b70286d9d0186e82156",
+  "final-surface-peer/test_final_host_surface.py": "7d27615f926cc8c30304fa176da72f05caa9f3995178c8c813baa83d89fedc14",
+  "final-surface-peer/test_profile_producer_binding.py": "579af1ffde483f459001120f7ce266178c9d8d357edbe02713b4e932f15ee847",
+  "host-binding-peer/reproduce_host_delta.py": "407456377d589534dcdab078c9177ff9c67aec20a9048f6a9657eab68d55e182"
 }
