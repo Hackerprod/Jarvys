@@ -42,12 +42,16 @@ public class NativeInstalledSourceTest {
         String appId;
         int calls;
         Bundle request;
+        String policyMode="ALLOW_ALWAYS";
+        boolean oldHost;
         Consumer<Bundle> mutate=result->{};
         @Override public Bundle call(String method,String arg,Bundle input) {
             assertEquals("describe_installed",method);assertNull(arg);calls++;request=new Bundle(input);
-            assertEquals(4,input.keySet().size());
+            assertEquals(input.containsKey("operation")?5:4,input.keySet().size());
+            if(oldHost && input.containsKey("operation")) throw new IllegalArgumentException("Unsupported descriptor");
             assertTrue(input.getLong("deadlineElapsedMs")<=SystemClock.elapsedRealtime()+2000L);
             Bundle result=new Bundle(input);
+            if(input.containsKey("operation")) result.putString("policyMode",policyMode);
             result.putString("appId",appId);result.putString("certificateSha256",repeat('a'));result.putString("apkSha256",repeat('b'));
             result.putString("recordSha256",repeat('c'));result.putLong("versionCode",42L);
             result.putString("resourceBudgets",ResourceBudgetsJson.toJson(ResourceBudgets.legacy()).toString());
@@ -77,11 +81,18 @@ public class NativeInstalledSourceTest {
         ShadowContentResolver.registerProviderInternal(info.authority,provider);
     }
     private NativeInstalledSource describe()throws Exception{return NativeInstalledSource.describe(context,config,"notifications",SystemClock.elapsedRealtime()+10000L,current::get);}
+    private NativeInstalledSource describeOperation(String operation)throws Exception{return NativeInstalledSource.describeOperation(context,config,operation,SystemClock.elapsedRealtime()+10000L,current::get);}
+    private void rejectedOperation(Consumer<Bundle> change){
+        provider.mutate=change;
+        FactoryException error=assertThrows(FactoryException.class,()->describeOperation("notifications.cancel"));
+        assertEquals("SOURCE_UNAVAILABLE",error.code);
+    }
     private void rejected(Consumer<Bundle> change){provider.mutate=change;assertThrows(FactoryException.class,()->describe());}
     @Test public void exactSourceUsesAuthenticatedReceiptAndBudgets()throws Exception{
         NativeInstalledSource value=describe();assertEquals(context.getPackageName(),value.appId);assertEquals(42L,value.versionCode);
         assertEquals(repeat('a'),value.certificateSha256);assertEquals(repeat('b'),value.apkSha256);assertEquals(repeat('c'),value.recordSha256);
-        assertEquals(ResourceBudgets.legacy(),value.resources);assertEquals(1,provider.calls);
+        assertEquals(ResourceBudgets.legacy(),value.resources);assertEquals(1,provider.calls);assertNull(value.policyMode);
+        assertEquals(new java.util.HashSet<>(java.util.Arrays.asList("protocolVersion","nonce","capability","deadlineElapsedMs")),provider.request.keySet());
     }
     @Test public void rejectsExtraMissingWrongTypeAndReplayFields(){
         rejected(b->b.putBoolean("unexpected",true));rejected(b->b.remove("recordSha256"));rejected(b->b.putLong("protocolVersion",1L));
@@ -112,4 +123,64 @@ public class NativeInstalledSourceTest {
         assertThrows(FactoryException.class,()->NativeInstalledSource.describe(context,config,"network",SystemClock.elapsedRealtime()+10000L,current::get));
         assertEquals(0,provider.calls);
     }
+    @Test public void operationQueryReturnsAllPointInTimeModesWithoutAcquiringAnEffect()throws Exception{
+        for(NativeInstalledSource.PolicyMode mode:NativeInstalledSource.PolicyMode.values()) {
+            provider.policyMode=mode.name();
+            NativeInstalledSource value=describeOperation("notifications.cancel");
+            assertEquals(mode,value.policyMode);assertEquals(context.getPackageName(),value.appId);
+            assertEquals(ResourceBudgets.legacy(),value.resources);
+            assertEquals(new java.util.HashSet<>(java.util.Arrays.asList("protocolVersion","nonce","capability","deadlineElapsedMs","operation")),provider.request.keySet());
+            assertEquals("notifications.cancel",provider.request.getString("operation"));assertEquals("notifications",provider.request.getString("capability"));
+        }
+        assertEquals(3,provider.calls); // The fixture rejects any acquire call or document-provider access.
+        assertNull(shadowOf((Application)context).getNextStartedActivity());
+    }
+    @Test public void rejectsMalformedMissingMismatchedAndUnsolicitedPolicyReplies(){
+        rejectedOperation(b->b.remove("operation"));rejectedOperation(b->b.putString("operation","notifications.show"));
+        rejectedOperation(b->b.putInt("operation",1));rejectedOperation(b->b.remove("policyMode"));
+        rejectedOperation(b->b.putInt("policyMode",1));rejectedOperation(b->b.putString("policyMode",null));
+        rejectedOperation(b->b.putString("policyMode","allow_always"));rejectedOperation(b->b.putString("policyMode","UNKNOWN"));
+        rejectedOperation(b->b.putString("policyMode"," ALLOW_ALWAYS"));rejectedOperation(b->b.putString("reviewToken",repeat('d')));
+        rejectedOperation(b->b.putBinder("lease",new android.os.Binder()));
+        rejectedOperation(b->b.putString("nonce",repeat('e')));rejectedOperation(b->b.putString("capability","audio"));
+        rejectedOperation(b->b.putString("appId","example.other"));rejectedOperation(b->b.putInt("versionCode",42));
+        rejectedOperation(b->b.putString("apkSha256","bad"));rejectedOperation(b->b.putString("resourceBudgets","{}"));
+        rejected(b->{b.putString("operation","notifications.cancel");b.putString("policyMode","ALLOW_ALWAYS");});
+    }
+    @Test public void unknownAndUndeclaredOperationsNeverQueryHost(){
+        assertThrows(IllegalArgumentException.class,()->describeOperation("unknown.operation"));
+        assertThrows(IllegalArgumentException.class,()->describeOperation("runtime.info"));
+        FactoryException error=assertThrows(FactoryException.class,()->describeOperation("audio.play"));
+        assertEquals("SOURCE_UNAVAILABLE",error.code);assertEquals(0,provider.calls);
+    }
+    @Test public void policyQueryRequiresCurrentCallerDeadlineAndAuthenticatedHost(){
+        current.set(false);assertThrows(FactoryException.class,()->describeOperation("notifications.cancel"));assertEquals(0,provider.calls);
+        current.set(true);
+        assertThrows(FactoryException.class,()->NativeInstalledSource.describeOperation(context,config,"notifications.cancel",SystemClock.elapsedRealtime(),current::get));
+        assertEquals(0,provider.calls);
+        rejectedOperation(b->current.set(false));current.set(true);
+        rejectedOperation(b->shadowOf(context.getPackageManager()).setPackagesForUid(23999,hostName,"example.shared"));
+        shadowOf(context.getPackageManager()).setPackagesForUid(23999,hostName);
+        rejectedOperation(b->{host.signatures=new Signature[]{new Signature(new byte[]{2,4,6,8})};shadowOf(context.getPackageManager()).installPackage(host);});
+    }
+    @Test public void queryIsNotACachedGrantAndRejectsLateReply()throws Exception{
+        NativeInstalledSource before=describeOperation("notifications.cancel");
+        String firstNonce=provider.request.getString("nonce");provider.policyMode="DENY";
+        NativeInstalledSource after=describeOperation("notifications.cancel");
+        assertEquals(NativeInstalledSource.PolicyMode.ALLOW_ALWAYS,before.policyMode);
+        assertEquals(NativeInstalledSource.PolicyMode.DENY,after.policyMode);
+        assertNotEquals(firstNonce,provider.request.getString("nonce"));assertEquals(2,provider.calls);
+        rejectedOperation(b->ShadowSystemClock.advanceBy(2001,TimeUnit.MILLISECONDS));
+    }
+    @Test public void oldHostRejectsOptionalQueryExplicitlyWhileLegacyDescriptionStillWorks()throws Exception{
+        provider.oldHost=true;
+        FactoryException error=assertThrows(FactoryException.class,()->describeOperation("notifications.cancel"));
+        assertEquals("SOURCE_UNAVAILABLE",error.code);assertEquals(1,provider.calls);
+        assertNull(describe().policyMode);assertEquals(2,provider.calls);assertFalse(provider.request.containsKey("operation"));
+    }
+    @Test public void oldShapeReplyCannotBeUpgradedToImplicitAllow(){
+        rejectedOperation(b->{b.remove("operation");b.remove("policyMode");});
+        assertEquals(1,provider.calls);
+    }
+
 }

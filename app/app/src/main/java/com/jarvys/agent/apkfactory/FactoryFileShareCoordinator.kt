@@ -9,6 +9,7 @@ import android.os.Looper
 import android.util.AtomicFile
 import com.jarvys.agent.MemoryUiAutomationGuard
 import com.jarvys.factory.runtime.FileShareTransfer
+import com.jarvys.factory.runtime.StreamingFileShareTransfer
 import org.json.JSONObject
 import java.io.File
 import java.util.UUID
@@ -26,7 +27,8 @@ internal class FactoryFileShareCoordinator(
     private val clean: (() -> Unit)? = null,
     private val policy: FactoryOperationPolicy = FactoryOperationPolicy.get(context),
 ) {
-    data class Request(val nonce: String, val filename: String, val mimeType: String, val size: Int, val sha256: String, val transfer: IBinder) {
+    data class Request(val nonce: String, val filename: String, val mimeType: String, val size: Long, val sha256: String, val transfer: IBinder, val protocolVersion: Int = 1) {
+        constructor(nonce: String, filename: String, mimeType: String, size: Int, sha256: String, transfer: IBinder) : this(nonce, filename, mimeType, size.toLong(), sha256, transfer, 1)
         companion object {
             fun parse(intent: Intent): Request {
                 require(intent.component != null) { "An explicit component is required" }
@@ -36,8 +38,13 @@ internal class FactoryFileShareCoordinator(
                 require(extras.keySet() == setOf("protocolVersion", "nonce", "filename", "mimeType", "size", "sha256", "transfer"))
                 fun value(key: String): Any? = extras.get(key)
                 fun string(key: String): String = value(key).also { require(it is String) } as String
-                require(value("protocolVersion") is Int && value("protocolVersion") == 1)
-                val size = value("size"); require(size is Int && size in 1..FileShareTransfer.MAX_BYTES)
+                val version = value("protocolVersion"); require(version is Int && version in 1..2)
+                val rawSize = value("size")
+                val size: Long = if (version == 1) {
+                    require(rawSize is Int && rawSize in 1..FileShareTransfer.MAX_BYTES); rawSize.toLong()
+                } else {
+                    require(rawSize is Long && rawSize in 1..StreamingFileShareTransfer.MAX_BYTES); rawSize
+                }
                 val nonce = string("nonce"); require(nonce.matches(Regex("[a-f0-9]{64}")))
                 val hash = string("sha256"); require(hash.matches(Regex("[a-f0-9]{64}")))
                 val filename = string("filename")
@@ -45,7 +52,7 @@ internal class FactoryFileShareCoordinator(
                 val mime = string("mimeType")
                 require(mime.length <= 127 && mime.matches(Regex("[a-zA-Z0-9][a-zA-Z0-9!#$&^_.+-]*/[a-zA-Z0-9][a-zA-Z0-9!#$&^_.+-]*")))
                 val transfer = value("transfer"); require(transfer is IBinder)
-                return Request(nonce, filename, mime, size, hash, transfer)
+                return Request(nonce, filename, mime, size, hash, transfer, version)
             }
         }
     }
@@ -128,8 +135,16 @@ internal class FactoryFileShareCoordinator(
         synchronized(this) { check(canBegin()); require(value.nonce != nonce) { "Replayed file sharing request" } }
         val identity = verify(callingPackage)
         check(identity.appId == callingPackage); checkActive()
+        require(value.protocolVersion == 1 || value.protocolVersion == 2)
+        require(value.size in 1..identity.resources.fileShare.sourceBytes) { "File-share source exceeds signed budget" }
+        if (value.protocolVersion == 1) require(value.size <= FileShareTransfer.MAX_BYTES)
+        val started = android.os.SystemClock.elapsedRealtime()
+        fun checkDeadline() {
+            val elapsed = android.os.SystemClock.elapsedRealtime() - started
+            check(elapsed >= 0 && elapsed < identity.resources.fileShare.transferTimeoutMs) { "File-share transfer expired" }
+        }
         val grant = policy.acquire(FactoryOperationPolicy.Subject.installed(identity), FactoryOperationPolicy.Operation.FILE_SHARE,
-            FactoryOperationPolicy.binding(value.nonce, value.filename, value.mimeType, value.size.toString(), value.sha256, identity.apk, identity.record))
+            FactoryOperationPolicy.binding(value.nonce, value.filename, value.mimeType, value.size.toString(), value.sha256, value.protocolVersion.toString(), identity.apk, identity.record))
         try { FactoryInteractionAdmission.acquire(this) } catch (failure: Exception) { grant.close(); throw failure }
         synchronized(this) { busy = true }
         var authenticated = false
@@ -143,12 +158,14 @@ internal class FactoryFileShareCoordinator(
                 open = true; opened = false; state = "receiving"; save(); owner!!
             }
             cleanup()
-            val active = { synchronized(this) { checkOwner(token); check(state == "receiving"); grant.requireCurrent() }; checkActive() }
+            val active = { synchronized(this) { checkOwner(token); check(state == "receiving"); grant.requireCurrent() }; checkDeadline(); checkActive() }
             val staged = if (receive != null) receive.invoke(value, active)
-                else store.stage(value.nonce, value.filename, value.mimeType, value.size, value.sha256, value.transfer, active) { grant.checkBeforeEffect() }
+                else store.stageStreaming(value.nonce, value.filename, value.mimeType, value.size, value.sha256, value.transfer,
+                    value.protocolVersion, identity.resources.fileShare, active) { grant.checkBeforeEffect() }
             active()
             // Revalidate after the bounded transfer: no old installed APK or signing evidence is accepted.
             check(verify(callingPackage) == identity)
+            checkDeadline() // APK/source revalidation cannot extend the signed transfer deadline.
             return synchronized(this) {
                 checkOwner(token); checkActive(); grant.requireCurrent(); snapshot = staged; state = "review"; save()
                 expire = Runnable { revokeTransfer(token, grant) }.also { handler.postDelayed(it, maxOf(0, staged.expiresAt - android.os.SystemClock.elapsedRealtime())) }
@@ -161,7 +178,7 @@ internal class FactoryFileShareCoordinator(
             if (synchronized(this) { open }) runCatching { cleanup() }
             // This endpoint belongs to the verified caller only. A stalled cancellation keeps this
             // same worker and admission occupied; never spawn a replacement Binder worker.
-            if (authenticated) runCatching { FileShareTransfer.cancel(value.transfer, value.nonce) }
+            if (authenticated) runCatching { StreamingFileShareTransfer.cancel(value.transfer, value.nonce, value.protocolVersion) }
             grant.close(); throw failure
         } finally {
             synchronized(this) { busy = false; if (!open && !broken) FactoryInteractionAdmission.release(this) }

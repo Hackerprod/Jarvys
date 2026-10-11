@@ -1,5 +1,7 @@
 package com.jarvys.factory.runtime;
 
+import android.Manifest;
+import androidx.annotation.RequiresPermission;
 import android.app.job.JobParameters;
 import android.content.Context;
 import android.net.ConnectivityManager;
@@ -22,6 +24,8 @@ public final class FactoryHttpJobServices {
     }
     interface Resolver { Environment open(Context context,HttpJobLedger ledger,Session session,JobParameters params)throws FactoryException; }
     static volatile Resolver testResolver;
+    // Installed jobs components are emitted with ACCESS_NETWORK_STATE by the selective manifest plan.
+    @RequiresPermission(Manifest.permission.ACCESS_NETWORK_STATE)
     static Environment open(Context context,HttpJobLedger ledger,Session session,JobParameters params)throws FactoryException{
         session.check();Resolver override=testResolver;
         if(override!=null)return override.open(context,ledger,session,params);
@@ -64,6 +68,7 @@ public final class FactoryHttpJobServices {
             session.check();return new Source(proof.appId,proof.certificateSha256,proof.apkSha256,proof.recordSha256,proof.versionCode,new Limits(((Number)records).intValue(),((Number)bytes).longValue()));
         }catch(RuntimeException unavailable){throw new FactoryException("SOURCE_UNAVAILABLE","Current signed job budgets are unavailable.");}
     }
+    @RequiresPermission(Manifest.permission.ACCESS_NETWORK_STATE)
     private static Network network(Context context,JobParameters params,HttpJobRequest.Constraints constraints)throws FactoryException{
         ConnectivityManager connectivity=(ConnectivityManager)context.getSystemService(Context.CONNECTIVITY_SERVICE);
         if(connectivity==null)throw new FactoryException("NETWORK_UNAVAILABLE","Android network service unavailable.");

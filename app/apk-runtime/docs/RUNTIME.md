@@ -2,10 +2,20 @@
 
 This Android application is a **build-time template**, not a shared-identity production APK. Build its release variant once; the on-device factory retains its compiled DEX/resources and replaces package metadata, `factory_icon.png`, web assets, and per-app configuration. No generated Kotlin/Java is compiled on the phone. There is no bundled production signing key. Every distributed app needs its own stable signing identity managed outside this module.
 
-Current v85 source catalog: 23 capabilities / 59 wire methods, SDK 2 and schema/bridge protocol 1. Native backup authorization uses its own v2 protocol; it does not change the JavaScript wire schema or backup archive format. Versioned sections retain their technical API scope, with current operation-policy behavior described below.
+Current development source catalog: 33 capabilities / 134 wire methods, SDK 2 and schema/bridge protocol 1. Native backup authorization uses its own v2 protocol; it does not change the JavaScript wire schema or backup archive format. Versioned sections retain their technical API scope, with current operation-policy behavior described below.
 
 Current source additions are documented in [Native network, notifications and speech (v85)](#native-network-notifications-and-speech-v85). This implementation batch permits compilation and small directed checks only; the final global suite, audit and APK generation/release remain deferred until the batch is complete. This document claims no completed validation or release. Historical versioned sections preserve API/data anchors. Their latest-only admission, forced extra host confirmation, old capability totals, blanket zero-permission/offline and pending TTS/network/notification statements are superseded by the current policy and native-services sections. No unimplemented Android family is implied.
 
+
+## Current generic runtime additions
+
+The [current Factory guide](../../APK_FACTORY.md#generic-hardware-widgets-and-finite-jobs-in-development) and bundled v86 references cover the complete 134-method catalog: foreground voice/location/recording/steps/sensor subscriptions, encrypted secrets, inbound shares, durable/action notifications, NFC NDEF, BLE central, RemoteViews widgets and finite HTTP jobs. Every method is a composable Android building block; the optional ping example contributes no product-specific runtime workflow.
+
+[Current media and packaging limits](../../APK_FACTORY.md#current-media-and-packaging-development-limits) supersede historical fixed share/audio/source ceilings below. Signed fileShare/audio budgets support up to 4 GiB sources using 32 KiB disk-backed transfer buffers; defaults remain 8 MiB for sharing and 6 MiB/30 seconds for PCM16 WAV. Actual document budgets, disk space, deadlines and Android lifecycle still apply. Read-only authenticated DENY preflight precedes source preparation; the final exact effect grant is separate and remains live-checked. Small payloads retain v1 transport; larger payloads use strict v2 long lengths. No old client receives stronger revocation guarantees retroactively.
+
+`storage.listPage` and bounded SQLite pages avoid oversized bridge results. Sequential document HTTP uploads/downloads use long offsets, finite per-call budgets and explicit partial outcomes. Background jobs execute typed finite HTTP only, with durable unknown outcomes and no automatic replay; they are not a background JavaScript engine. Remote LLM calls can compose HTTP and scoped secrets. Local inference needs a separate engine/model/license/ABI decision and device measurement.
+
+Current Java compilation and focused synthetic tests do not establish final DEX/resource packaging, a validated APK or device behavior. Global validation remains pending.
 
 ## Module and packaging contract
 
@@ -13,9 +23,9 @@ Current source additions are documented in [Native network, notifications and sp
 - Android min SDK 24, target 35, compile 36; Java 8 source.
 - Launcher class **absolute** `com.jarvys.factory.runtime.FactoryActivity`.
 - Manifest label `FACTORY_APP_LABEL`, version name `FACTORY_VERSION`, version code 1.
-- Exactly one launcher PNG `res/drawable-nodpi/factory_icon.png`; no application `R` or `BuildConfig` references in runtime code.
+- Legacy launcher PNG `res/drawable-nodpi/factory_icon.png` remains the fallback; optional adaptive icons use the compiled mipmap/drawable resource slots. Widget layouts and provider metadata are compiled into the template and audited by resource identity. No generated per-project R class or BuildConfig is required.
 - Dependencies: `androidx.webkit:webkit:1.14.0` and `androidx.core:core:1.15.0` (Google Maven); test-only `junit:junit:4.13.2`, `org.json:json:20240303`, `org.robolectric:robolectric:4.16`. Optional profileinstaller is excluded on every dependency path. Core's unused dynamic-receiver permission declarations are removed during manifest merging; the final template must retain zero permissions and no providers/receivers.
-- The template has no Android permissions, providers, services, receivers, debug bridge or production signing keys. Generated selected profiles add USE_BIOMETRIC, INTERNET/cleartext support or POST_NOTIFICATIONS as specified below; speech adds a TTS_SERVICE query. No package-install permission. INTERNET is process-wide; local-only WebView settings prove no zero-egress guarantee.
+- The template has no Android permissions, providers, services, receivers, debug bridge or production signing keys. Generated selected profiles add only their audited permissions, queries and components, including microphone/location/steps, BLE/NFC, notification scheduling, widgets and finite HTTP jobs. The current Factory guide describes these profiles; the selected speech/recognition engines have their own Android behavior. No package-install permission. INTERNET is process-wide; local-only WebView settings prove no zero-egress guarantee.
 - Actual identity always comes from `Context.getPackageName()`. Configuration `appId` must equal it or startup fails closed.
 
 Required APK assets:

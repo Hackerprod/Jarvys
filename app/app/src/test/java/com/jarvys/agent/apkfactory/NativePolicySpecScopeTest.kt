@@ -3,9 +3,7 @@ package com.jarvys.agent.apkfactory
 import com.jarvys.factory.contract.IncomingSharePolicy
 import com.jarvys.factory.contract.NotificationPolicy
 import com.jarvys.factory.contract.ManifestPlan
-import com.jarvys.factory.contract.ResourceBudgets
 import com.jarvys.factory.runtime.FactoryConfig
-import com.jarvys.factory.runtime.ResourceBudgetsJson
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -66,11 +64,8 @@ class NativePolicySpecScopeTest {
         assertTrue(exact.disclosure(multiple).any { it.contains("exactAlarms=true") })
     }
     @Test fun priorScopeFieldSetsAndResourceSectionsRetainExactBytes() {
-        val resources=ResourceBudgetsJson.toJson(ResourceBudgets.legacy()).apply { remove("incomingShare"); remove("secrets"); remove("notifications") }
-        val prior=JSONObject().put("capabilities",JSONArray(listOf("documents","notifications")))
-            .put("permissions",JSONArray()).put("exportedComponents",JSONArray(listOf(ManifestPlan.ACTIVITY)))
-            .put("features",JSONArray()).put("queries",JSONArray()).put("allowedHosts",JSONArray())
-            .put("queryActions",JSONArray()).put("resourceBudgets",resources)
+        // A genuine v3 writer snapshot, without modern resource sections or audio fields.
+        val prior = JSONObject(FactorySigningScopeFixtures.bytes("v3-default").toString(Charsets.UTF_8)).getJSONObject("scope")
         val bytes=JSONObject(prior.toString()).toString();val baseline=read(JSONObject(bytes))!!
         assertEquals(bytes,baseline.toJson().toString());assertFalse(baseline.toJson().has("incomingShare"));assertFalse(baseline.toJson().has("notifications"))
         assertFalse(baseline.toJson().getJSONObject("resourceBudgets").has("incomingShare"))

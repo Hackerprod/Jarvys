@@ -158,14 +158,14 @@ test('documents API preserves exact options and extends only picker timeouts', a
 });
 
 
-test('file sharing preserves opaque handle metadata and human chooser timeout', async () => {
+test('file sharing preserves opaque handle metadata and bounded streaming and chooser fallback', async () => {
   const env = environment();
   const options = {handle: 'a'.repeat(64), filename: 'fixture.bin', mimeType: 'application/octet-stream'};
   const promise = env.api.share.file(options);
   const request = env.sent.at(-1);
   assert.equal(request.method, 'share.file');
   assert.deepEqual(request.args, options);
-  assert.equal(env.delays.at(-1), 600000);
+  assert.equal(env.delays.at(-1), 259500000);
   env.reply(request, {chooserOpened: true, deliveryConfirmed: false});
   const result = await promise;
   assert.equal(result.chooserOpened, true);
@@ -195,7 +195,7 @@ test('photos exposes frozen empty-options methods and human-action timeouts', as
   const options = {handle: 'a'.repeat(64)};
   const promise = env.api.audio.play(options); const request = env.sent.at(-1);
   assert.equal(request.method, 'audio.play'); assert.deepEqual(request.args, options);
-  assert.equal(env.delays.at(-1), 610000);
+  assert.equal(env.delays.at(-1), 441245454);
   env.reply(request, {playbackAttempted: true, audibilityConfirmed: false});
   const result = await promise; assert.equal(result.playbackAttempted, true); assert.equal(result.audibilityConfirmed, false);
 });

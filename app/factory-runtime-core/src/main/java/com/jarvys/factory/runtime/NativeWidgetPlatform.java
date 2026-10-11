@@ -25,7 +25,7 @@ public final class NativeWidgetPlatform implements WidgetEngine.Platform {
     public JSONObject availability()throws FactoryException{try{return new JSONObject().put("available",registered()).put("requestPinSupported",pinSupported()).put("minimumPinApi",26).put("placementControlledByLauncher",true).put("htmlSupported",false).put("eventDelivery","at_least_once_delivery");}catch(JSONException e){throw new AssertionError(e);}}
     @Override public void validate(WidgetModel model)throws FactoryException{render(model,Collections.emptyMap());}
     @Override public boolean requestPin(WidgetModel model,NativeOperationAuthorization.Access live)throws FactoryException{
-        if(!pinSupported())return false;RemoteViews preview=render(model,Collections.emptyMap());Bundle extras=new Bundle();extras.putParcelable(AppWidgetManager.EXTRA_APPWIDGET_PREVIEW,preview);live.check();return manager().requestPinAppWidget(provider,extras,null);
+        if(Build.VERSION.SDK_INT<26||!pinSupported())return false;RemoteViews preview=render(model,Collections.emptyMap());Bundle extras=new Bundle();extras.putParcelable(AppWidgetManager.EXTRA_APPWIDGET_PREVIEW,preview);live.check();return manager().requestPinAppWidget(provider,extras,null);
     }
     @Override public void update(WidgetLedger.Record row,NativeOperationAuthorization.Access live)throws FactoryException{
         if(!ownInstances().contains(row.widgetId))throw new FactoryException("NOT_OWN_WIDGET","Widget is no longer owned by this provider.");RemoteViews views=render(row.model,row.tokens);live.check();manager().updateAppWidget(row.widgetId,views);

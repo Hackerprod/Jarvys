@@ -30,14 +30,15 @@ class F3SpecScopeTest {
         assertNotNull(FactorySpec.parse(input(listOf("jobs","network"))))
     }
     @Test fun everyHistoricalScopeFieldSetRetainsExactBytesAndAbsentNewDefaults() {
-        val base=FactorySigningScope.fromPlan(ManifestPlan(app,"F3",1,"1",0x7f010001,0x7f020001,listOf("storage"))).toJson()
         for(fieldCount in listOf(6,8,9,10)) {
+            // Historical bytes are independent of the current resource contract.
+            val fixture = if (fieldCount == 8) "v3-default" else "v4-default"
+            val base = JSONObject(FactorySigningScopeFixtures.bytes(fixture).toString(Charsets.UTF_8)).getJSONObject("scope")
             val historic=JSONObject(base.toString()).apply {
                 remove("bluetooth");remove("privateComponents")
                 if(fieldCount<10)remove("notifications")
                 if(fieldCount<9)remove("incomingShare")
                 if(fieldCount==6){remove("resourceBudgets");remove("queryActions")}
-                else { val resources=getJSONObject("resourceBudgets");for(name in listOf("nfc","bluetooth","widgets","jobs"))resources.remove(name) }
             }
             val bytes=JSONObject(historic.toString()).toString();val restored=read(JSONObject(bytes))!!
             assertEquals(fieldCount,restored.toJson().length());assertEquals(bytes,restored.toJson().toString())

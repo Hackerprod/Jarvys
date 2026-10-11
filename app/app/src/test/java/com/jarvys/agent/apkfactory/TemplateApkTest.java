@@ -303,30 +303,39 @@ public class TemplateApkTest {
         assertTrue(compiled.permissions.isEmpty()); assertTrue(compiled.plan.features.isEmpty());
         Map<String,byte[]> original=unzip(template);
         for(List<String> capabilities:Arrays.asList(Collections.singletonList("biometrics"),
-                Arrays.asList("biometrics","documents"),Arrays.asList("biometrics","browser","sensors"))) {
+                Arrays.asList("biometrics","documents"),Arrays.asList("biometrics","sensors"),
+                Arrays.asList("biometrics","browser","sensors"))) {
             TemplateApk.Spec selected=new TemplateApk.Spec(spec.appId,spec.label,1,"1.0",capabilities);
             byte[] generated=TemplateApk.build(template,selected,icon,assets);
             TemplateApk.ManifestInfo verified=TemplateApk.verify(generated,selected),inferred=TemplateApk.inspect(generated);
-            boolean broker=capabilities.contains("documents") || capabilities.contains("browser");
+            boolean sensors=capabilities.contains("sensors");
+            boolean broker=capabilities.contains("documents") || capabilities.contains("browser") || sensors;
             assertEquals(selected.capabilities,verified.plan.capabilities);
-            assertEquals(Collections.singletonList(CapabilityCatalog.BIOMETRIC_PERMISSION),verified.permissions);
+            assertEquals(sensors?Arrays.asList(CapabilityCatalog.HIGH_RATE_SENSORS_PERMISSION,CapabilityCatalog.BIOMETRIC_PERMISSION)
+                    :Collections.singletonList(CapabilityCatalog.BIOMETRIC_PERMISSION),verified.permissions);
             assertEquals(verified.permissions,inferred.permissions);
-            assertEquals(broker?Arrays.asList("biometrics","documents"):Collections.singletonList("biometrics"),inferred.plan.capabilities);
+            assertEquals(sensors?Arrays.asList("biometrics","documents","sensors")
+                    :broker?Arrays.asList("biometrics","documents"):Collections.singletonList("biometrics"),inferred.plan.capabilities);
             assertEquals(broker?Arrays.asList("com.jarvys.agent","com.jarvys.agent.recoverytest"):Collections.emptyList(),verified.plan.queries);
-            assertEquals(broker?11:8,verified.plan.nodes.size());
+            assertEquals(verified.plan.queries,inferred.plan.queries);
+            assertTrue(verified.plan.queryActions.isEmpty());
+            assertEquals((broker?11:8)+(sensors?1:0),verified.plan.nodes.size());
             assertTrue(verified.plan.features.isEmpty()); assertTrue(verified.plan.hosts.isEmpty());
             assertEquals(Collections.singletonList(ManifestPlan.ACTIVITY),verified.plan.exportedComponents);
             assertEquals(compiled.dexSha256,verified.dexSha256);
             Map<String,byte[]> output=unzip(generated);
             for(String name:compiled.dexSha256.keySet()) assertArrayEquals(original.get(name),output.get(name));
             assertStoredEntriesAligned(generated);
-            TemplateApk.Spec withoutPermission=new TemplateApk.Spec(spec.appId,spec.label,1,"1.0",broker?Collections.singletonList("documents"):Collections.emptyList());
+            List<String> withoutBiometricsCapabilities=new ArrayList<>(capabilities);
+            withoutBiometricsCapabilities.remove("biometrics");
+            TemplateApk.Spec withoutBiometrics=new TemplateApk.Spec(spec.appId,spec.label,1,"1.0",withoutBiometricsCapabilities);
             // Inspection may infer a closed profile, but cannot override an explicit caller plan.
-            rejects(()->TemplateApk.verify(generated,withoutPermission));
-            ManifestPlan mismatched=new ManifestPlan(spec.appId,spec.label,1,"1.0",verified.plan.iconResourceId,verified.plan.backupResourceId,withoutPermission.capabilities);
+            rejects(()->TemplateApk.verify(generated,withoutBiometrics));
+            ManifestPlan mismatched=new ManifestPlan(spec.appId,spec.label,1,"1.0",verified.plan.iconResourceId,verified.plan.backupResourceId,withoutBiometrics.capabilities);
             rejects(()->TemplateApk.verifyAgainstPlan(generated,mismatched));
-            byte[] absent=TemplateApk.build(template,withoutPermission,icon,assets);
-            assertTrue(TemplateApk.inspect(absent).permissions.isEmpty());
+            byte[] absent=TemplateApk.build(template,withoutBiometrics,icon,assets);
+            assertEquals(sensors?Collections.singletonList(CapabilityCatalog.HIGH_RATE_SENSORS_PERMISSION)
+                    :Collections.emptyList(),TemplateApk.inspect(absent).permissions);
             rejects(()->TemplateApk.verify(absent,selected));
             rejects(()->TemplateApk.verifyAgainstPlan(absent,verified.plan));
         }

@@ -1,6 +1,7 @@
 package com.jarvys.agent.apkfactory;
 
 import com.jarvys.factory.contract.BluetoothPolicy;
+import com.jarvys.factory.contract.AdaptiveIconAudit;
 import com.jarvys.factory.contract.F3ManifestPolicy;
 import com.jarvys.factory.contract.ManifestPlan;
 import com.jarvys.factory.contract.IncomingSharePolicy;
@@ -36,8 +37,8 @@ import java.util.zip.Inflater;
 public final class TemplateApk {
     private TemplateApk() {}
     public static final int MAX_APK_BYTES = 32 * 1024 * 1024;
-    private static final int MAX_ENTRY_BYTES = 16 * 1024 * 1024;
-    private static final int MAX_ENTRIES = 512;
+    public static final int MAX_ENTRY_BYTES = 16 * 1024 * 1024;
+    public static final int MAX_ENTRIES = 512;
     private static final int NONE = -1;
     private static final String ANDROID = "http://schemas.android.com/apk/res/android";
     private static final String TEMPLATE_PACKAGE = "com.jarvys.factory.template";
@@ -50,6 +51,7 @@ public final class TemplateApk {
         public final IncomingSharePolicy incomingShare;
         public final NotificationPolicy notifications;
         public final BluetoothPolicy bluetooth;
+        public final boolean adaptiveIcon;
         public Spec(String appId, String label, int versionCode, String versionName) {
             this(appId, label, versionCode, versionName, Collections.<String>emptyList());
         }
@@ -63,6 +65,10 @@ public final class TemplateApk {
             this(appId,label,versionCode,versionName,capabilities,incomingShare,notifications,null);
         }
         public Spec(String appId, String label, int versionCode, String versionName, Iterable<String> capabilities, IncomingSharePolicy incomingShare, NotificationPolicy notifications, BluetoothPolicy bluetooth) {
+            this(appId,label,versionCode,versionName,capabilities,incomingShare,notifications,bluetooth,false);
+        }
+        public Spec(String appId, String label, int versionCode, String versionName, Iterable<String> capabilities, IncomingSharePolicy incomingShare, NotificationPolicy notifications, BluetoothPolicy bluetooth, boolean adaptiveIcon) {
+            this.adaptiveIcon=adaptiveIcon;
             this.appId=appId; this.label=label; this.versionCode=versionCode; this.versionName=versionName;
             this.capabilities=CapabilityCatalog.select(capabilities);
             IncomingSharePolicy.validateSelection(this.capabilities, incomingShare);
@@ -73,6 +79,17 @@ public final class TemplateApk {
             F3ManifestPolicy.validateSelection(this.capabilities);
             this.bluetooth=bluetooth;
         }
+    }
+    /** Normalized, bounded raster layers only. The API26 XML remains precompiled template code. */
+    public static final class AdaptiveLayers {
+        private final byte[] foreground, background;
+        public AdaptiveLayers(byte[] foreground, byte[] background) {
+            if (foreground==null || background==null || foreground.length>1024*1024 || background.length>1024*1024)
+                throw new IllegalArgumentException("Adaptive layers must each fit 1 MiB");
+            this.foreground=foreground.clone(); this.background=background.clone();
+        }
+        public byte[] foreground() { return foreground.clone(); }
+        public byte[] background() { return background.clone(); }
     }
     /** Derived only from the actual compiled resource table, never a project declaration. */
     public static final class ResourceBinding {
@@ -146,7 +163,9 @@ public final class TemplateApk {
     public static ManifestInfo verifyAgainstPlan(byte[] apk, ManifestPlan plan) throws IOException {
         Map<String,byte[]> files=readZip(apk,true);
         ManifestAudit.read(required(files,"AndroidManifest.xml")).verify(plan);
-        return inspectFiles(files,new Spec(plan.appId,plan.label,plan.versionCode,plan.versionName,plan.capabilities,plan.incomingShare,plan.notifications,plan.bluetooth),plan.profile);
+        verifyResourceTable(required(files,"resources.arsc"));
+        return inspectFiles(files,new Spec(plan.appId,plan.label,plan.versionCode,plan.versionName,plan.capabilities,plan.incomingShare,plan.notifications,plan.bluetooth,
+            plan.iconResourceId!=findResourceId(required(files,"resources.arsc"),"drawable","factory_icon")),plan.profile);
     }
     /** v2/v3 signing adds a signing block, but must not alter any ZIP entry, not even resources. */
     public static void verifyUnchangedPayload(byte[] unsigned, byte[] signed) throws IOException {
@@ -161,7 +180,11 @@ public final class TemplateApk {
         ManifestAudit.Document decoded=ManifestAudit.read(manifest);
         byte[] resources=required(zip,"resources.arsc");
         verifyResourceTable(resources);
-        String iconPath=resolveIconPath(resources,info.iconResourceId);
+        int legacyIconId=findResourceId(resources,"drawable","factory_icon");
+        boolean adaptive=info.iconResourceId!=legacyIconId;
+        check(!adaptive || profile==ManifestPlan.Profile.CURRENT,"Adaptive icons require the current resource contract");
+        check(expected==null || expected.adaptiveIcon==adaptive,"Launcher icon mode differs from approved spec");
+        String iconPath=resolveIconPath(resources,legacyIconId);
         check(zip.containsKey(iconPath),"Referenced launcher icon is missing");
         ManifestAudit.Attribute backup=decoded.attribute("manifest/application",ManifestPlan.ANDROID,"dataExtractionRules");
         check(backup.type==1 && backup.value instanceof Integer,"Backup rules must be a resource reference");
@@ -227,7 +250,8 @@ public final class TemplateApk {
         } catch(IllegalArgumentException error) { throw new IOException("Invalid manifest plan identity",error); }
         decoded.verify(plan);
         Map<String,ResourceBinding> bindings=new TreeMap<>();
-        bindings.put("icon",new ResourceBinding(info.iconResourceId,"drawable","factory_icon",iconPath));
+        bindings.put("icon",new ResourceBinding(legacyIconId,"drawable","factory_icon",iconPath));
+        if (adaptive) auditAdaptiveIconResources(zip,resources,info.iconResourceId,bindings,!TEMPLATE_PACKAGE.equals(info.appId));
         bindings.put("backup",new ResourceBinding(backupId,"xml","factory_backup_rules",backupPath));
         if (plan.capabilities.contains("widgets")) auditWidgetResources(zip, resources, bindings);
         Map<String,String> inventory=dexInventory(zip);
@@ -265,7 +289,13 @@ public final class TemplateApk {
     }
     public static byte[] build(byte[] template, Spec spec, byte[] iconPng,
                                Map<String,byte[]> assetReplacements) throws IOException {
+        return build(template,spec,iconPng,assetReplacements,null);
+    }
+    public static byte[] build(byte[] template, Spec spec, byte[] iconPng,
+                               Map<String,byte[]> assetReplacements, AdaptiveLayers adaptiveLayers) throws IOException {
         validateSpec(spec);
+        check(spec.adaptiveIcon==(adaptiveLayers!=null),"Adaptive icon declaration and raster layers differ");
+        if (adaptiveLayers!=null) { checkAdaptivePng(adaptiveLayers.foreground); checkAdaptivePng(adaptiveLayers.background,true); }
         check(iconPng!=null && iconPng.length<=1024*1024,"Icon exceeds 1 MiB");
         checkPng(iconPng);
         Map<String,byte[]> files=readZip(template);
@@ -284,12 +314,23 @@ public final class TemplateApk {
                 && old.plan.queryActions.isEmpty(),"Unexpected runtime, permissions or visibility declarations");
         String iconPath=resolveIconPath(required(files,"resources.arsc"),old.iconResourceId);
         check(files.containsKey(iconPath),"Referenced factory icon is missing");
+        int outputIconId=old.plan.iconResourceId;
+        Map<String,ResourceBinding> adaptiveBindings=new TreeMap<>();
+        if (adaptiveLayers!=null) {
+            outputIconId=findResourceId(required(files,"resources.arsc"),"mipmap","factory_adaptive_icon",2);
+            auditAdaptiveIconResources(files,required(files,"resources.arsc"),outputIconId,adaptiveBindings,false);
+        }
         ManifestPlan expectedPlan=new ManifestPlan(spec.appId,spec.label,spec.versionCode,spec.versionName,
-            old.plan.iconResourceId,old.plan.backupResourceId,spec.capabilities,spec.incomingShare,spec.notifications,spec.bluetooth,
+            outputIconId,old.plan.backupResourceId,spec.capabilities,spec.incomingShare,spec.notifications,spec.bluetooth,
             spec.capabilities.contains("widgets") ? findResourceId(required(files,"resources.arsc"),"xml","factory_widget_info") : 0);
         files.put("AndroidManifest.xml",ManifestXml.encode(expectedPlan));
         files.put("resources.arsc",renamePackage(required(files,"resources.arsc"),spec.appId,old.iconResourceId));
         files.put(iconPath,iconPng.clone());
+        if (adaptiveLayers!=null) {
+            files.put(adaptiveBindings.get("icon").path,iconPng.clone());
+            files.put(adaptiveBindings.get("iconForeground").path,adaptiveLayers.foreground.clone());
+            files.put(adaptiveBindings.get("iconBackground").path,adaptiveLayers.background.clone());
+        }
         check(assetReplacements!=null && assetReplacements.containsKey("assets/factory-app.json") &&
                 assetReplacements.containsKey("assets/www/index.html"),"Config and index.html are required");
         // A generation replaces the complete website rather than leaking stale template assets.
@@ -298,8 +339,11 @@ public final class TemplateApk {
             validName(e.getKey());
             check(e.getKey().startsWith("assets/www/") || e.getKey().equals("assets/factory-app.json") || e.getKey().equals("assets/factory-provenance.json"),"Asset outside factory scope");
             check(e.getValue()!=null && e.getValue().length<=MAX_ENTRY_BYTES,"Asset exceeds limit");
-            files.put(e.getKey(),e.getValue().clone());
+            files.put(e.getKey(),e.getValue());
         }
+        // Count fixed runtime/config/provenance entries and all bytes before cloning source assets.
+        zipOutputBytes(files);
+        for (String name:assetReplacements.keySet()) files.put(name,files.get(name).clone());
         byte[] result=writeZip(files);
         ManifestInfo actual=verifyAgainstPlan(result,expectedPlan);
         check(actual.appId.equals(spec.appId) && actual.label.equals(spec.label) &&
@@ -386,6 +430,7 @@ public final class TemplateApk {
                 entryEnd=d+12; check(entryEnd<=central,"Descriptor intersects directory");
             }
             spans.add(new int[]{local,entryEnd});
+            total+=size; check(total<=MAX_APK_BYTES,"Expanded APK exceeds limit before entry allocation");
             byte[] data;
             if(method==0) { check(size==packed,"Stored size differs"); data=Arrays.copyOfRange(apk,start,start+packed); }
             else {
@@ -397,7 +442,7 @@ public final class TemplateApk {
                 } catch(DataFormatException e) { throw new IOException("Invalid deflate stream",e); } finally { z.end(); }
             }
             CRC32 crc=new CRC32(); crc.update(data); check(crc.getValue()==u32(apk,pos+16),"CRC mismatch");
-            total+=size; check(total<=MAX_APK_BYTES,"Expanded APK exceeds limit"); result.put(name,data); pos+=46+nl+el+cl;
+            result.put(name,data); pos+=46+nl+el+cl;
         }
         check(pos==end,"Directory entry count differs"); Collections.sort(spans,new java.util.Comparator<int[]>() { public int compare(int[] a,int[] b) { return Integer.compare(a[0],b[0]); } });
         int prior=0; for(int[] s:spans) { check(s[0]>=prior,"Overlapping ZIP entries"); prior=s[1]; }
@@ -412,9 +457,46 @@ public final class TemplateApk {
         }
         throw new IOException("Missing ZIP end");
     }
+    /** Bounded central-directory estimate for heap admission, never a substitute for readZip verification. */
+    public static long expandedBytes(byte[] apk) throws IOException {
+        check(apk!=null && apk.length>=22 && apk.length<=MAX_APK_BYTES,"Invalid APK size");
+        int end=-1;
+        for(int p=apk.length-22;p>=Math.max(0,apk.length-65557);p--)
+            if(integer(apk,p)==0x06054b50 && p+22+u16(apk,p+20)==apk.length) { end=p; break; }
+        check(end>=0,"Missing ZIP end");
+        int count=u16(apk,end+10),pos=small(apk,end+16);
+        check(count>0 && count<=MAX_ENTRIES && u16(apk,end+8)==count,"Invalid ZIP entry count");
+        check((long)pos+u32(apk,end+12)==end,"Invalid ZIP directory bounds");
+        long total=0;
+        for(int i=0;i<count;i++) {
+            bounds(apk,pos,46); check(integer(apk,pos)==0x02014b50,"Invalid central header");
+            int size=small(apk,pos+24),length=46+u16(apk,pos+28)+u16(apk,pos+30)+u16(apk,pos+32);
+            check(size<=MAX_ENTRY_BYTES && small(apk,pos+20)<=MAX_ENTRY_BYTES,"Invalid entry bounds");
+            check((long)pos+length<=end,"Central header exceeds directory");
+            total+=size; check(total<=MAX_APK_BYTES,"Expanded APK exceeds limit"); pos+=length;
+        }
+        check(pos==end,"Directory entry count differs");
+        return total;
+    }
+    /** Exact STORED output size including fixed entries, alignment, directory and end record. */
+    private static int zipOutputBytes(Map<String,byte[]> files) throws IOException {
+        check(files!=null && files.size()>0 && files.size()<=MAX_ENTRIES,
+            "Complete APK exceeds 512 ZIP entries including fixed runtime/config/provenance entries");
+        long out=0,central=0,expanded=0;
+        for(Map.Entry<String,byte[]> e:new TreeMap<>(files).entrySet()) {
+            validName(e.getKey()); byte[] data=e.getValue();
+            check(data!=null && data.length<=MAX_ENTRY_BYTES,"Entry exceeds 16 MiB technical limit");
+            int n=e.getKey().getBytes(StandardCharsets.UTF_8).length;
+            long pad=(4-((out+30+n+4)%4))%4;
+            expanded+=data.length; out+=30+n+4+pad+data.length; central+=46+n;
+            check(expanded<=MAX_APK_BYTES && out+central+22<=MAX_APK_BYTES,
+                "Complete APK exceeds 32 MiB technical limit including fixed runtime and ZIP overhead");
+        }
+        return (int)(out+central+22);
+    }
     private static byte[] writeZip(Map<String,byte[]> files) throws IOException {
-        check(files.size()>0 && files.size()<=MAX_ENTRIES,"Too many APK entries");
-        ByteArrayOutputStream out=new ByteArrayOutputStream(),central=new ByteArrayOutputStream();
+        int outputBytes=zipOutputBytes(files);
+        ByteArrayOutputStream out=new ByteArrayOutputStream(outputBytes),central=new ByteArrayOutputStream();
         for(Map.Entry<String,byte[]> e:new TreeMap<>(files).entrySet()) {
             validName(e.getKey()); byte[] n=e.getKey().getBytes(StandardCharsets.UTF_8),data=e.getValue();
             check(data.length<=MAX_ENTRY_BYTES,"Entry too large"); CRC32 crc=new CRC32(); crc.update(data);
@@ -714,6 +796,9 @@ public final class TemplateApk {
     /** Resolve the template's single drawable/factory_icon through ARSC, even after AAPT path shortening. */
     /** Resolve a compiled own-package symbol; never accept a project-supplied resource number. */
     private static int findResourceId(byte[] b, String wantedType, String wantedName) throws IOException {
+        return findResourceId(b,wantedType,wantedName,1);
+    }
+    private static int findResourceId(byte[] b, String wantedType, String wantedName, int configurations) throws IOException {
         int found=0, matches=0;
         for(int p=12;p<b.length;) {
             Chunk c=new Chunk(b,p,b.length);
@@ -745,7 +830,7 @@ public final class TemplateApk {
             }
             p+=c.size;
         }
-        check(found!=0 && matches==1,"Missing or qualified compiled resource: "+wantedType+"/"+wantedName);
+        check(found!=0 && matches==configurations,"Missing or unexpected compiled resource configurations: "+wantedType+"/"+wantedName);
         return found;
     }
     private static void auditWidgetResources(Map<String,byte[]> zip, byte[] resources, Map<String,ResourceBinding> bindings) throws IOException {
@@ -884,6 +969,12 @@ public final class TemplateApk {
         return resolveResourcePath(b,iconId,"drawable","factory_icon",".png");
     }
     private static String resolveResourcePath(byte[] b,int iconId,String resourceType,String resourceName,String suffix) throws IOException {
+        int configuration=resourceType.equals("drawable")?65535:0;
+        return resolveResourceVariants(b,iconId,resourceType,resourceName,Collections.singletonMap(configuration,suffix)).get(configuration);
+    }
+    /** Key is (SDK << 16) | density. Only exact approved configurations, never platform fallback guesses. */
+    private static Map<Integer,String> resolveResourceVariants(byte[] b,int iconId,String resourceType,String resourceName,Map<Integer,String> configurations) throws IOException {
+        Map<Integer,String> paths=new TreeMap<>();
         check(b.length<=8*1024*1024,"Resource table too large"); Chunk root=new Chunk(b,0,b.length);
         check(root.type==2 && root.header==12 && root.size==b.length && u32(b,8)==1,"Expected one resource package");
         Pool values=null; String path=null; int packages=0,matches=0;
@@ -915,17 +1006,19 @@ public final class TemplateApk {
                                 check(relative<=child.size-start-16,"Invalid launcher entry bounds"); int e=q+start+(int)relative;
                                 int configSize=small(b,q+20);
                                 check(configSize>=28 && configSize<=64 && child.header==20+configSize,"Unsupported resource configuration");
+                                int configuration=(u16(b,q+44)<<16)|u16(b,q+34);
+                                check(configurations.containsKey(configuration),"Unexpected compiled launcher resource configuration");
                                 for(int r=4;r<configSize;r++) {
-                                    int expected=(resourceType.equals("drawable") && (r==14 || r==15))?255:0;
-                                    check((b[q+20+r]&255)==expected,"Resource lacks its unqualified default/nodpi configuration");
+                                    if(r==14 || r==15 || r==24 || r==25) continue;
+                                    check(b[q+20+r]==0,"Qualified launcher resources are not supported");
                                 }
                                 int size=u16(b,e),flags=u16(b,e+2);
                                 check(size==8 && (flags&~6)==0,"Complex/compact launcher resource unsupported");
                                 check(resourceName.equals(keys.get(small(b,e+4))),"Launcher resource name differs");
                                 check(u16(b,e+size)==8 && b[e+size+2]==0 && b[e+size+3]==3,"Launcher resource is not a file string");
                                 path=values.get(small(b,e+size+4)); validName(path);
-                                check(path.startsWith("res/") && path.endsWith(suffix) && !path.endsWith(".9.png"),"Invalid launcher resource path");
-                                check(++matches==1,"Multiple launcher resource configurations unsupported");
+                                check(path.startsWith("res/") && path.endsWith(configurations.get(configuration)) && !path.endsWith(".9.png"),"Invalid launcher resource path");
+                                check(paths.put(configuration,path)==null,"Duplicate launcher resource configuration"); matches++;
                             }
                         }
                     }
@@ -934,7 +1027,35 @@ public final class TemplateApk {
             } else throw new IOException("Unexpected resource root chunk");
             p+=c.size;
         }
-        check(packages==1 && matches==1 && path!=null,"Launcher resource not resolved"); return path;
+        check(packages==1 && matches==configurations.size() && paths.keySet().equals(configurations.keySet()),"Launcher resource not resolved");
+        check(new HashSet<>(paths.values()).size()==paths.size(),"Aliased launcher resource variants");
+        return Collections.unmodifiableMap(paths);
+    }
+    private static void auditAdaptiveIconResources(Map<String,byte[]> zip,byte[] resources,int iconId,Map<String,ResourceBinding> bindings,boolean generated) throws IOException {
+        check(iconId==findResourceId(resources,"mipmap","factory_adaptive_icon",2),"Adaptive icon symbol differs");
+        Map<Integer,String> configurations=new TreeMap<>(); configurations.put(65535,".png"); configurations.put((26<<16)|65534,".xml");
+        Map<Integer,String> paths=resolveResourceVariants(resources,iconId,"mipmap","factory_adaptive_icon",configurations);
+        int foregroundId=findResourceId(resources,"drawable","factory_icon_adaptive_foreground");
+        int backgroundId=findResourceId(resources,"drawable","factory_icon_adaptive_background");
+        String foreground=resolveResourcePath(resources,foregroundId,"drawable","factory_icon_adaptive_foreground",".png");
+        String background=resolveResourcePath(resources,backgroundId,"drawable","factory_icon_adaptive_background",".png");
+        String fallback=paths.get(65535),xml=paths.get((26<<16)|65534);
+        String legacy=resolveIconPath(resources,findResourceId(resources,"drawable","factory_icon"));
+        check(new HashSet<>(Arrays.asList(legacy,fallback,xml,foreground,background)).size()==5,"Adaptive resources alias another icon role");
+        AdaptiveIconAudit.verify(required(zip,xml),backgroundId,foregroundId);
+        if(generated) {
+            checkPng(required(zip,fallback)); checkAdaptivePng(required(zip,foreground)); checkAdaptivePng(required(zip,background),true);
+            check(Arrays.equals(required(zip,legacy),required(zip,fallback)),"Adaptive legacy fallback differs from original launcher artwork");
+        } else { required(zip,fallback); required(zip,foreground); required(zip,background); }
+        bindings.put("icon",new ResourceBinding(iconId,"mipmap","factory_adaptive_icon",fallback));
+        bindings.put("iconApi26",new ResourceBinding(iconId,"mipmap","factory_adaptive_icon",xml));
+        bindings.put("iconForeground",new ResourceBinding(foregroundId,"drawable","factory_icon_adaptive_foreground",foreground));
+        bindings.put("iconBackground",new ResourceBinding(backgroundId,"drawable","factory_icon_adaptive_background",background));
+    }
+    private static void checkAdaptivePng(byte[] bytes) throws IOException { checkAdaptivePng(bytes,false); }
+    private static void checkAdaptivePng(byte[] bytes,boolean opaqueBackground) throws IOException {
+        check(bytes!=null && bytes.length<=1024*1024,"Adaptive icon exceeds 1 MiB"); checkPng(bytes,opaqueBackground);
+        check(ByteBuffer.wrap(bytes).getInt(16)==192 && ByteBuffer.wrap(bytes).getInt(20)==192,"Adaptive layers must be normalized 192px canvases");
     }
     private static String resourcePackageName(byte[] b) throws IOException {
         for(int p=12;p<b.length;) {
@@ -970,7 +1091,32 @@ public final class TemplateApk {
         }
         check(packages==1,"Resource package count differs"); return b;
     }
-    private static void checkPng(byte[] png) throws IOException {
+    /** Decode only bounded RGB/RGBA scanline filters; an opaque color contract cannot hide transparent pixels. */
+    private static void verifySolidOpaque(byte[] scanlines,int width,int height,int channels) throws IOException {
+        int rowBytes=width*channels,color=-1; byte[] previous=new byte[rowBytes],current=new byte[rowBytes];
+        for(int y=0;y<height;y++) {
+            int offset=y*(rowBytes+1),filter=scanlines[offset]&255;
+            for(int x=0;x<rowBytes;x++) {
+                int left=x>=channels?current[x-channels]&255:0,up=previous[x]&255,diagonal=x>=channels?previous[x-channels]&255:0,predictor=0;
+                if(filter==1) predictor=left;
+                else if(filter==2) predictor=up;
+                else if(filter==3) predictor=(left+up)/2;
+                else if(filter==4) {
+                    int p=left+up-diagonal,a=Math.abs(p-left),b=Math.abs(p-up),c=Math.abs(p-diagonal);
+                    predictor=a<=b && a<=c?left:b<=c?up:diagonal;
+                }
+                current[x]=(byte)((scanlines[offset+1+x]&255)+predictor);
+            }
+            for(int x=0;x<rowBytes;x+=channels) {
+                check(channels==3 || (current[x+3]&255)==255,"Adaptive background must be opaque");
+                int rgb=((current[x]&255)<<16)|((current[x+1]&255)<<8)|(current[x+2]&255);
+                if(color<0) color=rgb; else check(color==rgb,"Adaptive background must be one solid color");
+            }
+            byte[] swap=previous;previous=current;current=swap;
+        }
+    }
+    private static void checkPng(byte[] png) throws IOException { checkPng(png,false); }
+    private static void checkPng(byte[] png,boolean opaqueBackground) throws IOException {
         byte[] sig={(byte)137,80,78,71,13,10,26,10}; check(png.length>=45 && Arrays.equals(sig,Arrays.copyOf(png,8)),"Invalid PNG header");
         int pos=8,width=0,height=0,channels=0; boolean ihdr=false,idat=false,iend=false;
         ByteArrayOutputStream compressed=new ByteArrayOutputStream();
@@ -990,6 +1136,7 @@ public final class TemplateApk {
             } else check(!type.equals("IHDR"),"Duplicate PNG IHDR");
             if(type.equals("IDAT")) { idat=true; compressed.write(png,pos+8,n); }
             if(type.equals("IEND")) { check(n==0 && pos+12==png.length,"Invalid PNG IEND"); iend=true; }
+            check(!opaqueBackground || !type.equals("tRNS"),"Transparent adaptive background metadata is unsupported");
             check(!type.equals("acTL") && !type.equals("npTc"),"Animated/nine-patch icons unsupported"); pos+=12+n;
         }
         check(ihdr && idat && iend,"Incomplete PNG");
@@ -999,6 +1146,7 @@ public final class TemplateApk {
             while(at<expectedSize && !inflater.finished()) { int n=inflater.inflate(scanlines,at,expectedSize-at); check(n>0,"Incomplete PNG pixels"); at+=n; }
             check(at==expectedSize && inflater.finished() && inflater.getRemaining()==0,"PNG pixel stream size differs");
             for(int y=0;y<height;y++) check((scanlines[y*row]&255)<=4,"Invalid PNG scanline filter");
+            if(opaqueBackground) verifySolidOpaque(scanlines,width,height,channels);
         } catch(DataFormatException e) { throw new IOException("Invalid PNG compression",e); } finally { inflater.end(); }
     }
 }

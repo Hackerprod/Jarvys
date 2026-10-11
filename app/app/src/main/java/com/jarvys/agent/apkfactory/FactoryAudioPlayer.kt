@@ -16,6 +16,9 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 
 /** Local, one-shot playback. No native operation is claimed to have a hard realtime bound. */
 class FactoryAudioPlayer internal constructor(private val platform: Platform) {
@@ -27,11 +30,14 @@ class FactoryAudioPlayer internal constructor(private val platform: Platform) {
             internal set
         internal var attempted = false
         internal var released = false
+        internal var awaitingFeeder = false
     }
     internal interface Track {
-        fun write(pcm: FactoryAudioPcm): Int
+        fun prepare()
+        /** True only when no queued/running feeder can touch native or disk resources. */
+        fun quiescent(onReady: () -> Unit): Boolean = true
         fun marker(frames: Int, callback: () -> Unit)
-        fun play()
+        fun play(onFailure: () -> Unit)
         fun stop()
         fun release()
     }
@@ -54,22 +60,23 @@ class FactoryAudioPlayer internal constructor(private val platform: Platform) {
     private var focusNeedsCleanup = false
     private var routesNeedCleanup = false
     private var stopping = false
+    private var stopReason = "Playback stopped; audible outcome unknown"
 
-    /** Run on a worker. Allocates STATIC storage and performs exactly one write, never plays. */
+    /** Worker-only native allocation and bounded prefill. Never starts playback. */
     fun prepare(pcm: FactoryAudioPcm): Prepared {
         platform.requireWorker()
         val track = try { platform.create(pcm) } catch (_: Exception) {
             return Prepared(object : Track {
-                override fun write(pcm: FactoryAudioPcm) = 0
+                override fun prepare() { }
                 override fun marker(frames: Int, callback: () -> Unit) { }
-                override fun play() { error("No native track") }
+                override fun play(onFailure: () -> Unit) { error("No native track") }
                 override fun stop() { }
                 override fun release() { }
             }, pcm).apply { preparationFailure = "Native PCM allocation failed" }
         }
         val prepared = Prepared(track, pcm)
         try {
-            if (prepared.track.write(pcm) != pcm.pcmBytes) prepared.preparationFailure = "Incomplete native PCM write"
+            prepared.track.prepare()
         } catch (_: Exception) {
             prepared.preparationFailure = "Native PCM write failed"
         }
@@ -106,7 +113,7 @@ class FactoryAudioPlayer internal constructor(private val platform: Platform) {
             prepared.track.marker(prepared.pcm.frames) { if (current === prepared) stopWithReason("Playback stopped; audible outcome unknown") }
             if (!isStillAllowed() || current !== prepared) { stopWithReason("Playback authorization expired"); return false }
             val deadline = platform.now() + prepared.pcm.durationMs
-            prepared.track.play()
+            prepared.track.play { if (current === prepared) stopWithReason("Native streaming failed; audible outcome unknown") }
             if (current !== prepared) return false
             fun armDeadline() {
                 val remaining = deadline - platform.now()
@@ -140,6 +147,10 @@ class FactoryAudioPlayer internal constructor(private val platform: Platform) {
         // for this attempt; the retained reference is available to explicit cleanup retry.
         var stopped = true
         try { prepared.track.stop() } catch (_: Exception) { stopped = false }
+        prepared.awaitingFeeder = !prepared.track.quiescent {
+            if (!prepared.released) stopWithReason(stopReason)
+        }
+        if (prepared.awaitingFeeder) return
         try {
             prepared.track.release()
             prepared.released = true
@@ -151,17 +162,28 @@ class FactoryAudioPlayer internal constructor(private val platform: Platform) {
         platform.requireMain()
         if (stopping) return StopResult(false, reason)
         stopping = true
+        stopReason = reason
         current = null
         timer?.let { try { platform.cancel(it); timer = null } catch (_: Exception) { } }
         retained.toList().forEach(::cleanupTrack)
         if (routesNeedCleanup) try { platform.unobserveRoutes(); routesNeedCleanup = false } catch (_: Exception) { }
         if (focusNeedsCleanup) try { platform.abandonFocus(); focusNeedsCleanup = false } catch (_: Exception) { }
         val result = StopResult(retained.isEmpty() && !focusNeedsCleanup && !routesNeedCleanup && timer == null, reason)
-        val notify = callback
-        callback = null
+        // A queued or blocked feeder still owns the snapshot. Do not issue a terminal callback
+        // or permit coordinator cleanup until its actual completion callback has run.
+        val waiting = retained.any { it.awaitingFeeder }
+        val notify = if (waiting) null else callback
+        if (!waiting) callback = null
         stopping = false
         notify?.invoke(result)
         return result
+    }
+
+    companion object {
+        // Shared single feeder: a stalled disk/native operation retains capacity; no replacement.
+        private val FEEDER = ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS, ArrayBlockingQueue(1)) { task ->
+            Thread(task, "factory-audio-stream").apply { isDaemon = true }
+        }.apply { allowCoreThreadTimeOut(true) }
     }
 
     private class AndroidPlatform(private val context: Context) : Platform {
@@ -178,16 +200,34 @@ class FactoryAudioPlayer internal constructor(private val platform: Platform) {
         override fun requireMain() { check(Looper.myLooper() == Looper.getMainLooper()) { "Playback control requires main thread" } }
         override fun requireWorker() { check(Looper.myLooper() != Looper.getMainLooper()) { "PCM preparation requires worker thread" } }
         override fun create(pcm: FactoryAudioPcm): Track {
+            val channelMask = if (pcm.channels == 1) AudioFormat.CHANNEL_OUT_MONO else AudioFormat.CHANNEL_OUT_STEREO
+            val minimum = AudioTrack.getMinBufferSize(pcm.sampleRate, channelMask, AudioFormat.ENCODING_PCM_16BIT)
+            require(minimum > 0) { "Unsupported native PCM format" }
+            // Tiny clips cannot fill older Android streaming start thresholds. Preserve their
+            // static path using at most the same fixed 32 KiB working buffer, never a large array.
+            val shortClip = pcm.pcmBytes <= 32 * 1024
             val native = AudioTrack.Builder().setAudioAttributes(attributes)
                 .setAudioFormat(AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                    .setSampleRate(pcm.sampleRate).setChannelMask(if (pcm.channels == 1) AudioFormat.CHANNEL_OUT_MONO else AudioFormat.CHANNEL_OUT_STEREO).build())
-                .setTransferMode(AudioTrack.MODE_STATIC).setBufferSizeInBytes(pcm.pcmBytes).build()
+                    .setSampleRate(pcm.sampleRate).setChannelMask(channelMask).build())
+                .setTransferMode(if (shortClip) AudioTrack.MODE_STATIC else AudioTrack.MODE_STREAM)
+                .setBufferSizeInBytes(if (shortClip) pcm.pcmBytes.toInt() else maxOf(minimum, 32 * 1024)).build()
             return object : Track {
+                private val lock = Any()
+                private var cancelled = false
+                private var released = false
+                private var feeding = false
+                private var ready: (() -> Unit)? = null
                 private var routing: AudioRouting.OnRoutingChangedListener? = null
-                override fun write(pcm: FactoryAudioPcm): Int {
-                    val count = native.write(pcm.bytes, pcm.pcmOffset, pcm.pcmBytes)
+                private val feeder = FactoryAudioFeeder(pcm, { bytes, offset, count ->
+                    synchronized(lock) {
+                        if (cancelled || released) 0
+                        else native.write(bytes, offset, count, AudioTrack.WRITE_NON_BLOCKING)
+                    }
+                })
+                override fun prepare() {
+                    feeder.prime(requireComplete = shortClip)
                     check(native.state == AudioTrack.STATE_INITIALIZED) { "Native PCM track is not initialized" }
-                    return count
+                    if (!shortClip && Build.VERSION.SDK_INT >= 31) native.setStartThresholdInFrames(1)
                 }
                 override fun marker(frames: Int, callback: () -> Unit) {
                     native.setPlaybackPositionUpdateListener(object : AudioTrack.OnPlaybackPositionUpdateListener {
@@ -198,27 +238,55 @@ class FactoryAudioPlayer internal constructor(private val platform: Platform) {
                     var initialRoute = native.routedDevice?.id
                     val listener = AudioRouting.OnRoutingChangedListener {
                         val route = native.routedDevice?.id
-                        // A STATIC track can be unrouted before play. Its first assignment is
-                        // not a change; after that, route loss or replacement is terminal.
+                        // A track may be unrouted before play. Only its first assignment is ignored.
                         if (initialRoute == null && route != null) initialRoute = route
                         else if (route == null || route != initialRoute) callback()
                     }
                     routing = listener
                     native.addOnRoutingChangedListener(listener, handler)
                 }
-                override fun play() = native.play()
+                override fun play(onFailure: () -> Unit) {
+                    synchronized(lock) { check(!cancelled && !released && !feeding); native.play(); if (!shortClip) feeding = true }
+                    if (shortClip) return
+                    try {
+                        FEEDER.execute {
+                            var failed = false
+                            try { feeder.run() } catch (_: Exception) { failed = true }
+                            finally {
+                                val notify = synchronized(lock) { feeding = false; ready.also { ready = null } }
+                                handler.post { if (failed) onFailure(); notify?.invoke() }
+                            }
+                        }
+                    } catch (failure: RuntimeException) {
+                        synchronized(lock) { feeding = false }
+                        throw failure
+                    }
+                }
                 override fun stop() {
-                    // MODE_STATIC is STATE_NO_STATIC_DATA until the write succeeds.
-                    if (native.state == AudioTrack.STATE_INITIALIZED && native.playState != AudioTrack.PLAYSTATE_STOPPED) native.stop()
+                    feeder.cancel()
+                    synchronized(lock) {
+                        cancelled = true
+                        if (!released && native.state == AudioTrack.STATE_INITIALIZED && native.playState != AudioTrack.PLAYSTATE_STOPPED) {
+                            if (!shortClip) { native.pause(); native.flush() }
+                            native.stop()
+                        }
+                    }
+                }
+                override fun quiescent(onReady: () -> Unit): Boolean = synchronized(lock) {
+                    if (feeding) { ready = onReady; false } else true
                 }
                 override fun release() {
-                    var failure: Exception? = null
-                    try { native.setPlaybackPositionUpdateListener(null) } catch (e: Exception) { failure = e }
-                    routing?.let { listener ->
-                        try { native.removeOnRoutingChangedListener(listener); routing = null } catch (e: Exception) { failure = e }
+                    synchronized(lock) {
+                        check(!feeding)
+                        var failure: Exception? = null
+                        try { native.setPlaybackPositionUpdateListener(null) } catch (e: Exception) { failure = e }
+                        routing?.let { listener ->
+                            try { native.removeOnRoutingChangedListener(listener); routing = null } catch (e: Exception) { failure = e }
+                        }
+                        try { native.release(); released = true } catch (e: Exception) { failure = e }
+                        feeder.discard()
+                        failure?.let { throw it }
                     }
-                    try { native.release() } catch (e: Exception) { failure = e }
-                    failure?.let { throw it }
                 }
             }
         }

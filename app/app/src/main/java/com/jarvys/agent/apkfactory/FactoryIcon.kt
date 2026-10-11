@@ -7,6 +7,8 @@ import androidx.core.graphics.toColorInt
 import androidx.core.graphics.createBitmap
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.RectF
+import com.jarvys.factory.contract.AdaptiveIconPolicy
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -14,17 +16,39 @@ import java.io.ByteArrayOutputStream
 /** Bounded geometric icons let Coding create artwork with ordinary text files; no SVG/script engine. */
 internal object FactoryIcon {
     const val SIZE = 192
-    fun render(path: String, bytes: ByteArray): ByteArray = if (path.endsWith(".png", true)) validatePng(bytes) else {
+    fun render(path: String, bytes: ByteArray): ByteArray = renderSource(path, bytes, false)
+
+    /** The full 192px canvas maps to Android's 108dp adaptive layer. No hidden padding or mask. */
+    fun renderAdaptive(policy: AdaptiveIconPolicy, bytes: ByteArray): TemplateApk.AdaptiveLayers {
+        val normalized = renderSource(policy.foreground, bytes, true)
+        val image = BitmapFactory.decodeByteArray(normalized, 0, normalized.size) ?: error("Adaptive foreground cannot be decoded")
+        val foreground = createBitmap(SIZE, SIZE, Bitmap.Config.ARGB_8888)
+        val background = createBitmap(SIZE, SIZE, Bitmap.Config.ARGB_8888)
+        try {
+            val padding = SIZE * policy.insetPercent / 100f
+            val scale = (SIZE - padding * 2) / maxOf(image.width, image.height)
+            val width = image.width * scale; val height = image.height * scale
+            Canvas(foreground).drawBitmap(image, null, RectF((SIZE-width)/2, (SIZE-height)/2, (SIZE+width)/2, (SIZE+height)/2), Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
+            Canvas(background).drawColor(color(policy.background))
+            return TemplateApk.AdaptiveLayers(encode(foreground), encode(background))
+        } finally { image.recycle(); foreground.recycle(); background.recycle() }
+    }
+
+    private fun encode(bitmap: Bitmap): ByteArray = ByteArrayOutputStream().also {
+        check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) { "Could not encode adaptive icon" }
+    }.toByteArray()
+
+    private fun renderSource(path: String, bytes: ByteArray, transparent: Boolean): ByteArray = if (path.endsWith(".png", true)) validatePng(bytes) else {
         require(path.endsWith(".json", true) && bytes.size <= 16 * 1024) { "Icon must be a PNG or bounded vector JSON file" }
         val json = FactoryJson.objectFrom(bytes, 16 * 1024)
-        fields(json, setOf("schemaVersion", "background", "shapes"))
+        fields(json, if (transparent) setOf("schemaVersion", "shapes") else setOf("schemaVersion", "background", "shapes"))
         require(json.opt("schemaVersion") == 1) { "Unsupported icon schemaVersion" }
         val shapes = json.opt("shapes") as? JSONArray ?: error("Icon shapes must be an array")
         require(shapes.length() in 1..32) { "Use 1–32 icon shapes" }
         val bitmap = createBitmap(SIZE, SIZE, Bitmap.Config.ARGB_8888)
         try {
             val canvas = Canvas(bitmap)
-            canvas.drawColor(color(json.opt("background")))
+            if (!transparent) canvas.drawColor(color(json.opt("background")))
             val paint = Paint(Paint.ANTI_ALIAS_FLAG)
             for (i in 0 until shapes.length()) {
                 val shape = shapes.opt(i) as? JSONObject ?: error("Each icon shape must be an object")

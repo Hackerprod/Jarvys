@@ -1245,10 +1245,16 @@ public final class FactoryRuntime implements AutoCloseable {
         });
     }
     private void finishExport(Export work) {
-        if (export != work || !work.returned || !documentForeground) return;
+        if (export != work || !work.returned) return;
+        boolean stale = work.text == null || !work.reply.current();
+        // Only live writes wait for resume. A returned stale picker no longer owns UI admission.
+        if (!stale && !documentForeground) return;
         export = null; if (uiOwner == work.reply) uiOwner = null;
         if (work.lease != null) work.lease.externalHandoff(false);
-        if (!work.reply.current() || work.text == null) { if (work.lease != null) work.lease.close(); return; }
+        if (stale) {
+            work.text = null; releaseDocumentGrant(work.result); work.result = null;
+            if (work.lease != null) work.lease.close(); return;
+        }
         Intent result = work.result;
         if (work.resultCode != Activity.RESULT_OK || result == null || result.getData() == null) {
             if (work.lease != null) work.lease.close(); work.reply.fail("CANCELLED", "Export cancelled; a picker-created empty file may remain."); return;
@@ -1396,6 +1402,10 @@ public final class FactoryRuntime implements AutoCloseable {
     }
 
     private boolean claimUi(Reply reply) {
+        // A delayed revoke of an old export URI must not race a replacement picker grant.
+        if ("export.text".equals(reply.method) && documentResources.get() != 0) {
+            reply.fail("BUSY", "A previous document grant is still closing."); return false;
+        }
         if ((nativePermissions != null && nativePermissions.hasPendingReview()) || (nativeEffects != null && (nativeEffects.hasPendingPermission() || nativeEffects.hasPendingActivity())) || BiometricAuthentication.processUiBusy() || (biometrics!=null && biometrics.isUiBusy()) || presentationScheduled || uiOwner != null || export != null || documentSelection != null || fileShare != null || photoSelection != null || audioPlayback != null || browserOpen != null || externalLaunch != null || contactPick != null || clipboardWrite != null || backup != null || BACKUP_ADMISSION.get() || !activity.hasWindowFocus() || activity.isFinishing()) {
             reply.fail("BUSY", "Another native prompt is open, or the application is not in the foreground."); return false;
         }
@@ -1490,7 +1500,7 @@ public final class FactoryRuntime implements AutoCloseable {
         Export work = export;
         if (work == null || work.returned) return;
         work.returned = true; work.resultCode = resultCode; work.result = data;
-        if (documentForeground) finishExport(work);
+        finishExport(work);
     }
 
     /** Pause always revokes existing handles. The external broker alone may retain a picker tombstone. */
@@ -1701,10 +1711,20 @@ public final class FactoryRuntime implements AutoCloseable {
         }); } catch (RejectedExecutionException ignored) { }
     }
 
+    /** A point-in-time mode check prevents known DENY from starting snapshot disk/provider work.
+     * ALLOW/ASK here grant nothing: the host still rechecks and binds the exact resulting snapshot.
+     */
+    private void requirePreparationPolicy(String operation,java.util.function.BooleanSupplier current) throws FactoryException {
+        NativeInstalledSource description=NativeInstalledSource.describeOperation(activity,config,operation,
+                android.os.SystemClock.elapsedRealtime()+2000L,current);
+        if(description.policyMode==NativeInstalledSource.PolicyMode.DENY)
+            throw new FactoryException("PERMISSION_DENIED","Factory policy denies this operation; no content snapshot was prepared.");
+    }
     private static final class FileShare {
         final Reply reply;
         final String nonce;
-        volatile FileShareTransfer snapshot;
+        volatile StreamingFileShareTransfer snapshot;
+        volatile StreamingFileShareTransfer.Admission admission;
         volatile boolean cancelled, launched;
         boolean returned;
         int resultCode;
@@ -1714,26 +1734,39 @@ public final class FactoryRuntime implements AutoCloseable {
     private void shareFile(BridgeProtocol.Request request, Reply reply) throws Exception {
         requireDocumentForeground();
         DocumentBrokerIdentity.verify(activity, config.documentBroker);
-        if (!claimUi(reply)) return;
-        final FileShareTransfer.Admission admission = FileShareTransfer.reserve();
+        // Random generation owns neither UI nor transfer admission if it fails.
         byte[] random = new byte[32]; new java.security.SecureRandom().nextBytes(random);
         StringBuilder nonce = new StringBuilder();
         for (byte b:random) nonce.append(String.format(java.util.Locale.ROOT,"%02x",b & 255));
-        FileShare work = new FileShare(reply,nonce.toString()); fileShare=work;
+        if (!claimUi(reply)) return;
+        final StreamingFileShareTransfer.Admission admission;
+        try { admission = StreamingFileShareTransfer.reserve(activity, config.resources.fileShare.sourceBytes, config.resources.fileShare.transferTimeoutMs); }
+        catch (FactoryException | RuntimeException unavailable) {
+            if (uiOwner == reply) uiOwner = null;
+            throw unavailable;
+        }
+        FileShare work = new FileShare(reply,nonce.toString()); work.admission=admission; fileShare=work;
         final DocumentHandles source=documents;
         try { io.execute(() -> {
-            byte[] bytes=null;
             try {
                 requireDocumentForeground();
                 if (work.cancelled || !reply.current()) throw new FactoryException("CANCELLED","File sharing was cancelled.");
-                bytes=source.snapshotForShare(request.args.getString("handle"));
+                requirePreparationPolicy("share.file", () -> !work.cancelled && documentForeground && !destroyed && reply.current() && fileShare==work);
                 requireDocumentForeground();
                 DocumentBrokerIdentity.verify(activity,config.documentBroker);
                 final int hostUid=activity.getPackageManager().getApplicationInfo(config.documentBroker.packageName,0).uid;
                 String[] packages=activity.getPackageManager().getPackagesForUid(hostUid);
                 if (packages == null || packages.length != 1 || !packages[0].equals(config.documentBroker.packageName))
                     throw new FactoryException("UNAVAILABLE","The sharing host has an ambiguous UID.");
-                work.snapshot=admission.complete(bytes,work.nonce,uid -> {
+                work.snapshot=admission.prepare(new StreamingFileShareTransfer.SnapshotWriter() {
+                    private DocumentHandles.ShareSource shareSource;
+                    @Override public void write(java.io.OutputStream output,Runnable active) throws Exception {
+                        active.run();
+                        shareSource=source.takeShareSource(request.args.getString("handle"),config.resources.fileShare.sourceBytes);
+                        shareSource.copyTo(output,active);
+                    }
+                    @Override public void close() throws Exception { if(shareSource!=null) shareSource.close(); }
+                },work.nonce,uid -> {
                     if (uid != hostUid || work.cancelled || !work.launched || destroyed || fileShare != work || !reply.current()) return false;
                     try {
                         DocumentBrokerIdentity.verify(activity,config.documentBroker);
@@ -1741,8 +1774,10 @@ public final class FactoryRuntime implements AutoCloseable {
                         return current != null && current.length == 1 && current[0].equals(config.documentBroker.packageName)
                                 && activity.getPackageManager().getApplicationInfo(config.documentBroker.packageName,0).uid == uid;
                     } catch (Exception denied) { return false; }
+                },() -> {
+                    if(work.cancelled || !documentForeground || !reply.current() || fileShare!=work)
+                        throw new IllegalStateException("File sharing cancelled");
                 });
-                bytes=null; // Ownership moved to bounded native endpoint, never JavaScript.
                 main.post(() -> {
                     if (work.cancelled || !documentForeground || !reply.current() || fileShare != work) {
                         cancelFileShare(); finishUnlaunchedShare(work); return;
@@ -1750,10 +1785,12 @@ public final class FactoryRuntime implements AutoCloseable {
                     try {
                         DocumentBrokerIdentity.verify(activity,config.documentBroker);
                         android.os.Bundle extras=new android.os.Bundle();
-                        extras.putInt("protocolVersion",1); extras.putString("nonce",work.nonce);
+                        extras.putInt("protocolVersion",work.snapshot.protocolVersion); extras.putString("nonce",work.nonce);
                         extras.putString("filename",request.args.getString("filename"));
                         extras.putString("mimeType",request.args.getString("mimeType"));
-                        extras.putInt("size",work.snapshot.size); extras.putString("sha256",work.snapshot.sha256);
+                        if(work.snapshot.protocolVersion==1) extras.putInt("size",(int)work.snapshot.size);
+                        else extras.putLong("size",work.snapshot.size);
+                        extras.putString("sha256",work.snapshot.sha256);
                         extras.putBinder("transfer",work.snapshot);
                         Intent intent=new Intent().setComponent(new android.content.ComponentName(config.documentBroker.packageName,
                                 "com.jarvys.agent.apkfactory.FactoryFileShareActivity")).putExtras(extras);
@@ -1765,7 +1802,6 @@ public final class FactoryRuntime implements AutoCloseable {
                     }
                 });
             } catch (Exception failure) {
-                if (bytes != null) java.util.Arrays.fill(bytes,(byte)0);
                 if (work.snapshot != null) work.snapshot.close();
                 admission.close();
                 main.post(() -> {
@@ -1784,6 +1820,7 @@ public final class FactoryRuntime implements AutoCloseable {
         FileShare work=fileShare;
         if (work == null) return;
         work.cancelled=true;
+        if(work.admission!=null) work.admission.close();
         work.reply.fail("CANCELLED","File sharing was cancelled. Host or recipient copies may remain; close the native sharing flow.");
         if (work.snapshot != null) work.snapshot.close();
         // A launched broker remains a tombstone until its own callback. Cancellation cannot
@@ -2184,13 +2221,14 @@ public final class FactoryRuntime implements AutoCloseable {
     private static final class AudioPlayback {
         final Reply reply;
         final String nonce;
-        volatile FileShareTransfer snapshot;
+        volatile StreamingFileShareTransfer snapshot;
+        final StreamingFileShareTransfer.Admission admission;
         volatile AudioPlaybackControl control;
         volatile boolean cancelled, launched;
         boolean returned;
         int resultCode;
         Intent result;
-        AudioPlayback(Reply reply, String nonce) { this.reply=reply; this.nonce=nonce; }
+        AudioPlayback(Reply reply, String nonce, StreamingFileShareTransfer.Admission admission) { this.reply=reply; this.nonce=nonce; this.admission=admission; }
     }
     private void playAudio(BridgeProtocol.Request request, Reply reply) throws Exception {
         requireDocumentForeground();
@@ -2200,20 +2238,19 @@ public final class FactoryRuntime implements AutoCloseable {
         StringBuilder nonce = new StringBuilder();
         for (byte b:random) nonce.append(String.format(java.util.Locale.ROOT,"%02x",b & 255));
         if (!claimUi(reply)) return;
-        final FileShareTransfer.Admission admission;
-        try { admission = FileShareTransfer.reserve(); }
+        final StreamingFileShareTransfer.Admission admission;
+        try { admission = StreamingFileShareTransfer.reserve(activity, config.resources.audio.sourceBytes, config.resources.audio.setupTimeoutMs); }
         catch (FactoryException | RuntimeException unavailable) {
             if (uiOwner == reply) uiOwner = null;
             throw unavailable;
         }
-        AudioPlayback work = new AudioPlayback(reply,nonce.toString()); audioPlayback=work;
+        AudioPlayback work = new AudioPlayback(reply,nonce.toString(),admission); audioPlayback=work;
         final DocumentHandles source=documents;
         try { io.execute(() -> {
-            byte[] bytes=null;
             try {
                 requireDocumentForeground();
                 if (work.cancelled || !reply.current()) throw new FactoryException("CANCELLED","Audio playback was cancelled.");
-                bytes=source.snapshotForAudio(request.args.getString("handle"),config.resources.audio.sourceBytes);
+                requirePreparationPolicy("audio.play", () -> !work.cancelled && documentForeground && !destroyed && reply.current() && audioPlayback==work);
                 requireDocumentForeground();
                 DocumentBrokerIdentity.verify(activity,config.documentBroker);
                 final int hostUid=activity.getPackageManager().getApplicationInfo(config.documentBroker.packageName,0).uid;
@@ -2231,8 +2268,20 @@ public final class FactoryRuntime implements AutoCloseable {
                 };
                 work.control=new AudioPlaybackControl(work.nonce,verifiedHost);
                 if (work.cancelled) work.control.cancel();
-                work.snapshot=admission.complete(bytes,work.nonce,uid -> !work.cancelled && work.launched && !destroyed && audioPlayback == work && reply.current() && verifiedHost.allowed(uid));
-                bytes=null; // Ownership moved to bounded native endpoint, never JavaScript.
+                work.snapshot=admission.prepare(new StreamingFileShareTransfer.SnapshotWriter() {
+                    private DocumentHandles.ShareSource owned;
+                    @Override public void write(OutputStream output, Runnable active) throws Exception {
+                        // Claim lazily inside admission-owned preparation; cancellation before here
+                        // cannot strand a consumed provider outside the cleanup owner.
+                        active.run();
+                        owned=source.takeShareSource(request.args.getString("handle"),config.resources.audio.sourceBytes);
+                        owned.copyTo(output,active);
+                    }
+                    @Override public void close() throws Exception { if (owned != null) owned.close(); }
+                },work.nonce,uid -> !work.cancelled && work.launched && !destroyed && audioPlayback == work && reply.current() && verifiedHost.allowed(uid),() -> {
+                    if (!documentForeground || destroyed) throw new IllegalStateException("Audio source is not foreground");
+                    if (work.cancelled || !reply.current() || audioPlayback != work) throw new IllegalStateException("Audio playback cancelled");
+                },6 * 1024 * 1024);
                 main.post(() -> {
                     if (work.cancelled || !documentForeground || !reply.current() || audioPlayback != work) {
                         cancelAudioPlayback(); finishUnlaunchedAudio(work); return;
@@ -2240,8 +2289,10 @@ public final class FactoryRuntime implements AutoCloseable {
                     try {
                         DocumentBrokerIdentity.verify(activity,config.documentBroker);
                         android.os.Bundle extras=new android.os.Bundle();
-                        extras.putInt("protocolVersion",1); extras.putString("nonce",work.nonce);
-                        extras.putInt("size",work.snapshot.size); extras.putString("sha256",work.snapshot.sha256);
+                        extras.putInt("protocolVersion",work.snapshot.protocolVersion); extras.putString("nonce",work.nonce);
+                        if (work.snapshot.protocolVersion == 1) extras.putInt("size",(int)work.snapshot.size);
+                        else extras.putLong("size",work.snapshot.size);
+                        extras.putString("sha256",work.snapshot.sha256);
                         extras.putBinder("transfer",work.snapshot); extras.putBinder("control",work.control);
                         Intent intent=new Intent().setComponent(new android.content.ComponentName(config.documentBroker.packageName,
                                 "com.jarvys.agent.apkfactory.FactoryAudioActivity")).putExtras(extras);
@@ -2253,7 +2304,6 @@ public final class FactoryRuntime implements AutoCloseable {
                     }
                 });
             } catch (Exception failure) {
-                if (bytes != null) java.util.Arrays.fill(bytes,(byte)0);
                 if (work.snapshot != null) work.snapshot.close();
                 if (work.control != null) work.control.cancel();
                 admission.close();
@@ -2272,7 +2322,7 @@ public final class FactoryRuntime implements AutoCloseable {
     private void cancelAudioPlayback() {
         AudioPlayback work=audioPlayback;
         if (work == null) return;
-        work.cancelled=true;
+        work.cancelled=true; work.admission.close();
         work.reply.fail("CANCELLED","Audio playback was cancelled. Playback stop is unconfirmed; close the native audio flow.");
         if (work.control != null) work.control.cancel();
         if (work.snapshot != null) work.snapshot.close();
@@ -2286,7 +2336,7 @@ public final class FactoryRuntime implements AutoCloseable {
     }
     private void finishAudioPlayback(AudioPlayback work) {
         if (audioPlayback != work) return;
-        audioPlayback=null; if (work.control != null) work.control.close(); if (uiOwner == work.reply) uiOwner=null;
+        audioPlayback=null; work.admission.close(); if (work.control != null) work.control.close(); if (uiOwner == work.reply) uiOwner=null;
         if (work.cancelled || !work.reply.current()) {
             work.reply.fail("CANCELLED","Playback ended without an audibility claim."); return;
         }

@@ -18,7 +18,7 @@ import static org.junit.Assert.*;
 
 /** Synthetic runtime/broker boundary only; no audio hardware, audibility or user file. */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk={24,28,32},manifest=Config.NONE,shadows=FactoryRuntimeDocumentsTest.Features.class)
+@Config(sdk={24,28,32},manifest=Config.NONE,shadows={FactoryRuntimeDocumentsTest.Features.class,FileShareSnapshotOsShadow.class})
 @LooperMode(LooperMode.Mode.PAUSED)
 public class FactoryRuntimeAudioTest {
     public static class Screen extends Activity {
@@ -29,7 +29,7 @@ public class FactoryRuntimeAudioTest {
     private static class Host implements FactoryRuntime.Host {
         final MemoryBackend data=new MemoryBackend(); boolean preview;
         public InputStream open(String path){return new ByteArrayInputStream(new byte[0]);}
-        public String configuration(){return FactoryDispatcherTest.configuration("[\"documents\",\"audio\"]");}
+        public String configuration(){try{return new JSONObject(FactoryDispatcherTest.configuration("[\"documents\",\"audio\"]")).put("appId",RuntimeEnvironment.getApplication().getPackageName()).toString();}catch(Exception e){throw new AssertionError(e);}}
         public boolean isPreview(){return preview;}
         public BoundedStore.Backend storage(){return data;}
     }
@@ -39,7 +39,9 @@ public class FactoryRuntimeAudioTest {
         public void postMessage(byte[] bytes){throw new AssertionError();}
         String error()throws Exception{assertNotNull(value);return value.getJSONObject("error").getString("code");}
     }
+    private PreparationPolicyTestProvider policy;
     private FactoryRuntime runtime; private Screen screen; private Host host; private int next;
+    private final java.util.List<StreamingFileShareTransfer.Admission> admissions=new java.util.ArrayList<>();
     static Field field(String name)throws Exception{Field f=FactoryRuntime.class.getDeclaredField(name);f.setAccessible(true);return f;}
     private DocumentHandles handles()throws Exception{return (DocumentHandles)field("documents").get(runtime);}
     private ThreadPoolExecutor worker()throws Exception{return (ThreadPoolExecutor)field("io").get(runtime);}
@@ -48,18 +50,38 @@ public class FactoryRuntimeAudioTest {
         DocumentBrokerIdentityTest.install(screen,DocumentBrokerIdentity.PRIMARY,new Signature(DocumentBrokerIdentityTest.CERTIFICATE));
         android.content.pm.ApplicationInfo info=screen.getPackageManager().getApplicationInfo(DocumentBrokerIdentity.PRIMARY,0);
         info.uid=17777;Shadows.shadowOf(screen.getPackageManager()).setPackagesForUid(17777,DocumentBrokerIdentity.PRIMARY);
+        policy=PreparationPolicyTestProvider.install(screen);
         host=new Host();runtime=new FactoryRuntime(screen,new FrameLayout(screen),host);
         field("config").set(runtime,FactoryConfig.parsePreview(new JSONObject(host.configuration()).put("documentBroker",
                 new JSONObject().put("packageName",DocumentBrokerIdentity.PRIMARY).put("certificateSha256",DocumentBrokerIdentityTest.digest())).toString()));
         field("store").set(runtime,new BoundedStore(host.data));runtime.onResume();
     }
-    @After public void stop()throws Exception{runtime.close();assertTrue(worker().awaitTermination(5,TimeUnit.SECONDS));Shadows.shadowOf(Looper.getMainLooper()).idle();screen.finish();}
+    @After public void stop()throws Exception{runtime.close();assertTrue(worker().awaitTermination(5,TimeUnit.SECONDS));Shadows.shadowOf(Looper.getMainLooper()).idle();awaitCleanup();screen.finish();}
     private Response request(String method,JSONObject args)throws Exception{
         Response r=new Response();Method receive=FactoryRuntime.class.getDeclaredMethod("receive",String.class,JavaScriptReplyProxy.class);receive.setAccessible(true);
         receive.invoke(runtime,new JSONObject().put("v",1).put("id","share"+(++next)).put("method",method).put("args",args).toString(),r);return r;
     }
     private Response share(byte[] data)throws Exception{return shareHandle(handles().grantRead(new ByteArrayInputStream(data)));}
-    private Response shareHandle(String token)throws Exception{return request("audio.play",new JSONObject().put("handle",token));}
+    private Response shareHandle(String token)throws Exception{
+        awaitCancelledCleanup();
+        Response result=request("audio.play",new JSONObject().put("handle",token));
+        Object work=field("audioPlayback").get(runtime);
+        if(work!=null){Field slot=work.getClass().getDeclaredField("admission");slot.setAccessible(true);
+            StreamingFileShareTransfer.Admission admission=(StreamingFileShareTransfer.Admission)slot.get(work);
+            if(!admissions.contains(admission))admissions.add(admission);}
+        return result;
+    }
+    private void awaitCancelledCleanup()throws Exception{
+        for(StreamingFileShareTransfer.Admission slot:admissions){Field cancelled=slot.getClass().getDeclaredField("cancelled");cancelled.setAccessible(true);
+            boolean closing;synchronized(slot){closing=cancelled.getBoolean(slot);}
+            if(closing)awaitClean(slot);}
+    }
+    private void awaitCleanup()throws Exception{for(StreamingFileShareTransfer.Admission slot:admissions)awaitClean(slot);}
+    private void awaitClean(StreamingFileShareTransfer.Admission slot)throws Exception{
+        long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);
+        while(!slot.cleanedForTest()&&System.nanoTime()<deadline)Thread.sleep(5);
+        assertTrue("Real disk/provider cleanup must finish before new transfer admission",slot.cleanedForTest());
+    }
     private void idle()throws Exception{CountDownLatch done=new CountDownLatch(1);worker().execute(done::countDown);assertTrue(done.await(5,TimeUnit.SECONDS));Shadows.shadowOf(Looper.getMainLooper()).idle();}
     private Intent result(){return new Intent().putExtra("nonce",screen.launched.getStringExtra("nonce")).putExtra("playbackAttempted",true).putExtra("audibilityConfirmed",false);}
     @Test public void snapshotPrecedesBrokerLaunchAndNoBytesOrUriEnterIntent()throws Exception{
@@ -100,21 +122,26 @@ public class FactoryRuntimeAudioTest {
             runtime.onActivityResult(45,Activity.RESULT_OK,output);assertEquals("AUDIO_UNAVAILABLE",response.error());
         }
     }
-    @Test public void wrongOrAmbiguousHostNeverReceivesSnapshot()throws Exception{
+    @Test public void ambiguousPinnedHostUidNeverReceivesSnapshot()throws Exception{
         DocumentBrokerIdentityTest.install(screen,DocumentBrokerIdentity.RECOVERY,new Signature(DocumentBrokerIdentityTest.CERTIFICATE));
+        Shadows.shadowOf(screen.getPackageManager()).setPackagesForUid(17777,DocumentBrokerIdentity.PRIMARY,DocumentBrokerIdentity.RECOVERY);
+        Response response=share(new byte[]{1});idle();assertEquals("SOURCE_UNAVAILABLE",response.error());assertNull(screen.launched);
+    }
+    @Test public void wrongPinnedHostCertificateNeverReceivesSnapshot()throws Exception{
+        DocumentBrokerIdentityTest.install(screen,DocumentBrokerIdentity.PRIMARY,new Signature(new byte[]{99}));
         assertEquals("UNAVAILABLE",share(new byte[]{1}).error());assertNull(screen.launched);
     }
     @Test public void explicitCancelSettlesPromptlyWhileBlockedSnapshotRetainsAdmission()throws Exception{
         CountDownLatch entered=new CountDownLatch(1),release=new CountDownLatch(1);
         String token=handles().grantRead(new InputStream(){public int read(){return 0;}
-            public int read(byte[] bytes){entered.countDown();try{release.await();}catch(InterruptedException e){throw new AssertionError(e);}bytes[0]=1;return 1;}});
+            public int read(byte[] bytes,int offset,int length){entered.countDown();try{release.await();}catch(InterruptedException e){throw new AssertionError(e);}bytes[offset]=1;return 1;}});
         Response pending=shareHandle(token);
         try {
             assertTrue(entered.await(5,TimeUnit.SECONDS));request("documents.cancel",new JSONObject());
             assertEquals("CANCELLED",pending.error());assertNotNull(field("audioPlayback").get(runtime));
             try{FileShareTransfer.reserve();fail();}catch(FactoryException expected){assertEquals("SHARE_BUSY",expected.code);}
             release.countDown();idle();assertNull(screen.launched);assertNull(field("audioPlayback").get(runtime));
-            FileShareTransfer.reserve().close();
+            awaitCleanup();FileShareTransfer.reserve().close();
         } finally {release.countDown();}
     }
 
@@ -130,7 +157,7 @@ public class FactoryRuntimeAudioTest {
         try {
             AudioPlaybackControl.Registration registration=thread.submit(()->{
                 assertEquals(uid,android.os.Binder.getCallingUid());
-                java.lang.reflect.Field verifier=FileShareTransfer.class.getDeclaredField("verifier");verifier.setAccessible(true);
+                java.lang.reflect.Field verifier=StreamingFileShareTransfer.class.getDeclaredField("verifier");verifier.setAccessible(true);
                 assertTrue("Synthetic host must pass the actual runtime UID/session verifier",((FileShareTransfer.HostVerifier)verifier.get(transfer)).allowed(uid));
                 FileShareTransfer.copy(transfer,nonce,3,screen.launched.getStringExtra("sha256"),new ByteArrayOutputStream(),()->{});
                 return AudioPlaybackControl.register(control,nonce,caller->true,cancelled::countDown);
@@ -141,6 +168,49 @@ public class FactoryRuntimeAudioTest {
             runtime.onActivityResult(45,Activity.RESULT_CANCELED,null);assertNull(field("audioPlayback").get(runtime));registration.close();
         }finally{thread.shutdownNow();org.robolectric.shadows.ShadowBinder.reset();}
     }
+    @Test public void knownDenyNeverReadsOrConsumesAudioSourceOrCreatesDiskSnapshot()throws Exception {
+        policy.mode=NativeInstalledSource.PolicyMode.DENY;final int[] reads={0};
+        String token=handles().grantRead(new InputStream(){public int read(){reads[0]++;return 17;}
+            public int read(byte[] bytes,int offset,int count){reads[0]++;bytes[offset]=17;return 1;}});
+        File directory=new File(screen.getCacheDir(),"factory-share-snapshots");assertFalse(directory.exists());
+        Response response=shareHandle(token);idle();assertEquals("PERMISSION_DENIED",response.error());
+        assertEquals(1,policy.calls);assertEquals(0,reads[0]);assertFalse(directory.exists());assertNull(screen.launched);
+        assertNull(field("audioPlayback").get(runtime));assertNull(field("uiOwner").get(runtime));
+        handles().read(token,0,1);assertEquals(1,reads[0]);
+    }
+
+    @Test public void askPreflightIsDescriptionOnlyAndLeavesApprovalToExactHostRequest()throws Exception {
+        policy.mode=NativeInstalledSource.PolicyMode.ASK;Response response=share(new byte[]{1});idle();
+        assertEquals(1,policy.calls);assertNotNull(screen.launched);assertNull(response.value);
+        assertFalse(screen.launched.hasExtra("policyMode"));assertFalse(screen.launched.hasExtra("approved"));
+        runtime.onActivityResult(45,Activity.RESULT_CANCELED,null);
+    }
+
+    @Test public void aboveLegacyAudioCapUsesLongV2AndBoundedNativeCopy()throws Exception {
+        JSONObject configuration=new JSONObject(host.configuration()).put("documentBroker",
+                new JSONObject().put("packageName",DocumentBrokerIdentity.PRIMARY).put("certificateSha256",DocumentBrokerIdentityTest.digest()));
+        configuration.put("resourceBudgets",new JSONObject().put("version",1).put("audio",new JSONObject().put("sourceBytes",8*1024*1024).put("durationMs",300000)));
+        FactoryConfig configured=FactoryConfig.parsePreview(configuration.toString());field("config").set(runtime,configured);
+        final int count=7*1024*1024;
+        String token=handles().grantRead(new InputStream(){int left=count;
+            public int read(){throw new AssertionError("Bounded chunks only");}
+            public int read(byte[] bytes,int offset,int length){if(left==0)return -1;int n=Math.min(length,left);java.util.Arrays.fill(bytes,offset,offset+n,(byte)17);left-=n;return n;}});
+        Response response=shareHandle(token);idle();assertNull(response.value);assertNotNull(screen.launched);
+        assertEquals(2,screen.launched.getIntExtra("protocolVersion",0));assertTrue(screen.launched.getExtras().get("size") instanceof Long);
+        assertEquals(count,screen.launched.getLongExtra("size",0));
+        int uid=screen.getPackageManager().getApplicationInfo(DocumentBrokerIdentity.PRIMARY,0).uid;
+        org.robolectric.shadows.ShadowBinder.setCallingUid(uid);
+        ExecutorService transfer=Executors.newSingleThreadExecutor();final long[] received={0};
+        try {transfer.submit(()->{try {
+            StreamingFileShareTransfer.copy(screen.launched.getExtras().getBinder("transfer"),screen.launched.getStringExtra("nonce"),count,
+                screen.launched.getStringExtra("sha256"),2,new OutputStream(){public void write(int value){throw new AssertionError();}
+                    public void write(byte[] bytes,int offset,int length){assertTrue(length<=32768);for(int i=offset;i<offset+length;i++)assertEquals(17,bytes[i]);received[0]+=length;}},()->{});
+        }catch(Exception e){throw new AssertionError(e);}}).get(10,TimeUnit.SECONDS);
+        }finally{transfer.shutdownNow();org.robolectric.shadows.ShadowBinder.reset();}
+        assertEquals(count,received[0]);runtime.onActivityResult(45,Activity.RESULT_OK,result());
+        assertFalse(response.value.getJSONObject("result").getBoolean("audibilityConfirmed"));
+    }
+
     @Test public void occupiedTransferAdmissionNeverLeavesAudioUiClaimed()throws Exception {
         FileShareTransfer.Admission held=FileShareTransfer.reserve();
         try {

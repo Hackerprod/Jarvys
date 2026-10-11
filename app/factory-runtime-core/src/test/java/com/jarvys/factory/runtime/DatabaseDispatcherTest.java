@@ -14,7 +14,9 @@ public class DatabaseDispatcherTest {
     @Test public void databaseIsIndependentFromEveryOtherCapabilityAndHost()throws Exception{
         FactoryConfig database=config("[\"database\"]");assertNull(database.documentBroker);
         for(String capability:CapabilityCatalog.NAMES) if(!"database".equals(capability)) {
-            FactoryException denied=assertThrows(FactoryException.class,()->request("database.info",new JSONObject(),config("[\""+capability+"\"]")));assertEquals("CAPABILITY_DENIED",denied.code);
+            FactoryConfig unrelated=FactoryDispatcherTest.configForCapability(capability);
+            assertFalse(unrelated.capabilities.contains("database"));
+            FactoryException denied=assertThrows(FactoryException.class,()->request("database.info",new JSONObject(),unrelated));assertEquals("CAPABILITY_DENIED",denied.code);
         }
         assertTrue(CapabilityCatalog.CAPABILITIES.get("database").manifestNodes.isEmpty());
         assertEquals("fixture",dispatch(request("database.info",new JSONObject(),database),database,(method,args)->"fixture"));

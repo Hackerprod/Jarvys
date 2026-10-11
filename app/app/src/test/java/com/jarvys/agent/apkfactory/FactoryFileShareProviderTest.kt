@@ -54,6 +54,8 @@ internal abstract class FactoryFileShareTestSupport {
     protected fun snapshotFile(snapshot: FactoryFileShareStore.Snapshot) = File(root, snapshot.uri.lastPathSegment!!)
 
     @Before fun setUpShare() {
+        // Direct-javac runners do not generate a shadow resetter service. Keep each fixture isolated.
+        FactoryFileShareOsShadow.reset()
         context = ShareTestContext(ApplicationProvider.getApplicationContext())
         root.deleteRecursively()
         FactoryFileShareStore(context).cleanup()

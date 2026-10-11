@@ -11,6 +11,18 @@ Current source additions are documented in [Native network, notifications and sp
 
 
 
+## Current media and packaging development limits
+
+Signed budgets preserve legacy defaults while allowing larger sources. `fileShare.sourceBytes` defaults to 8 MiB and accepts up to 4 GiB; transfer timeout and URI lease default to five minutes and accept up to 24 hours. `audio.sourceBytes` defaults to 6 MiB and accepts up to 4 GiB; duration defaults to 30 seconds and accepts up to 268435454 ms; setup timeout defaults to five minutes and accepts up to 24 hours. Document source/session capacity and remaining lease must also suffice. These are ceilings, not disk, memory, provider throughput or uninterrupted Android-lifetime guarantees.
+
+Share/audio preparation streams into a private immutable unlinked file descriptor with 32 KiB working buffers. Small transfers retain the authenticated v1 wire format; larger transfers use v2 long lengths. The host streams canonical PCM16 WAV playback rather than allocating the entire clip. Mono/stereo 8–48 kHz remains the supported format. Very short clips use a bounded static path; longer clips use AudioTrack streaming. Cancellation/revocation cannot recall sound or bytes already exposed, and uncertain native cleanup retains ownership rather than permitting blind retry. After process death during snapshot preparation, a bounded private provisional cache file can remain until the next materialization validates and removes it before allocating another. Completed snapshots are unlinked; recovery receipts do not certify disk reclamation or erasure of every cache byte.
+
+Before large share/audio preparation, an authenticated read-only operation-policy query rejects saved DENY without reading source content or allocating a snapshot. It returns no grant and opens no UI. ALLOW/ASK still requires fresh exact source/hash-bound authority after preparation; an ASK operation has one meaningful host review. A policy change after the point-in-time query can race with already-authorized document preparation; final effects remain live-checked. The optional descriptor extension requires a compatible host for these new clients; existing clients retain their prior authenticated protocol behavior.
+
+Optional [adaptive launcher icons](../docs/FACTORY_ADAPTIVE_ICONS.md) use compiled Android resources and preserve the authored foreground canvas by default. [Packaging budgets](../docs/FACTORY_PACKAGING_BUDGETS.md) permit up to 512 website files, 16 MiB per file and 32 MiB total, subject to complete-archive entry/expanded/APK bounds and actual-size advisory heap admission. The precompiled DEX architecture remains unchanged. Historical fixed media/source ceilings below describe earlier releases and are superseded by this section for current development source.
+
+These changes are undergoing targeted checks. No rebuilt-template, final APK, sound, external share or physical-device acceptance is asserted.
+
 ## Generic hardware, widgets and finite jobs in development
 
 The current source adds NFC NDEF, Bluetooth LE central, RemoteViews widgets and finite HTTP jobs through the same SDK and operation policy. These are bounded generic Android building blocks. They do not activate arbitrary Java classes, native libraries, a background JavaScript engine or app-specific workflows. Source integration and focused tests are not a rebuilt-template, release or physical-device acceptance claim.

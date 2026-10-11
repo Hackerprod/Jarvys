@@ -8,6 +8,7 @@ import com.jarvys.agent.crew.CrewMissionSnapshot
 import com.jarvys.agent.crew.CrewProfile
 import com.jarvys.agent.crew.CrewProfileRepository
 import com.jarvys.agent.crew.CrewRole
+import com.jarvys.agent.skills.FactoryGuidanceBundle
 import com.jarvys.agent.skills.SkillMarkdownParser
 import com.jarvys.agent.skills.SkillRepository
 import com.jarvys.agent.skills.SkillScopePolicy
@@ -75,11 +76,13 @@ class ApkFactorySkillScopeTest {
         assertNull(entry.validationError)
         assertTrue(entry.body.length <= CorePromptBudget.standard().loadedSkillChars)
         assertTrue(parsed.metadata.allowedTools.contains("apk_factory"))
-        assertTrue(parsed.body.contains("not a fixed notes application"))
+        assertTrue(parsed.body.contains("Implement the requested workflow with real inspected APIs, not a canned demo."))
         assertTrue(parsed.body.contains("precompiled DEX"))
-        assertTrue(parsed.body.contains("No step here installs"))
+        assertTrue(parsed.body.contains("Build/sign/install/physical acceptance are separate."))
+        assertTrue(parsed.body.contains("Install only when requested, with the exact signed receipt"))
         assertTrue(parsed.body.contains("window.Jarvys"))
-        assertTrue(parsed.body.contains("losing", ignoreCase = true))
+        assertTrue(entry.factoryGuidance!!.resources.getValue("lifecycle")
+            .contains("Legacy AndroidKeyStore keys are non-exportable; loss may block updates."))
     }
 
     @Test fun repositoryExposesFactoryOnlyForExactCodingProfile() {
@@ -318,8 +321,9 @@ class ApkFactorySkillScopeTest {
         val repo = repository()
         val entry = factory()
         val bundle = entry.factoryGuidance!!
-        assertEquals("factory-guidance-v84", bundle.version)
-        assertEquals(10, bundle.resources.size)
+        assertEquals(FactoryGuidanceBundle.VERSION, bundle.version)
+        assertEquals(14, bundle.resources.size)
+        assertEquals(FactoryGuidanceBundle.NAMES.toSet(), bundle.resources.keys)
         assertTrue(entry.body.toByteArray().size <= 8192)
         assertTrue(bundle.resources.values.sumOf { it.toByteArray().size } <= 65536)
         val session = "factory-references-${System.nanoTime()}"
@@ -343,7 +347,7 @@ class ApkFactorySkillScopeTest {
             }
             val core = CoreAgentRuntime.factoryGuidanceInstructions(role, tools, listOf(entry), 16384)
             assertTrue(core.endsWith(entry.body))
-            assertTrue(core.contains("Read-only missions"))
+            assertTrue(core.contains("READ_ONLY forbids mutation/build/sign/install or delegated bypass"))
             assertFalse(tools.names().contains("apk_factory"))
             assertThrows(IllegalStateException::class.java) {
                 CoreAgentRuntime.factoryGuidanceInstructions(role, tools, listOf(entry), 256)
@@ -353,16 +357,21 @@ class ApkFactorySkillScopeTest {
 
     @Test fun resourceArgumentsRejectUnknownPathsStaleVersionsAndWrongTypesWithoutPartialBodies() {
         val tool = LoadSkillTool(listOf(factory()), 16384, { true }, "coding")
-        val base = mapOf<String, Any>("skill_id" to id, "resource" to "database", "resource_version" to "factory-guidance-v84")
+        val base = mapOf<String, Any>("skill_id" to id, "resource" to "database", "resource_version" to FactoryGuidanceBundle.VERSION)
         val invalid = listOf(base - "resource", base - "resource_version",
-            base + ("resource_version" to "factory-guidance-v77"), base + ("resource_version" to "factory-guidance-v79"), base + ("resource_version" to 80),
+            base + ("resource_version" to "factory-guidance-v77"), base + ("resource_version" to "factory-guidance-v79"),
+            base + ("resource_version" to "factory-guidance-v84"), base + ("resource_version" to "factory-guidance-v85"), base + ("resource_version" to 80),
             base + ("resource" to 1)) + listOf("", "unknown", "../database", "/database", "references/database.md", "database\\other", "database%2fother").map { base + ("resource" to it) }
         for (args in invalid) {
             val result = tool.execute(args, CancellationToken.uncancellable())
             assertFalse(args.toString(), result.success)
-            assertFalse(result.content.contains("private no-backup"))
+            assertFalse(result.content.contains("# Factory guidance"))
+            assertFalse(result.content.contains("database.migrate"))
         }
         val complete = tool.execute(base, CancellationToken.uncancellable())
+        assertTrue(complete.content, complete.success)
+        assertTrue(complete.completeContentRequired)
+        assertEquals("Skill $id — resource database @ ${FactoryGuidanceBundle.VERSION}\n${factory().factoryGuidance!!.resources.getValue("database")}", complete.content)
         val exact = LoadSkillTool(listOf(factory()), complete.content.length, { true }, "coding")
         assertTrue(exact.execute(base, CancellationToken.uncancellable()).success)
         val small = LoadSkillTool(listOf(factory()), complete.content.length - 1, { true }, "coding")
@@ -393,7 +402,7 @@ class ApkFactorySkillScopeTest {
             val updated = reopened.skills.value.single { it.metadata.id == id }
             assertFalse(updated.enabled)
             assertEquals(count, updated.usageCount)
-            assertEquals("factory-guidance-v84", updated.factoryGuidance!!.version)
+            assertEquals(FactoryGuidanceBundle.VERSION, updated.factoryGuidance!!.version)
             assertEquals("PRIVATE LEGACY OVERRIDE", override.readText())
             assertEquals(custom, File(context.filesDir, "skills/$customId/SKILL.md").readText())
             assertEquals(originalProfile, CrewProfileRepository(context).codingProfile().toJson().toString())
@@ -416,24 +425,33 @@ class ApkFactorySkillScopeTest {
         }
         val unversioned = CrewRole("coding", "Coding", "coding", "Review", listOf("read_skill"), null, "Review", 0, listOf(id), CrewProfile.WorkspaceMode.LEGACY_CHAT)
         assertEquals("", CoreAgentRuntime.factoryGuidanceInstructions(unversioned, tools, listOf(entry), 16384))
-        assertFalse(CoreAgentRuntime(listOf(entry), emptyList(), emptyList(), emptyList()).instructions().contains("factory-guidance-v84"))
+        assertFalse(CoreAgentRuntime(listOf(entry), emptyList(), emptyList(), emptyList()).instructions().contains(FactoryGuidanceBundle.VERSION))
     }
 
     @Test fun criticalFamilyContractsAndLanguageRemainDiscoverableWithoutDeadFilePointers() {
         val entry = factory()
         val modules = entry.factoryGuidance!!.resources
         assertTrue(entry.body.contains("user's language"))
-        assertTrue(entry.body.contains("preserve exact API identifiers"))
+        assertTrue(entry.body.contains("Preserve exact API names, enums and receipt fields."))
         assertFalse(entry.body.contains("APK_FACTORY.md"))
+        for ((name, body) in modules) {
+            assertFalse("$name must not point to unavailable repository files", body.contains("docs/FACTORY_ADAPTIVE_ICONS.md"))
+        }
         val expected = mapOf("documents-media" to listOf("providerCommitConfirmed:false", "rollbackConfirmed:false", "metadata", "audibilityConfirmed:false"),
-            "external-actions" to listOf("pageLoadConfirmed:false", "No normalization", "No secrets", "actionConfirmed:false"),
-            "contacts-calendar" to listOf("no minors/secrets", "Never press Save", "exclusive end date"),
-            "database" to listOf("rollbackConfirmed:false", "no total-disk/RAM cap", "No device durability/update proof"),
-            "presentation" to listOf("preferencesCommitted:true", "in-memory preferences", "queued", "orientationGuaranteed:false", "font scale"),
-            "sensors" to listOf("device-natural", "includesGravity", "16 KiB", "CANCELLED", "UNAVAILABLE", "no automatic restart"),
+            "external-actions" to listOf("pageLoadConfirmed:false", "No normalization/secret detection", "Full URL reaches browser/site",
+                "Opening shares fields; recipient may change/ignore/cloud-sync/transmit", "actionConfirmed:false"),
+            "contacts-calendar" to listOf("Returns only {kind,value}", "no broad query/new permission/fallback",
+                "Opening shares fields; recipient can ignore/change/save/sync", "never auto-press Save", "both UTC midnight,exclusive end"),
+            "database" to listOf("rollbackConfirmed:false", "No total disk/RAM guarantee", "no physical durability",
+                "Device/provider/restore/update acceptance remains unverified"),
+            "presentation" to listOf("preferencesCommitted:true", "Android memory may already differ; readback is no disk proof",
+                "Pause/navigation/close cancel callbacks; saved values may apply next launch", "orientationGuaranteed:false", "font scale"),
+            "sensors" to listOf("device-natural", "includesGravity", "16KiB", "CANCELLED", "UNAVAILABLE", "no automatic restart"),
             "biometrics" to listOf("BIOMETRIC_STRONG", "USE_BIOMETRIC", "authorizesOtherActions:false",
-                "cancellationAcknowledged:false", "2 seconds", "process restart", "no completed validation or delivery"),
-            "lifecycle" to listOf("No step here installs", "never erase app data/keys", "unknown history blocks signing", "No installation/hardware/persistence/zero-network claims"))
+                "cancellationAcknowledged:false", "2 seconds", "process restart", "fake tests establish no physical matching/closure/device acceptance"),
+            "lifecycle" to listOf("signing alone does not request install", "no global automation lock/data/key erase",
+                "unknown history needs native floor review", "no process-isolation/zero-egress proof", "Shared tests run no project JS/device",
+                "awaits final packaged validation and physical/ARM64/update/restore acceptance"))
         for ((name, phrases) in expected) for (phrase in phrases) assertTrue("$name: $phrase", modules.getValue(name).contains(phrase, true))
     }
 

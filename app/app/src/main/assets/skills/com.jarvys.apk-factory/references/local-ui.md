@@ -1,24 +1,5 @@
-# Factory guidance factory-guidance-v85 / local-ui
+# Factory guidance factory-guidance-v86 / local-ui
 
-Use with core; grants no authority. Current basics/native-services supersede historical latest-only, extra-consent, totals, zero-permission/offline and pending-family claims below. API/data/quotas remain version-scoped.
-
-In HTML link /factory-ui/pure-3.0.0/pure-min.css, then
-/factory-ui/pure-3.0.0/grids-responsive-min.css, then your own local stylesheet.
-Use pure-form / pure-form-stacked for labeled forms, pure-button / pure-button-primary
-for ordinary buttons, pure-table for tables and pure-g with pure-u-1 / pure-u-md-1-2
-for responsive columns. Include viewport meta; use semantic labels and visible focus.
-Use local separate JS event listeners, never inline handlers, eval, CDN or imports.
-
-The fixed-inclusion policy retains both CSS files plus LICENSE.txt, normalize-LICENSE.txt
-and PROVENANCE.json under that versioned runtime path, even when no page links them.
-These five resources have pinned exact bytes and cannot be project replacements. Do not
-copy them into webDir or claim they are implicitly provided by a separate installed Jarvys.
-Project limits remain 128 files / 1 MiB each / 8 MiB total; library overhead is separate,
-at most 32 KiB per file and 64 KiB total. No compiler/download occurs per application.
-
-Licenses: Pure BSD-3-Clause, embedded normalize MIT; notices are included in each APK.
-Project styles own themes, contrast and touch targets. Preserve the single native owner
-of safe-area/IME insets. CSS does not implement custom-widget keyboard behavior, native
-APIs, persistence or automatic dark mode. Responsive/focus/contrast/font-scale checks
-still need actual rendering. Desktop browser results do not establish Android WebView,
-OEM or device compatibility. Keep all existing physical acceptance gates open.
+Link /factory-ui/pure-3.0.0/pure-min.css,then /factory-ui/pure-3.0.0/grids-responsive-min.css,then local styles. Classes pure-form/pure-form-stacked,pure-button/pure-button-primary,pure-table,pure-g with pure-u-1/pure-u-md-1-2. Viewport meta,semantic labels/visible focus,local separate JS listeners,no inline handlers/eval/CDN.
+Fixed runtime inclusion retains both CSS files,LICENSE.txt,normalize-LICENSE.txt,PROVENANCE.json under that versioned path even if unused. Exact pinned bytes,no project replacement/copy into webDir; bundled in each APK,not supplied by an installed host. Library overhead≤32KiB/file,64KiB total,distinct from signed project packaging budgets. No per-app compiler/download.
+Pure BSD-3-Clause/embedded normalize MIT notices included. Project CSS owns theme/contrast/touch targets; preserve native safe-area/IME inset owner. CSS supplies no custom-widget behavior/native API/persistence/automatic dark mode. Rendering/font-scale/focus checks on desktop do not prove Android WebView/OEM/device compatibility.

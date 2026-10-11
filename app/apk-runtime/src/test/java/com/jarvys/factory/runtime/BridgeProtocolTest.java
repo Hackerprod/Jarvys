@@ -1,9 +1,23 @@
 package com.jarvys.factory.runtime;
 
 import org.json.JSONObject;
+import org.json.JSONArray;
+import com.jarvys.factory.contract.CapabilityCatalog;
+import java.util.AbstractSet;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Iterator;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
 import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.robolectric.RobolectricTestRunner;
+import org.robolectric.annotation.Config;
 import static org.junit.Assert.*;
 
+@RunWith(RobolectricTestRunner.class)
+@Config(manifest = Config.NONE, sdk = 28)
 public class BridgeProtocolTest {
     private static final String HANDLE = new String(new char[64]).replace('\0', 'a');
     static FactoryConfig config(String capabilities) throws Exception {
@@ -77,8 +91,11 @@ public class BridgeProtocolTest {
     }
     @Test public void strictJsonRejectsDuplicatesTrailingCommentsAndDeepNesting() throws Exception {
         FactoryConfig all = config("[\"storage\"]");
-        String[] invalid = {"{'v':1}", "{v:1}", "{\"v\":1,}", "{\"v\":1,\"v\":1}", "{\"v\":1} /* comment */", "{\"a\":NaN}", "{\"a\":01}", "{\"a\":\"line\nline\"}", "{\"a\":[[[[[[[[[[1]]]]]]]]]]}"};
+        String[] invalid = {"{'v':1}", "{v:1}", "{\"v\":1,}", "{\"v\":1,\"v\":1}", "{\"v\":1} /* comment */", "{\"a\":NaN}", "{\"a\":01}", "{\"a\":\"line\nline\"}"};
         for (String raw : invalid) rejected("INVALID_REQUEST", BridgeProtocol.ORIGIN, true, raw, all);
+        String tooDeep = "1";
+        for (int level = 0; level < 25; level++) tooDeep = "[" + tooDeep + "]";
+        rejected("INVALID_REQUEST", BridgeProtocol.ORIGIN, true, request("runtime.info", "{\"nested\":" + tooDeep + "}"), all);
         rejected("INVALID_REQUEST", BridgeProtocol.ORIGIN, true, "{\"x\":\"" + '\\' + "uＦＦＦＦ\"}", all);
     }
     @Test public void boundedMessagesAndUtf8Values() throws Exception {
@@ -88,7 +105,15 @@ public class BridgeProtocolTest {
         String unicode = new String(new char[22000]).replace('\0', '界');
         String raw = new JSONObject().put("v", 1).put("id", "utf8").put("method", "storage.set")
                 .put("args", new JSONObject().put("key", "test").put("value", unicode)).toString();
-        rejected("INVALID_ARGUMENT", BridgeProtocol.ORIGIN, true, raw, all);
+        // The former 64-KiB value limit is a legacy storage budget, not the current wire grammar.
+        assertEquals("storage.set", BridgeProtocol.validate(BridgeProtocol.ORIGIN, true, raw, all).method);
+        String encodedTooLarge = new String(new char[StorageRequest.MAX_RESULT_BYTES / 3]).replace('\0', '界');
+        JSONObject oversizedArgs = new JSONObject().put("key", "test").put("value", encodedTooLarge);
+        String oversizedRequest = request("storage.set", oversizedArgs.toString());
+        assertTrue(encodedTooLarge.length() < StorageRequest.MAX_VALUE_BYTES);
+        assertTrue(oversizedArgs.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length > StorageRequest.MAX_RESULT_BYTES);
+        assertTrue(oversizedRequest.getBytes(java.nio.charset.StandardCharsets.UTF_8).length < BridgeProtocol.MAX_MESSAGE_BYTES);
+        rejected("INVALID_ARGUMENT", BridgeProtocol.ORIGIN, true, oversizedRequest, all);
         assertEquals("storage.set", BridgeProtocol.validate(BridgeProtocol.ORIGIN, true,
                 request("storage.set", "{\"key\":\"notes.v1\",\"value\":\"hello\"}"), all).method);
     }
@@ -99,7 +124,7 @@ public class BridgeProtocolTest {
         JSONObject failure = new JSONObject(BridgeProtocol.failure("r_1", "CANCELLED", "Cancelled"));
         assertFalse(failure.getBoolean("ok")); assertEquals("CANCELLED", failure.getJSONObject("error").getString("code"));
     }
-    @Test public void allCapabilitySelectionsMatchCatalogAndTypedValidators() throws Exception {
+    @Test public void historicalFortySixFixturesRemainTyped() throws Exception {
         String[][] calls = {{"runtime.info", "{}"}, {"storage.get", "{\"key\":\"x\"}"},
             {"storage.set", "{\"key\":\"x\",\"value\":\"v\"}"}, {"storage.remove", "{\"key\":\"x\"}"},
             {"storage.list", "{}"}, {"export.text", "{\"filename\":\"x.txt\",\"text\":\"x\"}"},
@@ -140,61 +165,145 @@ public class BridgeProtocolTest {
             {"browser.open", "{\"url\":\"https://example.com/review?fixture=1\"}"},
             {"share.file", "{\"handle\":\""+HANDLE+"\",\"filename\":\"file.bin\",\"mimeType\":\"application/octet-stream\"}"}};
         assertEquals(46, calls.length);
-        assertEquals(20, com.jarvys.factory.contract.CapabilityCatalog.NAMES.size());
-        assertEquals(com.jarvys.factory.contract.CapabilityCatalog.METHODS.size(), calls.length);
-        CapabilityDecisionTree.requireReviewedProductionSources();
-        java.util.List<CapabilityDecisionTree<Object>> validTrees = new java.util.ArrayList<>();
-        java.util.List<CapabilityDecisionTree<Object>> invalidTrees = new java.util.ArrayList<>();
-        int validLeaves = 0, invalidLeaves = 0;
-        final int[] wireInvocations = {0};
+        // The original 46 cases remain executable historical fixtures, not a catalog-size claim.
+        FactoryConfig all = dependencyConfig(new LinkedHashSet<>(CapabilityCatalog.NAMES));
+        Set<String> seen = new LinkedHashSet<>();
         for (String[] call : calls) {
-            final String valid = request(call[0], call[1]);
-            final String invalid = request(call[0], new JSONObject(call[1]).put("undeclared", true).toString());
-            for (String raw : new String[]{valid, invalid}) {
-                CapabilityDecisionTree<Object> tree = CapabilityDecisionTree.explore(capabilities -> {
-                    wireInvocations[0]++;
-                    try {
-                        return BridgeProtocol.validate(BridgeProtocol.ORIGIN, true, raw,
-                                CapabilityDecisionTree.config(capabilities)).operation;
-                    } catch (FactoryException rejected) { return rejected.code; }
-                });
-                if (raw == valid) { validTrees.add(tree); validLeaves += tree.leaves(); }
-                else { invalidTrees.add(tree); invalidLeaves += tree.leaves(); }
+            assertTrue("Duplicate historical fixture: " + call[0], seen.add(call[0]));
+            assertSame(call[0], CapabilityCatalog.METHODS.get(call[0]),
+                    BridgeProtocol.validate(BridgeProtocol.ORIGIN, true, request(call[0], call[1]), all).operation);
+            rejected("INVALID_ARGUMENT", BridgeProtocol.ORIGIN, true,
+                    request(call[0], new JSONObject(call[1]).put("undeclared", true).toString()), all);
+        }
+    }
+
+    /**
+     * Exhaustive membership-path proof for each explicit fixture at ResourceBudgets.legacy().
+     * It factors only capability selection, not arbitrary arguments or resource-budget profiles.
+     * No global 2^33 subset enumeration is attempted: every assignment to a method's independently
+     * specified dependencies is checked, and any query of an undeclared dependency fails closed.
+     */
+    @Test public void allCapabilitySelectionsMatchCatalogAndTypedValidators() throws Exception {
+        CapabilityDecisionTree.requireReviewedProductionSources();
+        BridgeDependencyFixtures.Fixture[] calls = BridgeDependencyFixtures.ALL;
+        assertEquals(134, calls.length);
+        assertEquals(33, CapabilityCatalog.NAMES.size());
+        Set<String> methods = new LinkedHashSet<>();
+        for (BridgeDependencyFixtures.Fixture call : calls)
+            assertTrue("Duplicate fixture: " + call.method, methods.add(call.method));
+        assertEquals("Every catalog method needs an explicit typed fixture", CapabilityCatalog.METHODS.keySet(), methods);
+
+        int validLeaves = 0, invalidLeaves = 0, truthTableRows = 0;
+        int parsedSelections = 0, rejectedSelections = 0, wireComparisons = 0;
+        int[] oracleInvocations = {0};
+        for (BridgeDependencyFixtures.Fixture call : calls) {
+            CapabilityCatalog.Method operation = CapabilityCatalog.METHODS.get(call.method);
+            assertEquals("Independent primary capability for " + call.method, call.primary, operation.capability);
+            Set<String> required = call.requiredCapabilities();
+            Set<String> beforeArguments = call.preArgumentCapabilities();
+            assertTrue(call.method, CapabilityCatalog.SUPPORTED.containsAll(required));
+            assertTrue(call.method, required.containsAll(beforeArguments));
+            String valid = request(call.method, call.arguments);
+            String invalid = request(call.method, new JSONObject(call.arguments).put("undeclared", true).toString());
+            CapabilityDecisionTree<Object> validTree = dependencyTree(call.method, valid, required, oracleInvocations);
+            CapabilityDecisionTree<Object> invalidTree = dependencyTree(call.method, invalid, beforeArguments, oracleInvocations);
+            assertEquals(call.method + " valid reachable leaves", required.size() + 1, validTree.leaves());
+            assertEquals(call.method + " invalid reachable leaves", beforeArguments.size() + 1, invalidTree.leaves());
+            validLeaves += validTree.leaves(); invalidLeaves += invalidTree.leaves();
+
+            // incomingShare's documents prerequisite belongs to configuration validity, not the
+            // wire membership predicate. Keep that distinction explicit in this truth table.
+            Set<String> relevant = new LinkedHashSet<>(required);
+            if ("incomingShare".equals(call.primary)) relevant.add("documents");
+            List<String> relevantList = new ArrayList<>(relevant);
+            assertTrue("Bound the per-method table, never shift by the catalog size", relevantList.size() < 31);
+            int assignments = 1 << relevantList.size();
+            for (int mask = 0; mask < assignments; mask++) {
+                Set<String> minimal = new LinkedHashSet<>();
+                for (int bit = 0; bit < relevantList.size(); bit++)
+                    if ((mask & (1 << bit)) != 0) minimal.add(relevantList.get(bit));
+                for (boolean allIrrelevantPresent : new boolean[]{false, true}) {
+                    Set<String> selected = new LinkedHashSet<>(minimal);
+                    if (allIrrelevantPresent) {
+                        for (String capability : CapabilityCatalog.NAMES)
+                            if (!relevant.contains(capability)) selected.add(capability);
+                    }
+                    String context = call.method + " mask=" + mask + " irrelevant=" + allIrrelevantPresent;
+                    Object expectedValid = selected.containsAll(required) ? operation : "CAPABILITY_DENIED";
+                    Object expectedInvalid = selected.containsAll(beforeArguments) ? call.invalidExtraCode() : "CAPABILITY_DENIED";
+                    assertEquals(context + " valid oracle", expectedValid, validTree.outcome(selected));
+                    assertEquals(context + " invalid oracle", expectedInvalid, invalidTree.outcome(selected));
+                    truthTableRows++;
+
+                    boolean realizable = (!selected.contains("jobs") || selected.contains("network"))
+                            && (!selected.contains("incomingShare") || selected.contains("documents"));
+                    if (!realizable) {
+                        try { dependencyConfig(selected); fail(context + " must reject impossible configuration"); }
+                        catch (FactoryException rejected) { assertEquals(context, "INVALID_CONFIG", rejected.code); }
+                        rejectedSelections++;
+                        // Abstract oracle outcomes above are NOT described as real wire validation.
+                        continue;
+                    }
+                    FactoryConfig parsed = dependencyConfig(selected);
+                    assertEquals(context + " parsed selection", selected, parsed.capabilities);
+                    assertEquals(context + " capability count", selected.size(), parsed.capabilities.size());
+                    for (String capability : CapabilityCatalog.NAMES)
+                        assertEquals(context + " " + capability, selected.contains(capability), parsed.capabilities.contains(capability));
+                    assertEquals(context + " fixed budget slice",
+                            ResourceBudgetsJson.toJson(com.jarvys.factory.contract.ResourceBudgets.legacy()).toString(),
+                            ResourceBudgetsJson.toJson(parsed.resources).toString());
+                    assertEquals(context + " valid parsed wire", expectedValid, wireOutcome(valid, parsed));
+                    assertEquals(context + " invalid parsed wire", expectedInvalid, wireOutcome(invalid, parsed));
+                    parsedSelections++; wireComparisons += 2;
+                }
             }
         }
-        // All reachable membership paths, not a hand-picked projection or cached test result.
-        assertEquals(99, validLeaves);
-        assertEquals(46, invalidLeaves);
-        assertEquals(198, wireInvocations[0]);
-        int checked = 0;
-        long assertions = 0;
-        for (int mask = 0; mask < (1 << com.jarvys.factory.contract.CapabilityCatalog.NAMES.size()); mask++) {
-            org.json.JSONArray declared = new org.json.JSONArray();
-            for (int bit = 0; bit < com.jarvys.factory.contract.CapabilityCatalog.NAMES.size(); bit++) if ((mask & (1 << bit)) != 0)
-                declared.put(com.jarvys.factory.contract.CapabilityCatalog.NAMES.get(bit));
-            FactoryConfig selected = config(declared.toString());
-            // Independently bind the parsed set used for replay to every bit of this subset.
-            assertEquals(Integer.bitCount(mask), selected.capabilities.size());
-            for (int bit = 0; bit < com.jarvys.factory.contract.CapabilityCatalog.NAMES.size(); bit++)
-                assertEquals((mask & (1 << bit)) != 0, selected.capabilities.contains(
-                        com.jarvys.factory.contract.CapabilityCatalog.NAMES.get(bit)));
-            for (int index = 0; index < calls.length; index++) {
-                String[] call = calls[index];
-                com.jarvys.factory.contract.CapabilityCatalog.Method method =
-                    com.jarvys.factory.contract.CapabilityCatalog.METHODS.get(call[0]);
-                assertNotNull(method);
-                Object actual = validTrees.get(index).outcome(selected.capabilities);
-                if ((method.capability == null || selected.capabilities.contains(method.capability))
-                        && (!(call[0].equals("share.file") || call[0].startsWith("photos.") || call[0].equals("audio.play") || call[0].equals("database.backupExport") || call[0].equals("database.backupImport") || call[0].equals("storage.backupExport") || call[0].equals("storage.backupImport")) || selected.capabilities.contains("documents"))) {
-                    assertSame(method, actual);
-                } else assertEquals("CAPABILITY_DENIED", actual);
-                assertEquals("INVALID_ARGUMENT", invalidTrees.get(index).outcome(selected.capabilities));
-                assertions += 2;
-            }
-            checked++;
-        }
-        assertEquals(1048576, checked);
-        assertEquals(96468992L, assertions);
+        assertEquals(285, validLeaves);
+        assertEquals(143, invalidLeaves);
+        assertEquals(588, oracleInvocations[0]);
+        assertEquals(618, truthTableRows);
+        assertEquals(564, parsedSelections);
+        assertEquals(54, rejectedSelections);
+        assertEquals(1128, wireComparisons);
+    }
+
+    private static CapabilityDecisionTree<Object> dependencyTree(String method, String raw,
+            Set<String> allowedQueries, int[] invocations) throws Exception {
+        Set<String> observed = new LinkedHashSet<>();
+        CapabilityDecisionTree<Object> tree = CapabilityDecisionTree.explore(oracle -> {
+            invocations[0]++;
+            // The oracle explores every reachable membership path. Restricting queries prevents
+            // hidden dependencies from escaping a projection onto our expected truth-table axes.
+            Set<String> checkedOracle = new AbstractSet<String>() {
+                @Override public boolean contains(Object capability) {
+                    assertTrue(method + " queried unexpected dependency " + capability, allowedQueries.contains(capability));
+                    observed.add((String) capability);
+                    return oracle.contains(capability);
+                }
+                @Override public Iterator<String> iterator() { throw new AssertionError("Membership proof cannot enumerate its oracle"); }
+                @Override public int size() { throw new AssertionError("Membership proof cannot count its oracle"); }
+            };
+            return wireOutcome(raw, CapabilityDecisionTree.config(checkedOracle));
+        });
+        assertEquals(method + " must exercise every expected dependency", allowedQueries, observed);
+        return tree;
+    }
+
+    private static Object wireOutcome(String raw, FactoryConfig config) throws Exception {
+        try { return BridgeProtocol.validate(BridgeProtocol.ORIGIN, true, raw, config).operation; }
+        catch (FactoryException rejected) { return rejected.code; }
+    }
+
+    private static FactoryConfig dependencyConfig(Set<String> selected) throws Exception {
+        JSONObject config = new JSONObject().put("schemaVersion", 1).put("appId", "com.example.notes")
+                .put("name", "Notes").put("entryPoint", "www/index.html").put("capabilities", new JSONArray(selected));
+        if (selected.contains("incomingShare")) config.put("incomingShare", new JSONObject()
+                .put("mimeTypes", new JSONArray(Arrays.asList("text/plain"))).put("multiple", false));
+        if (selected.contains("bluetooth")) config.put("bluetooth", new JSONObject()
+                .put("version", 1).put("scanPrivacy", "neverForLocation"));
+        // Omit resourceBudgets deliberately: both parsed configurations and the membership-oracle
+        // constructor must use ResourceBudgets.legacy(); this is not a proof for arbitrary budgets.
+        return FactoryConfig.parsePreview(config.toString());
     }
 
     @Test public void sharingRejectsUrisPathsMimeWildcardsAndExtraAuthority() throws Exception {
@@ -222,7 +331,7 @@ public class BridgeProtocolTest {
             rejected("INVALID_ARGUMENT",BridgeProtocol.ORIGIN,true,request("documents.create",new JSONObject().put("filename","file.txt").put("mimeType",mime).toString()),docs);
         for (String data : new String[]{"", "AA", "AB==", "AAA", "AAB=", "AA==\n", "AA--", "====", new String(new char[43696]).replace('\0','A')})
             rejected("INVALID_ARGUMENT",BridgeProtocol.ORIGIN,true,request("documents.write",new JSONObject().put("handle",HANDLE).put("offset",0).put("data",data).toString()),docs);
-        for (String number : new String[]{"0.0","1e0","-1","16777217","2147483648","\"0\"","null"})
+        for (String number : new String[]{"0.0","1e0","-1","4294967297","9223372036854775807","\"0\"","null"})
             rejected("INVALID_ARGUMENT",BridgeProtocol.ORIGIN,true,request("documents.read","{\"handle\":\""+HANDLE+"\",\"offset\":"+number+",\"length\":1}"),docs);
         for (String extra : new String[]{"uri","path","url","persist","packageName"}) {
             JSONObject args = new JSONObject().put("handle",HANDLE).put(extra,"content://private");
@@ -235,7 +344,11 @@ public class BridgeProtocolTest {
         BridgeProtocol.validate(BridgeProtocol.ORIGIN,true,request("documents.read",new JSONObject().put("handle",HANDLE).put("offset",16777216).put("length",1).toString()),docs);
         String maximum = java.util.Base64.getEncoder().encodeToString(new byte[32768]);
         BridgeProtocol.validate(BridgeProtocol.ORIGIN,true,request("documents.write",new JSONObject().put("handle",HANDLE).put("offset",16744448).put("data",maximum).toString()),docs);
-        rejected("INVALID_ARGUMENT",BridgeProtocol.ORIGIN,true,request("documents.write",new JSONObject().put("handle",HANDLE).put("offset",16744449).put("data",maximum).toString()),docs);
+        // Signed legacy document budgets do not narrow the grammar's four-GiB coordinate space.
+        for (long offset : new long[]{16777217L, 2147483648L, BridgeProtocol.MAX_DOCUMENT_POSITION})
+            BridgeProtocol.validate(BridgeProtocol.ORIGIN,true,request("documents.read",new JSONObject().put("handle",HANDLE).put("offset",offset).put("length",1).toString()),docs);
+        BridgeProtocol.validate(BridgeProtocol.ORIGIN,true,request("documents.write",new JSONObject().put("handle",HANDLE).put("offset",BridgeProtocol.MAX_DOCUMENT_POSITION - 32768).put("data",maximum).toString()),docs);
+        rejected("INVALID_ARGUMENT",BridgeProtocol.ORIGIN,true,request("documents.write",new JSONObject().put("handle",HANDLE).put("offset",BridgeProtocol.MAX_DOCUMENT_POSITION - 32767).put("data",maximum).toString()),docs);
     }
 
     @Test public void photosRejectEveryCallerControlledOptionAndRequireBothDeclarations() throws Exception {

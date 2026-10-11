@@ -12,12 +12,20 @@ import java.util.function.BooleanSupplier;
 
 /** Authenticated point-in-time source data, never an operation authorization or effect lease. */
 public final class NativeInstalledSource {
+    public enum PolicyMode { ALLOW_ALWAYS, ASK, DENY }
+    /** Optional point-in-time mode only. Never replaces an effect grant. */
+    public final PolicyMode policyMode;
     public final String appId, certificateSha256, apkSha256, recordSha256;
     public final long versionCode;
     public final ResourceBudgets resources;
 
     private NativeInstalledSource(String appId, String certificateSha256, String apkSha256,
                                   String recordSha256, long versionCode, ResourceBudgets resources) {
+        this(appId,certificateSha256,apkSha256,recordSha256,versionCode,resources,null);
+    }
+    private NativeInstalledSource(String appId,String certificateSha256,String apkSha256,String recordSha256,
+                                  long versionCode,ResourceBudgets resources,PolicyMode policyMode) {
+        this.policyMode=policyMode;
         this.appId = appId;
         this.certificateSha256 = certificateSha256;
         this.apkSha256 = apkSha256;
@@ -33,6 +41,17 @@ public final class NativeInstalledSource {
      */
     public static NativeInstalledSource describe(Context context, FactoryConfig config, String capability,
                                                 long receiverDeadlineElapsedMs, BooleanSupplier current) throws FactoryException {
+        return describeInternal(context,config,capability,null,receiverDeadlineElapsedMs,current);
+    }
+    /** No UI, grant, policy mutation or provider-content access. DENY can stop expensive preparation. */
+    public static NativeInstalledSource describeOperation(Context context,FactoryConfig config,String operation,
+                                                         long deadlineElapsedMs,BooleanSupplier current) throws FactoryException {
+        com.jarvys.factory.contract.CapabilityCatalog.Method method=com.jarvys.factory.contract.CapabilityCatalog.METHODS.get(operation);
+        if(method==null || method.capability==null) throw new IllegalArgumentException("Known installed operation required");
+        return describeInternal(context,config,method.capability,operation,deadlineElapsedMs,current);
+    }
+    private static NativeInstalledSource describeInternal(Context context,FactoryConfig config,String capability,String operation,
+                                                         long receiverDeadlineElapsedMs,BooleanSupplier current) throws FactoryException {
         if (context == null || config == null || current == null || capability == null ||
                 !config.appId.equals(context.getPackageName()))
             throw new IllegalArgumentException("Installed source dependencies required");
@@ -50,14 +69,17 @@ public final class NativeInstalledSource {
             Bundle input = new Bundle();
             input.putInt("protocolVersion", 1); input.putString("nonce", nonce); input.putString("capability", capability);
             input.putLong("deadlineElapsedMs", deadline);
+            if(operation!=null) input.putString("operation",operation);
             requireCurrent(current, deadline);
             Bundle result = context.getContentResolver().call(
                     Uri.parse("content://" + config.documentBroker.packageName + ".factory.operations"),
                     "describe_installed", null, input);
             requireCurrent(current, deadline);
+            HashSet<String> expectedKeys=new HashSet<>(Arrays.asList("protocolVersion", "nonce", "capability", "deadlineElapsedMs",
+                    "appId", "certificateSha256", "apkSha256", "recordSha256", "versionCode", "resourceBudgets"));
+            if(operation!=null) { expectedKeys.add("operation"); expectedKeys.add("policyMode"); }
             if (result == null || result.hasFileDescriptors() ||
-                    !result.keySet().equals(new HashSet<>(Arrays.asList("protocolVersion", "nonce", "capability", "deadlineElapsedMs",
-                            "appId", "certificateSha256", "apkSha256", "recordSha256", "versionCode", "resourceBudgets"))) ||
+                    !result.keySet().equals(expectedKeys) ||
                     !Integer.valueOf(1).equals(result.get("protocolVersion")) || !nonce.equals(result.get("nonce")) ||
                     !capability.equals(result.get("capability")) || !Long.valueOf(deadline).equals(result.get("deadlineElapsedMs")) ||
                     !config.appId.equals(result.get("appId")))
@@ -70,7 +92,12 @@ public final class NativeInstalledSource {
             if (NativeOperationHostIdentity.verify(context, config.documentBroker) != hostUid)
                 throw new SecurityException("Installed source host changed");
             requireCurrent(current, deadline);
-            return new NativeInstalledSource(config.appId, certificate, apk, record, (Long) version, resources);
+            PolicyMode mode=null;
+            if(operation!=null) {
+                if(!operation.equals(result.get("operation")) || !(result.get("policyMode") instanceof String)) throw new SecurityException("Policy query reply differs");
+                mode=PolicyMode.valueOf((String)result.get("policyMode"));
+            }
+            return new NativeInstalledSource(config.appId, certificate, apk, record, (Long) version, resources,mode);
         } catch (Exception unavailable) {
             throw new FactoryException("SOURCE_UNAVAILABLE", "Current authenticated installed source is unavailable; no authority was assumed.");
         }

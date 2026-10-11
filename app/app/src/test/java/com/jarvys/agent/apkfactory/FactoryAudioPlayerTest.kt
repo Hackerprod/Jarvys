@@ -9,9 +9,11 @@ class FactoryAudioPlayerTest {
         var writes = 0; var plays = 0; var stops = 0; var releases = 0
         var writeFails = false; var shortWrite = false; var releaseFails = false; var stopFails = false; var playFails = false
         var marker: (() -> Unit)? = null
-        override fun write(pcm: FactoryAudioPcm): Int { writes++; if (writeFails) error("write"); return if (shortWrite) 0 else pcm.pcmBytes }
+        var feeding = false; var ready: (() -> Unit)? = null; var failed: (() -> Unit)? = null
+        override fun quiescent(onReady: () -> Unit): Boolean { ready = onReady; return !feeding }
+        override fun prepare() { writes++; if (writeFails || shortWrite) error("write") }
         override fun marker(frames: Int, callback: () -> Unit) { marker = callback }
-        override fun play() { plays++; if (playFails) error("play") }
+        override fun play(onFailure: () -> Unit) { failed = onFailure; plays++; if (playFails) error("play") }
         override fun stop() { stops++; if (stopFails) error("stop") }
         override fun release() { releases++; if (releaseFails) error("release") }
     }
@@ -120,6 +122,22 @@ class FactoryAudioPlayerTest {
         try { player.start(prepared, { true }) { }; fail("worker start") } catch (_: IllegalStateException) { }
         try { player.stop(); fail("worker stop") } catch (_: IllegalStateException) { }
         p.main = true; assertTrue(player.discard(prepared).cleanupConfirmed)
+    }
+    @Test fun cancelledFeederMustActuallyReturnBeforeTerminalCleanupCallback() {
+        val (p, player, prepared) = fixture(); p.track.feeding = true; var callbacks = 0
+        player.start(prepared, { true }) { assertTrue(it.cleanupConfirmed); callbacks++ }
+        assertFalse(player.stop().cleanupConfirmed)
+        assertEquals(0, p.track.releases); assertEquals(0, callbacks)
+        assertFalse(player.retryCleanup().cleanupConfirmed); assertEquals(0, callbacks)
+        p.track.feeding = false; p.track.ready!!.invoke()
+        assertEquals(1, p.track.releases); assertEquals(1, callbacks)
+        p.track.ready!!.invoke(); assertEquals(1, callbacks)
+    }
+    @Test fun feederFailureTerminatesOnceAndNeverReplays() {
+        val (p, player, prepared) = fixture(); var callbacks = 0
+        assertTrue(player.start(prepared, { true }) { assertTrue(it.reason.contains("unknown")); callbacks++ })
+        p.track.failed!!.invoke(); p.track.failed!!.invoke()
+        assertEquals(1, callbacks); assertEquals(1, p.track.plays); assertEquals(1, p.track.releases)
     }
     @Test fun playFailureStopsAndCannotRetry() {
         val (p, player, prepared) = fixture(); p.track.playFails = true

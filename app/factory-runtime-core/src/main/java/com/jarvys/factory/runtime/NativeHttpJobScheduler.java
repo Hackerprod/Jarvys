@@ -1,5 +1,7 @@
 package com.jarvys.factory.runtime;
 
+import android.Manifest;
+import androidx.annotation.RequiresPermission;
 import android.app.job.JobInfo;
 import android.app.job.JobScheduler;
 import android.content.ComponentName;
@@ -18,6 +20,8 @@ public final class NativeHttpJobScheduler implements Platform {
         scheduler=(JobScheduler)context.getSystemService(Context.JOB_SCHEDULER_SERVICE);
         if(scheduler==null)throw new FactoryException("UNAVAILABLE","Android JobScheduler is unavailable.");
     }
+    // The generated jobs capability declares these; this optional library must not add them globally.
+    @RequiresPermission(allOf = {Manifest.permission.INTERNET, Manifest.permission.ACCESS_NETWORK_STATE, Manifest.permission.RECEIVE_BOOT_COMPLETED})
     @Override public boolean schedule(Row row)throws FactoryException{
         try{
             ServiceInfo info=context.getPackageManager().getServiceInfo(component,0);

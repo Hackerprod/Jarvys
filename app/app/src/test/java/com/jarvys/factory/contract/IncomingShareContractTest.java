@@ -58,8 +58,33 @@ public class IncomingShareContractTest {
         ManifestPlan current=new ManifestPlan("org.example.old","Old",1,"1",0x7f010001,0x7f020001,caps);
         ManifestPlan old=new ManifestPlan("org.example.old","Old",1,"1",0x7f010001,0x7f020001,caps,ManifestPlan.Profile.V3_BEFORE_INCOMING_SHARE);
         assertArrayEquals(ManifestXml.encode(current), ManifestXml.encode(old));
-        for(ManifestPlan.Profile profile:ManifestPlan.Profile.values()) if(profile!=ManifestPlan.Profile.CURRENT)
-            assertThrows(IllegalArgumentException.class, () -> new ManifestPlan("org.example.old","Old",1,"1",0x7f010001,0x7f020001,
-                    Arrays.asList("documents","incomingShare"),new IncomingSharePolicy(Collections.singletonList("text/plain"),false),profile));
+        for (boolean multiple : new boolean[]{false, true}) {
+            IncomingSharePolicy policy=new IncomingSharePolicy(Collections.singletonList("text/plain"),multiple);
+            ManifestPlan supported=new ManifestPlan("org.example.old","Old",1,"1",0x7f010001,0x7f020001,
+                    Arrays.asList("documents","incomingShare"),policy);
+            for (ManifestPlan.Profile profile : ManifestPlan.Profile.values()) {
+                switch (profile) {
+                    case CURRENT:
+                    case V4_BEFORE_GENERIC_NATIVE:
+                        ManifestPlan retained=new ManifestPlan("org.example.old","Old",1,"1",0x7f010001,0x7f020001,
+                                Arrays.asList("documents","incomingShare"),policy,profile);
+                        byte[] bytes=ManifestXml.encode(retained);
+                        assertArrayEquals(ManifestXml.encode(supported),bytes);
+                        ManifestAudit.read(bytes).verify(retained);
+                        ManifestAudit.verifyTree(bytes,retained.root);
+                        assertEquals(policy,retained.incomingShare);
+                        break;
+                    case V3_BEFORE_INCOMING_SHARE:
+                    case V2_BEFORE_NATIVE_OPERATIONS:
+                    case V1_BEFORE_CLIPBOARD_BROKER:
+                    case V1_BEFORE_SAFE_AREA:
+                        assertThrows(IllegalArgumentException.class, () -> new ManifestPlan("org.example.old","Old",1,"1",0x7f010001,0x7f020001,
+                                Arrays.asList("documents","incomingShare"),policy,profile));
+                        break;
+                    default:
+                        fail("Incoming-share support must be explicit for profile "+profile);
+                }
+            }
+        }
     }
 }

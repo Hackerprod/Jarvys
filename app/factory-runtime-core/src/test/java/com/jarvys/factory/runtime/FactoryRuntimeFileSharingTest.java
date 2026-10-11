@@ -18,7 +18,7 @@ import static org.junit.Assert.*;
 
 /** Synthetic runtime/broker boundary only; no chooser, recipient or user file. */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk={24,28,32},manifest=Config.NONE,shadows=FactoryRuntimeDocumentsTest.Features.class)
+@Config(sdk={24,28,32},manifest=Config.NONE,shadows={FactoryRuntimeDocumentsTest.Features.class,FileShareSnapshotOsShadow.class})
 @LooperMode(LooperMode.Mode.PAUSED)
 public class FactoryRuntimeFileSharingTest {
     public static class Screen extends Activity {
@@ -29,7 +29,7 @@ public class FactoryRuntimeFileSharingTest {
     private static class Host implements FactoryRuntime.Host {
         final MemoryBackend data=new MemoryBackend(); boolean preview;
         public InputStream open(String path){return new ByteArrayInputStream(new byte[0]);}
-        public String configuration(){return FactoryDispatcherTest.configuration("[\"documents\",\"share\"]");}
+        public String configuration(){try{return new JSONObject(FactoryDispatcherTest.configuration("[\"documents\",\"share\"]")).put("appId",RuntimeEnvironment.getApplication().getPackageName()).toString();}catch(Exception failure){throw new AssertionError(failure);}}
         public boolean isPreview(){return preview;}
         public BoundedStore.Backend storage(){return data;}
     }
@@ -40,6 +40,7 @@ public class FactoryRuntimeFileSharingTest {
         String error()throws Exception{assertNotNull(value);return value.getJSONObject("error").getString("code");}
     }
     private FactoryRuntime runtime; private Screen screen; private Host host; private int next;
+    private PreparationPolicyTestProvider preparationPolicy;
     static Field field(String name)throws Exception{Field f=FactoryRuntime.class.getDeclaredField(name);f.setAccessible(true);return f;}
     private DocumentHandles handles()throws Exception{return (DocumentHandles)field("documents").get(runtime);}
     private ThreadPoolExecutor worker()throws Exception{return (ThreadPoolExecutor)field("io").get(runtime);}
@@ -48,12 +49,18 @@ public class FactoryRuntimeFileSharingTest {
         DocumentBrokerIdentityTest.install(screen,DocumentBrokerIdentity.PRIMARY,new Signature(DocumentBrokerIdentityTest.CERTIFICATE));
         android.content.pm.ApplicationInfo info=screen.getPackageManager().getApplicationInfo(DocumentBrokerIdentity.PRIMARY,0);
         info.uid=17777;Shadows.shadowOf(screen.getPackageManager()).setPackagesForUid(17777,DocumentBrokerIdentity.PRIMARY);
+        preparationPolicy=PreparationPolicyTestProvider.install(screen);
         host=new Host();runtime=new FactoryRuntime(screen,new FrameLayout(screen),host);
         field("config").set(runtime,FactoryConfig.parsePreview(new JSONObject(host.configuration()).put("documentBroker",
                 new JSONObject().put("packageName",DocumentBrokerIdentity.PRIMARY).put("certificateSha256",DocumentBrokerIdentityTest.digest())).toString()));
         field("store").set(runtime,new BoundedStore(host.data));runtime.onResume();
     }
-    @After public void stop()throws Exception{runtime.close();assertTrue(worker().awaitTermination(5,TimeUnit.SECONDS));Shadows.shadowOf(Looper.getMainLooper()).idle();screen.finish();}
+    @After public void stop()throws Exception{runtime.close();assertTrue(worker().awaitTermination(5,TimeUnit.SECONDS));waitTransferCleanup();Shadows.shadowOf(Looper.getMainLooper()).idle();screen.finish();}
+    private static void waitTransferCleanup()throws Exception{
+        Field slot=FileShareTransfer.class.getDeclaredField("active"),lock=FileShareTransfer.class.getDeclaredField("LOCK");slot.setAccessible(true);lock.setAccessible(true);
+        long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);
+        while(true){synchronized(lock.get(null)){if(slot.get(null)==null)return;}if(System.nanoTime()>=end)fail("File-share cleanup still owns admission");Thread.sleep(2);}
+    }
     private Response request(String method,JSONObject args)throws Exception{
         Response r=new Response();Method receive=FactoryRuntime.class.getDeclaredMethod("receive",String.class,JavaScriptReplyProxy.class);receive.setAccessible(true);
         receive.invoke(runtime,new JSONObject().put("v",1).put("id","share"+(++next)).put("method",method).put("args",args).toString(),r);return r;
@@ -71,6 +78,49 @@ public class FactoryRuntimeFileSharingTest {
         runtime.onPause();runtime.onActivityResult(43,Activity.RESULT_OK,result());assertNull(reply.value);runtime.onResume();
         assertTrue(reply.value.getJSONObject("result").getBoolean("chooserOpened"));assertFalse(reply.value.getJSONObject("result").getBoolean("deliveryConfirmed"));
     }
+    @Test public void expandedSignedBudgetSelectsLongEnvelopeOnlyForLargeSnapshot()throws Exception{
+        final long size=9L*1024*1024+3;
+        field("config").set(runtime,FactoryConfig.parsePreview(new JSONObject(host.configuration())
+                .put("resourceBudgets",new JSONObject().put("version",1).put("fileShare",new JSONObject().put("sourceBytes",size)))
+                .put("documentBroker",new JSONObject().put("packageName",DocumentBrokerIdentity.PRIMARY).put("certificateSha256",DocumentBrokerIdentityTest.digest())).toString()));
+        String token=handles().grantRead(new InputStream(){long offset;public int read(){throw new AssertionError();}
+            public int read(byte[] bytes,int start,int count){if(offset==size)return -1;int n=(int)Math.min(count,size-offset);java.util.Arrays.fill(bytes,start,start+n,(byte)7);offset+=n;return n;}});
+        Response reply=shareHandle(token);idle();assertNull(reply.value);assertNotNull(screen.launched);
+        assertEquals(2,screen.launched.getIntExtra("protocolVersion",0));assertTrue(screen.launched.getExtras().get("size") instanceof Long);
+        assertEquals(size,screen.launched.getLongExtra("size",0));
+        runtime.onActivityResult(43,Activity.RESULT_OK,result());assertFalse(reply.value.getJSONObject("result").getBoolean("deliveryConfirmed"));
+    }
+    @Test public void denyPreflightDoesNotReadConsumeOrCreateSnapshot()throws Exception{
+        preparationPolicy.mode=NativeInstalledSource.PolicyMode.DENY;
+        java.util.concurrent.atomic.AtomicInteger reads=new java.util.concurrent.atomic.AtomicInteger();
+        String handle=handles().grantRead(new InputStream(){public int read(){reads.incrementAndGet();return -1;}public int read(byte[]b,int o,int n){reads.incrementAndGet();return -1;}});
+        File root=new File(screen.getCacheDir(),FileShareSnapshot.FILE_SHARE_NAMESPACE);boolean existed=root.exists();
+        Response response=shareHandle(handle);idle();assertEquals("PERMISSION_DENIED",response.error());
+        assertEquals(0,reads.get());assertEquals(1,preparationPolicy.calls);assertEquals(existed,root.exists());assertNotNull(handles().metadata(handle));assertNull(screen.launched);
+    }
+    @Test public void askPreflightOnlyDescribesAndLeavesApprovalToContentBoundHost()throws Exception{
+        preparationPolicy.mode=NativeInstalledSource.PolicyMode.ASK;
+        Response response=share(new byte[]{1});idle();assertNull(response.value);assertNotNull(screen.launched);assertEquals(1,preparationPolicy.calls);
+        runtime.onActivityResult(43,Activity.RESULT_CANCELED,null);
+    }
+    @Test public void occupiedTransferAdmissionLeavesHandleUntouchedAndReleasesOnlyOwnUiClaim()throws Exception{
+        java.util.concurrent.atomic.AtomicInteger reads=new java.util.concurrent.atomic.AtomicInteger();
+        String token=handles().grantRead(new ByteArrayInputStream(new byte[]{1,2,3}){
+            @Override public synchronized int read(byte[] bytes,int offset,int count){reads.incrementAndGet();return super.read(bytes,offset,count);}
+        });
+        FileShareTransfer.Admission held=FileShareTransfer.reserve();
+        try{
+            Response blocked=shareHandle(token);assertEquals("SHARE_BUSY",blocked.error());
+            assertEquals(0,reads.get());assertEquals(0,preparationPolicy.calls);assertNotNull(handles().metadata(token));
+            assertNull(field("uiOwner").get(runtime));assertNull(field("fileShare").get(runtime));assertNull(screen.launched);
+        }finally{held.close();}
+        // Retry explicitly after releasing the held slot, using the same still-untouched handle.
+        Response fresh=shareHandle(token);idle();assertNull(fresh.value);assertNotNull(screen.launched);assertTrue(reads.get()>0);
+        runtime.onActivityResult(43,Activity.RESULT_OK,result());
+        assertTrue(fresh.value.getJSONObject("result").getBoolean("chooserOpened"));
+        assertFalse(fresh.value.getJSONObject("result").getBoolean("deliveryConfirmed"));
+        assertNull(field("uiOwner").get(runtime));assertNull(field("fileShare").get(runtime));
+    }
     @Test public void duplicateRequestsRemainBusyUntilBrokerCallback()throws Exception{
         Response original=share(new byte[]{1});idle();Response duplicate=share(new byte[]{2});assertEquals("BUSY",duplicate.error());
         request("documents.cancel",new JSONObject());assertEquals("CANCELLED",original.error());Response stillBusy=share(new byte[]{3});assertEquals("BUSY",stillBusy.error());
@@ -87,7 +137,7 @@ public class FactoryRuntimeFileSharingTest {
     }
     @Test public void launchFailureReleasesEndpointAndAllowsFreshRequest()throws Exception{
         screen.reject=true;Response failed=share(new byte[]{1});idle();assertEquals("SHARE_UNAVAILABLE",failed.error());assertNull(field("fileShare").get(runtime));
-        screen.reject=false;share(new byte[]{2});idle();assertNotNull(screen.launched);runtime.onActivityResult(43,Activity.RESULT_CANCELED,null);
+        waitTransferCleanup();screen.reject=false;share(new byte[]{2});idle();assertNotNull(screen.launched);runtime.onActivityResult(43,Activity.RESULT_CANCELED,null);
     }
     @Test public void forgedOrOverclaimingHostResultFailsClosed()throws Exception{
         for(int variant=0;variant<5;variant++){
@@ -95,24 +145,29 @@ public class FactoryRuntimeFileSharingTest {
             if(variant==0)output.putExtra("nonce","bad");if(variant==1)output.putExtra("deliveryConfirmed",true);
             if(variant==2)output.setData(android.net.Uri.parse("content://private/file"));if(variant==3)output.putExtra("unexpected",true);
             if(variant==4)output.putExtra("chooserOpened","true");
-            runtime.onActivityResult(43,Activity.RESULT_OK,output);assertEquals("SHARE_UNAVAILABLE",response.error());
+            runtime.onActivityResult(43,Activity.RESULT_OK,output);assertEquals("SHARE_UNAVAILABLE",response.error());waitTransferCleanup();
         }
     }
-    @Test public void wrongOrAmbiguousHostNeverReceivesSnapshot()throws Exception{
+    @Test public void sharedHostUidNeverReceivesSnapshot()throws Exception{
         DocumentBrokerIdentityTest.install(screen,DocumentBrokerIdentity.RECOVERY,new Signature(DocumentBrokerIdentityTest.CERTIFICATE));
+        Shadows.shadowOf(screen.getPackageManager()).setPackagesForUid(17777,DocumentBrokerIdentity.PRIMARY,DocumentBrokerIdentity.RECOVERY);
+        Response response=share(new byte[]{1});idle();assertEquals("SOURCE_UNAVAILABLE",response.error());assertNull(screen.launched);
+    }
+    @Test public void wrongPinnedHostCertificateNeverReceivesSnapshot()throws Exception{
+        DocumentBrokerIdentityTest.install(screen,DocumentBrokerIdentity.PRIMARY,new Signature("0102"));
         assertEquals("UNAVAILABLE",share(new byte[]{1}).error());assertNull(screen.launched);
     }
     @Test public void explicitCancelSettlesPromptlyWhileBlockedSnapshotRetainsAdmission()throws Exception{
         CountDownLatch entered=new CountDownLatch(1),release=new CountDownLatch(1);
         String token=handles().grantRead(new InputStream(){public int read(){return 0;}
-            public int read(byte[] bytes){entered.countDown();try{release.await();}catch(InterruptedException e){throw new AssertionError(e);}bytes[0]=1;return 1;}});
+            public int read(byte[] bytes,int offset,int count){entered.countDown();try{release.await();}catch(InterruptedException e){throw new AssertionError(e);}bytes[offset]=1;return 1;}});
         Response pending=shareHandle(token);
         try {
             assertTrue(entered.await(5,TimeUnit.SECONDS));request("documents.cancel",new JSONObject());
             assertEquals("CANCELLED",pending.error());assertNotNull(field("fileShare").get(runtime));
             try{FileShareTransfer.reserve();fail();}catch(FactoryException expected){assertEquals("SHARE_BUSY",expected.code);}
             release.countDown();idle();assertNull(screen.launched);assertNull(field("fileShare").get(runtime));
-            FileShareTransfer.reserve().close();
+            waitTransferCleanup();FileShareTransfer.reserve().close();
         } finally {release.countDown();}
     }
 

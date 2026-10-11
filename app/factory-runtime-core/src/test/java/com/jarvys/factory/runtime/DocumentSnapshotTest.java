@@ -68,8 +68,12 @@ public class DocumentSnapshotTest {
             handles.close(write); cleanup.remove().run();
         }
         final int[] reads={0};
-        String token=handles.grantRead(new ByteArrayInputStream(new byte[]{1}) {public int read(byte[] bytes){reads[0]++;return super.read(bytes,0,bytes.length);}});
-        rejects("DOCUMENT_QUOTA",() -> handles.snapshotForShare(token)); assertEquals(0,reads[0]); retired(token);
+        String token=handles.grantRead(new ByteArrayInputStream(new byte[]{1}) {public int read(byte[] bytes){assertEquals(1,bytes.length);reads[0]++;return super.read(bytes,0,bytes.length);}});
+        // The final charged byte may be read, but proving EOF may not borrow another byte.
+        rejects("DOCUMENT_QUOTA",() -> handles.snapshotForShare(token)); assertEquals(1,reads[0]); retired(token);
+        cleanup.remove().run();
+        String exhausted=handles.grantRead(new ByteArrayInputStream(new byte[]{2}) {public int read(byte[] bytes){reads[0]++;return super.read(bytes,0,bytes.length);}});
+        rejects("DOCUMENT_QUOTA",() -> handles.snapshotForShare(exhausted)); assertEquals(1,reads[0]); retired(exhausted);
     }
     @Test public void cancellationWhileReadingDiscardsStaleBytesAndConcurrentReadIsBusy() throws Exception {
         CountDownLatch entered=new CountDownLatch(1),release=new CountDownLatch(1);

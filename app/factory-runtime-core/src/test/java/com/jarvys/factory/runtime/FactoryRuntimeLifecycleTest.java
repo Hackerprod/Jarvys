@@ -1,6 +1,8 @@
 package com.jarvys.factory.runtime;
 
 import android.app.Activity;
+import android.content.Intent;
+import android.net.Uri;
 import android.widget.FrameLayout;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
@@ -43,8 +45,20 @@ public class FactoryRuntimeLifecycleTest {
         public void resetStorage() { memory.clear(); }
         void revoke() { synchronized (lock) { active = false; } }
     }
+    public static class ExportActivity extends Activity {
+        final CountDownLatch revokeEntered = new CountDownLatch(1), releaseRevoke = new CountDownLatch(1);
+        volatile Uri revokedUri;
+        volatile int revokedModes;
+        @Override public boolean hasWindowFocus() { return true; }
+        @Override public void revokeUriPermission(Uri uri, int modes) {
+            revokedUri = uri; revokedModes = modes; revokeEntered.countDown();
+            awaitUninterruptibly(releaseRevoke);
+        }
+    }
     private void create(Host host) throws Exception {
-        Activity activity = Robolectric.buildActivity(Activity.class).setup().get();
+        create(host, Robolectric.buildActivity(Activity.class).setup().get());
+    }
+    private void create(Host host, Activity activity) throws Exception {
         runtime = new FactoryRuntime(activity, new FrameLayout(activity), host);
         field("config").set(runtime, FactoryDispatcherTest.config());
         field("store").set(runtime, new BoundedStore(host.backend));
@@ -130,18 +144,92 @@ public class FactoryRuntimeLifecycleTest {
         release.countDown(); assertTrue(executor().awaitTermination(5, TimeUnit.SECONDS));
         assertTrue(host.memory.read().isEmpty());
     }
-    @Test public void outstandingExportTombstoneSurvivesPageInvalidationUntilItsResult() throws Exception {
-        Host host = new Host(); create(host);
+    private Object createReply(String id) throws Exception {
         Class<?> replyType = Class.forName(FactoryRuntime.class.getName() + "$Reply");
         java.lang.reflect.Constructor<?> replyConstructor = replyType.getDeclaredConstructors()[0]; replyConstructor.setAccessible(true);
-        Object reply = replyConstructor.newInstance(runtime, "old", "export.text", null, 0);
+        Object reply = replyConstructor.newInstance(runtime, id, "export.text", null, field("generation").getInt(runtime));
+        @SuppressWarnings("unchecked") Map<String, Object> pending = (Map<String, Object>) field("pending").get(runtime);
+        pending.put(id, reply); return reply;
+    }
+    private Object createExport(String id) throws Exception {
+        Object reply = createReply(id); field("uiOwner").set(runtime, reply);
         Class<?> exportType = Class.forName(FactoryRuntime.class.getName() + "$Export");
         java.lang.reflect.Constructor<?> exportConstructor = exportType.getDeclaredConstructors()[0]; exportConstructor.setAccessible(true);
         Object export = exportConstructor.newInstance(runtime, reply, "private-fixture"); field("export").set(runtime, export);
+        return export;
+    }
+    private Object exportField(Object export, String name) throws Exception {
+        Field value = export.getClass().getDeclaredField(name); value.setAccessible(true); return value.get(export);
+    }
+    private boolean claimUi(Object reply) throws Exception {
+        Method claim = FactoryRuntime.class.getDeclaredMethod("claimUi", reply.getClass()); claim.setAccessible(true);
+        return (Boolean) claim.invoke(runtime, reply);
+    }
+    @Test public void outstandingExportTombstoneSurvivesPageInvalidationUntilItsResult() throws Exception {
+        Host host = new Host(); create(host); runtime.onPause();
+        Object export = createExport("old");
         Method invalidate = FactoryRuntime.class.getDeclaredMethod("invalidate"); invalidate.setAccessible(true); invalidate.invoke(runtime);
         assertSame(export, field("export").get(runtime));
-        Field text = exportType.getDeclaredField("text"); text.setAccessible(true); assertNull(text.get(export));
+        assertNull(exportField(export, "text"));
+        runtime.onActivityResult(42, Activity.RESULT_CANCELED, null);
+        assertSame(export, field("export").get(runtime));
+        runtime.onActivityResult(41, Activity.RESULT_CANCELED, null);
+        assertNull(field("export").get(runtime)); assertNull(field("uiOwner").get(runtime));
         runtime.onActivityResult(41, Activity.RESULT_CANCELED, null);
         assertNull(field("export").get(runtime));
+    }
+    @Test public void staleSuccessfulExportResultDrainsWithoutRetainingPrivateResult() throws Exception {
+        Host host = new Host(); ExportActivity activity = Robolectric.buildActivity(ExportActivity.class).setup().get();
+        create(host, activity); runtime.onPause();
+        Uri uri = Uri.parse("content://synthetic.provider/old-export");
+        java.util.concurrent.atomic.AtomicInteger opens = new java.util.concurrent.atomic.AtomicInteger();
+        java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream();
+        org.robolectric.Shadows.shadowOf(activity.getContentResolver()).registerOutputStreamSupplier(uri, () -> {
+            opens.incrementAndGet(); return output;
+        });
+        Object export = createExport("old");
+        Method invalidate = FactoryRuntime.class.getDeclaredMethod("invalidate"); invalidate.setAccessible(true); invalidate.invoke(runtime);
+        Intent result = new Intent().setData(uri).addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        ThreadPoolExecutor exports = (ThreadPoolExecutor) field("EXPORT_IO").get(null);
+        long exportTasks = exports.getTaskCount();
+        try {
+            runtime.onActivityResult(41, Activity.RESULT_OK, result);
+            assertNull(field("export").get(runtime)); assertNull(field("uiOwner").get(runtime));
+            assertNull(exportField(export, "text")); assertNull(exportField(export, "result"));
+            assertTrue(((Map<?, ?>) field("pending").get(runtime)).isEmpty());
+            assertTrue(activity.revokeEntered.await(5, TimeUnit.SECONDS));
+            assertEquals(uri, activity.revokedUri); assertEquals(Intent.FLAG_GRANT_WRITE_URI_PERMISSION, activity.revokedModes);
+            assertEquals(1, ((java.util.concurrent.atomic.AtomicInteger) field("documentResources").get(runtime)).get());
+            runtime.onResume();
+            assertFalse(claimUi(createReply("blocked-until-cleanup")));
+            assertNull(field("uiOwner").get(runtime)); assertNull(field("export").get(runtime));
+            assertTrue(((Map<?, ?>) field("pending").get(runtime)).isEmpty());
+            assertNull(org.robolectric.Shadows.shadowOf(activity).getNextStartedActivityForResult());
+            assertEquals(exportTasks, exports.getTaskCount()); assertEquals(0, opens.get()); assertEquals(0, output.size());
+        } finally { activity.releaseRevoke.countDown(); }
+        // Hold both cleanup workers; a single barrier could overtake cleanup on the other worker.
+        CountDownLatch cleanupIdle = new CountDownLatch(2), releaseBarriers = new CountDownLatch(1);
+        java.util.concurrent.Executor cleanup = (java.util.concurrent.Executor) field("DOCUMENT_CLEANUP").get(null);
+        Runnable barrier = () -> { cleanupIdle.countDown(); awaitUninterruptibly(releaseBarriers); };
+        try {
+            cleanup.execute(barrier); cleanup.execute(barrier);
+            assertTrue(cleanupIdle.await(5, TimeUnit.SECONDS));
+            assertEquals(0, ((java.util.concurrent.atomic.AtomicInteger) field("documentResources").get(runtime)).get());
+        } finally { releaseBarriers.countDown(); }
+        Object fresh = createReply("fresh-after-cleanup");
+        assertTrue(claimUi(fresh)); assertSame(fresh, field("uiOwner").get(runtime));
+        assertNull(field("export").get(runtime));
+    }
+    @Test public void currentExportResultStillWaitsForResume() throws Exception {
+        Host host = new Host(); create(host); runtime.onPause();
+        Object export = createExport("current");
+        assertTrue(host.active); assertFalse(field("documentForeground").getBoolean(runtime));
+        runtime.onActivityResult(41, Activity.RESULT_CANCELED, null);
+        assertSame(export, field("export").get(runtime)); assertNotNull(field("uiOwner").get(runtime));
+        assertEquals("private-fixture", exportField(export, "text"));
+        assertTrue((Boolean) exportField(export, "returned"));
+        runtime.onResume();
+        assertNull(field("export").get(runtime)); assertNull(field("uiOwner").get(runtime));
+        assertTrue(((Map<?, ?>) field("pending").get(runtime)).isEmpty());
     }
 }

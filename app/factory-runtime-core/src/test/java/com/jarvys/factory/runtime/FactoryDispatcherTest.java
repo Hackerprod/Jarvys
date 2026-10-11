@@ -12,6 +12,19 @@ public class FactoryDispatcherTest {
     static String configuration(String capabilities) {
         return "{\"schemaVersion\":1,\"appId\":\"com.example.generated\",\"name\":\"Example\",\"entryPoint\":\"www/index.html\",\"capabilities\":" + capabilities + "}";
     }
+    /** A valid unrelated selection, including each capability's mandatory policy/dependencies. */
+    static FactoryConfig configForCapability(String capability) throws Exception {
+        JSONArray capabilities = new JSONArray().put(capability);
+        JSONObject value = new JSONObject(configuration(capabilities.toString()));
+        if ("incomingShare".equals(capability)) {
+            capabilities.put("documents");
+            value.put("incomingShare", new JSONObject().put("mimeTypes", new JSONArray().put("text/plain")).put("multiple", false));
+        }
+        if ("jobs".equals(capability)) capabilities.put("network");
+        if ("bluetooth".equals(capability))
+            value.put("bluetooth", new JSONObject().put("version", 1).put("scanPrivacy", "neverForLocation"));
+        return FactoryConfig.parsePreview(value.put("capabilities", capabilities).toString());
+    }
     static FactoryConfig config() throws Exception {
         return FactoryConfig.parsePreview(configuration("[\"storage\",\"device\",\"haptics\",\"share\",\"clipboard\",\"export\"]"));
     }
@@ -217,7 +230,7 @@ public class FactoryDispatcherTest {
                 JSONObject info = (JSONObject) FactoryDispatcher.dispatch(request("runtime.info", new JSONObject(), config), config,
                         new BoundedStore(new MemoryBackend()), FactoryDispatcher.metadata(mode, "host", 35, 35), FactoryDispatcher.simulatedEffects());
                 assertTrue(info.getBoolean("offline"));
-                assertEquals("embedded_webview", info.getString("offlineScope"));
+                assertEquals("embedded_webview_configuration_not_process_isolation", info.getString("offlineScope"));
                 assertTrue(info.getBoolean("browserMayUseExternalNetwork"));
                 assertEquals(mode, info.getString("mode"));
             }
@@ -282,7 +295,7 @@ public class FactoryDispatcherTest {
             }));
             JSONObject info=(JSONObject)FactoryDispatcher.dispatch(request("runtime.info",new JSONObject(),config),config,store,
                     FactoryDispatcher.previewMetadata("host",35,35),FactoryDispatcher.simulatedEffects());
-            assertEquals("embedded_webview",info.getString("offlineScope"));assertTrue(info.getBoolean("externalRecipientsMayUseNetwork"));
+            assertEquals("embedded_webview_configuration_not_process_isolation",info.getString("offlineScope"));assertTrue(info.getBoolean("externalRecipientsMayUseNetwork"));
             assertFalse(info.getBoolean("externalActionConfirmed"));assertTrue(info.getBoolean("externalLaunchBrokerRequired"));
             assertEquals(1,info.getInt("externalLaunchProtocolVersion"));
             assertEquals("[\"maps\"]",info.getJSONArray("mapsRequires").toString());
@@ -416,7 +429,7 @@ public class FactoryDispatcherTest {
         }
         JSONObject info = (JSONObject) FactoryDispatcher.dispatch(request("runtime.info", new JSONObject(), allowed), allowed, store,
                 FactoryDispatcher.previewMetadata("host", 35, 35), FactoryDispatcher.simulatedEffects());
-        assertEquals(1, info.getInt("databaseBackupProtocolVersion"));
+        assertEquals(2, info.getInt("databaseBackupProtocolVersion"));
         assertTrue(info.getBoolean("databaseBackupBrokerRequired"));
         assertEquals("[\"database\",\"documents\"]", info.getJSONArray("databaseBackupRequires").toString());
         assertEquals("[\"notes\",\"tasks\"]", info.getJSONArray("databaseBackupTables").toString());
@@ -471,7 +484,7 @@ public class FactoryDispatcherTest {
         for (String mode : new String[]{"installed", "preview"}) {
             JSONObject info = (JSONObject) FactoryDispatcher.dispatch(request("runtime.info", new JSONObject(), allowed), allowed, store,
                     FactoryDispatcher.metadata(mode, "host", 35, 35), effects);
-            assertEquals(1, info.getInt("storageBackupProtocolVersion"));
+            assertEquals(2, info.getInt("storageBackupProtocolVersion"));
             assertTrue(info.getBoolean("storageBackupBrokerRequired"));
             assertEquals("[\"storage\",\"documents\"]", info.getJSONArray("storageBackupRequires").toString());
             assertEquals("[\"settings\",\"theme\"]", info.getJSONArray("storageBackupKeys").toString());

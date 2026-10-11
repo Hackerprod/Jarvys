@@ -9,9 +9,11 @@ import android.os.SystemClock
 import android.util.AtomicFile
 import com.jarvys.factory.runtime.AudioPlaybackControl
 import com.jarvys.factory.runtime.FileShareTransfer
+import com.jarvys.factory.runtime.FileShareSnapshot
+import com.jarvys.factory.runtime.StreamingFileShareTransfer
 import org.json.JSONObject
 import java.io.File
-import java.io.OutputStream
+import java.io.InputStream
 import java.util.UUID
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
@@ -27,20 +29,26 @@ internal class FactoryAudioCoordinator(
     },
     private val receive: ((Request, () -> Unit) -> ByteArray)? = null,
 ) {
-    data class Request(val nonce: String, val size: Int, val sha256: String, val transfer: IBinder, val control: IBinder) {
+    data class Request(val nonce: String, val size: Long, val sha256: String, val transfer: IBinder, val control: IBinder, val protocolVersion: Int = 1) {
+        constructor(nonce: String, size: Int, sha256: String, transfer: IBinder, control: IBinder) : this(nonce, size.toLong(), sha256, transfer, control, 1)
         companion object {
             fun parse(intent: Intent): Request {
                 require(intent.component != null && intent.data == null && intent.clipData == null && intent.selector == null)
                 require(intent.flags and GRANT_FLAGS == 0)
                 val extras = intent.extras ?: error("Missing audio request")
                 require(extras.keySet() == setOf("protocolVersion", "nonce", "size", "sha256", "transfer", "control"))
-                require(extras.get("protocolVersion") is Int && extras.get("protocolVersion") == 1)
-                val size = extras.get("size"); require(size is Int && size in 46..FactoryAudioPcm.MAX_BYTES)
+                val version = extras.get("protocolVersion"); require(version is Int && version in 1..2)
+                val rawSize = extras.get("size")
+                val size = if (version == 1) {
+                    require(rawSize is Int && rawSize in 46..FactoryAudioPcm.MAX_BYTES); rawSize.toLong()
+                } else {
+                    require(rawSize is Long && rawSize in 46..FactoryAudioPcm.MAX_STREAM_BYTES); rawSize
+                }
                 val nonce = extras.get("nonce"); require(nonce is String && nonce.matches(Regex("[a-f0-9]{64}")))
                 val hash = extras.get("sha256"); require(hash is String && hash.matches(Regex("[a-f0-9]{64}")))
                 val transfer = extras.get("transfer"); val control = extras.get("control")
                 require(transfer is IBinder && control is IBinder)
-                return Request(nonce, size, hash, transfer, control)
+                return Request(nonce, size, hash, transfer, control, version)
             }
         }
     }
@@ -50,13 +58,15 @@ internal class FactoryAudioCoordinator(
         val playerClean = AtomicBoolean(true)
         val preparing = AtomicBoolean(false)
         @Volatile var pcm: FactoryAudioPcm? = null
+        @Volatile var snapshot: FileShareSnapshot? = null
         @Volatile var registration: AudioPlaybackControl.Registration? = null
         @Volatile var player: FactoryAudioPlayer? = null
         @Volatile var attempted = false
         /** No disk, worker, package manager or coordinator monitor on urgent revocation. */
         fun revoke() { revoked.set(true); authority.revoke() }
     }
-    private val packageManager = context.applicationContext.packageManager
+    private val application = context.applicationContext
+    private val packageManager = application.packageManager
     private val journal = AtomicFile(File(context.noBackupFilesDir, "factory-audio/interaction.json"))
     @Volatile private var current: Session? = null
     @Volatile private var state = "idle"
@@ -120,7 +130,8 @@ internal class FactoryAudioCoordinator(
         try {
             val proof = verify(callingPackage); check(proof.appId == callingPackage); active()
             // The authenticated artifact is the only source of developer-selected limits.
-            require(request.size in 46..FactoryAudioPcm.MAX_BYTES && request.size.toLong() <= proof.resources.audio.sourceBytes)
+            require(request.protocolVersion in 1..2 && request.size in 46..FactoryAudioPcm.MAX_STREAM_BYTES && request.size <= proof.resources.audio.sourceBytes)
+            require(request.protocolVersion != 1 || request.size <= FactoryAudioPcm.MAX_BYTES)
             val authority = policy.acquire(FactoryOperationPolicy.Subject.installed(proof), FactoryOperationPolicy.Operation.AUDIO_PLAY, FactoryOperationPolicy.binding(request.nonce, request.size.toString(), request.sha256))
             acquired = authority
             // An authenticated fresh ALLOW request can retire restored unknown state. It never replays it.
@@ -129,26 +140,30 @@ internal class FactoryAudioCoordinator(
                 state = "closed_outcome_unknown"; open = false; save(); release()
             }
             FactoryInteractionAdmission.acquire(this)
-            val lifetime = SETUP_DURATION_MS + proof.resources.audio.durationMs
+            val lifetime = proof.resources.audio.setupTimeoutMs + proof.resources.audio.durationMs
             val now = SystemClock.elapsedRealtime(); check(now >= 0 && now <= Long.MAX_VALUE - lifetime)
-            val value = Session(UUID.randomUUID().toString(), proof, request, now + lifetime, authority, now + SETUP_DURATION_MS)
+            val value = Session(UUID.randomUUID().toString(), proof, request, now + lifetime, authority, now + proof.resources.audio.setupTimeoutMs)
             current = value; acquired = null; authority.onRevoked { value.revoked.set(true) }; nonce = request.nonce; open = true; state = "receiving"; save()
             val checkActive = { requirePlaybackStart(value); active() }
-            bytes = if (receive != null) receive.invoke(request, checkActive) else {
-                val output = ByteArray(request.size); var offset = 0
-                try {
-                    FileShareTransfer.copy(request.transfer, request.nonce, request.size, request.sha256, object : OutputStream() {
-                        override fun write(value: Int) = error("Chunk writes only")
-                        override fun write(buffer: ByteArray, start: Int, length: Int) {
-                            checkActive(); require(length >= 0 && offset <= output.size - length)
-                            System.arraycopy(buffer, start, output, offset, length); offset += length
-                        }
-                    }, Runnable { checkActive() })
-                    check(offset == output.size); output
-                } catch (failure: Exception) { output.fill(0); throw failure }
+            val pcm = if (receive != null) {
+                // Legacy injectable ownership seam used by host tests; production always uses disk.
+                bytes = receive.invoke(request, checkActive)
+                checkActive(); require(bytes.size.toLong() == request.size)
+                FactoryAudioPcm.parseOwned(bytes, proof.resources.audio)
+            } else {
+                val snapshot = FileShareSnapshot(application, FileShareSnapshot.AUDIO_NAMESPACE)
+                value.snapshot = snapshot // Retain even an incomplete snapshot until explicit cleanup.
+                snapshot.materialize(request.size, StreamingFileShareTransfer.SnapshotWriter { output, stillActive ->
+                    StreamingFileShareTransfer.copy(request.transfer, request.nonce, request.size, request.sha256,
+                        request.protocolVersion, output, stillActive)
+                }, Runnable { checkActive() })
+                checkActive(); require(snapshot.size() == request.size && snapshot.sha256() == request.sha256)
+                FactoryAudioPcm.parseStream(object : InputStream() {
+                    override fun read(): Int = error("Bounded chunk reads only")
+                    override fun read(buffer: ByteArray, offset: Int, count: Int) = snapshot.read(buffer, offset, count)
+                    override fun close() = snapshot.close()
+                }, request.size, proof.resources.audio)
             }
-            checkActive(); require(bytes.size == request.size)
-            val pcm = FactoryAudioPcm.parseOwned(bytes, proof.resources.audio)
             check(verify(callingPackage) == proof); checkActive()
             value.pcm = pcm; bytes = null; state = "review"; save(); return value
         } catch (failure: Exception) {
@@ -190,7 +205,9 @@ internal class FactoryAudioCoordinator(
         val owned = current
         check(owned?.preparing?.get() != true && owned?.playerClean?.get() != false) { "Native audio cleanup remains unconfirmed" }
         owned?.revoke(); owned?.registration?.close(); owned?.registration = null
-        owned?.pcm?.bytes?.fill(0); owned?.pcm = null
+        // No feeder may still read this descriptor. Failed closes retain ownership/admission.
+        owned?.pcm?.close(); owned?.pcm = null
+        owned?.snapshot?.close(); owned?.snapshot = null
         active()
         val result = if (!recovery && owned != null) Intent().putExtra("nonce", nonce).putExtra("playbackAttempted", owned.attempted).putExtra("audibilityConfirmed", false) else null
         state = if (recovery) "closed_outcome_unknown" else "closed"; open = false

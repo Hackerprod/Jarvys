@@ -100,7 +100,27 @@ class FactoryAudioCoordinatorTest {
             intent().apply { component = null }, intent().addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
             intent().apply { clipData = ClipData.newPlainText("x", "y") }, intent().apply { selector = Intent("synthetic") })
         invalid.forEach { denied { FactoryAudioCoordinator.Request.parse(it) } }
-        assertEquals(syntheticWav().size, request().size)
+        assertEquals(syntheticWav().size.toLong(), request().size)
+    }
+    @Test fun longProtocolHasExactTypesAndDoesNotBorrowLegacyEnvelope() {
+        val v2 = intent().putExtra("protocolVersion", 2).putExtra("size", 4L * 1024 * 1024 * 1024)
+        val parsed = FactoryAudioCoordinator.Request.parse(v2)
+        assertEquals(2, parsed.protocolVersion); assertEquals(FactoryAudioPcm.MAX_STREAM_BYTES, parsed.size)
+        denied { FactoryAudioCoordinator.Request.parse(Intent(v2).putExtra("size", 100)) }
+        denied { FactoryAudioCoordinator.Request.parse(Intent(v2).putExtra("size", FactoryAudioPcm.MAX_STREAM_BYTES + 1)) }
+        denied { FactoryAudioCoordinator.Request.parse(Intent(v2).putExtra("protocolVersion", 3)) }
+        denied { io { coordinator.begin(proof.appId, parsed) {} } }
+        assertNull(coordinator.session()); assertTrue(FactoryInteractionAdmission.available())
+    }
+    @Test fun signedSetupDeadlineCanBeShorterThanLegacyAndDoesNotConsumePlaybackBudget() {
+        proof = proof.copy(resources = ResourceBudgets.parse(mapOf("version" to 1, "audio" to mapOf("setupTimeoutMs" to 5, "durationMs" to 1000))))
+        val before = android.os.SystemClock.elapsedRealtime()
+        val value = begin(); register(value)
+        assertEquals(before + 5, value.setupExpiresAt); assertEquals(before + 1005, value.expiresAt)
+        org.robolectric.shadows.ShadowSystemClock.advanceBy(java.time.Duration.ofMillis(5))
+        denied { io { coordinator.preparePlay(value) {} } }; assertFalse(value.attempted)
+        coordinator.requireActive(value)
+        io { coordinator.close(value, false) {} }
     }
     @Test fun callerProofMustSucceedBeforeAnyPullOrJournal() {
         var pulled = false
@@ -134,7 +154,7 @@ class FactoryAudioCoordinatorTest {
         val bytes = syntheticWav(8000, 1, 2400000)
         coordinator = FactoryAudioCoordinator(context, policy, { proof }, { _, active -> active(); bytes })
         val before = android.os.SystemClock.elapsedRealtime()
-        val value = io { coordinator.begin(proof.appId, request().copy(size = bytes.size)) {} }
+        val value = io { coordinator.begin(proof.appId, request().copy(size = bytes.size.toLong())) {} }
         register(value)
         assertEquals(before + FactoryAudioCoordinator.SETUP_DURATION_MS, value.setupExpiresAt)
         assertEquals(value.setupExpiresAt + 300000, value.expiresAt)

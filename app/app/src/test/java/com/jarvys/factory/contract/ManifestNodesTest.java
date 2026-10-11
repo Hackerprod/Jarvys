@@ -599,7 +599,7 @@ public class ManifestNodesTest {
         assertEquals(33, CapabilityCatalog.NAMES.size());
         assertEquals(134, CapabilityCatalog.METHODS.size());
         assertEquals(list(CapabilityCatalog.Method.STORAGE_GET, CapabilityCatalog.Method.STORAGE_SET,
-                CapabilityCatalog.Method.STORAGE_REMOVE, CapabilityCatalog.Method.STORAGE_LIST,
+                CapabilityCatalog.Method.STORAGE_REMOVE, CapabilityCatalog.Method.STORAGE_LIST, CapabilityCatalog.Method.STORAGE_LIST_PAGE,
                 CapabilityCatalog.Method.STORAGE_BACKUP_EXPORT, CapabilityCatalog.Method.STORAGE_BACKUP_IMPORT), storage.methods);
         assertTrue(storage.permissions.isEmpty()); assertTrue(storage.manifestNodes.isEmpty());
         assertTrue(storage.dependencies.isEmpty()); assertTrue(storage.queries.isEmpty());

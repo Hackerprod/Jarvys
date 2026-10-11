@@ -129,6 +129,7 @@ val prepareApkFactoryTemplate by tasks.registering {
 android.sourceSets.getByName("main").assets.srcDir(factoryAssets)
 tasks.configureEach {
     if ((name.startsWith("merge") && name.endsWith("Assets")) || name.startsWith("lintAnalyze") ||
+        name.startsWith("lintVitalAnalyze") || name.endsWith("LintVitalReportModel") ||
         name.endsWith("LintReportModel") || name.endsWith("LintModel")) {
         // Lint also consumes the generated asset directory; combined test/lint builds require the same producer dependency.
         dependsOn(prepareApkFactoryTemplate)

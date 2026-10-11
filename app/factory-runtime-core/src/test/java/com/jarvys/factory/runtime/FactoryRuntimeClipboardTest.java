@@ -218,11 +218,17 @@ public class FactoryRuntimeClipboardTest {
         assertEquals("preview", simulated.getString("mode")); assertEquals("clipboard.write", simulated.getString("operation"));
         assertNull(screen.launched); assertNull(work()); assertNull(field("uiOwner").get(runtime));
     }
-    @Test public void wrongCertificateAndAmbiguousInstalledHostCannotLaunch() throws Exception {
+    @Test public void wrongCertificateAndMissingPinnedHostCannotLaunch() throws Exception {
         installHost(new Signature(new byte[] {9, 8, 7})); assertEquals("UNAVAILABLE", copy().error()); assertNull(screen.launched);
         installHost(new Signature(DocumentBrokerIdentityTest.CERTIFICATE));
+        Shadows.shadowOf(screen.getPackageManager()).removePackage(DocumentBrokerIdentity.PRIMARY);
         DocumentBrokerIdentityTest.install(screen, DocumentBrokerIdentity.RECOVERY, new Signature(DocumentBrokerIdentityTest.CERTIFICATE));
         assertEquals("UNAVAILABLE", copy().error()); assertNull(screen.launched); assertNull(work());
+    }
+    @Test public void anotherInstalledHostDoesNotOverrideTheExplicitPin() throws Exception {
+        DocumentBrokerIdentityTest.install(screen, DocumentBrokerIdentity.RECOVERY, new Signature(new byte[] {9, 8, 7}));
+        Response reply = copy(); assertNotNull(screen.launched); assertNull(reply.value);
+        assertEquals(DocumentBrokerIdentity.PRIMARY, screen.launched.getComponent().getPackageName());
     }
     @Test public void nativeRegistrationRejectsWrongAndSharedUid() throws Exception {
         copy(); assertThrows(ExecutionException.class, () -> register(new CountDownLatch(1), HOST_UID + 1));

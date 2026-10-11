@@ -1,6 +1,7 @@
 package com.jarvys.factory.runtime;
 
 import android.app.Activity;
+import androidx.annotation.RequiresPermission;
 import android.bluetooth.*;
 import android.bluetooth.le.*;
 import android.content.Context;
@@ -87,6 +88,8 @@ public final class AndroidBlePlatform implements BleCentral.Platform {
     private final class NativeScan implements BleCentral.Scan {
         final BleCentral.ScanEvents events; BluetoothLeScanner scanner; volatile boolean ended; ScanCallback callback;
         NativeScan(BleCentral.ScanEvents events) { this.events = events; }
+        // SCAN is required only on API/target 31+; require() also checks legacy/location permissions.
+        @RequiresPermission(value = BlePermissions.SCAN, conditional = true)
         @Override public boolean start(List<UUID> uuids) {
             require(true, false); BluetoothAdapter adapter = adapter(); if (adapter == null) return false;
             // getBluetoothLeScanner returns null when Bluetooth is disabled. Do not turn it on.
@@ -115,6 +118,8 @@ public final class AndroidBlePlatform implements BleCentral.Platform {
                 events.found(this, device.getAddress(), device, record.getDeviceName(), result.getRssi(), bytes);
             } catch (SecurityException denied) { events.failed(this, -1); }
         }
+        // API/target 31+ permission may be revoked during cleanup; the catch preserves unconfirmed state.
+        @RequiresPermission(value = BlePermissions.SCAN, conditional = true)
         @Override public boolean stop() {
             ended = true;
             if (scanner == null || callback == null) return true;
@@ -134,6 +139,8 @@ public final class AndroidBlePlatform implements BleCentral.Platform {
                 return gatt == source;
             }
         }
+        // CONNECT applies only on API/target 31+; require() enforces the current device/target profile.
+        @RequiresPermission(value = BlePermissions.CONNECT, conditional = true)
         @Override public boolean connect() {
             require(false, true);
             BluetoothGatt created = device.connectGatt(context, false, callbacks, BluetoothDevice.TRANSPORT_LE);
@@ -143,6 +150,7 @@ public final class AndroidBlePlatform implements BleCentral.Platform {
                 gatt = created; return true;
             }
         }
+        @RequiresPermission(value = BlePermissions.CONNECT, conditional = true)
         @Override public boolean execute(BleCentral.Command command) {
             require(false, true); BluetoothGatt current;
             synchronized (lock) { if (ended || gatt == null || pending != null) return false; pending = command; current = gatt; }
@@ -170,11 +178,14 @@ public final class AndroidBlePlatform implements BleCentral.Platform {
             if (!accepted) synchronized (lock) { if (pending == command) pending = null; }
             return accepted;
         }
+        @RequiresPermission(value = BlePermissions.CONNECT, conditional = true)
         @Override public boolean localNotifications(Object characteristic, boolean enabled) {
             require(false, true); BluetoothGatt current;
             synchronized (lock) { if (ended || gatt == null) return false; current = gatt; }
             return current.setCharacteristicNotification((BluetoothGattCharacteristic)characteristic, enabled);
         }
+        // On API/target 31+ cleanup still attempts local close after revocation and reports failure.
+        @RequiresPermission(value = BlePermissions.CONNECT, conditional = true)
         @Override public boolean close() {
             BluetoothGatt current;
             synchronized (lock) { ended = true; pending = null; current = gatt; }

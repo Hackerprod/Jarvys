@@ -1,5 +1,7 @@
 package com.jarvys.factory.runtime;
 
+import android.Manifest;
+import androidx.annotation.RequiresPermission;
 import android.app.AlarmManager;
 import android.app.Notification;
 import android.app.NotificationManager;
@@ -87,6 +89,8 @@ public final class NativeScheduledNotifications implements Platform {
             alarms.cancel(operation); operation.cancel();
         } catch (RuntimeException unavailable) { throw unavailable(); }
     }
+    // POST_NOTIFICATIONS applies on API 33+; both requireReady checks preserve the real OS gate.
+    @RequiresPermission(value = Manifest.permission.POST_NOTIFICATIONS, conditional = true)
     @Override @SuppressWarnings("deprecation") public void post(Row row, List<ActionToken> actions, Checkpoint checkpoint) throws FactoryException {
         own(row); if (checkpoint == null || actions == null || actions.size() != row.notification.actions.size()) throw new IllegalArgumentException();
         NotificationRequest.Show request = row.notification.show;

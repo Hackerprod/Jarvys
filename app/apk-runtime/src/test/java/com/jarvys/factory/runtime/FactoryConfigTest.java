@@ -52,7 +52,7 @@ public class FactoryConfigTest {
 
     @Test public void externalCapabilitiesAloneRequireAndAcceptTheSameBuildOwnedBrokerWithoutDocuments() throws Exception {
         String digest = new String(new char[64]).replace('\0', 'a');
-        for (String caps : new String[]{"[\"clipboard\"]", "[\"browser\"]", "[\"maps\"]", "[\"phone\"]", "[\"email\"]", "[\"sms\"]", "[\"contacts\"]", "[\"calendar\"]", "[\"browser\",\"documents\",\"maps\",\"phone\"]"}) {
+        for (String caps : new String[]{"[\"share\"]", "[\"clipboard\"]", "[\"browser\"]", "[\"maps\"]", "[\"phone\"]", "[\"email\"]", "[\"sms\"]", "[\"contacts\"]", "[\"calendar\"]", "[\"browser\",\"documents\",\"maps\",\"phone\"]"}) {
             String base = text("com.example.app", "www/index.html", caps);
             reject(base, "com.example.app");
             assertNull(FactoryConfig.parsePreview(base).documentBroker);
@@ -64,7 +64,7 @@ public class FactoryConfigTest {
                 assertEquals(caps.contains("documents"), parsed.capabilities.contains("documents"));
             }
         }
-        for (String caps : new String[]{"[]", "[\"audio\"]", "[\"photos\"]", "[\"share\"]"}) {
+        for (String caps : new String[]{"[]", "[\"audio\"]", "[\"photos\"]"}) {
             org.json.JSONObject json = new org.json.JSONObject(text("com.example.app", "www/index.html", caps)).put("documentBroker",
                     new org.json.JSONObject().put("packageName", "com.jarvys.agent").put("certificateSha256", digest));
             reject(json.toString(), "com.example.app");

@@ -43,7 +43,7 @@ public final class DocumentHandles {
     private Object nativeByteAuthority = new Object();
     private static final class Entry {
         final String token; final boolean write; final long created;
-        Closeable stream; boolean busy, eof, opening, admission=true; long offset, charged;
+        Closeable stream; boolean busy, eof, opening, shareOwned, admission=true; long offset, charged;
         Entry(String token, boolean write, long created) { this.token=token; this.write=write; this.created=created; }
     }
     public DocumentHandles() { this(ResourceBudgets.legacy()); }
@@ -329,6 +329,69 @@ public final class DocumentHandles {
             return new ReadResult(encode(buffer,actual),offset,entry.offset,entry.eof);
         }
     }
+    /** Retires an untouched source into a native-owned bounded streaming snapshot producer.
+     * No provider I/O occurs here. The caller MUST retain/close ShareSource, even on cancellation.
+     * Revocation prevents reads immediately but does not race provider close against an active read.
+     */
+    public ShareSource takeShareSource(String token,long maximum) throws FactoryException {
+        if(maximum<1 || maximum>4L*1024*1024*1024) throw error("INVALID_ARGUMENT");
+        synchronized(lock) {
+            Entry entry=lookup(token,false,0);
+            entry.busy=true; entry.shareOwned=true;
+            return new ShareSource(entry,maximum);
+        }
+    }
+    public final class ShareSource implements AutoCloseable {
+        private final Entry entry;
+        private final InputStream input;
+        private final long maximum;
+        private boolean consumed,closed;
+        private ShareSource(Entry entry,long maximum) {
+            this.entry=entry; this.input=(InputStream)entry.stream; this.maximum=maximum;
+        }
+        /** One native sequential pass. Both document quotas charge each read and the EOF probe. */
+        public void copyTo(OutputStream output,Runnable active) throws Exception {
+            if(output==null || active==null) throw error("INVALID_ARGUMENT");
+            synchronized(lock) { if(consumed || closed) throw error("INVALID_HANDLE"); consumed=true; finishCheck(entry); }
+            byte[] bytes=new byte[MAX_CHUNK_BYTES]; long total=0;
+            try {
+                while(true) {
+                    active.run();
+                    final int requested;
+                    synchronized(lock) {
+                        finishCheck(entry);
+                        long remaining=Math.min(budget.handleBytes-entry.charged,budget.sessionBytes-ledger.charged);
+                        // Never borrow an uncharged byte to prove EOF at an exhausted quota.
+                        if(remaining<1) throw error("DOCUMENT_QUOTA");
+                        requested=(int)Math.min(Math.min(MAX_CHUNK_BYTES,maximum-total+1),remaining);
+                        begin(entry,requested);
+                    }
+                    final int count=input.read(bytes,0,requested);
+                    if(count < -1 || count==0 || count>requested) throw error("DOCUMENT_IO");
+                    active.run();
+                    synchronized(lock) {
+                        finishCheck(entry); int actual=Math.max(0,count); refund(entry,requested-actual);
+                        entry.offset=add(entry.offset,actual);
+                    }
+                    if(count==-1) {
+                        if(total==0) throw error("EMPTY_FILE");
+                        return;
+                    }
+                    if(count>maximum-total) throw error("SHARE_TOO_LARGE");
+                    output.write(bytes,0,count); total+=count; active.run();
+                }
+            } finally {
+                java.util.Arrays.fill(bytes,(byte)0);
+                synchronized(lock) { remove(entry); }
+            }
+        }
+        /** Caller uses its one bounded cleanup worker. Failure deliberately retains all admission. */
+        @Override public void close() throws Exception {
+            synchronized(lock) { if(closed) return; remove(entry); }
+            input.close();
+            synchronized(lock) { closed=true; releaseAdmission(entry); }
+        }
+    }
     /** Consumes an untouched read handle into a bounded immutable sharing snapshot.
      * The extra byte proves EOF without bypassing either cumulative quota. The handle is
      * retired even after failure; provider close retains the existing bounded async path.
@@ -363,8 +426,14 @@ public final class DocumentHandles {
         java.io.ByteArrayOutputStream output=new java.io.ByteArrayOutputStream();
         try {
             while (true) {
-                int requested=Math.min(MAX_CHUNK_BYTES,maximum+1-output.size());
-                synchronized(lock) { finishCheck(entry); begin(entry,requested); }
+                final int requested;
+                synchronized(lock) {
+                    finishCheck(entry);
+                    long remaining=Math.min(budget.handleBytes-entry.charged,budget.sessionBytes-ledger.charged);
+                    if(remaining<=0) throw error("DOCUMENT_QUOTA");
+                    requested=(int)Math.min(Math.min(MAX_CHUNK_BYTES,maximum+1-output.size()),remaining);
+                    begin(entry,requested);
+                }
                 byte[] bytes=new byte[requested]; final int count;
                 try { count=((InputStream)entry.stream).read(bytes); }
                 catch (Exception failure) { throw error("DOCUMENT_IO"); }
@@ -464,7 +533,7 @@ public final class DocumentHandles {
     }
     private void remove(Entry entry) {
         if (entries.get(entry.token) == entry) { entries.remove(entry.token);
-            if (entry.stream != null) closeTracked(entry,entry.stream);
+            if (entry.stream != null) { if (!entry.shareOwned) closeTracked(entry,entry.stream); }
             else if (entry.opening) retiredOpening++;
             else releaseAdmission(entry); }
     }

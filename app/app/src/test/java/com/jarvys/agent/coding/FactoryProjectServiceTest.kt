@@ -290,21 +290,33 @@ class FactoryProjectServiceTest {
             }
         }
     }
-    @Test fun biometricPermissionIsSelectedPerGeneratedProjectWithoutFeaturesOrBrokerAccess() {
+    @Test fun biometricAndSensorPermissionsAndBrokerAccessAreSelectedPerGeneratedProject() {
         for (capabilities in listOf(emptyList(), listOf("sensors"), listOf("biometrics"), listOf("biometrics", "sensors"))) {
             val f = Fixture()
             f.spec("org.example.selective", 1, capabilities)
             f.build()
             val manifest = TemplateApk.inspect(File(f.root, "notes.apk").readBytes())
-            assertEquals(if ("biometrics" in capabilities) listOf("android.permission.USE_BIOMETRIC") else emptyList<String>(), manifest.permissions)
+            val expectedPermissions = listOfNotNull(
+                "android.permission.HIGH_SAMPLING_RATE_SENSORS".takeIf { "sensors" in capabilities },
+                "android.permission.USE_BIOMETRIC".takeIf { "biometrics" in capabilities },
+            )
+            assertEquals(capabilities.toString(), expectedPermissions, manifest.permissions)
             assertTrue(manifest.plan.features.isEmpty())
-            assertTrue(manifest.plan.queries.isEmpty())
+            assertEquals(if ("sensors" in capabilities) listOf("com.jarvys.agent", "com.jarvys.agent.recoverytest")
+                else emptyList<String>(), manifest.plan.queries)
+            assertTrue(manifest.plan.queryActions.isEmpty())
             assertEquals(listOf(com.jarvys.factory.contract.ManifestPlan.ACTIVITY), manifest.plan.exportedComponents)
             ZipFile(File(f.root, "notes.apk")).use { zip ->
                 val text = zip.getInputStream(zip.getEntry("assets/factory-app.json")).bufferedReader().use { it.readText() }
                 val config = com.jarvys.factory.runtime.FactoryConfig.parse(text, "org.example.selective")
                 assertEquals(capabilities.toSet(), config.capabilities)
-                assertNull(config.documentBroker)
+                if ("sensors" in capabilities) {
+                    assertNotNull(config.documentBroker)
+                    assertEquals(f.context.packageName, config.documentBroker.packageName)
+                    assertEquals(ProjectScope.sha256(byteArrayOf(7, 12, 24, 42)), config.documentBroker.certificateSha256)
+                } else {
+                    assertNull(config.documentBroker)
+                }
             }
             assertEquals(0, f.requested); assertEquals(0, f.obtained)
         }
@@ -536,7 +548,10 @@ class FactoryProjectServiceTest {
         val f=Fixture(); f.identityState=FactorySigningIdentity.State(true,"a".repeat(64),5,
             mode=FactorySigningIdentity.RECOVERABLE,continuityKnown=true,continuityResolution="user_declared_floor")
         f.spec("org.example.notebook",6); val build=f.build(); val before=f.identityState
-        assertThrows(Exception::class.java){f.service.sign("notes.apk",build.getString("sha256"),"signed.apk",f.scope.version(),CancellationToken.cancellable())}
+        assertEquals(FactoryOperationPolicy.Mode.ASK, f.policy.mode(
+            FactoryOperationPolicy.Subject.signedArtifact("org.example.notebook", before.fingerprint!!), FactoryOperationPolicy.Operation.SIGN))
+        val failure = assertThrows(IllegalStateException::class.java){f.service.sign("notes.apk",build.getString("sha256"),"signed.apk",f.scope.version(),CancellationToken.cancellable())}
+        assertEquals("Signing was not approved. Nothing was signed.", failure.message)
         assertEquals(1,f.requested);assertEquals(0,f.obtained);assertEquals(before,f.identityState)
         assertTrue(f.lastSummary!!.lines.any{it.contains("user_declared_floor; floor 5")})
         assertFalse(f.lastSummary!!.lines.any{it.contains("Create a new")})
@@ -653,8 +668,21 @@ class FactoryProjectServiceTest {
     }
     @Test fun emptyDirectoryTreeCannotBypassTraversalQuota() {
         val f=Fixture()
-        for(i in 0..256) File(f.root,"web/dir$i").mkdir()
-        assertThrows(Exception::class.java){f.build()};assertFalse(File(f.root,"notes.apk").exists())
+        val specFile=File(f.root,"factory.json")
+        val specJson=JSONObject(specFile.readText()).put("resourceBudgets", JSONObject().put("version",1)
+            .put("packaging",JSONObject().put("sourceFiles",3)))
+        specFile.writeText(specJson.toString())
+        val budgets=com.jarvys.agent.apkfactory.FactorySpec.parse(specJson).resources.packaging
+        val maxEntries=budgets.sourceFiles * com.jarvys.agent.apkfactory.FactorySpec.MAX_PATH_SEGMENTS
+        // The two real files count too. The declared envelope can exceed the old fixed 256-entry limit.
+        for(i in 0 until maxEntries-2) assertTrue(File(f.root,"web/dir$i").mkdir())
+        val plan=FactoryProjectFiles.planWebsite(f.scope,"web",budgets,CancellationToken.cancellable())
+        assertEquals(setOf("index.html","app.js"),plan.sizes.keys)
+        assertTrue(File(f.root,"web/one-too-many").mkdir())
+        val version=f.scope.version()
+        val failure=assertThrows(IllegalArgumentException::class.java){f.build()}
+        assertEquals("Website directory entries exceed the declared path/file envelope",failure.message)
+        assertEquals(version,f.scope.version());assertFalse(File(f.root,"notes.apk").exists())
     }
     @Test fun revalidationHashRemainsBoundedWhenFileGrows() {
         val f=Fixture();File(f.root,"grow.txt").writeBytes(ByteArray(1025))
@@ -672,8 +700,11 @@ class FactoryProjectServiceTest {
     }
     @Test fun toolSchemaRejectsExtraFieldsAndCannotDelegate() {
         val f=Fixture();val tool=ApkFactoryTools.Tool(f.service)
-        assertFalse(tool.canDelegate());assertFalse(tool.execute(mapOf("action" to "inspect","command" to "echo bad"),CancellationToken.cancellable()).success)
-        assertTrue(tool.execute(mapOf("action" to "inspect"),CancellationToken.cancellable()).success)
+        assertFalse(tool.canDelegate())
+        val rejected=tool.execute(mapOf("action" to "inspect","command" to "echo bad"),CancellationToken.cancellable())
+        assertFalse(rejected.success);assertTrue(rejected.content,rejected.content.contains("Use exactly these fields for inspect: action"))
+        val inspected=tool.execute(mapOf("action" to "inspect"),CancellationToken.cancellable())
+        assertTrue(inspected.content,inspected.success)
     }
     @Test fun receiptRuntimeVerificationRequiresExactlyTheDeclaredDataBackupPolicy() {
         val f = Fixture()

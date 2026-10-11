@@ -123,10 +123,16 @@ public class FactoryRuntimeContactsTest {
         screen.reject=true;Response failed=open();idle();assertEquals("CONTACT_UNAVAILABLE",failed.error());assertNull(work());assertNull(field("uiOwner").get(runtime));
         screen.reject=false;open();idle();assertNotNull(screen.launched);
     }
-    @Test public void previewNeverLaunchesAndMissingOrAmbiguousHostFailsClosed()throws Exception{
+    @Test public void previewAndMissingPinnedHostNeverLaunch()throws Exception{
         host.preview=true;assertEquals("UNAVAILABLE",open().error());assertNull(screen.launched);host.preview=false;
+        Shadows.shadowOf(screen.getPackageManager()).removePackage(DocumentBrokerIdentity.PRIMARY);
         DocumentBrokerIdentityTest.install(screen,DocumentBrokerIdentity.RECOVERY,new Signature(DocumentBrokerIdentityTest.CERTIFICATE));
         assertEquals("UNAVAILABLE",open().error());assertNull(screen.launched);
+    }
+    @Test public void anotherInstalledHostDoesNotOverrideTheExplicitPin()throws Exception{
+        DocumentBrokerIdentityTest.install(screen,DocumentBrokerIdentity.RECOVERY,new Signature(new byte[]{9,8,7}));
+        Response response=open();idle();assertNotNull(screen.launched);assertNull(response.value);
+        assertEquals(DocumentBrokerIdentity.PRIMARY,screen.launched.getComponent().getPackageName());
     }
     @Test public void sharedUidAndChangedPinnedHostNeverLaunch()throws Exception{
         Shadows.shadowOf(screen.getPackageManager()).setPackagesForUid(hostUid(),DocumentBrokerIdentity.PRIMARY,"com.other.app");

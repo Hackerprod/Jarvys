@@ -20,14 +20,14 @@ class FactoryAudioPcmTest {
         val bytes = syntheticWav(48000, 2, 1)
         val pcm = FactoryAudioPcm.parseOwned(bytes)
         assertSame(bytes, pcm.bytes); assertEquals(44, pcm.pcmOffset)
-        assertEquals(4, pcm.pcmBytes); assertEquals(1L, pcm.durationMs)
+        assertEquals(4L, pcm.pcmBytes); assertEquals(1L, pcm.durationMs)
     }
     @Test fun exactThirtySecondBoundary() {
         assertEquals(30000L, FactoryAudioPcm.parseOwned(syntheticWav(48000, 2, 1440000)).durationMs)
         reject(syntheticWav(48000, 2, 1440001))
     }
     @Test fun declaredDurationAllowsLongLowRatePcmWithoutRaisingWholeArrayCeiling() {
-        val budget = ResourceBudgets.maxima().audio
+        val budget = ResourceBudgets.parse(mapOf("version" to 1, "audio" to mapOf("sourceBytes" to FactoryAudioPcm.MAX_BYTES, "durationMs" to 300000))).audio
         val bytes = syntheticWav(8000, 1, 2400000)
         assertTrue(bytes.size < FactoryAudioPcm.MAX_BYTES)
         assertEquals(300000L, FactoryAudioPcm.parseOwned(bytes, budget).durationMs)

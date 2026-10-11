@@ -1,6 +1,7 @@
 package com.jarvys.factory.runtime;
 
 import android.Manifest;
+import androidx.annotation.RequiresPermission;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.media.AudioFormat;
@@ -411,6 +412,9 @@ public final class NativeAudioRecording implements AutoCloseable {
     }
     private static final class PlatformDriver implements Driver {
         final AudioRecord recorder;
+        // initialize() rechecks the current platform permission before invoking the delayed factory;
+        // guarded() handles SecurityException if Android revokes it between that check and this call.
+        @RequiresPermission(Manifest.permission.RECORD_AUDIO)
         PlatformDriver(RecordingRequest.Record request) throws FactoryException {
             int mask = request.channels == 1 ? AudioFormat.CHANNEL_IN_MONO : AudioFormat.CHANNEL_IN_STEREO;
             int minimum = AudioRecord.getMinBufferSize(request.sampleRate, mask, AudioFormat.ENCODING_PCM_16BIT);

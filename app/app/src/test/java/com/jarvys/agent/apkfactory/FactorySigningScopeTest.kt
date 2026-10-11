@@ -111,7 +111,10 @@ class FactorySigningScopeTest {
             .map { current.toJson().getJSONArray("queryActions").getString(it) })
         assertTrue(plan.queryActions.isNotEmpty())
         assertEquals(budgets, current.resources())
-        assertEquals(14, current.toJson().getJSONObject("resourceBudgets").length())
+        assertEquals(setOf("version", "storage", "database", "documents", "audio", "sensors", "packaging",
+            "secrets", "notifications", "incomingShare", "nfc", "bluetooth", "widgets", "jobs", "fileShare"),
+            current.toJson().getJSONObject("resourceBudgets").keys().asSequence().toSet())
+        assertEquals(ResourceBudgetsJson.toJson(budgets).toString(), current.toJson().getJSONObject("resourceBudgets").toString())
         val reloaded = read(record().put("lastSignedScope", current.anchored(appId, fingerprint, 1, sha)))!!
         assertEquals(current, reloaded)
         assertEquals(budgets, reloaded.resources())
@@ -140,16 +143,14 @@ class FactorySigningScopeTest {
         }
     }
     @Test fun preServiceResourceScopePreservesAuthenticatedCanonicalBytes() {
-        val prior = scope().toJson()
-        val resources = prior.getJSONObject("resourceBudgets")
-        for (section in listOf("secrets", "notifications", "incomingShare", "nfc", "bluetooth", "widgets", "jobs")) resources.remove(section)
-        prior.remove("incomingShare"); prior.remove("notifications"); prior.remove("bluetooth"); prior.remove("privateComponents")
-        val historic = JSONObject(prior.toString())
-        val original = historic.toString()
-        val saved = record()
-        saved.getJSONObject("lastSignedScope").put("scope", historic)
+        // Literal bytes from the actual historical writer, never derived from today's schema.
+        val anchor = JSONObject(FactorySigningScopeFixtures.bytes("v3-default").toString(Charsets.UTF_8))
+        val original = anchor.getJSONObject("scope").toString()
+        val saved = record().put("lastSignedScope", anchor)
         val loaded = read(saved)!!
         assertEquals(original, loaded.toJson().toString())
+        assertFalse(loaded.toJson().getJSONObject("resourceBudgets").getJSONObject("audio").has("setupTimeoutMs"))
+        assertFalse(loaded.toJson().getJSONObject("resourceBudgets").has("fileShare"))
         assertEquals(32, loaded.resources().secrets.entries)
         assertEquals(128, loaded.resources().notifications.schedules)
         assertEquals(16, loaded.resources().incomingShare.queuedEnvelopes)

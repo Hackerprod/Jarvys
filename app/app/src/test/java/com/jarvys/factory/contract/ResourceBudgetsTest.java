@@ -50,11 +50,11 @@ public final class ResourceBudgetsTest {
     @Test public void explicitVersionOnlyResolvesToLegacyAndSerializesCompletely() {
         ResourceBudgets value = ResourceBudgets.parse(Collections.singletonMap("version", 1));
         assertEquals(ResourceBudgets.legacy(), value);
-        assertEquals(Arrays.asList("version", "storage", "database", "documents", "audio", "sensors", "packaging", "secrets", "notifications", "incomingShare", "nfc", "bluetooth", "widgets", "jobs"),
+        assertEquals(Arrays.asList("version", "storage", "database", "documents", "audio", "sensors", "packaging", "secrets", "notifications", "incomingShare", "nfc", "bluetooth", "widgets", "jobs", "fileShare"),
                 new ArrayList<>(value.toMap().keySet()));
         int count = 0;
         for (Object section : value.toMap().values()) if (section instanceof Map) count += ((Map<?, ?>) section).size();
-        assertEquals(62, count);
+        assertEquals(66, count);
     }
     @Test public void partialOverridesDoNotChangeOtherDefaultsOrFollowInputMutations() {
         Map<String, Object> input = declaration("database", "mainFileBytes", 256 * MIB);
@@ -148,9 +148,9 @@ public final class ResourceBudgetsTest {
     }
     @Test public void materializedPayloadCapsStayDistinctFromStreamTotals() {
         ResourceBudgets value = ResourceBudgets.maxima();
-        assertEquals(16 * MIB, value.storage.totalBytes); assertEquals(6 * MIB, value.audio.sourceBytes);
-        assertEquals(8 * MIB, value.packaging.totalSourceBytes); assertEquals(32 * MIB, value.packaging.apkBytes);
-        assertEquals(300000, value.audio.durationMs); assertEquals(300000, value.sensors.captureDurationMs);
+        assertEquals(16 * MIB, value.storage.totalBytes); assertEquals(4 * GIB, value.audio.sourceBytes);
+        assertEquals(32 * MIB, value.packaging.totalSourceBytes); assertEquals(32 * MIB, value.packaging.apkBytes);
+        assertEquals(268435454, value.audio.durationMs); assertEquals(300000, value.sensors.captureDurationMs);
         assertEquals(50, value.sensors.bufferedSamples);
         assertEquals(Long.valueOf(6 * MIB), ResourceBudgets.implementationLimits().get("wholeAudioPayloadBytes"));
     }
@@ -194,6 +194,16 @@ public final class ResourceBudgetsTest {
         rejected(declaration("widgets","nodes",1)); rejected(declaration("widgets","modelBytes",255));
         rejected(declaration("jobs","records",1025));
         assertEquals(ResourceBudgets.maxima(),ResourceBudgets.parse(ResourceBudgets.maxima().toMap()));
+    }
+
+    @Test public void fileSharingBudgetsUseLongDiskTotalsAndExplicitDeadlines() {
+        assertEquals(8*MIB,ResourceBudgets.legacy().fileShare.sourceBytes);
+        assertEquals(300000,ResourceBudgets.legacy().fileShare.transferTimeoutMs);
+        assertEquals(300000,ResourceBudgets.legacy().fileShare.leaseMs);
+        assertEquals(4*GIB,ResourceBudgets.maxima().fileShare.sourceBytes);
+        assertEquals(86400000,ResourceBudgets.maxima().fileShare.leaseMs);
+        rejected(declaration("fileShare","sourceBytes",4*GIB+1));
+        rejected(declaration("fileShare","transferTimeoutMs",0));
     }
 
 }

@@ -14,7 +14,7 @@
 
 ---
 
-> Development checkpoint: Factory v84 configurable autonomy is implemented as a reviewed development checkpoint; the current batch adds native HTTP(S), actual Android-utility ICMP ping, notifications, platform speech and retained signed-artifact authority, with one global validation and APK delivery at the end. The first native slice has compiled and passed focused synthetic checks; recognition/location and authenticated resource budgets have passed Java and Full/Play Kotlin compilation. The newer generic recording, steps and sensor-subscription slice passes core Java compilation and focused cleanup/adapter checks; its full suites and final global validation remain pending. The packaged-DEX runtime now has a shared per-app/per-operation ALLOW_ALWAYS / ASK / DENY policy, defaulting to ALLOW_ALWAYS. The current source also integrates generic encrypted secrets, incoming sharing, durable notifications and document HTTP streaming; NFC, BLE central, RemoteViews widgets and finite HTTP jobs now have shared SDK/policy wiring and the current Java graph compiles. Larger storage/SQLite budgets and keyset pagination are included in the development source; focused regression checks are tracked separately. This source checkpoint is not a validated APK release; see [Pending.md](Pending.md) and [Factory guidance](app/APK_FACTORY.md) for scope and remaining technical limits.
+> Factory v84 host validation is complete on source `f7794461ed0201dc312b1b6d128b067759e5bec2`, with fresh Full Debug, Play Debug and Full Release APKs (84 / `1.2.77-FACTORY-AUTONOMY`). Independent exact artifact review passed for all three APKs and the template. The retained-D7 signed ARM64 Full Release APK was sent successfully on 11 October 2026 at 22:45 UTC (20,266,643 bytes; SHA-256 `b4b2f38d70932ce333bdba0627b519006f3aa1b4bbd61643fc18f8a77f794a3d`). Download, installation and physical-device acceptance are not established. The packaged-DEX runtime exposes 33 generic capabilities, 134 SDK methods and 65 per-app/per-operation policy actions, defaulting to ALLOW_ALWAYS with configurable ASK/DENY. It includes generic networking/ICMP, media, notifications, speech, sensors, encrypted secrets, sharing, document streaming, NFC NDEF, BLE central, widgets and finite HTTP jobs. No external Android compiler is required per generated app. Android system grants, identity, isolation, lifecycle correctness and explicit resource budgets remain; hardware and system-service availability vary. Local inference still needs an engine/model/license/ABI decision. See [Pending.md](Pending.md) and [Factory guidance](app/APK_FACTORY.md) for scope and technical limits.
 
 
 The optional [multiview ICMP ping example](app/examples/factory-ping-multiview/) demonstrates native ping, local history, notifications and contact-assisted sharing. It is a capability-composition fixture, never a default project or hardcoded application workflow. Its offline controller tests pass; device/WebView acceptance remains pending.
@@ -28,6 +28,8 @@ The agent runtime runs in the Android app. **This does not mean the language mod
 ### Current project status
 
 This is an actively developed project with incremental, evidence-backed checkpoints.
+
+The v84 batch has reconciled host coverage: 4,000 Full and 3,602 Play tests passed; Core Debug/Release each have 2,706 passes and one explicit SDK24 assumption skip; APK runtime has 93 passes per variant. This combines fresh affected runs with reviewed unchanged-input results and preserves earlier failed runs. Fresh Core/template lint has zero errors and 11/22 acknowledged warnings. Host lint retains existing debt (46 Full / 37 Play errors); this is not a lint-clean or physical-device acceptance claim. Software validation, signing and accepted attachment delivery are complete for this batch; physical/OEM acceptance and unrelated UX/CrewAI work remain open.
 
 v82 gyroscope passed staged host validation: 2,604 fresh JUnit cases, SDK42, exact retained
 lint diagnostics and independent three-APK/DEX/template audits. It adds bounded rad/s capture
@@ -49,7 +51,7 @@ were independently verified. Physical-device acceptance remains open.
 | **v80 · Local strong biometrics** | Complete fresh host validation: 8,776 tests, SDK41, exact controlled-baseline lint and generated-profile/signature audit passed. All three final APK audits passed. ARM64 D7 v2/v3 delivery accepted 2026-10-11 03:34:08 UTC; signed payload and independently retrieved Library bytes verified. Physical installation/authentication remain unverified. API30+ strong human system prompt; local receipt authorizes no other action. Only selected biometric profiles add normal USE_BIOMETRIC. [Scope and evidence](recovery/factory-biometrics/README.md) |
 | **Factory test infrastructure** | Exhaustive subset assertions retained with reviewed compositional wire validation. The two bridge cases measured 38.437/42.347 s; 48 focused tests and exact five-diagnostic runtime lint passed. Production and delivered v80 APKs unchanged; no new full aggregate or device claim. [Proof and measured scope](recovery/factory-matrix/README.md) |
 | **v81 · Packaged local UI** | Host-validated fixed Pure.css 3.0.0 catalog, full license notices, responsive CSS and usable offline example. 2,398 fresh affected tests + SDK41, exact lint and independent three-APK audit passed; unrelated host suites remain historical. ARM64 D7 v2/v3 delivery accepted 2026-10-11 05:19:24 UTC; signed payload and retrieved Library bytes independently verified. No successful browser/WebView rendering or physical installation claim. [Scope and evidence](recovery/factory-local-ui/README.md) |
-| Broader Factory roadmap | Remaining F1 capabilities and F2/F3 are unfinished. Platform TTS is implemented with configurable policy. Recording, steps and foreground sensor subscriptions are integrated in development. App secrets, scheduled/action notifications and inbound sharing are integrated in development; combined compilation and final validation remain pending. Broader streaming and scoped F3 work remain open. |
+| Broader Factory roadmap | The scoped v84 F1/F2 batch and bounded F3 NFC NDEF, BLE central, widgets and finite HTTP jobs are implemented, host-validated, independently audited and delivered. This includes platform TTS/recognition, recording, sensor subscriptions, secrets, scheduled/action notifications, inbound sharing, document/media streaming, adaptive icons and expanded packaging budgets. Physical/OEM acceptance and the local-inference engine/model/license/ABI decision remain open; universal Android API coverage is not claimed. |
 
 This status is a **2026-10-11 snapshot**, not a live build badge. [Pending.md](Pending.md) is the current work queue; feature-specific evidence records distinguish passing, failed, interrupted and unrun checks.
 
@@ -144,7 +146,9 @@ Inspect → Build unsigned APK → Apply signing policy → Sign
          └── Private preview / simulated tests       └── Apply install policy / Android flow
 ```
 
-### Implemented slices
+### Earlier implemented slices
+
+These rows summarize earlier capability slices through v80. Their original boundaries are historical; the v84 summary above and current Factory contract describe the expanded APIs and configurable policy.
 
 | Area | What exists | Important boundary |
 | --- | --- | --- |
@@ -164,9 +168,9 @@ Inspect → Build unsigned APK → Apply signing policy → Sign
 | Local strong biometrics (v80) | API30+ framework prompt, coarse availability and explicit cancellation | Human-only prompt; receipt authorizes no other action, cancel proves no closure, preview unavailable; physical acceptance remains open |
 | Email/SMS editors | v73 adds typed editor launches with one recipient and reviewed fields | Host gates passed and signed test APK delivered; external apps may sync drafts; no automatic sending or delivery claim |
 
-**Not every generated app is standalone.** Local runtime features differ from brokered native capabilities. The latter require a compatible Jarvys host, exact caller/signing identity checks and native review. Generated profiles without biometrics retain zero permissions; selecting biometrics adds only normal USE_BIOMETRIC. Neither closed manifest scope nor local authentication makes the host or selected third-party app permissionless or offline.
+**Not every generated app is standalone.** Local runtime features differ from brokered native capabilities. The latter require a compatible Jarvys host, exact caller/signing identity checks and the configured per-operation policy: ALLOW advances automatically, ASK reviews once and DENY blocks. Generated manifest permissions follow the selected capabilities; biometrics contributes normal USE_BIOMETRIC. Neither closed manifest scope nor local authentication makes the host or selected third-party app permissionless or offline.
 
-Strict Factory TTS/voice, remaining F1 work and F2/F3 remain open. Do not interpret the available runtime or a successful build as completion of the full Factory roadmap.
+The scoped v84 batch is delivered, including normal platform TTS/voice and the bounded F3 contracts. Device-dependent acceptance and the local-inference engine/model choice remain open; delivery does not imply universal Android API support or completion of unrelated roadmap items.
 
 [Full contract and project schema](app/APK_FACTORY.md) · [Factory skill](app/app/src/main/assets/skills/com.jarvys.apk-factory/SKILL.md) · [TTS design gate](recovery/factory-tts/README.md) · [Roadmap](Pending.md)
 
@@ -356,7 +360,7 @@ When reporting a bug, include the app version/flavor, Android and WebView versio
 
 ## Roadmap and documentation
 
-The authoritative queue is [Pending.md](Pending.md). Current open themes include the remaining Factory capability families, strict TTS/voice design, physical-device acceptance, context-work gates, remaining autonomy and runtime expansion work and the later central Jarvys/spaces architecture. Their presence in the queue does not mean they are enabled. **UX44**'s proposed permission defaults and migration remain documentation-only; current approval behavior is unchanged.
+The authoritative queue is [Pending.md](Pending.md). The v84 Factory software batch is validated and delivered. Current open themes include device-dependent acceptance, a local-inference engine/model decision, context-work gates, broader autonomy migration, the later central Jarvys/spaces architecture and CrewAI analysis at the end of the queue. Their presence in the queue does not mean they are enabled. The current Factory/Coding scope implements the requested default Allow always policy. Broader UX44 migration outside that scope remains separately tracked.
 
 - [Main agent](app/MAIN_AGENT.md) · [Crew](app/CREW_TASKS.md) · [Coding](app/CODING_AGENT.md)
 - [Memory](app/MEMORY_SCOPE.md) · [Continuous missions](app/CONTINUOUS_MISSIONS.md)

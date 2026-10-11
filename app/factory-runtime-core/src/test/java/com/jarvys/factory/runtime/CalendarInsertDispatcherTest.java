@@ -23,7 +23,9 @@ public class CalendarInsertDispatcherTest {
         assertEquals(1, entry.manifestNodes.size());
         assertEquals("calendar.insert", FactoryDispatcherTest.request("calendar.insert", CalendarInsertRequestTest.args(), config("[\"calendar\"]")).method);
         for (String capability : CapabilityCatalog.NAMES) if (!capability.equals("calendar")) {
-            FactoryException denied = assertThrows(FactoryException.class, () -> FactoryDispatcherTest.request("calendar.insert", CalendarInsertRequestTest.args(), config("[\"" + capability + "\"]")));
+            FactoryConfig unrelated = FactoryDispatcherTest.configForCapability(capability);
+            assertFalse(unrelated.capabilities.contains("calendar"));
+            FactoryException denied = assertThrows(FactoryException.class, () -> FactoryDispatcherTest.request("calendar.insert", CalendarInsertRequestTest.args(), unrelated));
             assertEquals("CAPABILITY_DENIED", denied.code);
         }
         assertEquals("CAPABILITY_DENIED", assertThrows(FactoryException.class, () -> FactoryDispatcherTest.request("calendar.insert", CalendarInsertRequestTest.args(), config("[]"))).code);

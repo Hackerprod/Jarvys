@@ -11,6 +11,8 @@ import android.system.OsConstants
 import android.system.StructStat
 import androidx.core.content.FileProvider
 import com.jarvys.factory.runtime.FileShareTransfer
+import com.jarvys.factory.runtime.StreamingFileShareTransfer
+import com.jarvys.factory.contract.ResourceBudgets
 import java.io.File
 import java.io.FileDescriptor
 import java.io.FileOutputStream
@@ -26,14 +28,35 @@ internal class FactoryFileShareStore(
 ) {
     private val context = context.applicationContext
 
-    data class Snapshot(val uri: Uri, val filename: String, val mimeType: String, val size: Int, val expiresAt: Long)
+    data class Snapshot(val uri: Uri, val filename: String, val mimeType: String, val size: Long, val expiresAt: Long) {
+        constructor(uri: Uri, filename: String, mimeType: String, size: Int, expiresAt: Long) : this(uri, filename, mimeType, size.toLong(), expiresAt)
+    }
 
     fun stage(nonce: String, filename: String, mimeType: String, size: Int, sha256: String,
-              transfer: IBinder, checkActive: () -> Unit, checkAccess: () -> Unit = {}): Snapshot {
+              transfer: IBinder, checkActive: () -> Unit, checkAccess: () -> Unit = {}): Snapshot =
+        stageChecked(nonce, filename, mimeType, size.toLong(), sha256, MAX_BYTES.toLong(), LIFETIME_MILLIS, checkActive, checkAccess) { output, active ->
+            copy(transfer, nonce, size, sha256, output, active)
+        }
+
+    /** The budget is read from authenticated signing/source proof, never incoming Intent extras. */
+    fun stageStreaming(nonce: String, filename: String, mimeType: String, size: Long, sha256: String,
+                       transfer: IBinder, protocolVersion: Int, budget: ResourceBudgets.FileShare,
+                       checkActive: () -> Unit, checkAccess: () -> Unit): Snapshot {
+        require(protocolVersion == 1 || protocolVersion == 2)
+        if (protocolVersion == 1) require(size in 1..MAX_BYTES.toLong())
+        return stageChecked(nonce, filename, mimeType, size, sha256, budget.sourceBytes, budget.leaseMs, checkActive, checkAccess) { output, active ->
+            StreamingFileShareTransfer.copy(transfer, nonce, size, sha256, protocolVersion, output, active)
+        }
+    }
+
+    private fun stageChecked(nonce: String, filename: String, mimeType: String, size: Long, sha256: String,
+                             maximum: Long, leaseMs: Long, checkActive: () -> Unit, checkAccess: () -> Unit,
+                             transferCopy: (OutputStream, Runnable) -> Unit): Snapshot {
+        require(maximum in 1..StreamingFileShareTransfer.MAX_BYTES && leaseMs in 1..StreamingFileShareTransfer.MAX_TIMEOUT_MILLIS)
         require(nonce.matches(Regex("[a-f0-9]{64}")))
         require(filename.matches(Regex("[a-zA-Z0-9][a-zA-Z0-9 _.-]{0,119}")) && !filename.endsWith(".") && !filename.contains(".."))
         require(mimeType.length <= 127 && mimeType.matches(Regex("[a-zA-Z0-9][a-zA-Z0-9!#$&^_.+-]*/[a-zA-Z0-9][a-zA-Z0-9!#$&^_.+-]*")))
-        require(size in 1..MAX_BYTES && sha256.matches(Regex("[a-f0-9]{64}")))
+        require(size in 1..maximum && sha256.matches(Regex("[a-f0-9]{64}")))
         val operation = FactoryFileShareRegistry.begin()
         var staging: File? = null
         var completed: File? = null
@@ -45,19 +68,20 @@ internal class FactoryFileShareStore(
             // Never reconstruct registration from disk, including after process death.
             check(root.list()?.isEmpty() == true) { "Stale file-share cache requires cleanup" }
             val rootIdentity = Identity.directory(Os.lstat(root.path))
+            check(root.usableSpace >= size) { "Insufficient private file-share storage" }
             staging = File(root, "staging-${UUID.randomUUID()}.tmp")
             completed = File(root, "snapshot-${UUID.randomUUID()}.bin")
             val descriptor = Os.open(staging.path, OsConstants.O_WRONLY or OsConstants.O_CREAT or
                 OsConstants.O_EXCL or OsConstants.O_NOFOLLOW or ATOMIC_CLOSE_ON_EXEC, OWNER_RW)
             FileOutputStream(descriptor).use { stream ->
                 val checked = CheckedOutput(stream, size, sha256, active)
-                copy(transfer, nonce, size, sha256, checked, active)
+                transferCopy(checked, active)
                 checked.verify()
                 active.run()
                 stream.flush()
                 Os.fsync(descriptor)
                 Os.fchmod(descriptor, OWNER_READ)
-                check(Os.fstat(descriptor).st_size == size.toLong())
+                check(Os.fstat(descriptor).st_size == size)
             }
             active.run()
             requireRootIdentity(root, rootIdentity)
@@ -69,20 +93,22 @@ internal class FactoryFileShareStore(
             check(completed.canonicalFile == completed)
             val uri = FileProvider.getUriForFile(context, authority(context), completed)
             val now = SystemClock.elapsedRealtime()
-            check(now >= 0 && now <= Long.MAX_VALUE - LIFETIME_MILLIS)
-            val result = Snapshot(uri, filename, mimeType, size, now + LIFETIME_MILLIS)
+            check(now >= 0 && now <= Long.MAX_VALUE - leaseMs)
+            val result = Snapshot(uri, filename, mimeType, size, now + leaseMs)
             active.run()
             FactoryFileShareRegistry.register(operation, result, completed, rootIdentity, identity, checkAccess)
             published = true
             return result
         } finally {
             // No registry lock is held while a remote Binder may be stalled.
+            var cleanupComplete = published
             try {
                 if (!published) {
                     staging?.let(::deleteCacheEntry)
                     completed?.let(::deleteCacheEntry)
+                    cleanupComplete = true
                 }
-            } finally { FactoryFileShareRegistry.finish(operation) }
+            } finally { FactoryFileShareRegistry.finish(operation, cleanupComplete) }
         }
     }
 
@@ -133,10 +159,10 @@ internal class FactoryFileShareStore(
         FactoryFileShareRegistry.cleaned(uris.toList())
     }
 
-    private class CheckedOutput(private val target: OutputStream, private val size: Int,
+    private class CheckedOutput(private val target: OutputStream, private val size: Long,
                                 private val sha256: String, private val active: Runnable) : OutputStream() {
         private val digest = MessageDigest.getInstance("SHA-256")
-        private var count = 0
+        private var count = 0L
         override fun write(value: Int) { write(byteArrayOf(value.toByte())) }
         override fun write(bytes: ByteArray, offset: Int, length: Int) {
             require(offset >= 0 && length >= 0 && offset <= bytes.size - length)
@@ -211,9 +237,9 @@ internal class FactoryFileShareStore(
                 // Directory time/size changes as entries are created; identity is the directory inode.
                 return Identity(stat.st_dev, stat.st_ino, 0, stat.st_mode, stat.st_uid, 0, 0)
             }
-            fun file(stat: StructStat, size: Int): Identity {
+            fun file(stat: StructStat, size: Long): Identity {
                 check(OsConstants.S_ISREG(stat.st_mode) && stat.st_nlink == 1L && stat.st_uid == Os.getuid())
-                check(stat.st_mode and 511 == OWNER_READ && stat.st_size == size.toLong())
+                check(stat.st_mode and 511 == OWNER_READ && stat.st_size == size)
                 return Identity(stat.st_dev, stat.st_ino, stat.st_size, stat.st_mode, stat.st_uid, stat.st_mtime, stat.st_ctime)
             }
         }
@@ -227,16 +253,22 @@ internal object FactoryFileShareRegistry {
                              val pinned: FileDescriptor, val checkAccess: () -> Unit)
     private var operation: String? = null
     private var cancelled = false
+    private var copying = false
     private var entry: Entry? = null
     private val pendingRevocations = linkedSetOf<Uri>()
     private val pendingClose = mutableListOf<FileDescriptor>()
 
     @Synchronized fun begin(): String {
         check(operation == null && entry == null && pendingRevocations.isEmpty() && pendingClose.isEmpty()) { "A file-share operation is already pending" }
-        return UUID.randomUUID().toString().also { operation = it; cancelled = false }
+        return UUID.randomUUID().toString().also { operation = it; cancelled = false; copying = true }
     }
     @Synchronized fun requireActive(token: String) { check(token == operation && !cancelled) { "File-share operation revoked" } }
-    @Synchronized fun finish(token: String) { if (operation == token) operation = null }
+    @Synchronized fun finish(token: String, cleanupComplete: Boolean = true) {
+        if (operation == token) {
+            copying = false
+            if (cleanupComplete) operation = null else cancelled = true
+        }
+    }
     @Synchronized fun register(token: String, snapshot: FactoryFileShareStore.Snapshot, file: File,
                                root: FactoryFileShareStore.Identity, identity: FactoryFileShareStore.Identity, checkAccess: () -> Unit = {}) {
         requireActive(token)
@@ -266,7 +298,10 @@ internal object FactoryFileShareRegistry {
         }
     }
     @Synchronized fun retainRevocations(uris: List<Uri>) { pendingRevocations.addAll(uris) }
-    @Synchronized fun cleaned(uris: List<Uri>) { pendingRevocations.removeAll(uris.toSet()) }
+    @Synchronized fun cleaned(uris: List<Uri>) {
+        pendingRevocations.removeAll(uris.toSet())
+        if (cancelled && !copying && entry == null && pendingRevocations.isEmpty() && pendingClose.isEmpty()) operation = null
+    }
 
     /** The lock only covers bounded local metadata/open work, never transfer or caller code. */
     @Synchronized fun <T> read(context: Context, uri: Uri,

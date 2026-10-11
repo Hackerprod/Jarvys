@@ -2,8 +2,13 @@ package com.jarvys.factory.runtime;
 
 import org.json.JSONObject;
 import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.robolectric.RobolectricTestRunner;
+import org.robolectric.annotation.Config;
 import static org.junit.Assert.*;
 
+@RunWith(RobolectricTestRunner.class)
+@Config(sdk = 28, manifest = Config.NONE)
 public final class HttpJobRequestTest {
     static final String ID="12345678-1234-4321-8123-123456789abc";
     static JSONObject input()throws Exception{return new JSONObject().put("jobId",ID).put("request",new JSONObject().put("url","https://example.invalid/job").put("method","POST").put("body","one"));}
@@ -35,7 +40,10 @@ public final class HttpJobRequestTest {
         reject(input().put("request",new JSONObject().put("url","https://example.invalid").put("method","GET").put("body","x")));
         reject(input().put("request",new JSONObject().put("url","https://example.invalid").put("timeoutMs",120001)));
         JSONObject n=new JSONObject().put("url","https://example.invalid").put("method","POST").put("bodyBase64","AAEC/w==").put("responseType","base64");
-        assertEquals("base64",HttpJobRequest.parse(input().put("request",n)).request.responseType);
+        HttpJobRequest binary=HttpJobRequest.parse(input().put("request",n));
+        assertEquals("base64",binary.request.responseType);
+        assertArrayEquals(new byte[]{0,1,2,(byte)255},binary.request.bodyBytes());
+        assertEquals(binary.fingerprint,HttpJobRequest.parse(binary.payloadJson()).fingerprint);
     }
     private void reject(JSONObject value)throws Exception{try{HttpJobRequest.parse(value);fail(value.toString());}catch(FactoryException expected){assertNotNull(expected.code);}}
 }

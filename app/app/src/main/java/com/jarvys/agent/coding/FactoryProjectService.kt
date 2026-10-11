@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import android.util.AtomicFile
 import com.jarvys.agent.CancellationToken
+import com.jarvys.agent.apkfactory.FactoryPackagingResources
 import com.jarvys.agent.apkfactory.FactoryOperationPolicy
 import com.jarvys.agent.apkfactory.FactoryJson
 import com.jarvys.agent.apkfactory.FactoryIcon
@@ -39,10 +40,20 @@ internal class FactoryProjectService(
         check(available()) { "APK factory is no longer available to this Coding run" }
         scope.validate()
     }
-    private fun template(): ByteArray {
+    private fun template(token: CancellationToken): ByteArray {
         val expected = context.assets.open("apk_factory/template.sha256").bufferedReader().use { it.readText().trim() }
         check(expected.matches(Regex("[a-f0-9]{64}"))) { "Invalid bundled template provenance" }
-        val bytes = context.assets.open("apk_factory/template.apk").use { readBounded(it, MAX_APK_BYTES) }
+        // Count without materializing first; the trusted asset may be compressed in the host APK.
+        val plannedBytes = context.assets.open("apk_factory/template.apk").use { input ->
+            val buffer = ByteArray(8192)
+            var count = 0L
+            while (true) { token.throwIfCancelled(); val n = input.read(buffer); if (n < 0) break; count += n
+                check(count <= MAX_APK_BYTES) { "Bundled template exceeds technical APK limit" } }
+            count
+        }
+        FactoryPackagingResources.requireHeap(FactoryPackagingResources.readEstimate(plannedBytes))
+        val bytes = context.assets.open("apk_factory/template.apk").use { readBounded(it, plannedBytes.toInt(), token) }
+        FactoryPackagingResources.requireHeap(FactoryPackagingResources.artifactEstimate(bytes.size.toLong(), TemplateApk.expandedBytes(bytes)))
         check(ProjectScope.sha256(bytes) == expected) { "Bundled runtime template hash mismatch" }
         FactoryUiAssets.fromApk(bytes)
         return bytes
@@ -55,9 +66,12 @@ internal class FactoryProjectService(
         .put("files", JSONArray(FactoryUiAssets.paths().map { path -> JSONObject()
             .put("path", "/$path").put("bytes", FactoryUiAssets.size(path)).put("sha256", FactoryUiAssets.sha256(path)) }))
 
-    fun inspect(token: CancellationToken): JSONObject {
+    fun inspect(token: CancellationToken): JSONObject =
+        FactoryPackagingResources.acquire().use { inspectOwned(token) }
+
+    private fun inspectOwned(token: CancellationToken): JSONObject {
         checkActive(token)
-        val bytes = template()
+        val bytes = template(token)
         val manifest = TemplateApk.inspect(bytes)
         return JSONObject().put("schemaVersion", 1).put("runtimeVersion", 1)
             .put("templateSha256", ProjectScope.sha256(bytes)).put("templateBytes", bytes.size)
@@ -74,13 +88,22 @@ internal class FactoryProjectService(
             .put("supportedAbis", "Architecture-neutral JVM/Android code; physical device validation is still required")
             .put("scope_version", scope.version()).put("project_id", scope.id())
             .put("localUiLibraries", localUiLibraries())
-            .put("specFields", JSONArray(listOf("schemaVersion", "appId", "name", "versionCode", "versionName", "capabilities", "webDir", "icon", "dataBackup", "resourceBudgets", "incomingShare", "notifications", "bluetooth")))
+            .put("specFields", JSONArray(listOf("schemaVersion", "appId", "name", "versionCode", "versionName", "capabilities", "webDir", "icon", "dataBackup", "resourceBudgets", "incomingShare", "notifications", "bluetooth", "adaptiveIcon")))
             .put("limits", JSONObject().put("websiteFiles", FactorySpec.MAX_WEB_FILES).put("websiteBytes", FactorySpec.MAX_WEB_BYTES)
-                .put("fileBytes", FactorySpec.MAX_FILE_BYTES).put("icon", "PNG, 48–1024 pixels per side, at most 1 MiB; or 192px geometric vector JSON"))
+                .put("fileBytes", FactorySpec.MAX_FILE_BYTES)
+                .put("sourceBudgetMaxima", JSONObject().put("sourceFiles", TemplateApk.MAX_ENTRIES)
+                    .put("singleSourceBytes", TemplateApk.MAX_ENTRY_BYTES).put("totalSourceBytes", TemplateApk.MAX_APK_BYTES))
+                .put("technicalZipEntries", TemplateApk.MAX_ENTRIES).put("technicalExpandedBytes", TemplateApk.MAX_APK_BYTES)
+                .put("technicalApkBytes", TemplateApk.MAX_APK_BYTES)
+                .put("resourceAdmission", "Defaults shown above; signed resourceBudgets.packaging can raise source limits within maxima. Complete APK includes fixed runtime/config/provenance and ZIP overhead. One process-local operation with conservative actual-size heap admission; availability is not guaranteed.").put("icon", "PNG, 48–1024 pixels per side, at most 1 MiB; or 192px geometric vector JSON")
+                .put("adaptiveIcon", "Optional foreground PNG or transparent geometric JSON, opaque #RRGGBB background, insetPercent 0–40 (default 0 preserves canvas); compiled API26 adaptive resource plus legacy fallback"))
             .put("signing", "Signing follows Factory permissions: Allow always by default, Ask once, or Deny. Existing non-exportable AndroidKeyStore identities stay unchanged. For a NEW recoverable identity or encrypted backup/import, open Settings > Factory identities yourself; never send passphrases or private keys to a tool or conversation. No silent rotation or shared key.")
-            .put("unsupported", "Native APIs outside the listed template capabilities require a reviewed template update; HTTP(S), ICMP utility probing, notifications and platform speech are available through their listed capabilities; microphone APIs are not implemented; photo capture delegates to Android. Full installation follows Factory permissions and actual Android installer requirements.")
+            .put("unsupported", "Implemented operations depend on declared capabilities, applicable user grants, and device/OS availability. Native APIs outside the compiled capability catalog require a reviewed template update; per-app native code and compilation are unsupported.")
     }
-    fun build(specPath: String, outputPath: String, expectedVersion: Long, token: CancellationToken): JSONObject {
+    fun build(specPath: String, outputPath: String, expectedVersion: Long, token: CancellationToken): JSONObject =
+        FactoryPackagingResources.acquire().use { buildOwned(specPath, outputPath, expectedVersion, token) }
+
+    private fun buildOwned(specPath: String, outputPath: String, expectedVersion: Long, token: CancellationToken): JSONObject {
         checkActive(token)
         if (Build.VERSION.SDK_INT < 26) throw IllegalStateException("Native APK generation requires Android 8/API 26 or newer for bounded project file access. Generated apps support API 24+.")
         FactorySpec.relativePath(specPath)
@@ -90,14 +113,20 @@ internal class FactoryProjectService(
             val source = FactoryProjectFiles.read(scope, specPath, FactorySpec.MAX_SPEC_BYTES, token)
             val spec = FactorySpec.parse(FactoryJson.objectFrom(source, FactorySpec.MAX_SPEC_BYTES))
             require(!outputPath.startsWith(spec.webDir + "/")) { "Output cannot be inside webDir" }
-            val iconSource = FactoryProjectFiles.read(scope, spec.icon, FactorySpec.MAX_FILE_BYTES, token)
+            val websitePlan = FactoryProjectFiles.planWebsite(scope, spec.webDir, spec.resources.packaging, token)
+            val template = template(token)
+            FactoryPackagingResources.requireHeap(FactoryPackagingResources.buildEstimate(websitePlan.totalBytes,
+                template.size.toLong(), TemplateApk.expandedBytes(template)))
+            val iconSource = FactoryProjectFiles.read(scope, spec.icon, FactorySpec.MAX_ICON_BYTES, token)
             val icon = FactoryIcon.render(spec.icon, iconSource)
-            val web = FactoryProjectFiles.website(scope, spec.webDir, token)
-            require(web.size <= spec.resources.packaging.sourceFiles && web.values.sumOf { it.size.toLong() } <= spec.resources.packaging.totalSourceBytes &&
-                web.values.all { it.size.toLong() <= spec.resources.packaging.singleSourceBytes }) { "Website exceeds declared resource budgets" }
+            val adaptiveSource = spec.adaptiveIcon?.let { FactoryProjectFiles.read(scope, it.foreground, FactorySpec.MAX_ICON_BYTES, token) }
+            val adaptiveLayers = spec.adaptiveIcon?.let { FactoryIcon.renderAdaptive(it, adaptiveSource!!) }
+            val adaptiveHashes = adaptiveLayers?.let { JSONObject().put("foreground", ProjectScope.sha256(it.foreground()))
+                .put("background", ProjectScope.sha256(it.background())) }
+            val web = FactoryProjectFiles.readWebsite(scope, websitePlan, token)
             val sources = sortedMapOf(specPath to ProjectScope.sha256(source), spec.icon to ProjectScope.sha256(iconSource))
+            spec.adaptiveIcon?.let { sources[it.foreground] = ProjectScope.sha256(adaptiveSource!!) }
             web.forEach { (path, bytes) -> sources["${spec.webDir}/$path"] = ProjectScope.sha256(bytes) }
-            val template = template()
             val replacements = sortedMapOf<String, ByteArray>()
             web.forEach { (path, bytes) -> replacements["assets/www/$path"] = bytes }
             replacements["assets/factory-app.json"] = spec.runtimeConfig(
@@ -105,13 +134,14 @@ internal class FactoryProjectService(
             )
             replacements["assets/factory-provenance.json"] = JSONObject().put("schemaVersion", 1).put("runtimeVersion", 1)
                 .put("templateSha256", ProjectScope.sha256(template)).put("sourceSha256", JSONObject(sources))
-                .put("renderedIconSha256", ProjectScope.sha256(icon)).put("localUiLibraries", localUiLibraries()).toString().toByteArray(Charsets.UTF_8)
-            val bytes = TemplateApk.build(template, TemplateApk.Spec(spec.appId, spec.name, spec.versionCode, spec.versionName, spec.capabilities, spec.incomingShare, spec.notifications, spec.bluetooth), icon, replacements)
-            val manifest = TemplateApk.verify(bytes, TemplateApk.Spec(spec.appId, spec.name, spec.versionCode, spec.versionName, spec.capabilities, spec.incomingShare, spec.notifications, spec.bluetooth))
+                .put("renderedIconSha256", ProjectScope.sha256(icon)).put("localUiLibraries", localUiLibraries())
+                .also { if (adaptiveHashes != null) it.put("renderedAdaptiveIconSha256", adaptiveHashes) }.toString().toByteArray(Charsets.UTF_8)
+            val bytes = TemplateApk.build(template, TemplateApk.Spec(spec.appId, spec.name, spec.versionCode, spec.versionName, spec.capabilities, spec.incomingShare, spec.notifications, spec.bluetooth, spec.adaptiveIcon != null), icon, replacements, adaptiveLayers)
+            val manifest = TemplateApk.verify(bytes, TemplateApk.Spec(spec.appId, spec.name, spec.versionCode, spec.versionName, spec.capabilities, spec.incomingShare, spec.notifications, spec.bluetooth, spec.adaptiveIcon != null))
             require(bytes.size <= MAX_APK_BYTES && bytes.size.toLong() <= spec.resources.packaging.apkBytes) { "Generated APK exceeds factory size limit" }
             FactoryUiAssets.fromApk(bytes)
             checkActive(token)
-            sources.forEach { (path, sha) -> check(FactoryProjectFiles.sha(scope, path, if (path == specPath) FactorySpec.MAX_SPEC_BYTES else FactorySpec.MAX_FILE_BYTES, token) == sha) { "Factory source changed before publication: $path" } }
+            sources.forEach { (path, sha) -> check(FactoryProjectFiles.sha(scope, path, when (path) { specPath -> FactorySpec.MAX_SPEC_BYTES; spec.icon, spec.adaptiveIcon?.foreground -> FactorySpec.MAX_ICON_BYTES; else -> spec.resources.packaging.singleSourceBytes.toInt() }, token) == sha) { "Factory source changed before publication: $path" } }
             val id = UUID.randomUUID().toString()
             val job = newJob(id)
             val staged = File(job, "unsigned.apk").apply { writeBytes(bytes) }
@@ -120,6 +150,7 @@ internal class FactoryProjectService(
                 .put("projectIdentity", scope.durableIdentity()).put("projectId", scope.id()).put("outputPath", outputPath)
                 .put("apkSha256", sha).put("apkBytes", bytes.size).put("templateSha256", ProjectScope.sha256(template))
                 .put("manifestContract", "closed-v5-generic-native").put("renderedIconSha256", ProjectScope.sha256(icon)).put("dexSha256", JSONObject(manifest.dexSha256)).put("spec", spec.toJson()).put("sources", JSONObject(sources)).put("signed", false)
+            if (adaptiveHashes != null) receipt.put("renderedAdaptiveIconSha256", adaptiveHashes)
             saveReceipt(sha, receipt)
             try {
                 FactoryProjectFiles.publish(scope, outputPath, staged, lease, token) { checkActive(token) }
@@ -135,7 +166,10 @@ internal class FactoryProjectService(
             return publicReceipt(receipt).put("scope_version", scope.version()).put("notice", "Unsigned APK built and verified. It is not installable until explicitly signed; no installation was attempted.")
         }
     }
-    fun sign(inputPath: String, expectedSha: String, outputPath: String, expectedVersion: Long, token: CancellationToken): JSONObject {
+    fun sign(inputPath: String, expectedSha: String, outputPath: String, expectedVersion: Long, token: CancellationToken): JSONObject =
+        FactoryPackagingResources.acquire().use { signOwned(inputPath, expectedSha, outputPath, expectedVersion, token) }
+
+    private fun signOwned(inputPath: String, expectedSha: String, outputPath: String, expectedVersion: Long, token: CancellationToken): JSONObject {
         checkActive(token)
         if (Build.VERSION.SDK_INT < 26) throw IllegalStateException("Native factory signing requires Android 8/API 26 or newer")
         require(expectedSha.matches(Regex("[a-f0-9]{64}"))) { "expected_sha256 is required" }
@@ -145,10 +179,10 @@ internal class FactoryProjectService(
             val receipt = loadReceipt(expectedSha, inputPath)
             check(receipt.getString("state") == "published" && !receipt.getBoolean("signed") && receipt.getString("projectIdentity") == scope.durableIdentity()
                 && receipt.getString("outputPath") == inputPath && receipt.getString("apkSha256") == expectedSha) { "This exact unsigned APK has no completed build receipt in this project" }
-            val bytes = FactoryProjectFiles.read(scope, inputPath, MAX_APK_BYTES, token)
+            val bytes = readArtifact(inputPath, receipt.getLong("apkBytes"), token)
             check(ProjectScope.sha256(bytes) == expectedSha) { "Unsigned APK changed; build it again from inspected source" }
             val spec = FactorySpec.parse(receipt.getJSONObject("spec"))
-            val expectedManifest = TemplateApk.Spec(spec.appId, spec.name, spec.versionCode, spec.versionName, spec.capabilities, spec.incomingShare, spec.notifications, spec.bluetooth)
+            val expectedManifest = TemplateApk.Spec(spec.appId, spec.name, spec.versionCode, spec.versionName, spec.capabilities, spec.incomingShare, spec.notifications, spec.bluetooth, spec.adaptiveIcon != null)
             val manifest = verifyReceiptManifest(bytes, expectedManifest, receipt)
             verifyRuntimeConfig(bytes, spec)
             // v1 receipts predate inventory storage; their exact artifact hash/project binding remains authoritative.
@@ -239,7 +273,8 @@ internal class FactoryProjectService(
                         permission.checkBeforeEffect()
                         val certificate = FactoryApkSigner.sign(input, output, identity.key, identity.certificate)
                         checkActive(token)
-                        val outputBytes = output.readBytes()
+                        require(output.length() <= minOf(MAX_APK_BYTES.toLong(), spec.resources.packaging.apkBytes)) { "Signed APK exceeds declared or technical APK byte limit" }
+                        val outputBytes = output.inputStream().use { readBounded(it, minOf(MAX_APK_BYTES.toLong(), spec.resources.packaging.apkBytes).toInt()) }
                         val signedInfo = TemplateApk.verifyAgainstPlan(outputBytes, manifest.plan)
                         TemplateApk.verifyUnchangedPayload(bytes, outputBytes)
                         check(signedInfo.dexSha256 == manifest.dexSha256) { "Signed APK DEX inventory changed" }
@@ -282,7 +317,11 @@ internal class FactoryProjectService(
         }
     }
     /** Installation has its own configurable authority, never inferred from signing. */
-    fun installation(action: String, inputPath: String, expectedSha: String, expectedVersion: Long, token: CancellationToken): JSONObject {
+    fun installation(action: String, inputPath: String, expectedSha: String, expectedVersion: Long, token: CancellationToken): JSONObject =
+        if (action != "install") installationOwned(action, inputPath, expectedSha, expectedVersion, token) else
+        FactoryPackagingResources.acquire().use { installationOwned(action, inputPath, expectedSha, expectedVersion, token) }
+
+    private fun installationOwned(action: String, inputPath: String, expectedSha: String, expectedVersion: Long, token: CancellationToken): JSONObject {
         require(action in setOf("install", "install_status", "install_cancel"))
         require(expectedSha.matches(Regex("[a-f0-9]{64}")))
         FactorySpec.relativePath(inputPath)
@@ -317,9 +356,9 @@ internal class FactoryProjectService(
         // The coordinator still acquires and rechecks the live grant at its effect boundaries.
         check(operationPolicy.mode(FactoryOperationPolicy.Subject.signedArtifact(spec.appId, binding.getString("certificate_sha256")),
             FactoryOperationPolicy.Operation.INSTALL) != FactoryOperationPolicy.Mode.DENY) { "Factory installation is denied by the saved policy" }
-        val bytes = FactoryProjectFiles.read(scope, inputPath, MAX_APK_BYTES, token)
+        val bytes = readArtifact(inputPath, receipt.getLong("apkBytes"), token)
         check(bytes.size.toLong() == receipt.getLong("apkBytes") && ProjectScope.sha256(bytes) == expectedSha) { "Signed APK changed" }
-        val plan = TemplateApk.Spec(spec.appId, spec.name, spec.versionCode, spec.versionName, spec.capabilities, spec.incomingShare, spec.notifications, spec.bluetooth)
+        val plan = TemplateApk.Spec(spec.appId, spec.name, spec.versionCode, spec.versionName, spec.capabilities, spec.incomingShare, spec.notifications, spec.bluetooth, spec.adaptiveIcon != null)
         val manifest = verifyReceiptManifest(bytes, plan, receipt)
         verifyRuntimeConfig(bytes, spec)
         if (receipt.has("dexSha256")) {
@@ -343,7 +382,10 @@ internal class FactoryProjectService(
         return result.put("notice", "Installation requested under the saved Factory policy. Allow always proceeds without a Jarvys approval; Ask reviews this exact APK once. Android may require its own installer confirmation. This request is not evidence of installation success; Settings > Factory installations retains status.")
     }
     /** Read-only evidence actions: no signing identities, permission changes, install or project mutation. */
-    fun harness(action: String, inputPath: String, expectedSha: String, expectedVersion: Long, token: CancellationToken): JSONObject {
+    fun harness(action: String, inputPath: String, expectedSha: String, expectedVersion: Long, token: CancellationToken): JSONObject =
+        FactoryPackagingResources.acquire().use { harnessOwned(action, inputPath, expectedSha, expectedVersion, token) }
+
+    private fun harnessOwned(action: String, inputPath: String, expectedSha: String, expectedVersion: Long, token: CancellationToken): JSONObject {
         require(action in setOf("preview", "preview_status", "test"))
         require(expectedSha.matches(Regex("[a-f0-9]{64}"))) { "expected_sha256 is required" }
         FactorySpec.relativePath(inputPath)
@@ -358,11 +400,11 @@ internal class FactoryProjectService(
         check(receipt.getString("state") == "published" && receipt.getString("projectIdentity") == identity &&
             receipt.getString("projectId") == scope.id() && receipt.getString("outputPath") == inputPath &&
             receipt.getString("apkSha256") == expectedSha) { "This exact APK has no completed build receipt in this project" }
-        val bytes = FactoryProjectFiles.read(scope, inputPath, MAX_APK_BYTES, token)
+        val bytes = readArtifact(inputPath, receipt.getLong("apkBytes"), token)
         check(ProjectScope.sha256(bytes) == expectedSha && bytes.size.toLong() == receipt.getLong("apkBytes")) { "Factory APK changed" }
         val spec = FactorySpec.parse(receipt.getJSONObject("spec"))
-        check(receipt.getString("templateSha256") == ProjectScope.sha256(template())) { "Runtime template changed; rebuild this app before preview or test" }
-        val manifest = verifyReceiptManifest(bytes, TemplateApk.Spec(spec.appId, spec.name, spec.versionCode, spec.versionName, spec.capabilities, spec.incomingShare, spec.notifications, spec.bluetooth), receipt)
+        check(receipt.getString("templateSha256") == ProjectScope.sha256(template(token))) { "Runtime template changed; rebuild this app before preview or test" }
+        val manifest = verifyReceiptManifest(bytes, TemplateApk.Spec(spec.appId, spec.name, spec.versionCode, spec.versionName, spec.capabilities, spec.incomingShare, spec.notifications, spec.bluetooth, spec.adaptiveIcon != null), receipt)
         val savedDex = receipt.getJSONObject("dexSha256")
         check(savedDex.keys().asSequence().toSet() == manifest.dexSha256.keys && manifest.dexSha256.all { (name, hash) -> savedDex.getString(name) == hash }) { "Runtime inventory differs from receipt" }
         val assets = sortedMapOf<String, ByteArray>()
@@ -378,13 +420,15 @@ internal class FactoryProjectService(
                     (entry.name.startsWith("assets/") && FactoryUiAssets.isNamespace(entry.name.removePrefix("assets/")))) {
                     val path = entry.name.removePrefix("assets/")
                     check(!entry.isDirectory && !assets.containsKey(path)) { "Duplicate or directory preview asset" }
-                    val data = if (FactoryUiAssets.isNamespace(path)) FactoryUiAssets.read(path, zip)
-                        else readBounded(zip, FactorySpec.MAX_FILE_BYTES)
                     if (path.startsWith("www/")) {
-                        webFiles++
+                        check(++webFiles <= spec.resources.packaging.sourceFiles) { "Preview website exceeds declared sourceFiles" }
+                    }
+                    val data = if (FactoryUiAssets.isNamespace(path)) FactoryUiAssets.read(path, zip)
+                        else readBounded(zip, if (path.startsWith("www/")) minOf(spec.resources.packaging.singleSourceBytes, spec.resources.packaging.totalSourceBytes - webBytes).toInt() else TemplateApk.MAX_ENTRY_BYTES)
+                    if (path.startsWith("www/")) {
                         webBytes += data.size
-                        check(webFiles <= FactorySpec.MAX_WEB_FILES && webBytes <= FactorySpec.MAX_WEB_BYTES) {
-                            "Preview website exceeds build limit"
+                        check(webFiles <= spec.resources.packaging.sourceFiles && webBytes <= spec.resources.packaging.totalSourceBytes) {
+                            "Preview website exceeds declared packaging budget"
                         }
                     }
                     assets[path] = data
@@ -417,7 +461,7 @@ internal class FactoryProjectService(
             .put("android_api", Build.VERSION.SDK_INT).put("webview_version", JSONObject.NULL)
         validate()
         if (action == "preview_status") return FactoryPreviewRegistry.status(metadata)
-        val snapshot = FactoryPreviewRegistry.Snapshot(metadata, runtimeConfig, assets)
+        val snapshot = FactoryPreviewRegistry.Snapshot(metadata, runtimeConfig, assets, spec.resources.packaging)
         if (action == "test") {
             val result = FactoryRuntimeContractTests.run(snapshot, context.packageName, Build.VERSION.SDK_INT, context.applicationInfo.targetSdkVersion, ::validate)
             validate()
@@ -482,6 +526,14 @@ internal class FactoryProjectService(
         .put("certificate_sha256", receipt.opt("certificateSha256") ?: JSONObject.NULL)
         .put("source_file_count", receipt.getJSONObject("sources").length())
         .put("source_manifest_sha256", ProjectScope.sha256(receipt.getJSONObject("sources").toString().toByteArray(Charsets.UTF_8)))
+    private fun readArtifact(path: String, plannedBytes: Long, token: CancellationToken): ByteArray {
+        require(plannedBytes in 22..MAX_APK_BYTES.toLong()) { "Receipt APK bytes exceed technical limit" }
+        FactoryPackagingResources.requireHeap(FactoryPackagingResources.readEstimate(plannedBytes))
+        val bytes = FactoryProjectFiles.read(scope, path, plannedBytes.toInt(), token)
+        check(bytes.size.toLong() == plannedBytes) { "Artifact size differs from receipt" }
+        FactoryPackagingResources.requireHeap(FactoryPackagingResources.artifactEstimate(plannedBytes, TemplateApk.expandedBytes(bytes)))
+        return bytes
+    }
     private fun newJob(id: String): File {
         val directory = File(privateRoot, "staging/$id")
         check(directory.mkdirs()) { "Cannot create private factory staging" }
@@ -500,10 +552,10 @@ internal class FactoryProjectService(
     companion object {
         private val SIGN_LOCK = FactorySigningIdentity.LOCK
         const val MAX_APK_BYTES = 32 * 1024 * 1024
-        private fun readBounded(input: java.io.InputStream, max: Int): ByteArray {
+        private fun readBounded(input: java.io.InputStream, max: Int, token: CancellationToken? = null): ByteArray {
             val out = java.io.ByteArrayOutputStream()
             val buffer = ByteArray(8192)
-            while (true) { val n = input.read(buffer); if (n < 0) break; check(out.size().toLong() + n <= max) { "Template exceeds factory limit" }; out.write(buffer, 0, n) }
+            while (true) { token?.throwIfCancelled(); val n = input.read(buffer); if (n < 0) break; check(out.size().toLong() + n <= max) { "Template exceeds factory limit" }; out.write(buffer, 0, n) }
             return out.toByteArray()
         }
     }

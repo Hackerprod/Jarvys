@@ -154,7 +154,7 @@ class FactoryFileShareActivityTest {
     }
     private fun incoming() = Intent(context, FactoryFileShareActivity::class.java).putExtras(Bundle().apply {
         putInt("protocolVersion", 1); putString("nonce", request.nonce); putString("filename", request.filename)
-        putString("mimeType", request.mimeType); putInt("size", request.size); putString("sha256", request.sha256); putBinder("transfer", request.transfer)
+        putString("mimeType", request.mimeType); putInt("size", request.size.toInt()); putString("sha256", request.sha256); putBinder("transfer", request.transfer)
     })
     private fun pendingStartup(): Pair<java.util.concurrent.CountDownLatch, java.util.concurrent.Future<*>> {
         val entered = java.util.concurrent.CountDownLatch(1)

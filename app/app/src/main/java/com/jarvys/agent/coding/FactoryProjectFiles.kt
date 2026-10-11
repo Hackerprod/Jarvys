@@ -44,40 +44,63 @@ internal object FactoryProjectFiles {
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
+    /** Metadata-only plan; no source array is allocated before aggregate heap admission. */
+    class WebsitePlan internal constructor(val directory: String, val sizes: Map<String, Int>) {
+        val totalBytes: Long = sizes.values.sumOf { it.toLong() }
+    }
+
     @RequiresApi(26)
-    fun website(scope: ProjectScope, directory: String, token: CancellationToken): Map<String, ByteArray> {
-        val result = sortedMapOf<String, ByteArray>()
+    fun planWebsite(scope: ProjectScope, directory: String, budgets: com.jarvys.factory.contract.ResourceBudgets.Packaging,
+                    token: CancellationToken): WebsitePlan {
+        FactorySpec.relativePath(directory)
+        val sizes = sortedMapOf<String, Int>()
         var total = 0L
-        var visited = 0
-        fun visit(relative: String, depth: Int) {
-            require(depth <= 12) { "Website directory nesting exceeds limit" }
+        var visited = 0L
+        // Every bounded file can introduce at most this many path components. Empty trees are
+        // charged too, so traversal remains finite without a lower hidden file-count ceiling.
+        val maxEntries = budgets.sourceFiles.toLong() * FactorySpec.MAX_PATH_SEGMENTS
+        fun visit(relative: String) {
+            token.throwIfCancelled()
             val folder = scope.resolve(relative)
             require(ProjectFileIO.attributes(folder).isDirectory) { "webDir must be an ordinary directory" }
             java.nio.file.Files.newDirectoryStream(folder.toPath()).use { children ->
                 for (child in children) {
                     token.throwIfCancelled()
-                    require(++visited <= 256) { "Website contains more than 256 total directory entries" }
+                    require(++visited <= maxEntries) { "Website directory entries exceed the declared path/file envelope" }
                     val path = "$relative/${child.fileName}"
                     FactorySpec.relativePath(path)
                     val resolved = scope.resolve(path)
                     val attributes = ProjectFileIO.attributes(resolved)
-                    if (attributes.isDirectory) visit(path, depth + 1)
+                    if (attributes.isDirectory) visit(path)
                     else {
                         require(attributes.isRegularFile) { "Website contains a special file" }
-                        require(result.size < FactorySpec.MAX_WEB_FILES) { "Website has too many files" }
-                        val data = read(scope, path, FactorySpec.MAX_FILE_BYTES, token)
-                        total += data.size
-                        require(total <= FactorySpec.MAX_WEB_BYTES) { "Website exceeds 8 MiB" }
-                        val inside = path.removePrefix("$directory/")
-                        result[inside] = data
+                        require(sizes.size < budgets.sourceFiles) { "Website exceeds declared sourceFiles" }
+                        val size = attributes.size()
+                        require(size in 0..budgets.singleSourceBytes) { "Website file exceeds declared singleSourceBytes: $path" }
+                        total += size
+                        require(total <= budgets.totalSourceBytes) { "Website exceeds declared totalSourceBytes" }
+                        sizes[path.removePrefix("$directory/")] = size.toInt()
                     }
                 }
             }
         }
-        visit(directory, 0)
-        require("index.html" in result) { "webDir must contain index.html" }
-        return result
+        visit(directory)
+        require("index.html" in sizes) { "webDir must contain index.html" }
+        return WebsitePlan(directory, java.util.Collections.unmodifiableMap(sizes))
     }
+
+    fun readWebsite(scope: ProjectScope, plan: WebsitePlan, token: CancellationToken): Map<String, ByteArray> =
+        plan.sizes.mapValuesTo(sortedMapOf()) { (inside, size) ->
+            val path = "${plan.directory}/$inside"
+            read(scope, path, size, token).also {
+                require(it.size == size) { "Website file changed after resource planning: $path" }
+            }
+        }
+
+    @RequiresApi(26)
+    fun website(scope: ProjectScope, directory: String, token: CancellationToken,
+                budgets: com.jarvys.factory.contract.ResourceBudgets.Packaging = com.jarvys.factory.contract.ResourceBudgets.legacy().packaging): Map<String, ByteArray> =
+        readWebsite(scope, planWebsite(scope, directory, budgets, token), token)
 
     fun output(scope: ProjectScope, path: String): File {
         FactorySpec.relativePath(path)

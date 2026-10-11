@@ -1,6 +1,8 @@
 package com.jarvys.factory.runtime;
 
 import android.Manifest;
+import androidx.annotation.RequiresApi;
+import androidx.annotation.RequiresPermission;
 import android.app.Activity;
 import android.app.Notification;
 import android.app.NotificationChannel;
@@ -95,6 +97,8 @@ public final class NativeNotifications {
 
     /** The same app-scoped tag/id replaces an earlier notification; no delivery receipt is implied. */
     @SuppressWarnings("deprecation")
+    // POST_NOTIFICATIONS is required on API 33+; requireReady() rechecks declaration and grant.
+    @RequiresPermission(value = Manifest.permission.POST_NOTIFICATIONS, conditional = true)
     public JSONObject show(NotificationRequest.Show request, NativeOperationAuthorization.Access authorization)
             throws FactoryException {
         require(authorization);
@@ -194,6 +198,7 @@ public final class NativeNotifications {
         return new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER).setPackage(appId)
                 .setComponent(component).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
     }
+    @RequiresApi(26)
     private static boolean channelBlocked(NotificationManager manager, NotificationChannel channel) {
         if (channel.getImportance() == NotificationManager.IMPORTANCE_NONE) return true;
         if (Build.VERSION.SDK_INT >= 28 && channel.getGroup() != null) {

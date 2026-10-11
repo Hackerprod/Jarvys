@@ -12,9 +12,12 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class FactoryPreviewRegistryTest {
-    private fun snapshot(capabilities: List<String> = emptyList()): FactoryPreviewRegistry.Snapshot {
+    private fun snapshot(capabilities: List<String> = emptyList(), resourceBudgets: JSONObject? = null): FactoryPreviewRegistry.Snapshot {
         val config = JSONObject().put("schemaVersion", 1).put("appId", "org.example.test").put("name", "Test")
             .put("entryPoint", "www/index.html").put("capabilities", JSONArray(capabilities))
+        if (resourceBudgets != null) config.put("resourceBudgets", resourceBudgets)
+        if ("incomingShare" in capabilities) config.put("incomingShare", JSONObject().put("mimeTypes", JSONArray(listOf("text/plain"))).put("multiple", false))
+        if ("bluetooth" in capabilities) config.put("bluetooth", JSONObject().put("version", 1).put("scanPrivacy", "full"))
         return FactoryPreviewRegistry.Snapshot(JSONObject().put("project_id", "project").put("apk_sha256", "a".repeat(64))
             .put("scope_version", 1).put("project_identity_sha256", "identity").put("build_id", "build")
             .put("project_sha256", "sources").put("template_sha256", "template").put("app_id", "org.example.test").put("version_code", 1), config.toString().toByteArray(), com.jarvys.agent.coding.FactoryUiTestAssets.withUi(mapOf("www/index.html" to "<title>Test</title>".toByteArray())))
@@ -35,6 +38,17 @@ class FactoryPreviewRegistryTest {
         FactoryPreviewRegistry.Snapshot(JSONObject(), byteArrayOf(), FactoryUiTestAssets.withUi(web))
         assertThrows(IllegalArgumentException::class.java) { FactoryPreviewRegistry.Snapshot(JSONObject(), byteArrayOf(), FactoryUiTestAssets.withUi(web + ("www/extra.css" to byteArrayOf()))) }
         assertThrows(IllegalArgumentException::class.java) { FactoryPreviewRegistry.Snapshot(JSONObject(), byteArrayOf(), FactoryUiTestAssets.withUi(web + ("www/1.css" to ByteArray(65537)))) }
+    }
+    @Test fun snapshotUsesResolvedPackagingBudgetsForLargeFilesAndCount() {
+        val large = ByteArray(9 * 1024 * 1024)
+        val web = (0 until 300).associate { "www/f$it.js" to byteArrayOf() } + ("www/index.html" to large)
+        val assets = FactoryUiTestAssets.withUi(web)
+        val maximum = com.jarvys.factory.contract.ResourceBudgets.maxima().packaging
+        val retained = FactoryPreviewRegistry.Snapshot(JSONObject(), byteArrayOf(), assets, maximum)
+        assertEquals(large.size, retained.asset("www/index.html")!!.size)
+        assertThrows(IllegalArgumentException::class.java) { FactoryPreviewRegistry.Snapshot(JSONObject(), byteArrayOf(), assets) }
+        val tooMany = (0..512).associate { "www/f$it" to byteArrayOf() } + ("www/index.html" to byteArrayOf())
+        assertThrows(IllegalArgumentException::class.java) { FactoryPreviewRegistry.Snapshot(JSONObject(), byteArrayOf(), FactoryUiTestAssets.withUi(tooMany), maximum) }
     }
     @Test fun launchTokenIsOpaqueOneShotAndCancellationRevokesConsumedSession() {
         val token = CancellationToken.cancellable()
@@ -168,12 +182,40 @@ class FactoryPreviewRegistryTest {
         assertEquals(1, results.size); results.single().close()
     }
     @Test fun realSharedHandlerAssertionsPassForAllAndNoCapabilitiesAndNeverExecuteJavascript() {
-        for (capabilities in listOf(emptyList(), listOf("share"), listOf("documents"), listOf("audio"), listOf("audio", "documents"), listOf("browser"), listOf("browser", "documents"), listOf("maps"), listOf("phone"), listOf("maps", "phone"), listOf("email"), listOf("sms"), listOf("email", "sms"), listOf("contacts"), listOf("calendar"), listOf("database"), listOf("database", "documents"), listOf("storage"), listOf("storage", "documents"), listOf("storage", "database", "documents"), listOf("presentation"), listOf("sensors"), listOf("biometrics"), com.jarvys.factory.contract.CapabilityCatalog.NAMES)) {
+        val capabilitySelections = listOf(emptyList(), listOf("share"), listOf("documents"), listOf("audio"), listOf("audio", "documents"), listOf("browser"), listOf("browser", "documents"), listOf("maps"), listOf("phone"), listOf("maps", "phone"), listOf("email"), listOf("sms"), listOf("email", "sms"), listOf("contacts"), listOf("calendar"), listOf("database"), listOf("database", "documents"), listOf("storage"), listOf("storage", "documents"), listOf("storage", "database", "documents"), listOf("presentation"), listOf("sensors"), listOf("biometrics"), com.jarvys.factory.contract.CapabilityCatalog.NAMES) +
+            com.jarvys.factory.contract.CapabilityCatalog.NAMES.map {
+                when (it) {
+                    "incomingShare" -> listOf(it, "documents")
+                    "jobs" -> listOf(it, "network")
+                    else -> listOf(it)
+                }
+            } + listOf(com.jarvys.factory.contract.CapabilityCatalog.NAMES - setOf("documents", "incomingShare"),
+                com.jarvys.factory.contract.CapabilityCatalog.NAMES - setOf("network", "jobs"))
+        for (capabilities in capabilitySelections.distinct()) {
             val result = FactoryRuntimeContractTests.run(snapshot(capabilities), "com.jarvys.host", 34, 34) {}
-            assertEquals("passed", result.getString("state"))
+            assertEquals(result.getJSONArray("observations").toString(), "passed", result.getString("state"))
             val observations = result.getJSONArray("observations")
-            assertEquals(49, observations.length())
             assertEquals(com.jarvys.factory.contract.CapabilityCatalog.METHODS.size + 3, observations.length())
+            val contractObservations = (0 until observations.length()).map { observations.getJSONObject(it) }
+                .filter { it.getString("operation").substringBefore(':') in com.jarvys.factory.contract.CapabilityCatalog.METHODS }
+            assertEquals(com.jarvys.factory.contract.CapabilityCatalog.METHODS.keys,
+                contractObservations.map { it.getString("operation").substringBefore(':') }.toSet())
+            assertEquals(com.jarvys.factory.contract.CapabilityCatalog.METHODS.size, contractObservations.size)
+            val dependencies = mapOf(
+                "network.upload" to "documents", "network.download" to "documents", "recording.record" to "documents",
+                "secrets.request" to "network", "jobs.enqueueHttp" to "network", "jobs.status" to "network",
+                "jobs.cancel" to "network", "jobs.readResult" to "network", "jobs.forget" to "network", "jobs.resume" to "network"
+            )
+            for ((method, dependency) in dependencies) {
+                val capability = com.jarvys.factory.contract.CapabilityCatalog.METHODS.getValue(method).capability
+                val check = contractObservations.single { it.getString("operation").startsWith("$method:") }
+                val expected = if (capability in capabilities && dependency in capabilities) "preview_unavailable" else "undeclared_denied"
+                assertEquals("$method:$expected", check.getString("operation"))
+                assertEquals("passed", check.getString("outcome"))
+            }
+            val page = contractObservations.single { it.getString("operation").startsWith("storage.listPage:") }
+            assertEquals("storage.listPage:" + if ("storage" in capabilities) "shared_handler" else "undeclared_denied", page.getString("operation"))
+            assertEquals("passed", page.getString("outcome"))
             val documentAssertions = (0 until observations.length()).map { observations.getJSONObject(it) }
                 .filter { it.getString("operation").startsWith("documents.") }
             assertEquals(6, documentAssertions.size)
@@ -230,6 +272,20 @@ class FactoryPreviewRegistryTest {
             assertEquals("shared_core_test", result.getString("mode"))
             assertTrue(result.getString("evidence_limit").contains("were not tested"))
             assertFalse(result.toString().contains("factory-test"))
+        }
+    }
+    @Test fun fixedSyntheticInputsFitMinimumSignedNativeValidationBudgets() {
+        val budgets = JSONObject("""{"version":1,"documents":{"handleBytes":1,"sessionBytes":1,"leaseMs":1},"nfc":{"messageBytes":3,"records":1,"timeoutMs":1000},"bluetooth":{"valueBytes":1,"scanDurationMs":1},"widgets":{"nodes":1,"depth":1,"actions":0,"modelBytes":256,"actionDataBytes":2}}""")
+        val result = FactoryRuntimeContractTests.run(snapshot(com.jarvys.factory.contract.CapabilityCatalog.NAMES, budgets), "com.jarvys.host", 34, 34) {}
+        assertEquals(result.getJSONArray("observations").toString(), "passed", result.getString("state"))
+        assertEquals(com.jarvys.factory.contract.CapabilityCatalog.METHODS.size + 3, result.getJSONArray("observations").length())
+    }
+    @Test fun invalidCapabilityDependenciesCannotProduceSyntheticReceipts() {
+        for (capabilities in listOf(listOf("incomingShare"), listOf("jobs"))) {
+            val failure = assertThrows(com.jarvys.factory.runtime.FactoryException::class.java) {
+                FactoryRuntimeContractTests.run(snapshot(capabilities), "com.jarvys.host", 34, 34) {}
+            }
+            assertEquals("INVALID_CONFIG", failure.code)
         }
     }
     @Test fun cancellationIsNotConvertedIntoAPassingOrFailedTestReceipt() {

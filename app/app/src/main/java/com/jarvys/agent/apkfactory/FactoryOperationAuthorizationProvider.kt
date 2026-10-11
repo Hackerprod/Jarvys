@@ -164,8 +164,11 @@ open class FactoryOperationAuthorizationProvider : ContentProvider() {
      * review, policy write, or reusable authority; every effect still needs its own fresh live lease.
      */
     private fun describeInstalled(app: Context, caller: String, uid: Int, arg: String?, extras: Bundle?): Bundle {
+        val hasOperation = extras?.containsKey("operation") == true
         require(arg == null && extras != null && !extras.hasFileDescriptors() &&
-            extras.keySet() == setOf("protocolVersion", "nonce", "capability", "deadlineElapsedMs"))
+            extras.keySet() == setOf("protocolVersion", "nonce", "capability", "deadlineElapsedMs") +
+                (if (hasOperation) setOf("operation") else emptySet()))
+        @Suppress("DEPRECATION") val rawOperation = if (hasOperation) extras.get("operation") else null
         @Suppress("DEPRECATION") val version = extras.get("protocolVersion")
         @Suppress("DEPRECATION") val nonce = extras.get("nonce")
         @Suppress("DEPRECATION") val capability = extras.get("capability")
@@ -173,6 +176,11 @@ open class FactoryOperationAuthorizationProvider : ContentProvider() {
         val started = SystemClock.elapsedRealtime()
         require(version is Int && version == 1 && nonce is String && nonce.matches(HEX) &&
             capability is String && capability in CapabilityCatalog.SUPPORTED && rawDeadline is Long && rawDeadline > started)
+        val selected = if (hasOperation) {
+            require(rawOperation is String && CapabilityCatalog.METHODS[rawOperation]?.capability == capability)
+            FactoryOperationPolicy.Operation.entries.singleOrNull { it.id == rawOperation }
+                ?: throw SecurityException("Operation has no Factory policy")
+        } else null
         val deadline = minOf(rawDeadline, started + 2_000L)
         requireCaller(app, caller, uid)
         val cancelled = AtomicBoolean()
@@ -183,7 +191,7 @@ open class FactoryOperationAuthorizationProvider : ContentProvider() {
             requireCurrent()
             requireCaller(app, caller, uid)
             val before = sourceStamp(app, caller, uid)
-            val capabilities = setOf(capability)
+            val capabilities = setOf(capability) + if (rawOperation == "share.file" || rawOperation == "audio.play") setOf("documents") else emptySet()
             val proof = verifiedCaller(app, caller, capabilities)
             requireCurrent()
             require(proof.appId == caller && proof.certificate.matches(HEX) && proof.apk.matches(HEX) &&
@@ -201,6 +209,12 @@ open class FactoryOperationAuthorizationProvider : ContentProvider() {
                     putString("certificateSha256", proof.certificate); putString("apkSha256", proof.apk)
                     putString("recordSha256", proof.record); putLong("versionCode", proof.version)
                     putString("resourceBudgets", ResourceBudgetsJson.toJson(proof.resources).toString())
+                    if (selected != null) {
+                        val policy = operationPolicy(app)
+                        check(policy.isHealthy())
+                        putString("operation", selected.id)
+                        putString("policyMode", policy.mode(FactoryOperationPolicy.Subject.installed(proof), selected).name)
+                    }
                 }
                 check(sourceStamp(app, caller, uid) == stamp) { "Installed source changed" }
                 authority.requireCurrent()

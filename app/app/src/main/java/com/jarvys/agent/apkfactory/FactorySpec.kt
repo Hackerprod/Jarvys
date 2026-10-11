@@ -1,5 +1,6 @@
 package com.jarvys.agent.apkfactory
 
+import com.jarvys.factory.contract.AdaptiveIconPolicy
 import com.jarvys.factory.contract.BluetoothPolicy
 import com.jarvys.factory.contract.F3ManifestPolicy
 import com.jarvys.factory.runtime.BluetoothPolicyJson
@@ -29,6 +30,7 @@ data class FactorySpec(
     val incomingShare: IncomingSharePolicy? = null,
     val notifications: NotificationPolicy? = null,
     val bluetooth: BluetoothPolicy? = null,
+    val adaptiveIcon: AdaptiveIconPolicy? = null,
 ) {
     fun runtimeConfig(documentBroker: JSONObject? = null): ByteArray {
         val config = JSONObject().put("schemaVersion", 1).put("appId", appId)
@@ -53,6 +55,8 @@ data class FactorySpec(
             incomingShare?.let { json.put("incomingShare", IncomingSharePolicyJson.toJson(it)) }
             notifications?.let { json.put("notifications", NotificationPolicyJson.toJson(it)) }
             bluetooth?.let { json.put("bluetooth", BluetoothPolicyJson.toJson(it)) }
+            adaptiveIcon?.let { policy -> json.put("adaptiveIcon", JSONObject().put("foreground", policy.foreground).put("background", policy.background)
+                .also { if (policy.insetPercent != 0) it.put("insetPercent", policy.insetPercent) }) }
         }
 
     private fun backupPolicy(): JSONObject? {
@@ -66,13 +70,17 @@ data class FactorySpec(
     companion object {
         val CAPABILITIES: List<String> = CapabilityCatalog.NAMES
         const val MAX_SPEC_BYTES = 16 * 1024
+        // Legacy defaults only. Website reads use the artifact's resolved packaging declaration.
         const val MAX_WEB_BYTES = 8 * 1024 * 1024
-        const val MAX_FILE_BYTES = 1024 * 1024
+        const val MAX_ICON_BYTES = 1024 * 1024
+        const val MAX_FILE_BYTES = MAX_ICON_BYTES
         const val MAX_WEB_FILES = 128
+        const val MAX_PATH_CHARACTERS = 240
+        const val MAX_PATH_SEGMENTS = (MAX_PATH_CHARACTERS + 1) / 2
         private val APP_ID = Regex("[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+")
         @JvmStatic fun parse(json: JSONObject): FactorySpec {
             val fields = setOf("schemaVersion", "appId", "name", "versionCode", "versionName", "capabilities", "webDir", "icon")
-            require(json.keys().asSequence().toSet().let { it.containsAll(fields) && it.all { key -> key in fields || key == "dataBackup" || key == "resourceBudgets" || key == "incomingShare" || key == "notifications" || key == "bluetooth" } }) { "factory.json requires ${fields.joinToString()} and optional dataBackup/resourceBudgets/incomingShare/notifications/bluetooth" }
+            require(json.keys().asSequence().toSet().let { it.containsAll(fields) && it.all { key -> key in fields || key == "dataBackup" || key == "resourceBudgets" || key == "incomingShare" || key == "notifications" || key == "bluetooth" || key == "adaptiveIcon" } }) { "factory.json requires ${fields.joinToString()} and optional dataBackup/resourceBudgets/incomingShare/notifications/bluetooth/adaptiveIcon" }
             require(integer(json, "schemaVersion") == 1) { "Unsupported factory schemaVersion" }
             val appId = string(json, "appId")
             require(APP_ID.matches(appId) && appId.split('.').size in 2..16 && appId.length <= 127 && !appId.startsWith("android.") &&
@@ -132,11 +140,24 @@ data class FactorySpec(
             val webDir = relativePath(string(json, "webDir"))
             val icon = relativePath(string(json, "icon"))
             require(icon.endsWith(".png", true) || icon.endsWith(".json", true)) { "Icon must be PNG or vector JSON" }
+            val adaptiveIcon = if (json.has("adaptiveIcon")) {
+                val adaptive = json.getJSONObject("adaptiveIcon")
+                val fields = adaptive.keys().asSequence().toSet()
+                require(fields.containsAll(setOf("foreground", "background")) && fields.all { it in setOf("foreground", "background", "insetPercent") }) { "adaptiveIcon requires foreground/background and optional insetPercent" }
+                val inset = if (adaptive.has("insetPercent")) {
+                    val value = adaptive.opt("insetPercent")
+                    require(value is Int || value is Long) { "adaptiveIcon.insetPercent must be an integer" }
+                    val number = (value as Number).toLong()
+                    require(number in 0..40) { "adaptiveIcon.insetPercent must be 0–40" }
+                    number.toInt()
+                } else 0
+                AdaptiveIconPolicy(relativePath(string(adaptive, "foreground")), string(adaptive, "background"), inset)
+            } else null
             val resources = if (json.has("resourceBudgets")) ResourceBudgetsJson.parse(json.getJSONObject("resourceBudgets")) else ResourceBudgets.legacy()
-            return FactorySpec(appId, name, version, versionName, CapabilityCatalog.select(caps), webDir, icon, backupTables, backupKeys, resources, incomingShare, notifications, bluetooth)
+            return FactorySpec(appId, name, version, versionName, CapabilityCatalog.select(caps), webDir, icon, backupTables, backupKeys, resources, incomingShare, notifications, bluetooth, adaptiveIcon)
         }
         fun relativePath(value: String): String {
-            require(value.isNotBlank() && value.length <= 240 && !value.startsWith('/') && '\\' !in value &&
+            require(value.isNotBlank() && value.length <= MAX_PATH_CHARACTERS && !value.startsWith('/') && '\\' !in value &&
                 value.none { it.isISOControl() } && value.split('/').all { it.isNotBlank() && it != "." && it != ".." && !it.startsWith('.') }) {
                 "Use a non-hidden, relative project path without traversal"
             }

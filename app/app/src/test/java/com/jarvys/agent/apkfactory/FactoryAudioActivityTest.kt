@@ -51,9 +51,9 @@ class FactoryAudioActivityTest {
         override fun now() = 0L
         override fun schedule(delayMs: Long, callback: () -> Unit): Any = callback
         override fun cancel(token: Any) { }
-        override fun write(pcm: FactoryAudioPcm): Int { writes++; beforeWrite?.invoke(); return pcm.pcmBytes }
+        override fun prepare() { writes++; beforeWrite?.invoke() }
         override fun marker(frames: Int, callback: () -> Unit) { onMarker = callback }
-        override fun play() { plays++ }
+        override fun play(onFailure: () -> Unit) { plays++ }
         override fun stop() { stops++ }
         override fun release() { releases++; if (releaseFails) error("synthetic release failure") }
     }

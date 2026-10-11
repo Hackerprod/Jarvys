@@ -88,7 +88,7 @@ public class FactoryRuntimeSensorsTest {
         Response subscription=request("sensors.subscribe",arguments("subscribe"));
         ((ThreadPoolExecutor)field("io").get(runtime)).submit(()->{}).get(10,TimeUnit.SECONDS);
         Shadows.shadowOf(Looper.getMainLooper()).idle();
-        assertEquals("PERMISSION_DENIED",subscription.error());assertEquals(1,subscription.count);
+        assertEquals("UNAVAILABLE",subscription.error());assertEquals(1,subscription.count);
         assertEquals(1,driver.registrations);assertEquals(1,driver.unregisters);
         Field subscriptions=NativeEffects.class.getDeclaredField("subscriptions");subscriptions.setAccessible(true);
         assertNull(subscriptions.get(field("nativeEffects").get(runtime)));

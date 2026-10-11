@@ -1,16 +1,19 @@
 {
-  "version": "factory-guidance-v85",
+  "version": "factory-guidance-v86",
   "sha256": {
-    "basics": "5ad5d81c3cea2032b65d79a597a5987f1b538b9672596724b913a186c35baae1",
-    "biometrics": "6d2a48d28edfb42338a5b3fe676cd1f493bfbee7c94cd3b824a74aad0500da2b",
-    "contacts-calendar": "bb287bd6b1af795354e3506bc76bd4c14ec69313ce478076c249ad5710901cf0",
-    "database": "b124c80377f91140a151c0faeaadf7600e116b0ad0a6f43fcc792b617d32b854",
-    "documents-media": "a4006ecbe9cafb3c546b5fd9a708f678e2331a979b9a38823f5ddf92d7c70ada",
-    "external-actions": "9fce7ce3a8a5f0610bce95abddfd19c74a62ce5881d2f19ecafa3ea9bd818ad9",
-    "lifecycle": "1cbd7b046c5223425765ca0f421d2aa105aef62e256f8f2fab1da148ad5a685a",
-    "local-ui": "8594e672af2cec4d0a90931ae30f0c4b4ae527df8a6ebceae9457ac80dc0194d",
-    "native-services": "5983b0926023b68da206c5ba6c4548162835950a28654fb6a1def6bf184d0c65",
-    "presentation": "a2ecac8174e313cda1d7b87223ff9b4403c2db756d620b66741b8fe3cc7d93fd",
-    "sensors": "038d6df62d0351cccb089170f6bf5b7843e3c13cd004edae1958da3b86e728de"
+    "basics": "85042d94e4ed28a299f49873528a2c9b9a369667c2d8431390ac2276da7c666d",
+    "biometrics": "378d97514a532bb36f0d7ef25e3d4b58a489bb2f33b073192089c7340e5e8bc5",
+    "contacts-calendar": "407d1fcb8d8274b818ef47c53d1d19802e912c9903a64c7cf8df54e00233e84a",
+    "database": "d54c43f492d8c2ef25f3017fb60353e188fec54eeee184742810c76588586231",
+    "documents-media": "838a62a4107e22e26ba6bc5d0c8ecca16c1e2e8ebbe909b393b39273ba6f52f9",
+    "durable-native": "87afd92c4aa67e44817bd2f3aeccc1fd661b4eff4369f891599dfd7559286e93",
+    "external-actions": "e8a0f4f62dad27dc2e58013f8dc34ff8bc617306a6e66fa6bc0d3a2b0b4f4862",
+    "lifecycle": "6fe428f477050eb9255e0b21804837059ebc966e7f05a67098f1db057f47a791",
+    "local-ui": "551ff344966321bf4e5d77b43e5c0ccae4b8687f077c2a959ad837bb246e6b75",
+    "native-input": "dd5c6c1eb1a98f9d5ddfb8e3083e3dab28b74b9cbe4b1cdc568ea6111b783fcf",
+    "native-services": "6587020510942f66e5e2682ebdc8f5fdaf833a5fdc5ee0a03dc91934e0672da9",
+    "presentation": "48485bf6c2d8a0cfa3d18429d189be5b834a3c886427e7fe2eaf69efb2d7ea97",
+    "radios": "7fd193c300388b7cf3748ec5efd37340e2707df703b6321a96b6402e4fbf8599",
+    "sensors": "9ed827b4d2f92e80ecb14a0e77d5caff8e5fe1dfc68cf977b9a227061cfcf8b6"
   }
 }

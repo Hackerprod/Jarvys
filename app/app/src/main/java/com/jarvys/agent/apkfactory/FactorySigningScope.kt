@@ -57,6 +57,14 @@ internal data class FactorySigningScope private constructor(private val canonica
         private val INCOMING_FIELDS = V3_FIELDS + "incomingShare"
         private val V4_FIELDS = INCOMING_FIELDS + "notifications"
         private val CURRENT_FIELDS = V4_FIELDS + listOf("bluetooth", "privateComponents")
+        // Complete writer profiles, not arbitrary partial project declarations. Keep these frozen:
+        // adding a runtime default must never change bytes authenticated by a historical receipt.
+        private val ORIGINAL_RESOURCE_SECTIONS = setOf("version", "storage", "database", "documents", "audio", "sensors", "packaging")
+        private val SERVICE_RESOURCE_SECTIONS = ORIGINAL_RESOURCE_SECTIONS + setOf("secrets", "notifications", "incomingShare")
+        private val HARDWARE_RESOURCE_SECTIONS = SERVICE_RESOURCE_SECTIONS + setOf("nfc", "bluetooth", "widgets", "jobs")
+        private val CURRENT_RESOURCE_SECTIONS = HARDWARE_RESOURCE_SECTIONS + "fileShare"
+        private val HISTORICAL_RESOURCE_PROFILES = setOf(ORIGINAL_RESOURCE_SECTIONS, SERVICE_RESOURCE_SECTIONS, HARDWARE_RESOURCE_SECTIONS)
+        private val HISTORICAL_AUDIO_FIELDS = setOf("sourceBytes", "durationMs")
         private fun bluetooth(json: JSONObject): BluetoothPolicy? =
             if (json.has("bluetooth") && !json.isNull("bluetooth")) BluetoothPolicyJson.parse(json.getJSONObject("bluetooth")) else null
         private fun notifications(json: JSONObject): NotificationPolicy =
@@ -103,14 +111,25 @@ internal data class FactorySigningScope private constructor(private val canonica
                 val resolved = ResourceBudgetsJson.toJson(ResourceBudgetsJson.parse(declared))
                 // Signed snapshots freeze every resolved value, even when the project used a partial declaration.
                 val declaredSections = declared.keys().asSequence().toSet()
-                val originalSections = setOf("version", "storage", "database", "documents", "audio", "sensors", "packaging")
-                require(declaredSections.containsAll(originalSections))
-                // Preserve pre-service v1 scope bytes. New optional sections resolve their defaults
-                // when read, but must not be injected into an already-authenticated snapshot.
+                val historicalResources = declaredSections in HISTORICAL_RESOURCE_PROFILES
+                require(historicalResources || declaredSections == CURRENT_RESOURCE_SECTIONS)
+                // Only complete known historical profiles may omit later fields. Never discard a
+                // declared field or serialize a default into the already-authenticated snapshot.
                 val retained = JSONObject()
                 for (section in resolved.keys().asSequence()) if (section in declaredSections) {
-                    if (section != "version") require(declared.getJSONObject(section).keys().asSequence().toSet() == resolved.getJSONObject(section).keys().asSequence().toSet())
-                    retained.put(section, resolved.get(section))
+                    if (section == "version") {
+                        retained.put(section, resolved.get(section))
+                        continue
+                    }
+                    val resolvedSection = resolved.getJSONObject(section)
+                    val expectedFields = if (historicalResources && section == "audio") HISTORICAL_AUDIO_FIELDS
+                        else resolvedSection.keys().asSequence().toSet()
+                    require(declared.getJSONObject(section).keys().asSequence().toSet() == expectedFields)
+                    val retainedSection = JSONObject()
+                    for (field in resolvedSection.keys().asSequence()) if (field in expectedFields) {
+                        retainedSection.put(field, resolvedSection.get(field))
+                    }
+                    retained.put(section, retainedSection)
                 }
                 canonical.put("resourceBudgets", retained)
             }

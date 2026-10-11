@@ -74,8 +74,42 @@ class FactoryFileShareCoordinatorTest {
             wire().addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION), wire().addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION),
             wire().addFlags(Intent.FLAG_GRANT_PREFIX_URI_PERMISSION), wire().setComponent(null), wire().putExtra("transfer", "fake")
         )) fail { FactoryFileShareCoordinator.Request.parse(changed) }
-        assertEquals(3, request().size)
-        assertEquals(8388608, FactoryFileShareCoordinator.Request.parse(wire().putExtra("size", 8388608)).size)
+        assertEquals(3L, request().size)
+        assertEquals(8388608L, FactoryFileShareCoordinator.Request.parse(wire().putExtra("size", 8388608)).size)
+    }
+    @Test fun v2LongEnvelopeAcceptsFourGiBBoundButNeverCoercesOrRaisesV1Limit() {
+        val maximum = 4L * 1024 * 1024 * 1024
+        assertEquals(maximum, FactoryFileShareCoordinator.Request.parse(wire().putExtra("protocolVersion", 2).putExtra("size", maximum)).size)
+        for (intent in listOf(wire().putExtra("protocolVersion", 2).putExtra("size", 3),
+            wire().putExtra("protocolVersion", 2).putExtra("size", maximum + 1),
+            wire().putExtra("protocolVersion", 2).putExtra("size", -1L),
+            wire().putExtra("protocolVersion", 3).putExtra("size", maximum))) fail { FactoryFileShareCoordinator.Request.parse(intent) }
+    }
+    @Test fun legacySignedBudgetRejectsLargeV2BeforeReceiveOrJournal() {
+        val request = FactoryFileShareCoordinator.Request.parse(wire().putExtra("protocolVersion", 2).putExtra("size", 8388609L))
+        fail { io { coordinator.begin(proof.appId, request) {} } }
+        assertEquals(0, received); assertFalse(journal.exists()); assertTrue(FactoryInteractionAdmission.available())
+    }
+    @Test fun expandedSignedBudgetAllowsV2WithoutClaimingDelivery() {
+        val resources = com.jarvys.factory.contract.ResourceBudgets.parse(mapOf("version" to 1, "fileShare" to mapOf("sourceBytes" to 4L*1024*1024*1024)))
+        proof = proof.copy(resources = resources)
+        val request = FactoryFileShareCoordinator.Request.parse(wire().putExtra("protocolVersion", 2).putExtra("size", 2147483649L))
+        val token = io { coordinator.begin(proof.appId, request) {} }
+        assertEquals(1, received); assertEquals("review", coordinator.status())
+        val outcome = io { coordinator.close(token, false) {} }
+        assertFalse(outcome.getBooleanExtra("deliveryConfirmed", true))
+    }
+    @Test fun slowSourceRevalidationCannotExtendSignedTransferDeadline() {
+        proof = proof.copy(resources = com.jarvys.factory.contract.ResourceBudgets.parse(mapOf("version" to 1, "fileShare" to mapOf("transferTimeoutMs" to 1))))
+        var verifications = 0
+        coordinator = make {
+            verifications++
+            if (verifications == 2) org.robolectric.shadows.ShadowSystemClock.advanceBy(java.time.Duration.ofMillis(2))
+            proof
+        }
+        fail { begin() }
+        assertEquals(2, verifications); assertEquals(1, received)
+        assertTrue(coordinator.needsRecovery()); assertFalse(coordinator.chooserOpened())
     }
     @Test fun callerProofPrecedesPullAndUnknownCallerGetsNoLatch() {
         fail { io { coordinator.begin(null, request()) {} } }

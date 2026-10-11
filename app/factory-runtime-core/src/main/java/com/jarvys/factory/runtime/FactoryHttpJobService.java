@@ -1,5 +1,7 @@
 package com.jarvys.factory.runtime;
 
+import android.Manifest;
+import androidx.annotation.RequiresPermission;
 import android.app.job.JobParameters;
 import android.app.job.JobService;
 import android.content.Context;
@@ -40,6 +42,8 @@ public final class FactoryHttpJobService extends JobService {
             if(!fromOs)main.post(()->{try{if(!osStopped.get())jobFinished(params,retry&&beforeEffect);}finally{active.remove(params.getJobId(),this);}});
         }
     }
+    // This service is installed only with the jobs capability and its network-state permission.
+    @RequiresPermission(Manifest.permission.ACCESS_NETWORK_STATE)
     @Override public boolean onStartJob(JobParameters params){
         String token;
         try{
@@ -54,6 +58,7 @@ public final class FactoryHttpJobService extends JobService {
         catch(java.util.concurrent.RejectedExecutionException busy){run.end(true,false);}
         return true;
     }
+    @RequiresPermission(Manifest.permission.ACCESS_NETWORK_STATE)
     private void execute(Run run){
         boolean retry=false;
         try(HttpJobLedger ledger=new HttpJobLedger(this)){

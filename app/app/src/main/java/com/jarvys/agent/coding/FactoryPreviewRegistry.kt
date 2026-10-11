@@ -47,10 +47,18 @@ internal object FactoryPreviewRegistry {
     }
     private val NUMERIC_BINDING_FIELDS = setOf("scope_version", "version_code")
     private val BINDING_FIELDS = setOf("project_id", "project_identity_sha256", "scope_version", "build_id", "apk_sha256", "project_sha256", "template_sha256", "app_id", "version_code")
-    class Snapshot(metadata: JSONObject, config: ByteArray, assets: Map<String, ByteArray>) {
+    class Snapshot(metadata: JSONObject, config: ByteArray, assets: Map<String, ByteArray>,
+                   budgets: com.jarvys.factory.contract.ResourceBudgets.Packaging = com.jarvys.factory.contract.ResourceBudgets.legacy().packaging) {
         private val metadataText = metadata.toString()
-        private val config = config.copyOf()
-        private val assets = assets.mapValues { it.value.copyOf() }
+        private val config = config.also { require(it.size <= FactorySpec.MAX_SPEC_BYTES) }.copyOf()
+        private val assets = assets.also { candidate ->
+            // Fail before defensive copies, then validate retained bytes again below.
+            val web = candidate.filterKeys { it.startsWith("www/") }
+            require(web.size <= budgets.sourceFiles)
+            require(web.values.all { it.size.toLong() <= budgets.singleSourceBytes })
+            require(web.values.sumOf { it.size.toLong() } <= budgets.totalSourceBytes)
+            require(candidate.filterKeys { !it.startsWith("www/") }.values.all { it.size <= com.jarvys.agent.apkfactory.TemplateApk.MAX_ENTRY_BYTES })
+        }.mapValues { it.value.copyOf() }
         init {
             // Validate the retained copies, not caller-owned mutable byte arrays.
             val config = this.config
@@ -59,9 +67,10 @@ internal object FactoryPreviewRegistry {
             require(assets.keys.all { it == "factory-sdk.js" || it.startsWith("www/") || FactoryUiAssets.contains(it) })
             assets.keys.forEach { FactorySpec.relativePath(it) }
             val web = assets.filterKeys { it.startsWith("www/") }
-            require(web.size <= FactorySpec.MAX_WEB_FILES)
-            require(assets.values.all { it.size <= FactorySpec.MAX_FILE_BYTES })
-            require(web.values.sumOf { it.size.toLong() } <= FactorySpec.MAX_WEB_BYTES.toLong())
+            require(web.size <= budgets.sourceFiles)
+            require(web.values.all { it.size.toLong() <= budgets.singleSourceBytes })
+            require(assets.filterKeys { !it.startsWith("www/") }.values.all { it.size <= com.jarvys.agent.apkfactory.TemplateApk.MAX_ENTRY_BYTES })
+            require(web.values.sumOf { it.size.toLong() } <= budgets.totalSourceBytes)
             require("www/index.html" in assets)
             FactoryUiAssets.verifyComplete(assets.filterKeys { FactoryUiAssets.isNamespace(it) })
         }

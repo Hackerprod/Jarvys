@@ -19,7 +19,7 @@ import java.util.Map;
 public final class ResourceBudgets {
     public static final int VERSION = 1;
     private static final long KIB = 1024L, MIB = 1024L * KIB, GIB = 1024L * MIB;
-    private static final String[] SECTIONS = {"storage", "database", "documents", "audio", "sensors", "packaging", "secrets", "notifications", "incomingShare", "nfc", "bluetooth", "widgets", "jobs"};
+    private static final String[] SECTIONS = {"storage", "database", "documents", "audio", "sensors", "packaging", "secrets", "notifications", "incomingShare", "nfc", "bluetooth", "widgets", "jobs", "fileShare"};
 
     /** Fixed allocation/transport ceilings; these are not developer-editable policy settings. */
     public static final int BRIDGE_MESSAGE_BYTES = 512 * 1024;
@@ -47,17 +47,18 @@ public final class ResourceBudgets {
         DOCUMENT_HANDLE_BYTES("documents", "handleBytes", 16 * MIB, 1, 4 * GIB),
         DOCUMENT_SESSION_BYTES("documents", "sessionBytes", 32 * MIB, 1, 16 * GIB),
         DOCUMENT_LEASE("documents", "leaseMs", 300000, 1, 86400000),
-        AUDIO_BYTES("audio", "sourceBytes", 6 * MIB, 46, 6 * MIB),
-        // Longer low-rate PCM fits the same existing 6 MiB whole-payload ceiling.
-        AUDIO_DURATION("audio", "durationMs", 30000, 1, 300000),
+        AUDIO_BYTES("audio", "sourceBytes", 6 * MIB, 46, 4 * GIB),
+        // PCM16 RIFF/frame ceilings; the v2 path streams instead of allocating the whole clip.
+        AUDIO_DURATION("audio", "durationMs", 30000, 1, 268435454),
+        AUDIO_SETUP_TIMEOUT("audio", "setupTimeoutMs", 300000, 1, 86400000),
         SENSOR_DURATION("sensors", "captureDurationMs", 5000, 100, 300000),
         SENSOR_SAMPLES("sensors", "captureSamples", 50, 1, 50),
         SENSOR_INTERVAL("sensors", "minimumIntervalUs", 100000, 0, 1000000),
         // V1 materializes a capture array. A streaming-ring adapter is required to raise this.
         SENSOR_BUFFER("sensors", "bufferedSamples", 50, 1, 50),
-        PACKAGE_FILES("packaging", "sourceFiles", 128, 1, 128),
-        PACKAGE_TOTAL("packaging", "totalSourceBytes", 8 * MIB, 1, 8 * MIB),
-        PACKAGE_SINGLE("packaging", "singleSourceBytes", MIB, 1, MIB),
+        PACKAGE_FILES("packaging", "sourceFiles", 128, 1, 512),
+        PACKAGE_TOTAL("packaging", "totalSourceBytes", 8 * MIB, 1, 32 * MIB),
+        PACKAGE_SINGLE("packaging", "singleSourceBytes", MIB, 1, 16 * MIB),
         PACKAGE_APK("packaging", "apkBytes", 32 * MIB, 1, 32 * MIB),
         SECRET_ENTRIES("secrets", "entries", 32, 1, 256),
         SECRET_VALUE("secrets", "valueBytes", 8192, 1, 32768),
@@ -95,7 +96,10 @@ public final class ResourceBudgets {
         WIDGETS_IMAGE_BYTES("widgets", "imageBytes", 262144, 1, 2097152),
         WIDGETS_IMAGE_PIXELS("widgets", "imagePixels", 262144, 1, 1048576),
         JOBS_RECORDS("jobs", "records", 32, 1, 1024),
-        JOBS_STORAGE_BYTES("jobs", "storageBytes", 8388608, 1048576, 67108864);
+        JOBS_STORAGE_BYTES("jobs", "storageBytes", 8388608, 1048576, 67108864),
+        FILE_SHARE_BYTES("fileShare", "sourceBytes", 8 * MIB, 1, 4 * GIB),
+        FILE_SHARE_TRANSFER_TIMEOUT("fileShare", "transferTimeoutMs", 300000, 1, 86400000),
+        FILE_SHARE_LEASE("fileShare", "leaseMs", 300000, 1, 86400000);
 
         final String section, name;
         final long legacy, minimum, maximum;
@@ -132,8 +136,8 @@ public final class ResourceBudgets {
         }
     }
     public static final class Audio {
-        public final long sourceBytes, durationMs;
-        private Audio(long[] values) { sourceBytes = value(values, Field.AUDIO_BYTES); durationMs = value(values, Field.AUDIO_DURATION); }
+        public final long sourceBytes, durationMs, setupTimeoutMs;
+        private Audio(long[] values) { sourceBytes = value(values, Field.AUDIO_BYTES); durationMs = value(values, Field.AUDIO_DURATION); setupTimeoutMs = value(values, Field.AUDIO_SETUP_TIMEOUT); }
     }
     public static final class Sensors {
         public final long captureDurationMs;
@@ -202,6 +206,14 @@ public final class ResourceBudgets {
             storageBytes=count(values,Field.JOBS_STORAGE_BYTES);
         }
     }
+    public static final class FileShare {
+        public final long sourceBytes, transferTimeoutMs, leaseMs;
+        private FileShare(long[] values) {
+            sourceBytes=value(values,Field.FILE_SHARE_BYTES);
+            transferTimeoutMs=value(values,Field.FILE_SHARE_TRANSFER_TIMEOUT);
+            leaseMs=value(values,Field.FILE_SHARE_LEASE);
+        }
+    }
     public static final class Packaging {
         public final int sourceFiles;
         public final long totalSourceBytes, singleSourceBytes, apkBytes;
@@ -226,6 +238,7 @@ public final class ResourceBudgets {
     public final Bluetooth bluetooth;
     public final Widgets widgets;
     public final Jobs jobs;
+    public final FileShare fileShare;
     private final Map<String, Object> canonical;
 
     private ResourceBudgets(long[] values) {
@@ -236,6 +249,7 @@ public final class ResourceBudgets {
         bluetooth = new Bluetooth(values);
         widgets = new Widgets(values);
         jobs = new Jobs(values);
+        fileShare = new FileShare(values);
         require(bluetooth.pollEvents <= bluetooth.bufferedEvents, "bluetooth.pollEvents exceeds bufferedEvents");
         require(widgets.actions <= widgets.nodes, "widgets.actions exceeds nodes");
         require(widgets.actionDataBytes <= widgets.modelBytes, "widgets.actionDataBytes exceeds modelBytes");
@@ -316,6 +330,9 @@ public final class ResourceBudgets {
         values.put("databaseSchemaBytes", (long) DATABASE_SCHEMA_BYTES);
         values.put("sensorResultBytes", (long) SENSOR_RESULT_BYTES);
         values.put("globalDocumentSlots", (long) GLOBAL_DOCUMENT_SLOTS);
+        values.put("packagingZipEntries", 512L); values.put("packagingEntryBytes", 16 * MIB);
+        values.put("packagingExpandedBytes", 32 * MIB); values.put("packagingApkBytes", 32 * MIB);
+        values.put("packagingConcurrentOperations", 1L); values.put("packagingHeapHeadroomBytes", 16 * MIB);
         values.put("wholeStorePayloadBytes", 16 * MIB); values.put("wholeStoreEntries", 65536L); values.put("storageResultBytes", (long) BRIDGE_MESSAGE_BYTES - 1024); values.put("wholeAudioPayloadBytes", 6 * MIB);
         values.put("wholeWebsitePayloadBytes", 8 * MIB); values.put("wholeApkPayloadBytes", 32 * MIB);
         return Collections.unmodifiableMap(values);

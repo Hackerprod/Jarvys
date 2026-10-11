@@ -83,10 +83,16 @@ public class FactoryRuntimePhotosTest {
         assertEquals("AQID",handles().read(value.getString("handle"),0,3).base64);
         assertTrue(handles().read(value.getString("handle"),3,1).eof);
     }
-    @Test public void previewAndMissingHostNeverLaunch()throws Exception{
+    @Test public void previewAndMissingPinnedHostNeverLaunch()throws Exception{
         host.preview=true;assertEquals("UNAVAILABLE",photo().error());assertNull(screen.launched);
-        host.preview=false;DocumentBrokerIdentityTest.install(screen,DocumentBrokerIdentity.RECOVERY,new Signature(DocumentBrokerIdentityTest.CERTIFICATE));
+        host.preview=false;Shadows.shadowOf(screen.getPackageManager()).removePackage(DocumentBrokerIdentity.PRIMARY);
+        DocumentBrokerIdentityTest.install(screen,DocumentBrokerIdentity.RECOVERY,new Signature(DocumentBrokerIdentityTest.CERTIFICATE));
         assertEquals("UNAVAILABLE",photo().error());assertNull(screen.launched);
+    }
+    @Test public void anotherInstalledHostDoesNotOverrideTheExplicitPin()throws Exception{
+        DocumentBrokerIdentityTest.install(screen,DocumentBrokerIdentity.RECOVERY,new Signature(new byte[]{9,8,7}));
+        Response response=photo();assertNotNull(screen.launched);assertNull(response.value);
+        assertEquals(DocumentBrokerIdentity.PRIMARY,screen.launched.getComponent().getPackageName());
     }
     @Test public void malformedHostFieldsNeverGrant()throws Exception{
         for(int variant=0;variant<12;variant++){

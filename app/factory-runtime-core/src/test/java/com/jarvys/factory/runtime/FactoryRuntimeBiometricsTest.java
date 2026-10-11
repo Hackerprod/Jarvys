@@ -1,6 +1,11 @@
 package com.jarvys.factory.runtime;
 
 import android.app.Activity;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
+import android.content.pm.ProviderInfo;
+import android.content.pm.Signature;
+import org.robolectric.shadows.ShadowContentResolver;
 import android.os.*;
 import android.widget.FrameLayout;
 import androidx.webkit.JavaScriptReplyProxy;
@@ -58,18 +63,35 @@ public class FactoryRuntimeBiometricsTest {
     FactoryRuntime runtime;
     Driver driver;
     BiometricAuthentication.ProcessGate gate;
+    final NativePermissionSessionsTest.PolicyProvider policyProvider=new NativePermissionSessionsTest.PolicyProvider();
     long now;
     int sequence;
     static Field field(String name)throws Exception{Field f=FactoryRuntime.class.getDeclaredField(name);f.setAccessible(true);return f;}
     @Before public void setup()throws Exception{
         screen=Robolectric.buildActivity(Screen.class).setup().get();
+        installPolicyHost();
         now=1000;gate=new BiometricAuthentication.ProcessGate();
         installRuntime();
+    }
+    void installPolicyHost()throws Exception{
+        String name=DocumentBrokerIdentity.PRIMARY;
+        DocumentBrokerIdentityTest.install(screen,name,new Signature(DocumentBrokerIdentityTest.CERTIFICATE));
+        PackageInfo info=screen.getPackageManager().getPackageInfo(name,PackageManager.GET_SIGNATURES|PackageManager.GET_SIGNING_CERTIFICATES);
+        info.applicationInfo.uid=android.os.Process.myUid();info.applicationInfo.enabled=true;
+        ProviderInfo provider=new ProviderInfo();provider.authority=name+".factory.operations";
+        provider.packageName=name;provider.name="com.jarvys.agent.apkfactory.FactoryOperationAuthorizationProvider";
+        provider.enabled=true;provider.exported=true;provider.applicationInfo=info.applicationInfo;
+        info.providers=new ProviderInfo[]{provider};
+        Shadows.shadowOf(screen.getPackageManager()).installPackage(info);
+        Shadows.shadowOf(screen.getPackageManager()).setPackagesForUid(android.os.Process.myUid(),name);
+        policyProvider.attachInfo(screen,provider);
+        ShadowContentResolver.registerProviderInternal(provider.authority,policyProvider);
     }
     void installRuntime()throws Exception{
         host=new Host();host.appId=screen.getPackageName();
         runtime=new FactoryRuntime(screen,new FrameLayout(screen),host);
-        field("config").set(runtime,FactoryConfig.parse(host.configuration(),screen.getPackageName()));
+        field("config").set(runtime,FactoryConfig.parse(new JSONObject(host.configuration()).put("documentBroker",
+                new JSONObject().put("packageName",DocumentBrokerIdentity.PRIMARY).put("certificateSha256",DocumentBrokerIdentityTest.digest())).toString(),screen.getPackageName()));
         field("store").set(runtime,new BoundedStore(host.memory));
         driver=new Driver();
         field("biometrics").set(runtime,new BiometricAuthentication(driver,()->now,new Handler(Looper.getMainLooper()),gate));
@@ -79,7 +101,9 @@ public class FactoryRuntimeBiometricsTest {
         runtime.close();assertTrue(((ThreadPoolExecutor)field("io").get(runtime)).awaitTermination(10,TimeUnit.SECONDS));
     }
     @After public void cleanup()throws Exception{
-        closeRuntime();Shadows.shadowOf(Looper.getMainLooper()).idle();screen.finish();
+        closeRuntime();Shadows.shadowOf(Looper.getMainLooper()).idle();
+        for(NativePermissionSessionsTest.Issued issued:policyProvider.issued)issued.host.close();
+        screen.finish();
     }
     String arguments(){return "{\"reason\":\"Confirm this local action\"}";}
     String envelope(String id,String method,String args)throws Exception{return new JSONObject().put("v",1).put("id",id).put("method",method).put("args",new JSONObject(args)).toString();}
@@ -97,7 +121,12 @@ public class FactoryRuntimeBiometricsTest {
     void invalidate()throws Exception{Method method=FactoryRuntime.class.getDeclaredMethod("invalidate");method.setAccessible(true);method.invoke(runtime);}
     void saturated()throws Exception{field("rateWindow").setLong(runtime,SystemClock.elapsedRealtime());field("rateCount").setInt(runtime,80);}
     void ordinaryRateReset()throws Exception{field("rateCount").setInt(runtime,0);}
-    Response share()throws Exception{return request("share.text","{\"text\":\"Synthetic fixture\"}");}
+    Response share()throws Exception{
+        Response response=request("share.text","{\"text\":\"Synthetic fixture\"}");
+        // The competing UI now acquires its default-ALLOW policy lease asynchronously.
+        ((ThreadPoolExecutor)field("io").get(runtime)).submit(()->{}).get(10,TimeUnit.SECONDS);
+        Shadows.shadowOf(Looper.getMainLooper()).idle();return response;
+    }
 
     @Test public void previewCannotQueryAuthenticateOrCancelAndNeverStartsDriver()throws Exception{
         host.preview=true;

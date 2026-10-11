@@ -60,7 +60,10 @@
       var timeout = /^(export|clipboard|share)\./.test(method) || /^(documents\.(open|create)|photos\.(pick|capture)|audio\.play|browser\.open|maps\.open|phone\.dial|email\.compose|sms\.compose|contacts\.pick|calendar\.insert)$/.test(method) ? 600000 : 30000;
       if (/^(nfc|bluetooth|widgets|jobs)\./.test(method)) timeout = 620000;
       if (method === 'sensors.capture') timeout = 310000;
-      if (method === 'audio.play') timeout = 610000;
+      // Outer transport fallback: two maximum setup phases plus maximum RIFF PCM duration.
+      // Native signed/actual deadlines and page teardown normally settle much sooner.
+      if (method === 'audio.play') timeout = 441245454;
+      if (method === 'share.file') timeout = 259500000;
       if (method === 'biometrics.authenticate') timeout = 90000;
       if (/^(network|notifications|location|steps)\./.test(method)) timeout = 420000;
       if (/^(secrets|incomingShare)\./.test(method)) timeout = 600000;
