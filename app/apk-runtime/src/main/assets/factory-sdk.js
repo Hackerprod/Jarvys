@@ -45,7 +45,7 @@
       if (!bridge || typeof bridge.postMessage !== 'function') {
         reject(failure('BRIDGE_UNAVAILABLE', 'Open this application in its generated Android APK.')); return;
       }
-      var cancellation = method === 'sensors.cancel' || method === 'biometrics.cancel' || method === 'database.cancel' || method === 'documents.cancel' || method === 'network.cancel' || method === 'speech.stop';
+      var cancellation = method === 'sensors.cancel' || method === 'biometrics.cancel' || method === 'database.cancel' || method === 'documents.cancel' || method === 'network.cancel' || method === 'speech.stop' || method === 'voiceRecognition.cancel' || method === 'location.cancel';
       var controlPending = false;
       if (cancellation) pending.forEach(function (entry) { if (entry.method === method) controlPending = true; });
       if (pending.size >= (cancellation ? 20 : 16) || controlPending) {
@@ -58,8 +58,11 @@
         if (new TextEncoder().encode(payload).length > MAX_MESSAGE_BYTES) throw failure('TOO_LARGE', 'Native request exceeds 512 KiB.');
       } catch (error) { reject(error.code ? error : failure('INVALID_ARGUMENT', 'Arguments must be serializable JSON.')); return; }
       var timeout = /^(export|clipboard|share)\./.test(method) || /^(documents\.(open|create)|photos\.(pick|capture)|audio\.play|browser\.open|maps\.open|phone\.dial|email\.compose|sms\.compose|contacts\.pick|calendar\.insert)$/.test(method) ? 600000 : 30000;
+      if (method === 'sensors.capture') timeout = 310000;
+      if (method === 'audio.play') timeout = 610000;
       if (method === 'biometrics.authenticate') timeout = 90000;
-      if (/^(network|notifications)\./.test(method)) timeout = 420000;
+      if (/^(network|notifications|location)\./.test(method)) timeout = 420000;
+      if (/^voiceRecognition\./.test(method)) timeout = 900000;
       if (/^speech\./.test(method)) timeout = method === 'speech.speak' ? 86400000 : 420000;
       var backup = method === 'database.backupExport' || method === 'database.backupImport' ||
         method === 'storage.backupExport' || method === 'storage.backupImport';
@@ -97,6 +100,17 @@
       voices: function (options) { return call('speech.voices', options === undefined ? {} : options); },
       speak: function (options) { return call('speech.speak', options); },
       stop: function (options) { return call('speech.stop', options === undefined ? {} : options); }
+    }),
+    voiceRecognition: Object.freeze({
+      status: function (options) { return call('voiceRecognition.status', options === undefined ? {} : options); },
+      recognize: function (options) { return call('voiceRecognition.recognize', options === undefined ? {} : options); },
+      cancel: function (options) { return call('voiceRecognition.cancel', options === undefined ? {} : options); }
+    }),
+    location: Object.freeze({
+      status: function (options) { return call('location.status', options === undefined ? {} : options); },
+      current: function (options) { return call('location.current', options === undefined ? {} : options); },
+      cancel: function (options) { return call('location.cancel', options === undefined ? {} : options); },
+      requestPermission: function (options) { return call('location.requestPermission', options === undefined ? {} : options); }
     }),
     storage: Object.freeze({
       get: function (key) { return call('storage.get', { key: key }); },

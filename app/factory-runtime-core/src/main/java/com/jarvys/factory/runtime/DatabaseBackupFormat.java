@@ -93,6 +93,8 @@ public final class DatabaseBackupFormat {
     }
 
     static void validateColumns(JSONObject columns) throws JSONException, FactoryException {
+        // V1 archives keep their original schema envelope even when the paged database grows.
+        if (columns.length() > DatabaseRequest.MAX_COLUMNS) throw DatabaseRequest.invalid();
         DatabaseRequest.columns(columns);
         for (String name : BackupJson.keys(columns)) DatabaseBackupRequest.required(columns.getJSONObject(name), "type", "nullable");
     }

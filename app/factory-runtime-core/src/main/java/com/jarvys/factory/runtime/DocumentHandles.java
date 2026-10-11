@@ -1,5 +1,6 @@
 package com.jarvys.factory.runtime;
 
+import com.jarvys.factory.contract.ResourceBudgets;
 import java.io.Closeable;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -27,24 +28,100 @@ public final class DocumentHandles {
     private static final Executor CLEANUP = new ThreadPoolExecutor(MAX_HANDLES, MAX_HANDLES, 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(256), r -> {
         Thread thread = new Thread(r, "factory-document-close"); thread.setDaemon(true); return thread;
     });
-    private final Object lock = new Object();
+    private final Object lock;
     private final Map<String, Entry> entries = new HashMap<>();
     private final SecureRandom random = new SecureRandom();
     private final Clock clock;
     private final Executor cleanup;
-    private long charged;
+    private final ResourceBudgets.Documents budget;
+    // Shared by replacement page authorities for one runtime lifetime. A page cannot reset
+    // cumulative bytes or open a new slot while an older authority is still closing a stream.
+    private static final class Ledger { long charged; int admissions; }
+    private final Ledger ledger;
     private int closing, retiredOpening;
     private boolean revoked;
+    private Object nativeByteAuthority = new Object();
     private static final class Entry {
         final String token; final boolean write; final long created;
         Closeable stream; boolean busy, eof, opening, admission=true; long offset, charged;
         Entry(String token, boolean write, long created) { this.token=token; this.write=write; this.created=created; }
     }
-    public DocumentHandles() { this(() -> System.nanoTime() / 1000000L, CLEANUP); }
+    public DocumentHandles() { this(ResourceBudgets.legacy()); }
+    public DocumentHandles(ResourceBudgets budgets) { this(() -> System.nanoTime() / 1000000L, CLEANUP, budgets); }
     /** Clock must be monotonic. Executor must enqueue asynchronously, never run inline. */
     public DocumentHandles(Clock clock, Executor cleanupExecutor) {
-        if (clock == null || cleanupExecutor == null) throw new IllegalArgumentException();
-        this.clock=clock; this.cleanup=cleanupExecutor;
+        this(clock, cleanupExecutor, ResourceBudgets.legacy());
+    }
+    /** The immutable artifact budget does not change during a handle session. */
+    public DocumentHandles(Clock clock, Executor cleanupExecutor, ResourceBudgets budgets) {
+        this(clock,cleanupExecutor,budgets==null?null:budgets.documents,new Ledger());
+    }
+    private DocumentHandles(Clock clock,Executor cleanupExecutor,ResourceBudgets.Documents budget,Ledger ledger) {
+        if (clock == null || cleanupExecutor == null || budget == null || ledger == null) throw new IllegalArgumentException();
+        this.clock=clock; this.cleanup=cleanupExecutor; this.budget=budget; this.ledger=ledger; this.lock=ledger;
+    }
+    /** End this page's authority, preserving runtime-session spending and pending resource claims. */
+    public DocumentHandles revokeAndRenew() {
+        synchronized(lock) {
+            if(revoked) throw new IllegalStateException("Document authority has already ended.");
+            revokeAll();
+            return new DocumentHandles(clock,cleanup,budget,ledger);
+        }
+    }
+    /**
+     * Reserves native-produced output before capture, without opening a file or allocating its size.
+     * A separate handle reservation owns the provider/stream slot. Reading the finished output is
+     * charged separately. Revocation does not refund an in-flight producer: its owner must first
+     * stop the producer and delete incomplete output, then close this uncommitted reservation.
+     */
+    public NativeByteReservation reserveNativeBytes(long maximum) throws FactoryException {
+        synchronized(lock) {
+            expireLocked();
+            if(revoked) throw error("SESSION_REVOKED");
+            if(maximum<1 || maximum>budget.handleBytes) throw error("DOCUMENT_QUOTA");
+            chargeSession(maximum);
+            return new NativeByteReservation(maximum,nativeByteAuthority,clock.millis());
+        }
+    }
+    public final class NativeByteReservation implements AutoCloseable {
+        private final long maximum,created;
+        private final Object authority;
+        private boolean committed,closed;
+        private long actual;
+        private NativeByteReservation(long maximum,Object authority,long created) {
+            this.maximum=maximum; this.authority=authority; this.created=created;
+        }
+        /**
+         * Call only with native-measured finalized bytes, never a renderer-supplied size. Success
+         * retains the actual charge permanently; repeated commits of that same size are harmless.
+         * Failure leaves the full reservation charged until the owner deletes output and closes.
+         */
+        public void commit(long actualBytes) throws FactoryException {
+            synchronized(lock) {
+                if(revoked) throw error("SESSION_REVOKED");
+                if(authority!=nativeByteAuthority || clock.millis()-created>=budget.leaseMs) throw error("INVALID_HANDLE");
+                if(actualBytes<0 || actualBytes>maximum) throw error("INVALID_ARGUMENT");
+                if(committed) {
+                    if(actualBytes!=actual) throw error("INVALID_ARGUMENT");
+                    return;
+                }
+                if(closed) throw error("INVALID_HANDLE");
+                refundNative(maximum-actualBytes); actual=actualBytes; committed=true;
+            }
+        }
+        /** No automatic provider cleanup occurs here. Stop/delete incomplete output before close. */
+        @Override public void close() {
+            synchronized(lock) {
+                if(closed) return;
+                if(!committed) refundNative(maximum);
+                closed=true;
+            }
+        }
+    }
+    private void refundNative(long bytes) {
+        // This is native-owned reservation state. An invariant failure must never mint capacity.
+        if(bytes<0 || bytes>ledger.charged) throw new IllegalStateException("Invalid native byte reservation accounting.");
+        ledger.charged=Math.subtractExact(ledger.charged,bytes);
     }
     public final class Reservation {
         private final Entry entry;
@@ -74,8 +151,7 @@ public final class DocumentHandles {
                 expireLocked();
                 if (revoked || entries.get(entry.token) != entry || entry.stream != null || entry.opening
                         || bytes < 1 || bytes > 8 * 1024 * 1024) throw error("INVALID_HANDLE");
-                if (bytes > MAX_SESSION_BYTES-charged) throw error("DOCUMENT_QUOTA");
-                charged+=bytes;
+                chargeSession(bytes);
             }
         }
         public String grantRead(InputStream stream) throws FactoryException { return grant(entry, stream, false); }
@@ -101,7 +177,7 @@ public final class DocumentHandles {
         synchronized(lock) {
             expireLocked();
             if (revoked) throw error("SESSION_REVOKED");
-            if (entries.size() + closing + retiredOpening >= MAX_HANDLES) throw error("HANDLE_LIMIT");
+            if (ledger.admissions >= budget.openHandles) throw error("HANDLE_LIMIT");
             if (!GLOBAL_SLOTS.tryAcquire()) throw error("HANDLE_LIMIT");
             byte[] bytes=new byte[32]; String token;
             do {
@@ -109,7 +185,7 @@ public final class DocumentHandles {
                 for (byte b:bytes) { out.append("0123456789abcdef".charAt((b & 255) >>> 4)); out.append("0123456789abcdef".charAt(b & 15)); }
                 token=out.toString();
             } while (entries.containsKey(token));
-            Entry entry=new Entry(token,write,clock.millis()); entries.put(token,entry);
+            Entry entry=new Entry(token,write,clock.millis()); entries.put(token,entry); ledger.admissions++;
             return new Reservation(entry);
         }
     }
@@ -158,8 +234,8 @@ public final class DocumentHandles {
         if (count < -1 || count == 0 || count > maxBytes) { poison(entry); throw error("DOCUMENT_IO"); }
         synchronized(lock) {
             finishCheck(entry);
-            int actual=Math.max(0,count); charged-=maxBytes-actual; entry.charged-=maxBytes-actual;
-            entry.offset+=actual; entry.busy=false; entry.eof=count == -1;
+            int actual=Math.max(0,count); refund(entry,maxBytes-actual);
+            entry.offset=add(entry.offset,actual); entry.busy=false; entry.eof=count == -1;
             return new ReadResult(encode(buffer,actual),offset,entry.offset,entry.eof);
         }
     }
@@ -172,7 +248,11 @@ public final class DocumentHandles {
     }
     /** Consumes an untouched read handle. Format validation belongs to the authenticated host. */
     public byte[] snapshotForAudio(String token) throws FactoryException {
-        return snapshot(token, 6 * 1024 * 1024, "AUDIO_TOO_LARGE");
+        return snapshotForAudio(token, 6 * 1024 * 1024);
+    }
+    public byte[] snapshotForAudio(String token, long byteLimit) throws FactoryException {
+        if (byteLimit < 46 || byteLimit > 6 * 1024 * 1024) throw error("INVALID_ARGUMENT");
+        return snapshot(token, (int)byteLimit, "AUDIO_TOO_LARGE");
     }
     /** Consumes an untouched backup source, including a charged EOF probe. Never persists authority. */
     public byte[] snapshotForBackup(String token) throws FactoryException {
@@ -184,8 +264,7 @@ public final class DocumentHandles {
             expireLocked();
             if(revoked) throw error("SESSION_REVOKED");
             if(bytes < 1 || bytes > 1024 * 1024) throw error("BACKUP_TOO_LARGE");
-            if(bytes > MAX_SESSION_BYTES-charged) throw error("DOCUMENT_QUOTA");
-            charged += bytes;
+            chargeSession(bytes);
         }
     }
     private byte[] snapshot(String token, int maximum, String tooLarge) throws FactoryException {
@@ -202,8 +281,8 @@ public final class DocumentHandles {
                 if (count < -1 || count == 0 || count > requested) throw error("DOCUMENT_IO");
                 synchronized(lock) {
                     finishCheck(entry);
-                    int actual=Math.max(0,count); charged-=requested-actual; entry.charged-=requested-actual;
-                    entry.offset+=actual;
+                    int actual=Math.max(0,count); refund(entry,requested-actual);
+                    entry.offset=add(entry.offset,actual);
                 }
                 if (count == -1) {
                     if (output.size() == 0) throw error("EMPTY_FILE");
@@ -220,7 +299,7 @@ public final class DocumentHandles {
         try { ((OutputStream)entry.stream).write(bytes); }
         catch (Exception e) { poison(entry); throw error("DOCUMENT_IO"); }
         synchronized(lock) {
-            finishCheck(entry); entry.offset+=bytes.length; entry.busy=false;
+            finishCheck(entry); entry.offset=add(entry.offset,bytes.length); entry.busy=false;
             return new WriteResult(offset,bytes.length);
         }
     }
@@ -233,8 +312,23 @@ public final class DocumentHandles {
         return entry;
     }
     private void begin(Entry entry,int bytes) throws FactoryException {
-        if (bytes > MAX_HANDLE_BYTES-entry.charged || bytes > MAX_SESSION_BYTES-charged) throw error("DOCUMENT_QUOTA");
-        entry.charged+=bytes; charged+=bytes; entry.busy=true;
+        if (bytes < 1 || entry.charged < 0 || entry.charged > budget.handleBytes ||
+                bytes > budget.handleBytes-entry.charged) throw error("DOCUMENT_QUOTA");
+        long next=add(entry.charged,bytes);
+        chargeSession(bytes); entry.charged=next; entry.busy=true;
+    }
+    private void chargeSession(long bytes) throws FactoryException {
+        if (bytes < 1 || ledger.charged < 0 || ledger.charged > budget.sessionBytes ||
+                bytes > budget.sessionBytes-ledger.charged) throw error("DOCUMENT_QUOTA");
+        ledger.charged=add(ledger.charged,bytes);
+    }
+    private static long add(long current,long bytes) throws FactoryException {
+        try { return Math.addExact(current,bytes); }
+        catch (ArithmeticException overflow) { throw error("DOCUMENT_QUOTA"); }
+    }
+    private void refund(Entry entry,int unused) throws FactoryException {
+        if (unused < 0 || unused > entry.charged || unused > ledger.charged) throw error("DOCUMENT_QUOTA");
+        entry.charged-=unused; ledger.charged-=unused;
     }
     private void finishCheck(Entry entry) throws FactoryException {
         expireLocked();
@@ -250,16 +344,22 @@ public final class DocumentHandles {
     }
     /** Cancel current work without resetting cumulative budget or enabling stale picker grants. */
     public void cancelAll() {
-        synchronized(lock) { for (Entry entry:new ArrayList<>(entries.values())) remove(entry); }
+        synchronized(lock) {
+            nativeByteAuthority=new Object();
+            for (Entry entry:new ArrayList<>(entries.values())) remove(entry);
+        }
     }
     /** Irreversible session cancellation: stale picker completions cannot grant new authority. */
     public void revokeAll() {
-        synchronized(lock) { revoked=true; for (Entry entry:new ArrayList<>(entries.values())) remove(entry); }
+        synchronized(lock) {
+            revoked=true; nativeByteAuthority=new Object();
+            for (Entry entry:new ArrayList<>(entries.values())) remove(entry);
+        }
     }
     public void expire() { synchronized(lock) { expireLocked(); } }
     private void expireLocked() {
         long now=clock.millis();
-        for (Entry entry:new ArrayList<>(entries.values())) if (now-entry.created >= LIFETIME_MILLIS) remove(entry);
+        for (Entry entry:new ArrayList<>(entries.values())) if (now-entry.created >= budget.leaseMs) remove(entry);
     }
     private void remove(Entry entry) {
         if (entries.get(entry.token) == entry) { entries.remove(entry.token);
@@ -268,7 +368,7 @@ public final class DocumentHandles {
             else releaseAdmission(entry); }
     }
     private void releaseAdmission(Entry entry) {
-        if (entry.admission) { entry.admission=false; GLOBAL_SLOTS.release(); }
+        if (entry.admission) { entry.admission=false; ledger.admissions--; GLOBAL_SLOTS.release(); }
     }
     private void closeTracked(Entry entry,Closeable stream) {
         if (stream == null) return;

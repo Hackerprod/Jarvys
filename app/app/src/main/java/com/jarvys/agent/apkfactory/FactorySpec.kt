@@ -1,6 +1,8 @@
 package com.jarvys.agent.apkfactory
 
 import com.jarvys.factory.contract.CapabilityCatalog
+import com.jarvys.factory.contract.ResourceBudgets
+import com.jarvys.factory.runtime.ResourceBudgetsJson
 import com.jarvys.factory.runtime.FactoryConfig
 import org.json.JSONArray
 import org.json.JSONObject
@@ -16,11 +18,12 @@ data class FactorySpec(
     val icon: String,
     val dataBackupTables: List<String> = emptyList(),
     val dataBackupKeys: List<String> = emptyList(),
+    val resources: ResourceBudgets = ResourceBudgets.legacy(),
 ) {
     fun runtimeConfig(documentBroker: JSONObject? = null): ByteArray {
         val config = JSONObject().put("schemaVersion", 1).put("appId", appId)
             .put("name", name).put("entryPoint", "www/index.html")
-            .put("capabilities", JSONArray(capabilities))
+            .put("capabilities", JSONArray(capabilities)).put("resourceBudgets", ResourceBudgetsJson.toJson(resources))
         backupPolicy()?.let { config.put("dataBackup", it) }
         if (documentBroker != null) config.put("documentBroker", documentBroker)
         val text = config.toString()
@@ -31,6 +34,7 @@ data class FactorySpec(
     fun toJson(): JSONObject = JSONObject().put("schemaVersion", 1).put("appId", appId).put("name", name)
         .put("versionCode", versionCode).put("versionName", versionName)
         .put("capabilities", JSONArray(capabilities)).put("webDir", webDir).put("icon", icon)
+        .put("resourceBudgets", ResourceBudgetsJson.toJson(resources))
         .also { json -> backupPolicy()?.let { json.put("dataBackup", it) } }
 
     private fun backupPolicy(): JSONObject? {
@@ -50,7 +54,7 @@ data class FactorySpec(
         private val APP_ID = Regex("[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+")
         @JvmStatic fun parse(json: JSONObject): FactorySpec {
             val fields = setOf("schemaVersion", "appId", "name", "versionCode", "versionName", "capabilities", "webDir", "icon")
-            require(json.keys().asSequence().toSet().let { it == fields || it == fields + "dataBackup" }) { "factory.json requires ${fields.joinToString()} and optional dataBackup" }
+            require(json.keys().asSequence().toSet().let { it.containsAll(fields) && it.all { key -> key in fields || key == "dataBackup" || key == "resourceBudgets" } }) { "factory.json requires ${fields.joinToString()} and optional dataBackup/resourceBudgets" }
             require(integer(json, "schemaVersion") == 1) { "Unsupported factory schemaVersion" }
             val appId = string(json, "appId")
             require(APP_ID.matches(appId) && appId.split('.').size in 2..16 && appId.length <= 127 && !appId.startsWith("android.") &&
@@ -103,7 +107,8 @@ data class FactorySpec(
             val webDir = relativePath(string(json, "webDir"))
             val icon = relativePath(string(json, "icon"))
             require(icon.endsWith(".png", true) || icon.endsWith(".json", true)) { "Icon must be PNG or vector JSON" }
-            return FactorySpec(appId, name, version, versionName, CapabilityCatalog.select(caps), webDir, icon, backupTables, backupKeys)
+            val resources = if (json.has("resourceBudgets")) ResourceBudgetsJson.parse(json.getJSONObject("resourceBudgets")) else ResourceBudgets.legacy()
+            return FactorySpec(appId, name, version, versionName, CapabilityCatalog.select(caps), webDir, icon, backupTables, backupKeys, resources)
         }
         fun relativePath(value: String): String {
             require(value.isNotBlank() && value.length <= 240 && !value.startsWith('/') && '\\' !in value &&

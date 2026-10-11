@@ -179,18 +179,28 @@ public class PrivateDatabaseTest {
         JSONObject[] steps = new JSONObject[8];
         for (int i = 0; i < steps.length; i++) steps[i] = create("table" + i, titleColumns());
         migrate(db, 0, steps);
-        error("INVALID_ARGUMENT", () -> migrate(db, 1, create("ninth", titleColumns())));
+        error("QUOTA_EXCEEDED", () -> migrate(db, 1, create("ninth", titleColumns())));
         assertEquals(1, call(db, "info", new JSONObject()).getInt("version"));
         assertEquals(8, call(db, "info", new JSONObject()).getJSONObject("schema").length());
     }
-    @Test public void oversizedResultFailsWithoutReturningPartialRowsAndSmallerPageWorks() throws Exception {
+    @Test public void oversizedResultReturnsBoundedContinuationWithoutDroppingAnyRows() throws Exception {
         PrivateDatabase db = ready(); String text = DatabaseRequestTest.repeat("x", 4096);
         for (int batch = 0; batch < 2; batch++) {
             JSONObject[] operations = new JSONObject[35];
             for (int i = 0; i < operations.length; i++) operations[i] = op("insert", "id" + (batch * 35 + i), value(text));
             tx(db, 1, operations);
         }
-        error("QUOTA_EXCEEDED", () -> call(db, "select", query(1).put("limit", 100)));
+        JSONObject first = call(db, "select", query(1).put("limit", 100));
+        assertTrue(first.getBoolean("hasMore"));
+        assertTrue(first.getJSONArray("rows").length() > 0);
+        assertTrue(first.getJSONArray("rows").length() < 70);
+        assertTrue(DatabaseRequest.bytes(first) <= DatabaseRequest.MAX_RESULT_BYTES);
+        JSONObject remaining = call(db, "select", query(1).put("limit", 100).put("afterId", first.getString("nextAfterId")));
+        assertFalse(remaining.getBoolean("hasMore"));
+        assertEquals(70, first.getJSONArray("rows").length() + remaining.getJSONArray("rows").length());
+        String last = first.getJSONArray("rows").getJSONObject(first.getJSONArray("rows").length()-1).getString("id");
+        assertEquals(last, first.getString("nextAfterId"));
+        assertTrue(last.compareTo(remaining.getJSONArray("rows").getJSONObject(0).getString("id")) < 0);
         JSONObject result = call(db, "select", query(1).put("limit", 10));
         assertEquals(10, result.getJSONArray("rows").length()); assertTrue(result.getBoolean("hasMore"));
         assertTrue(DatabaseRequest.bytes(result) <= DatabaseRequest.MAX_RESULT_BYTES);
@@ -351,7 +361,7 @@ public class PrivateDatabaseTest {
             assertTrue(cursor.moveToFirst()); assertFalse("wal".equalsIgnoreCase(cursor.getString(0)));
         }
     }
-    @Test public void oversizedExistingNativeFileFailsQuotaWithoutShrinkingOrDeletingRows() throws Exception {
+    @Test public void oversizedExistingNativeFileCanOpenWithoutShrinkingOrDeletingRows() throws Exception {
         File directory = temporary.newFolder("oversized-native"); PrivateDatabase db = installed(context(directory));
         migrate(db, 0, create("notes", titleColumns())); tx(db, 1, op("insert", "one", value("preserve-existing-synthetic-row"))); db.close();
         File file = new File(directory, "factory-private-v1.sqlite");
@@ -361,8 +371,10 @@ public class PrivateDatabaseTest {
             nativeDb.execSQL("INSERT INTO t_notes(id,c_title) VALUES ('large_synthetic',zeroblob(?))", new Object[]{blobBytes});
         }
         long originalLength = file.length(); assertTrue(originalLength > DatabaseRequest.MAX_DATABASE_BYTES);
-        FactoryException failure = error("QUOTA_EXCEEDED", () -> call(db, "info", new JSONObject()));
-        assertFalse(failure.getMessage().contains(directory.getAbsolutePath()));
+        JSONObject info = call(db, "info", new JSONObject());
+        assertEquals(1, info.getInt("version"));
+        JSONObject small = call(db, "select", query(1).put("where", new JSONObject().put("id", "one")));
+        assertEquals("preserve-existing-synthetic-row", small.getJSONArray("rows").getJSONObject(0).getString("title"));
         db.close(); assertTrue(file.isFile()); assertEquals(originalLength, file.length());
         try (SQLiteDatabase nativeDb = SQLiteDatabase.openDatabase(file.getPath(), null, SQLiteDatabase.OPEN_READONLY);
              android.database.Cursor kept = nativeDb.rawQuery("SELECT c_title FROM t_notes WHERE id='one'", null);

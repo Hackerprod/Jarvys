@@ -26,7 +26,8 @@ internal class FactoryOperationPolicy internal constructor(private val store: St
         NETWORK_REQUEST("network.request"), NETWORK_PROBE("network.probe"), NETWORK_PING("network.ping"),
         NOTIFICATIONS_CHANNEL("notifications.channel"), NOTIFICATIONS_PERMISSION("notifications.requestPermission"),
         NOTIFICATIONS_SHOW("notifications.show"), NOTIFICATIONS_CANCEL("notifications.cancel"),
-        SPEECH_VOICES("speech.voices"), SPEECH_SPEAK("speech.speak"), SPEECH_STOP("speech.stop")
+        SPEECH_VOICES("speech.voices"), SPEECH_SPEAK("speech.speak"), SPEECH_STOP("speech.stop"),
+        VOICE_RECOGNITION_RECOGNIZE("voiceRecognition.recognize"), LOCATION_CURRENT("location.current"), LOCATION_REQUEST_PERMISSION("location.requestPermission")
     }
     data class Subject private constructor(val kind: String, val appId: String, val identity: String) {
         val key: String get() = binding(kind, appId, identity)

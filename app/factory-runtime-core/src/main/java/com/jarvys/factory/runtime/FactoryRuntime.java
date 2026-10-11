@@ -97,6 +97,7 @@ public final class FactoryRuntime implements AutoCloseable {
     private int rateCount;
     private Export export;
     private DocumentHandles documents = new DocumentHandles();
+    private boolean documentBudgetsInitialized;
     private volatile boolean documentForeground;
     private DocumentSelection documentSelection;
     private volatile FileShare fileShare;
@@ -189,7 +190,8 @@ public final class FactoryRuntime implements AutoCloseable {
         try {
             config = host.isPreview() ? FactoryConfig.parsePreview(host.configuration())
                     : FactoryConfig.parse(host.configuration(), activity.getPackageName());
-            store = new BoundedStore(host.storage());
+            store = new BoundedStore(host.storage(), config.resources);
+            if (!documentBudgetsInitialized) { documents.revokeAll(); documents = new DocumentHandles(config.resources); documentBudgetsInitialized = true; }
             if(host.isPreview()) documentForeground=true; // Preview Activity closes its session on pause.
             main.removeCallbacks(expireDocuments);
             if (config.capabilities.contains("documents")) main.postDelayed(expireDocuments, 1000);
@@ -217,7 +219,7 @@ public final class FactoryRuntime implements AutoCloseable {
         if(sensors!=null) sensors.cancel();
         if(biometrics!=null) biometrics.cancel();
         retireDatabase();
-        documents.revokeAll(); documents = new DocumentHandles();
+        documents = documents.revokeAndRenew();
         cancelBackup("CANCELLED", "Backup authority ended. A restore may have committed or a partial export may remain.");
         cancelDocumentSelection(); cancelFileShare(); cancelPhotoSelection(); cancelAudioPlayback();
         cancelBrowserOpen(browserOpen, "CANCELLED", "Browser launch authority ended. A browser already opened may remain open.");
@@ -428,7 +430,9 @@ public final class FactoryRuntime implements AutoCloseable {
         try { request = BridgeProtocol.validate(BridgeProtocol.ORIGIN, true, raw, config); }
         catch (FactoryException e) { safePost(proxy, BridgeProtocol.failure(BridgeProtocol.requestId(raw), e.code, e.getMessage())); return; }
         boolean nativeControl = request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.NETWORK_CANCEL ||
-                request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.SPEECH_STOP;
+                request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.SPEECH_STOP ||
+                request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.VOICE_RECOGNITION_CANCEL ||
+                request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.LOCATION_CANCEL;
         boolean duplicateControl = nativeControl && pending.values().stream().anyMatch(value -> value.method.equals(request.method));
         if (pending.size() >= (nativeControl ? MAX_PENDING + 4 : MAX_PENDING) || pending.containsKey(request.id) || duplicateControl) {
             safePost(proxy, BridgeProtocol.failure(request.id, "BUSY", "Too many pending requests or duplicate request ID.")); return;
@@ -556,7 +560,7 @@ public final class FactoryRuntime implements AutoCloseable {
                                 work.storageBaseline==null?new JSONObject():work.storageBaseline.present()));
                     } else {
                         PrivateDatabase selected=database;
-                        if(selected==null) { selected=PrivateDatabase.installed(activity,config.appId); database=selected; }
+                        if(selected==null) { selected=PrivateDatabase.installed(activity,config.appId,config.resources); database=selected; }
                         final PrivateDatabase owner=selected; final long ticket=owner.ticket();
                         if(work.exporting) {
                             work.archive=DataBackupArchive.of(owner.backupExport(config.appId,certificate,work.args.getInt("version"),names,ticket,()->backupAuthority(work,true)));
@@ -677,7 +681,7 @@ public final class FactoryRuntime implements AutoCloseable {
             else if(work.storageBackup) result=store.backupImport(work.archive.storage,work.plan.mode,work.storageBaseline,()->backupEffectAllowed(work));
             else {
                 PrivateDatabase selected=database;
-                if(selected==null) { selected=PrivateDatabase.installed(activity,config.appId); database=selected; }
+                if(selected==null) { selected=PrivateDatabase.installed(activity,config.appId,config.resources); database=selected; }
                 final PrivateDatabase owner=selected; final long ticket=owner.ticket();
                 result=owner.backupImport(work.archive.database,work.plan.mode,work.baseline,ticket,()->backupEffectAllowed(work));
             }
@@ -837,7 +841,7 @@ public final class FactoryRuntime implements AutoCloseable {
         if(!documentForeground || !reply.current()) { reply.fail("CANCELLED","Database requires the active foreground page."); return; }
         try {
             PrivateDatabase current=database;
-            if(current==null) { current=host.isPreview()?PrivateDatabase.preview():PrivateDatabase.installed(activity,config.appId); database=current; }
+            if(current==null) { current=host.isPreview()?PrivateDatabase.preview(config.resources):PrivateDatabase.installed(activity,config.appId,config.resources); database=current; }
             final PrivateDatabase selected=current;
             if(request.operation==com.jarvys.factory.contract.CapabilityCatalog.Method.DATABASE_CANCEL) {
                 selected.cancel(); reply.ok(PrivateDatabase.cancellation()); return;
@@ -881,7 +885,9 @@ public final class FactoryRuntime implements AutoCloseable {
     private void dispatchInstalledEffect(BridgeProtocol.Request request, Reply reply) throws Exception {
         if (!reply.current()) return;
         switch (request.operation) {
-            case NETWORK_REQUEST: case NETWORK_PROBE: case NETWORK_PING: case NETWORK_CANCEL:
+            case VOICE_RECOGNITION_STATUS: case VOICE_RECOGNITION_RECOGNIZE: case VOICE_RECOGNITION_CANCEL:
+                case LOCATION_STATUS: case LOCATION_CURRENT: case LOCATION_CANCEL: case LOCATION_REQUEST_PERMISSION:
+                case NETWORK_REQUEST: case NETWORK_PROBE: case NETWORK_PING: case NETWORK_CANCEL:
             case NOTIFICATIONS_STATUS: case NOTIFICATIONS_CHANNEL: case NOTIFICATIONS_SHOW: case NOTIFICATIONS_CANCEL: case NOTIFICATIONS_REQUEST_PERMISSION:
             case SPEECH_STATUS: case SPEECH_VOICES: case SPEECH_SPEAK: case SPEECH_STOP:
                 ensureNativeEffects();
@@ -955,7 +961,7 @@ public final class FactoryRuntime implements AutoCloseable {
         requireDocumentForeground();
         if (nativePermissions != null && nativePermissions.isClosed() && nativePermissions.hasPendingReview())
             throw new FactoryException("BUSY", "A previous native review is still returning.");
-        if (nativeEffects != null && nativeEffects.isClosed() && nativeEffects.hasPendingPermission())
+        if (nativeEffects != null && nativeEffects.isClosed() && (nativeEffects.hasPendingPermission() || nativeEffects.hasPendingActivity()))
             throw new FactoryException("BUSY", "A previous Android permission request is still returning.");
         if (nativePermissions == null || nativePermissions.isClosed()) nativePermissions = new NativePermissionSessions(activity, config, io, documentForeground);
         if (nativeEffects == null || nativeEffects.isClosed()) nativeEffects = new NativeEffects(activity, config, nativePermissions, io, documentForeground);
@@ -965,6 +971,7 @@ public final class FactoryRuntime implements AutoCloseable {
     }
     public void onWindowFocusChanged(boolean focused) {
         if (nativePermissions != null) nativePermissions.onWindowFocusChanged(focused);
+        if (nativeEffects != null) nativeEffects.onWindowFocusChanged(focused);
     }
     private void authorizeTextEffect(BridgeProtocol.Request request, Reply reply) throws Exception {
         ensureNativeEffects();
@@ -1105,7 +1112,7 @@ public final class FactoryRuntime implements AutoCloseable {
     private void sensorRequest(BridgeProtocol.Request request,Reply reply)throws Exception {
         if(host.isPreview()) throw new FactoryException("UNAVAILABLE","Sensors are unavailable in preview.");
         if(!sensorAuthority() || !reply.current()) throw new FactoryException("CANCELLED","Sensors require the active foreground page.");
-        if(sensors==null) sensors=SensorCapture.installed(activity,main);
+        if(sensors==null) sensors=SensorCapture.installed(activity,main,config.resources.sensors);
         switch(request.operation) {
             case SENSORS_LIST: reply.ok(sensors.list());break;
             case SENSORS_CANCEL: reply.ok(sensors.cancellation());break;
@@ -1159,13 +1166,17 @@ public final class FactoryRuntime implements AutoCloseable {
     }
 
     private boolean claimUi(Reply reply) {
-        if ((nativePermissions != null && nativePermissions.hasPendingReview()) || (nativeEffects != null && nativeEffects.hasPendingPermission()) || BiometricAuthentication.processUiBusy() || (biometrics!=null && biometrics.isUiBusy()) || presentationScheduled || uiOwner != null || export != null || documentSelection != null || fileShare != null || photoSelection != null || audioPlayback != null || browserOpen != null || externalLaunch != null || contactPick != null || clipboardWrite != null || backup != null || BACKUP_ADMISSION.get() || !activity.hasWindowFocus() || activity.isFinishing()) {
+        if ((nativePermissions != null && nativePermissions.hasPendingReview()) || (nativeEffects != null && (nativeEffects.hasPendingPermission() || nativeEffects.hasPendingActivity())) || BiometricAuthentication.processUiBusy() || (biometrics!=null && biometrics.isUiBusy()) || presentationScheduled || uiOwner != null || export != null || documentSelection != null || fileShare != null || photoSelection != null || audioPlayback != null || browserOpen != null || externalLaunch != null || contactPick != null || clipboardWrite != null || backup != null || BACKUP_ADMISSION.get() || !activity.hasWindowFocus() || activity.isFinishing()) {
             reply.fail("BUSY", "Another native prompt is open, or the application is not in the foreground."); return false;
         }
         uiOwner = reply; return true;
     }
 
     public void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == NativeVoiceRecognition.REQUEST_CODE) {
+            if (nativeEffects != null) nativeEffects.onActivityResult(requestCode, resultCode, data);
+            return; // A prior Activity's late result never targets another operation.
+        }
         if (nativePermissions != null && nativePermissions.onActivityResult(requestCode, resultCode, data)) return;
         if(requestCode==CLIPBOARD_REQUEST) {
             ClipboardWrite work=clipboardWrite;
@@ -1972,7 +1983,7 @@ public final class FactoryRuntime implements AutoCloseable {
             try {
                 requireDocumentForeground();
                 if (work.cancelled || !reply.current()) throw new FactoryException("CANCELLED","Audio playback was cancelled.");
-                bytes=source.snapshotForAudio(request.args.getString("handle"));
+                bytes=source.snapshotForAudio(request.args.getString("handle"),config.resources.audio.sourceBytes);
                 requireDocumentForeground();
                 DocumentBrokerIdentity.verify(activity,config.documentBroker);
                 final int hostUid=activity.getPackageManager().getApplicationInfo(config.documentBroker.packageName,0).uid;
@@ -2295,7 +2306,7 @@ public final class FactoryRuntime implements AutoCloseable {
         root.addView(text, new FrameLayout.LayoutParams(-1, -1));
     }
     @Override public void close() {
-        synchronized (lifecycle) { destroyed = true; invalidate(); host.resetStorage(); }
+        synchronized (lifecycle) { if (destroyed) return; destroyed = true; invalidate(); host.resetStorage(); }
         main.removeCallbacks(expireDocuments);
         documents.revokeAll();
         io.shutdown();

@@ -1,6 +1,7 @@
 package com.jarvys.factory.runtime;
 
 import com.jarvys.factory.contract.CapabilityCatalog;
+import com.jarvys.factory.contract.ResourceBudgets;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -19,6 +20,7 @@ public final class FactoryConfig {
     public final DocumentBroker documentBroker;
     public final Set<String> dataBackupTables;
     public final Set<String> dataBackupKeys;
+    public final ResourceBudgets resources;
     public static final class DocumentBroker {
         public final String packageName, certificateSha256;
         private DocumentBroker(String packageName, String certificateSha256) {
@@ -30,6 +32,10 @@ public final class FactoryConfig {
         this(appId, name, entryPoint, capabilities, documentBroker, Collections.emptySet(), Collections.emptySet());
     }
     private FactoryConfig(String appId, String name, String entryPoint, Set<String> capabilities, DocumentBroker documentBroker, Set<String> dataBackupTables, Set<String> dataBackupKeys) {
+        this(appId, name, entryPoint, capabilities, documentBroker, dataBackupTables, dataBackupKeys, ResourceBudgets.legacy());
+    }
+    private FactoryConfig(String appId, String name, String entryPoint, Set<String> capabilities, DocumentBroker documentBroker, Set<String> dataBackupTables, Set<String> dataBackupKeys, ResourceBudgets resources) {
+        this.resources = resources;
         this.dataBackupTables = Collections.unmodifiableSet(new LinkedHashSet<>(dataBackupTables));
         this.dataBackupKeys = Collections.unmodifiableSet(new LinkedHashSet<>(dataBackupKeys));
         this.documentBroker = documentBroker;
@@ -44,7 +50,7 @@ public final class FactoryConfig {
     private static FactoryConfig parseInternal(String text, String installedPackage) throws FactoryException {
         try {
             JSONObject object = StrictJson.object(text, 8192);
-            exactKeys(object, "schemaVersion", "appId", "name", "entryPoint", "capabilities", "documentBroker", "dataBackup");
+            exactKeys(object, "schemaVersion", "appId", "name", "entryPoint", "capabilities", "documentBroker", "dataBackup", "resourceBudgets");
             if (!(object.get("schemaVersion") instanceof Integer) || object.getInt("schemaVersion") != 1)
                 throw new FactoryException("INVALID_CONFIG", "Unsupported application configuration version.");
             String appId = string(object, "appId");
@@ -110,7 +116,8 @@ public final class FactoryConfig {
             }
             if (installedPackage != null && CapabilityCatalog.requiresHostBroker(capabilities) && broker == null)
                 throw new FactoryException("INVALID_CONFIG", "Declared native policy or broker operations require a pinned compatible Jarvys host.");
-            return new FactoryConfig(appId, name, entry, capabilities, broker, backupTables, backupKeys);
+            ResourceBudgets resources = object.has("resourceBudgets") ? ResourceBudgetsJson.parse(object.getJSONObject("resourceBudgets")) : ResourceBudgets.legacy();
+            return new FactoryConfig(appId, name, entry, capabilities, broker, backupTables, backupKeys, resources);
         } catch (JSONException e) {
             throw new FactoryException("INVALID_CONFIG", "Invalid application configuration.");
         }

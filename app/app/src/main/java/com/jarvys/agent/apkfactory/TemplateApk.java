@@ -147,9 +147,11 @@ public final class TemplateApk {
                 if(CapabilityCatalog.BIOMETRIC_PERMISSION.equals(permission)) inferredCapabilities.add("biometrics");
                 else if(CapabilityCatalog.INTERNET_PERMISSION.equals(permission)) inferredCapabilities.add("network");
                 else if(CapabilityCatalog.NOTIFICATION_PERMISSION.equals(permission)) inferredCapabilities.add("notifications");
+                else if(CapabilityCatalog.LOCATION_PERMISSIONS.contains(permission)) { if(!inferredCapabilities.contains("location")) inferredCapabilities.add("location"); }
                 else throw new IOException("Unapproved factory permission profile");
             }
-            if(baseXml.speechQuery) inferredCapabilities.add("speech");
+            if(baseXml.queryActions.contains(CapabilityCatalog.TTS_SERVICE_ACTION)) inferredCapabilities.add("speech");
+            if(baseXml.queryActions.contains(CapabilityCatalog.RECOGNIZE_SPEECH_ACTION)) inferredCapabilities.add("voiceRecognition");
             if(!baseXml.queryPackages.isEmpty()) inferredCapabilities.add("documents");
         }
         ManifestPlan plan;
@@ -407,7 +409,7 @@ public final class TemplateApk {
         Attr appId,label,versionCode,versionName,icon,activity;
         final List<String> permissions=new ArrayList<>();
         final Set<String> queryPackages=new java.util.LinkedHashSet<>();
-        boolean speechQuery;
+        final Set<String> queryActions=new java.util.LinkedHashSet<>();
         Xml(byte[] b) throws IOException {
             check(b.length<=1024*1024,"Manifest too large"); Chunk outer=new Chunk(b,0,b.length);
             check(outer.type==3 && outer.header==8 && outer.size==b.length,"Invalid binary XML");
@@ -437,14 +439,16 @@ public final class TemplateApk {
                     "manifest/application/activity","manifest/application/activity/intent-filter",
                     "manifest/application/activity/intent-filter/action","manifest/application/activity/intent-filter/category",
                     "manifest/queries","manifest/queries/package","manifest/queries/intent","manifest/queries/intent/action").contains(path),"Unsupported template component "+path);
-                if (!path.equals("manifest/queries/package") && !path.equals("manifest/uses-permission")) check(seen.add(path),"Duplicate template element "+path);
+                if (!path.equals("manifest/queries/package") && !path.equals("manifest/queries/intent")
+                        && !path.equals("manifest/queries/intent/action") && !path.equals("manifest/uses-permission")) check(seen.add(path),"Duplicate template element "+path);
                 check(u16(n,24)==20 && u16(n,26)==20 && c.size==36+20*u16(n,28),"Unsupported attribute layout");
                 Map<String,Attr> attrs=new LinkedHashMap<>();
                 for(int a=36;a<n.length;a+=20) { Attr v=new Attr(n,a,pool); check(attrs.put(v.ns+"|"+v.name,v)==null,"Duplicate attribute"); }
                 if(path.equals("manifest/queries") || path.equals("manifest/queries/intent")) check(attrs.isEmpty(),"Query containers cannot have attributes");
                 if(path.equals("manifest/queries/intent/action")) {
-                    check(attrs.size()==1 && CapabilityCatalog.TTS_SERVICE_ACTION.equals(attr(attrs,ANDROID,"name").text()),"Unapproved service visibility action");
-                    speechQuery=true;
+                    String queryAction=attr(attrs,ANDROID,"name").text();
+                    check(attrs.size()==1 && Arrays.asList(CapabilityCatalog.TTS_SERVICE_ACTION, CapabilityCatalog.RECOGNIZE_SPEECH_ACTION).contains(queryAction)
+                            && queryActions.add(queryAction),"Unapproved or duplicate service visibility action");
                 }
                 if(path.equals("manifest/queries/package")) {
                     check(attrs.size()==1,"Query package must have exactly one attribute");
@@ -456,7 +460,7 @@ public final class TemplateApk {
                 if(path.equals("manifest/uses-permission")) {
                     String permission=attr(attrs,ANDROID,"name").text();
                     check(attrs.size()==1 && Arrays.asList(CapabilityCatalog.BIOMETRIC_PERMISSION,CapabilityCatalog.INTERNET_PERMISSION,
-                            CapabilityCatalog.NOTIFICATION_PERMISSION).contains(permission) && !permissions.contains(permission),"Unapproved or duplicate permission");
+                            CapabilityCatalog.NOTIFICATION_PERMISSION,CapabilityCatalog.COARSE_LOCATION_PERMISSION,CapabilityCatalog.FINE_LOCATION_PERMISSION).contains(permission) && !permissions.contains(permission),"Unapproved or duplicate permission");
                     permissions.add(permission);
                 }
                 if(path.equals("manifest/application")) {

@@ -96,7 +96,7 @@ internal open class FactorySignedArtifactHistory(
         require(requiredCapabilities.isNotEmpty() && requiredCapabilities.all { required ->
             (0 until capabilities.length()).any { capabilities.getString(it) == required }
         }) { "This signed artifact does not declare the requested capability" }
-        Verified(FactoryDocumentCoordinator.Proof(appId, certificate, apk, version, selected.digest()), true)
+        Verified(FactoryDocumentCoordinator.Proof(appId, certificate, apk, version, selected.digest(), selected.scope.resources()), true)
     }
 
     private fun validateHistory(appId: String, entries: List<Artifact>?, certificate: String, floor: Int) {

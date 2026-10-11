@@ -1,5 +1,6 @@
 package com.jarvys.factory.runtime;
 
+import com.jarvys.factory.contract.ResourceBudgets;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.nio.charset.StandardCharsets;
@@ -32,7 +33,12 @@ public final class BoundedStore {
         }
     }
     private final Backend backend;
-    public BoundedStore(Backend backend) { this.backend = backend; }
+    private final ResourceBudgets.Storage budget;
+    public BoundedStore(Backend backend) { this(backend, ResourceBudgets.legacy()); }
+    public BoundedStore(Backend backend, ResourceBudgets budgets) {
+        if (backend == null || budgets == null) throw new IllegalArgumentException();
+        this.backend = backend; this.budget = budgets.storage;
+    }
     public String get(String key) {
         synchronized (backend.transactionLock()) { return backend.read().get(key); }
     }
@@ -43,13 +49,11 @@ public final class BoundedStore {
     }
     public void set(String key, String value) throws FactoryException {
         synchronized (backend.transactionLock()) {
-            if (!key.matches("[a-zA-Z0-9_.:-]{1,96}") || bytes(value) > BridgeProtocol.MAX_VALUE_BYTES)
+            if (key == null || value == null || !key.matches("[a-zA-Z0-9_.:-]{1,96}") || bytes(value) > BridgeProtocol.MAX_VALUE_BYTES)
                 throw new FactoryException("INVALID_ARGUMENT", "Storage entry exceeds the supported limits.");
-            Map<String, String> values = new HashMap<>(backend.read()); values.put(key, value);
-            if (values.size() > MAX_ENTRIES) throw new FactoryException("QUOTA_EXCEEDED", "Storage entry limit reached.");
-            long total = 0;
-            for (Map.Entry<String, String> entry : values.entrySet()) total += bytes(entry.getKey()) + bytes(entry.getValue());
-            if (total > MAX_TOTAL_BYTES) throw new FactoryException("QUOTA_EXCEEDED", "Application storage limit reached.");
+            Map<String, String> before = backend.read();
+            Map<String, String> values = new HashMap<>(before); values.put(key, value);
+            checkValueQuota(before.get(key), value); checkQuota(before, values);
             if (!backend.replace(values)) throw new FactoryException("STORAGE_ERROR", "Could not persist application data.");
         }
     }
@@ -106,9 +110,10 @@ public final class BoundedStore {
             for (String key : archive.keys) {
                 checkBackup(allowed);
                 if ("insertOnly".equals(mode) && current.containsKey(key)) throw backupConflict();
-                String value = StorageBackupRequest.string(values, key); StorageBackupFormat.validateValue(value); selected.put(key, value);
+                String value = StorageBackupRequest.string(values, key); StorageBackupFormat.validateValue(value);
+                checkValueQuota(current.get(key), value); selected.put(key, value);
             }
-            Map<String, String> complete = new HashMap<>(current); complete.putAll(selected); checkBackupQuota(complete);
+            Map<String, String> complete = new HashMap<>(current); complete.putAll(selected); checkQuota(current, complete);
             // Build the receipt before the irreversible boundary so no serialization work can fail after persistence.
             JSONObject receipt = new JSONObject().put("version", archive.version).put("mode", mode)
                     .put("keys", new JSONArray(archive.keys)).put("count", selected.size()).put("committed", true);
@@ -155,15 +160,30 @@ public final class BoundedStore {
         digest.update(new byte[] { (byte) (length >>> 24), (byte) (length >>> 16), (byte) (length >>> 8), (byte) length });
         digest.update(bytes);
     }
-    private static void checkBackupQuota(Map<String, String> values) throws FactoryException {
-        if (values.size() > MAX_ENTRIES) throw new FactoryException("QUOTA_EXCEEDED", "Storage entry limit reached.");
+    /** A lower signed budget never removes existing data or prevents a non-growing replacement. */
+    private void checkQuota(Map<String, String> before, Map<String, String> after) throws FactoryException {
+        if (after.size() > budget.entries && after.size() > before.size())
+            throw new FactoryException("QUOTA_EXCEEDED", "Storage entry limit reached.");
+        long next = totalBytes(after);
+        if (next > budget.totalBytes && next > totalBytes(before))
+            throw new FactoryException("QUOTA_EXCEEDED", "Application storage limit reached.");
+    }
+    private void checkValueQuota(String before, String after) throws FactoryException {
+        int next = bytes(after);
+        if (next > budget.valueBytes && (before == null || next > bytes(before)))
+            throw new FactoryException("QUOTA_EXCEEDED", "Storage value limit reached.");
+    }
+    private static long totalBytes(Map<String, String> values) throws FactoryException {
         long total = 0;
-        for (Map.Entry<String, String> entry : values.entrySet()) {
-            int size = bytes(entry.getValue());
-            if (size > BridgeProtocol.MAX_VALUE_BYTES) throw new FactoryException("QUOTA_EXCEEDED", "Storage value limit reached.");
-            total += bytes(entry.getKey()) + size;
-            if (total > MAX_TOTAL_BYTES) throw new FactoryException("QUOTA_EXCEEDED", "Application storage limit reached.");
+        try {
+            for (Map.Entry<String, String> entry : values.entrySet()) {
+                total = Math.addExact(total, (long) bytes(entry.getKey()));
+                total = Math.addExact(total, (long) bytes(entry.getValue()));
+            }
+        } catch (ArithmeticException overflow) {
+            throw new FactoryException("QUOTA_EXCEEDED", "Application storage limit reached.");
         }
+        return total;
     }
     private static void checkBackup(BooleanSupplier allowed) throws FactoryException {
         boolean current = false;

@@ -32,10 +32,12 @@ public final class FactoryDispatcher {
     public static Effects simulatedEffects() {
         return (method, args) -> {
             switch (method) {
+                case VOICE_RECOGNITION_STATUS: case VOICE_RECOGNITION_RECOGNIZE: case VOICE_RECOGNITION_CANCEL:
+                case LOCATION_STATUS: case LOCATION_CURRENT: case LOCATION_CANCEL: case LOCATION_REQUEST_PERMISSION:
                 case NETWORK_REQUEST: case NETWORK_PROBE: case NETWORK_PING: case NETWORK_CANCEL:
                 case NOTIFICATIONS_STATUS: case NOTIFICATIONS_CHANNEL: case NOTIFICATIONS_SHOW: case NOTIFICATIONS_CANCEL: case NOTIFICATIONS_REQUEST_PERMISSION:
                 case SPEECH_STATUS: case SPEECH_VOICES: case SPEECH_SPEAK: case SPEECH_STOP:
-                    throw new FactoryException("UNAVAILABLE", "Native network, notifications and speech require an installed generated app and live Jarvys policy. ICMP also requires an available Android ping utility. Preview does not perform or simulate these effects.");
+                    throw new FactoryException("UNAVAILABLE", "Native network, notifications, speech, recognition and location require an installed generated app and live Jarvys policy. ICMP also requires an available Android ping utility. Preview does not perform or simulate these effects.");
                 case BIOMETRICS_AVAILABILITY: case BIOMETRICS_AUTHENTICATE: case BIOMETRICS_CANCEL:
                 case SENSORS_LIST: case SENSORS_CAPTURE: case SENSORS_CANCEL:
                 case PRESENTATION_GET: case PRESENTATION_SET: case PRESENTATION_RESET:
@@ -98,6 +100,9 @@ public final class FactoryDispatcher {
                         .put("offlineScope", "embedded_webview_configuration_not_process_isolation")
                         .put("processInternetPermission", config.capabilities.contains("network"))
                         .put("nativeNetworkProtocol", "http_https").put("nativeProbeIsIcmp", false)
+                        .put("resourceBudgets", ResourceBudgetsJson.toJson(config.resources))
+                        .put("resourceImplementationLimits", new JSONObject(com.jarvys.factory.contract.ResourceBudgets.implementationLimits()))
+                        .put("voiceRecognitionMayUseNetwork", true).put("locationForegroundOnly", true)
                         .put("nativePingProtocol", "icmp").put("platformPingUtilityRequired", true)
                         .put("nativeOperationsPolicy", "host_allow_ask_deny").put("speechEngineMayUseNetwork", true)
                         .put("notificationAcceptedMeansDelivered", false).put("browserMayUseExternalNetwork", true)
@@ -107,9 +112,9 @@ public final class FactoryDispatcher {
                         .put("simulatedCapabilities", new JSONArray("preview".equals(metadata.mode())
                                 ? java.util.Arrays.asList("export", "share", "clipboard", "haptics") : java.util.Collections.emptyList()))
                         .put("unavailableCapabilities", new JSONArray("preview".equals(metadata.mode())
-                                ? java.util.Arrays.asList("documents", "photos", "audio", "browser", "maps", "phone", "email", "sms", "contacts", "calendar", "presentation", "sensors", "biometrics", "network", "notifications", "speech") : java.util.Collections.emptyList()))
+                                ? java.util.Arrays.asList("documents", "photos", "audio", "browser", "maps", "phone", "email", "sms", "contacts", "calendar", "presentation", "sensors", "biometrics", "network", "notifications", "speech", "voiceRecognition", "location") : java.util.Collections.emptyList()))
                         .put("unavailableMethods", new JSONArray("preview".equals(metadata.mode())
-                                ? java.util.Arrays.asList("share.file", "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture", "audio.play", "browser.open", "maps.open", "phone.dial", "email.compose", "sms.compose", "contacts.pick", "calendar.insert", "presentation.get", "presentation.set", "presentation.reset", "sensors.list", "sensors.capture", "sensors.cancel", "biometrics.availability", "biometrics.authenticate", "biometrics.cancel", "database.backupExport", "database.backupImport", "storage.backupExport", "storage.backupImport", "network.request", "network.probe", "network.ping", "network.cancel", "notifications.status", "notifications.channel", "notifications.show", "notifications.cancel", "notifications.requestPermission", "speech.status", "speech.voices", "speech.speak", "speech.stop")
+                                ? java.util.Arrays.asList("share.file", "documents.open", "documents.create", "documents.read", "documents.write", "documents.close", "documents.cancel", "photos.pick", "photos.capture", "audio.play", "browser.open", "maps.open", "phone.dial", "email.compose", "sms.compose", "contacts.pick", "calendar.insert", "presentation.get", "presentation.set", "presentation.reset", "sensors.list", "sensors.capture", "sensors.cancel", "biometrics.availability", "biometrics.authenticate", "biometrics.cancel", "database.backupExport", "database.backupImport", "storage.backupExport", "storage.backupImport", "network.request", "network.probe", "network.ping", "network.cancel", "notifications.status", "notifications.channel", "notifications.show", "notifications.cancel", "notifications.requestPermission", "speech.status", "speech.voices", "speech.speak", "speech.stop", "voiceRecognition.status", "voiceRecognition.recognize", "voiceRecognition.cancel", "location.status", "location.current", "location.cancel", "location.requestPermission")
                                 : java.util.Collections.emptyList()))
                         .put("biometricsProtocolVersion", 1).put("biometricsBrokerRequired", false)
                         .put("biometricsRequires", new JSONArray(java.util.Collections.singletonList("biometrics")))
@@ -119,7 +124,7 @@ public final class FactoryDispatcher {
                         .put("sensorsProtocolVersion", 1).put("sensorsBrokerRequired", false)
                         .put("sensorsKinds",new JSONArray(java.util.Arrays.asList("light","accelerometer","gyroscope")))
                         .put("sensorsForegroundOnly",true).put("sensorsMaxRateHz",10)
-                        .put("sensorsMaxDurationMs",5000).put("sensorsMaxSamples",50).put("sensorsResultBytes",16384)
+                        .put("sensorsMaxDurationMs",config.resources.sensors.captureDurationMs).put("sensorsMaxSamples",config.resources.sensors.captureSamples).put("sensorsResultBytes",16384)
                         .put("presentationProtocolVersion", 1).put("presentationBrokerRequired", false)
                         .put("presentationRequires", new JSONArray(java.util.Collections.singletonList("presentation")))
                         .put("presentationThemes", new JSONArray(java.util.Arrays.asList("system", "light", "dark")))
@@ -178,8 +183,8 @@ public final class FactoryDispatcher {
                         .put("implementedCapabilities", new JSONArray(FactoryConfig.SUPPORTED))
                         .put("declaredCapabilities", new JSONArray(config.capabilities))
                         .put("limits", new JSONObject().put("messageBytes", BridgeProtocol.MAX_MESSAGE_BYTES)
-                                .put("textBytes", BridgeProtocol.MAX_TEXT_BYTES).put("storageValueBytes", BridgeProtocol.MAX_VALUE_BYTES)
-                                .put("storageBytes", BoundedStore.MAX_TOTAL_BYTES).put("storageEntries", BoundedStore.MAX_ENTRIES)
+                                .put("textBytes", BridgeProtocol.MAX_TEXT_BYTES).put("storageValueBytes", config.resources.storage.valueBytes)
+                                .put("storageBytes", config.resources.storage.totalBytes).put("storageEntries", config.resources.storage.entries)
                                 .put("biometricsReasonCharacters", 160).put("biometricsReasonBytes", 512)
                                 .put("biometricsAuthenticationMs", 60000).put("biometricsAdmissionCount", 3)
                                 .put("biometricsAdmissionWindowMs", 60000).put("biometricsCancelEnvelopeBytes", 1024)
@@ -213,14 +218,16 @@ public final class FactoryDispatcher {
                                 .put("storageBackupArgumentBytes", StorageBackupRequest.MAX_ARGUMENT_BYTES)
                                 .put("storageBackupBytes", 1024 * 1024).put("storageBackupKeys", 32)
                                 .put("storageBackupLifetimeMs", 300000)
-                                .put("documentChunkBytes", 32768).put("documentBytes", 16 * 1024 * 1024)
-                                .put("documentSessionBytes", 32 * 1024 * 1024).put("documentHandles", 4)
+                                .put("documentChunkBytes", 32768).put("documentBytes", config.resources.documents.handleBytes)
+                                .put("documentSessionBytes", config.resources.documents.sessionBytes).put("documentHandles", config.resources.documents.openHandles)
                                 .put("fileShareBytes", 8 * 1024 * 1024).put("fileShareLifetimeMs", 300000)
-                                .put("audioBytes", 6 * 1024 * 1024).put("audioDurationMs", 30000)
+                                .put("audioBytes", config.resources.audio.sourceBytes).put("audioDurationMs", config.resources.audio.durationMs)
                                 .put("audioChannelsMax", 2).put("audioBitsPerSample", 16)
                                 .put("audioSampleRateMin", 8000).put("audioSampleRateMax", 48000)
-                                .put("documentHandleLifetimeMs", 300000));
+                                .put("documentHandleLifetimeMs", config.resources.documents.leaseMs));
             case DEVICE_INFO: return metadata.deviceInfo().put("declaredAppId", config.appId);
+                case VOICE_RECOGNITION_STATUS: case VOICE_RECOGNITION_RECOGNIZE: case VOICE_RECOGNITION_CANCEL:
+                case LOCATION_STATUS: case LOCATION_CURRENT: case LOCATION_CANCEL: case LOCATION_REQUEST_PERMISSION:
                 case NETWORK_REQUEST: case NETWORK_PROBE: case NETWORK_PING: case NETWORK_CANCEL:
                 case NOTIFICATIONS_STATUS: case NOTIFICATIONS_CHANNEL: case NOTIFICATIONS_SHOW: case NOTIFICATIONS_CANCEL: case NOTIFICATIONS_REQUEST_PERMISSION:
                 case SPEECH_STATUS: case SPEECH_VOICES: case SPEECH_SPEAK: case SPEECH_STOP:

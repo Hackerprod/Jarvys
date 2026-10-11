@@ -36,6 +36,14 @@ public final class NativeOperationRequest {
         try {
             String capability;
             switch (operation == null ? "" : operation) {
+                case "voiceRecognition.recognize":
+                    capability = "voiceRecognition"; exact(value, "language", "languageModel", "prompt", "maxResults", "preferOffline", "timeoutMs");
+                    value = VoiceRecognitionRequest.parseRecognize(value).authorizationDetails(); break;
+                case "location.current":
+                    capability = "location"; exact(value, "provider", "timeoutMs", "maxAgeMs", "maxAccuracyMeters", "allowMock");
+                    value = LocationRequest.parseCurrent(value).authorizationDetails(); break;
+                case "location.requestPermission":
+                    capability = "location"; exact(value, "precision"); value = LocationRequest.parsePermission(value).authorizationDetails(); break;
                 case "network.request": case "network.probe":
                     capability = "network"; validateNetwork(value, "network.probe".equals(operation)); break;
                 case "network.ping":

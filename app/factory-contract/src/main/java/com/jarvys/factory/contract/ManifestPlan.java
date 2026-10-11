@@ -66,7 +66,8 @@ public final class ManifestPlan {
         this.iconResourceId = iconResourceId; this.backupResourceId = backupResourceId;
         this.capabilities = CapabilityCatalog.select(capabilities);
         if (profile != Profile.CURRENT && (this.capabilities.contains("network")
-                || this.capabilities.contains("notifications") || this.capabilities.contains("speech")))
+                || this.capabilities.contains("notifications") || this.capabilities.contains("speech")
+                || this.capabilities.contains("voiceRecognition") || this.capabilities.contains("location")))
             throw new IllegalArgumentException("Native operation capabilities have no historical manifest profile");
         List<Node> result = new ArrayList<>();
         result.add(new Node("manifest", -1,
@@ -107,22 +108,28 @@ public final class ManifestPlan {
             if (profile == Profile.V1_BEFORE_SAFE_AREA)
                 throw new IllegalArgumentException("Additional manifest declarations are not activated");
             if (contribution == CapabilityCatalog.BIOMETRIC_DECLARATION || contribution == CapabilityCatalog.INTERNET_DECLARATION
-                    || contribution == CapabilityCatalog.NOTIFICATION_DECLARATION) {
+                    || contribution == CapabilityCatalog.NOTIFICATION_DECLARATION || contribution == CapabilityCatalog.COARSE_LOCATION_DECLARATION
+                    || contribution == CapabilityCatalog.FINE_LOCATION_DECLARATION) {
                 String permission = contribution == CapabilityCatalog.BIOMETRIC_DECLARATION ? CapabilityCatalog.BIOMETRIC_PERMISSION
-                        : contribution == CapabilityCatalog.INTERNET_DECLARATION ? CapabilityCatalog.INTERNET_PERMISSION : CapabilityCatalog.NOTIFICATION_PERMISSION;
+                        : contribution == CapabilityCatalog.INTERNET_DECLARATION ? CapabilityCatalog.INTERNET_PERMISSION
+                        : contribution == CapabilityCatalog.COARSE_LOCATION_DECLARATION ? CapabilityCatalog.COARSE_LOCATION_PERMISSION
+                        : contribution == CapabilityCatalog.FINE_LOCATION_DECLARATION ? CapabilityCatalog.FINE_LOCATION_PERMISSION : CapabilityCatalog.NOTIFICATION_PERMISSION;
                 selectedPermissions.add(permission);
                 result.add(new Node("manifest/uses-permission", 0,
                         a("name", 0x01010003, 3, permission)));
-            } else if (contribution == CapabilityCatalog.DOCUMENT_QUERIES || contribution == CapabilityCatalog.SPEECH_QUERIES) {
+            } else if (contribution == CapabilityCatalog.DOCUMENT_QUERIES || contribution == CapabilityCatalog.SPEECH_QUERIES
+                    || contribution == CapabilityCatalog.VOICE_QUERIES || contribution == CapabilityCatalog.SPEECH_VOICE_QUERIES) {
                 selectedQueries.addAll(CapabilityCatalog.DOCUMENT_BROKER_PACKAGES);
                 int queryIndex = result.size();
                 result.add(new Node("manifest/queries", 0));
-                if (contribution == CapabilityCatalog.SPEECH_QUERIES) {
+                if (contribution == CapabilityCatalog.SPEECH_QUERIES || contribution == CapabilityCatalog.SPEECH_VOICE_QUERIES)
                     selectedQueryActions.add(CapabilityCatalog.TTS_SERVICE_ACTION);
+                if (contribution == CapabilityCatalog.VOICE_QUERIES || contribution == CapabilityCatalog.SPEECH_VOICE_QUERIES)
+                    selectedQueryActions.add(CapabilityCatalog.RECOGNIZE_SPEECH_ACTION);
+                for (String action : selectedQueryActions) {
                     int intentIndex = result.size();
                     result.add(new Node("manifest/queries/intent", queryIndex));
-                    result.add(new Node("manifest/queries/intent/action", intentIndex,
-                            a("name", 0x01010003, 3, CapabilityCatalog.TTS_SERVICE_ACTION)));
+                    result.add(new Node("manifest/queries/intent/action", intentIndex, a("name", 0x01010003, 3, action)));
                 }
                 for (String host : selectedQueries) result.add(new Node("manifest/queries/package", queryIndex,
                         a("name", 0x01010003, 3, host)));
@@ -146,7 +153,7 @@ public final class ManifestPlan {
         if (name.equals("uses-permission")) return ManifestNodes.permission(
                 (String)node.attributes.get(ANDROID + "|name").value, ManifestNodes.PermissionVariant.STANDARD, null);
         if (name.equals("queries")) return ManifestNodes.queries(children);
-        if (node.path.equals("manifest/queries/intent")) return ManifestNodes.queryIntent(CapabilityCatalog.TTS_SERVICE_ACTION, null, null);
+        if (node.path.equals("manifest/queries/intent")) return ManifestNodes.queryIntent((String)nodes.get(index + 1).attributes.get(ANDROID + "|name").value, null, null);
         if (name.equals("package")) return ManifestNodes.queryPackage((String)node.attributes.values().iterator().next().value);
         return ManifestNodes.base(name, children, node.attributes.values().toArray(new Attribute[0]));
     }

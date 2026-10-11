@@ -33,7 +33,8 @@ internal class FactoryDocumentCoordinator(context: Context, private val policy: 
             }
         }
     }
-    data class Proof(val appId: String, val certificate: String, val apk: String, val version: Long, val record: String)
+    data class Proof(val appId: String, val certificate: String, val apk: String, val version: Long, val record: String,
+        val resources: com.jarvys.factory.contract.ResourceBudgets = com.jarvys.factory.contract.ResourceBudgets.legacy())
     private val journal = AtomicFile(File(context.noBackupFilesDir, "factory-documents/interaction.json"))
     private var permit: FactoryOperationPolicy.Grant? = null
     private var owner: String? = null
@@ -244,7 +245,8 @@ internal class FactoryDocumentCoordinator(context: Context, private val policy: 
             require(evidence.existing && evidence.continuityKnown && evidence.fingerprint == cert && evidence.lastApkSha256 == apk && evidence.lastVersion.toLong() == version)
             val scope = evidence.lastScope?.toJson()?.getJSONArray("capabilities") ?: error("Unknown signed scope")
             require(requiredCapabilities.isNotEmpty() && requiredCapabilities.all { required -> (0 until scope.length()).any { scope.getString(it) == required } })
-            return Proof(appId, cert, apk, version, evidence.recordSha256 ?: error("Unknown identity record"))
+            return Proof(appId, cert, apk, version, evidence.recordSha256 ?: error("Unknown identity record"),
+                evidence.lastScope!!.resources())
         }
         private fun digest(bytes: ByteArray) = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
     }

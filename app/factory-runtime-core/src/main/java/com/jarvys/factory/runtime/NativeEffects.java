@@ -32,6 +32,10 @@ final class NativeEffects implements AutoCloseable {
     private final NativeNetwork network;
     private final Map<String, Job> jobs = new ConcurrentHashMap<>();
     private NativeSpeech speech;
+    private NativeVoiceRecognition recognition;
+    private NativeLocation location;
+    private Job recognitionUiJob;
+    private String[] permissionNames;
     private Job speechOwner;
     private Job permissionJob;
     private boolean permissionReturned;
@@ -62,7 +66,7 @@ final class NativeEffects implements AutoCloseable {
             jobs.remove(id, this);
             Runnable action = cancellation; if (action != null) try { action.run(); } catch (RuntimeException ignored) { }
             if (lease != null) lease.close();
-            main.post(() -> { if (permissionJob != this || permissionReturned) reply.releaseUi(); reply.fail(code, message); });
+            main.post(() -> { if ((permissionJob != this || permissionReturned) && !(recognitionUiJob == this && hasPendingActivity())) reply.releaseUi(); reply.fail(code, message); });
         }
         void fail(Exception error) {
             if (error instanceof FactoryException) fail(((FactoryException) error).code, error.getMessage());
@@ -95,6 +99,38 @@ final class NativeEffects implements AutoCloseable {
                     cancelled++; job.fail("CANCELLED", "Network operation cancellation requested; bytes already sent are not recalled.");
                 }
                 reply.ok(new JSONObject().put("cancelled", cancelled).put("rollbackConfirmed", false)); return;
+            case VOICE_RECOGNITION_STATUS: reply.ok(recognition().status()); return;
+            case LOCATION_STATUS: reply.ok(location().status()); return;
+            case VOICE_RECOGNITION_CANCEL: case LOCATION_CANCEL:
+                String target = request.operation == com.jarvys.factory.contract.CapabilityCatalog.Method.LOCATION_CANCEL ? "location.current" : "voiceRecognition.recognize";
+                int count = 0;
+                for (Job job : new ArrayList<>(jobs.values())) if (target.equals(job.method)) { count++; job.fail("CANCELLED", "Native cancellation requested; prior effects are not recalled."); }
+                reply.ok(new JSONObject().put("cancelled", count).put("rollbackConfirmed", false).put("externalActivityClosedVerified", false)); return;
+            case VOICE_RECOGNITION_RECOGNIZE:
+                VoiceRecognitionRequest.Recognize recognized = VoiceRecognitionRequest.parseRecognize(request.args);
+                authorize(request, reply, recognized.authorizationDetails(), job -> {
+                    NativeVoiceRecognition.Handle handle = recognition().recognize(recognized, job.lease, new NativeVoiceRecognition.Callback() {
+                        public boolean current() { return job.current(); }
+                        public boolean claimUi() { boolean held = job.current() && job.reply.claimUi(); if (held) recognitionUiJob = job; return held; }
+                        public void releaseUi() { if (recognitionUiJob == job) recognitionUiJob = null; job.reply.releaseUi(); }
+                        public void externalHandoff(boolean value) { job.lease.externalHandoff(value); }
+                        public void complete(JSONObject result) { job.complete(result); }
+                        public void error(FactoryException error) { job.fail(error); }
+                    });
+                    job.cancellation = handle::cancel; job.lease.onCancelled(handle::cancel);
+                }); return;
+            case LOCATION_CURRENT:
+                LocationRequest.Current located = LocationRequest.parseCurrent(request.args);
+                authorize(request, reply, located.authorizationDetails(), job -> {
+                    NativeLocation.Handle handle = location().current(located, job.lease, new NativeLocation.Callback() {
+                        public void complete(JSONObject result) { job.complete(result); }
+                        public void error(FactoryException error) { job.fail(error); }
+                    });
+                    job.cancellation = handle::cancel; job.lease.onCancelled(handle::cancel);
+                }); return;
+            case LOCATION_REQUEST_PERMISSION:
+                LocationRequest.Permission locationPermission = LocationRequest.parsePermission(request.args);
+                authorize(request, reply, locationPermission.authorizationDetails(), job -> requestLocationPermission(job, locationPermission.precision)); return;
             case NOTIFICATIONS_STATUS:
                 reply.ok(notifications().status(NotificationRequest.parseStatus(request.args.toString()))); return;
             case SPEECH_STATUS: reply.ok(speech().status()); return;
@@ -153,6 +189,8 @@ final class NativeEffects implements AutoCloseable {
         job.cancellation = close; job.lease.onCancelled(close);
     }
     private NativeNotifications notifications() { return new NativeNotifications(activity, config.appId); }
+    private NativeVoiceRecognition recognition() { if (recognition == null) recognition = new NativeVoiceRecognition(activity, config.appId, foreground); return recognition; }
+    private NativeLocation location() { if (location == null) location = new NativeLocation(activity, config.appId, () -> foreground && !closed); return location; }
     private NativeSpeech speech() { if (speech == null) speech = new NativeSpeech(activity, config.appId); return speech; }
     private void authorize(BridgeProtocol.Request request, Reply reply, JSONObject details, Work work) throws Exception {
         Job job = new Job(request.id, request.method, reply); jobs.put(job.id, job);
@@ -174,7 +212,7 @@ final class NativeEffects implements AutoCloseable {
         JSONObject before = notifications().status(null);
         if (!"permission_required".equals(before.optString("status"))) { job.complete(before); return; }
         if (permissionJob != null || !job.reply.claimUi()) { job.fail("BUSY", "A native permission request is already open."); return; }
-        permissionJob = job; permissionReturned = false; job.lease.externalHandoff(true);
+        permissionJob = job; permissionNames = new String[] { Manifest.permission.POST_NOTIFICATIONS }; permissionReturned = false; job.lease.externalHandoff(true);
         try {
             JSONObject result = notifications().requestPermission(activity, NOTIFICATION_PERMISSION_REQUEST, job.lease);
             if (!"permission_requested".equals(result.optString("status"))) {
@@ -182,11 +220,28 @@ final class NativeEffects implements AutoCloseable {
             }
         } catch (Exception failed) { permissionJob = null; job.lease.externalHandoff(false); job.reply.releaseUi(); job.fail(failed); }
     }
+    private void requestLocationPermission(Job job, String precision) throws Exception {
+        JSONObject before = location().status();
+        boolean precise = "precise".equals(precision);
+        if (!before.optBoolean("coarseDeclared") || (precise && !before.optBoolean("fineDeclared"))) {
+            job.complete(before.put("permissionRequestStatus", "permission_not_declared")); return;
+        }
+        if (before.optBoolean("fineGranted") || (!precise && before.optBoolean("coarseGranted"))) {
+            job.complete(before.put("permissionRequestStatus", "already_granted")); return;
+        }
+        if (permissionJob != null || !job.reply.claimUi()) { job.fail("BUSY", "A native permission request is already open."); return; }
+        permissionJob = job; permissionReturned = false;
+        permissionNames = precise ? new String[] { Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION }
+                : new String[] { Manifest.permission.ACCESS_COARSE_LOCATION };
+        job.lease.externalHandoff(true);
+        try { job.lease.check(); activity.requestPermissions(permissionNames.clone(), NOTIFICATION_PERMISSION_REQUEST); }
+        catch (Exception failed) { permissionJob = null; permissionNames = null; job.lease.externalHandoff(false); job.reply.releaseUi(); job.fail(failed); }
+    }
     boolean onRequestPermissionsResult(int request, String[] names, int[] grants) {
         if (request != NOTIFICATION_PERMISSION_REQUEST) return false;
         Job job = permissionJob; if (job == null || permissionReturned) return true;
         permissionReturned = true;
-        if (names == null || names.length != 1 || !Manifest.permission.POST_NOTIFICATIONS.equals(names[0]) || grants == null || grants.length != 1)
+        if (permissionNames == null || !java.util.Arrays.equals(names, permissionNames) || grants == null || grants.length != permissionNames.length)
             job.fail("PERMISSION_DENIED", "Unexpected Android permission result.");
         finishPermission(); return true;
     }
@@ -195,16 +250,25 @@ final class NativeEffects implements AutoCloseable {
         if (job == null || !permissionReturned || !foreground) return;
         permissionJob = null; job.reply.releaseUi(); if (job.lease != null) job.lease.externalHandoff(false);
         if (job.done.get()) return;
-        job.worker(io, value -> value.complete(notifications().status(null))); // Re-read OS truth, not callback's Boolean.
+        job.worker(io, value -> value.complete("location.requestPermission".equals(value.method) ? location().status() : notifications().status(null))); // Re-read OS truth, not callback's Boolean.
     }
     boolean isClosed() { return closed; }
     boolean hasPendingPermission() { return permissionJob != null && !permissionReturned; }
-    void onPause() { foreground = false; }
-    void onResume() { foreground = true; finishPermission(); }
+    boolean hasPendingActivity() { return recognition != null && recognition.hasPendingActivity(); }
+    boolean onActivityResult(int request, int result, Intent data) {
+        if (request != NativeVoiceRecognition.REQUEST_CODE) return false;
+        if (recognition != null) recognition.onActivityResult(request, result, data);
+        return true;
+    }
+    void onWindowFocusChanged(boolean focused) { if (recognition != null) recognition.onWindowFocusChanged(focused); }
+    void onPause() { foreground = false; if (recognition != null) recognition.onPause(); if (location != null) location.cancel(); }
+    void onResume() { foreground = true; finishPermission(); if (recognition != null) recognition.onResume(); }
     @Override public void close() {
         closed = true;
         for (Job job : new ArrayList<>(jobs.values())) job.fail("CANCELLED", "Native operation page ended; earlier effects are not undone.");
         if (speech != null) { speech.close(); speech = null; speechOwner = null; }
+        if (recognition != null) recognition.close();
+        if (location != null) location.close();
         networkIo.shutdown();
     }
 }

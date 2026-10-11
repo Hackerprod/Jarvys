@@ -1,5 +1,6 @@
 package com.jarvys.agent.apkfactory
 
+import com.jarvys.factory.contract.ResourceBudgets
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -72,6 +73,16 @@ class FactoryAudioPlayerTest {
         player.start(prepared, { true }) { stopped = true }
         p.time = 9; p.deadline!!.invoke(); assertFalse(stopped)
         p.time = 10; p.deadline!!.invoke(); assertTrue(stopped)
+    }
+    @Test fun longConfiguredClipHasNoHiddenThirtySecondPlaybackTimer() {
+        val p = FakePlatform(); val player = FactoryAudioPlayer(p)
+        val prepared = player.prepare(FactoryAudioPcm.parseOwned(syntheticWav(8000, 1, 2400000), ResourceBudgets.maxima().audio))
+        p.main = true; var stopped = false
+        assertTrue(player.start(prepared, { true }) { stopped = true })
+        p.time = 30000; p.deadline!!.invoke(); assertFalse(stopped)
+        p.time = 299999; p.deadline!!.invoke(); assertFalse(stopped)
+        p.time = 300000; p.deadline!!.invoke(); assertTrue(stopped)
+        assertEquals(1, p.track.plays); assertEquals(1, p.track.releases)
     }
     @Test fun releaseFailureRetainsHandleForExplicitRetry() {
         val (p, player, prepared) = fixture(); p.track.releaseFails = true

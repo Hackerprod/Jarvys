@@ -1,5 +1,7 @@
 package com.jarvys.agent.apkfactory
 
+import com.jarvys.factory.contract.ResourceBudgets
+
 /** A strictly bounded, canonical PCM16 WAV. Ownership of [bytes] transfers to this object. */
 class FactoryAudioPcm private constructor(
     val bytes: ByteArray,
@@ -12,9 +14,12 @@ class FactoryAudioPcm private constructor(
     val pcmOffset: Int get() = 44
 
     companion object {
+        // Fixed whole-array implementation ceilings, independent of the artifact declaration.
         const val MAX_BYTES = 6 * 1024 * 1024
-        fun parseOwned(bytes: ByteArray): FactoryAudioPcm {
-            require(bytes.size in 44..MAX_BYTES) { "WAV envelope outside limit" }
+        const val MAX_DURATION_MS = 300000L
+        fun parseOwned(bytes: ByteArray): FactoryAudioPcm = parseOwned(bytes, ResourceBudgets.legacy().audio)
+        fun parseOwned(bytes: ByteArray, budget: ResourceBudgets.Audio): FactoryAudioPcm {
+            require(bytes.size in 44..MAX_BYTES && bytes.size.toLong() <= budget.sourceBytes) { "WAV envelope outside limit" }
             fun tag(offset: Int, value: String) = value.indices.all { bytes[offset + it].toInt() == value[it].code }
             fun u16(offset: Int) = (bytes[offset].toInt() and 255) or ((bytes[offset + 1].toInt() and 255) shl 8)
             fun u32(offset: Int): Long = (0..3).fold(0L) { value, i -> value or ((bytes[offset + i].toLong() and 255L) shl (8 * i)) }
@@ -29,7 +34,7 @@ class FactoryAudioPcm private constructor(
             val size = u32(40)
             require(size == bytes.size.toLong() - 44 && size > 0 && size % alignment == 0L) { "Invalid PCM data length" }
             val frames = size / alignment
-            require(frames <= rate * 30L) { "Audio exceeds 30 seconds" }
+            require(frames * 1000L <= rate * minOf(budget.durationMs, MAX_DURATION_MS)) { "Audio exceeds its declared duration budget" }
             return FactoryAudioPcm(bytes, size.toInt(), channels, rate.toInt(), frames.toInt(), (frames * 1000L + rate - 1L) / rate)
         }
     }

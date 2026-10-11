@@ -2,6 +2,8 @@ package com.jarvys.agent.apkfactory
 
 import android.util.AtomicFile
 import com.jarvys.agent.coding.ProjectScope
+import com.jarvys.factory.contract.ResourceBudgets
+import com.jarvys.factory.runtime.ResourceBudgetsJson
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -26,13 +28,15 @@ class FactorySignedArtifactHistoryTest {
     private val root get() = File(folder.root, "signed-artifacts")
     private val file get() = File(root, "$appId.json")
     private fun sha(version: Int) = ProjectScope.sha256("artifact-$version".toByteArray())
-    private fun state(version: Int, capabilities: List<String> = listOf("documents"), cert: String = certificate): FactorySigningIdentity.State {
+    private fun state(version: Int, capabilities: List<String> = listOf("documents"), cert: String = certificate,
+        resources: ResourceBudgets? = null, queryActions: List<String> = emptyList()): FactorySigningIdentity.State {
         val scope = JSONObject().put("capabilities", JSONArray(capabilities))
             .put("permissions", JSONArray(listOf("android.permission.INTERNET")))
             .put("exportedComponents", JSONArray(listOf("activity:org.example.history.Main")))
             .put("features", JSONArray(listOf("feature.camera:false")))
             .put("queries", JSONArray(listOf("android.intent.action.VIEW")))
             .put("allowedHosts", JSONArray(listOf("example.org")))
+        if (resources != null) scope.put("queryActions", JSONArray(queryActions)).put("resourceBudgets", ResourceBudgetsJson.toJson(resources))
         val anchor = JSONObject().put("schemaVersion", 1).put("appId", appId).put("certificateSha256", cert)
             .put("versionCode", version).put("apkSha256", sha(version)).put("scope", scope)
         val baseline = FactorySigningScope.readBaseline(JSONObject().put("lastApkSha256", sha(version)).put("lastSignedScope", anchor), appId, cert, version)!!
@@ -55,6 +59,68 @@ class FactorySignedArtifactHistoryTest {
         history.recordCurrent(appId, state(3, listOf("network")))
         assertEquals(before, verify(history, 1, state(3)))
         reject { verify(history, 3, state(3), setOf("clipboard")) }
+    }
+
+    @Test fun retainedLegacyReceiptKeepsOriginalRecordAndDigestWhenNewCapacityReceiptsArrive() {
+        val legacy = state(1)
+        val legacyRecord = legacy.lastScope!!.anchored(appId, certificate, 1, sha(1)).toString()
+        val legacyDigest = ProjectScope.sha256(legacyRecord.toByteArray(Charsets.UTF_8))
+        root.mkdirs()
+        file.writeText(JSONObject().put("schemaVersion", 1).put("appId", appId).put("artifacts", JSONArray()
+            .put(JSONObject().put("record", legacyRecord).put("sha256", legacyDigest))).toString())
+        val history = FactorySignedArtifactHistory(root)
+        val before = verify(history, 1, legacy)
+        assertEquals(legacyDigest, before.record)
+        assertEquals(ResourceBudgets.legacy(), before.resources)
+        val latest = state(2, resources = ResourceBudgets.maxima())
+        history.recordCurrent(appId, latest)
+        assertEquals(before, verify(FactorySignedArtifactHistory(root), 1, latest))
+        val retained = JSONObject(file.readText()).getJSONArray("artifacts").getJSONObject(1)
+        assertEquals(legacyRecord, retained.getString("record"))
+        assertEquals(legacyDigest, retained.getString("sha256"))
+        assertEquals(6, JSONObject(retained.getString("record")).getJSONObject("scope").length())
+    }
+
+    @Test fun exactArtifactProofKeepsItsOwnCapacitiesAndRejectsSubstitutionByValue() {
+        val firstResources = ResourceBudgets.parse(mapOf("version" to 1, "documents" to mapOf("openHandles" to 8)))
+        val first = state(1, resources = firstResources)
+        val latest = state(2, resources = ResourceBudgets.maxima())
+        val history = FactorySignedArtifactHistory(root)
+        // Genuinely absent history still binds resources from the authenticated latest identity scope.
+        assertEquals(firstResources, verify(history, 1, first).resources)
+        history.recordCurrent(appId, first)
+        val proof = verify(history, 1, first)
+        history.recordCurrent(appId, latest)
+        assertEquals(proof, verify(FactorySignedArtifactHistory(root), 1, latest))
+        assertEquals(firstResources, proof.resources)
+        assertEquals(ResourceBudgets.maxima(), verify(history, 2, latest).resources)
+        val equalResources = ResourceBudgetsJson.parse(ResourceBudgetsJson.toJson(firstResources))
+        assertNotSame(firstResources, equalResources)
+        history.capture(proof.copy(resources = equalResources), latest, setOf("documents")).use { it.requireCurrent() }
+        reject { history.capture(proof.copy(resources = ResourceBudgets.maxima()), latest, setOf("documents")) }
+        reject { history.capture(proof.copy(resources = ResourceBudgets.legacy()), latest, setOf("documents")) }
+    }
+
+    @Test fun capacityAndQueryActionsParticipateInReceiptIntegrityAndConflictingEvidence() {
+        val originalState = state(1, resources = ResourceBudgets.legacy(), queryActions = listOf("android.intent.action.TTS_SERVICE"))
+        val history = FactorySignedArtifactHistory(root); history.recordCurrent(appId, originalState)
+        val original = file.readBytes()
+        for (mutate in listOf<(JSONObject) -> Unit>(
+            { it.getJSONObject("resourceBudgets").getJSONObject("documents").put("openHandles", 8) },
+            { it.put("queryActions", JSONArray(listOf("android.speech.action.RECOGNIZE_SPEECH"))) }
+        )) {
+            edit { saved ->
+                val entry = saved.getJSONArray("artifacts").getJSONObject(0)
+                val record = JSONObject(entry.getString("record"))
+                mutate(record.getJSONObject("scope")); entry.put("record", record.toString())
+            }
+            reject { verify(history, 1, originalState) }
+            file.writeBytes(original)
+        }
+        reject { history.recordCurrent(appId, state(1, resources = ResourceBudgets.maxima(), queryActions = listOf("android.intent.action.TTS_SERVICE"))) }
+        reject { history.recordCurrent(appId, state(1, resources = ResourceBudgets.legacy())) }
+        assertArrayEquals(original, file.readBytes())
+        verify(history, 1, originalState)
     }
 
     @Test fun identityCertificateAppVersionAndExactApkRemainBound() {

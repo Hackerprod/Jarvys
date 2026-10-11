@@ -327,7 +327,8 @@ public class BridgeProtocolTest {
         String args="{\"kind\":\"gyroscope\",\"durationMs\":5000,\"intervalMs\":100,\"maxSamples\":50}";
         assertEquals("sensors.capture",BridgeProtocol.validate(BridgeProtocol.ORIGIN,true,request("sensors.capture",args),config("[\"sensors\"]")).method);
         rejected("CAPABILITY_DENIED",BridgeProtocol.ORIGIN,true,request("sensors.capture",args),config("[]"));
-        rejected("INVALID_ARGUMENT",BridgeProtocol.ORIGIN,true,request("sensors.capture",args.replace("5000","5001")),config("[]"));
+        assertEquals("sensors.capture",BridgeProtocol.validate(BridgeProtocol.ORIGIN,true,request("sensors.capture",args.replace("5000","300000")),config("[\"sensors\"]")).method);
+        rejected("INVALID_ARGUMENT",BridgeProtocol.ORIGIN,true,request("sensors.capture",args.replace("5000","300001")),config("[]"));
         for(String key:new String[]{"durationMs","intervalMs","maxSamples"}){
             JSONObject missing=new JSONObject(args);missing.remove(key);rejected("INVALID_ARGUMENT",BridgeProtocol.ORIGIN,true,request("sensors.capture",missing.toString()),config("[\"sensors\"]"));
         }

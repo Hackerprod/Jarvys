@@ -9,7 +9,11 @@ import java.util.Iterator;
 /** Closed typed database grammar. Neither identifiers nor values can introduce SQL syntax. */
 public final class DatabaseRequest {
     private DatabaseRequest() { }
+    // Historical defaults remain aliases for v1 backup protocols. They are not per-app admission.
     public static final int MAX_TABLES=8, MAX_COLUMNS=16, MAX_STEPS=16, MAX_OPERATIONS=64;
+    // Pure implementation ceilings: never consult FactoryConfig, capabilities or mutable budgets.
+    public static final int HARD_MAX_TABLES=16, HARD_MAX_COLUMNS=32;
+    public static final long HARD_MAX_ROWS=1000000L, HARD_MAX_DATABASE_BYTES=1024L*1024*1024;
     public static final int MAX_ROWS=10000, MAX_CELL_BYTES=4096, MAX_ROW_BYTES=16384;
     public static final int MAX_ARGUMENT_BYTES=262144, MAX_RESULT_BYTES=262144, MAX_SELECT_ROWS=100;
     public static final long MAX_DATABASE_BYTES=16L*1024*1024, MAX_SAFE_INTEGER=9007199254740991L;
@@ -52,7 +56,7 @@ public final class DatabaseRequest {
                     identifier(string(args,"table"));
                     if(args.has("where")) {
                         JSONObject where=args.getJSONObject("where");
-                        if(where.length()>MAX_COLUMNS || bytes(where)>MAX_ROW_BYTES) throw invalid();
+                        if(where.length()>HARD_MAX_COLUMNS || bytes(where)>MAX_ROW_BYTES) throw invalid();
                         for(Iterator<String> it=where.keys();it.hasNext();) {
                             String key=it.next();
                             if("id".equals(key)) id(string(where,key));
@@ -67,7 +71,7 @@ public final class DatabaseRequest {
         } catch(JSONException e) { throw invalid(); }
     }
     static void columns(JSONObject columns) throws JSONException,FactoryException {
-        if(columns.length()<1 || columns.length()>MAX_COLUMNS) throw invalid();
+        if(columns.length()<1 || columns.length()>HARD_MAX_COLUMNS) throw invalid();
         for(Iterator<String> it=columns.keys();it.hasNext();) { String key=it.next(); identifier(key); definition(columns.getJSONObject(key)); }
     }
     static void definition(JSONObject value) throws JSONException,FactoryException {
@@ -76,7 +80,7 @@ public final class DatabaseRequest {
         if(!(value.get("nullable") instanceof Boolean)) throw invalid();
     }
     static void values(JSONObject values) throws JSONException,FactoryException {
-        if(values.length()>MAX_COLUMNS || bytes(values)>MAX_ROW_BYTES) throw invalid();
+        if(values.length()>HARD_MAX_COLUMNS || bytes(values)>MAX_ROW_BYTES) throw invalid();
         for(Iterator<String> it=values.keys();it.hasNext();) { String key=it.next(); identifier(key); scalar(values.get(key)); }
     }
     static void scalar(Object value) throws FactoryException {

@@ -148,7 +148,7 @@ open class FactoryAudioActivity : ComponentActivity() {
                     if (lifecycleReady() && generation == approved && !value.revoked.get() && value.registration?.isRevoked == false) {
                         player.start(prepared, {
                             lifecycleReady() && generation == approved && !value.revoked.get() && value.registration?.isRevoked == false &&
-                                runCatching { coordinator.requireActive(value); value.authority.checkBeforeEffect() }.isSuccess
+                                runCatching { coordinator.requirePlaybackStart(value); value.authority.checkBeforeEffect() }.isSuccess
                         }) { stopped ->
                             value.playerClean.set(stopped.cleanupConfirmed)
                             if (!stopped.cleanupConfirmed) value.revoke()

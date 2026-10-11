@@ -1,5 +1,6 @@
 package com.jarvys.factory.runtime;
 
+import com.jarvys.factory.contract.ResourceBudgets;
 import android.content.ContentValues;
 import android.content.Context;
 import android.database.Cursor;
@@ -24,23 +25,31 @@ import java.util.function.BooleanSupplier;
 /** One private typed SQLite store. No wire input can select a file, connection, SQL or extension. */
 public final class PrivateDatabase implements AutoCloseable {
     private final Context context;
+    private final ResourceBudgets.Database budget;
     private File file;
     private final AtomicLong epoch=new AtomicLong();
     private volatile CancellationSignal active;
     private SQLiteDatabase database;
     private final BackupTransactionEnd backupTransactionEnd;
-    private PrivateDatabase(Context context) { this(context,SQLiteDatabase::endTransaction); }
-    private PrivateDatabase(Context context,BackupTransactionEnd end) { this.context=context; this.backupTransactionEnd=end; }
+    private PrivateDatabase(Context context,ResourceBudgets budgets) { this(context,budgets,SQLiteDatabase::endTransaction); }
+    private PrivateDatabase(Context context,ResourceBudgets budgets,BackupTransactionEnd end) {
+        if(budgets==null || end==null) throw new IllegalArgumentException();
+        this.context=context; this.budget=budgets.database; this.backupTransactionEnd=end;
+    }
     /** Failure-only test seam; production instances always call SQLiteDatabase.endTransaction directly. */
     interface BackupTransactionEnd { void end(SQLiteDatabase database); }
-    static PrivateDatabase previewForBackupTest(BackupTransactionEnd end) { return new PrivateDatabase(null,end); }
-    public static PrivateDatabase preview() { return new PrivateDatabase(null); }
+    static PrivateDatabase previewForBackupTest(BackupTransactionEnd end) { return new PrivateDatabase(null,ResourceBudgets.legacy(),end); }
+    public static PrivateDatabase preview() { return preview(ResourceBudgets.legacy()); }
+    public static PrivateDatabase preview(ResourceBudgets budgets) { return new PrivateDatabase(null,budgets); }
     public static PrivateDatabase installed(Context context,String appId) throws FactoryException {
+        return installed(context,appId,ResourceBudgets.legacy());
+    }
+    public static PrivateDatabase installed(Context context,String appId,ResourceBudgets budgets) throws FactoryException {
         if(context==null || !context.getPackageName().equals(appId))
             throw new FactoryException("INVALID_CONFIG","Database identity does not match installed application.");
         Context owner=context.getApplicationContext();
         if(owner==null || !owner.getPackageName().equals(appId)) throw new FactoryException("INVALID_CONFIG","Database application context is unavailable.");
-        return new PrivateDatabase(owner);
+        return new PrivateDatabase(owner,budgets);
     }
     public long ticket() { return epoch.get(); }
     /** Synchronous authority invalidation; never closes an in-use SQLite connection. */
@@ -105,7 +114,7 @@ public final class PrivateDatabase implements AutoCloseable {
         return backupTransaction(ticket,current,(schema,signal)-> {
             if(database.getVersion()!=version) throw versionConflict();
             JSONObject selectedSchema=backupSchema(schema,selected), data=new JSONObject();
-            enforceRows(schema,signal); long encodedRows=0;
+            long encodedRows=0;
             for(String name:selected) {
                 JSONObject columns=selectedSchema.getJSONObject(name); JSONArray rows=new JSONArray();
                 try(Cursor cursor=database.rawQuery(selectSql(name,columns)+" ORDER BY id COLLATE BINARY ASC",null,signal)) {
@@ -124,7 +133,7 @@ public final class PrivateDatabase implements AutoCloseable {
     public synchronized Baseline backupBaseline(DatabaseBackupFormat.Archive archive,long ticket,BooleanSupplier current) throws Exception {
         backupIdentity(archive);
         return backupTransaction(ticket,current,(schema,signal)-> {
-            backupCompatible(archive,schema); enforceRows(schema,signal);
+            backupCompatible(archive,schema);
             return backupSnapshot(archive,schema,signal,ticket,current);
         });
     }
@@ -139,6 +148,16 @@ public final class PrivateDatabase implements AutoCloseable {
                     !Arrays.equals(DatabaseBackupFormat.canonical(actual.selectedCounts),DatabaseBackupFormat.canonical(baseline.selectedCounts)))
                 throw backupConflict();
             JSONObject data=archive.data(), incomingSchema=archive.schema(), imported=new JSONObject();
+            Usage before=usage(schema,signal); long selectedBytesBefore=storedBytes(schema,archive.tables,signal);
+            // Validate every incoming row against its preimage before replacing any selected table.
+            // Only one persisted row is materialized at a time, even when the target is much larger.
+            for(String name:archive.tables) {
+                JSONObject definitions=incomingSchema.getJSONObject(name); JSONArray rows=data.getJSONArray(name);
+                for(int i=0;i<rows.length();i++) {
+                    check(ticket,current); JSONObject next=DatabaseBackupFormat.normalizeRow(rows.getJSONObject(i),definitions);
+                    admitRow(readRow(name,definitions,next.getString("id"),signal),next);
+                }
+            }
             if("insertOnly".equals(mode)) {
                 // Fail on every collision, including identical rows. Never silently update or skip a record.
                 for(String name:archive.tables) {
@@ -164,7 +183,7 @@ public final class PrivateDatabase implements AutoCloseable {
                 }
                 imported.put(name,rows.length());
             }
-            enforceRows(schema,signal);
+            enforceWriteUsage(schema,signal,before,subtract(storedBytes(schema,archive.tables,signal),selectedBytesBefore));
             return new JSONObject().put("version",archive.version).put("mode",mode).put("tables",new JSONArray(archive.tables))
                     .put("counts",imported).put("committed",true);
         });
@@ -264,7 +283,14 @@ public final class PrivateDatabase implements AutoCloseable {
                 corrupt -> { throw new android.database.sqlite.SQLiteDatabaseCorruptException("Private database requires recovery; it was not deleted."); });
         try {
             opened.disableWriteAheadLogging();
-            if(opened.setMaximumSize(DatabaseRequest.MAX_DATABASE_BYTES)>DatabaseRequest.MAX_DATABASE_BYTES) throw quota();
+            // SQLite must not truncate or reject an existing store when a new artifact lowers its
+            // capacity. Pin growth to the larger of current pages and the configured page budget;
+            // transactional admission below permits reads, deletes and non-growing replacements.
+            long pageSize=pragma(opened,"page_size"), existing=mainBytes(opened);
+            if(existing>DatabaseRequest.HARD_MAX_DATABASE_BYTES) throw quota();
+            long configured=(budget.mainFileBytes/pageSize)*pageSize;
+            long maximum=Math.max(existing,configured);
+            if(maximum<pageSize || opened.setMaximumSize(maximum)>maximum) throw quota();
             opened.beginTransaction();
             try {
                 // Initialize only an empty version-zero database, never repair missing metadata.
@@ -283,8 +309,8 @@ public final class PrivateDatabase implements AutoCloseable {
     private JSONObject readSchema(CancellationSignal signal) throws Exception {
         try(Cursor cursor=database.rawQuery("SELECT schema_json FROM factory_schema WHERE id=1",null,signal)) {
             if(!cursor.moveToFirst()) throw corrupt();
-            JSONObject schema=StrictJson.object(cursor.getString(0),65536);
-            if(schema.length()>DatabaseRequest.MAX_TABLES) throw corrupt();
+            JSONObject schema=StrictJson.object(cursor.getString(0),ResourceBudgets.DATABASE_SCHEMA_BYTES);
+            if(schema.length()>DatabaseRequest.HARD_MAX_TABLES) throw corrupt();
             for(String table:keys(schema)) { DatabaseRequest.identifier(table); DatabaseRequest.columns(schema.getJSONObject(table)); }
             int version=database.getVersion();
             if(version<0 || version>1000 || ((version==0)!=(schema.length()==0))) throw corrupt();
@@ -320,50 +346,62 @@ public final class PrivateDatabase implements AutoCloseable {
     private JSONObject info(JSONObject schema,int version) throws Exception {
         return new JSONObject().put("version",version).put("schema",schema).put("mode",context==null?"preview":"installed")
                 .put("persistent",context!=null).put("encrypted",false).put("backupIncluded",false)
-                .put("limits",new JSONObject().put("mainDatabaseBytes",DatabaseRequest.MAX_DATABASE_BYTES)
-                        .put("totalDiskHardLimit",false).put("tables",DatabaseRequest.MAX_TABLES).put("columnsPerTable",DatabaseRequest.MAX_COLUMNS)
-                        .put("rows",DatabaseRequest.MAX_ROWS).put("cellBytes",DatabaseRequest.MAX_CELL_BYTES).put("rowBytes",DatabaseRequest.MAX_ROW_BYTES)
-                        .put("operations",DatabaseRequest.MAX_OPERATIONS).put("migrationSteps",DatabaseRequest.MAX_STEPS)
+                .put("limits",new JSONObject().put("mainDatabaseBytes",budget.mainFileBytes)
+                        .put("totalDiskHardLimit",false).put("tables",budget.tables).put("columnsPerTable",budget.columnsPerTable)
+                        .put("rows",budget.rows).put("cellBytes",budget.cellBytes).put("rowBytes",budget.rowBytes)
+                        .put("operations",budget.batchOperations).put("migrationSteps",DatabaseRequest.MAX_STEPS)
                         .put("requestBytes",DatabaseRequest.MAX_ARGUMENT_BYTES).put("responseBytes",DatabaseRequest.MAX_RESULT_BYTES)
-                        .put("selectRows",DatabaseRequest.MAX_SELECT_ROWS));
+                        .put("selectRows",budget.selectPageRows));
     }
     private JSONObject migrate(JSONObject schema,JSONObject args,long ticket,BooleanSupplier current,CancellationSignal signal) throws Exception {
-        JSONArray steps=args.getJSONArray("steps");
+        JSONArray steps=args.getJSONArray("steps"); Usage before=usage(schema,signal);
         for(int i=0;i<steps.length();i++) {
             check(ticket,current); JSONObject step=steps.getJSONObject(i); String table=step.getString("table");
             if("createTable".equals(step.getString("kind"))) {
-                if(schema.has(table) || schema.length()>=DatabaseRequest.MAX_TABLES) throw DatabaseRequest.invalid();
+                if(schema.has(table)) throw DatabaseRequest.invalid();
+                if(schema.length()>=budget.tables) throw quota();
                 JSONObject columns=step.getJSONObject("columns");
+                if(columns.length()>budget.columnsPerTable) throw quota();
                 StringBuilder sql=new StringBuilder("CREATE TABLE ").append(table(table)).append(" (id TEXT PRIMARY KEY NOT NULL COLLATE BINARY");
                 for(String column:keys(columns)) sql.append(',').append(column(column)).append(' ').append(sqlType(columns.getJSONObject(column)));
                 database.execSQL(sql.append(')').toString()); schema.put(table,new JSONObject(columns.toString()));
             } else {
                 JSONObject columns=columns(schema,table); String column=step.getString("column");
-                if(columns.has(column) || columns.length()>=DatabaseRequest.MAX_COLUMNS) throw DatabaseRequest.invalid();
+                if(columns.has(column)) throw DatabaseRequest.invalid();
+                if(columns.length()>=budget.columnsPerTable) throw quota();
                 JSONObject definition=step.getJSONObject("definition");
                 database.execSQL("ALTER TABLE "+table(table)+" ADD COLUMN "+column(column)+" "+sqlType(definition));
                 columns.put(column,new JSONObject(definition.toString()));
             }
         }
-        check(ticket,current); enforceRows(schema,signal);
+        check(ticket,current);
+        // A migration always grows the schema. Do not use free pages as an over-budget escape.
+        if(before.mainBytes>budget.mainFileBytes) throw quota();
+        enforceWriteUsage(schema,signal,before,0);
         // New nullable columns also enlarge serialized existing rows. Reject atomically before commit.
         for(String table:keys(schema)) {
             JSONObject columns=columns(schema,table);
             try(Cursor cursor=database.rawQuery(selectSql(table,columns),null,signal)) {
-                while(cursor.moveToNext()) { check(ticket,current); if(DatabaseRequest.bytes(row(cursor,columns))>DatabaseRequest.MAX_ROW_BYTES) throw quota(); }
+                while(cursor.moveToNext()) { check(ticket,current); if(DatabaseRequest.bytes(row(cursor,columns))>budget.rowBytes) throw quota(); }
             }
         }
+        if(DatabaseRequest.bytes(schema)>ResourceBudgets.DATABASE_SCHEMA_BYTES) throw quota();
         database.execSQL("UPDATE factory_schema SET schema_json=? WHERE id=1",new Object[]{schema.toString()});
         database.setVersion(args.getInt("toVersion"));
+        enforceWriteUsage(schema,signal,before,0);
         return new JSONObject().put("version",args.getInt("toVersion")).put("stepsApplied",steps.length()).put("committed",true);
     }
     private JSONObject transact(JSONObject schema,JSONObject args,long ticket,BooleanSupplier current,CancellationSignal signal) throws Exception {
         JSONArray operations=args.getJSONArray("operations"), changes=new JSONArray();
+        if(operations.length()>budget.batchOperations) throw quota();
+        Usage before=usage(schema,signal); long byteDelta=0;
         for(int i=0;i<operations.length();i++) {
             check(ticket,current); JSONObject operation=operations.getJSONObject(i); String table=operation.getString("table"), id=operation.getString("id");
             JSONObject columns=columns(schema,table); String kind=operation.getString("kind"); int changed;
+            long previousBytes=storedRowBytes(table,columns,id,signal);
             if("delete".equals(kind)) changed=database.delete(table(table),"id=?",new String[]{id});
             else {
+                JSONObject previous="update".equals(kind)?readRow(table,columns,id,signal):null;
                 JSONObject values=operation.getJSONObject("values"); ContentValues content=new ContentValues();
                 for(String name:keys(values)) {
                     if(!columns.has(name)) throw DatabaseRequest.invalid();
@@ -376,13 +414,13 @@ public final class PrivateDatabase implements AutoCloseable {
                     changed=database.update(table(table),content,"id=?",new String[]{id});
                     if(changed!=1) throw new FactoryException("NOT_FOUND","No database row has that ID.");
                 }
-                try(Cursor cursor=database.rawQuery(selectSql(table,columns)+" WHERE id=?",new String[]{id},signal)) {
-                    if(!cursor.moveToFirst() || DatabaseRequest.bytes(row(cursor,columns))>DatabaseRequest.MAX_ROW_BYTES) throw quota();
-                }
+                JSONObject next=readRow(table,columns,id,signal);
+                if(next==null) throw corrupt(); admitRow(previous,next);
             }
+            byteDelta=add(byteDelta,subtract(storedRowBytes(table,columns,id,signal),previousBytes));
             changes.put(changed);
         }
-        enforceRows(schema,signal); check(ticket,current);
+        enforceWriteUsage(schema,signal,before,byteDelta); check(ticket,current);
         return new JSONObject().put("version",args.getInt("version")).put("changes",changes).put("committed",true);
     }
     private JSONObject select(JSONObject schema,JSONObject args,CancellationSignal signal,long ticket,BooleanSupplier current) throws Exception {
@@ -399,27 +437,92 @@ public final class PrivateDatabase implements AutoCloseable {
             else { sql.append(" AND ").append(column(name)).append("=?"); binds.add(value instanceof Boolean?((Boolean)value?"1":"0"):value.toString()); }
         }
         if(args.has("afterId")) { sql.append(" AND id>?"); binds.add(args.getString("afterId")); }
-        int limit=args.has("limit")?args.getInt("limit"):50;
+        int limit=Math.min(args.has("limit")?args.getInt("limit"):50,budget.selectPageRows);
         sql.append(" ORDER BY id COLLATE BINARY ASC LIMIT ?"); binds.add(Integer.toString(limit+1));
-        JSONArray rows=new JSONArray(); boolean more=false; String last=null;
+        JSONArray rows=new JSONArray(); boolean more=false; String last=null; long encodedBytes=2;
+        final long rowPageBytes=ResourceBudgets.DATABASE_RESPONSE_BYTES-1024L;
         try(Cursor cursor=database.rawQuery(sql.toString(),binds.toArray(new String[0]),signal)) {
             while(cursor.moveToNext()) {
                 check(ticket,current);
                 if(rows.length()==limit) { more=true; break; }
                 JSONObject row=row(cursor,columns);
-                if(DatabaseRequest.bytes(row)>DatabaseRequest.MAX_ROW_BYTES) throw quota();
-                rows.put(row); last=cursor.getString(0);
-                if(DatabaseRequest.bytes(rows)>DatabaseRequest.MAX_RESULT_BYTES-1024) throw quota();
+                int rowBytes=DatabaseRequest.bytes(row);
+                if(rowBytes>DatabaseRequest.MAX_ROW_BYTES) throw quota();
+                long next=add(encodedBytes,(long)rowBytes+(rows.length()==0?0:1));
+                if(next>rowPageBytes) { more=true; break; }
+                rows.put(row); encodedBytes=next; last=cursor.getString(0);
             }
         }
         return new JSONObject().put("version",args.getInt("version")).put("rows",rows).put("hasMore",more)
                 .put("nextAfterId",more?last:JSONObject.NULL).put("snapshotAcrossPages",false);
     }
-    private void enforceRows(JSONObject schema,CancellationSignal signal) throws Exception {
+    private static final class Usage {
+        final long rows,mainBytes;
+        Usage(long rows,long mainBytes) { this.rows=rows; this.mainBytes=mainBytes; }
+    }
+    private Usage usage(JSONObject schema,CancellationSignal signal) throws Exception {
         long total=0;
         for(String table:keys(schema)) try(Cursor cursor=database.rawQuery("SELECT count(*) FROM "+table(table),null,signal)) {
-            if(!cursor.moveToFirst()) throw corrupt(); total+=cursor.getLong(0); if(total>DatabaseRequest.MAX_ROWS) throw quota();
+            if(!cursor.moveToFirst() || cursor.getLong(0)<0) throw corrupt(); total=add(total,cursor.getLong(0));
         }
+        return new Usage(total,mainBytes(database));
+    }
+    private void enforceWriteUsage(JSONObject schema,CancellationSignal signal,Usage before,long byteDelta) throws Exception {
+        Usage after=usage(schema,signal);
+        if(after.rows>budget.rows && after.rows>before.rows) throw quota();
+        if(after.mainBytes>budget.mainFileBytes &&
+                (after.mainBytes>before.mainBytes || after.rows>before.rows || byteDelta>0)) throw quota();
+    }
+    private void admitRow(JSONObject before,JSONObject after) throws Exception {
+        int next=DatabaseRequest.bytes(after);
+        if(next>DatabaseRequest.MAX_ROW_BYTES || (next>budget.rowBytes && (before==null || next>DatabaseRequest.bytes(before)))) throw quota();
+        for(String key:keys(after)) {
+            if("id".equals(key) || !(after.get(key) instanceof String)) continue;
+            int bytes=after.getString(key).getBytes(StandardCharsets.UTF_8).length;
+            Object previous=before==null?null:before.opt(key);
+            if(bytes>budget.cellBytes && (!(previous instanceof String) || bytes>((String)previous).getBytes(StandardCharsets.UTF_8).length)) throw quota();
+        }
+    }
+    private JSONObject readRow(String name,JSONObject columns,String id,CancellationSignal signal) throws Exception {
+        try(Cursor cursor=database.rawQuery(selectSql(name,columns)+" WHERE id=?",new String[]{id},signal)) {
+            return cursor.moveToFirst()?row(cursor,columns):null;
+        }
+    }
+    // SQL computes bounded aggregate counters without materializing a table or a result JSONArray.
+    // The constant row charge also makes deletion/reinsertion accounting independent of null cells.
+    private static String byteExpression(JSONObject columns) throws Exception {
+        StringBuilder sql=new StringBuilder("128+length(CAST(id AS BLOB))");
+        for(String name:keys(columns)) sql.append("+COALESCE(length(CAST(").append(column(name)).append(" AS BLOB)),0)");
+        return sql.toString();
+    }
+    private long storedRowBytes(String name,JSONObject columns,String id,CancellationSignal signal) throws Exception {
+        try(Cursor cursor=database.rawQuery("SELECT "+byteExpression(columns)+" FROM "+table(name)+" WHERE id=?",new String[]{id},signal)) {
+            if(!cursor.moveToFirst()) return 0;
+            long bytes=cursor.getLong(0); if(bytes<0) throw corrupt(); return bytes;
+        }
+    }
+    private long storedBytes(JSONObject schema,List<String> names,CancellationSignal signal) throws Exception {
+        long total=0;
+        for(String name:names) try(Cursor cursor=database.rawQuery("SELECT COALESCE(sum("+byteExpression(columns(schema,name))+"),0) FROM "+table(name),null,signal)) {
+            if(!cursor.moveToFirst() || cursor.getLong(0)<0) throw corrupt(); total=add(total,cursor.getLong(0));
+        }
+        return total;
+    }
+    private static long pragma(SQLiteDatabase connection,String key) throws Exception {
+        try(Cursor cursor=connection.rawQuery("PRAGMA "+key,null)) {
+            if(!cursor.moveToFirst()) throw corrupt(); long value=cursor.getLong(0);
+            if(value<0 || ("page_size".equals(key) && value==0)) throw corrupt(); return value;
+        }
+    }
+    private static long mainBytes(SQLiteDatabase connection) throws Exception {
+        try { return Math.multiplyExact(pragma(connection,"page_count"),pragma(connection,"page_size")); }
+        catch(ArithmeticException overflow) { throw quota(); }
+    }
+    private static long add(long a,long b) throws FactoryException {
+        try { return Math.addExact(a,b); } catch(ArithmeticException overflow) { throw quota(); }
+    }
+    private static long subtract(long a,long b) throws FactoryException {
+        try { return Math.subtractExact(a,b); } catch(ArithmeticException overflow) { throw quota(); }
     }
     private static JSONObject row(Cursor cursor,JSONObject columns) throws Exception {
         if(cursor.getType(0)!=Cursor.FIELD_TYPE_STRING) throw corrupt();

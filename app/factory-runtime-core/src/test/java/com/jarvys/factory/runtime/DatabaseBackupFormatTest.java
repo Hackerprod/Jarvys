@@ -50,6 +50,15 @@ public class DatabaseBackupFormatTest {
         assertFalse(DatabaseBackupFormat.sameTables(first,Arrays.asList("notes","other")));
         assertFalse(DatabaseBackupFormat.sameTables(first,Collections.singletonList("other")));
     }
+    @Test public void v1ColumnsStayLegacyBoundedWhenTypedDatabaseGrammarExpands() throws Exception {
+        JSONObject schema = new JSONObject();
+        for (int i = 0; i < DatabaseRequest.MAX_COLUMNS; i++) schema.put("c" + i, def("text", true));
+        DatabaseBackupFormat.create(APP, CERT, 1, new JSONObject().put("notes", schema), new JSONObject().put("notes", new JSONArray()));
+        schema.put("expanded", def("text", true));
+        DatabaseRequest.columns(schema); // Pure typed-DB grammar supports this; archive v1 does not.
+        invalid(() -> DatabaseBackupFormat.create(APP, CERT, 1,
+                new JSONObject().put("notes", schema), new JSONObject().put("notes", new JSONArray())));
+    }
     @Test public void emptySelectedTablesRemainPresentAndAreImmutable() throws Exception {
         JSONObject schema=new JSONObject().put("zeta",columns()).put("alpha",columns());
         JSONObject data=new JSONObject().put("alpha",new JSONArray()).put("zeta",new JSONArray());

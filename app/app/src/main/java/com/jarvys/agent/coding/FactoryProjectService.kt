@@ -74,7 +74,7 @@ internal class FactoryProjectService(
             .put("supportedAbis", "Architecture-neutral JVM/Android code; physical device validation is still required")
             .put("scope_version", scope.version()).put("project_id", scope.id())
             .put("localUiLibraries", localUiLibraries())
-            .put("specFields", JSONArray(listOf("schemaVersion", "appId", "name", "versionCode", "versionName", "capabilities", "webDir", "icon", "dataBackup")))
+            .put("specFields", JSONArray(listOf("schemaVersion", "appId", "name", "versionCode", "versionName", "capabilities", "webDir", "icon", "dataBackup", "resourceBudgets")))
             .put("limits", JSONObject().put("websiteFiles", FactorySpec.MAX_WEB_FILES).put("websiteBytes", FactorySpec.MAX_WEB_BYTES)
                 .put("fileBytes", FactorySpec.MAX_FILE_BYTES).put("icon", "PNG, 48–1024 pixels per side, at most 1 MiB; or 192px geometric vector JSON"))
             .put("signing", "Signing follows Factory permissions: Allow always by default, Ask once, or Deny. Existing non-exportable AndroidKeyStore identities stay unchanged. For a NEW recoverable identity or encrypted backup/import, open Settings > Factory identities yourself; never send passphrases or private keys to a tool or conversation. No silent rotation or shared key.")
@@ -93,6 +93,8 @@ internal class FactoryProjectService(
             val iconSource = FactoryProjectFiles.read(scope, spec.icon, FactorySpec.MAX_FILE_BYTES, token)
             val icon = FactoryIcon.render(spec.icon, iconSource)
             val web = FactoryProjectFiles.website(scope, spec.webDir, token)
+            require(web.size <= spec.resources.packaging.sourceFiles && web.values.sumOf { it.size.toLong() } <= spec.resources.packaging.totalSourceBytes &&
+                web.values.all { it.size.toLong() <= spec.resources.packaging.singleSourceBytes }) { "Website exceeds declared resource budgets" }
             val sources = sortedMapOf(specPath to ProjectScope.sha256(source), spec.icon to ProjectScope.sha256(iconSource))
             web.forEach { (path, bytes) -> sources["${spec.webDir}/$path"] = ProjectScope.sha256(bytes) }
             val template = template()
@@ -106,7 +108,7 @@ internal class FactoryProjectService(
                 .put("renderedIconSha256", ProjectScope.sha256(icon)).put("localUiLibraries", localUiLibraries()).toString().toByteArray(Charsets.UTF_8)
             val bytes = TemplateApk.build(template, TemplateApk.Spec(spec.appId, spec.name, spec.versionCode, spec.versionName, spec.capabilities), icon, replacements)
             val manifest = TemplateApk.verify(bytes, TemplateApk.Spec(spec.appId, spec.name, spec.versionCode, spec.versionName, spec.capabilities))
-            require(bytes.size <= MAX_APK_BYTES) { "Generated APK exceeds factory size limit" }
+            require(bytes.size <= MAX_APK_BYTES && bytes.size.toLong() <= spec.resources.packaging.apkBytes) { "Generated APK exceeds factory size limit" }
             FactoryUiAssets.fromApk(bytes)
             checkActive(token)
             sources.forEach { (path, sha) -> check(FactoryProjectFiles.sha(scope, path, if (path == specPath) FactorySpec.MAX_SPEC_BYTES else FactorySpec.MAX_FILE_BYTES, token) == sha) { "Factory source changed before publication: $path" } }
@@ -165,13 +167,15 @@ internal class FactoryProjectService(
             if (policySubject.certificate != null) operationPolicy.bindBootstrap(bootstrapSubject, policySubject)
             operationPolicy.acquire(policySubject, FactoryOperationPolicy.Operation.SIGN,
                 FactoryOperationPolicy.binding(expectedSha, outputPath, scope.durableIdentity(), expectedVersion.toString(), approvedState.toString())).use { permission ->
-            val signingScope = FactorySigningScope.fromPlan(manifest.plan)
+            val signingScope = FactorySigningScope.fromPlan(manifest.plan, spec.resources)
             val lines = mutableListOf("App: ${spec.name} (${spec.appId}), version ${spec.versionName} / ${spec.versionCode}",
                 "Unsigned SHA-256: $expectedSha", "Output in this Coding project: $outputPath", "Declared capabilities: ${spec.capabilities.joinToString().ifEmpty { "none" }}",
                 "Declared data backup tables (SQLite rows only): ${spec.dataBackupTables.joinToString().ifEmpty { "none; data backup disabled" }}",
                 "Declared preference backup keys (string values only): ${spec.dataBackupKeys.joinToString().ifEmpty { "none; preference backup disabled" }}",
+                "Resource budgets: ${spec.resources.canonicalText()}",
                 "Decoded Android permissions: ${manifest.permissions.joinToString().ifEmpty { "none" }}",
                 "Decoded exported components: ${manifest.plan.exportedComponents.joinToString()}",
+                "Decoded query actions: ${manifest.plan.queryActions.joinToString().ifEmpty { "none" }}",
                 "Decoded features/queries/allowed hosts: ${manifest.plan.features.joinToString().ifEmpty { "none" }} / ${manifest.plan.queries.joinToString().ifEmpty { "none" }} / ${manifest.plan.hosts.joinToString().ifEmpty { "none" }}",
                 "Runtime DEX inventory: ${manifest.dexSha256.size} exact files, verified against the build.")
             lines += "Verified resource bindings: " + manifest.resourceBindings.entries.joinToString { (role, binding) ->
@@ -457,7 +461,7 @@ internal class FactoryProjectService(
         val parsed = com.jarvys.factory.runtime.FactoryConfig.parsePreview(String(bytes, Charsets.UTF_8))
         check(parsed.appId == spec.appId && parsed.name == spec.name && parsed.entryPoint == "www/index.html" &&
             parsed.capabilities == spec.capabilities.toSet() && parsed.dataBackupTables == spec.dataBackupTables.toSet() &&
-            parsed.dataBackupKeys == spec.dataBackupKeys.toSet()) {
+            parsed.dataBackupKeys == spec.dataBackupKeys.toSet() && parsed.resources == spec.resources) {
             "Runtime configuration differs from build receipt"
         }
     }

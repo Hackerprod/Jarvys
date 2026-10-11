@@ -18,6 +18,9 @@ public final class CapabilityCatalog {
     public static final String BIOMETRIC_PERMISSION = "android.permission.USE_BIOMETRIC";
     public static final String INTERNET_PERMISSION = "android.permission.INTERNET";
     public static final String NOTIFICATION_PERMISSION = "android.permission.POST_NOTIFICATIONS";
+    public static final String COARSE_LOCATION_PERMISSION = "android.permission.ACCESS_COARSE_LOCATION";
+    public static final String FINE_LOCATION_PERMISSION = "android.permission.ACCESS_FINE_LOCATION";
+    public static final String RECOGNIZE_SPEECH_ACTION = "android.speech.action.RECOGNIZE_SPEECH";
     public static final String TTS_SERVICE_ACTION = "android.intent.action.TTS_SERVICE";
     public enum Method {
         RUNTIME_INFO("runtime.info", null),
@@ -47,7 +50,9 @@ public final class CapabilityCatalog {
         NOTIFICATIONS_SHOW("notifications.show", "notifications"), NOTIFICATIONS_CANCEL("notifications.cancel", "notifications"),
         NOTIFICATIONS_REQUEST_PERMISSION("notifications.requestPermission", "notifications"),
         SPEECH_STATUS("speech.status", "speech"), SPEECH_VOICES("speech.voices", "speech"),
-        SPEECH_SPEAK("speech.speak", "speech"), SPEECH_STOP("speech.stop", "speech");
+        SPEECH_SPEAK("speech.speak", "speech"), SPEECH_STOP("speech.stop", "speech"),
+        VOICE_RECOGNITION_STATUS("voiceRecognition.status", "voiceRecognition"), VOICE_RECOGNITION_RECOGNIZE("voiceRecognition.recognize", "voiceRecognition"), VOICE_RECOGNITION_CANCEL("voiceRecognition.cancel", "voiceRecognition"),
+        LOCATION_STATUS("location.status", "location"), LOCATION_CURRENT("location.current", "location"), LOCATION_CANCEL("location.cancel", "location"), LOCATION_REQUEST_PERMISSION("location.requestPermission", "location");
         public final String wireName;
         public final String capability;
         Method(String wireName, String capability) { this.wireName = wireName; this.capability = capability; }
@@ -72,18 +77,19 @@ public final class CapabilityCatalog {
             this.name = name;
             boolean biometric = name.equals("biometrics");
             boolean broker = hostBrokerCapability(name);
-            boolean network = name.equals("network"), notifications = name.equals("notifications"), speech = name.equals("speech");
+            boolean network = name.equals("network"), notifications = name.equals("notifications"), speech = name.equals("speech"), voice = name.equals("voiceRecognition"), location = name.equals("location");
             minimumApi = biometric ? 30 : MIN_APP_API;
             permissions = biometric ? Collections.singleton(BIOMETRIC_PERMISSION) : network ? Collections.singleton(INTERNET_PERMISSION)
-                    : notifications ? Collections.singleton(NOTIFICATION_PERMISSION) : Collections.emptySet();
+                    : notifications ? Collections.singleton(NOTIFICATION_PERMISSION) : location ? LOCATION_PERMISSIONS : Collections.emptySet();
             List<ManifestNodes.Element> declarations = new ArrayList<>();
             if (biometric) declarations.add(BIOMETRIC_DECLARATION);
             if (network) declarations.add(INTERNET_DECLARATION);
             if (notifications) declarations.add(NOTIFICATION_DECLARATION);
-            if (broker) declarations.add(speech ? SPEECH_QUERIES : DOCUMENT_QUERIES);
+            if (location) { declarations.add(COARSE_LOCATION_DECLARATION); declarations.add(FINE_LOCATION_DECLARATION); }
+            if (broker) declarations.add(speech ? SPEECH_QUERIES : voice ? VOICE_QUERIES : DOCUMENT_QUERIES);
             manifestNodes = ManifestNodes.ordered(declarations);
             queries = broker ? DOCUMENT_BROKER_PACKAGES : Collections.emptySet();
-            queryActions = speech ? Collections.singleton(TTS_SERVICE_ACTION) : Collections.emptySet();
+            queryActions = speech ? Collections.singleton(TTS_SERVICE_ACTION) : voice ? Collections.singleton(RECOGNIZE_SPEECH_ACTION) : Collections.emptySet();
             List<Method> selected = new ArrayList<>();
             for (Method method : Method.values()) if (name.equals(method.capability)) selected.add(method);
             methods = Collections.unmodifiableList(selected);
@@ -99,15 +105,23 @@ public final class CapabilityCatalog {
             INTERNET_PERMISSION, ManifestNodes.PermissionVariant.STANDARD, null);
     static final ManifestNodes.Element NOTIFICATION_DECLARATION = ManifestNodes.permission(
             NOTIFICATION_PERMISSION, ManifestNodes.PermissionVariant.STANDARD, null);
-    static final ManifestNodes.Element SPEECH_QUERIES;
+    public static final Set<String> LOCATION_PERMISSIONS = Collections.unmodifiableSet(new LinkedHashSet<>(Arrays.asList(COARSE_LOCATION_PERMISSION, FINE_LOCATION_PERMISSION)));
+    static final ManifestNodes.Element COARSE_LOCATION_DECLARATION = ManifestNodes.permission(COARSE_LOCATION_PERMISSION, ManifestNodes.PermissionVariant.STANDARD, null);
+    static final ManifestNodes.Element FINE_LOCATION_DECLARATION = ManifestNodes.permission(FINE_LOCATION_PERMISSION, ManifestNodes.PermissionVariant.STANDARD, null);
+    static final ManifestNodes.Element SPEECH_QUERIES, VOICE_QUERIES, SPEECH_VOICE_QUERIES;
     static {
         List<ManifestNodes.Element> queries = new ArrayList<>(DOCUMENT_QUERIES.children);
         queries.add(ManifestNodes.queryIntent(TTS_SERVICE_ACTION, null, null));
         SPEECH_QUERIES = ManifestNodes.queries(queries);
+        queries.add(ManifestNodes.queryIntent(RECOGNIZE_SPEECH_ACTION, null, null));
+        SPEECH_VOICE_QUERIES = ManifestNodes.queries(queries);
+        queries = new ArrayList<>(DOCUMENT_QUERIES.children);
+        queries.add(ManifestNodes.queryIntent(RECOGNIZE_SPEECH_ACTION, null, null));
+        VOICE_QUERIES = ManifestNodes.queries(queries);
     }
     public static final List<String> NAMES = Collections.unmodifiableList(Arrays.asList(
             "storage", "export", "share", "clipboard", "haptics", "device", "documents", "photos", "audio", "browser", "maps", "phone", "email", "sms", "contacts", "calendar", "database", "presentation", "sensors", "biometrics",
-            "network", "notifications", "speech"));
+            "network", "notifications", "speech", "voiceRecognition", "location"));
     public static final Set<String> SUPPORTED = Collections.unmodifiableSet(new LinkedHashSet<>(NAMES));
     public static final Map<String, Capability> CAPABILITIES;
     public static final Map<String, Method> METHODS;
@@ -125,16 +139,17 @@ public final class CapabilityCatalog {
     /** Only compiled catalog entries contribute; project strings can never register declarations. */
     public static List<ManifestNodes.Element> manifestContributions(Iterable<String> requested) {
         List<ManifestNodes.Element> result = new ArrayList<>();
-        boolean broker = false, speech = false;
+        boolean broker = false, speech = false, voice = false;
         for (String name : select(requested)) {
             for (ManifestNodes.Element node : CAPABILITIES.get(name).manifestNodes) {
                 if (node == DOCUMENT_QUERIES) broker = true;
                 else if (node == SPEECH_QUERIES) { broker = true; speech = true; }
+                else if (node == VOICE_QUERIES) { broker = true; voice = true; }
                 else if (!result.contains(node)) result.add(node);
             }
         }
         // Exactly one queries element; speech adds its one service intent to the shared packages.
-        if (broker) result.add(speech ? SPEECH_QUERIES : DOCUMENT_QUERIES);
+        if (broker) result.add(speech && voice ? SPEECH_VOICE_QUERIES : speech ? SPEECH_QUERIES : voice ? VOICE_QUERIES : DOCUMENT_QUERIES);
         return ManifestNodes.ordered(result);
     }
     /** Current runtime binding requirement; historical manifest profiles filter separately. */
@@ -147,7 +162,7 @@ public final class CapabilityCatalog {
         return name.equals("documents") || name.equals("browser") || name.equals("maps") || name.equals("phone")
                 || name.equals("email") || name.equals("sms") || name.equals("contacts") || name.equals("calendar")
                 || name.equals("clipboard") || name.equals("share") || name.equals("export")
-                || name.equals("network") || name.equals("notifications") || name.equals("speech");
+                || name.equals("network") || name.equals("notifications") || name.equals("speech") || name.equals("voiceRecognition") || name.equals("location");
     }
     /** Defensive, deterministic selection; no implied or future capabilities. */
     public static List<String> select(Iterable<String> requested) {

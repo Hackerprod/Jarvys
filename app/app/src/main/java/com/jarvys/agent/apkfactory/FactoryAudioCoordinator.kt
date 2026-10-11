@@ -44,7 +44,8 @@ internal class FactoryAudioCoordinator(
             }
         }
     }
-    class Session(val token: String, val proof: FactoryDocumentCoordinator.Proof, val request: Request, val expiresAt: Long, val authority: FactoryOperationPolicy.Grant) {
+    class Session(val token: String, val proof: FactoryDocumentCoordinator.Proof, val request: Request, val expiresAt: Long, val authority: FactoryOperationPolicy.Grant,
+        val setupExpiresAt: Long = expiresAt - proof.resources.audio.durationMs) {
         val revoked = AtomicBoolean(false)
         val playerClean = AtomicBoolean(true)
         val preparing = AtomicBoolean(false)
@@ -118,6 +119,8 @@ internal class FactoryAudioCoordinator(
         var bytes: ByteArray? = null
         try {
             val proof = verify(callingPackage); check(proof.appId == callingPackage); active()
+            // The authenticated artifact is the only source of developer-selected limits.
+            require(request.size in 46..FactoryAudioPcm.MAX_BYTES && request.size.toLong() <= proof.resources.audio.sourceBytes)
             val authority = policy.acquire(FactoryOperationPolicy.Subject.installed(proof), FactoryOperationPolicy.Operation.AUDIO_PLAY, FactoryOperationPolicy.binding(request.nonce, request.size.toString(), request.sha256))
             acquired = authority
             // An authenticated fresh ALLOW request can retire restored unknown state. It never replays it.
@@ -126,10 +129,11 @@ internal class FactoryAudioCoordinator(
                 state = "closed_outcome_unknown"; open = false; save(); release()
             }
             FactoryInteractionAdmission.acquire(this)
-            val now = SystemClock.elapsedRealtime(); check(now >= 0 && now <= Long.MAX_VALUE - 300000)
-            val value = Session(UUID.randomUUID().toString(), proof, request, now + 300000, authority)
+            val lifetime = SETUP_DURATION_MS + proof.resources.audio.durationMs
+            val now = SystemClock.elapsedRealtime(); check(now >= 0 && now <= Long.MAX_VALUE - lifetime)
+            val value = Session(UUID.randomUUID().toString(), proof, request, now + lifetime, authority, now + SETUP_DURATION_MS)
             current = value; acquired = null; authority.onRevoked { value.revoked.set(true) }; nonce = request.nonce; open = true; state = "receiving"; save()
-            val checkActive = { requireActive(value); active() }
+            val checkActive = { requirePlaybackStart(value); active() }
             bytes = if (receive != null) receive.invoke(request, checkActive) else {
                 val output = ByteArray(request.size); var offset = 0
                 try {
@@ -144,7 +148,7 @@ internal class FactoryAudioCoordinator(
                 } catch (failure: Exception) { output.fill(0); throw failure }
             }
             checkActive(); require(bytes.size == request.size)
-            val pcm = FactoryAudioPcm.parseOwned(bytes)
+            val pcm = FactoryAudioPcm.parseOwned(bytes, proof.resources.audio)
             check(verify(callingPackage) == proof); checkActive()
             value.pcm = pcm; bytes = null; state = "review"; save(); return value
         } catch (failure: Exception) {
@@ -162,18 +166,23 @@ internal class FactoryAudioCoordinator(
         check(current === value && open && !broken && !value.revoked.get() && SystemClock.elapsedRealtime() < value.expiresAt)
         value.authority.requireCurrent()
     }
+    /** Setup may not consume the time reserved for the complete declared clip. */
+    fun requirePlaybackStart(value: Session) {
+        requireActive(value)
+        check(SystemClock.elapsedRealtime() < value.setupExpiresAt)
+    }
     /** Worker revalidates durable evidence; main will independently recheck volatile authority before sound. */
     fun preparePlay(value: Session, active: () -> Unit) {
-        worker(); requireActive(value); check(state == "review" && !value.attempted)
+        worker(); requirePlaybackStart(value); check(state == "review" && !value.attempted)
         active(); value.authority.checkBeforeEffect(); check(verify(value.proof.appId) == value.proof)
-        requireActive(value); active(); value.authority.checkBeforeEffect()
+        requirePlaybackStart(value); active(); value.authority.checkBeforeEffect()
         check(value.registration != null && !value.registration!!.isRevoked)
         value.attempted = true; state = "play_pending"; save()
     }
     fun verifyReady(value: Session, active: () -> Unit) {
-        worker(); requireActive(value); active(); value.authority.checkBeforeEffect()
+        worker(); requirePlaybackStart(value); active(); value.authority.checkBeforeEffect()
         check(state == "play_pending" && value.attempted && verify(value.proof.appId) == value.proof)
-        requireActive(value); active(); value.authority.checkBeforeEffect(); check(value.registration?.isRevoked == false)
+        requirePlaybackStart(value); active(); value.authority.checkBeforeEffect(); check(value.registration?.isRevoked == false)
     }
     fun close(value: Session?, recovery: Boolean, active: () -> Unit): Intent? {
         worker(); check(!busy && !restoring); active()
@@ -190,6 +199,7 @@ internal class FactoryAudioCoordinator(
     }
     private fun release() { current?.authority?.close(); current = null; FactoryInteractionAdmission.release(this) }
     companion object {
+        const val SETUP_DURATION_MS = 300000L
         private const val GRANT_FLAGS = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
         private val OPEN_STATES = setOf("receiving", "review", "play_pending", "outcome_unknown")
         private val CLOSED_STATES = setOf("closed", "closed_outcome_unknown")

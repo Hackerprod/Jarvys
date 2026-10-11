@@ -8,6 +8,7 @@ import android.os.Binder
 import android.os.Bundle
 import androidx.test.core.app.ApplicationProvider
 import com.jarvys.agent.MemoryUiAutomationGuard
+import com.jarvys.factory.contract.ResourceBudgets
 import com.jarvys.factory.runtime.AudioPlaybackControl
 import org.json.JSONObject
 import org.junit.After
@@ -108,6 +109,45 @@ class FactoryAudioCoordinatorTest {
         denied { io { coordinator.begin("evil.app", request()) {} } }
         assertFalse(pulled); assertFalse(File(root, "interaction.json").exists()); assertTrue(coordinator.canBegin())
     }
+    @Test fun authenticatedByteBudgetRejectsBeforePullJournalAndAdmission() {
+        proof = proof.copy(resources = ResourceBudgets.parse(mapOf("version" to 1, "audio" to mapOf("sourceBytes" to 46))))
+        var pulled = false
+        coordinator = FactoryAudioCoordinator(context, policy, { proof }, { _, _ -> pulled = true; syntheticWav() })
+        denied { begin() }
+        assertFalse(pulled); assertNull(coordinator.session()); assertFalse(File(root, "interaction.json").exists())
+        assertTrue(FactoryInteractionAdmission.available())
+        // Caller-provided declarations are not part of the authenticated wire grammar.
+        denied { FactoryAudioCoordinator.Request.parse(intent().putExtra("resourceBudgets", "{}")) }
+        denied { FactoryAudioCoordinator.Request.parse(intent().putExtra("maxDurationMs", 300000)) }
+    }
+    @Test fun actualPcmMustFitAuthenticatedDurationAndFailedBytesAreErased() {
+        proof = proof.copy(resources = ResourceBudgets.parse(mapOf("version" to 1, "audio" to mapOf("durationMs" to 1))))
+        val bytes = syntheticWav()
+        coordinator = FactoryAudioCoordinator(context, policy, { proof }, { _, active -> active(); bytes })
+        denied { begin() }
+        assertTrue(bytes.all { it == 0.toByte() }); assertNull(coordinator.session()!!.pcm)
+        assertTrue(coordinator.needsRecovery()); assertFalse(coordinator.session()!!.attempted)
+        io { coordinator.close(coordinator.session(), true) {} }
+    }
+    @Test fun longClipGetsFullDeclaredDurationAfterBoundedSetupAndCannotStartLate() {
+        proof = proof.copy(resources = ResourceBudgets.parse(mapOf("version" to 1, "audio" to mapOf("durationMs" to 300000))))
+        val bytes = syntheticWav(8000, 1, 2400000)
+        coordinator = FactoryAudioCoordinator(context, policy, { proof }, { _, active -> active(); bytes })
+        val before = android.os.SystemClock.elapsedRealtime()
+        val value = io { coordinator.begin(proof.appId, request().copy(size = bytes.size)) {} }
+        register(value)
+        assertEquals(before + FactoryAudioCoordinator.SETUP_DURATION_MS, value.setupExpiresAt)
+        assertEquals(value.setupExpiresAt + 300000, value.expiresAt)
+        assertEquals(300000L, value.pcm!!.durationMs)
+        org.robolectric.shadows.ShadowSystemClock.advanceBy(java.time.Duration.ofMillis(299999))
+        io { coordinator.preparePlay(value) {} }; io { coordinator.verifyReady(value) {} }
+        coordinator.requirePlaybackStart(value)
+        org.robolectric.shadows.ShadowSystemClock.advanceBy(java.time.Duration.ofMillis(1))
+        coordinator.requireActive(value)
+        denied { coordinator.requirePlaybackStart(value) }
+        denied { io { coordinator.verifyReady(value) {} } }
+        io { coordinator.close(value, false) {} }
+    }
     @Test fun journalIsMinimalAndCloseClearsOwnedBytesWithoutClaimingAudibility() {
         val value = begin(); val bytes = value.pcm!!.bytes
         val journal = JSONObject(File(root, "interaction.json").readText())
@@ -124,7 +164,7 @@ class FactoryAudioCoordinatorTest {
         denied { io { coordinator.preparePlay(value) {} } }
         register(value)
         val original = proof
-        for (changed in listOf(proof.copy(certificate="f".repeat(64)), proof.copy(apk="f".repeat(64)), proof.copy(version=3), proof.copy(record="f".repeat(64)))) {
+        for (changed in listOf(proof.copy(certificate="f".repeat(64)), proof.copy(apk="f".repeat(64)), proof.copy(version=3), proof.copy(record="f".repeat(64)), proof.copy(resources=ResourceBudgets.maxima()))) {
             proof = changed; denied { io { coordinator.preparePlay(value) {} } }; assertFalse(value.attempted)
         }
         proof = original; io { coordinator.preparePlay(value) {} }; assertEquals("play_pending", coordinator.status())

@@ -13,7 +13,8 @@ public final class BridgeProtocol {
     public static final int MAX_TEXT_BYTES = 262144;
     public static final int MAX_VALUE_BYTES = 65536;
     public static final int MAX_DOCUMENT_CHUNK_BYTES = 32768;
-    public static final int MAX_DOCUMENT_BYTES = 16 * 1024 * 1024;
+    public static final int MAX_DOCUMENT_BYTES = 16 * 1024 * 1024; // Legacy default, not the grammar ceiling.
+    public static final long MAX_DOCUMENT_POSITION = 4L * 1024 * 1024 * 1024;
 
     public static final class Request {
         public final String id, method;
@@ -44,6 +45,11 @@ public final class BridgeProtocol {
                 throw new FactoryException("INVALID_ARGUMENT", "Backup cancellation envelope exceeds 1 KiB.");
             switch (operation) {
                 case NETWORK_REQUEST: NetworkRequest.fromRequest(args); break;
+                case VOICE_RECOGNITION_STATUS: case VOICE_RECOGNITION_CANCEL: VoiceRecognitionRequest.parseEmpty(args); break;
+                case VOICE_RECOGNITION_RECOGNIZE: VoiceRecognitionRequest.parseRecognize(args); break;
+                case LOCATION_STATUS: case LOCATION_CANCEL: LocationRequest.parseEmpty(args); break;
+                case LOCATION_CURRENT: LocationRequest.parseCurrent(args); break;
+                case LOCATION_REQUEST_PERMISSION: LocationRequest.parsePermission(args); break;
                 case NETWORK_PROBE: NetworkRequest.fromProbe(args); break;
                 case NETWORK_PING: NetworkPingRequest.parse(args); break;
                 case NETWORK_CANCEL: FactoryConfig.exactKeys(args); break;
@@ -165,14 +171,14 @@ public final class BridgeProtocol {
                     documentMime(args, false); break;
                 case DOCUMENTS_READ:
                     FactoryConfig.exactKeys(args, "handle", "offset", "length"); documentHandle(args);
-                    documentInteger(args, "offset", 0, MAX_DOCUMENT_BYTES);
+                    documentInteger(args, "offset", 0, MAX_DOCUMENT_POSITION);
                     documentInteger(args, "length", 1, MAX_DOCUMENT_CHUNK_BYTES);
                     break;
                 case DOCUMENTS_WRITE:
                     FactoryConfig.exactKeys(args, "handle", "offset", "data"); documentHandle(args);
-                    long writeOffset = documentInteger(args, "offset", 0, MAX_DOCUMENT_BYTES);
+                    long writeOffset = documentInteger(args, "offset", 0, MAX_DOCUMENT_POSITION);
                     int byteCount = documentDataLength(FactoryConfig.string(args, "data"));
-                    if (writeOffset + byteCount > MAX_DOCUMENT_BYTES)
+                    if (writeOffset + byteCount > MAX_DOCUMENT_POSITION)
                         throw new FactoryException("INVALID_ARGUMENT", "Write exceeds the document limit.");
                     break;
                 case DOCUMENTS_CLOSE:

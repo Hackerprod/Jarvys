@@ -1,10 +1,14 @@
 package com.jarvys.factory.runtime;
 
 import android.Manifest;
+import android.app.Activity;
 import android.app.NotificationManager;
 import android.content.Context;
+import android.content.Intent;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.os.SystemClock;
+import android.speech.RecognizerIntent;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.Voice;
 import java.io.ByteArrayInputStream;
@@ -31,6 +35,7 @@ import org.robolectric.RobolectricTestRunner;
 import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
 import org.robolectric.annotation.LooperMode;
+import org.robolectric.util.ReflectionHelpers;
 import static com.jarvys.factory.runtime.NativePermissionSessionsTest.idle;
 import static org.junit.Assert.*;
 
@@ -41,6 +46,7 @@ import static org.junit.Assert.*;
 public class NativeEffectsTest {
     private NativePermissionSessionsTest.Fixture fixture;
     private NativeEffects effects;
+    private FactoryConfig config;
     private ThreadPoolExecutor networkIo;
     private Connection connection;
     private final AtomicInteger opens = new AtomicInteger();
@@ -50,14 +56,21 @@ public class NativeEffectsTest {
 
     @Before public void setup() throws Exception {
         fixture = new NativePermissionSessionsTest.Fixture();
+        config = FactoryConfig.parse(new JSONObject(FactoryDispatcherTest.configuration(
+                "[\"network\",\"notifications\",\"speech\",\"voiceRecognition\",\"location\"]"))
+                .put("appId", fixture.config.appId).put("documentBroker", new JSONObject()
+                        .put("packageName", fixture.config.documentBroker.packageName)
+                        .put("certificateSha256", fixture.config.documentBroker.certificateSha256)).toString(), fixture.config.appId);
         PackageInfo own = fixture.screen.getPackageManager().getPackageInfo(fixture.config.appId, PackageManager.GET_PERMISSIONS);
-        own.requestedPermissions = new String[]{Manifest.permission.POST_NOTIFICATIONS};
+        own.requestedPermissions = new String[]{Manifest.permission.POST_NOTIFICATIONS,
+                Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION};
         own.applicationInfo.targetSdkVersion = 35;
         Shadows.shadowOf(fixture.screen.getPackageManager()).installPackage(own);
         Shadows.shadowOf(fixture.screen.getPackageManager()).setPackagesForUid(android.os.Process.myUid(), DocumentBrokerIdentity.PRIMARY);
         fixture.screen.getApplicationInfo().targetSdkVersion = 35;
         fixture.screen.getApplication().getApplicationInfo().targetSdkVersion = 35;
-        Shadows.shadowOf(fixture.screen.getApplication()).denyPermissions(Manifest.permission.POST_NOTIFICATIONS);
+        Shadows.shadowOf(fixture.screen.getApplication()).denyPermissions(Manifest.permission.POST_NOTIFICATIONS,
+                Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION);
         notifications = (NotificationManager) fixture.screen.getSystemService(Context.NOTIFICATION_SERVICE);
         Shadows.shadowOf(notifications).setNotificationsEnabled(true);
         connection = new Connection();
@@ -68,7 +81,7 @@ public class NativeEffectsTest {
         networkIo = new ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS, new ArrayBlockingQueue<>(1),
                 task -> { Thread thread = new Thread(task, "synthetic-native-network"); thread.setDaemon(true); return thread; },
                 new ThreadPoolExecutor.AbortPolicy());
-        effects = new NativeEffects(fixture.screen, fixture.config, fixture.sessions, fixture.io, true, networkIo, network, speech);
+        effects = new NativeEffects(fixture.screen, config, fixture.sessions, fixture.io, true, networkIo, network, speech);
     }
 
     @After public void cleanup() throws Exception {
@@ -173,6 +186,143 @@ public class NativeEffectsTest {
         assertEquals(0, Shadows.shadowOf(notifications).size());
     }
 
+    @Test public void preciseLocationPermissionWaitsForResumeAndReportsActualCoarseAndFineGrants() throws Exception {
+        locationStatusOnly();
+        JSONObject precise = new JSONObject().put("precision", "precise");
+        Result coarse = perform("location.requestPermission", precise); fixture.pump();
+        assertArrayEquals(locationPermissions(), Shadows.shadowOf(fixture.screen).getLastRequestedPermission().requestedPermissions);
+        effects.onPause(); fixture.sessions.onPause();
+        Shadows.shadowOf(fixture.screen.getApplication()).grantPermissions(Manifest.permission.ACCESS_COARSE_LOCATION);
+        locationPermissionResult(PackageManager.PERMISSION_GRANTED, PackageManager.PERMISSION_GRANTED);
+        fixture.pump(); assertEquals(0, coarse.calls); assertEquals(0, coarse.releases);
+        fixture.sessions.onResume(); effects.onResume(); fixture.pump();
+        assertTrue(coarse.value.getBoolean("coarseGranted")); assertFalse(coarse.value.getBoolean("fineGranted"));
+        assertEquals("coarse", coarse.value.getString("permissionGranularity"));
+        assertEquals(1, coarse.calls); assertEquals(1, coarse.releases);
+        Result fine = perform("location.requestPermission", precise); fixture.pump();
+        Shadows.shadowOf(fixture.screen.getApplication()).grantPermissions(Manifest.permission.ACCESS_FINE_LOCATION);
+        locationPermissionResult(PackageManager.PERMISSION_DENIED, PackageManager.PERMISSION_DENIED);
+        fixture.pump();
+        assertTrue(fine.value.getBoolean("coarseGranted")); assertTrue(fine.value.getBoolean("fineGranted"));
+        assertEquals("fine", fine.value.getString("permissionGranularity"));
+        assertEquals(1, fine.calls); assertEquals(1, fine.releases); assertFalse(effects.hasPendingPermission());
+    }
+
+    @Test public void revokedLocationPermissionKeepsUiTombstoneUntilLateResultThenAdmitsSuccessor() throws Exception {
+        locationStatusOnly();
+        JSONObject precise = new JSONObject().put("precision", "precise");
+        Result old = perform("location.requestPermission", precise); fixture.pump();
+        fixture.sessions.cancelAll(); fixture.pump();
+        assertEquals("CANCELLED", old.error); assertEquals(1, old.calls);
+        assertTrue(old.held); assertEquals(0, old.releases); assertTrue(effects.hasPendingPermission());
+        Result blocked = perform("location.requestPermission", precise); fixture.pump();
+        assertEquals("BUSY", blocked.error); assertEquals(0, blocked.claims); assertTrue(old.held);
+        locationPermissionResult(PackageManager.PERMISSION_GRANTED, PackageManager.PERMISSION_GRANTED);
+        locationPermissionResult(PackageManager.PERMISSION_GRANTED, PackageManager.PERMISSION_GRANTED);
+        fixture.pump();
+        assertEquals(1, old.calls); assertEquals(0, old.successes); assertEquals(1, old.releases);
+        assertFalse(effects.hasPendingPermission());
+        Result next = perform("location.requestPermission", precise); fixture.pump();
+        assertEquals(1, next.claims); assertTrue(effects.hasPendingPermission());
+        locationPermissionResult(PackageManager.PERMISSION_DENIED, PackageManager.PERMISSION_DENIED);
+        fixture.pump();
+        assertEquals("none", next.value.getString("permissionGranularity"));
+        assertEquals(1, next.calls); assertEquals(1, next.releases); assertEquals(1, old.calls);
+    }
+
+    @Test public void resetLocationPermissionKeepsItsTombstoneThroughLateResultUntilResume() throws Exception {
+        locationStatusOnly();
+        Result old = perform("location.requestPermission", new JSONObject().put("precision", "precise")); fixture.pump();
+        effects.onPause(); fixture.sessions.onPause();
+        effects.close(); fixture.sessions.close(); idle();
+        assertTrue(effects.isClosed()); assertTrue(effects.hasPendingPermission());
+        assertEquals("CANCELLED", old.error); assertEquals(1, old.calls); assertEquals(0, old.releases);
+        locationPermissionResult(PackageManager.PERMISSION_GRANTED, PackageManager.PERMISSION_GRANTED); idle();
+        assertEquals(0, old.releases); assertEquals(0, old.successes);
+        effects.onResume(); idle();
+        locationPermissionResult(PackageManager.PERMISSION_DENIED, PackageManager.PERMISSION_DENIED); idle();
+        assertFalse(effects.hasPendingPermission()); assertEquals(1, old.releases);
+        assertEquals(1, old.calls); assertEquals(0, old.successes); assertNull(old.value);
+    }
+
+    @Test public void cancelledRecognitionCannotLaunchASuccessorBeforeRealCode52Return() throws Exception {
+        RecognitionPlatform platform = recognitionPlatform();
+        Result old = perform("voiceRecognition.recognize", new JSONObject()); fixture.pump();
+        assertEquals(1, platform.launches); assertTrue(old.held); assertTrue(effects.hasPendingActivity());
+        Result cancelled = perform("voiceRecognition.cancel", new JSONObject()); idle();
+        assertEquals(1, cancelled.value.getInt("cancelled")); assertFalse(cancelled.value.getBoolean("externalActivityClosedVerified"));
+        assertEquals("CANCELLED", old.error); assertEquals(1, old.calls); assertEquals(1, platform.cancels);
+        assertEquals(0, old.releases); assertTrue(effects.hasPendingActivity());
+        Result blocked = perform("voiceRecognition.recognize", new JSONObject()); fixture.pump();
+        assertEquals("BUSY", blocked.error); assertEquals(0, blocked.claims); assertEquals(1, platform.launches);
+        assertFalse(effects.onActivityResult(53, Activity.RESULT_OK, recognized("wrong request")));
+        assertEquals(0, old.releases); assertTrue(effects.hasPendingActivity());
+        assertTrue(effects.onActivityResult(52, Activity.RESULT_OK, recognized("discard this late result"))); idle();
+        assertEquals(1, old.releases); assertEquals(1, old.calls); assertEquals(0, old.successes); assertFalse(effects.hasPendingActivity());
+        Result next = perform("voiceRecognition.recognize", new JSONObject()); fixture.pump();
+        assertEquals(2, platform.launches); assertTrue(next.held);
+        effects.onActivityResult(52, Activity.RESULT_OK, recognized("new owner")); fixture.pump();
+        assertEquals("new owner", next.value.getJSONArray("results").getString(0));
+        assertEquals(1, next.calls); assertEquals(1, next.releases); assertEquals(1, old.calls);
+    }
+
+    @Test public void closedRecognitionRetainsResetTombstoneUntilLateCode52ResultWithoutSuccess() throws Exception {
+        RecognitionPlatform platform = recognitionPlatform();
+        Result old = perform("voiceRecognition.recognize", new JSONObject()); fixture.pump();
+        effects.close(); fixture.sessions.close(); effects.close(); idle();
+        assertTrue(effects.isClosed()); assertTrue(effects.hasPendingActivity());
+        assertEquals("CANCELLED", old.error); assertEquals(1, old.calls); assertEquals(0, old.releases);
+        assertEquals(1, platform.cancels);
+        assertEquals("UNAVAILABLE", assertThrows(FactoryException.class,
+                () -> perform("voiceRecognition.recognize", new JSONObject())).code);
+        assertEquals(1, platform.launches);
+        effects.onActivityResult(52, Activity.RESULT_OK, recognized("stale after reset")); idle();
+        effects.onActivityResult(52, Activity.RESULT_CANCELED, null); idle();
+        assertFalse(effects.hasPendingActivity()); assertEquals(1, old.releases);
+        assertEquals(1, old.calls); assertEquals(0, old.successes); assertNull(old.value);
+    }
+
+    private void locationStatusOnly() {
+        NativeLocation.Backend backend = new NativeLocation.Backend() {
+            public boolean available() { return true; }
+            public boolean hasProvider(String provider) { return true; }
+            public boolean enabled(String provider) { return true; }
+            public NativeLocation.Registration current(String provider, NativeLocation.Listener listener) {
+                throw new AssertionError("Permission handoff must not request a location fix");
+            }
+            public NativeLocation.Registration updates(String provider, NativeLocation.Listener listener) {
+                throw new AssertionError("Permission handoff must not subscribe to location updates");
+            }
+        };
+        ReflectionHelpers.setField(effects, "location", new NativeLocation(fixture.screen, config.appId,
+                () -> !effects.isClosed(), backend, SystemClock::elapsedRealtimeNanos));
+    }
+    private RecognitionPlatform recognitionPlatform() {
+        RecognitionPlatform platform = new RecognitionPlatform();
+        ReflectionHelpers.setField(effects, "recognition", new NativeVoiceRecognition(fixture.screen, config.appId, true, platform));
+        return platform;
+    }
+    private static String[] locationPermissions() {
+        return new String[]{Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION};
+    }
+    private void locationPermissionResult(int coarse, int fine) {
+        assertTrue(effects.onRequestPermissionsResult(NativeEffects.NOTIFICATION_PERMISSION_REQUEST,
+                locationPermissions(), new int[]{coarse, fine}));
+    }
+    private static Intent recognized(String text) {
+        return new Intent().putStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS,
+                new ArrayList<>(Collections.singletonList(text)));
+    }
+    private static final class RecognitionPlatform implements NativeVoiceRecognition.Platform {
+        int launches, cancels;
+        public boolean available() { return true; }
+        public boolean focused() { return true; }
+        public void launch(Intent intent, int request) {
+            assertEquals(52, request); assertEquals(RecognizerIntent.ACTION_RECOGNIZE_SPEECH, intent.getAction()); launches++;
+        }
+        public void cancel(int request) { assertEquals(52, request); cancels++; }
+    }
+
     @Test public void busySpeechJobCannotCloseTheActiveEngineOrSettleItsReply() throws Exception {
         Result first = perform("speech.speak", new JSONObject().put("text", "First")); fixture.pump();
         Engine engine = engines.get(0); engine.ready(); idle();
@@ -202,7 +352,7 @@ public class NativeEffectsTest {
     private Result perform(String method, JSONObject args) throws Exception {
         Result result = new Result();
         BridgeProtocol.Request request = BridgeProtocol.validate(BridgeProtocol.ORIGIN, true,
-                new JSONObject().put("v", 1).put("id", "effect_" + ++sequence).put("method", method).put("args", args).toString(), fixture.config);
+                new JSONObject().put("v", 1).put("id", "effect_" + ++sequence).put("method", method).put("args", args).toString(), config);
         effects.perform(request, result); return result;
     }
     private void permissionResult(int grant) {

@@ -1,5 +1,6 @@
 package com.jarvys.agent.apkfactory
 
+import com.jarvys.factory.contract.ResourceBudgets
 import org.junit.Assert.*
 import org.junit.Test
 import java.nio.ByteBuffer
@@ -24,6 +25,24 @@ class FactoryAudioPcmTest {
     @Test fun exactThirtySecondBoundary() {
         assertEquals(30000L, FactoryAudioPcm.parseOwned(syntheticWav(48000, 2, 1440000)).durationMs)
         reject(syntheticWav(48000, 2, 1440001))
+    }
+    @Test fun declaredDurationAllowsLongLowRatePcmWithoutRaisingWholeArrayCeiling() {
+        val budget = ResourceBudgets.maxima().audio
+        val bytes = syntheticWav(8000, 1, 2400000)
+        assertTrue(bytes.size < FactoryAudioPcm.MAX_BYTES)
+        assertEquals(300000L, FactoryAudioPcm.parseOwned(bytes, budget).durationMs)
+        assertThrows(IllegalArgumentException::class.java) { FactoryAudioPcm.parseOwned(syntheticWav(8000, 1, 2400001), budget) }
+        assertThrows(IllegalArgumentException::class.java) { FactoryAudioPcm.parseOwned(ByteArray(FactoryAudioPcm.MAX_BYTES + 1), budget) }
+    }
+    @Test fun actualBytesAndFramesRespectSmallerDeclaredBudgetsExactly() {
+        val bytes = syntheticWav(frames = 8)
+        val budget = ResourceBudgets.parse(mapOf("version" to 1, "audio" to mapOf("sourceBytes" to bytes.size, "durationMs" to 1))).audio
+        assertEquals(1L, FactoryAudioPcm.parseOwned(bytes, budget).durationMs)
+        assertThrows(IllegalArgumentException::class.java) { FactoryAudioPcm.parseOwned(syntheticWav(frames = 9), budget) }
+        val durationOnly = ResourceBudgets.parse(mapOf("version" to 1, "audio" to mapOf("durationMs" to 1))).audio
+        assertThrows(IllegalArgumentException::class.java) { FactoryAudioPcm.parseOwned(syntheticWav(frames = 9), durationOnly) }
+        val bytesOnly = ResourceBudgets.parse(mapOf("version" to 1, "audio" to mapOf("sourceBytes" to bytes.size))).audio
+        assertThrows(IllegalArgumentException::class.java) { FactoryAudioPcm.parseOwned(syntheticWav(frames = 9), bytesOnly) }
     }
     @Test fun rejectsTruncationTrailingDataAndEnvelope() {
         reject(ByteArray(43)); reject(ByteArray(FactoryAudioPcm.MAX_BYTES + 1))

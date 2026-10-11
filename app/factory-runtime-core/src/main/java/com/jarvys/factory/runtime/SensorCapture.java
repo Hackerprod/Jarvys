@@ -7,13 +7,15 @@ import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
 import android.os.Handler;
 import android.os.SystemClock;
+import com.jarvys.factory.contract.ResourceBudgets;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.nio.charset.StandardCharsets;
 
 /** Foreground-only, finite, main-thread-owned capture. No identifiers or persistent sensor data. */
 public final class SensorCapture {
-    public static final int MAX_RESULT_BYTES=16384, MAX_SAMPLES=50, MAX_DURATION_MS=5000, MIN_INTERVAL_MS=100;
+    // Grammar ceilings are fixed; configured policy is enforced only by the native helper.
+    public static final int MAX_RESULT_BYTES=16384, MAX_SAMPLES=50, MAX_DURATION_MS=300000, MIN_INTERVAL_MS=100;
     public static final class Request {
         public final String kind;
         public final int durationMs, intervalMs, maxSamples;
@@ -67,12 +69,19 @@ public final class SensorCapture {
     private final Driver driver;
     private final Clock clock;
     private final Handler handler;
+    private final ResourceBudgets.Sensors budget;
     private Work current;
     private boolean cleanupFailed;
     // Retained across capture, pause, page reset and sensor kind changes; no one-sample bypass.
     private long lastReceipt=-1,lastEvent=-1;
-    SensorCapture(Driver driver,Clock clock,Handler handler) { this.driver=driver;this.clock=clock;this.handler=handler; }
-    static SensorCapture installed(Context context,Handler handler) { return new SensorCapture(android(context,handler),SystemClock::elapsedRealtimeNanos,handler); }
+    SensorCapture(Driver driver,Clock clock,Handler handler) { this(driver,clock,handler,ResourceBudgets.legacy().sensors); }
+    SensorCapture(Driver driver,Clock clock,Handler handler,ResourceBudgets.Sensors budget) {
+        this.driver=driver;this.clock=clock;this.handler=handler;this.budget=java.util.Objects.requireNonNull(budget);
+    }
+    static SensorCapture installed(Context context,Handler handler) { return installed(context,handler,ResourceBudgets.legacy().sensors); }
+    static SensorCapture installed(Context context,Handler handler,ResourceBudgets.Sensors budget) {
+        return new SensorCapture(android(context,handler),SystemClock::elapsedRealtimeNanos,handler,budget);
+    }
     JSONObject list()throws Exception {
         if(cleanupFailed) throw new FactoryException("UNAVAILABLE","Sensor cleanup is unconfirmed; restart the application.");
         JSONArray sensors=new JSONArray();
@@ -87,6 +96,9 @@ public final class SensorCapture {
         if(cleanupFailed) throw new FactoryException("UNAVAILABLE","Sensor cleanup is unconfirmed; restart the application.");
         if(current!=null) throw new FactoryException("BUSY","A sensor capture is already active.");
         if(!authority.active()) throw new FactoryException("CANCELLED","Sensor capture requires the current foreground page.");
+        if(request.durationMs>budget.captureDurationMs || request.maxSamples>budget.captureSamples
+                || request.maxSamples>budget.bufferedSamples || request.intervalMs*1000L<budget.minimumIntervalUs)
+            throw new FactoryException("INVALID_ARGUMENT","Sensor capture exceeds its declared resource budget.");
         if(!driver.available(request.kind)) throw new FactoryException("UNAVAILABLE","The requested sensor is unavailable.");
         Work work=new Work(request,authority,sink,clock.nanos()); current=work;
         try {
@@ -134,6 +146,9 @@ public final class SensorCapture {
         long interval=work.request.intervalMs*1000000L;
         if((lastReceipt>=0&&now-lastReceipt<interval)||(lastEvent>=0&&timestamp-lastEvent<interval)) return;
         try {
+            if(work.samples.length()>=Math.min(MAX_SAMPLES,budget.bufferedSamples)) {
+                finish(work,null,"TOO_LARGE","Sensor buffer exceeded its sample limit.");return;
+            }
             JSONArray copied=new JSONArray();
             for(int i=0;i<size;i++) { if(Float.isNaN(values[i])||Float.isInfinite(values[i])) return; copied.put((double)values[i]); }
             work.samples.put(new JSONObject().put("elapsedMs",(now-work.started)/1000000L).put("values",copied));
@@ -149,7 +164,14 @@ public final class SensorCapture {
                 .put("reason",reason).put("samples",work.samples).put("mode","installed").put("simulated",false);
     }
     private void complete(Work work,String reason) {
-        try { finish(work,result(work,reason),null,null); }
+        try {
+            JSONObject result=result(work,reason);
+            if(work.samples.length()>Math.min(work.request.maxSamples,Math.min(budget.captureSamples,budget.bufferedSamples))
+                    || work.samples.length()>MAX_SAMPLES || result.toString().getBytes(StandardCharsets.UTF_8).length>MAX_RESULT_BYTES) {
+                finish(work,null,"TOO_LARGE","Sensor result exceeded its declared budget.");return;
+            }
+            finish(work,result,null,null);
+        }
         catch(Exception failed) { finish(work,null,"NATIVE_ERROR","Sensor result could not be represented."); }
     }
     private void finish(Work work,JSONObject result,String code,String message) {

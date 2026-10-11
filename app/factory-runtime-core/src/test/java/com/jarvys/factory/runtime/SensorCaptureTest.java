@@ -2,6 +2,7 @@ package com.jarvys.factory.runtime;
 
 import android.os.Handler;
 import android.os.Looper;
+import com.jarvys.factory.contract.ResourceBudgets;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
@@ -46,6 +47,7 @@ public class SensorCaptureTest {
     Set<String> keys(JSONObject value){Set<String> keys=new HashSet<>();value.keys().forEachRemaining(keys::add);return keys;}
     @Test public void strictRequestBoundsTypesMissingNullAndUnknownFields()throws Exception{
         SensorCapture.Request.parse(args("light",100,100,1));SensorCapture.Request.parse(args("accelerometer",5000,1000,50));
+        SensorCapture.Request.parse(args("light",5001,100,1));SensorCapture.Request.parse(args("gyroscope",300000,1000,50));
         for(String key:new String[]{"durationMs","intervalMs","maxSamples"}){
             for(Object bad:new Object[]{JSONObject.NULL,"100",true,100.0,0,-1,Long.MAX_VALUE}){
                 JSONObject a=args("light",100,100,1).put(key,bad);assertThrows(Exception.class,()->SensorCapture.Request.parse(a));
@@ -54,10 +56,35 @@ public class SensorCaptureTest {
         }
         for(String kind:new String[]{"gyroscope_uncalibrated","magnetometer","step-counter","LIGHT",""})assertThrows(Exception.class,()->SensorCapture.Request.parse(args(kind,100,100,1)));
         for(String extra:new String[]{"frequencyHz","sensorId","background","persist","vendor"})assertThrows(Exception.class,()->SensorCapture.Request.parse(args("light",100,100,1).put(extra,true)));
-        assertThrows(Exception.class,()->SensorCapture.Request.parse(args("light",5001,100,1)));
+        assertThrows(Exception.class,()->SensorCapture.Request.parse(args("light",300001,100,1)));
         assertThrows(Exception.class,()->SensorCapture.Request.parse(args("light",100,1001,1)));
         assertThrows(Exception.class,()->SensorCapture.Request.parse(args("light",100,100,51)));
         assertThrows(Exception.class,()->SensorCapture.Request.parse(args("light",100,100,1).put("kind",JSONObject.NULL)));
+    }
+    @Test public void legacyConstructorEnforcesHistoricalDurationAfterPureGrammarValidation()throws Exception{
+        assertEquals("INVALID_ARGUMENT",assertThrows(FactoryException.class,()->start("light",5001,100,1)).code);
+        assertEquals(0,driver.registrations);
+    }
+    @Test public void configuredDurationSupportsSparseCaptureThroughFiveMinutes()throws Exception{
+        capture=new SensorCapture(driver,()->now,new Handler(Looper.getMainLooper()),ResourceBudgets.maxima().sensors);
+        Result result=start("light",300000,1000,50);emit(3);advance(5001);assertEquals(0,result.replies);
+        advance(294998);assertEquals(0,result.replies);advance(1);
+        assertEquals(1,result.samples().length());assertEquals("duration",result.value.getString("reason"));assertEquals(1,driver.unregisters);
+        assertTrue(result.value.toString().getBytes(StandardCharsets.UTF_8).length<=SensorCapture.MAX_RESULT_BYTES);
+    }
+    @Test public void configuredDurationSampleAndIntervalBudgetsRejectBeforeRegistration()throws Exception{
+        ResourceBudgets resources=ResourceBudgetsJson.parse(new JSONObject().put("version",1).put("sensors",new JSONObject()
+                .put("captureDurationMs",500).put("captureSamples",2).put("bufferedSamples",2).put("minimumIntervalUs",200000)));
+        capture=new SensorCapture(driver,()->now,new Handler(Looper.getMainLooper()),resources.sensors);
+        assertEquals("INVALID_ARGUMENT",assertThrows(FactoryException.class,()->start("light",501,200,2)).code);
+        assertEquals("INVALID_ARGUMENT",assertThrows(FactoryException.class,()->start("light",500,200,3)).code);
+        assertEquals("INVALID_ARGUMENT",assertThrows(FactoryException.class,()->start("light",500,199,2)).code);
+        assertEquals(0,driver.registrations);
+        Result result=start("light",500,200,2);emit(1);advance(199);emit(2);assertEquals(0,result.replies);advance(1);emit(3);
+        assertEquals(2,result.samples().length());assertEquals(200000,driver.intervalUs);assertEquals(1,driver.unregisters);
+        assertEquals("sample_limit",result.value.getString("reason"));
+        Result next=start("gyroscope",500,200,1);emit(1,2,3);assertEquals(0,next.replies);advance(200);emit(1,2,3);
+        assertEquals(1,next.samples().length());assertEquals(2,driver.unregisters);
     }
     @Test public void inventoryExposesOnlyBoundedKindUnitsFrameAndAvailability()throws Exception{
         JSONObject result=capture.list();assertEquals(new HashSet<>(Arrays.asList("sensors","mode")),keys(result));

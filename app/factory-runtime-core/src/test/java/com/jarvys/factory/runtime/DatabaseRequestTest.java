@@ -92,7 +92,7 @@ public class DatabaseRequestTest {
         invalid(() -> DatabaseRequest.definition(definition("text", true).put("default", "x")));
         invalid(() -> DatabaseRequest.columns(new JSONObject()));
         JSONObject columns = new JSONObject();
-        for (int i = 0; i < 16; i++) columns.put("c" + i, definition("text", true));
+        for (int i = 0; i < DatabaseRequest.HARD_MAX_COLUMNS; i++) columns.put("c" + i, definition("text", true));
         DatabaseRequest.columns(columns);
         columns.put("extra", definition("text", true));
         invalid(() -> DatabaseRequest.columns(columns));
