@@ -310,7 +310,14 @@ open class FactoryDataBackupActivity : ComponentActivity() {
         }
         super.onPause()
     }
-    override fun onSaveInstanceState(outState: Bundle) { /* No archive, consent, URI, or view state survives recreation. */ }
+    override fun onSaveInstanceState(outState: Bundle) {
+        try {
+            super.onSaveInstanceState(outState)
+        } finally {
+            // Framework/providers may add state; this review must never restore any of it.
+            outState.clear()
+        }
+    }
     override fun onDestroy() {
         handler.removeCallbacks(expire)
         if (::details.isInitialized) details.text = ""

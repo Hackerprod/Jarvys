@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.Intent
 import android.os.Binder
 import android.os.Bundle
+import android.net.Uri
+import android.os.Parcel
 import android.os.Looper
 import android.os.SystemClock
 import android.view.View
@@ -212,5 +214,62 @@ class FactoryDataBackupActivityTest {
         controller.pause().stop().destroy(); controllers.remove(controller); drain()
         assertSame(original, coordinator.session())
         worker { coordinator.close(original, true, true) {} }
+    }
+    @Config(sdk = [26, 28, 34])
+    @Test fun superclassSaveRunsButNoPrepopulatedProviderOrViewStateSurvives() {
+        val controller = launch(); val activity = controller.get()
+        val details = view<TextView>(activity, "values")
+        val consent = view<CheckBox>(activity, "acknowledgement")
+        consent.performClick()
+        assertTrue(consent.isChecked); assertTrue(details.text.contains(plan.json()))
+        assertFalse(details.isSaveEnabled); assertFalse(details.isSaveFromParentEnabled)
+        assertFalse(consent.isSaveEnabled); assertFalse(consent.isSaveFromParentEnabled)
+        val syntheticUri = Uri.parse("content://synthetic.backup/document/private-fixture")
+        var providerCalls = 0
+        activity.savedStateRegistry.registerSavedStateProvider("synthetic-backup-review") {
+            providerCalls++
+            Bundle().apply {
+                putString("reviewValues", details.text.toString())
+                putBoolean("approvedCheckbox", consent.isChecked)
+                putParcelable("selectedDocument", syntheticUri)
+            }
+        }
+        val saved = Bundle().apply {
+            putString("preexistingArchive", plan.json())
+            putBoolean("preexistingConsent", true)
+            putParcelable("preexistingUri", syntheticUri)
+            putBundle("preexistingNested", Bundle().apply { putString("privateValue", text) })
+        }
+        controller.saveInstanceState(saved)
+        assertEquals(1, providerCalls) // Proves ComponentActivity's real saved-state path ran.
+        assertEquals(androidx.lifecycle.Lifecycle.State.CREATED, activity.lifecycle.currentState)
+        assertTrue(saved.isEmpty)
+        val parcel = Parcel.obtain()
+        try {
+            parcel.writeBundle(saved); parcel.setDataPosition(0)
+            assertTrue(checkNotNull(parcel.readBundle(activity.javaClass.classLoader)).isEmpty)
+        } finally { parcel.recycle() }
+        assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode)
+        val owner = coordinator.session()
+        val recreated = launch(saved = saved).get()
+        assertTrue(recreated.isFinishing); assertEquals(Activity.RESULT_CANCELED, shadowOf(recreated).resultCode)
+        assertSame(owner, coordinator.session()) // The non-null empty state cannot replay or adopt the review.
+    }
+    @Config(sdk = [26, 28, 34])
+    @Test fun superclassSaveFailureStillClearsAllOutputStateAndPropagatesFailure() {
+        val controller = launch(); val activity = controller.get()
+        val saved = Bundle().apply {
+            putString("preexistingArchive", plan.json())
+            putBoolean("preexistingConsent", true)
+            putParcelable("preexistingUri", Uri.parse("content://synthetic.backup/document/private-fixture"))
+        }
+        var providerCalls = 0
+        activity.savedStateRegistry.registerSavedStateProvider("synthetic-failing-backup-review") {
+            providerCalls++
+            error("Synthetic saved-state provider failure")
+        }
+        assertTrue(runCatching { controller.saveInstanceState(saved) }.isFailure)
+        assertEquals(1, providerCalls); assertTrue(saved.isEmpty)
+        assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode)
     }
 }
