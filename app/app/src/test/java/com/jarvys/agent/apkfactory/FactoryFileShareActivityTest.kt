@@ -193,23 +193,41 @@ class FactoryFileShareActivityTest {
         assertEquals("idle", coordinator.status()); assertTrue(FactoryInteractionAdmission.available())
         assertEquals(Activity.RESULT_CANCELED, shadowOf(control.get()).resultCode)
     }
-    @Test fun validColdStartDocumentRequestWaitsWithoutRegressingSaf() {
+    @Test fun validColdStartDocumentRequestProceedsDuringUnrelatedSharingCleanup() {
         val (release, startup) = pendingStartup()
-        val documents = FactoryDocumentCoordinator(context, FactoryOperationPolicy.inMemory(FactoryOperationPolicy.Mode.ASK)) { check(it == proof.appId); proof }
+        val verifications = java.util.concurrent.atomic.AtomicInteger()
+        val documents = FactoryDocumentCoordinator(context, FactoryOperationPolicy.inMemory(FactoryOperationPolicy.Mode.ASK)) {
+            check(it == proof.appId); verifications.incrementAndGet(); proof
+        }
         FactoryDocumentCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(null, documents)
         val intent = Intent(context, FactoryDocumentActivity::class.java).putExtra("operation", "open").putExtra("mimeType", "text/plain").putExtra("nonce", request.nonce)
         val control = Robolectric.buildActivity(FactoryDocumentActivity::class.java, intent)
         shadowOf(control.get()).setCallingPackage(proof.appId)
         try {
             control.create().start().resume().visible()
-            assertFalse(control.get().isFinishing); assertEquals("idle", documents.status())
+            assertFalse(control.get().isFinishing)
+            val worker = FactoryDocumentActivity::class.java.getDeclaredField("worker").apply { isAccessible = true }.get(control.get()) as java.util.concurrent.ExecutorService
+            fun drainDocuments() {
+                var accepted = false
+                repeat(1000) { if (!accepted) try { worker.submit {}.get(5, TimeUnit.SECONDS); accepted = true } catch (_: java.util.concurrent.RejectedExecutionException) { Thread.yield() } }
+                assertTrue(accepted); shadowOf(Looper.getMainLooper()).idle()
+            }
+            drainDocuments()
+            // The document family can finish preparation while sharing still owns its
+            // real cleanup slot. Pending ASK protects only this native document review.
+            assertTrue(FactoryFileShareCoordinator.startupPending())
+            assertFalse(coordinator.canBegin()); assertFalse(FactoryInteractionAdmission.available(coordinator))
+            assertEquals("review", documents.status()); assertEquals(1, verifications.get())
+            assertTrue(control.get().window.decorView.findViewWithTag<Button>("factory-documents-choose").isEnabled)
+            val token = FactoryDocumentActivity::class.java.getDeclaredField("token").apply { isAccessible = true }
+            val owner = token.get(control.get()); assertNotNull(owner)
             release.countDown(); startup.get(5, TimeUnit.SECONDS)
             shadowOf(Looper.getMainLooper()).idle()
-            val worker = FactoryDocumentActivity::class.java.getDeclaredField("worker").apply { isAccessible = true }.get(control.get()) as java.util.concurrent.ExecutorService
-            var accepted = false
-            repeat(1000) { if (!accepted) try { worker.submit {}.get(5, TimeUnit.SECONDS); accepted = true } catch (_: java.util.concurrent.RejectedExecutionException) { Thread.yield() } }
-            assertTrue(accepted); shadowOf(Looper.getMainLooper()).idle()
-            assertEquals("review", documents.status())
+            drainDocuments()
+            assertFalse(FactoryFileShareCoordinator.startupPending())
+            assertTrue(coordinator.canBegin()); assertTrue(FactoryInteractionAdmission.available(coordinator))
+            assertEquals("review", documents.status()); assertEquals(owner, token.get(control.get()))
+            assertEquals("Sharing restore must not replay the document request", 1, verifications.get())
             assertTrue(control.get().window.decorView.findViewWithTag<Button>("factory-documents-choose").isEnabled)
         } finally {
             release.countDown(); control.pause().stop().destroy()

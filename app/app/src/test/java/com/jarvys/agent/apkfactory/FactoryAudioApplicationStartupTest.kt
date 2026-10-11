@@ -36,8 +36,7 @@ class FactoryAudioApplicationStartupTest {
         val previous = field.get(null) as? FactoryAudioCoordinator
         if (previous != null) {
             check(!previous.isBusy() && !previous.needsRecovery() && previous.session() == null)
-            val lease = FactoryAudioCoordinator::class.java.getDeclaredField("lease").apply { isAccessible = true }
-            check(lease.get(previous) == null) { "Never erase a live protection lease" }
+            check(FactoryInteractionAdmission.available(previous)) { "Never erase a live audio resource owner" }
             FactoryInteractionAdmission.release(previous)
         }
         field.set(null, null)
@@ -73,12 +72,15 @@ class FactoryAudioApplicationStartupTest {
             assertTrue(audio.isBusy()); assertFalse(audio.canBegin()); assertNull(audio.session())
             assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
             assertTrue(runCatching { MemoryUiAutomationGuard.captureAutomationEpoch() }.isSuccess)
-            assertFalse(FactoryDocumentCoordinator.get(context).canBegin())
+            assertFalse(FactoryInteractionAdmission.available(audio))
+            val documents = FactoryDocumentCoordinator.get(context)
+            assertTrue(documents.canBegin()); assertTrue(FactoryInteractionAdmission.available(documents))
         } finally { release.countDown() }
         audioBarrier(); FactoryStartupTestIsolation.awaitSharingWorkerCompletion()
         val audio = FactoryAudioCoordinator.get(context)
         assertFalse(audio.isBusy()); assertTrue(audio.needsRecovery()); assertEquals("outcome_unknown", audio.status())
         assertNull(audio.session()); assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
+        assertFalse(FactoryInteractionAdmission.available(audio)); assertTrue(FactoryDocumentCoordinator.get(context).canBegin())
         val refused = FutureTask(Callable { audio.close(null, true) { error("No human confirmation") } })
         check(worker.queue.offer(refused, 5, TimeUnit.SECONDS)); assertTrue(runCatching { refused.get(5, TimeUnit.SECONDS) }.isFailure)
         assertTrue(audio.needsRecovery()); assertFalse(FactoryInteractionAdmission.available())

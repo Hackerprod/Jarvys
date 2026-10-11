@@ -25,8 +25,8 @@ import java.util.concurrent.TimeUnit
 class FactoryBrowserApplicationStartupTest {
     private val context: Context get() = ApplicationProvider.getApplicationContext()
     private val root get() = File(context.noBackupFilesDir, "factory-browser")
-    private fun <T> worker(block: () -> T): T {
-        val executor = FactoryBrowserCoordinator.WORKER; executor.prestartCoreThread()
+    private fun <T> worker(executor: java.util.concurrent.ThreadPoolExecutor = FactoryBrowserCoordinator.WORKER, block: () -> T): T {
+        executor.prestartCoreThread()
         val task = FutureTask(Callable(block)); check(executor.queue.offer(task, 5, TimeUnit.SECONDS)); return task.get(5, TimeUnit.SECONDS)
     }
     @Before fun setup() {
@@ -55,11 +55,17 @@ class FactoryBrowserApplicationStartupTest {
             assertTrue(browser.isBusy()); assertFalse(browser.canBegin()); assertNull(browser.session())
             assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
             assertTrue(runCatching { MemoryUiAutomationGuard.captureAutomationEpoch() }.isSuccess)
-            assertFalse(FactoryDocumentCoordinator.get(context).canBegin()); assertFalse(FactoryAudioCoordinator.get(context).canBegin())
+            assertFalse(FactoryInteractionAdmission.available(browser))
+            val documents = FactoryDocumentCoordinator.get(context)
+            assertTrue(documents.canBegin()); assertTrue(FactoryInteractionAdmission.available(documents))
+            val audio = FactoryAudioCoordinator.get(context)
+            worker(FactoryAudioCoordinator.WORKER) {}
+            assertFalse(audio.isBusy()); assertTrue(audio.canBegin()); assertTrue(FactoryInteractionAdmission.available(audio))
         } finally { release.countDown() }
         worker {}; FactoryStartupTestIsolation.awaitSharingWorkerCompletion()
         val browser = FactoryBrowserCoordinator.get(context)
         assertFalse(browser.isBusy()); assertTrue(browser.needsRecovery()); assertEquals("outcome_unknown", browser.status()); assertNull(browser.session())
+        assertFalse(FactoryInteractionAdmission.available(browser)); assertTrue(FactoryDocumentCoordinator.get(context).canBegin())
         assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
         assertTrue(runCatching { worker { browser.close(null, true) { error("No human confirmation") } } }.isFailure)
         assertTrue(browser.needsRecovery()); assertFalse(FactoryInteractionAdmission.available())

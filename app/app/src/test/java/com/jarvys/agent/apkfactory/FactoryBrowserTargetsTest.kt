@@ -44,6 +44,32 @@ class FactoryBrowserTargetsTest {
         chosen.installed.versionCode++
         assertNull(targets.preferred(FactoryBrowserTestPackages.URL, candidates))
     }
+    @Test fun knownAndroidDefaultSnapshotFailureNeverSelectsAnotherBrowser() {
+        val fallback = FactoryBrowserTestPackages.install(context, "example.aaa", 22001)
+        val chosen = FactoryBrowserTestPackages.install(context, "example.zzz", 22002)
+        val pm = shadowOf(context.packageManager)
+        pm.setResolveInfosForIntent(FactoryBrowserTestPackages.view(FactoryBrowserTestPackages.DISCOVERY), listOf(fallback.resolve, chosen.resolve))
+        pm.setResolveInfosForIntent(FactoryBrowserTestPackages.view(FactoryBrowserTestPackages.URL), listOf(chosen.resolve))
+        val candidates = targets.discover()
+        for (signatures in listOf(emptyArray<Signature>(), arrayOf(Signature(byteArrayOf(1)), Signature(byteArrayOf(2))))) {
+            chosen.signatures(signatures)
+            assertNull("Unreadable known default must not select another browser", targets.preferred(FactoryBrowserTestPackages.URL, candidates))
+        }
+        chosen.signatures(arrayOf(Signature(FactoryBrowserTestPackages.CERT)))
+        chosen.installed.packageName = "example.inconsistent.identity"
+        assertNull(targets.preferred(FactoryBrowserTestPackages.URL, candidates))
+    }
+    @Test fun unrelatedAppLinkFallsBackOnlyToVerifiedGeneralAndroidBrowser() {
+        val browser = FactoryBrowserTestPackages.install(context, "example.browser", 22001)
+        val appLink = FactoryBrowserTestPackages.install(context, "example.applink", 22002)
+        appLink.resolve.filter = FactoryBrowserTestPackages.filter().apply { addDataAuthority("example.invalid", null) }
+        val pm = shadowOf(context.packageManager)
+        pm.setResolveInfosForIntent(FactoryBrowserTestPackages.view(FactoryBrowserTestPackages.DISCOVERY), listOf(browser.resolve))
+        pm.setResolveInfosForIntent(FactoryBrowserTestPackages.view(FactoryBrowserTestPackages.URL), listOf(appLink.resolve))
+        val candidates = targets.discover()
+        assertEquals(listOf(browser.component), candidates.map { it.component })
+        assertEquals(browser.component, targets.preferred(FactoryBrowserTestPackages.URL, candidates)?.component)
+    }
     @Test fun missingOrIneligibleAndroidDefaultNeverFallsBackToFirstCandidate() {
         FactoryBrowserTestPackages.install(context)
         val candidates = targets.discover(); assertFalse(candidates.isEmpty())

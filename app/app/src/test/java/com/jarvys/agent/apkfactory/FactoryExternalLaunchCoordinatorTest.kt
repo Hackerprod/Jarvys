@@ -314,7 +314,11 @@ class FactoryExternalLaunchCoordinatorTest {
                 assertTrue(external.needsRecovery()); assertEquals("outcome_unknown", JSONObject(File(root, "interaction.json").readText()).getString("state"))
             }
             assertFalse(MemoryUiAutomationGuard.isProtected()); assertFalse(FactoryInteractionAdmission.available())
-            denied { MemoryUiAutomationGuard.captureAutomationEpoch() }
+            assertTrue(runCatching { MemoryUiAutomationGuard.captureAutomationEpoch() }.isSuccess)
+            val remainingOwner: Any = if (externalFirst) browser else external
+            val closedOwner: Any = if (externalFirst) external else browser
+            assertFalse(FactoryInteractionAdmission.available(remainingOwner)); assertTrue(FactoryInteractionAdmission.available(closedOwner))
+            assertTrue(FactoryInteractionAdmission.available(Any()))
             if (externalFirst) assertNull(io { browser.close(null, true) {} }) else assertNull(io { external.close(null, true) {} })
             assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available())
             assertEquals("closed_outcome_unknown", JSONObject(File(root, "interaction.json").readText()).getString("state"))

@@ -32,10 +32,15 @@ internal class FactoryBrowserTargets(private val context: Context) {
         // A verified app-link handler is not a general browser. In that case Android's
         // general HTTPS default may still be used, with the exact URL revalidated before dispatch.
         for (address in listOf(checked, "https://browser-discovery.invalid/").distinct()) {
-            val exact = runCatching {
-                pm.resolveActivity(view(address), PackageManager.MATCH_DEFAULT_ONLY)?.let(::snapshot)
+            val resolved = runCatching {
+                pm.resolveActivity(view(address), PackageManager.MATCH_DEFAULT_ONLY)
             }.getOrNull() ?: continue
-            candidates.singleOrNull { it == exact }?.let { return it }
+            val activity = resolved.activityInfo ?: continue
+            val component = runCatching { ComponentName(activity.packageName, activity.name) }.getOrNull() ?: return null
+            val candidate = candidates.singleOrNull { it.component == component } ?: continue
+            // A known browser whose identity changed or cannot be read is not an app-link
+            // fallback. Do not silently substitute a different recipient in that case.
+            return runCatching { snapshot(resolved) }.getOrNull()?.takeIf { it == candidate }
         }
         return null
     }
