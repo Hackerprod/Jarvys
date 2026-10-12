@@ -2,6 +2,8 @@
 
 Delivered software slice v88 / `1.2.81-WORKSPACE-RESULTS`, accepted on 2026-10-12 at 16:45:36 UTC. The delivered v87 behavior and its evidence remain documented separately in [the first vertical](UX43_CENTRAL_WORKSPACES.md).
 
+The next bounded coordination slice is documented in [UX43 coordination](UX43_COORDINATION.md); it is development work and has not been delivered.
+
 ## Exact evidence and identity
 
 Each new Crew execution cycle receives a persisted random identity, independent of process-local cancellation counters. Terminal DONE, PARTIAL, FAILED or STOPPED evidence captures that cycle's own text at the deciding branch. The immutable envelope binds source session, mission, bot, cycle, status, timestamp and exact text digest. Snapshot schema 4 retains the cycle and evidence; older snapshots remain readable without inventing missing identity or a delivery receipt.

@@ -10,8 +10,11 @@ import com.jarvys.agent.tasks.ScheduledTaskConversation;
 import com.jarvys.agent.device.ScreenData;
 import com.jarvys.agent.crew.CrewMissionSnapshot;
 import com.jarvys.agent.crew.CrewResultEvidence;
+import com.jarvys.agent.crew.CrewCoordinationEvidence;
 import com.jarvys.agent.workspaces.WorkspaceIdentity;
 import com.jarvys.agent.workspaces.WorkspaceResultReference;
+import com.jarvys.agent.workspaces.WorkspaceCoordinationReference;
+import com.jarvys.agent.workspaces.WorkspaceCoordinationReply;
 import com.jarvys.agent.crew.CrewProcessIdentity;
 import com.jarvys.agent.proactive.ProactiveReplyClaim;
 import com.jarvys.agent.proactive.ProactiveSuggestedReply;
@@ -294,6 +297,310 @@ public final class LocalRunStore {
         return Collections.unmodifiableList(new ArrayList<>(found.values()));
     }
 
+    public synchronized CrewCoordinationEvidence appendCrewCoordinationEvidence(CrewCoordinationEvidence evidence, Runnable beforeWrite) {
+        if (evidence == null || beforeWrite == null) throw new IllegalArgumentException("Evidence and admission are required");
+        CrewCoordinationEvidence.fromJsonStrict(evidence.toJson());
+        requireResultSource(evidence.conversationId);
+        synchronized (SESSION_TITLE_LOCK) {
+            CrewCoordinationEvidence existing = readCrewCoordinationEvidence(evidence.conversationId, evidence.evidenceId);
+            if (existing != null) {
+                if (!sameCoordinationEvidence(existing, evidence)) resultConflict();
+                return existing;
+            }
+            appendResultRowLocked(evidence.conversationId, evidence.toJson(), false, beforeWrite);
+            return evidence;
+        }
+    }
+
+    public CrewCoordinationEvidence appendCrewCoordinationEvidence(CrewCoordinationEvidence evidence) {
+        return appendCrewCoordinationEvidence(evidence, () -> { });
+    }
+
+    /** Exact raw evidence retrieval; callers must page text before exposing it to a model/UI. */
+    public synchronized CrewCoordinationEvidence readCrewCoordinationEvidence(String sourceSessionId, String evidenceId) {
+        requireResultSource(sourceSessionId); WorkspaceCoordinationReference.requireEvidenceId(evidenceId);
+        synchronized (SESSION_TITLE_LOCK) {
+            final CrewCoordinationEvidence[] found = {null};
+            scanCoordinationLedgerLocked(sourceSessionId, false, (evidence, reference, notice, reply, transition) -> {
+                if (evidence != null && evidenceId.equals(evidence.evidenceId)) found[0] = evidence;
+            });
+            return found[0];
+        }
+    }
+
+    /** Lexically paged evidence IDs only; never an unbounded list of worker result text. */
+    public synchronized List<String> listCrewCoordinationEvidence(String sourceSessionId, int limit, String afterEvidenceId) {
+        requireResultSource(sourceSessionId); resultPage(limit);
+        if (afterEvidenceId != null) WorkspaceCoordinationReference.requireEvidenceId(afterEvidenceId);
+        synchronized (SESSION_TITLE_LOCK) {
+            java.util.TreeSet<String> found = new java.util.TreeSet<>();
+            scanCoordinationLedgerLocked(sourceSessionId, false, (evidence, reference, notice, reply, transition) -> {
+                if (evidence != null && (afterEvidenceId == null || evidence.evidenceId.compareTo(afterEvidenceId) > 0)) {
+                    found.add(evidence.evidenceId);
+                    if (found.size() > limit) found.pollLast();
+                }
+            });
+            return Collections.unmodifiableList(new ArrayList<>(found));
+        }
+    }
+
+    public synchronized WorkspaceCoordinationReference appendWorkspaceCoordinationReferenceIfAbsent(
+            WorkspaceCoordinationReference reference, Runnable beforeWrite) {
+        requireCoordinationReference(reference, beforeWrite);
+        synchronized (SESSION_TITLE_LOCK) {
+            CrewCoordinationEvidence evidence = readCrewCoordinationEvidence(reference.executionSessionId, reference.evidenceId);
+            if (!reference.matchesEvidence(evidence)) throw new IllegalStateException("Reference has no matching durable evidence");
+            WorkspaceCoordinationReference existing = readWorkspaceCoordinationReference(reference.executionSessionId, reference.referenceId);
+            if (existing != null) {
+                if (!existing.sameBinding(reference)) resultConflict();
+                // A later registry revision is an observation, not a new result identity.
+                return existing;
+            }
+            appendResultRowLocked(reference.executionSessionId, reference.toJson(), false, beforeWrite);
+            return reference;
+        }
+    }
+
+    public synchronized WorkspaceCoordinationReference readWorkspaceCoordinationReference(String sourceSessionId, String referenceId) {
+        requireResultSource(sourceSessionId); WorkspaceCoordinationReference.requireReferenceId(referenceId);
+        synchronized (SESSION_TITLE_LOCK) {
+            return findCoordinationReferenceLocked(sourceSessionId, referenceId, false);
+        }
+    }
+
+    public synchronized List<WorkspaceCoordinationReference> listWorkspaceCoordinationReferences(
+            String sourceSessionId, int limit, String afterReferenceId) {
+        requireResultSource(sourceSessionId);
+        synchronized (SESSION_TITLE_LOCK) {
+            return listCoordinationReferencesLocked(sourceSessionId, limit, afterReferenceId, false);
+        }
+    }
+
+    /** Receipt existence proves local delivery only; no worker text, role, or approval is copied. */
+    public synchronized WorkspaceCoordinationReference appendWorkspaceCoordinationNoticeIfAbsent(
+            WorkspaceCoordinationReference reference, Runnable beforeWrite) {
+        requireCoordinationReference(reference, beforeWrite);
+        synchronized (SESSION_TITLE_LOCK) {
+            WorkspaceCoordinationReference durable = readWorkspaceCoordinationReference(reference.executionSessionId, reference.referenceId);
+            if (durable == null || !durable.samePayload(reference))
+                throw new IllegalStateException("Notice has no exact durable source reference");
+            WorkspaceCoordinationReference existing = findCoordinationReferenceLocked(reference.ownerCentralSessionId, reference.referenceId, true);
+            if (existing != null) {
+                if (!existing.samePayload(reference)) resultConflict();
+                return existing;
+            }
+            appendResultRowLocked(reference.ownerCentralSessionId, reference.toNoticeJson(), true, beforeWrite);
+            return reference;
+        }
+    }
+
+    public synchronized WorkspaceCoordinationReference readWorkspaceCoordinationNotice(String centralSessionId, String referenceId) {
+        requireResultCentral(centralSessionId); WorkspaceCoordinationReference.requireReferenceId(referenceId);
+        synchronized (SESSION_TITLE_LOCK) { return findCoordinationReferenceLocked(centralSessionId, referenceId, true); }
+    }
+
+    public synchronized List<WorkspaceCoordinationReference> listWorkspaceCoordinationNotices(
+            String centralSessionId, int limit, String afterReferenceId) {
+        requireResultCentral(centralSessionId);
+        synchronized (SESSION_TITLE_LOCK) { return listCoordinationReferencesLocked(centralSessionId, limit, afterReferenceId, true); }
+    }
+
+    private WorkspaceCoordinationReference findCoordinationReferenceLocked(String session, String id, boolean notices) {
+        final WorkspaceCoordinationReference[] found = {null};
+        scanCoordinationLedgerLocked(session, notices, (evidence, reference, notice, reply, transition) -> {
+            if (reference != null && notice == notices && id.equals(reference.referenceId)) found[0] = reference;
+        });
+        return found[0];
+    }
+
+    private List<WorkspaceCoordinationReference> listCoordinationReferencesLocked(String session, int limit, String after, boolean notices) {
+        resultPage(limit);
+        if (after != null) WorkspaceCoordinationReference.requireReferenceId(after);
+        java.util.TreeMap<String, WorkspaceCoordinationReference> found = new java.util.TreeMap<>();
+        scanCoordinationLedgerLocked(session, notices, (evidence, reference, notice, reply, transition) -> {
+            if (reference != null && notice == notices && (after == null || reference.referenceId.compareTo(after) > 0)) {
+                found.put(reference.referenceId, reference);
+                if (found.size() > limit) found.pollLastEntry();
+            }
+        });
+        return Collections.unmodifiableList(new ArrayList<>(found.values()));
+    }
+
+    /** A single durable reply claim per exact source request. No dispatch happens inside the store. */
+    public synchronized WorkspaceCoordinationReply prepareWorkspaceCoordinationReply(
+            WorkspaceCoordinationReply proposed, Runnable finalAdmission) {
+        requireCoordinationReply(proposed, finalAdmission);
+        synchronized (SESSION_TITLE_LOCK) {
+            WorkspaceCoordinationReply existing = readWorkspaceCoordinationReply(
+                    proposed.reference.ownerCentralSessionId, proposed.reference.referenceId);
+            if (existing != null) {
+                if (!existing.samePayload(proposed)) coordinationConflict();
+                return existing;
+            }
+            // An alternate assignment/reference cannot circumvent the source-wide reply claim.
+            scanCoordinationLedgerLocked(proposed.reference.ownerCentralSessionId, true,
+                    (evidence, reference, notice, reply, transition) -> {
+                if (reply != null && reply.reference.evidenceId.equals(proposed.reference.evidenceId)) coordinationConflict();
+            });
+            if (proposed.state != WorkspaceCoordinationReply.State.PREPARED)
+                throw new IllegalArgumentException("A new reply must be PREPARED");
+            requireExactCoordinationReplySource(proposed.reference);
+            appendResultRowLocked(proposed.reference.ownerCentralSessionId, proposed.toJson(), true, finalAdmission);
+            return proposed;
+        }
+    }
+
+    /** Only a newly appended STARTED record authorizes the caller's one exact synchronous dispatch. */
+    public synchronized WorkspaceCoordinationReply markWorkspaceCoordinationReplyStarted(
+            WorkspaceCoordinationReply proposed, Runnable finalAdmission) {
+        requireCoordinationReply(proposed, finalAdmission);
+        synchronized (SESSION_TITLE_LOCK) {
+            WorkspaceCoordinationReply durable = requireExistingCoordinationReply(proposed);
+            if (durable.state == WorkspaceCoordinationReply.State.ACCEPTED_LOCAL) return durable;
+            if (durable.state == WorkspaceCoordinationReply.State.STARTED)
+                throw new IllegalStateException("Coordination reply is UNCERTAIN; dispatch must not be retried");
+            requireExactCoordinationReplySource(durable.reference);
+            WorkspaceCoordinationReply started = durable.withState(WorkspaceCoordinationReply.State.STARTED,
+                    Math.max(System.currentTimeMillis(), durable.stateAtMillis));
+            appendResultRowLocked(durable.reference.ownerCentralSessionId, started.toStateJson(), true, finalAdmission);
+            return started;
+        }
+    }
+
+    /** Record only after the exact live mailbox synchronously accepted; a failed write leaves STARTED/UNCERTAIN. */
+    public synchronized WorkspaceCoordinationReply markWorkspaceCoordinationReplyAccepted(
+            WorkspaceCoordinationReply proposed, Runnable finalAdmission) {
+        requireCoordinationReply(proposed, finalAdmission);
+        synchronized (SESSION_TITLE_LOCK) {
+            WorkspaceCoordinationReply durable = requireExistingCoordinationReply(proposed);
+            if (durable.state == WorkspaceCoordinationReply.State.ACCEPTED_LOCAL) return durable;
+            if (durable.state != WorkspaceCoordinationReply.State.STARTED)
+                throw new IllegalStateException("Coordination acceptance requires a durable STARTED claim");
+            requireExactCoordinationReplySource(durable.reference);
+            WorkspaceCoordinationReply accepted = durable.withState(WorkspaceCoordinationReply.State.ACCEPTED_LOCAL,
+                    Math.max(System.currentTimeMillis(), durable.stateAtMillis));
+            appendResultRowLocked(durable.reference.ownerCentralSessionId, accepted.toStateJson(), true, finalAdmission);
+            return accepted;
+        }
+    }
+
+    /** Historical receipt only. STARTED means UNCERTAIN, including after reopening; never resume or replay. */
+    public synchronized WorkspaceCoordinationReply readWorkspaceCoordinationReply(String centralSessionId, String referenceId) {
+        requireResultCentral(centralSessionId); WorkspaceCoordinationReference.requireReferenceId(referenceId);
+        synchronized (SESSION_TITLE_LOCK) {
+            final WorkspaceCoordinationReply[] found = {null};
+            scanCoordinationLedgerLocked(centralSessionId, true, (evidence, reference, notice, reply, transition) -> {
+                if (reply != null && referenceId.equals(reply.reference.referenceId)) found[0] = reply;
+                if (transition != null && referenceId.equals(transition.referenceId))
+                    found[0] = found[0].withState(transition.state, transition.stateAtMillis);
+            });
+            return found[0];
+        }
+    }
+
+    public synchronized WorkspaceCoordinationReply readWorkspaceCoordinationReply(
+            String centralSessionId, String referenceId, String replyKey) {
+        if (replyKey == null || !replyKey.matches("[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}"))
+            throw new IllegalArgumentException("Invalid coordination reply key");
+        WorkspaceCoordinationReply reply = readWorkspaceCoordinationReply(centralSessionId, referenceId);
+        if (reply != null && !reply.replyKey.equals(replyKey)) coordinationConflict();
+        return reply;
+    }
+
+    public synchronized void requireWorkspaceCoordinationDisclosureLive(
+            WorkspaceCoordinationReference reference, boolean noticeRequired) {
+        requireCoordinationReference(reference, () -> { });
+        synchronized (SESSION_TITLE_LOCK) {
+            requireResultLedgerLocked(reference.executionSessionId, false);
+            File central = requireResultLedgerLocked(reference.ownerCentralSessionId, true);
+            if (noticeRequired && !central.isFile()) throw new IllegalStateException("Central coordination receipt is unavailable");
+        }
+    }
+
+    private WorkspaceCoordinationReply requireExistingCoordinationReply(WorkspaceCoordinationReply proposed) {
+        WorkspaceCoordinationReply durable = readWorkspaceCoordinationReply(
+                proposed.reference.ownerCentralSessionId, proposed.reference.referenceId);
+        if (durable == null) throw new IllegalStateException("Coordination reply intent is missing");
+        if (!durable.samePayload(proposed)) coordinationConflict();
+        return durable;
+    }
+    private void requireExactCoordinationReplySource(WorkspaceCoordinationReference reference) {
+        WorkspaceCoordinationReference source = readWorkspaceCoordinationReference(reference.executionSessionId, reference.referenceId);
+        WorkspaceCoordinationReference notice = readWorkspaceCoordinationNotice(reference.ownerCentralSessionId, reference.referenceId);
+        if (source == null || notice == null || !source.samePayload(reference) || !notice.samePayload(reference))
+            throw new IllegalStateException("Reply requires an exact durable source reference and Central notice");
+    }
+    private static void requireCoordinationReply(WorkspaceCoordinationReply value, Runnable admission) {
+        if (value == null || admission == null) throw new IllegalArgumentException("Reply and admission are required");
+        WorkspaceCoordinationReply.fromJsonStrict(value.toJson());
+    }
+    private static void requireCoordinationReference(WorkspaceCoordinationReference value, Runnable admission) {
+        if (value == null || admission == null) throw new IllegalArgumentException("Reference and admission are required");
+        WorkspaceCoordinationReference.fromJsonStrict(value.toJson());
+    }
+    private static boolean sameCoordinationEvidence(CrewCoordinationEvidence a, CrewCoordinationEvidence b) {
+        return a.evidenceId.equals(b.evidenceId) && a.contentSha256.equals(b.contentSha256)
+                && a.conversationId.equals(b.conversationId) && a.missionId.equals(b.missionId)
+                && a.botId.equals(b.botId) && a.cycleId.equals(b.cycleId) && a.messageId.equals(b.messageId)
+                && a.kind.equals(b.kind) && a.text.equals(b.text) && a.refs.equals(b.refs) && a.producedAtMillis == b.producedAtMillis;
+    }
+    private static void validateCoordinationDuplicate(Map<String, WorkspaceCoordinationReference> seen,
+            WorkspaceCoordinationReference value) throws IOException {
+        WorkspaceCoordinationReference prior = seen.put(value.referenceId, value);
+        if (prior != null && !prior.samePayload(value)) throw new IOException("Conflicting coordination reference identity");
+    }
+    private static void coordinationConflict() {
+        throw new IllegalStateException("Coordination request already has a different immutable reply claim");
+    }
+    private interface CoordinationRowVisitor {
+        void accept(CrewCoordinationEvidence evidence, WorkspaceCoordinationReference reference, boolean notice,
+                WorkspaceCoordinationReply reply, WorkspaceCoordinationReply.Transition transition);
+    }
+    private static final class CoordinationEvidenceIdentity {
+        final String digest, session, mission, bot, cycle, message, kind;
+        final long producedAt;
+        CoordinationEvidenceIdentity(CrewCoordinationEvidence evidence) {
+            digest = evidence.contentSha256; session = evidence.conversationId; mission = evidence.missionId;
+            bot = evidence.botId; cycle = evidence.cycleId; message = evidence.messageId;
+            kind = evidence.kind; producedAt = evidence.producedAtMillis;
+        }
+        boolean matches(WorkspaceCoordinationReference reference) {
+            return digest.equals(reference.contentSha256) && session.equals(reference.executionSessionId)
+                    && mission.equals(reference.missionId) && bot.equals(reference.botId) && cycle.equals(reference.cycleId)
+                    && message.equals(reference.messageId) && kind.equals(reference.kind) && producedAt == reference.producedAtMillis;
+        }
+    }
+    /** Metadata only during whole-tail scans; no accumulation of immutable reply bodies. */
+    private static final class CoordinationReplyIdentity {
+        final String replyId, payloadSha256, referenceId, executionSessionId;
+        final long preparedAtMillis;
+        WorkspaceCoordinationReply.State state;
+        long stateAtMillis;
+        CoordinationReplyIdentity(WorkspaceCoordinationReply reply) {
+            replyId = reply.replyId; payloadSha256 = reply.payloadSha256; referenceId = reply.reference.referenceId;
+            executionSessionId = reply.reference.executionSessionId; preparedAtMillis = reply.preparedAtMillis;
+            state = reply.state; stateAtMillis = reply.stateAtMillis;
+        }
+        boolean matches(WorkspaceCoordinationReply reply) {
+            return replyId.equals(reply.replyId) && payloadSha256.equals(reply.payloadSha256)
+                    && referenceId.equals(reply.reference.referenceId) && executionSessionId.equals(reply.reference.executionSessionId)
+                    && preparedAtMillis == reply.preparedAtMillis;
+        }
+        void advance(WorkspaceCoordinationReply.Transition next) throws IOException {
+            if (!replyId.equals(next.replyId) || !payloadSha256.equals(next.payloadSha256)
+                    || !referenceId.equals(next.referenceId) || !executionSessionId.equals(next.executionSessionId)
+                    || next.stateAtMillis < stateAtMillis) throw new IOException("Conflicting coordination reply transition binding");
+            if (state == next.state) {
+                if (stateAtMillis != next.stateAtMillis) throw new IOException("Conflicting duplicate coordination reply state");
+                return;
+            }
+            if (!(state == WorkspaceCoordinationReply.State.PREPARED && next.state == WorkspaceCoordinationReply.State.STARTED)
+                    && !(state == WorkspaceCoordinationReply.State.STARTED && next.state == WorkspaceCoordinationReply.State.ACCEPTED_LOCAL))
+                throw new IOException("Missing or out-of-order coordination reply transition");
+            state = next.state; stateAtMillis = next.stateAtMillis;
+        }
+    }
+
     private interface ResultRowVisitor {
         void accept(CrewResultEvidence evidence, WorkspaceResultReference reference, boolean notice);
     }
@@ -319,10 +626,21 @@ public final class LocalRunStore {
      * repair/truncate bytes, skip malformed rows, append beyond torn tails, or replay an action.
      */
     private void scanResultLedgerLocked(String session, boolean allowMissingCentral, ResultRowVisitor visitor) {
+        scanWorkspaceLedgerLocked(session, allowMissingCentral, visitor, (evidence, reference, notice, reply, transition) -> { });
+    }
+    private void scanCoordinationLedgerLocked(String session, boolean allowMissingCentral, CoordinationRowVisitor visitor) {
+        scanWorkspaceLedgerLocked(session, allowMissingCentral, (evidence, reference, notice) -> { }, visitor);
+    }
+    private void scanWorkspaceLedgerLocked(String session, boolean allowMissingCentral,
+            ResultRowVisitor visitor, CoordinationRowVisitor coordinationVisitor) {
         File ledger = requireResultLedgerLocked(session, allowMissingCentral);
         if (!ledger.exists()) return;
         Map<String, ResultEvidenceIdentity> evidenceKeys = new LinkedHashMap<>();
         Map<String, WorkspaceResultReference> referenceKeys = new LinkedHashMap<>();
+        Map<String, CoordinationEvidenceIdentity> coordinationEvidenceKeys = new LinkedHashMap<>();
+        Map<String, WorkspaceCoordinationReference> coordinationReferenceKeys = new LinkedHashMap<>();
+        Map<String, CoordinationReplyIdentity> coordinationReplyKeys = new LinkedHashMap<>();
+        Map<String, String> coordinationReplyEvidenceClaims = new LinkedHashMap<>();
         try (java.io.InputStreamReader decoded = new java.io.InputStreamReader(new java.io.FileInputStream(ledger),
                 StandardCharsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
                         .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT));
@@ -355,7 +673,54 @@ public final class LocalRunStore {
                     if (!session.equals(reference.ownerCentralSessionId)) throw new IOException("Wrong notice ledger owner");
                     validateResultDuplicate(referenceKeys, reference);
                     visitor.accept(null, reference, true);
-                } else if (type.startsWith("crew_result_") || type.startsWith("workspace_result_")
+                } else if (CrewCoordinationEvidence.ROW_TYPE.equals(type)) {
+                    requireResultSource(session);
+                    CrewCoordinationEvidence evidence = CrewCoordinationEvidence.fromJsonStrict(row);
+                    if (!session.equals(evidence.conversationId)) throw new IOException("Wrong coordination evidence owner");
+                    CoordinationEvidenceIdentity previous = coordinationEvidenceKeys.get(evidence.evidenceId);
+                    if (previous != null && !previous.digest.equals(evidence.contentSha256))
+                        throw new IOException("Conflicting coordination evidence identity");
+                    coordinationEvidenceKeys.put(evidence.evidenceId, new CoordinationEvidenceIdentity(evidence));
+                    coordinationVisitor.accept(evidence, null, false, null, null);
+                } else if (WorkspaceCoordinationReference.REFERENCE_TYPE.equals(type)) {
+                    requireResultSource(session);
+                    WorkspaceCoordinationReference reference = WorkspaceCoordinationReference.fromJsonStrict(row);
+                    CoordinationEvidenceIdentity evidence = coordinationEvidenceKeys.get(reference.evidenceId);
+                    if (!session.equals(reference.executionSessionId) || evidence == null || !evidence.matches(reference))
+                        throw new IOException("Coordination reference has no preceding exact source evidence");
+                    validateCoordinationDuplicate(coordinationReferenceKeys, reference);
+                    coordinationVisitor.accept(null, reference, false, null, null);
+                } else if (WorkspaceCoordinationReference.NOTICE_TYPE.equals(type)) {
+                    requireResultCentral(session);
+                    WorkspaceCoordinationReference reference = WorkspaceCoordinationReference.fromNoticeJsonStrict(row);
+                    if (!session.equals(reference.ownerCentralSessionId)) throw new IOException("Wrong coordination notice owner");
+                    validateCoordinationDuplicate(coordinationReferenceKeys, reference);
+                    coordinationVisitor.accept(null, reference, true, null, null);
+                } else if (WorkspaceCoordinationReply.INTENT_TYPE.equals(type)) {
+                    requireResultCentral(session);
+                    WorkspaceCoordinationReply reply = WorkspaceCoordinationReply.fromJsonStrict(row);
+                    WorkspaceCoordinationReference notice = coordinationReferenceKeys.get(reply.reference.referenceId);
+                    if (!session.equals(reply.reference.ownerCentralSessionId) || notice == null || !notice.samePayload(reply.reference))
+                        throw new IOException("Coordination reply has no preceding exact notice");
+                    String previousReference = coordinationReplyEvidenceClaims.put(reply.reference.evidenceId, reply.reference.referenceId);
+                    if (previousReference != null && !previousReference.equals(reply.reference.referenceId))
+                        throw new IOException("Multiple reply claims for one exact coordination source");
+                    CoordinationReplyIdentity previous = coordinationReplyKeys.get(reply.reference.referenceId);
+                    if (previous != null && (!previous.matches(reply) || previous.state != WorkspaceCoordinationReply.State.PREPARED))
+                        throw new IOException("Conflicting or out-of-order coordination reply claim");
+                    coordinationReplyKeys.put(reply.reference.referenceId, new CoordinationReplyIdentity(reply));
+                    coordinationVisitor.accept(null, null, false, reply, null);
+                } else if (WorkspaceCoordinationReply.STATE_TYPE.equals(type)) {
+                    requireResultCentral(session);
+                    WorkspaceCoordinationReply.Transition transition = WorkspaceCoordinationReply.fromStateJsonStrict(row);
+                    CoordinationReplyIdentity previous = coordinationReplyKeys.get(transition.referenceId);
+                    if (previous == null) throw new IOException("Coordination reply state has no preceding intent");
+                    previous.advance(transition);
+                    coordinationVisitor.accept(null, null, false, null, transition);
+                } else if (type.startsWith("crew_coordination_") || type.startsWith("workspace_coordination_")
+                        || row.has("crewCoordinationSchemaVersion") || row.has("workspaceCoordinationSchemaVersion")
+                        || row.has("workspaceCoordinationReplySchemaVersion") || row.has("replyId")
+                        || type.startsWith("crew_result_") || type.startsWith("workspace_result_")
                         || row.has("crewResultSchemaVersion") || row.has("workspaceResultSchemaVersion")
                         || row.has("evidenceId") || row.has("referenceId")) {
                     throw new IOException("Unsupported result ledger row");
@@ -1416,7 +1781,10 @@ public final class LocalRunStore {
 
     private static boolean isResultOnlyRow(JSONObject row) {
         String type = row.optString("type", "");
-        return type.startsWith("crew_result_") || type.startsWith("workspace_result_")
+        return type.startsWith("crew_coordination_") || type.startsWith("workspace_coordination_")
+                || row.has("crewCoordinationSchemaVersion") || row.has("workspaceCoordinationSchemaVersion")
+                || row.has("workspaceCoordinationReplySchemaVersion") || row.has("replyId")
+                || type.startsWith("crew_result_") || type.startsWith("workspace_result_")
                 || row.has("crewResultSchemaVersion") || row.has("workspaceResultSchemaVersion")
                 || row.has("evidenceId") || row.has("referenceId");
     }

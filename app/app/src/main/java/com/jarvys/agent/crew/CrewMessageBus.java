@@ -24,9 +24,17 @@ public final class CrewMessageBus {
 
     public CrewMessage send(String from, String to, CrewMessage.Type type, String text, List<String> refs) {
         CrewMessage message = new CrewMessage(conversationId, from, to, type, text, refs, System.currentTimeMillis());
+        return enqueueFresh(message);
+    }
+
+    /** Fresh in-process admission only. A previously accepted ID is never replayed after draining. */
+    CrewMessage enqueueFresh(CrewMessage message) {
         synchronized (monitor) {
+            if (!conversationId.equals(message.conversationId)) throw new IllegalArgumentException("Wrong Crew message scope");
+            for (CrewMessage existing : log) if (existing.id.equals(message.id))
+                throw new IllegalStateException("Crew message ID has already been admitted");
             log.add(message);
-            mailboxes.computeIfAbsent(to, (ignored)->new ArrayList<>()).add(message);
+            mailboxes.computeIfAbsent(message.to, (ignored)->new ArrayList<>()).add(message);
             monitor.notifyAll();
         }
         return message;

@@ -6,6 +6,10 @@ v91 (`1.2.84-MASCOT-SCALE`) amplía la mascota central de 30 a 84 dp (2,8×), co
 
 Envío aceptado el 12 de octubre de 2026 a las 21:37 UTC mediante ZIP: extraer antes de instalar. ZIP: 19.758.814 bytes, SHA-256 `8271af8d88a99907ae6d1341550fa8b0d0e57fd556050f35b520799de1a67393`. APK ARM64 interior: 21.311.123 bytes, SHA-256 `ef4c710d79582c43dda003eff857eb5f75617de0a7e2859310cb1a8e7fec8557`. Instalación/aceptación física pendientes. [Contrato de identidad](docs/MASCOT_STATIC_IDENTITY.md).
 
+### Desarrollo en curso: coordinación durable UX43
+
+El siguiente lote incorpora preguntas, hallazgos y bloqueos ligados al ciclo del trabajador, lectura exacta desde el central, respuesta causal al ciclo todavía activo e indicador nativo consolidado. La primera compilación integrada Kotlin/Java pasó el 12 de octubre a las 21:57 UTC; pruebas integradas y aceptación de APK pendientes. La entrega vigente sigue siendo v91. [Contrato del lote](docs/UX43_COORDINATION.md).
+
 ### Entrega anterior v90
 
 v90 (`1.2.83-MASCOT`) está validada y firmada con D7. Incorpora la imagen exacta proporcionada como icono y mascota estática de Jarvys, con quince derivados de launcher reproducibles. El robot animado anterior queda inactivo incluso con consentimiento previo; las mascotas de otros bots y Factory siguen intactas. La animación triste entregada por separado todavía no se integra. [Contrato de identidad](docs/MASCOT_STATIC_IDENTITY.md).

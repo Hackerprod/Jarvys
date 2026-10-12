@@ -34,7 +34,11 @@ class NativeActionPolicy(private val store: ConnectorAutonomyStore) {
     init { ActionPolicyDefaults.register(CONNECTOR_ID, Operation.entries.map { it.id }) }
 
     fun snapshot(operation: Operation): ActionPolicySnapshot = store.snapshot(CONNECTOR_ID, operation.id)
-    fun set(operation: Operation, mode: AutonomyPolicy) = store.setPolicyChecked(CONNECTOR_ID, operation.id, mode)
+    fun set(operation: Operation, mode: AutonomyPolicy) = store.setPolicyChecked(CONNECTOR_ID, operation.id, mode).also {
+        // Refresh native metadata projections after the durable permission change, without running work.
+        if (operation == Operation.WORKSPACE_READ || operation == Operation.WORKSPACE_DELEGATE)
+            com.jarvys.agent.workspaces.WorkspaceChanges.changed()
+    }
     fun prepare(operation: Operation, binding: String): Request {
         require(binding.matches(Regex("[a-f0-9]{64}"))) { "An exact native request binding is required" }
         val saved = snapshot(operation)

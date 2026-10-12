@@ -495,6 +495,21 @@ public final class CoreAgentRuntime {
         }
       });
     }
+    if (WorkspaceCoordinationDelivery.isCanonicalWorkspace(this.context, this.sessionId)) {
+      manager.configureCoordinationEvidenceListener(new CrewManager.CoordinationEvidenceListener() {
+        @Override public void onCoordinationEvidence(com.jarvys.agent.crew.CrewCoordinationEvidence evidence) {
+          if (!CoreAgentRuntime.this.sessionId.equals(evidence.conversationId))
+            throw new IllegalArgumentException("Coordination evidence owner changed");
+          crewStore.appendCrewCoordinationEvidence(evidence, () -> {});
+          com.jarvys.agent.workspaces.WorkspaceChanges.coordinationEvidenceSaved(evidence.conversationId, evidence.missionId, evidence.evidenceId);
+          WorkspaceCoordinationDelivery.schedule(CoreAgentRuntime.this.context, evidence.conversationId);
+        }
+        @Override public void onDeliveryFailure(com.jarvys.agent.crew.CrewCoordinationEvidence evidence, RuntimeException failure) {
+          com.jarvys.agent.workspaces.WorkspaceChanges.coordinationEvidenceFailed(evidence.conversationId, evidence.missionId, evidence.evidenceId);
+          LocalDiagnostics.recoverable(CoreAgentRuntime.this.context, LocalDiagnostics.Origin.RUNTIME, failure);
+        }
+      });
+    }
     final List<String> profileCeiling = new ArrayList<>(crewCapabilities.names());
     profileCeiling.addAll(CodingProjectTools.names());
     if (projectImagesAllowed()) profileCeiling.add(ProjectImageTool.NAME);

@@ -48,6 +48,12 @@ public final class CrewMissionSnapshot {
                     || !conversationId.equals(bot.resultEvidence.conversationId)))
                 throw new IllegalArgumentException("Worker result evidence belongs to another mission");
         }
+        for (CrewMessage message : messages) if (message.coordination != null) {
+            if (!missionId.equals(message.coordination.missionId)
+                    || !conversationId.equals(message.coordination.conversationId)
+                    || bots.stream().noneMatch(bot -> bot.id.equals(message.coordination.botId)))
+                throw new IllegalArgumentException("Crew coordination reference belongs to another mission");
+        }
         this.bots = Collections.unmodifiableList(new ArrayList<>(bots));
         this.messages = Collections.unmodifiableList(new ArrayList<>(messages));
     }

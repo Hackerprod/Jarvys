@@ -62,8 +62,11 @@ class WorkspaceResultDelivery internal constructor(
         token.throwIfCancelled(); admission.run()
         source(reference) // Registry and source reads stay outside the ledger append lock.
         synchronized(DeliveredArtifactStore.DELIVERY_ACTION_LOCK) {
-            token.throwIfCancelled(); admission.run()
-            ledger.appendWorkspaceResultNoticeIfAbsent(reference, Runnable { token.throwIfCancelled(); admission.run() })
+            // Same lock order as artifact delivery and coordination: delivery → STOP → ledger.
+            if (!token.runIfActive {
+                    token.throwIfCancelled(); admission.run()
+                    ledger.appendWorkspaceResultNoticeIfAbsent(reference, Runnable { token.throwIfCancelled(); admission.run() })
+                }) token.throwIfCancelled()
         }
         AgentRunUiState.workspaceResultAdded(reference)
         WorkspaceChanges.changed()
@@ -223,6 +226,7 @@ class WorkspaceResultDelivery internal constructor(
                     val id = WorkspaceIdentity.workspaceId(executionSessionId)
                     try {
                         beginPending(entry)
+                        WorkspaceCoordinationDelivery.reconcileScheduled(app, id, token)
                         WorkspaceResultDelivery(app).reconcile(id, token)
                         errors.remove(id)
                     } catch (_: java.util.concurrent.CancellationException) {

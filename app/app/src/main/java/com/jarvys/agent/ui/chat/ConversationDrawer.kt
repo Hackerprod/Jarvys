@@ -237,6 +237,7 @@ fun ConversationDrawer(
                                     Text(workspaceDisplayText(workspace.title, stringResource(R.string.workspace_title), 256),
                                         style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                                     WorkspaceStatusText(workspace.status)
+                                    com.jarvys.agent.workspaces.WorkspaceCoordinationIndicator(workspace.coordination)
                                     if (workspace.statusPageLimited) Text(stringResource(R.string.workspace_status_page_scope),
                                         style = MaterialTheme.typography.bodySmall)
                                 }

@@ -25,7 +25,8 @@ object WorkspaceProjection {
             val manager = CoreAgentRuntime.crewManagerForSession(scope.executionSessionId)
             val projected = assignments.map { assignment -> projectAssignment(localized, store, scope, assignment, snapshots, manager) }
             WorkspaceSidebarRow(scope.workspaceId, scope.title,
-                workspaceAggregateStatus(projected.map { it.status }, hasMore), hasMore)
+                workspaceAggregateStatus(projected.map { it.status }, hasMore), hasMore,
+                com.jarvys.agent.WorkspaceCoordinationDelivery(context).summary(scope.workspaceId))
         }
         val next = workspaces.lastOrNull()?.workspaceId?.takeIf {
             workspaces.size == WORKSPACE_PAGE_SIZE && store.listWorkspaces(1, it).isNotEmpty()
@@ -43,7 +44,8 @@ object WorkspaceProjection {
         val assignments = records.map { assignment -> projectAssignment(localized, store, scope, assignment, snapshots, manager) }
         val pageLimited = afterAssignmentId != null || next != null
         WorkspaceDetailUiState(id, scope.title, workspaceAggregateStatus(assignments.map { it.status }, pageLimited),
-            assignments, canOpenFiles = true, nextCursor = next, statusPageLimited = pageLimited)
+            assignments, canOpenFiles = true, nextCursor = next, statusPageLimited = pageLimited,
+            coordination = com.jarvys.agent.WorkspaceCoordinationDelivery(context).summary(id))
     }
 
     private fun assignmentNext(store: WorkspaceRegistry, id: String, records: List<WorkspaceAssignment>): String? =
@@ -75,6 +77,7 @@ object WorkspaceProjection {
             else -> status(recorded?.status)
         }
         val note = listOfNotNull(issue, com.jarvys.agent.WorkspaceResultDelivery.issue(scope.workspaceId),
+            com.jarvys.agent.WorkspaceCoordinationDelivery.issue(scope.workspaceId),
             if (assignment.needsReconciliation) context.getString(R.string.workspace_admission_uncertain) else null,
             if (unsettled != null) context.getString(R.string.workspace_control_uncertain) else null,
             if (recorded == null) context.getString(R.string.workspace_evidence_unavailable) else recorded.recoveryNote.takeIf { it.isNotBlank() },

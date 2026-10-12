@@ -1434,4 +1434,12 @@ Se desconoce cómo terminaron. No se repiten automáticamente. Revisa los cambio
     <string name="native_permission_workspace_read">Leer resultados del espacio</string>
     <string name="native_permission_workspace_deliver">Entregar archivos del espacio al chat central</string>
     <string name="workspace_policy_disclosure">Se aplica a esta acción exacta del espacio. Las capacidades del trabajador y los permisos de Android o proveedores siguen siendo independientes.</string>
+
+    <string name="workspace_coordination_live">%1$d preguntas o bloqueos pueden recibir una respuesta dirigida.</string>
+    <string name="workspace_coordination_uncertain">%1$d intentos de respuesta tienen resultado incierto. No reenviar automáticamente.</string>
+    <string name="workspace_coordination_review">El acceso o la respuesta requiere revisar el permiso en primer plano.</string>
+    <string name="workspace_coordination_historical">%1$d solicitudes históricas o sustituidas. Reabrir no reanuda el trabajo.</string>
+    <string name="workspace_coordination_page_scope">Solo primera página de coordinación. Puede haber más registros en la bandeja central.</string>
+    <string name="workspace_coordination_unavailable">La evidencia de coordinación no está disponible. No se repitió trabajo.</string>
+    <string name="crew_type_blocker">Bloqueo</string>
 </resources>

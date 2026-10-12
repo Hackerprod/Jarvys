@@ -54,6 +54,7 @@ fun WorkspaceDetailScreen(
                     Modifier.semantics { heading() }.testTag("workspace-title"),
                     style = MaterialTheme.typography.headlineSmall, maxLines = 3, overflow = TextOverflow.Ellipsis)
                 WorkspaceStatusText(state.status)
+                WorkspaceCoordinationIndicator(state.coordination, showHistory = true)
                 if (state.statusPageLimited) Text(stringResource(R.string.workspace_status_page_scope),
                     Modifier.testTag("workspace-status-page-scope"), style = MaterialTheme.typography.bodySmall)
                 Text(stringResource(R.string.workspace_read_only_notice), style = MaterialTheme.typography.bodyMedium,

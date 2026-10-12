@@ -52,6 +52,7 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
                 bot.setScopeIdentity(new ProjectScopeStore(this.context.getFilesDir()).open(this.conversation).durableIdentity());
             }
             JSONObject metadata = new JSONObject().put("conversationId", this.conversation).put("botId", bot.id).put("missionId", bot.missionId).put("mission", bot.mission).put("missionAccess", bot.role.missionAccess.value).put("name", bot.name).put("status", bot.status().name()).put("result", bot.result()).put("error", bot.error()).put("startedAtMillis", bot.startedAtMillis()).put("finishedAtMillis", bot.finishedAtMillis()).put("completedCycles", bot.completedCycles()).put("jobOwners", new JSONArray((Collection)bot.recoveredJobOwners())).put("role", new CrewProfile(bot.role.id, bot.role.profileVersion, bot.role.name, bot.role.description, bot.role.missionPrompt, bot.role.skillIds, bot.role.tools, bot.role.workspaceMode).toJson()).put("messages", encodeMessages(messages, bot.id)).put("pending", encodeMessages(pending, bot.id));
+            if (!bot.cycleId().isEmpty()) metadata.put("cycleId", bot.cycleId());
             CrewMissionTitle title = bot.missionTitle();
             metadata.put("missionPresentation", new JSONObject().put("schemaVersion", 1)
                     .put("title", title.title).put("titleSource", title.source)
@@ -73,7 +74,7 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
             try {
                 JSONObject data = saved.metadata;
                 CrewProfile profile = CrewProfile.fromJson(data.getJSONObject("role"));
-                CrewBotSnapshot bot = new CrewBotSnapshot(saved.botId, profile.id, profile.name, data.getString("name"), profile.id, data.getString("mission"), data.getString("status"), data.optString("error"), data.optString("result"), "", profile.capabilities, data.getLong("startedAtMillis"), data.getLong("finishedAtMillis"));
+                CrewBotSnapshot bot = new CrewBotSnapshot(saved.botId, profile.id, profile.name, data.getString("name"), profile.id, data.getString("mission"), data.getString("status"), data.optString("error"), data.optString("result"), "", profile.capabilities, data.getLong("startedAtMillis"), data.getLong("finishedAtMillis"), false, "", false, "", "", 0L, historicalCycleId(data), null);
                 missions.add(recoveredMission(data, bot, saved.savedAtMs));
             } catch (Exception invalid) {
                 restoreIssue(manager, "A saved checkpoint has invalid mission metadata. Original evidence has been preserved.");
@@ -105,9 +106,9 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
                         for (String owner : owners) validateOwner(visible.id, owner);
                         String state = data.getString("status");
                         CrewManager.Status.valueOf(state);
-                        CrewBotSnapshot precise = new CrewBotSnapshot(visible.id, role.id, role.name, data.getString("name"), role.colorKey, data.getString("mission"), state, data.optString("error"), data.optString("result"), "", role.tools, data.getLong("startedAtMillis"), data.getLong("finishedAtMillis"), false, "", false, "", visible.lastProgress, visible.lastProgressAtMillis);
+                        CrewBotSnapshot precise = new CrewBotSnapshot(visible.id, role.id, role.name, data.getString("name"), role.colorKey, data.getString("mission"), state, data.optString("error"), data.optString("result"), "", role.tools, data.getLong("startedAtMillis"), data.getLong("finishedAtMillis"), false, "", false, "", visible.lastProgress, visible.lastProgressAtMillis, historicalCycleId(data), null);
                         CrewMissionSnapshot presentation = withCheckpointPresentation(mission, recoveredMission(data, precise, saved.savedAtMs));
-                        manager.restoreBot(presentation, precise, role, saved.loop, saved.artifactOwnership, saved.scopeIdentity, owners, data.getLong("completedCycles"), decodeMessages(data.getJSONArray("messages"), visible.id, false), decodeMessages(data.getJSONArray("pending"), visible.id, true), "");
+                        manager.restoreBot(presentation, precise, role, saved.loop, saved.artifactOwnership, saved.scopeIdentity, owners, data.getLong("completedCycles"), decodeMessages(data.getJSONArray("messages"), visible.id, mission.missionId, false), decodeMessages(data.getJSONArray("pending"), visible.id, mission.missionId, true), "");
                         continue;
                     }
                 } catch (Exception invalid) {
@@ -195,6 +196,15 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
         Long.parseLong(owner.substring(prefix.length()));
     }
 
+    /** Historical provenance only. A legacy checkpoint cannot infer a later snapshot's cycle. */
+    private static String historicalCycleId(JSONObject data) {
+        if (!data.has("cycleId")) return "";
+        Object value = data.opt("cycleId");
+        if (!(value instanceof String) || ((String) value).isEmpty())
+            throw new IllegalArgumentException("Invalid checkpoint cycle identity");
+        return (String) value; // CrewBotSnapshot validates the canonical UUID.
+    }
+
     private static JSONArray encodeMessages(List<CrewMessage> values, String botId) throws JSONException {
         JSONArray rows = new JSONArray();
         for (CrewMessage value : values) {
@@ -205,7 +215,7 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
         return rows;
     }
 
-    private List<CrewMessage> decodeMessages(JSONArray values, String botId, boolean pending) throws JSONException {
+    private List<CrewMessage> decodeMessages(JSONArray values, String botId, String missionId, boolean pending) throws JSONException {
         List<CrewMessage> result = new ArrayList<>();
         for (int index = 0; index < values.length(); index++) {
             JSONObject value = values.getJSONObject(index);
@@ -217,6 +227,9 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
                 throw new IllegalStateException("Checkpoint USER provenance is invalid");
             }
             CrewMessage message = CrewMessage.fromJson(value);
+            if (message.coordination != null && (!botId.equals(message.coordination.botId)
+                    || !missionId.equals(message.coordination.missionId)))
+                throw new IllegalStateException("Checkpoint causal source belongs to another mission");
             if (pending && message.activity != null) throw new IllegalStateException("Local activity cannot be mailbox work");
             result.add(message);
         }

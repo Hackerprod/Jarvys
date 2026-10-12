@@ -1033,6 +1033,7 @@ private fun crewMessageType(type: CrewMessage.Type): String = stringResource(whe
     CrewMessage.Type.FINDING -> R.string.crew_type_finding
     CrewMessage.Type.CRITIQUE -> R.string.crew_type_critique
     CrewMessage.Type.QUESTION -> R.string.crew_type_question
+    CrewMessage.Type.BLOCKER -> R.string.crew_type_blocker
     CrewMessage.Type.ANSWER -> R.string.crew_type_answer
     CrewMessage.Type.RESULT -> R.string.crew_type_result
     CrewMessage.Type.STATUS -> R.string.crew_type_status

@@ -323,7 +323,7 @@ class CentralWorkspaceToolTest {
         assertFalse(schema.getBoolean("additionalProperties"))
         val properties = schema.getJSONObject("properties")
         val actions = properties.getJSONObject("action").getJSONArray("enum")
-        assertEquals(listOf("create", "list", "delegate", "read", "inspect_file", "deliver", "results", "read_result"), (0 until actions.length()).map { actions.getString(it) })
+        assertEquals(listOf("create", "list", "delegate", "read", "inspect_file", "deliver", "results", "read_result", "inbox", "read_message", "reply"), (0 until actions.length()).map { actions.getString(it) })
         for (field in listOf("pause", "resume", "correct", "control", "user_text", "origin", "session_id",
             "request_id", "requestId", "original_user_request", "originalUserRequest", "admission", "token",
             "destination", "destination_session_id", "source_session_id", "project_id")) {

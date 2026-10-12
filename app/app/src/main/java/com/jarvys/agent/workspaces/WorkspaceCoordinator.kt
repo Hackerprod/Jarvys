@@ -20,6 +20,7 @@ object WorkspaceChanges {
     val revision: StateFlow<Long> = mutable
     private val issues = ConcurrentHashMap<String, String>()
     private val resultIssues = ConcurrentHashMap<String, String>()
+    private val coordinationIssues = ConcurrentHashMap<String, String>()
     @JvmStatic fun changed() { mutable.value = counter.incrementAndGet() }
     @JvmStatic fun snapshotSaved(sessionId: String, missionId: String) {
         if (WorkspaceIdentity.isExecutionSession(sessionId)) { issues.remove("$sessionId/$missionId"); changed() }
@@ -37,8 +38,15 @@ object WorkspaceChanges {
         resultIssues["$sessionId/$missionId/$evidenceId"] = "The worker result could not be saved for central delivery."
         changed()
     }
+    @JvmStatic fun coordinationEvidenceSaved(sessionId: String, missionId: String, evidenceId: String) {
+        coordinationIssues.remove("$sessionId/$missionId/$evidenceId"); changed()
+    }
+    @JvmStatic fun coordinationEvidenceFailed(sessionId: String, missionId: String, evidenceId: String) {
+        coordinationIssues["$sessionId/$missionId/$evidenceId"] = "The exact worker message could not be saved for central coordination."
+        changed()
+    }
     fun issue(sessionId: String, missionId: String): String? =
-        listOfNotNull(issues["$sessionId/$missionId"], resultIssues.entries.firstOrNull { it.key.startsWith("$sessionId/$missionId/") }?.value).joinToString("\n").takeIf { it.isNotEmpty() }
+        listOfNotNull(issues["$sessionId/$missionId"], coordinationIssues.entries.firstOrNull { it.key.startsWith("$sessionId/$missionId/") }?.value, resultIssues.entries.firstOrNull { it.key.startsWith("$sessionId/$missionId/") }?.value).joinToString("\n").takeIf { it.isNotEmpty() }
 }
 
 /** An additive adapter over existing per-session Crew, checkpoints and project ownership. */
@@ -67,6 +75,19 @@ class WorkspaceCoordinator internal constructor(context: Context,
     override fun readResult(workspaceId: String, resultId: String, expectedSha256: String, offset: Int,
                             token: CancellationToken, admission: Runnable): JSONObject =
         WorkspaceResultDelivery(app).read(workspaceId, resultId, expectedSha256, offset, token, admission)
+
+    override fun inbox(workspaceId: String, limit: Int, afterMessageId: String?, admission: Runnable): JSONObject =
+        WorkspaceCoordinationDelivery(app).inbox(workspaceId, limit, afterMessageId, admission)
+
+    override fun readMessage(workspaceId: String, messageId: String, expectedSha256: String, offset: Int,
+                             token: CancellationToken, admission: Runnable): JSONObject =
+        WorkspaceCoordinationDelivery(app).read(workspaceId, messageId, expectedSha256, offset, token, admission)
+
+    override fun reply(workspaceId: String, messageId: String, expectedSha256: String, key: String, text: String,
+                       expectedAssignmentRevision: Long, requestId: String, originalUserRequest: String,
+                       token: CancellationToken, admission: Runnable): JSONObject =
+        WorkspaceCoordinationDelivery(app).reply(workspaceId, messageId, expectedSha256, key, text,
+            expectedAssignmentRevision, requestId, originalUserRequest, token, admission)
 
     override fun inspect(workspaceId: String, path: String, token: CancellationToken, admission: Runnable): JSONObject =
         WorkspaceArtifactDelivery(app).inspect(workspaceId, path, token, admission)
@@ -239,7 +260,7 @@ class WorkspaceCoordinator internal constructor(context: Context,
                     }
                     var started: WorkspaceUserControl? = null
                     try {
-                        synchronized(controlLocks.getOrPut(control.assignmentId) { Any() }) {
+                        synchronized(controlDispatchLock(control.assignmentId)) {
                             if (!token.runIfActive {
                         started = store.markControlStarted(controlId, control.revision, CrewProcessIdentity.ID, validate)
                         WorkspaceChanges.changed()
@@ -297,6 +318,7 @@ class WorkspaceCoordinator internal constructor(context: Context,
         @JvmStatic fun cancelPendingControls() = WorkspaceControlOwners.cancelPending()
         private val locks = ConcurrentHashMap<String, Any>()
         private val controlLocks = ConcurrentHashMap<String, Any>()
+        internal fun controlDispatchLock(assignmentId: String): Any = controlLocks.getOrPut(assignmentId) { Any() }
         private val cleanup = Executors.newCachedThreadPool { runnable -> Thread(runnable, "workspace-control-cleanup").apply { isDaemon = true } }
         private fun sha256(value: String) = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8))
             .joinToString("") { "%02x".format(it.toInt() and 255) }

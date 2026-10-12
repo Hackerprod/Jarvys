@@ -1434,4 +1434,12 @@ Their exit results are unknown. Do not repeat them automatically. Review project
     <string name="native_permission_workspace_read">Read workspace results</string>
     <string name="native_permission_workspace_deliver">Deliver workspace files to central</string>
     <string name="workspace_policy_disclosure">Applies to this exact workspace action. Worker capabilities and Android or provider permissions remain independent.</string>
+
+    <string name="workspace_coordination_live">%1$d questions or blockers can receive an exact reply.</string>
+    <string name="workspace_coordination_uncertain">%1$d reply attempts have an uncertain outcome. Do not resend automatically.</string>
+    <string name="workspace_coordination_review">Coordination access or reply needs foreground permission review.</string>
+    <string name="workspace_coordination_historical">%1$d historical or superseded requests. Reopening does not resume work.</string>
+    <string name="workspace_coordination_page_scope">First coordination page only. More records may require the central inbox.</string>
+    <string name="workspace_coordination_unavailable">Coordination evidence is unavailable. No work was repeated.</string>
+    <string name="crew_type_blocker">Blocker</string>
 </resources>
