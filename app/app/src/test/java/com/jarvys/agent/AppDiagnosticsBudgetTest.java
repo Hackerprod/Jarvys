@@ -8,7 +8,7 @@ import org.junit.Test;
 
 /** The existing complete-output contract rejects a second large result instead of slicing JSON. */
 public class AppDiagnosticsBudgetTest {
-    @Test public void boundedDiagnosticOutputsStayWholeOrProduceExplicitBudgetError() {
+    @Test public void boundedDiagnosticOutputsStayWholeOrProduceExplicitBudgetError() throws Exception {
         String json = new JSONObject().put("status", "ok").put("synthetic_metadata", "x".repeat(16000)).toString();
         AtomicInteger turns = new AtomicInteger(), reads = new AtomicInteger();
         List<ToolActivity> activities = new ArrayList<>();
