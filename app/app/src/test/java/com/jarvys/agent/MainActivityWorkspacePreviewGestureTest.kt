@@ -321,6 +321,8 @@ class MainActivityWorkspacePreviewGestureTest {
         assertEquals(before, transcript())
         assertEquals(session, selectedSession())
         compose.onNode(hasSetTextAction()).assertTextEquals(draft)
+        // Returning navigation can publish the chat before its merged preview semantics are ready.
+        compose.waitUntil(10_000) { compose.onAllNodesWithTag(previewTag).fetchSemanticsNodes().size == 1 }
         compose.onNodeWithTag(previewTag).performScrollTo()
         settleNativeFrame()
         compose.onNodeWithTag(previewTag).performTouchInput { click() }
