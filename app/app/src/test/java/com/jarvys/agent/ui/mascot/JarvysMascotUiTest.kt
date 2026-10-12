@@ -16,6 +16,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import com.jarvys.agent.R
+import com.jarvys.agent.ui.chat.awaitReactionDrawIdle
 import com.jarvys.agent.ui.motion.LocalReducedMotion
 import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Assert.assertEquals
@@ -46,6 +47,8 @@ class JarvysMascotUiTest {
     }
 
     private fun openMenu() {
+        // Complete Android traversal after a route key replaces the button before injecting touch.
+        awaitReactionDrawIdle(compose)
         compose.onNodeWithTag("jarvys-account-menu").performClick()
         compose.waitForIdle()
     }
@@ -129,6 +132,9 @@ class JarvysMascotUiTest {
             assertEquals(true, JarvysMascotProcessConsent.session.optedIn)
             compose.onNodeWithTag("jarvys-mascot-toggle").assertDoesNotExist()
             compose.onNodeWithTag("jarvys-mascot-visual-test").assertDoesNotExist()
+            compose.waitUntil(timeoutMillis = 5_000) {
+                compose.onAllNodesWithText("Close test menu").fetchSemanticsNodes().size == 1
+            }
             compose.onNodeWithText("Close test menu").performClick()
             noNative()
         }
