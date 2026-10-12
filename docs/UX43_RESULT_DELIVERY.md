@@ -2,7 +2,7 @@
 
 Delivered software slice v88 / `1.2.81-WORKSPACE-RESULTS`, accepted on 2026-10-12 at 16:45:36 UTC. The delivered v87 behavior and its evidence remain documented separately in [the first vertical](UX43_CENTRAL_WORKSPACES.md).
 
-The next bounded coordination slice is documented in [UX43 coordination](UX43_COORDINATION.md); it is development work and has not been delivered.
+The bounded questions/findings/blockers and causal reply slice was delivered in v92; see [UX43 coordination](UX43_COORDINATION.md).
 
 ## Exact evidence and identity
 

@@ -1,6 +1,6 @@
 # UX43: causal local coordination
 
-Development checkpoint, not a delivered APK. The current delivered version remains v91. First integrated Full Debug Kotlin/Java compilation passed on 2026-10-12 at 21:57 UTC. Independent contract/source review and bounded direct tests are available. Seventeen delivery-seam tests pass against those integrated FullDebug classes. Final affected Full/Play execution, UI and artifact acceptance for v92 / `1.2.85-COORDINATION` remain pending.
+Delivered software slice v92 / `1.2.85-COORDINATION`, source `b2d3e49dac4d4efa57531d7780097b54b226f408`. ZIP send accepted on 2026-10-12 at 23:24:59 UTC; extract the APK before installation. This closes the bounded coordination slice below, not every UX43 roadmap item.
 
 ## Evidence and authority
 
@@ -27,3 +27,14 @@ ACCEPTED_LOCAL proves local mailbox acceptance only. It does not prove consumpti
 ## Remaining scope
 
 This slice does not implement workspace memory, proactive inference, server push, legacy chat migration or UX34 gated phases. Explicit file delivery remains the separate WORKSPACE_DELIVER contract. Physical process-death/power-loss behavior and real-model usage require their own evidence. CrewAI remains last in Pending order.
+
+
+## Validation and delivery
+
+The reviewed affected scope contains 39 classes per flavor. Full: 415 passing cases, comprising 412 retained cases with exact production/resource/dependency and unaffected-test equality, plus the entire repaired three-case Compose class. Play: 415 fresh passing cases. Seventeen earlier seam checks ran against integrated FullDebug production classes. The original compile failure (Android JSONObject key iteration) and two nested-semantics fixture failures remain in private evidence; repairs preserve all assertions. Test guards recorded 2/0/2 blocked attempts, with no global zero-attempt claim.
+
+One FullRelease and its Vital task passed. Independent review explains all changed DEX, resource, manifest and ART-profile content against v91. Factory/Core/runtime/SDK evidence is retained through 333 source and 108 resolved-input equalities. Full and Play lint tasks remain FAILED on the same 46/37 historical errors; three additional PluralsCandidate warnings per flavor reflect real singular/plural wording debt in the counters. No detector was suppressed. Full/Play Debug APKs were not rebuilt, and unselected app tests remain historical.
+
+Retained-D7 signed ARM64 APK: 21,347,987 bytes, SHA-256 `ad0bbfb6c2b232db57664a52b019c35929b0c02459be3625b2f8e9d1f39ef284`. Delivered ZIP: 19,790,107 bytes, SHA-256 `e4f61d3727b1bebfbec4c7410596a25da76f27fcc64f2dbd49a1c2d4403a5bdd`. Independent persisted readbacks verified exact contents, certificate, CRC and alignment. Sending does not establish installation, physical recovery or real-model acceptance.
+
+A later bounded step may expose a durable acknowledgement that an exact reply or correction was incorporated into a worker checkpoint. This version does not infer that from observed assignment revision, local mailbox acceptance or redacted historical text. Such an acknowledgement would still not prove understanding, compliance, resolution or verified completion.

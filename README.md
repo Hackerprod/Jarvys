@@ -1,14 +1,18 @@
 <div align="center">
 
-## Entrega actual: mascota central ampliada v91
+## Entrega actual: coordinación durable UX43 v92
+
+v92 (`1.2.85-COORDINATION`) conserva preguntas, hallazgos y bloqueos ligados a la misión/ciclo del trabajador. El central puede leerlos con identidad y hash exactos y responder a una solicitud que siga activa. El indicador nativo reúne los avisos útiles; la coordinación interna sigue fuera del chat visible. Aceptación local de una respuesta no significa consumo ni resolución, y reabrir no repite trabajo. [Contrato](docs/UX43_COORDINATION.md).
+
+Validación afectada: 415 casos Full (412 conservados por igualdad exacta y 3 reemplazos frescos) y 415 Play frescos, 39 clases por sabor. Única FullRelease/Vital, revisión exacta, firma D7 y lectura persistida aprobadas. Módulos Factory/Core/runtime/SDK retenidos por igualdad. Lint conserva 46/37 errores históricos y añade tres avisos de pluralización por sabor, sin nuevos errores; no es una regresión universal ni lint limpio.
+
+Envío ZIP aceptado el 12 de octubre de 2026 a las 23:24:59 UTC: extraer antes de instalar. ZIP: 19.790.107 bytes, SHA-256 `e4f61d3727b1bebfbec4c7410596a25da76f27fcc64f2dbd49a1c2d4403a5bdd`. APK ARM64 interior: 21.347.987 bytes, SHA-256 `ad0bbfb6c2b232db57664a52b019c35929b0c02459be3625b2f8e9d1f39ef284`. Instalación y comportamiento físico/modelo real pendientes.
+
+### Entrega anterior: mascota central ampliada v91
 
 v91 (`1.2.84-MASCOT-SCALE`) amplía la mascota central de 30 a 84 dp (2,8×), con cabecera de 96 dp más insets Android. Las 24 pruebas focales Full/Play pasan; FullRelease y Vital, auditoría exacta, firma D7 y lectura persistida están aprobados. Los PNG, launcher, otros bots y animaciones siguen como en v90. Lint general de v90 retenido como histórico, sin nueva ejecución ni afirmación de regresión universal.
 
 Envío aceptado el 12 de octubre de 2026 a las 21:37 UTC mediante ZIP: extraer antes de instalar. ZIP: 19.758.814 bytes, SHA-256 `8271af8d88a99907ae6d1341550fa8b0d0e57fd556050f35b520799de1a67393`. APK ARM64 interior: 21.311.123 bytes, SHA-256 `ef4c710d79582c43dda003eff857eb5f75617de0a7e2859310cb1a8e7fec8557`. Instalación/aceptación física pendientes. [Contrato de identidad](docs/MASCOT_STATIC_IDENTITY.md).
-
-### Desarrollo en curso: coordinación durable UX43
-
-El siguiente lote incorpora preguntas, hallazgos y bloqueos ligados al ciclo del trabajador, lectura exacta desde el central, respuesta causal al ciclo todavía activo e indicador nativo consolidado. La primera compilación integrada Kotlin/Java pasó el 12 de octubre a las 21:57 UTC; pruebas integradas y aceptación de APK pendientes. La entrega vigente sigue siendo v91. [Contrato del lote](docs/UX43_COORDINATION.md).
 
 ### Entrega anterior v90
 
