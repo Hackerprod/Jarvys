@@ -86,7 +86,8 @@ class TaskActionPolicyTest {
             permission.admit(CancellationToken.uncancellable())
         } }.isFailure)
         assertTrue(repository.list().isEmpty())
-        assertFalse(file.exists())
+        // TaskStore locks its ledger with RandomAccessFile("rw"), which may create an empty file.
+        assertEquals("Revoked creation must append no durable task bytes", 0L, file.length())
         assertEquals(0, rearmed)
 
         val saved = repository.createPreparedIfEquivalent(candidate).task

@@ -141,6 +141,7 @@ public final class MemoryStore {
     private final MemorySeedTextProvider seedTextProvider;
     private volatile boolean testEnabled;
     private final MemoryStore owner;
+    private final NativeActionPolicy nativeActionPolicy;
     private final String scopeConversationId;
     private final String scopeKey;
 
@@ -152,6 +153,7 @@ public final class MemoryStore {
         Context app = context.getApplicationContext();
         this.root = canonicalMemoryRoot(new File(new File(app.getFilesDir(), "jarvys"), MemoryConstants.MEMORY_DIRECTORY));
         this.owner = this;
+        this.nativeActionPolicy = new NativeActionPolicy(app);
         this.scopeConversationId = null;
         this.scopeKey = "";
         this.preferences = app.getSharedPreferences(MemoryConstants.PREFERENCES_FILE, Context.MODE_PRIVATE);
@@ -167,6 +169,7 @@ public final class MemoryStore {
     MemoryStore(File root, boolean enabled, MemorySeedTextProvider seedTextProvider) {
         this.root = canonicalMemoryRoot(root);
         this.owner = this;
+        this.nativeActionPolicy = NativeActionPolicy.inMemory();
         this.scopeConversationId = null;
         this.scopeKey = "";
         this.preferences = null;
@@ -180,6 +183,7 @@ public final class MemoryStore {
 
     private MemoryStore(MemoryStore owner, String conversationId) {
         this.owner = owner;
+        this.nativeActionPolicy = owner.nativeActionPolicy;
         this.scopeConversationId = conversationId;
         this.scopeKey = sha256(conversationId.getBytes(StandardCharsets.UTF_8));
         File scopes = new File(owner.root, SCOPE_DIRECTORY);
@@ -208,6 +212,61 @@ public final class MemoryStore {
             return this;
         }
         return new MemoryStore(this, conversationId);
+    }
+
+    public NativeActionPolicy nativeActionPolicy() { return nativeActionPolicy; }
+
+    /** Opaque trusted native scope identity; never an agent-selectable path. */
+    public String nativeScopeIdentity() { return sha256((owner.canonicalRoot + "\u0000" + scopeKey).getBytes(StandardCharsets.UTF_8)); }
+
+    /** Pure bounded fingerprint, without seeding, journal recovery, or crossing into other conversations. */
+    public String nativeStateFingerprint(boolean includeSharedHistory) {
+        lock.lock();
+        try {
+            StringBuilder value = new StringBuilder(nativeScopeIdentity());
+            if (root.exists()) {
+                rejectSymlink(root);
+                List<File> files = new ArrayList<>();
+                collectLegacyFiles(root, 0, files);
+                files.sort(Comparator.comparing(this::relativePath));
+                long bytes = 0;
+                for (File file : files) {
+                    bytes += file.length();
+                    if (bytes > 16L * 1024L * 1024L) throw new IllegalStateException("Native memory review exceeds its bounded scope");
+                    byte[] content = readBoundedBytes(file);
+                    String path = relativePath(file);
+                    value.append('\n').append(path.length()).append(':').append(path).append(':')
+                            .append(file.lastModified()).append(':').append(sha256(content));
+                }
+                if (journalFile.exists()) {
+                    rejectSymlink(journalFile);
+                    if (!journalFile.isFile() || journalFile.length() > MemoryConstants.MAX_JOURNAL_BYTES + 1024L * 1024L)
+                        throw new IllegalStateException("Native memory journal cannot be bound safely");
+                    value.append("\njournal:").append(sha256(readUtf8(journalFile).getBytes(StandardCharsets.UTF_8)));
+                }
+            }
+            if (includeSharedHistory) for (JSONObject row : sharedRowsLocked()) {
+                value.append("\nshared:").append(sha256(row.toString().getBytes(StandardCharsets.UTF_8)));
+                value.append(':').append(sharedActiveLocked(row));
+            }
+            return sha256(value.toString().getBytes(StandardCharsets.UTF_8));
+        } finally { lock.unlock(); }
+    }
+
+    /** Verify data under the family lock, then admit briefly before immediate family effect dispatch.
+     * The admission callback must not do IO or wait for UI/network. The effect runs after it returns.
+     */
+    public <T> T withNativeState(String expected, boolean includeSharedHistory, Runnable admission,
+                                 java.util.concurrent.Callable<T> effect) {
+        lock.lock();
+        try {
+            if (!nativeStateFingerprint(includeSharedHistory).equals(expected))
+                throw new IllegalStateException("Selected memory changed; review the exact current state again");
+            admission.run();
+            return effect.call();
+        } catch (RuntimeException failure) { throw failure; }
+        catch (Exception failure) { throw new IllegalStateException("Native memory operation failed", failure); }
+        finally { lock.unlock(); }
     }
 
     public boolean isConversationScoped() { return scopeConversationId != null; }
@@ -615,8 +674,10 @@ public final class MemoryStore {
         try {
             recoverPendingLocked();
             if (isConversationScoped()) validateTreeLocked();
+            List<MemoryFileInfo> exportEntries = listFilesForUser();
+            NativeEffectDispatchScope.beforeDispatch();
             ZipOutputStream zip = new ZipOutputStream(output, StandardCharsets.UTF_8);
-            for (MemoryFileInfo entry : listFilesForUser()) {
+            for (MemoryFileInfo entry : exportEntries) {
                 File file = resolveMemoryFile(entry.path, true);
                 zip.putNextEntry(new ZipEntry(entry.path));
                 try (FileInputStream input = new FileInputStream(file)) {
@@ -943,6 +1004,7 @@ public final class MemoryStore {
         try {
             ensureRoot();
             recoverPendingLocked();
+            NativeEffectDispatchScope.beforeDispatch();
             invalidateSourceGrantsLocked();
             File[] children = root.listFiles();
             if (children != null) for (File child : children) {
@@ -1116,7 +1178,10 @@ public final class MemoryStore {
         JSONObject pending = revisionJson(id, actor, conversationId, relative, operation,
                 previousExists, previous, exists, nextContent, reflectionGroupId);
         jsonPut(document, "pending", pending);
-        writeAtomic(journalFile, document.toString().getBytes(StandardCharsets.UTF_8));
+        byte[] preparedJournal = document.toString().getBytes(StandardCharsets.UTF_8);
+        // An admission boundary is before the atomic transaction, never inside rollback/cleanup.
+        if (!"SEED".equals(operation)) NativeEffectDispatchScope.beforeDispatch();
+        writeAtomic(journalFile, preparedJournal);
         try {
             applyFileState(target, exists, nextContent);
             if (isConversationScoped()) validateTreeLocked();
@@ -1796,7 +1861,9 @@ public final class MemoryStore {
             jsonPut(row, "approvedAt", timestampNow());
             jsonPut(row, "approvedAtMillis", System.currentTimeMillis());
             jsonPut(row, "revoked", false);
-            writeAtomic(sharedFileLocked(id, true), row.toString().getBytes(StandardCharsets.UTF_8));
+            byte[] preparedGrant = row.toString().getBytes(StandardCharsets.UTF_8);
+            NativeEffectDispatchScope.beforeDispatch();
+            writeAtomic(sharedFileLocked(id, true), preparedGrant);
             publishCleared();
             return grantForUserLocked(row);
         } finally { lock.unlock(); }
@@ -1810,7 +1877,9 @@ public final class MemoryStore {
             if (row.optBoolean("revoked")) return;
             jsonPut(row, "revoked", true);
             jsonPut(row, "revokedAt", timestampNow());
-            writeAtomic(sharedFileLocked(grantId, false), row.toString().getBytes(StandardCharsets.UTF_8));
+            byte[] preparedRevocation = row.toString().getBytes(StandardCharsets.UTF_8);
+            NativeEffectDispatchScope.beforeDispatch();
+            writeAtomic(sharedFileLocked(grantId, false), preparedRevocation);
             publishCleared();
         } finally { lock.unlock(); }
     }

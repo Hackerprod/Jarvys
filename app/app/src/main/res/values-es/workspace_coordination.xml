@@ -1,0 +1,15 @@
+<resources>
+    <string name="workspace_file_unavailable">No se pudo leer el archivo o la página. Su ámbito, revisión o formato puede haber cambiado.</string>
+    <string name="workspace_coding_files">Archivos del proyecto</string>
+    <string name="workspace_shared_files">Archivos compartidos del espacio</string>
+    <string name="workspace_file_read_only">Vista de archivos de solo lectura. Los lectores existentes comprueban ámbito y límites de página.</string>
+    <string name="workspace_parent_folder">Volver a la carpeta</string>
+    <string name="workspace_next_page">Página siguiente</string>
+    <string name="workspace_reserved_conversation">El central y los espacios no se pueden archivar ni borrar como chats independientes.</string>
+    <string name="workspace_control_failed">No se pudo confirmar el control. Consulta el espacio antes de intentar otra acción.</string>
+    <string name="workspace_correction_target">Espacio %1$s · asignación %2$s</string>
+    <string name="workspace_correction_text">Tu corrección</string>
+    <string name="workspace_send_correction">Enviar corrección</string>
+    <string name="workspace_pause_request">Pausa esta asignación del espacio y conserva su trabajo.</string>
+    <string name="workspace_resume_request">Reanuda esta asignación del espacio usando su trabajo conservado y los permisos actuales.</string>
+</resources>

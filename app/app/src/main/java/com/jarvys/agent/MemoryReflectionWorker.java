@@ -47,14 +47,16 @@ public final class MemoryReflectionWorker {
     private final CoreAgentModel model;
     private final MemoryStore memoryStore;
     private final List<CoreTool> injectedTools;
+    private final MemoryReflectionAuthority authority;
 
-    public MemoryReflectionWorker(Context context, String sessionId, String reflectionId, CoreAgentModel model) {
+    MemoryReflectionWorker(Context context, String sessionId, String reflectionId, CoreAgentModel model, MemoryReflectionAuthority authority) {
         this.context = context.getApplicationContext();
         this.sessionId = sessionId;
         this.reflectionId = reflectionId;
         this.model = model;
         this.memoryStore = new MemoryStore(this.context).forConversation(sessionId);
         this.injectedTools = null;
+        this.authority = java.util.Objects.requireNonNull(authority);
     }
 
     MemoryReflectionWorker(String sessionId, String reflectionId, MemoryStore memoryStore,
@@ -65,6 +67,7 @@ public final class MemoryReflectionWorker {
         this.model = model;
         this.memoryStore = memoryStore.forConversation(sessionId);
         this.injectedTools = new ArrayList<>(injectedTools);
+        this.authority = null; // Explicit package-private test seam, never a production context route.
     }
 
     public Result run(String transcriptPayload, CancellationToken token) {
@@ -72,13 +75,28 @@ public final class MemoryReflectionWorker {
         if (transcriptPayload == null || transcriptPayload.trim().isEmpty()) throw new IllegalArgumentException("Reflection transcript is empty");
         boolean groupStarted = false;
         AtomicLong totalContextTokens = new AtomicLong();
-        try {
+        try (NativeEffectDispatchScope dispatch = NativeEffectDispatchScope.enter(() -> { if (authority != null) authority.admit(); })) {
+            if (authority != null) authority.admit();
             memoryStore.beginReflectionGroup(reflectionId, sessionId);
             groupStarted = true;
             List<CoreTool> memoryTools = injectedTools == null
                     ? WorkspaceTools.createReflectionMemoryOnly(context, sessionId, memoryStore, reflectionId)
                     : injectedTools;
-            CoreToolRegistry registry = new CoreToolRegistry(memoryTools);
+            List<CoreTool> guardedTools = new ArrayList<>();
+            for (CoreTool original : memoryTools) guardedTools.add(new CoreTool() {
+                @Override public ToolSpec declaration() { return original.declaration(); }
+                @Override public boolean canDelegate() { return original.canDelegate(); }
+                @Override public String auditDetail(java.util.Map<String,Object> args) { return original.auditDetail(args); }
+                @Override public CoreToolResult execute(java.util.Map<String,Object> args, CancellationToken active) {
+                    if (authority != null) authority.admit();
+                    return original.execute(args, active);
+                }
+                @Override public CoreToolResult execute(java.util.Map<String,Object> args, CancellationToken active, ProgressListener progress) {
+                    if (authority != null) authority.admit();
+                    return original.execute(args, active, progress);
+                }
+            });
+            CoreToolRegistry registry = new CoreToolRegistry(guardedTools);
             if (!registry.names().equals(Arrays.asList("ls", "read", "write", "edit", "delete"))) {
                 throw new IllegalStateException("Reflection worker tool scope is not the memory-only allowlist");
             }
@@ -101,6 +119,7 @@ public final class MemoryReflectionWorker {
                     if (totalContextTokens.get() + requestEstimate > MAX_TOTAL_CONTEXT_TOKENS) {
                         throw new IllegalStateException("Reflection reached its configured token budget");
                     }
+                    if (authority != null) authority.admit();
                     ModelReply reply = model.complete(instructions, transcript, prompt, tools, activeToken);
                     activeToken.throwIfCancelled();
                     int used = reply.contextTokensUsed == null

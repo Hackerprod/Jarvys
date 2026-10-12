@@ -411,7 +411,7 @@ public class CrewProviderUnavailableRecoveryTest {
                 assertEquals("Reviewed late job-77 evidence", bot.result());
                 assertEquals(2, requests.get());
                 assertEquals(1, loops.get());
-                assertEquals(generation, bot.token.generation());
+                assertNotEquals("Every resumed DONE cycle needs fresh cancellation/job ownership", generation, bot.token.generation());
                 assertFalse(bot.token.isCancellationRequested());
                 assertEquals(1L, receiptCount(manager.messageBus().snapshot(), "job-77 completed after the final answer"));
                 assertTrue(manager.messageBus().pending(bot.id).isEmpty());

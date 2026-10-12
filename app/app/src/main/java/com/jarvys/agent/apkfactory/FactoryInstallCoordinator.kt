@@ -444,6 +444,7 @@ internal class FactoryInstallCoordinator(
 class FactoryInstallApplication : Application() {
     override fun onCreate() {
         super.onCreate()
+        com.jarvys.agent.LocalDiagnostics.install(this)
         FactoryDataBackupCoordinator.get(this)
         FactoryContactCoordinator.get(this)
         FactoryExternalLaunchCoordinator.get(this)

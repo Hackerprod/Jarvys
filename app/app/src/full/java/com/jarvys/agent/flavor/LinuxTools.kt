@@ -484,11 +484,13 @@ internal class LinuxUninstallTool(
             val existing = runtime.state()
             var deleteWorkspace = requestedDeletion
             var approvedAsk = false
+            // A missing argument requires a real choice even under ALLOW. Only an ASK
+            // policy snapshot can receive an ASK approval; the choice never changes policy.
             if (requestedDeletion == null || authorization.policy == AutonomyPolicy.ASK) {
                 when (val decision = requestDecision(uninstallDecisionSpec(requestedDeletion, rootfs, workspace), token)) {
                     is UserDecisionResult.Selected -> when (decision.option.id) {
-                        OPTION_KEEP_WORKSPACE -> { deleteWorkspace = false; approvedAsk = true }
-                        OPTION_DELETE_WORKSPACE -> { deleteWorkspace = true; approvedAsk = true }
+                        OPTION_KEEP_WORKSPACE -> { deleteWorkspace = false; approvedAsk = authorization.policy == AutonomyPolicy.ASK }
+                        OPTION_DELETE_WORKSPACE -> { deleteWorkspace = true; approvedAsk = authorization.policy == AutonomyPolicy.ASK }
                         else -> return CoreToolResult.failure(linuxText(context, R.string.full_linux_uninstall_dismissed))
                     }
                     UserDecisionResult.Unavailable -> return CoreToolResult.failure(linuxText(context, R.string.full_linux_uninstall_unavailable))

@@ -55,7 +55,7 @@ internal fun memoryUiProtection(onClose: (() -> Unit)? = null): MemoryUiAutomati
 internal fun MemoryUiAutomationGuard.Lease.allowsHumanUiAction(): Boolean =
     runCatching { requireHumanUiInteraction(); true }.getOrDefault(false)
 
-private fun Context.activityOrNull(): Activity? {
+internal fun Context.activityOrNull(): Activity? {
     var candidate: Context = this
     val seen = HashSet<Context>()
     while (seen.add(candidate)) {
@@ -66,7 +66,7 @@ private fun Context.activityOrNull(): Activity? {
 }
 
 /** Ref-count window security independently of nested screen/dialog composition lifetimes. */
-private object MemorySecureWindows {
+internal object MemorySecureWindows {
     private data class State(var users: Int, val originallySecure: Boolean)
     private val windows = IdentityHashMap<Window, State>()
 
@@ -100,7 +100,7 @@ private object MemorySecureWindows {
 }
 
 /** Never unblock automation on a timer while pixels from a removed memory surface remain visible. */
-private fun releaseMemoryProtectionAfterRemoval(
+internal fun releaseMemoryProtectionAfterRemoval(
     view: View,
     lease: MemoryUiAutomationGuard.Lease,
     secureWindow: MemorySecureWindows.Lease,

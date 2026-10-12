@@ -3,6 +3,9 @@ package com.jarvys.agent;
 import android.content.Context;
 import android.webkit.MimeTypeMap;
 import com.jarvys.agent.coding.ArtifactSnapshotIO;
+import com.jarvys.agent.workspaces.WorkspaceIdentity;
+import com.jarvys.agent.workspaces.WorkspaceRegistry;
+import com.jarvys.agent.workspaces.WorkspaceRecord;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
@@ -24,6 +27,9 @@ import org.json.JSONObject;
 public final class DeliveredArtifactStore {
     public static final long MAX_BYTES = 256L * 1024 * 1024;
     static final int MAX_MANIFEST_BYTES = 1024 * 1024;
+    // Writers can check STOP while holding their per-store lock. Central attachment commits
+    // check STOP before re-entering that store from the ledger; serialize both paths here.
+    static final Object DELIVERY_ACTION_LOCK = new Object();
     private static final Map<String, Object> LOCKS = new ConcurrentHashMap<>();
     private static final Map<String, Long> THUMBNAIL_GENERATIONS = new ConcurrentHashMap<>();
     private final File root;
@@ -42,23 +48,55 @@ public final class DeliveredArtifactStore {
 
     ChatAttachment snapshot(String session, WorkspaceStore workspace, String path, String name,
             CancellationToken token) throws IOException {
+        if (workspace == null || session == null || !session.equals(workspace.deliveryConversationId()))
+            throw new IOException("The source belongs to another conversation");
+        return snapshotScoped(session, workspace, path, name, token, null, null, () -> { });
+    }
+
+    /** Explicit central transfer only. This does not relax ordinary per-chat snapshot ownership. */
+    ChatAttachment snapshotWorkspace(WorkspaceRegistry registry, String workspaceId, WorkspaceStore workspace,
+            String path, String name, String expectedSha256, CancellationToken token, Runnable admission) throws IOException {
+        if (registry == null || admission == null || expectedSha256 == null || !expectedSha256.matches("[a-f0-9]{64}"))
+            throw new IllegalArgumentException("A registered source, policy admission and expected checksum are required");
+        WorkspaceArtifactDelivery.requireSourcePath(path);
+        Runnable validate = () -> {
+            token.throwIfCancelled();
+            admission.run();
+            token.throwIfCancelled();
+            WorkspaceRecord owner = WorkspaceArtifactDelivery.requireOwnedWorkspace(registry, workspaceId);
+            if (workspace == null || !owner.getExecutionSessionId().equals(workspace.deliveryConversationId())
+                    || !WorkspaceStore.projectIdForSession(owner.getExecutionSessionId()).equals(workspace.projectId()))
+                throw new IllegalArgumentException("The file source does not match the registered workspace");
+        };
+        validate.run();
+        return snapshotScoped(WorkspaceIdentity.CENTRAL_SESSION, workspace, path, name, token,
+                expectedSha256, workspaceId, validate);
+    }
+
+    private ChatAttachment snapshotScoped(String session, WorkspaceStore workspace, String path, String name,
+            CancellationToken token, String expectedSha256, String workspaceId, Runnable admission) throws IOException {
+        synchronized (DELIVERY_ACTION_LOCK) {
         synchronized (lock) {
-            if (workspace == null || session == null || !session.equals(workspace.deliveryConversationId()))
-                throw new IOException("The source belongs to another conversation");
+            token.throwIfCancelled();
+            admission.run();
             File directory = directory(session, true);
             cleanupStaging(directory);
             File staged = File.createTempFile(".delivery-", ".tmp", directory);
             File previewStage = null;
             try {
+                admission.run();
                 WorkspaceStore.DeliverySource source = workspace.deliverySource(path);
                 ArtifactSnapshotIO.Snapshot copied = ArtifactSnapshotIO.copy(source.root, source.relative, staged, MAX_BYTES, token);
                 token.throwIfCancelled();
+                if (expectedSha256 != null && !expectedSha256.equals(copied.sha256))
+                    throw new IOException("Workspace file changed; read its current checksum before delivering it");
                 String filename = ChatAttachment.sanitizeName(name == null ? path.substring(path.lastIndexOf('/') + 1) : name);
                 String mime = mime(filename);
                 HtmlPreviewCapture.Capture preview = null;
                 String unavailable = null;
                 if ("text/html".equals(mime) && HtmlPreviewCapture.htmlName(filename)) {
                     if (HtmlPreviewCapture.htmlName(source.relative)) {
+                        admission.run();
                         previewStage = new File(directory, ".preview-" + UUID.randomUUID() + ".tmp");
                         if (!previewStage.mkdir()) throw new IOException("Could not stage HTML preview");
                         try { preview = HtmlPreviewCapture.capture(source, staged, copied, previewStage, token); }
@@ -70,6 +108,7 @@ public final class DeliveredArtifactStore {
                         unavailable = "HTML preview requires a UTF-8 HTML source within the preview limits; the original file is still attached.";
                 }
                 String identity = session + "\0" + filename + "\0" + copied.sha256;
+                if (workspaceId != null) identity += "\0workspace:" + workspaceId + "\0" + source.provenance + "\0" + source.relative;
                 if (preview != null) identity += "\0" + preview.fingerprint();
                 String id = UUID.nameUUIDFromBytes(identity.getBytes(StandardCharsets.UTF_8)).toString();
                 ChatAttachment attachment = new ChatAttachment(id, filename, mime, copied.bytes,
@@ -77,40 +116,61 @@ public final class DeliveredArtifactStore {
                 File target = path(session, attachment.relativePath);
                 File manifest = path(session, id + ".json");
                 if (manifest.exists()) {
+                    admission.run();
                     resolve(session, attachment);
                     if (preview != null) resolvePreview(session, HtmlPreviewDescriptor.TOKEN_PREFIX + id);
+                    admission.run();
                     return attachment;
                 }
-                // An interrupted delivery's existing immutable bytes may be completed, never overwritten.
-                if (target.exists()) {
-                    if (target.length() != copied.bytes || !hash(target).equals(copied.sha256))
-                        throw new IOException("An interrupted attachment must be inspected before retrying");
-                } else if (!staged.renameTo(target)) throw new IOException("Could not save attachment copy");
-                verify(target);
+                // Verify interrupted immutable copies before taking the short STOP commit gate.
+                if (target.exists() && (target.length() != copied.bytes || !hash(target).equals(copied.sha256)))
+                    throw new IOException("An interrupted attachment must be inspected before retrying");
                 JSONObject record = new JSONObject().put("attachment", attachment.toJson()).put("sha256", copied.sha256)
                         .put("conversation", session);
+                if (workspaceId != null) record.put("source_workspace_id", workspaceId)
+                        .put("source_session_id", workspace.deliveryConversationId()).put("source_path", path)
+                        .put("source_scope", source.provenance);
+                final File previewTarget = preview == null ? null : path(session, id + ".preview");
                 if (preview != null) {
-                    File previewTarget = path(session, id + ".preview");
                     JSONObject previewRecord = preview.json();
                     if (previewTarget.exists()) verifyCapturedFiles(previewTarget, previewRecord);
-                    else {
-                        syncPreviewDirectories(previewStage);
-                        if (!previewStage.renameTo(previewTarget)) throw new IOException("Could not save immutable HTML preview");
-                    }
-                    verifyCapturedFiles(previewTarget, previewRecord);
+                    else { verifyCapturedFiles(previewStage, previewRecord); syncPreviewDirectories(previewStage); }
                     record.put("preview", previewRecord);
                 } else if (unavailable != null) record.put("previewUnavailable", unavailable);
                 if ("text/html".equals(mime) && !HtmlPreviewCapture.htmlName(source.relative)) record.put("previewDenied", true);
-                ArtifactSnapshotIO.syncDirectory(directory);
-                writeManifest(manifest, record);
+                final File readyPreview = previewStage;
+                final IOException[] commitFailure = { null };
+                Runnable commit = () -> {
+                    admission.run();
+                    token.throwIfCancelled();
+                    try {
+                        verify(staged); verify(target); verify(manifest);
+                        if (!target.exists() && !staged.renameTo(target)) throw new IOException("Could not save attachment copy");
+                        verify(target);
+                        if (previewTarget != null && !previewTarget.exists()) {
+                            verify(readyPreview); verify(previewTarget);
+                            if (!readyPreview.renameTo(previewTarget)) throw new IOException("Could not save immutable HTML preview");
+                        }
+                        ArtifactSnapshotIO.syncDirectory(directory);
+                        writeManifest(manifest, record);
+                    } catch (IOException failed) { commitFailure[0] = failed; }
+                };
+                // Ordinary same-chat callers keep their existing lock ordering. Central transfers are
+                // serialized by WorkspaceArtifactDelivery before entering either STOP commit boundary.
+                if (workspaceId == null) commit.run();
+                else if (!token.runIfActive(commit))
+                    throw new java.util.concurrent.CancellationException("File delivery stopped before committing");
+                if (commitFailure[0] != null) throw commitFailure[0];
                 return attachment;
             } catch (java.util.concurrent.CancellationException cancelled) { throw cancelled; }
+            catch (RuntimeException denied) { throw denied; }
             catch (IOException invalid) { throw invalid; }
             catch (Exception invalid) { throw new IOException("Could not persist artifact metadata", invalid); }
             finally {
                 if (staged.exists()) staged.delete();
                 if (previewStage != null && previewStage.exists()) delete(previewStage);
             }
+        }
         }
     }
 
@@ -119,6 +179,7 @@ public final class DeliveredArtifactStore {
             CancellationToken token) throws IOException {
         if (bytes == null || bytes.length > ConnectorArtifactAccess.MAX_BYTES)
             throw new IOException("Connector attachment exceeds the byte limit");
+        synchronized (DELIVERY_ACTION_LOCK) {
         synchronized (lock) {
             token.throwIfCancelled();
             File directory = directory(session, true);
@@ -157,6 +218,7 @@ public final class DeliveredArtifactStore {
                 return attachment;
             } catch (org.json.JSONException invalid) { throw new IOException("Could not persist artifact metadata", invalid); }
             finally { if (staged.exists()) staged.delete(); }
+        }
         }
     }
 
@@ -399,6 +461,8 @@ public final class DeliveredArtifactStore {
 
     <T> T withThumbnailStorage(String session, ChatAttachment owner, String fingerprint, long generation,
             ThumbnailOperation<T> operation) throws IOException {
+        // Thumbnail write callbacks also check STOP; share the writer gate before the store lock.
+        synchronized (DELIVERY_ACTION_LOCK) {
         synchronized (lock) {
             if (thumbnailGeneration(session) != generation) throw new IOException("Thumbnail request was revoked by deletion");
             ThumbnailStorage storage = new ThumbnailStorage(session, directory(session, false));
@@ -409,6 +473,7 @@ public final class DeliveredArtifactStore {
                     throw new IOException("The immutable preview content changed");
                 return operation.run(storage);
             } catch (IllegalArgumentException invalid) { throw new IOException("Preview is unavailable", invalid); }
+        }
         }
     }
 

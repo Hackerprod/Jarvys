@@ -19,6 +19,9 @@ class NativeActionPolicy(private val store: ConnectorAutonomyStore) {
     constructor(context: Context) : this(SharedPreferencesConnectorAutonomyStore(context.applicationContext))
 
     enum class Operation(val id: String) {
+        DIAGNOSTICS_READ("diagnostics.read"),
+        WORKSPACE_CREATE("workspaces.create"), WORKSPACE_DELEGATE("workspaces.delegate"), WORKSPACE_READ("workspaces.read"),
+        WORKSPACE_DELIVER("workspaces.deliver"),
         MEMORY_VIEW("memory.view"), MEMORY_MODIFY("memory.modify"), MEMORY_DELETE("memory.delete"),
         MEMORY_RESTORE("memory.restore"), MEMORY_CLEAR("memory.clear"), MEMORY_EXPORT("memory.export"),
         MEMORY_SHARE_PERSONAL("memory.share_personal"), MEMORY_REFLECTION("memory.reflection.run"),

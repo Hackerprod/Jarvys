@@ -33,6 +33,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.window.DialogWindowProvider
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.testTag
@@ -62,12 +64,17 @@ internal fun MemoryScopeReviewDialog(
     onDismiss: () -> Unit,
     onMemoryChanged: () -> Unit,
 ) {
-    val uiProtection = memoryUiProtection(onDismiss) ?: return
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val lifecycleOwner = LocalLifecycleOwner.current
     val session = remember(store, legacyStore) { MemoryScopeReviewSession() }
     var source by remember { mutableStateOf(ReviewSource.CURRENT_CHAT) }
+    val selectedStore = if (source == ReviewSource.LEGACY) legacyStore else store
+    if (selectedStore == null) { onDismiss(); return }
+    val nativeToken = rememberMemoryEffectToken(selectedStore, source)
+    val uiProtection = memoryViewProtection(selectedStore, "scope-review:${source.name}",
+        shared = source == ReviewSource.PERSONAL_SHARED, onClose = onDismiss) ?: return
+    val nativeActions = remember(context) { MemoryNativeActions(context) }
     var localFiles by remember { mutableStateOf(emptyList<MemoryStore.MemoryFileInfo>()) }
     var legacyFiles by remember { mutableStateOf(emptyList<MemoryStore.MemoryFileInfo>()) }
     var grants by remember { mutableStateOf(emptyList<MemoryScopeGrant>()) }
@@ -82,10 +89,11 @@ internal fun MemoryScopeReviewDialog(
 
     fun close() {
         if (!open) return
+        nativeToken.cancel()
         open = false
         snapshotRequest++
         session.close()
-        onDismiss()
+        uiProtection.navigate(onDismiss)
     }
 
     DisposableEffect(session, lifecycleOwner) {
@@ -108,71 +116,56 @@ internal fun MemoryScopeReviewDialog(
         onDispose { MemoryStore.removeGlobalSearchListener(listener) }
     }
 
-    LaunchedEffect(store, legacyStore, refresh) {
+    LaunchedEffect(selectedStore, source, refresh, uiProtection.state) {
         loading = true
-        val result = withContext(Dispatchers.IO) { runCatching {
-            uiProtection.requireHumanUiInteraction()
-            Triple(
-                store.listFilesForUser().filterNot { it.path.startsWith("shared/") },
-                legacyStore?.listFilesForUser().orEmpty(),
-                store.listSharedPersonalForUser(),
-            )
+        localFiles = emptyList(); legacyFiles = emptyList(); grants = emptyList()
+        val result: Result<Triple<List<MemoryStore.MemoryFileInfo>, List<MemoryStore.MemoryFileInfo>, List<MemoryScopeGrant>>> =
+            withContext(Dispatchers.IO) { runCatching {
+            uiProtection.read {
+                when (source) {
+                    ReviewSource.CURRENT_CHAT -> Triple(store.listFilesForUser().filterNot { it.path.startsWith("shared/") }, emptyList(), emptyList())
+                    ReviewSource.LEGACY -> Triple(emptyList(), selectedStore.listFilesForUser(), emptyList())
+                    ReviewSource.PERSONAL_SHARED -> Triple(emptyList(), emptyList(), store.listSharedPersonalForUser())
+                }
+            }
         } }
-        result.onSuccess { (local, legacy, shared) ->
-            localFiles = local
-            legacyFiles = legacy
-            grants = shared
-        }.onFailure { error = context.getString(R.string.memory_scope_load_failed) }
+        result.onSuccess { (local, legacy, shared) -> localFiles=local; legacyFiles=legacy; grants=shared }
+            .onFailure { error = context.getString(R.string.memory_scope_load_failed) }
         loading = false
     }
 
     fun review(sourceStore: MemoryStore, path: String) {
-        if (mutationInFlight || !open || !uiProtection.allowsHumanUiAction()) return
-        snapshotRequest++
-        val ticket = session.beginReview()
-        error = null
-        status = null
-        scope.launch {
-            val result = withContext(Dispatchers.IO) { runCatching { uiProtection.requireHumanUiInteraction(); sourceStore.reviewForSharing(path) } }
-            result.onSuccess { session.present(ticket, sourceStore, it) }
-                .onFailure {
-                    if (session.failed(ticket)) error = context.getString(R.string.memory_scope_review_failed)
-                }
-        }
-    }
-
-    fun approve() {
-        if (mutationInFlight || !uiProtection.allowsHumanUiAction()) return
-        val pending = session.takeApproved() ?: return
+        if (mutationInFlight || !open || !uiProtection.allowsUiAction()) return
         mutationInFlight = true
+        error = null
         scope.launch {
-            val result = withContext(Dispatchers.IO) { runCatching { uiProtection.requireHumanUiInteraction(); pending.source.approveSharedPersonal(pending.review) } }
+            val result = withContext(Dispatchers.IO) { runCatching {
+                nativeActions.prepare(NativeActionPolicy.Operation.MEMORY_SHARE_PERSONAL, sourceStore,
+                    listOf("Share immutable PERSONAL snapshot", path, "Destination: shared PERSONAL projection"), nativeToken).use { action ->
+                    val exact = uiProtection.read { sourceStore.reviewForSharing(path) }
+                    action.appendExactArguments(listOf("Source conversation: ${exact.sourceConversationId}",
+                        "Revision: ${exact.revisionId}", "SHA-256: ${exact.sha256}", "Exact content:", exact.content))
+                    action.execute({ uiProtection.requireEffectSelection() }) { sourceStore.approveSharedPersonal(exact) }
+                }
+            } }
             mutationInFlight = false
-            result.onSuccess {
-                source = ReviewSource.PERSONAL_SHARED
-                status = context.getString(R.string.memory_scope_shared_success)
-                onMemoryChanged()
-                refresh++
-            }.onFailure {
-                error = context.getString(R.string.memory_scope_approval_failed)
-                refresh++
-            }
+            result.onSuccess { status=context.getString(R.string.memory_scope_shared_success); onMemoryChanged(); refresh++ }
+                .onFailure { error=context.getString(R.string.memory_scope_approval_failed) }
         }
     }
 
     fun revoke(grant: MemoryScopeGrant) {
-        if (mutationInFlight || !uiProtection.allowsHumanUiAction()) return
+        if (mutationInFlight || !uiProtection.allowsUiAction()) return
         mutationInFlight = true
-        error = null
         scope.launch {
-            val result = withContext(Dispatchers.IO) { runCatching { uiProtection.requireHumanUiInteraction(); store.revokeSharedPersonal(grant.id) } }
-            mutationInFlight = false
-            result.onSuccess {
-                status = context.getString(R.string.memory_scope_revoked_success)
-                approvedSnapshot = null
-                onMemoryChanged()
-                refresh++
-            }.onFailure { error = context.getString(R.string.memory_scope_revoke_failed) }
+            val result = withContext(Dispatchers.IO) { runCatching {
+                nativeActions.run(NativeActionPolicy.Operation.MEMORY_SHARE_PERSONAL, store,
+                    listOf("Revoke PERSONAL projection", grant.id, grant.sha256, grant.revisionId.toString()), nativeToken,
+                    { uiProtection.requireEffectSelection() }) { store.revokeSharedPersonal(grant.id) }
+            } }
+            mutationInFlight=false
+            result.onSuccess { approvedSnapshot=null; onMemoryChanged(); refresh++ }
+                .onFailure { error=context.getString(R.string.memory_scope_revoke_failed) }
         }
     }
 
@@ -184,7 +177,13 @@ internal fun MemoryScopeReviewDialog(
     }
 
     BackHandler { back() }
-    Dialog(onDismissRequest = { back() }, properties = DialogProperties(usePlatformDefaultWidth = false, securePolicy = SecureFlagPolicy.SecureOn)) {
+    Dialog(onDismissRequest = { back() }, properties = DialogProperties(usePlatformDefaultWidth = false, securePolicy = SecureFlagPolicy.SecureOff)) {
+        val dialogView = LocalView.current
+        DisposableEffect(uiProtection, dialogView) {
+            val window = (dialogView.parent as? DialogWindowProvider)?.window
+            val bound = uiProtection.bindWindow(window)
+            onDispose { bound.close() }
+        }
         Surface(modifier = Modifier.fillMaxWidth().fillMaxHeight(0.95f).padding(12.dp)
             .testTag("memory-scope-dialog"), shape = MaterialTheme.shapes.large) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -197,34 +196,7 @@ internal fun MemoryScopeReviewDialog(
                 }
                 val pending = session.pending
                 val snapshot = approvedSnapshot
-                if (pending != null) {
-                    Column(Modifier.weight(1f).verticalScroll(rememberScrollState())
-                        .testTag("memory-scope-review-scroll"), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text(stringResource(R.string.memory_scope_review_title), fontWeight = FontWeight.SemiBold)
-                        ScopeProvenance(pending.review.sourcePath, pending.review.sourceConversationId,
-                            pending.review.legacy, pending.review.revisionId, pending.review.sha256)
-                        Text(stringResource(R.string.memory_scope_share_explanation))
-                        Text(stringResource(R.string.memory_scope_exact_content), fontWeight = FontWeight.SemiBold)
-                        SelectionContainer {
-                            Text(pending.review.content, fontFamily = FontFamily.Monospace,
-                                modifier = Modifier.fillMaxWidth().testTag("memory-scope-exact-content"))
-                        }
-                        HorizontalDivider()
-                        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
-                            .toggleable(value = session.acknowledged, role = Role.Checkbox,
-                                onValueChange = { if (uiProtection.allowsHumanUiAction()) session.acknowledge(it) else session.cancel() })
-                            .testTag("memory-scope-consent")) {
-                            Checkbox(checked = session.acknowledged, onCheckedChange = null)
-                            Text(stringResource(R.string.memory_scope_consent), modifier = Modifier.weight(1f))
-                        }
-                    }
-                    Button(onClick = { approve() }, enabled = session.acknowledged && !mutationInFlight,
-                        modifier = Modifier.fillMaxWidth().testTag("memory-scope-approve")) {
-                        Text(stringResource(R.string.memory_scope_approve))
-                    }
-                    TextButton(onClick = { session.cancel() }, modifier = Modifier.fillMaxWidth()
-                        .testTag("memory-scope-cancel")) { Text(stringResource(R.string.cancel)) }
-                } else if (snapshot != null) {
+                if (snapshot != null) {
                     Column(Modifier.weight(1f).verticalScroll(rememberScrollState()),
                         verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         snapshot.grant?.let { grant ->
@@ -243,7 +215,9 @@ internal fun MemoryScopeReviewDialog(
                 } else {
                     Row(Modifier.fillMaxWidth()) {
                         ReviewSource.entries.forEach { option ->
-                            TextButton(onClick = { snapshotRequest++; session.cancel(); source = option; error = null; status = null },
+                            TextButton(onClick = { uiProtection.navigate {
+                                snapshotRequest++; session.cancel(); approvedSnapshot=null; source = option; error = null; status = null
+                            } },
                                 enabled = !mutationInFlight,
                                 modifier = Modifier.weight(1f).heightIn(min = 48.dp)
                                     .testTag("memory-scope-tab-${option.name}")) {
@@ -283,7 +257,7 @@ internal fun MemoryScopeReviewDialog(
                                         val request = ++snapshotRequest
                                         scope.launch {
                                             val result = withContext(Dispatchers.IO) {
-                                                runCatching { uiProtection.requireHumanUiInteraction(); store.readSharedPersonalForUser(grant.id) }
+                                                runCatching { uiProtection.read { store.readSharedPersonalForUser(grant.id) } }
                                             }
                                             if (open && request == snapshotRequest) {
                                                 result.onSuccess { approvedSnapshot = ReadOnlyMemoryPreview(it, grant = grant) }
@@ -315,7 +289,7 @@ internal fun MemoryScopeReviewDialog(
                                     if (source == ReviewSource.LEGACY && sourceStore != null) OutlinedButton(onClick = {
                                         val request = ++snapshotRequest
                                         scope.launch {
-                                            val result = withContext(Dispatchers.IO) { runCatching { uiProtection.requireHumanUiInteraction(); sourceStore.readForUser(file.path) } }
+                                            val result = withContext(Dispatchers.IO) { runCatching { uiProtection.read { sourceStore.readForUser(file.path) } } }
                                             if (open && request == snapshotRequest) {
                                                 result.onSuccess { approvedSnapshot = ReadOnlyMemoryPreview(it, legacyPath = file.path) }
                                                     .onFailure { error = context.getString(R.string.memory_scope_load_failed) }
@@ -328,7 +302,7 @@ internal fun MemoryScopeReviewDialog(
                                     OutlinedButton(onClick = { if (sourceStore != null) review(sourceStore, file.path) },
                                         enabled = sourceStore != null && !mutationInFlight && !session.loading,
                                         modifier = Modifier.testTag("memory-scope-review-${file.path}")) {
-                                        Text(stringResource(R.string.memory_scope_review))
+                                        Text(stringResource(R.string.memory_scope_approve))
                                     }
                                     HorizontalDivider()
                                 }

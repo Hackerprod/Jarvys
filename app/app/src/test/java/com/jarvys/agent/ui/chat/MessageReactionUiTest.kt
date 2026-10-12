@@ -31,6 +31,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertCountEquals
@@ -56,6 +57,7 @@ import com.jarvys.agent.ui.motion.LocalReducedMotion
 import kotlin.coroutines.resume
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -71,7 +73,12 @@ import org.robolectric.annotation.GraphicsMode
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [34], qualifiers = "en-rUS-w360dp-h800dp-port-mdpi", shadows = [ReactionMagnifierShadow::class])
 class MessageReactionUiTest {
-    @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
+    // Match the generated-image fixture: IO decode completion must enqueue View work on
+    // the test clock instead of resuming owner observation through an unconfined IO worker.
+    @OptIn(ExperimentalTestApi::class)
+    @get:Rule val compose = createAndroidComposeRule<ComponentActivity>(
+        effectContext = StandardTestDispatcher(),
+    )
     private val menu = ReactionSelectionMenu()
     private val body = "Alpha bravo charlie delta"
 

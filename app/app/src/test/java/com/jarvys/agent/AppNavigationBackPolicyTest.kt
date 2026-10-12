@@ -23,7 +23,7 @@ class AppNavigationBackPolicyTest {
             "connectors/remote/{serviceId}?title={title}", "connectors/google/{serviceId}?title={title}",
             "memory", "memory/history", "memory/file?path={path}&new={new}",
             "tasks", "tasks/detail/{taskId}", "bots", "crew", "crew/{missionId}",
-            "crew/{missionId}/bot/{botId}", "workspace-preview/{projectId}", "artifact-preview/{sessionId}/{artifactId}",
+            "crew/{missionId}/bot/{botId}", "workspace/{workspaceId}", "workspace/{workspaceId}/files", "workspace-preview/{projectId}", "artifact-preview/{sessionId}/{artifactId}",
         ), AppNavigationBackPolicy.registeredRoutePatterns)
         assertEquals(setOf("chat"), AppNavigationBackPolicy.rootRoutes)
         AppNavigationBackPolicy.registeredRoutePatterns.forEach { route ->

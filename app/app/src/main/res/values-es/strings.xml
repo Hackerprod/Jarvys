@@ -1428,4 +1428,9 @@ Se desconoce cómo terminaron. No se repiten automáticamente. Revisa los cambio
     <string name="factory_operation_review_title">¿Permitir esta operación?</string>
     <string name="factory_operation_review_disclosure">Revisa la solicitud exacta de esta app instalada de Factory. Esta aprobación solo se aplica a esta solicitud.</string>
     <string name="factory_operation_review_approve">Permitir una vez</string>
+    <string name="native_permission_workspace_create">Crear espacios duraderos</string>
+    <string name="native_permission_workspace_delegate">Delegar trabajo del espacio</string>
+    <string name="native_permission_workspace_read">Leer resultados del espacio</string>
+    <string name="native_permission_workspace_deliver">Entregar archivos del espacio al chat central</string>
+    <string name="workspace_policy_disclosure">Se aplica a esta acción exacta del espacio. Las capacidades del trabajador y los permisos de Android o proveedores siguen siendo independientes.</string>
 </resources>

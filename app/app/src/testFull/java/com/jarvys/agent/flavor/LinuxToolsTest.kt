@@ -206,6 +206,8 @@ class LinuxToolsTest {
             assertTrue(result.content, result.success)
             assertEquals(1, cards)
             assertEquals(if (requested == true) 1 else 0, runtime.workspaceDeleteCalls)
+            assertEquals(if (requested == null) AutonomyPolicy.ALLOW else AutonomyPolicy.ASK,
+                autonomy.maintenanceAuthorization(LinuxExecAutonomy.UNINSTALL_OPERATION_NAME).policy)
             assertFalse(com.jarvys.agent.MemoryUiAutomationGuard.isProtected())
         }
     }

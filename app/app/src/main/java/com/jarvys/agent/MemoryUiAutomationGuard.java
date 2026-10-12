@@ -12,13 +12,36 @@ public final class MemoryUiAutomationGuard {
     private static int protectedSurfaces;
     private static int taintedSurfaces;
     private static int activeActions;
+    private static final java.util.concurrent.CopyOnWriteArrayList<java.util.function.BooleanSupplier> VIEW_AUTHORITIES =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    /** Selected native view only. Validation is always outside MONITOR (may inspect its policy/data). */
+    public static AutoCloseable registerViewAuthority(java.util.function.BooleanSupplier authority) {
+        java.util.Objects.requireNonNull(authority);
+        VIEW_AUTHORITIES.add(authority);
+        invalidateQueuedAutomation();
+        return () -> { VIEW_AUTHORITIES.remove(authority); invalidateQueuedAutomation(); };
+    }
+    public static void invalidateQueuedAutomation() { synchronized (MONITOR) { epoch++; } }
+    private static boolean viewAuthoritiesValid() {
+        for (java.util.function.BooleanSupplier authority : VIEW_AUTHORITIES) {
+            try { if (!authority.getAsBoolean()) return false; } catch (RuntimeException failure) { return false; }
+        }
+        return true;
+    }
+    /** A transition reserves pixels without pretending an automated opening is human consent. */
+    public static Lease enterViewTransition() {
+        synchronized (MONITOR) { protectedSurfaces++; epoch++; return new Lease(false, false); }
+    }
 
     private MemoryUiAutomationGuard() { }
 
     public static final class Lease implements AutoCloseable {
         private final boolean tainted;
+        private final boolean humanReview;
         private boolean closed;
-        private Lease(boolean tainted) { this.tainted = tainted; }
+        private Lease(boolean tainted) { this(tainted, true); }
+        private Lease(boolean tainted, boolean humanReview) { this.tainted = tainted; this.humanReview = humanReview; }
 
         public boolean isReadyForUser() {
             synchronized (MONITOR) {
@@ -27,7 +50,7 @@ public final class MemoryUiAutomationGuard {
         }
 
         public void requireHumanUiInteraction() {
-            if (!isReadyForUser()) throw blocked();
+            if (!humanReview || !isReadyForUser()) throw blocked();
         }
 
         @Override public void close() {
@@ -123,7 +146,10 @@ public final class MemoryUiAutomationGuard {
 
     /** Provider-only endpoints. These must remain strictly local to avoid recursive peer IPC. */
     public static long[] localSnapshot() {
-        synchronized (MONITOR) { return new long[] {epoch, protectedSurfaces == 0 ? 0L : 1L}; }
+        final long before;
+        synchronized (MONITOR) { before = epoch; }
+        boolean viewValid = viewAuthoritiesValid();
+        synchronized (MONITOR) { return new long[] {epoch, protectedSurfaces == 0 && viewValid && before == epoch ? 0L : 1L}; }
     }
 
     public static boolean localIsAutomationEpochValid(long capturedEpoch) {
@@ -145,18 +171,23 @@ public final class MemoryUiAutomationGuard {
     }
 
     public static boolean isProtected() {
-        synchronized (MONITOR) { return protectedSurfaces != 0; }
+        boolean viewValid = viewAuthoritiesValid();
+        synchronized (MONITOR) { return protectedSurfaces != 0 || !viewValid; }
     }
 
     /** Capture once when an observation or action begins; never replace it after an intervening UI. */
     public static long captureAutomationEpoch() {
+        final long before;
+        synchronized (MONITOR) { if (protectedSurfaces != 0) throw blocked(); before = epoch; }
+        if (!viewAuthoritiesValid()) throw blocked();
         synchronized (MONITOR) {
-            if (protectedSurfaces != 0) throw blocked();
+            if (protectedSurfaces != 0 || epoch != before) throw blocked();
             return epoch;
         }
     }
 
     public static boolean isAutomationEpochValid(long capturedEpoch) {
+        if (!viewAuthoritiesValid()) return false;
         synchronized (MONITOR) { return protectedSurfaces == 0 && epoch == capturedEpoch; }
     }
 
@@ -167,6 +198,7 @@ public final class MemoryUiAutomationGuard {
     /** Gate at the actual dispatch, not at command enqueue time. Reentrant native entry is tainted. */
     public static boolean runAutomated(long capturedEpoch, Runnable action) {
         if (action == null) throw new IllegalArgumentException("Action is required");
+        if (!viewAuthoritiesValid()) return false;
         synchronized (MONITOR) {
             if (protectedSurfaces != 0 || epoch != capturedEpoch) return false;
             activeActions++;
@@ -180,6 +212,7 @@ public final class MemoryUiAutomationGuard {
 
     /** Call inside runAutomated at dispatch; caller closes only from real terminal callbacks. */
     public static Action beginAsyncAction(long capturedEpoch) {
+        if (!viewAuthoritiesValid()) throw blocked();
         synchronized (MONITOR) {
             if (protectedSurfaces != 0 || epoch != capturedEpoch) throw blocked();
             activeActions++;

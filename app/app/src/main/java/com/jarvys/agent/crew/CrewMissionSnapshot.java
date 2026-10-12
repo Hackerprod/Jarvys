@@ -10,7 +10,7 @@ import java.util.List;
  * Versioned, immutable projection used by the live UI and the per-chat append-only ledger.
  */
 public final class CrewMissionSnapshot {
-    public static final int SCHEMA_VERSION = 3;
+    public static final int SCHEMA_VERSION = 4;
     public final String missionId;
     public final String conversationId;
     public final String processId;
@@ -43,6 +43,11 @@ public final class CrewMissionSnapshot {
         this.synthesis = synthesis == null ? "" : synthesis;
         this.startedAtMillis = startedAtMillis;
         this.finishedAtMillis = finishedAtMillis;
+        for (CrewBotSnapshot bot : bots) {
+            if (bot.resultEvidence != null && (!missionId.equals(bot.resultEvidence.missionId)
+                    || !conversationId.equals(bot.resultEvidence.conversationId)))
+                throw new IllegalArgumentException("Worker result evidence belongs to another mission");
+        }
         this.bots = Collections.unmodifiableList(new ArrayList<>(bots));
         this.messages = Collections.unmodifiableList(new ArrayList<>(messages));
     }
@@ -89,6 +94,8 @@ public final class CrewMissionSnapshot {
             for (CrewBotSnapshot bot : bots) {
                 JSONObject value = new JSONObject();
                 value.put("id", bot.id);
+                value.put("cycleId", bot.cycleId);
+                if (bot.resultEvidence != null) value.put("resultEvidence", bot.resultEvidence.toJson());
                 value.put("roleId", bot.roleId);
                 value.put("roleName", bot.roleName);
                 value.put("name", bot.name);
@@ -123,7 +130,7 @@ public final class CrewMissionSnapshot {
 
     public static CrewMissionSnapshot fromJson(JSONObject row) {
         int version = row.optInt("crewSchemaVersion", 0);
-        if (version != 1 && version != 2 && version != SCHEMA_VERSION) return null;
+        if (version != 1 && version != 2 && version != 3 && version != SCHEMA_VERSION) return null;
         try {
             List<CrewBotSnapshot> bots = new ArrayList<>();
             JSONArray botRows = row.optJSONArray("bots");
@@ -133,7 +140,12 @@ public final class CrewMissionSnapshot {
                 JSONArray toolRows = value.optJSONArray("tools");
                 List<String> tools = new ArrayList<>();
                 if (toolRows != null) for (int tool = 0; tool < toolRows.length(); tool++) tools.add(toolRows.optString(tool));
-                bots.add(new CrewBotSnapshot(value.optString("id"), value.optString("roleId"), value.optString("roleName"), value.optString("name"), value.optString("colorKey"), value.optString("mission"), value.optString("status"), value.optString("error"), value.optString("result"), value.optString("waitingReason"), tools, value.optLong("startedAtMillis"), value.optLong("finishedAtMillis"), value.optBoolean("canResume"), value.optString("recoveryNote"), value.optBoolean("resumeRequired"), value.optString("phase"), value.optString("lastProgress"), value.optLong("lastProgressAtMillis")));
+                if (version >= 4 && !(value.opt("cycleId") instanceof String)) return null;
+                String cycleId = version >= 4 ? value.getString("cycleId") : "";
+                CrewResultEvidence evidence = null;
+                if (version >= 4 && value.has("resultEvidence"))
+                    evidence = CrewResultEvidence.fromJsonStrict(value.getJSONObject("resultEvidence"));
+                bots.add(new CrewBotSnapshot(value.optString("id"), value.optString("roleId"), value.optString("roleName"), value.optString("name"), value.optString("colorKey"), value.optString("mission"), value.optString("status"), value.optString("error"), value.optString("result"), value.optString("waitingReason"), tools, value.optLong("startedAtMillis"), value.optLong("finishedAtMillis"), value.optBoolean("canResume"), value.optString("recoveryNote"), value.optBoolean("resumeRequired"), value.optString("phase"), value.optString("lastProgress"), value.optLong("lastProgressAtMillis"), cycleId, evidence));
             }
             List<CrewMessage> messages = new ArrayList<>();
             JSONArray messageRows = row.optJSONArray("messages");

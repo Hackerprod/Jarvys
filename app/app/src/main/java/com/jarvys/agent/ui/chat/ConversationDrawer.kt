@@ -42,6 +42,13 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.text.style.TextOverflow
+import com.jarvys.agent.workspaces.WorkspaceSidebarRow
+import com.jarvys.agent.workspaces.WorkspaceStatusText
+import com.jarvys.agent.workspaces.WorkspacePageButtons
+import com.jarvys.agent.workspaces.isWorkspaceCoordinationSession
+import com.jarvys.agent.workspaces.workspaceDisplayText
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.jarvys.agent.R
@@ -84,6 +91,21 @@ fun ConversationDrawer(
     onOpenScheduledTasks: () -> Unit = {},
     isDrawerOpen: Boolean = true,
     onCloseDrawer: () -> Unit = {},
+    centralSelected: Boolean = false,
+    onOpenCentral: (() -> Unit)? = null,
+    workspaces: List<WorkspaceSidebarRow> = emptyList(),
+    selectedWorkspaceId: String? = null,
+    onOpenWorkspace: (String) -> Unit = {},
+    reservedSessionIds: Set<String> = emptySet(),
+    workspacesLoading: Boolean = false,
+    workspaceError: String? = null,
+    canPreviousWorkspacePage: Boolean = false,
+    canFirstWorkspacePage: Boolean = false,
+    canNextWorkspacePage: Boolean = false,
+    onPreviousWorkspacePage: () -> Unit = {},
+    onNextWorkspacePage: () -> Unit = {},
+    onFirstWorkspacePage: () -> Unit = {},
+    onRetryWorkspaces: () -> Unit = {},
 ) {
     val configuration = LocalConfiguration.current
     val listState = rememberLazyListState()
@@ -116,11 +138,13 @@ fun ConversationDrawer(
     }
     val activeRecord = history.firstOrNull { it.sessionId == activeSessionId }
         ?: RunHistoryItem(activeSessionId, activeGoal, "", 0, 0, 0.0, activeSessionId, activeTitle)
-    val searchableHistory = remember(history, activeSessionVisible, activeSessionId) {
-        history.filterNot { activeSessionVisible && it.sessionId == activeSessionId }
+    val searchableHistory = remember(history, activeSessionVisible, activeSessionId, reservedSessionIds) {
+        history.filterNot { isWorkspaceCoordinationSession(it.sessionId) || it.sessionId in reservedSessionIds ||
+            (activeSessionVisible && it.sessionId == activeSessionId) }
     }
     val visibleHistory = remember(searchableHistory, filter) { drawerChatsForDisplay(searchableHistory, filter) }
     val activeVisible = activeSessionVisible && !activeRecord.archived &&
+        !isWorkspaceCoordinationSession(activeSessionId) && activeSessionId !in reservedSessionIds &&
         drawerChatMatches(activeTitle ?: activeRecord.title, activeGoal, filter)
     val rows = buildList {
         if (activeVisible) add(activeRecord)
@@ -173,6 +197,56 @@ fun ConversationDrawer(
                 LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth().testTag("conversation-drawer-scroll"),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
+                    if (onOpenCentral != null) item(key = "central-navigation") {
+                        Surface(shape = RoundedCornerShape(13.dp),
+                            color = if (centralSelected) MaterialTheme.colorScheme.primaryContainer
+                                else MaterialTheme.colorScheme.surface) {
+                            DrawerMenuRow(stringResource(R.string.workspace_central_chat), LucideIcons.Bot,
+                                Modifier.testTag("drawer-open-central").semantics { selected = centralSelected }, onOpenCentral)
+                        }
+                    }
+                    if (onOpenCentral != null || workspaces.isNotEmpty()) {
+                        item(key = "workspace-heading") {
+                            DrawerGroupHeading(stringResource(R.string.workspace_sidebar_heading), "drawer-workspaces-heading")
+                        }
+                        if (workspacesLoading) item(key = "workspace-loading") {
+                            Text(stringResource(R.string.workspace_loading), Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                                .testTag("drawer-workspaces-loading"))
+                        }
+                        if (workspaceError != null) item(key = "workspace-error") {
+                            Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp).testTag("drawer-workspaces-error")) {
+                                Text(workspaceError, color = MaterialTheme.colorScheme.error)
+                                androidx.compose.material3.TextButton(onClick = onRetryWorkspaces) {
+                                    Text(stringResource(R.string.workspace_retry))
+                                }
+                            }
+                        }
+                        if (!workspacesLoading && workspaceError == null && workspaces.isEmpty()) item(key = "workspace-empty") {
+                            Text(stringResource(if (canFirstWorkspacePage) R.string.workspace_page_empty else R.string.workspace_sidebar_empty),
+                                Modifier.padding(horizontal = 12.dp, vertical = 8.dp).testTag("drawer-workspaces-empty"),
+                                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        items(workspaces, key = { "workspace-" + it.id }) { workspace ->
+                            val selected = selectedWorkspaceId == workspace.id
+                            Surface(shape = RoundedCornerShape(13.dp),
+                                color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface) {
+                                Column(Modifier.fillMaxWidth().heightIn(min = 56.dp)
+                                    .testTag("drawer-workspace-${workspace.id}").semantics { this.selected = selected }
+                                    .clickable(enabled = actionsEnabled && !workspacesLoading && workspaceError == null, role = Role.Button) { onOpenWorkspace(workspace.id) }
+                                    .padding(horizontal = 12.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Text(workspaceDisplayText(workspace.title, stringResource(R.string.workspace_title), 256),
+                                        style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                    WorkspaceStatusText(workspace.status)
+                                    if (workspace.statusPageLimited) Text(stringResource(R.string.workspace_status_page_scope),
+                                        style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                        }
+                    }
+                    if (canFirstWorkspacePage || canNextWorkspacePage) item(key = "workspace-pages") {
+                        WorkspacePageButtons(canPreviousWorkspacePage, canFirstWorkspacePage, canNextWorkspacePage,
+                            !workspacesLoading && actionsEnabled, onPreviousWorkspacePage, onNextWorkspacePage, onFirstWorkspacePage)
+                    }
                     item(key = "primary-navigation") {
                         Column {
                             DrawerMenuRow(stringResource(R.string.drawer_new_chat), LucideIcons.MessageCirclePlus,
@@ -191,7 +265,7 @@ fun ConversationDrawer(
                             val active = activeVisible && record.sessionId == activeSessionId
                             ConversationSessionRow(drawerConversationTitle(if (active) activeTitle else record.title,
                                 if (active) activeGoal else record.goal, stringResource(R.string.drawer_chat_fallback)),
-                                selected = isChatRoute && if (active) selectedHistoryId == null else selectedHistoryId == record.id,
+                                selected = isChatRoute && !centralSelected && selectedWorkspaceId == null && if (active) selectedHistoryId == null else selectedHistoryId == record.id,
                                 active = active, onClick = { if (active) onResumeActive() else onOpenHistory(record.id) },
                                 pinned = record.pinned, archived = false, actionsEnabled = actionsEnabled,
                                 showPinnedMarker = false, verticalOverflow = true,
@@ -212,7 +286,7 @@ fun ConversationDrawer(
                         val active = activeVisible && record.sessionId == activeSessionId
                         ConversationSessionRow(drawerConversationTitle(if (active) activeTitle else record.title,
                             if (active) activeGoal else record.goal, stringResource(R.string.drawer_chat_fallback)),
-                            selected = isChatRoute && if (active) selectedHistoryId == null else selectedHistoryId == record.id,
+                            selected = isChatRoute && !centralSelected && selectedWorkspaceId == null && if (active) selectedHistoryId == null else selectedHistoryId == record.id,
                             active = active, onClick = { if (active) onResumeActive() else onOpenHistory(record.id) },
                             pinned = record.pinned, archived = false, actionsEnabled = actionsEnabled,
                             showPinnedMarker = false, verticalOverflow = true,

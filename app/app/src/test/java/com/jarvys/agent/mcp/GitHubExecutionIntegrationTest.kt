@@ -691,7 +691,7 @@ class GitHubExecutionIntegrationTest {
             check(repository.get(config.id)!!.tools.any { it.wireName == name }) { "Undiscovered fixture tool $name" }
             repository.updateToolEnabled(config.id, name, true)
             // Existing review-race fixtures explicitly select ASK. Reads retain the common ALLOW default.
-            val definition = repository.exposedTools().single { it.wireName == name }
+            val definition = repository.exposedTools().single { it.serverId == config.id && it.wireName == name }
             if (definition.access == McpToolAccess.WRITE) store.setPolicy("mcp:${config.id}", name, AutonomyPolicy.ASK)
         }
         fun discover(tools: List<McpToolConfig>) = discovery(tools)

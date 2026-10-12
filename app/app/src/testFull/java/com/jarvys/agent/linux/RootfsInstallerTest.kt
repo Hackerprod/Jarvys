@@ -198,6 +198,29 @@ class RootfsInstallerTest {
         } finally { remove(root) }
     }
 
+    @Test fun cancelledReadRetainsOnlyPreviouslyWrittenPrefixAndExplicitRetryResumesIt() {
+        val archive = archive()
+        val root = tempDir()
+        try {
+            val paths = RootfsInstaller.Paths(root)
+            paths.linuxDir.mkdirs()
+            val prefix = archive.copyOfRange(0, archive.size / 3)
+            paths.archivePart.writeBytes(prefix)
+            val token = CancellationToken.cancellable()
+            val cancelledTransport = FakeTransport(archive, afterRead = { token.cancel() })
+            val cancelled = installer(paths, cancelledTransport, archive).install(token)
+            assertEquals("cancelled", cancelled.failureCode)
+            assertEquals(prefix.size.toLong(), cancelled.bytes)
+            assertTrue(prefix.contentEquals(paths.archivePart.readBytes()))
+            assertFalse(paths.staging.exists())
+            assertEquals(listOf(prefix.size.toLong()), cancelledTransport.offsets)
+            val retryTransport = FakeTransport(archive)
+            val ready = installer(paths, retryTransport, archive).install(CancellationToken.uncancellable())
+            assertEquals(LinuxInstallPhase.READY, ready.phase)
+            assertEquals(listOf(prefix.size.toLong()), retryTransport.offsets)
+        } finally { remove(root) }
+    }
+
     @Test fun cancelledDownloadAndInterruptedExtractionDiscardStagingAndCanRetry() {
         val archive = archive()
         val root = tempDir()
@@ -207,7 +230,10 @@ class RootfsInstallerTest {
             val cancelledTransport = FakeTransport(archive, afterRead = { token.cancel() })
             val cancelled = installer(paths, cancelledTransport, archive).install(token)
             assertEquals("cancelled", cancelled.failureCode)
-            assertTrue(paths.archivePart.length() > 0)
+            // Cancellation is latched inside read(), before the next archive write admission.
+            assertEquals(0L, paths.archivePart.length())
+            assertEquals(0L, cancelled.bytes)
+            assertFalse(paths.staging.exists())
             val cancelledBytes = paths.archivePart.length()
             val retryTransport = FakeTransport(archive)
             assertEquals(LinuxInstallPhase.READY,

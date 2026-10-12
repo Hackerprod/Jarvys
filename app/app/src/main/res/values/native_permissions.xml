@@ -20,4 +20,8 @@
     <string name="native_permission_origin_user">Your saved choice</string>
     <string name="native_permission_origin_legacy">Previous choice with unknown origin, preserved</string>
     <string name="native_permission_origin_invalid">Invalid saved setting; review required</string>
+    <string name="native_permission_diagnostics_read">Read local app diagnostics</string>
+    <string name="diagnostics_policy_disclosure">Share the selected sanitized diagnostic metadata with this conversation’s configured model. No raw messages, request bodies or credentials are included.</string>
+    <string name="diagnostics_policy_latest">Latest summaries</string>
+    <string name="diagnostics_policy_id">Diagnostic ID</string>
 </resources>

@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="memory_native_reflection_denied">La política guardada de acciones nativas no permite la reflexión</string>
+    <string name="memory_native_undo_chat_revision">Deshacer la revisión exacta de memoria del chat</string>
+    <string name="memory_native_undo_reflection_group">Deshacer el grupo exacto de reflexión</string>
+    <string name="memory_native_allow_once">Permitir una vez</string>
+    <string name="memory_native_close">Cerrar</string>
+    <string name="memory_native_finish_interaction">Termina la interacción y vuelve a abrir esta revisión manualmente</string>
+    <string name="memory_native_selection_changed">La memoria seleccionada ha cambiado</string>
+    <string name="memory_native_review_loading">Cargando la revisión de la memoria seleccionada</string>
+    <string name="memory_native_review_prompt">¿Permitir revisar y capturar esta memoria seleccionada?</string>
+    <string name="memory_native_review_scope">Ámbito: %1$s\nVista: %2$s\nEstado: %3$s</string>
+    <string name="memory_native_open_foreground">Abre esta acción exacta de memoria con la aplicación en primer plano</string>
+    <string name="memory_native_lifecycle_required">Esta revisión de memoria requiere una actividad en primer plano con un ciclo de vida gestionado</string>
+    <string name="memory_native_export_destination_unavailable">No se puede abrir el destino seleccionado</string>
+    <string name="memory_native_export_success">Memoria exportada</string>
+    <string name="memory_native_export_incomplete">La exportación no se completó. Revisa el archivo seleccionado antes de volver a intentarlo.</string>
+    <string name="memory_native_draft_capture_once">Permitir una captura de este borrador actualizado</string>
+    <string name="memory_native_reflection_title">Reflexionar sobre la conversación seleccionada</string>
+    <string name="memory_native_reflection_conversation">Conversación: %1$s</string>
+    <string name="memory_native_reflection_through_message">Hasta el mensaje: %1$s</string>
+    <string name="memory_native_reflection_manual">Manual: %1$s</string>
+    <string name="memory_native_reflection_explanation">Leer esta transcripción delimitada y actualizar únicamente la memoria habilitada de esta conversación con las herramientas existentes de uso exclusivo para memoria.</string>
+    <string name="memory_native_reflection_transcript_hash">SHA-256 de la transcripción: %1$s</string>
+    <string name="memory_native_selected_scope">Ámbito de la memoria seleccionada: %1$s</string>
+    <string name="memory_native_exact_state">Estado exacto: %1$s</string>
+    <string name="memory_native_create_directory">Crear carpeta</string>
+    <string name="memory_native_save_note">Guardar nota</string>
+    <string name="memory_native_delete_note">Eliminar nota</string>
+    <string name="memory_native_clear_history">Borrar de forma irreversible la memoria seleccionada y su historial</string>
+    <string name="memory_native_restore_revision">Restaurar revisión</string>
+    <string name="memory_native_undo_revision">Deshacer la última revisión</string>
+    <string name="memory_native_export_selected">Exportar la memoria seleccionada</string>
+    <string name="memory_native_export_include_journal">Incluir registro: %1$s</string>
+    <string name="memory_native_export_destination">Destino seleccionado en Android: %1$s</string>
+    <string name="memory_native_share_snapshot">Compartir una copia inmutable PERSONAL</string>
+    <string name="memory_native_share_destination">Destino: proyección PERSONAL compartida</string>
+    <string name="memory_native_source_conversation">Conversación de origen: %1$s</string>
+    <string name="memory_native_source_revision">Revisión: %1$s</string>
+    <string name="memory_native_source_hash">SHA-256: %1$s</string>
+    <string name="memory_native_exact_content">Contenido exacto:</string>
+    <string name="memory_native_revoke_projection">Revocar la proyección PERSONAL</string>
+</resources>

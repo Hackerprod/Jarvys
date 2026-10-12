@@ -143,6 +143,13 @@ class ConnectedGooglePermissionScreensTest {
             assertEquals("$prefix vertical center", row.center.y, control.center.y, 1f)
         }
         assertTrue("$prefix 48 dp touch target", control.height >= 48f)
+        if (prefix.startsWith("google-policy-")) {
+            val origin = compose.onNodeWithTag("$prefix-origin").performScrollTo().assertIsDisplayed()
+                .fetchSemanticsNode().boundsInRoot
+            val visibleRow = compose.onNodeWithTag("$prefix-row", useUnmergedTree = true)
+                .fetchSemanticsNode().boundsInRoot
+            assertTrue("$prefix provenance remains below the centered policy row", origin.top >= visibleRow.bottom - 1f)
+        }
     }
     private fun policy(prefix: String, resource: Int) =
         compose.onNodeWithTag("$prefix-control").assertTextContains(compose.activity.getString(resource))

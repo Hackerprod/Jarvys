@@ -65,6 +65,7 @@ final class ProviderHttp {
                 connection.setRequestProperty(header.getKey(), header.getValue());
             }
             token.throwIfCancelled();
+            NativeEffectDispatchScope.beforeDispatch();
             try (OutputStream output = connection.getOutputStream()) {
                 output.write(body);
                 output.flush();

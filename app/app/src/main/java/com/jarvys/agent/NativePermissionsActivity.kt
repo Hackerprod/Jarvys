@@ -131,6 +131,11 @@ open class NativePermissionsActivity : ComponentActivity() {
     override fun onDestroy() { synchronized(authorityLock) { resumed=false; generation++ }; editLease?.close(); editLease=null; worker.shutdown(); super.onDestroy() }
     companion object {
         internal fun operationLabel(operation: NativeActionPolicy.Operation): Int = when(operation) {
+            NativeActionPolicy.Operation.WORKSPACE_CREATE -> R.string.native_permission_workspace_create
+            NativeActionPolicy.Operation.WORKSPACE_DELEGATE -> R.string.native_permission_workspace_delegate
+            NativeActionPolicy.Operation.WORKSPACE_READ -> R.string.native_permission_workspace_read
+            NativeActionPolicy.Operation.WORKSPACE_DELIVER -> R.string.native_permission_workspace_deliver
+            NativeActionPolicy.Operation.DIAGNOSTICS_READ -> R.string.native_permission_diagnostics_read
             NativeActionPolicy.Operation.MEMORY_VIEW -> R.string.native_permission_memory_view
             NativeActionPolicy.Operation.MEMORY_MODIFY -> R.string.native_permission_memory_modify
             NativeActionPolicy.Operation.MEMORY_DELETE -> R.string.native_permission_memory_delete

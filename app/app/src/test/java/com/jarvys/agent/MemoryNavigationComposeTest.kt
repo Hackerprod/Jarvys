@@ -158,11 +158,9 @@ class MemoryNavigationComposeTest {
         compose.onNodeWithText("#${firstRevision.id}").scrollIntoView().performClick()
         val restoreLabel = text(R.string.memory_restore_version)
         compose.onNodeWithText(restoreLabel).scrollIntoView().performClick()
-        compose.onNodeWithText(text(R.string.memory_restore_title)).assertIsDisplayed()
-        val restoreNodes = compose.onAllNodesWithText(restoreLabel).fetchSemanticsNodes().size
-        val restoreClicked = confirmDialogAction(restoreLabel)
-        awaitMemoryMutationReturn(nav, store, path, first, "restore", restoreNodes, restoreClicked)
-        scrollHomeToFiles()
+        awaitMemoryMutationReturn(nav, store, path, first, "restore", 1, "Configured ALLOW")
+        awaitRoute(nav, AppNavigationBackPolicy.MEMORY) // Require the refreshed list, not only route + disk.
+        scrollListToNode("memory-home-list", hasText("First title"), "First title")
         compose.onNodeWithText("First title").assertIsDisplayed()
         compose.onAllNodesWithText("Second title").assertCountEquals(0)
     }
@@ -183,10 +181,7 @@ class MemoryNavigationComposeTest {
         }
         compose.onNodeWithText(undoLabel).assertIsEnabled()
         compose.onNodeWithText(undoLabel).performClick()
-        compose.onNodeWithText(text(R.string.memory_undo_title)).assertIsDisplayed()
-        val undoNodes = compose.onAllNodesWithText(undoLabel).fetchSemanticsNodes().size
-        val undoClicked = confirmDialogAction(undoLabel)
-        awaitMemoryMutationReturn(nav, store, path, first, "undo", undoNodes, undoClicked)
+        awaitMemoryMutationReturn(nav, store, path, first, "undo", 1, "Configured ALLOW")
         val home = compose.onNodeWithTag("memory-home-list")
         var restartSearch = true
         compose.waitUntil(5_000) {
@@ -336,15 +331,7 @@ class MemoryNavigationComposeTest {
 
         val deleteLabel = text(R.string.memory_delete)
         compose.onNodeWithText(deleteLabel).scrollIntoView().performClick()
-        val deleteTitle = text(R.string.memory_delete_title)
-        compose.waitUntil(10_000) {
-            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
-            runCatching { compose.onNodeWithText(deleteTitle).assertIsDisplayed(); true }.getOrDefault(false)
-        }
-        compose.onNodeWithText(deleteTitle).assertIsDisplayed()
-        val matchingDeleteNodes = compose.onAllNodesWithText(deleteLabel).fetchSemanticsNodes().size
-        val clickedDialogNode = confirmDialogAction(deleteLabel)
-        awaitDeleteResult(nav, store, matchingDeleteNodes, clickedDialogNode)
+        awaitDeleteResult(nav, store, 1, "Configured ALLOW")
         scrollHomeToFiles()
         compose.onAllNodesWithText("Delete me").assertCountEquals(0)
     }
@@ -388,18 +375,22 @@ class MemoryNavigationComposeTest {
 
     @Test fun leavingNativeShareReviewForChatDiscardsConsentAndReentryStartsAtHome() {
         val store = newStore()
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        NativeActionPolicy(context).set(NativeActionPolicy.Operation.MEMORY_SHARE_PERSONAL, com.jarvys.agent.connectors.AutonomyPolicy.ASK)
         val nav = showMemory(store)
         compose.onNodeWithTag("memory-home-list").scrollToIndexWithClock(4)
         compose.onNodeWithTag("memory-scope-open").performClick()
         scrollListToTag("memory-scope-list", "memory-scope-review-human.md")
         compose.onNodeWithTag("memory-scope-review-human.md").performClick()
         compose.waitUntil(10_000) {
-            runCatching { compose.onNodeWithTag("memory-scope-consent").fetchSemanticsNode(); true }.getOrDefault(false)
+            shadowOf(Looper.getMainLooper()).idle()
+            org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog()?.isShowing == true
         }
-        compose.onNodeWithTag("memory-scope-consent").scrollIntoView().performClick()
-        compose.onNodeWithTag("memory-scope-approve").assertIsEnabled()
+        val review = requireNotNull(org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog())
+        assertTrue(store.listSharedPersonalForUser().isEmpty())
         compose.runOnIdle { nav.controller.navigate(AppNavigationBackPolicy.CHAT_ROOT) }
         awaitRoute(nav, AppNavigationBackPolicy.CHAT_ROOT)
+        compose.waitUntil(10_000) { shadowOf(Looper.getMainLooper()).idle(); !review.isShowing }
         compose.onNodeWithTag("memory-test-enter").assertIsDisplayed().performClick()
         awaitRoute(nav, AppNavigationBackPolicy.MEMORY)
         compose.onNodeWithTag("memory-home-list").assertIsDisplayed()
@@ -662,21 +653,24 @@ class MemoryNavigationComposeTest {
     }
 
     /** Page the actual lazy list with a bounded, progress-checked action per page. */
-    private fun scrollListToTag(listTag: String, targetTag: String) {
+    private fun scrollListToTag(listTag: String, targetTag: String) =
+        scrollListToNode(listTag, hasTestTag(targetTag), targetTag)
+
+    private fun scrollListToNode(listTag: String, target: androidx.compose.ui.test.SemanticsMatcher, description: String) {
         val list = compose.onNodeWithTag(listTag)
         awaitNode(list)
         compose.waitUntil(10_000) { list.fetchSemanticsNode().children.isNotEmpty() }
         list.scrollToIndexWithClock(0)
         repeat(32) { page ->
-            if (compose.onAllNodesWithTag(targetTag).fetchSemanticsNodes().size == 1) {
-                compose.onNodeWithTag(targetTag).scrollIntoView()
+            if (compose.onAllNodes(target).fetchSemanticsNodes().size == 1) {
+                compose.onNode(target).scrollIntoView()
                 return
             }
             val node = list.fetchSemanticsNode()
             val axis = node.config[SemanticsProperties.VerticalScrollAxisRange]
             val before = axis.value()
             assertFalse("Memory fixture expects normal vertical scrolling", axis.reverseScrolling)
-            assertTrue("$targetTag missing at end of $listTag: page=$page axis=$before/${axis.maxValue()}",
+            assertTrue("$description missing at end of $listTag: page=$page axis=$before/${axis.maxValue()}",
                 before < axis.maxValue())
             val delta = node.boundsInRoot.height * 0.8f
             assertTrue("$listTag has no scroll viewport: ${node.boundsInRoot}", delta >= 1f)
@@ -684,7 +678,7 @@ class MemoryNavigationComposeTest {
             val after = list.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()
             assertTrue("$listTag made no progress: page=$page before=$before after=$after delta=$delta", after > before)
         }
-        throw AssertionError("$targetTag was not found after 32 real, progress-checked pages of $listTag")
+        throw AssertionError("$description was not found after 32 real, progress-checked pages of $listTag")
     }
 
     private fun scrollByAndSettle(scroller: SemanticsNode, delta: Float) {

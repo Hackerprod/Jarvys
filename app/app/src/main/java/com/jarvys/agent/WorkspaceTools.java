@@ -438,8 +438,11 @@ public final class WorkspaceTools {
         return coding;
       }
       String path = string(arguments, "path");
+      String content = string(arguments, "content");
       MemoryStore.Revision revision =
-          this.workspace.writeWithRevision(path, string(arguments, "content"));
+          MemoryToolActions.run(this.workspace, NativeActionPolicy.Operation.MEMORY_MODIFY, path,
+              java.util.Arrays.asList("write", content), token,
+              () -> this.workspace.writeWithRevision(path, content));
       refreshSearchDocument(path);
       String link = this.workspace.skillLinkForPath(path);
       String revisionNote =
@@ -500,8 +503,12 @@ public final class WorkspaceTools {
         return coding;
       }
       String path = string(arguments, "path");
+      String oldText = string(arguments, "old_text");
+      String newText = string(arguments, "new_text");
       String result =
-          this.workspace.edit(path, string(arguments, "old_text"), string(arguments, "new_text"));
+          MemoryToolActions.run(this.workspace, NativeActionPolicy.Operation.MEMORY_MODIFY, path,
+              java.util.Arrays.asList("edit", oldText, newText), token,
+              () -> this.workspace.edit(path, oldText, newText));
       refreshSearchDocument(path);
       String link = this.workspace.skillLinkForPath(path);
       return CoreToolResult.success(
@@ -531,7 +538,9 @@ public final class WorkspaceTools {
     @Override // com.jarvys.agent.CoreTool
     public CoreToolResult execute(Map<String, Object> arguments, CancellationToken token) {
       token.throwIfCancelled();
-      return CoreToolResult.success(this.workspace.deleteMemoryFile(string(arguments, "path")));
+      String path = string(arguments, "path");
+      return CoreToolResult.success(MemoryToolActions.run(this.workspace, NativeActionPolicy.Operation.MEMORY_DELETE, path,
+          java.util.Collections.singletonList("delete"), token, () -> this.workspace.deleteMemoryFile(path)));
     }
   }
 
@@ -703,7 +712,7 @@ public final class WorkspaceTools {
   public static String memoryZoneNote(WorkspaceStore workspace) {
     if (workspace.memoryEnabled()) {
       return " This conversation’s private memory is available at absolute path /memory/ through these file"
-          + " tools; use its indexes to discover details. Shared personal notes are read-only and require native user approval. Never infer permission to share project or task context.";
+          + " tools; use its indexes to discover details. Shared personal notes are read-only and require the configured native policy for the exact source, version and destination. Never infer permission to share project or task context.";
     }
     return "";
   }

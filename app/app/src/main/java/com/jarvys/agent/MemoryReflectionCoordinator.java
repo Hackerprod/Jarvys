@@ -50,8 +50,8 @@ public final class MemoryReflectionCoordinator {
                     : chatWithoutMemory ? app.getString(R.string.reflection_skip_chat) : app.getString(R.string.reflection_auto_off);
             return skippedUi(preferences, sessionId, status);
         }
-        if (!preferences.disclosureShown()) {
-            return skippedUi(preferences, sessionId, app.getString(R.string.reflection_privacy_required));
+        if (!MemoryReflectionAuthority.maySchedule(app)) {
+            return skippedUi(preferences, sessionId, app.getString(R.string.memory_native_reflection_denied));
         }
         LocalRunStore.ReflectionPayload payload = conversation.buildReflectionPayload(sessionId, throughMessageId);
         boolean compactionPending = conversation.hasPendingCompactionReflection(sessionId)
@@ -90,19 +90,14 @@ public final class MemoryReflectionCoordinator {
             if (!manual) conversation.advanceReflectionCheckpoint(sessionId, "chat without memory", throughMessageId);
             return skipped(preferences, sessionId, app.getString(R.string.reflection_skip_chat));
         }
-        if (!preferences.disclosureShown()) {
-            preferences.setStatus(sessionId, app.getString(R.string.reflection_privacy_required));
-            return new Outcome(false, false, false, preferences.localizedStatus(preferences.status(sessionId)), "", "", java.util.Collections.emptyList(), false);
-        }
         String actualTrigger = manual ? TRIGGER_MANUAL : "compaction-event";
         if (!manual && !preferences.enabled()) {
             conversation.advanceReflectionCheckpoint(sessionId, "automatic reflection disabled", throughMessageId);
             return skipped(preferences, sessionId, app.getString(R.string.reflection_auto_off));
         }
-        if (!MemoryReflectionPolicy.canReflect(memory.isEnabled(), !chatWithoutMemory,
-                preferences.enabled(), preferences.disclosureShown(), manual)) {
-            return skipped(preferences, sessionId, app.getString(R.string.reflection_privacy_required));
-        }
+        if (!MemoryReflectionAuthority.maySchedule(app))
+            return skipped(preferences, sessionId, app.getString(R.string.memory_native_reflection_denied));
+        try (MemoryReflectionAuthority authority = new MemoryReflectionAuthority(app, sessionId, manual, token)) {
 
         // Evaluate after persisted transcript state and consume the compaction trigger only in a successful checkpoint.
         // This follows post-turn-reflection.ts:33-77 without Letta's host-specific reminder tracker.
@@ -122,13 +117,15 @@ public final class MemoryReflectionCoordinator {
         if (!preferences.failureBackoffElapsed(sessionId, now)) {
             return skipped(preferences, sessionId, app.getString(R.string.reflection_failed_backoff));
         }
+        authority.authorize(payload.text, payload.endMessageId);
+        authority.admit();
         preferences.markStarted(sessionId);
 
         token.throwIfCancelled();
         String reflectionId = UUID.randomUUID().toString();
         try {
             MemoryReflectionWorker worker = new MemoryReflectionWorker(app, sessionId, reflectionId,
-                    new CoreAgentModel(app, sessionId + "-reflection"));
+                    new CoreAgentModel(app, sessionId + "-reflection"), authority);
             MemoryReflectionWorker.Result result = worker.run(payload.text, token);
             token.throwIfCancelled();
             List<Long> revisionIds = ids(result.revisions);
@@ -179,6 +176,7 @@ public final class MemoryReflectionCoordinator {
             String status = app.getString(R.string.reflection_failed_backoff);
             preferences.failed(sessionId, System.currentTimeMillis(), status);
             return new Outcome(true, partial, partial, status, reflectionId, summary, revisionIds, false);
+        }
         }
     }
 

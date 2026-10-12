@@ -1,10 +1,10 @@
 # UX44: configurable action policies
 
-## Development checkpoint, not a release
+## Validated and delivered v85
 
-Factory v84 remains the delivered APK. The authorized UX44 batch is in progress. The initial Full Debug checkpoint passed 42 targeted tests. The next integration compiled production and tests, then ran 155 targeted cases: 153 passed and two failed, with no blocked offline-network attempts. One fixture incorrectly modeled document truncation; custom MCP rediscovery also changed its own configuration revision through unrelated GitHub bookkeeping. Both corrections are integrated and await rerun. Later maintenance/task integrations and the complete current checkpoint have not yet been compiled or globally validated. No new APK is delivered.
+Version 85 / `1.2.78-AUTONOMY`, final source `4802bd2fb8991d51dbdbc4abd20d9a0b04edd7ad`. The retained-D7 ARM64 APK was sent with acceptance on 12 October 2026 at 03:28:36 UTC: 20,434,579 bytes, SHA-256 `2fe460765edc4cec9392ea45fa3d121134ecf7484ab476758f58ece45c25108f`. Persisted bytes, signature, retained payload and all three host APKs were independently verified. This does not establish download, installation or physical-device acceptance.
 
-## Implemented in this checkpoint
+## Implemented scope
 
 - One absent-value rule: ALLOW. Persisted valid ASK/DENY/ALLOW remain unchanged; malformed values remain ASK and are marked invalid.
 - Versioned provenance distinguishes default, user, ambiguous legacy, inherited server and invalid records. Restoration is reconciled per record. Unknown provenance is never inferred from a value alone.
@@ -17,14 +17,17 @@ Factory v84 remains the delivered APK. The authorized UX44 batch is in progress.
 - Principal Linux commands, Coding commands and separate Linux setup/removal choices use the common policy store. Setup phases and process launches recheck authority; uninstall has exclusive ownership and honest partial-removal receipts. Actual keep/delete-workspace selection is retained when the request omits it.
 - Bot creation/mascot and signing-identity operations use exact native operation decisions. Provider icon retries, key/backup effects and task mutation boundaries recheck authority. Actual key/passphrase forms and Android file selection remain.
 - Agent task creation, modification, cancellation and reads have explicit controls. These govern agent management tools, not recurring scheduler execution or human STOP/recovery. ALLOW cancellation preserves history. Optional manual tests retain their exact queued task binding.
+- Native memory viewing/capture, mutations, restoration, export/sharing and reflection use the same policies. View permission covers the selected native screen/capture, while agent and reflection mutations bind the relevant write/delete decisions. Exact content/scope, cancellation and export ownership remain checked.
 - Policy editors disclose provenance and protect only the actual choice interaction. Genuine ASK cards retain human-interaction protection; ALLOW execution does not acquire a blanket approval guard.
 
 
-## Remaining integration and validation
+## Validation and remaining limits
 
-Memory viewing/capture, mutation, reflection and sharing remain in independent source review outside this checkpoint. The memory view choice is scoped to the selected native screen/capture, not ordinary agent data reads; write/delete decisions must also bind agent/reflection mutation routes. Existing tests have been migrated to seed explicit ASK for approval scenarios while retaining real grants, exact identity and no-effect assertions. Current corrections and later integrations still require execution. No exhaustive completion claim is made.
+Host coverage is an exact reconciled union: 4,187 Full and 3,744 Play cases pass with no unresolved failures, errors or skips. Initial failures are preserved; complete affected classes were replaced only after source and compiled-input comparison. This is not a second complete fresh aggregate. SDK59 ran fresh. Unchanged Factory core/runtime evidence is retained against 333 identical source/configuration files, 108 identical resolved inputs, the same environment and the exact embedded template: core 2,706 passes plus one explicit SDK24 location assumption per variant; APK runtime 93 passes per variant.
 
-The batch will receive one combined final validation and artifact review after implementation. No provider actions, account access expansion, real messages, remote commands or key exports are used in development tests. Android/OEM denial, revocation and physical behavior remain device acceptance conditions. UX34 and other hardware-dependent gates are not closed by host tests.
+Fresh host lint and affected incremental analysis preserve the same 46 Full and 37 Play legacy errors, with no new errors. Visible warning/hint totals are 317/4 Full and 313/3 Play; this is not a lint-clean claim. Main/unit analysis and report reuse are byte-bound. The guarded initial complete Full and Play runs each recorded eight blocked network attempts; corrected class runs recorded zero. No destination attribution or blanket zero-attempt claim is made.
+
+Android/OEM grants, denial/revocation, lifecycle behavior, installation and real provider acceptance remain unverified on a physical device. The batch does not connect accounts, grant Android/OAuth access or remove UX34 and other independent hardware gates. The next local-diagnostic feature is separately queued and is not present in v85.
 
 ## Admission limit
 

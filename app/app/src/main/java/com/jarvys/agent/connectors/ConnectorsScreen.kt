@@ -400,7 +400,6 @@ private fun AutonomyPolicyRow(
     }, permission = {
         ConnectorPolicySelector(
             modifier = Modifier.testTag("connector-policy-${operation.name}-control"),
-            origin = origin,
             subjectKey = "$connectorId/${operation.name}",
             selectedLabelResource = when (configuredPolicy) {
                 AutonomyPolicy.ASK -> R.string.connector_policy_ask
@@ -414,6 +413,8 @@ private fun AutonomyPolicyRow(
             },
         )
     })
+    ConnectorPolicyOriginCaption(origin,
+        Modifier.fillMaxWidth().testTag("connector-policy-${operation.name}-origin"))
     if (effectiveReason != null) {
         Text(
             context.getString(R.string.connector_active_policy, effectivePolicy.label(context), effectiveReason?.resolve(context).orEmpty()),

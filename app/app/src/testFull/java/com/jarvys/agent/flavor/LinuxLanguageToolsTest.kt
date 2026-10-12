@@ -14,6 +14,9 @@ import com.jarvys.agent.UserDecisionSpec
 import com.jarvys.agent.connectors.ApprovalGate
 import com.jarvys.agent.connectors.ApprovalPresenter
 import com.jarvys.agent.connectors.ApprovalSummary
+import com.jarvys.agent.connectors.AutonomyPolicy
+import com.jarvys.agent.connectors.InMemoryConnectorAutonomyStore
+import com.jarvys.agent.linux.LinuxExecAutonomy
 import com.jarvys.agent.linux.LinuxExecResult
 import com.jarvys.agent.linux.LinuxInstallPhase
 import com.jarvys.agent.linux.LinuxInstallState
@@ -23,6 +26,7 @@ import com.jarvys.agent.linux.LinuxProbeStatus
 import com.jarvys.agent.linux.LinuxRuntime
 import androidx.test.core.app.ApplicationProvider
 import org.json.JSONObject
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -72,8 +76,13 @@ class LinuxLanguageToolsTest {
             override fun show(id: String, summary: ApprovalSummary) = Unit
             override fun update(id: String, decision: com.jarvys.agent.connectors.ApprovalDecision) = Unit
         })
+        // This fixture exercises translated review copy, so select ASK explicitly instead
+        // of depending on the absent-value default or another test's persisted preferences.
+        val autonomy = LinuxExecAutonomy(InMemoryConnectorAutonomyStore().apply {
+            setPolicy(LinuxExecAutonomy.CONNECTOR_ID, LinuxExecAutonomy.SETUP_OPERATION_NAME, AutonomyPolicy.ASK)
+        }, { false })
         val tools = FlavorLinuxTools.createForRuntime(app, "linux-language-test", 0,
-            CorePromptBudget.standard(), runtime, approvalGate, gate, presenter, { true }).associateBy {
+            CorePromptBudget.standard(), runtime, approvalGate, gate, presenter, { true }, autonomy).associateBy {
             it.declaration().name
         }
         val localized = AppLanguageRuntime.localizedContext(app)
@@ -84,8 +93,9 @@ class LinuxLanguageToolsTest {
         val exec = tools.getValue("linux_exec").execute(mapOf("command" to "id"), CancellationToken.cancellable()).content
         val setup = tools.getValue("linux_setup").execute(emptyMap(), CancellationToken.cancellable()).content
         val uninstall = tools.getValue("linux_uninstall").execute(emptyMap(), CancellationToken.cancellable()).content
-        val consent = decisionSpecs.first { it.options.any { option -> option.id == "later" } }
-        val uninstallChoice = decisionSpecs.first { it.options.any { option -> option.id == "keep_workspace" } }
+        assertEquals(2, decisionSpecs.size) // One setup ASK and one real missing workspace choice.
+        val consent = decisionSpecs.single { it.options.any { option -> option.id == "later" } }
+        val uninstallChoice = decisionSpecs.single { it.options.any { option -> option.id == "keep_workspace" } }
         val installLabel = consent.options.first { it.id == "install" }.label
         val laterLabel = consent.options.first { it.id == "later" }.label
         val uninstallLabels = uninstallChoice.options.map { it.label }

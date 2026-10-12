@@ -20,4 +20,8 @@
     <string name="native_permission_origin_user">Tu elección guardada</string>
     <string name="native_permission_origin_legacy">Elección anterior de origen desconocido, conservada</string>
     <string name="native_permission_origin_invalid">Ajuste guardado inválido; requiere revisión</string>
+    <string name="native_permission_diagnostics_read">Leer diagnósticos locales de la app</string>
+    <string name="diagnostics_policy_disclosure">Compartir los metadatos de diagnóstico seleccionados con el modelo configurado en esta conversación. No incluye mensajes originales, cuerpos de solicitudes ni credenciales.</string>
+    <string name="diagnostics_policy_latest">Resúmenes recientes</string>
+    <string name="diagnostics_policy_id">ID de diagnóstico</string>
 </resources>

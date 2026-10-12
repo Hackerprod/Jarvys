@@ -279,6 +279,9 @@ private fun JarvysConversationEvent(
         "crew_mission" -> event.crewMissionSnapshot?.let { mission ->
             CrewMissionCard(mission, onOpen = { onOpenCrewMission(mission.missionId) })
         }
+        "workspace_result" -> TimelineArrival(animateEntry) {
+            event.workspaceResultReference?.let { com.jarvys.agent.workspaces.WorkspaceResultNotice(it) }
+        }
         "delivered_file" -> TimelineArrival(animateEntry) {
             DeliveredArtifactEventCard(event, generatedImageSessionId, onOpenPreview)
         }

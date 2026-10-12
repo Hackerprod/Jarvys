@@ -1,0 +1,115 @@
+package com.jarvys.agent.workspaces
+
+import androidx.compose.runtime.Immutable
+import java.util.Collections
+
+/** Presentation only. The runtime supplies recorded status and exact action availability. */
+enum class WorkspaceUiStatus {
+    UNKNOWN, ACTIVE, WAITING, CANCEL_REQUESTED, STOPPING, PAUSED, PARTIAL, INTERRUPTED, COMPLETED,
+}
+
+@Immutable
+data class WorkspaceSidebarRow(val id: String, val title: String, val status: WorkspaceUiStatus,
+    val statusPageLimited: Boolean = false)
+
+/** One visible catalog page; never retain or eagerly load the whole catalog. */
+class WorkspaceSidebarPage(rows: List<WorkspaceSidebarRow>, val nextCursor: String? = null) {
+    val rows: List<WorkspaceSidebarRow> = Collections.unmodifiableList(ArrayList(rows))
+    init { require(this.rows.size <= WORKSPACE_PAGE_SIZE) }
+}
+
+internal const val WORKSPACE_PAGE_SIZE = 50
+internal const val WORKSPACE_CURSOR_HISTORY_LIMIT = 32
+
+/** Bound saved cursor memory independently of how many pages the user visits. */
+internal fun workspacePushCursor(history: List<String>, current: String?): List<String> =
+    (history + current.orEmpty()).takeLast(WORKSPACE_CURSOR_HISTORY_LIMIT)
+
+/**
+ * Aggregate recorded observations, not objective verification. Priority: cleanup/cancel, active,
+ * waiting, interruption, missing evidence, partial, paused, completed. A bounded page cannot
+ * establish global completion: unseen assignments add UNKNOWN as an explicit conservative input.
+ */
+internal fun workspaceAggregateStatus(statuses: List<WorkspaceUiStatus>, unseenAssignments: Boolean = false): WorkspaceUiStatus {
+    val present = statuses.toMutableSet()
+    if (unseenAssignments || present.isEmpty()) present += WorkspaceUiStatus.UNKNOWN
+    return listOf(WorkspaceUiStatus.STOPPING, WorkspaceUiStatus.CANCEL_REQUESTED,
+        WorkspaceUiStatus.ACTIVE, WorkspaceUiStatus.WAITING, WorkspaceUiStatus.INTERRUPTED,
+        WorkspaceUiStatus.UNKNOWN, WorkspaceUiStatus.PARTIAL, WorkspaceUiStatus.PAUSED,
+        WorkspaceUiStatus.COMPLETED).first { it in present }
+}
+
+internal data class WorkspaceSharedTextPage(val text: String, val nextCursor: String?)
+
+/** Source reader already caps files at 256 KiB. Cursor binds exact owner, path and full text. */
+internal fun workspaceSharedTextPage(owner: String, path: String, text: String, cursor: String?,
+                                    limit: Int = 16000): WorkspaceSharedTextPage {
+    require(owner.isNotBlank() && path.isNotBlank() && limit in 2..16000)
+    val input = "${owner.length}:$owner${path.length}:$path$text".toByteArray(Charsets.UTF_8)
+    val digest = java.security.MessageDigest.getInstance("SHA-256").digest(input)
+        .joinToString("") { "%02x".format(it.toInt() and 255) }
+    val offset = if (cursor == null) 0 else {
+        val parts = cursor.split('.')
+        require(parts.size == 3 && parts[0] == "v1" && parts[1] == digest) { "File page source changed" }
+        require(parts[2].matches(Regex("0|[1-9][0-9]{0,8}"))) { "Invalid file page cursor" }
+        requireNotNull(parts[2].toIntOrNull())
+    }
+    require(offset in 0..text.length) { "Invalid file page offset" }
+    require(offset == 0 || offset == text.length || !(Character.isLowSurrogate(text[offset]) && Character.isHighSurrogate(text[offset - 1])))
+    var end = minOf(offset + limit, text.length)
+    if (end < text.length && Character.isHighSurrogate(text[end - 1]) && Character.isLowSurrogate(text[end])) end--
+    return WorkspaceSharedTextPage(text.substring(offset, end), if (end < text.length) "v1.$digest.$end" else null)
+}
+
+@Immutable
+data class WorkspaceAssignmentUi(
+    val id: String,
+    val revision: Long,
+    val name: String,
+    val mission: String,
+    val status: WorkspaceUiStatus,
+    val recoveryNote: String? = null,
+    val result: String? = null,
+    val canCorrect: Boolean = false,
+    val canPause: Boolean = false,
+    val canResume: Boolean = false,
+    val resultVerified: Boolean = false,
+    val pendingControlSaved: Boolean = false,
+) {
+    init {
+        require(id.isNotBlank()) { "Assignment identity is required" }
+        require(revision >= 0) { "Assignment revision must not be negative" }
+    }
+}
+
+/** Defensive snapshot: callers cannot mutate rows beneath a rendered target/revision. */
+@Immutable
+class WorkspaceDetailUiState(
+    val id: String,
+    val title: String,
+    val status: WorkspaceUiStatus,
+    assignments: List<WorkspaceAssignmentUi> = emptyList(),
+    val loading: Boolean = false,
+    val error: String? = null,
+    val canOpenFiles: Boolean = false,
+    val nextCursor: String? = null,
+    val statusPageLimited: Boolean = false,
+) {
+    val assignments: List<WorkspaceAssignmentUi> = Collections.unmodifiableList(ArrayList(assignments))
+
+    init {
+        require(id.isNotBlank()) { "Workspace identity is required" }
+        require(this.assignments.map { it.id }.distinct().size == this.assignments.size) {
+            "Assignment identities must be unique within a workspace"
+        }
+    }
+}
+
+internal fun isWorkspaceCoordinationSession(sessionId: String): Boolean =
+    WorkspaceIdentity.isCentral(sessionId) || WorkspaceIdentity.isExecutionSession(sessionId)
+
+/** Bound text measurement without parsing worker content as Markdown, links or commands. */
+internal fun workspaceDisplayText(value: String?, fallback: String, limit: Int = 4096): String {
+    if (value.isNullOrBlank()) return fallback
+    return if (value.length <= limit) value else value.take(limit) + "…"
+}

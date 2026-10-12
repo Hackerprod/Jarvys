@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="memory_native_reflection_denied">Reflection is denied by the saved native action policy</string>
+    <string name="memory_native_undo_chat_revision">Undo exact chat memory revision</string>
+    <string name="memory_native_undo_reflection_group">Undo exact reflection group</string>
+    <string name="memory_native_allow_once">Allow once</string>
+    <string name="memory_native_close">Close</string>
+    <string name="memory_native_finish_interaction">Finish the interaction and reopen this review manually</string>
+    <string name="memory_native_selection_changed">Selected memory changed</string>
+    <string name="memory_native_review_loading">Loading selected memory review</string>
+    <string name="memory_native_review_prompt">Allow this selected memory review and capture?</string>
+    <string name="memory_native_review_scope">Scope: %1$s\nView: %2$s\nState: %3$s</string>
+    <string name="memory_native_open_foreground">Open this exact memory action in the foreground app</string>
+    <string name="memory_native_lifecycle_required">This memory review needs a lifecycle-owned foreground activity</string>
+    <string name="memory_native_export_destination_unavailable">The selected destination cannot be opened</string>
+    <string name="memory_native_export_success">Memory exported</string>
+    <string name="memory_native_export_incomplete">Export did not complete. Inspect the selected file before retrying.</string>
+    <string name="memory_native_draft_capture_once">Allow capture of this updated draft once</string>
+    <string name="memory_native_reflection_title">Reflect on selected conversation</string>
+    <string name="memory_native_reflection_conversation">Conversation: %1$s</string>
+    <string name="memory_native_reflection_through_message">Through message: %1$s</string>
+    <string name="memory_native_reflection_manual">Manual: %1$s</string>
+    <string name="memory_native_reflection_explanation">Read this bounded transcript and update only this conversation\'s enabled memory with the existing memory-only tools.</string>
+    <string name="memory_native_reflection_transcript_hash">Transcript SHA-256: %1$s</string>
+    <string name="memory_native_selected_scope">Selected memory scope: %1$s</string>
+    <string name="memory_native_exact_state">Exact state: %1$s</string>
+    <string name="memory_native_create_directory">Create directory</string>
+    <string name="memory_native_save_note">Save note</string>
+    <string name="memory_native_delete_note">Delete note</string>
+    <string name="memory_native_clear_history">Irreversibly clear the selected memory and its history</string>
+    <string name="memory_native_restore_revision">Restore revision</string>
+    <string name="memory_native_undo_revision">Undo latest revision</string>
+    <string name="memory_native_export_selected">Export selected memory</string>
+    <string name="memory_native_export_include_journal">Include journal: %1$s</string>
+    <string name="memory_native_export_destination">Android-selected destination: %1$s</string>
+    <string name="memory_native_share_snapshot">Share immutable PERSONAL snapshot</string>
+    <string name="memory_native_share_destination">Destination: shared PERSONAL projection</string>
+    <string name="memory_native_source_conversation">Source conversation: %1$s</string>
+    <string name="memory_native_source_revision">Revision: %1$s</string>
+    <string name="memory_native_source_hash">SHA-256: %1$s</string>
+    <string name="memory_native_exact_content">Exact content:</string>
+    <string name="memory_native_revoke_projection">Revoke PERSONAL projection</string>
+</resources>

@@ -9,6 +9,9 @@ import com.jarvys.agent.tasks.ScheduledTaskConversation;
 
 import com.jarvys.agent.device.ScreenData;
 import com.jarvys.agent.crew.CrewMissionSnapshot;
+import com.jarvys.agent.crew.CrewResultEvidence;
+import com.jarvys.agent.workspaces.WorkspaceIdentity;
+import com.jarvys.agent.workspaces.WorkspaceResultReference;
 import com.jarvys.agent.crew.CrewProcessIdentity;
 import com.jarvys.agent.proactive.ProactiveReplyClaim;
 import com.jarvys.agent.proactive.ProactiveSuggestedReply;
@@ -138,7 +141,7 @@ public final class LocalRunStore {
         String digest;
         try {
             byte[] hash = java.security.MessageDigest.getInstance("SHA-256")
-                    .digest(row.toString().getBytes(StandardCharsets.UTF_8));
+                    .digest(losslessResultRecord(row));
             StringBuilder encoded = new StringBuilder(hash.length * 2);
             for (byte value : hash) encoded.append(String.format(Locale.ROOT, "%02x", value & 0xff));
             digest = encoded.toString();
@@ -152,6 +155,340 @@ public final class LocalRunStore {
             CREW_SNAPSHOT_DIGESTS.put(key, digest);
         }
     }
+
+    /**
+     * UX43 local result journal. All comparisons and fsynced appends share SESSION_TITLE_LOCK
+     * across store instances. beforeWrite runs immediately before a new append, never on reads.
+     * Callers must acquire their outer delivery/STOP gate before entering these methods; the
+     * callback may check current policy but must not read the registry, acquire another store,
+     * start work, or make provider calls. No approval or runtime action is retained in these rows.
+     * Source ledgers must already exist. Only the first Central notice may create a ledger;
+     * the existing deletion tombstone always wins, so neither path resurrects a deleted chat.
+     */
+    public synchronized CrewResultEvidence appendCrewResultEvidence(CrewResultEvidence evidence, Runnable beforeWrite) {
+        if (evidence == null || beforeWrite == null) throw new IllegalArgumentException("Evidence and admission are required");
+        CrewResultEvidence.fromJsonStrict(evidence.toJson());
+        requireResultSource(evidence.conversationId);
+        synchronized (SESSION_TITLE_LOCK) {
+            CrewResultEvidence existing = readCrewResultEvidence(evidence.conversationId, evidence.evidenceId);
+            if (existing != null) {
+                if (!sameResultEvidence(existing, evidence)) resultConflict();
+                return existing;
+            }
+            appendResultRowLocked(evidence.conversationId, evidence.toJson(), false, beforeWrite);
+            return evidence;
+        }
+    }
+
+    public CrewResultEvidence appendCrewResultEvidence(CrewResultEvidence evidence) {
+        return appendCrewResultEvidence(evidence, () -> { });
+    }
+
+    /** Exact raw evidence retrieval; callers must page resultText before exposing it to a model/UI. */
+    public synchronized CrewResultEvidence readCrewResultEvidence(String sourceSessionId, String evidenceId) {
+        requireResultSource(sourceSessionId); WorkspaceResultReference.requireEvidenceId(evidenceId);
+        synchronized (SESSION_TITLE_LOCK) {
+            final CrewResultEvidence[] found = {null};
+            scanResultLedgerLocked(sourceSessionId, false, (evidence, reference, notice) -> {
+                if (evidence != null && evidenceId.equals(evidence.evidenceId)) found[0] = evidence;
+            });
+            return found[0];
+        }
+    }
+
+    /** Lexically paged evidence IDs only; never an unbounded list of worker result text. */
+    public synchronized List<String> listCrewResultEvidence(String sourceSessionId, int limit, String afterEvidenceId) {
+        requireResultSource(sourceSessionId); resultPage(limit);
+        if (afterEvidenceId != null) WorkspaceResultReference.requireEvidenceId(afterEvidenceId);
+        synchronized (SESSION_TITLE_LOCK) {
+            java.util.TreeSet<String> found = new java.util.TreeSet<>();
+            scanResultLedgerLocked(sourceSessionId, false, (evidence, reference, notice) -> {
+                if (evidence != null && (afterEvidenceId == null || evidence.evidenceId.compareTo(afterEvidenceId) > 0)) {
+                    found.add(evidence.evidenceId);
+                    if (found.size() > limit) found.pollLast();
+                }
+            });
+            return Collections.unmodifiableList(new ArrayList<>(found));
+        }
+    }
+
+    public synchronized WorkspaceResultReference appendWorkspaceResultReferenceIfAbsent(
+            WorkspaceResultReference reference, Runnable beforeWrite) {
+        requireResultReference(reference, beforeWrite);
+        synchronized (SESSION_TITLE_LOCK) {
+            CrewResultEvidence evidence = readCrewResultEvidence(reference.executionSessionId, reference.evidenceId);
+            if (!reference.matchesEvidence(evidence)) throw new IllegalStateException("Reference has no matching durable evidence");
+            WorkspaceResultReference existing = readWorkspaceResultReference(reference.executionSessionId, reference.referenceId);
+            if (existing != null) {
+                if (!existing.sameBinding(reference)) resultConflict();
+                // A later registry revision is an observation, not a new result identity.
+                return existing;
+            }
+            appendResultRowLocked(reference.executionSessionId, reference.toJson(), false, beforeWrite);
+            return reference;
+        }
+    }
+
+    public synchronized WorkspaceResultReference readWorkspaceResultReference(String sourceSessionId, String referenceId) {
+        requireResultSource(sourceSessionId); WorkspaceResultReference.requireReferenceId(referenceId);
+        synchronized (SESSION_TITLE_LOCK) {
+            return findResultReferenceLocked(sourceSessionId, referenceId, false);
+        }
+    }
+
+    public synchronized List<WorkspaceResultReference> listWorkspaceResultReferences(
+            String sourceSessionId, int limit, String afterReferenceId) {
+        requireResultSource(sourceSessionId);
+        synchronized (SESSION_TITLE_LOCK) {
+            return listResultReferencesLocked(sourceSessionId, limit, afterReferenceId, false);
+        }
+    }
+
+    /** Receipt existence proves local delivery only; no worker text, role, or approval is copied. */
+    public synchronized WorkspaceResultReference appendWorkspaceResultNoticeIfAbsent(
+            WorkspaceResultReference reference, Runnable beforeWrite) {
+        requireResultReference(reference, beforeWrite);
+        synchronized (SESSION_TITLE_LOCK) {
+            WorkspaceResultReference durable = readWorkspaceResultReference(reference.executionSessionId, reference.referenceId);
+            if (durable == null || !durable.samePayload(reference))
+                throw new IllegalStateException("Notice has no exact durable source reference");
+            WorkspaceResultReference existing = findResultReferenceLocked(reference.ownerCentralSessionId, reference.referenceId, true);
+            if (existing != null) {
+                if (!existing.samePayload(reference)) resultConflict();
+                return existing;
+            }
+            appendResultRowLocked(reference.ownerCentralSessionId, reference.toNoticeJson(), true, beforeWrite);
+            return reference;
+        }
+    }
+
+    public synchronized WorkspaceResultReference readWorkspaceResultNotice(String centralSessionId, String referenceId) {
+        requireResultCentral(centralSessionId); WorkspaceResultReference.requireReferenceId(referenceId);
+        synchronized (SESSION_TITLE_LOCK) { return findResultReferenceLocked(centralSessionId, referenceId, true); }
+    }
+
+    public synchronized List<WorkspaceResultReference> listWorkspaceResultNotices(
+            String centralSessionId, int limit, String afterReferenceId) {
+        requireResultCentral(centralSessionId);
+        synchronized (SESSION_TITLE_LOCK) { return listResultReferencesLocked(centralSessionId, limit, afterReferenceId, true); }
+    }
+
+    private WorkspaceResultReference findResultReferenceLocked(String session, String id, boolean notices) {
+        final WorkspaceResultReference[] found = {null};
+        scanResultLedgerLocked(session, notices, (evidence, reference, notice) -> {
+            if (reference != null && notice == notices && id.equals(reference.referenceId)) found[0] = reference;
+        });
+        return found[0];
+    }
+
+    private List<WorkspaceResultReference> listResultReferencesLocked(String session, int limit, String after, boolean notices) {
+        resultPage(limit);
+        if (after != null) WorkspaceResultReference.requireReferenceId(after);
+        java.util.TreeMap<String, WorkspaceResultReference> found = new java.util.TreeMap<>();
+        scanResultLedgerLocked(session, notices, (evidence, reference, notice) -> {
+            if (reference != null && notice == notices && (after == null || reference.referenceId.compareTo(after) > 0)) {
+                found.put(reference.referenceId, reference);
+                if (found.size() > limit) found.pollLastEntry();
+            }
+        });
+        return Collections.unmodifiableList(new ArrayList<>(found.values()));
+    }
+
+    private interface ResultRowVisitor {
+        void accept(CrewResultEvidence evidence, WorkspaceResultReference reference, boolean notice);
+    }
+
+    /** Only metadata is retained while scanning. Full result strings do not accumulate in paging. */
+    private static final class ResultEvidenceIdentity {
+        final String digest, session, mission, bot, cycle, status;
+        final long producedAt;
+        ResultEvidenceIdentity(CrewResultEvidence evidence) {
+            digest = evidence.contentSha256; session = evidence.conversationId; mission = evidence.missionId;
+            bot = evidence.botId; cycle = evidence.cycleId; status = evidence.reportedStatus; producedAt = evidence.producedAtMillis;
+        }
+        boolean matches(WorkspaceResultReference reference) {
+            return digest.equals(reference.contentSha256) && session.equals(reference.executionSessionId)
+                    && mission.equals(reference.missionId) && bot.equals(reference.botId) && cycle.equals(reference.cycleId)
+                    && status.equals(reference.reportedStatus) && producedAt == reference.producedAtMillis;
+        }
+    }
+
+    /**
+     * Do not reuse readConversationRows: its legacy skip-on-error behavior cannot prove absence.
+     * Validate every row, including the tail, before returning even a found exact result. Never
+     * repair/truncate bytes, skip malformed rows, append beyond torn tails, or replay an action.
+     */
+    private void scanResultLedgerLocked(String session, boolean allowMissingCentral, ResultRowVisitor visitor) {
+        File ledger = requireResultLedgerLocked(session, allowMissingCentral);
+        if (!ledger.exists()) return;
+        Map<String, ResultEvidenceIdentity> evidenceKeys = new LinkedHashMap<>();
+        Map<String, WorkspaceResultReference> referenceKeys = new LinkedHashMap<>();
+        try (java.io.InputStreamReader decoded = new java.io.InputStreamReader(new java.io.FileInputStream(ledger),
+                StandardCharsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                        .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT));
+             BufferedReader reader = new BufferedReader(decoded)) {
+            requireCompleteResultTail(ledger);
+            String line;
+            while ((line = reader.readLine()) != null) {
+                JSONObject row = strictResultJson(line);
+                String type = row.optString("type", "");
+                if ("crew_result_evidence".equals(type)) {
+                    requireResultSource(session);
+                    CrewResultEvidence evidence = CrewResultEvidence.fromJsonStrict(row);
+                    if (!session.equals(evidence.conversationId)) throw new IOException("Wrong evidence ledger owner");
+                    ResultEvidenceIdentity previous = evidenceKeys.get(evidence.evidenceId);
+                    if (previous != null && !previous.digest.equals(evidence.contentSha256))
+                        throw new IOException("Conflicting evidence identity");
+                    evidenceKeys.put(evidence.evidenceId, new ResultEvidenceIdentity(evidence));
+                    visitor.accept(evidence, null, false);
+                } else if (WorkspaceResultReference.REFERENCE_TYPE.equals(type)) {
+                    requireResultSource(session);
+                    WorkspaceResultReference reference = WorkspaceResultReference.fromJsonStrict(row);
+                    ResultEvidenceIdentity evidence = evidenceKeys.get(reference.evidenceId);
+                    if (!session.equals(reference.executionSessionId) || evidence == null || !evidence.matches(reference))
+                        throw new IOException("Reference has no preceding exact source evidence");
+                    validateResultDuplicate(referenceKeys, reference);
+                    visitor.accept(null, reference, false);
+                } else if (WorkspaceResultReference.NOTICE_TYPE.equals(type)) {
+                    requireResultCentral(session);
+                    WorkspaceResultReference reference = WorkspaceResultReference.fromNoticeJsonStrict(row);
+                    if (!session.equals(reference.ownerCentralSessionId)) throw new IOException("Wrong notice ledger owner");
+                    validateResultDuplicate(referenceKeys, reference);
+                    visitor.accept(null, reference, true);
+                } else if (type.startsWith("crew_result_") || type.startsWith("workspace_result_")
+                        || row.has("crewResultSchemaVersion") || row.has("workspaceResultSchemaVersion")
+                        || row.has("evidenceId") || row.has("referenceId")) {
+                    throw new IOException("Unsupported result ledger row");
+                }
+            }
+        } catch (Exception error) {
+            throw new IllegalStateException("Result ledger is unreadable or corrupt; no repair or replay was attempted", error);
+        }
+    }
+
+    /** Lightweight last disclosure boundary; no evidence content or callbacks under this lock. */
+    public synchronized void requireWorkspaceResultDisclosureLive(WorkspaceResultReference reference, boolean noticeRequired) {
+        synchronized (SESSION_TITLE_LOCK) {
+            requireResultLedgerLocked(reference.executionSessionId, false);
+            File central = requireResultLedgerLocked(reference.ownerCentralSessionId, true);
+            if (noticeRequired && !central.isFile()) throw new IllegalStateException("Central receipt is unavailable");
+        }
+    }
+
+    private File requireResultLedgerLocked(String session, boolean allowMissingCentral) {
+        if (allowMissingCentral) requireResultCentral(session); else requireResultSource(session);
+        File ledger = conversationFile(session);
+        if (conversationMetadata.read(session).deleted) throw new IllegalStateException("Result conversation was deleted");
+        if (ledger.exists() && !ledger.isFile()) throw new IllegalStateException("Result ledger is not a regular file");
+        if (!allowMissingCentral && !ledger.isFile()) throw new IllegalStateException("Source result ledger is unavailable");
+        return ledger;
+    }
+
+    private void appendResultRowLocked(String session, JSONObject row, boolean allowMissingCentral, Runnable beforeWrite) {
+        scanResultLedgerLocked(session, allowMissingCentral, (evidence, reference, notice) -> { });
+        byte[] record = losslessResultRecord(row);
+        // Expensive validation and serialization precede the final live admission check. The
+        // shared lock excludes ordinary deletion; only lightweight path/tombstone checks follow.
+        beforeWrite.run();
+        File ledger = requireResultLedgerLocked(session, allowMissingCentral);
+        if (allowMissingCentral) requireResultLedgerLocked(row.optString("executionSessionId"), false);
+        try {
+            if (ledger.exists()) requireCompleteResultTail(ledger);
+            try (FileOutputStream output = new FileOutputStream(ledger, true)) {
+                output.write(record); output.flush(); output.getFD().sync();
+            }
+        } catch (Exception error) { throw new IllegalStateException("Could not append durable result ledger row", error); }
+    }
+
+    private static byte[] losslessResultRecord(JSONObject row) {
+        // JSONObject may emit literal lone surrogates. Escape UTF-16 units before UTF-8 encoding
+        // so exact worker strings survive without replacement by the charset encoder.
+        String serialized = row.toString();
+        StringBuilder escaped = new StringBuilder(serialized.length() + 1);
+        for (int index = 0; index < serialized.length(); index++) {
+            char value = serialized.charAt(index);
+            if (Character.isSurrogate(value)) escaped.append(String.format(Locale.ROOT, "\\u%04x", (int) value));
+            else escaped.append(value);
+        }
+        return escaped.append('\n').toString().getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static void requireCompleteResultTail(File ledger) throws IOException {
+        try (java.io.RandomAccessFile input = new java.io.RandomAccessFile(ledger, "r")) {
+            if (input.length() > 0) {
+                input.seek(input.length() - 1);
+                if (input.read() != '\n') throw new IOException("Incomplete result ledger tail");
+            }
+        }
+    }
+
+    private static JSONObject strictResultJson(String line) throws Exception {
+        try (android.util.JsonReader reader = new android.util.JsonReader(new java.io.StringReader(line))) {
+            reader.setLenient(false);
+            Object value = strictResultJsonValue(reader, 0);
+            if (!(value instanceof JSONObject) || reader.peek() != android.util.JsonToken.END_DOCUMENT)
+                throw new IOException("Expected one JSON object per ledger row");
+            return (JSONObject) value;
+        }
+    }
+
+    private static Object strictResultJsonValue(android.util.JsonReader reader, int depth) throws Exception {
+        if (depth > 128) throw new IOException("Excessively nested ledger JSON");
+        switch (reader.peek()) {
+            case BEGIN_OBJECT: {
+                JSONObject result = new JSONObject(); reader.beginObject();
+                while (reader.hasNext()) {
+                    String name = reader.nextName();
+                    if (result.has(name)) throw new IOException("Duplicate ledger JSON field");
+                    result.put(name, strictResultJsonValue(reader, depth + 1));
+                }
+                reader.endObject(); return result;
+            }
+            case BEGIN_ARRAY: {
+                JSONArray result = new JSONArray(); reader.beginArray();
+                while (reader.hasNext()) result.put(strictResultJsonValue(reader, depth + 1));
+                reader.endArray(); return result;
+            }
+            case STRING: return reader.nextString();
+            case BOOLEAN: return reader.nextBoolean();
+            case NULL: reader.nextNull(); return JSONObject.NULL;
+            case NUMBER: {
+                String value = reader.nextString();
+                if (value.matches("-?(0|[1-9][0-9]*)")) return Long.parseLong(value);
+                double number = Double.parseDouble(value);
+                if (Double.isInfinite(number) || Double.isNaN(number)) throw new IOException("Invalid JSON number");
+                return number;
+            }
+            default: throw new IOException("Invalid ledger JSON value");
+        }
+    }
+
+    private static void validateResultDuplicate(Map<String, WorkspaceResultReference> seen, WorkspaceResultReference value)
+            throws IOException {
+        WorkspaceResultReference prior = seen.put(value.referenceId, value);
+        if (prior != null && !prior.samePayload(value)) throw new IOException("Conflicting result reference identity");
+    }
+    private static boolean sameResultEvidence(CrewResultEvidence first, CrewResultEvidence second) {
+        return first.evidenceId.equals(second.evidenceId) && first.contentSha256.equals(second.contentSha256)
+                && first.conversationId.equals(second.conversationId) && first.missionId.equals(second.missionId)
+                && first.botId.equals(second.botId) && first.cycleId.equals(second.cycleId)
+                && first.reportedStatus.equals(second.reportedStatus) && first.resultText.equals(second.resultText)
+                && first.producedAtMillis == second.producedAtMillis;
+    }
+    private static void requireResultReference(WorkspaceResultReference value, Runnable beforeWrite) {
+        if (value == null || beforeWrite == null) throw new IllegalArgumentException("Reference and admission are required");
+        WorkspaceResultReference.fromJsonStrict(value.toJson());
+    }
+    private static void requireResultSource(String session) {
+        if (!WorkspaceIdentity.isExecutionSession(session)) throw new IllegalArgumentException("Canonical workspace session required");
+    }
+    private static void requireResultCentral(String session) {
+        if (!WorkspaceIdentity.CENTRAL_SESSION.equals(session)) throw new IllegalArgumentException("Canonical Central owner required");
+    }
+    private static void resultPage(int limit) {
+        if (limit < 1 || limit > 100) throw new IllegalArgumentException("Result page limit must be 1..100");
+    }
+    private static void resultConflict() { throw new IllegalStateException("Result identity already has a different payload"); }
 
     /** Reads the latest schema-supported Crew snapshot for each mission, preserving insertion order. */
     public synchronized List<CrewMissionSnapshot> readCrewMissionSnapshots(String sessionId) {
@@ -924,6 +1261,7 @@ public final class LocalRunStore {
             while ((line = reader.readLine()) != null) {
                 try {
                     JSONObject row = new JSONObject(line);
+                    if (isResultOnlyRow(row)) continue;
                     String role = row.optString("role");
                     if (("user".equals(role) || "assistant".equals(role)) && row.has("content")) messages.add(row);
                 } catch (Exception ignored) { }
@@ -1076,15 +1414,29 @@ public final class LocalRunStore {
         synchronized (SESSION_TITLE_LOCK) { appendSessionRowLocked(conversationFile(sessionId), row); }
     }
 
-    private List<JSONObject> readConversationRows(String sessionId) {
+    private static boolean isResultOnlyRow(JSONObject row) {
+        String type = row.optString("type", "");
+        return type.startsWith("crew_result_") || type.startsWith("workspace_result_")
+                || row.has("crewResultSchemaVersion") || row.has("workspaceResultSchemaVersion")
+                || row.has("evidenceId") || row.has("referenceId");
+    }
+
+    private List<JSONObject> readConversationRows(String sessionId) { return readConversationRows(sessionId, false); }
+
+    private List<JSONObject> readConversationRows(String sessionId, boolean includeResultNotices) {
         File ledger = conversationFile(sessionId);
         List<JSONObject> rows = new ArrayList<>();
         synchronized (SESSION_TITLE_LOCK) {
             if (conversationMetadata.read(sessionId).deleted || !ledger.isFile()) return rows;
             try (BufferedReader reader = new BufferedReader(new FileReader(ledger))) {
                 String line;
-                while ((line = reader.readLine()) != null) try { rows.add(new JSONObject(line)); }
-                catch (Exception ignored) { }
+                while ((line = reader.readLine()) != null) try {
+                    JSONObject row = new JSONObject(line);
+                    if (isResultOnlyRow(row) && (!includeResultNotices
+                            || !"workspace_result_notice".equals(row.optString("type"))
+                            || row.has("role") || row.has("content"))) continue;
+                    rows.add(row);
+                } catch (Exception ignored) { }
             } catch (Exception error) {
                 throw new IllegalStateException("Could not read conversation ledger", error);
             }
@@ -1406,7 +1758,7 @@ public final class LocalRunStore {
     /** UI timeline preserves every original user/assistant row and inserts read-only compaction notices. */
     public synchronized List<AgentRunUiEvent> readConversationTimeline(String sessionId) {
         List<AgentRunUiEvent> events = new ArrayList<>();
-        List<JSONObject> rows = readConversationRows(sessionId);
+        List<JSONObject> rows = readConversationRows(sessionId, true);
         Map<String, ChatAttachment> ownedDeliveredFiles = new LinkedHashMap<>();
         for (JSONObject row : rows) {
             if ("delivered_file".equals(row.optString("type"))) {
@@ -1561,6 +1913,21 @@ public final class LocalRunStore {
                     AgentRunUiEvent.messageEvent(id++, "user", row.optString("content"),
                         (long) (row.optDouble("timestamp", 0) * 1000))
                         .copyMetadata("pending-" + requestId, 0L).copyStage("QUEUED"));
+            } else if ("workspace_result_notice".equals(type)) {
+                if (!com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(sessionId)) continue;
+                try {
+                    com.jarvys.agent.workspaces.WorkspaceResultReference reference =
+                        com.jarvys.agent.workspaces.WorkspaceResultReference.fromNoticeJsonStrict(row);
+                    // Strict receipt read validates the complete ledger; tolerant UI scanning is not authority.
+                    com.jarvys.agent.workspaces.WorkspaceResultReference exact =
+                        readWorkspaceResultNotice(sessionId, reference.referenceId);
+                    if (exact != null && events.stream().noneMatch(event ->
+                        "workspace_result".equals(event.getKind()) && event.getWorkspaceResultReference() != null &&
+                        exact.referenceId.equals(event.getWorkspaceResultReference().referenceId)))
+                        events.add(AgentRunUiEvent.workspaceResultEvent(id++, exact, exact.producedAtMillis));
+                } catch (RuntimeException invalidReceipt) {
+                    // Preserve malformed evidence, withhold an unverified notice; never repair or replay.
+                }
             } else if ("delivered_file".equals(type)) {
                 ChatAttachment artifact = ChatAttachment.fromJson(row.optJSONObject("artifact"));
                 if (artifact != null) events.add(AgentRunUiEvent.deliveredFileEvent(id++, artifact,
@@ -1750,7 +2117,8 @@ public final class LocalRunStore {
         String sessionId = ledger.getName().substring(0, ledger.getName().length() - ".jsonl".length());
         if (conversationMetadata.read(sessionId).deleted) throw new IllegalStateException("This chat has been deleted");
         conversationFile(sessionId);
-        byte[] record = (row.toString() + "\n").getBytes(StandardCharsets.UTF_8);
+        byte[] record = "crew_snapshot".equals(row.optString("type"))
+                ? losslessResultRecord(row) : (row.toString() + "\n").getBytes(StandardCharsets.UTF_8);
         try (FileOutputStream output = new FileOutputStream(ledger, true)) {
             output.write(record);
             output.flush();
@@ -1769,6 +2137,7 @@ public final class LocalRunStore {
                 while ((line = reader.readLine()) != null) {
                     try {
                         JSONObject row = new JSONObject(line);
+                        if (isResultOnlyRow(row)) continue;
                         if ("user".equals(row.optString("role")) && row.has("content")) {
                             return row.optString("content", "");
                         }

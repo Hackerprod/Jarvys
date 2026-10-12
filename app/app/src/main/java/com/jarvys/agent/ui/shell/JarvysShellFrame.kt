@@ -58,6 +58,7 @@ fun JarvysShellFrame(
     mainMascotMode: Int? = null,
     mascotVisibleSessionId: String? = null,
     mascotLiveConversationVisible: Boolean = false,
+    centralMascotCentered: Boolean = false,
     content: @Composable (PaddingValues) -> Unit,
 ) {
     val chatRoute = route.action == AppRouteAction.CHAT
@@ -102,6 +103,7 @@ fun JarvysShellFrame(
                     onToggleMemory = onToggleMemory,
                     onCompact = onCompact,
                     onReflect = onReflect,
+                    centralMascotCentered = centralMascotCentered,
                     mainMascotMode = mainMascotMode,
                     mascotVisibleSessionId = mascotVisibleSessionId,
                     mascotLiveConversationVisible = mascotLiveConversationVisible,

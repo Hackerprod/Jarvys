@@ -8,6 +8,10 @@ import java.util.List;
  * UI/persistence projection of one bot. Deliberately contains no token counters.
  */
 public final class CrewBotSnapshot {
+    /** Empty only for legacy history that predates persistent execution-cycle identity. */
+    public final String cycleId;
+    /** Historical output for this exact cycle, independent of mutable display status/result. */
+    public final CrewResultEvidence resultEvidence;
     public final String id;
     public final String roleId;
     public final String roleName;
@@ -41,6 +45,20 @@ public final class CrewBotSnapshot {
     }
 
     public CrewBotSnapshot(String id, String roleId, String roleName, String name, String colorKey, String mission, String status, String error, String result, String waitingReason, List<String> tools, long startedAtMillis, long finishedAtMillis, boolean canResume, String recoveryNote, boolean resumeRequired, String phase, String lastProgress, long lastProgressAtMillis) {
+        this(id, roleId, roleName, name, colorKey, mission, status, error, result, waitingReason, tools,
+                startedAtMillis, finishedAtMillis, canResume, recoveryNote, resumeRequired, phase,
+                lastProgress, lastProgressAtMillis, "", null);
+    }
+
+    public CrewBotSnapshot(String id, String roleId, String roleName, String name, String colorKey, String mission,
+            String status, String error, String result, String waitingReason, List<String> tools,
+            long startedAtMillis, long finishedAtMillis, boolean canResume, String recoveryNote,
+            boolean resumeRequired, String phase, String lastProgress, long lastProgressAtMillis,
+            String cycleId, CrewResultEvidence resultEvidence) {
+        this.cycleId = cycleId == null || cycleId.isEmpty() ? "" : CrewResultEvidence.requireCycleId(cycleId);
+        if (resultEvidence != null && (!id.equals(resultEvidence.botId) || !this.cycleId.equals(resultEvidence.cycleId)))
+            throw new IllegalArgumentException("Worker result evidence does not match snapshot identity");
+        this.resultEvidence = resultEvidence;
         this.phase = "RUNNING".equals(status) ? safeProgress(phase) : "";
         this.lastProgress = safeProgress(lastProgress);
         this.lastProgressAtMillis = Math.max(0L, lastProgressAtMillis);
@@ -77,6 +95,6 @@ public final class CrewBotSnapshot {
 
     public CrewBotSnapshot interrupted() {
         if (!active()) return this;
-        return new CrewBotSnapshot(id, roleId, roleName, name, colorKey, mission, "INTERRUPTED", "", result, "", tools, startedAtMillis, System.currentTimeMillis(), false, recoveryNote, true, "", lastProgress, lastProgressAtMillis);
+        return new CrewBotSnapshot(id, roleId, roleName, name, colorKey, mission, "INTERRUPTED", "", result, "", tools, startedAtMillis, System.currentTimeMillis(), false, recoveryNote, true, "", lastProgress, lastProgressAtMillis, cycleId, resultEvidence);
     }
 }

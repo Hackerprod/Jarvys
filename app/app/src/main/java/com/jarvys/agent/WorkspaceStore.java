@@ -813,6 +813,21 @@ public final class WorkspaceStore {
         }
     }
 
+    /** Pure trusted scope lookup for permission preparation. Never seeds, recovers or broadens a zone. */
+    public MemoryStore memoryStoreForNativeAction(String path) {
+        String relative = memoryRelativePath(normalizePath(path));
+        if (relative == null) return null;
+        if (!memoryAccessAllowed) throw new IllegalStateException("Memory is disabled for this conversation");
+        if (memoryStore == null || !memoryStore.isEnabled()) throw new IllegalStateException("User memory is disabled in Settings");
+        return memoryStore;
+    }
+
+    public String normalizedNativeMemoryPath(String path) {
+        String normalized = normalizePath(path);
+        if (memoryRelativePath(normalized) == null) throw new IllegalArgumentException("Not a memory path");
+        return normalized;
+    }
+
     public MemoryStore memoryStore() {
         return requireMemoryStore();
     }

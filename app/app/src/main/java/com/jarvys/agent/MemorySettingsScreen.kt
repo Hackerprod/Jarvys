@@ -83,9 +83,12 @@ fun MemorySettingsScreen(
     legacyStore: MemoryStore? = null,
     onCloseMemory: (() -> Unit)? = null,
 ) {
-    val uiProtection = memoryUiProtection(onCloseMemory) ?: return
-    val context = LocalContext.current
+    val nativeExport = rememberMemoryExport(store)
     val scope = rememberCoroutineScope()
+    val nativeToken = rememberMemoryEffectToken(store, "home")
+    val uiProtection = memoryViewProtection(store, "home", onClose = onCloseMemory) ?: return
+    val context = LocalContext.current
+    val nativeActions = remember(context) { MemoryNativeActions(context) }
     var files by remember { mutableStateOf(emptyList<MemoryStore.MemoryFileInfo>()) }
     var usedCharacters by remember { mutableStateOf(0) }
     var loading by remember { mutableStateOf(true) }
@@ -107,8 +110,7 @@ fun MemorySettingsScreen(
             loading = true
             val result = withContext(Dispatchers.IO) {
                 runCatching {
-                    uiProtection.requireHumanUiInteraction()
-                    store.listFilesForUser().filterNot { it.path.startsWith("shared/") } to store.coreCharactersUsed()
+                    uiProtection.read { store.listFilesForUser().filterNot { it.path.startsWith("shared/") } to store.coreCharactersUsed() }
                 }
             }
             result.onSuccess { (nextFiles, chars) ->
@@ -131,24 +133,6 @@ fun MemorySettingsScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
-        if (uri == null || !uiProtection.allowsHumanUiAction()) return@rememberLauncherForActivityResult
-        scope.launch {
-            exportStatus = context.getString(R.string.memory_exporting)
-            val result = withContext(Dispatchers.IO) {
-                runCatching {
-                    uiProtection.requireHumanUiInteraction()
-                    val output = context.contentResolver.openOutputStream(uri)
-                        ?: error(context.getString(R.string.memory_export_destination_error))
-                    output.use { store.exportZip(it, includeJournal) }
-                }
-            }
-            exportStatus = result.fold(
-                { context.getString(R.string.memory_exported) },
-                { context.getString(R.string.memory_export_failed, context.getString(R.string.memory_error_generic)) },
-            )
-        }
-    }
 
     Box(Modifier.fillMaxSize()) {
             MemoryHome(
@@ -156,22 +140,22 @@ fun MemorySettingsScreen(
                 files = files,
                 usedCharacters = usedCharacters,
                 loading = loading,
-                status = statusMessage ?: exportStatus,
-                onEnabledChange = { if (uiProtection.allowsHumanUiAction()) onEnabledChange(it) },
+                status = statusMessage ?: nativeExport.status,
+                onEnabledChange = { value -> memoryPreferenceChange { onEnabledChange(value) } },
                 onShowDisclosure = onShowDisclosure,
                 reflectionEnabled = reflectionEnabled,
                 reflectionStatus = reflectionStatus,
                 lastReflectionMillis = lastReflectionMillis,
                 reflecting = reflecting,
-                onReflectionEnabledChange = { if (uiProtection.allowsHumanUiAction()) onReflectionEnabledChange(it) },
+                onReflectionEnabledChange = { value -> memoryPreferenceChange { onReflectionEnabledChange(value) } },
                 onReflectionDisclosure = onReflectionDisclosure,
-                onOpenFile = { if (uiProtection.allowsHumanUiAction()) onOpenFile(it.path, false) },
+                onOpenFile = { if (uiProtection.allowsUiAction()) uiProtection.navigate { onOpenFile(it.path, false) } },
                 onAddNote = { addNotePath = "note.md"; showAddNoteDialog = true },
                 onAddDirectory = { directoryPath = ""; showDirectoryDialog = true },
-                onHistory = { if (uiProtection.allowsHumanUiAction()) onOpenHistory() },
+                onHistory = { if (uiProtection.allowsUiAction()) uiProtection.navigate { onOpenHistory() } },
                 onExport = { showExportDialog = true },
                 onClearMemory = { clearConfirmStep = 1 },
-                onScopeReview = { if (uiProtection.allowsHumanUiAction()) showScopeReview = true },
+                onScopeReview = { if (uiProtection.allowsUiAction()) showScopeReview = true },
             )
     }
 
@@ -199,7 +183,7 @@ fun MemorySettingsScreen(
             confirmButton = { Button(onClick = {
                 val path = if (addNotePath.endsWith(".md")) addNotePath else "$addNotePath.md"
                 showAddNoteDialog = false
-                onOpenFile(path, true)
+                uiProtection.navigate { onOpenFile(path, true) }
             }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.memory_continue), softWrap = true) } },
             dismissButton = { TextButton(onClick = { showAddNoteDialog = false }) { Text(stringResource(R.string.cancel)) } },
         )
@@ -220,8 +204,11 @@ fun MemorySettingsScreen(
                 }
             },
             confirmButton = { Button(onClick = {
+                val exactDirectory = directoryPath
                 scope.launch {
-                    val result = withContext(Dispatchers.IO) { runCatching { uiProtection.requireHumanUiInteraction(); store.createDirectoryForUser(directoryPath, conversationId) } }
+                    val result = withContext(Dispatchers.IO) { runCatching { nativeActions.run(NativeActionPolicy.Operation.MEMORY_MODIFY, store,
+                        listOf("Create directory", exactDirectory, conversationId), nativeToken,
+                        { uiProtection.requireEffectSelection() }) { store.createDirectoryForUser(exactDirectory, conversationId) } } }
                     result.onSuccess {
                         showDirectoryDialog = false
                         inlineError = null
@@ -253,41 +240,25 @@ fun MemorySettingsScreen(
             },
             confirmButton = { Button(onClick = {
                 showExportDialog = false
-                exportLauncher.launch("jarvys-memory.zip")
+                nativeExport.launch(includeJournal)
             }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.memory_export), softWrap = true) } },
             dismissButton = { TextButton(onClick = { showExportDialog = false }) { Text(stringResource(R.string.cancel)) } },
         )
     }
 
-    if (clearConfirmStep > 0) {
-        val fileCount = files.size
-        AlertDialog(
-            onDismissRequest = { clearConfirmStep = 0 },
-            title = { Text(if (clearConfirmStep == 1) stringResource(R.string.memory_clear_title) else stringResource(R.string.memory_clear_confirm_title)) },
-            text = { ScrollableDialogContent {
-                Text(if (clearConfirmStep == 1) stringResource(R.string.memory_clear_first_confirm, fileCount)
-                    else stringResource(R.string.memory_clear_final_confirm))
-            } },
-            confirmButton = { Button(onClick = {
-                if (clearConfirmStep == 1) clearConfirmStep = 2
-                else scope.launch {
-                    val result = withContext(Dispatchers.IO) { runCatching { uiProtection.requireHumanUiInteraction(); store.clearAll(MemoryStore.Actor.USER) } }
-                    result.onSuccess {
-                        clearConfirmStep = 0
-                        statusMessage = context.getString(R.string.memory_cleared)
-                        onMemoryChanged()
-                        refreshKey = "clear-${System.currentTimeMillis()}"
-                    }.onFailure {
-                        clearConfirmStep = 0
-                        statusMessage = memoryErrorText(context, it.message)
-                    }
-                }
-            }, modifier = Modifier.fillMaxWidth()) {
-                Text(if (clearConfirmStep == 1) stringResource(R.string.memory_continue) else stringResource(R.string.memory_clear_all), softWrap = true)
-            } },
-            dismissButton = { TextButton(onClick = { clearConfirmStep = 0 }) { Text(stringResource(R.string.cancel)) } },
-        )
+    LaunchedEffect(clearConfirmStep) {
+        if (clearConfirmStep > 0) {
+            val result = withContext(Dispatchers.IO) { runCatching {
+                nativeActions.run(NativeActionPolicy.Operation.MEMORY_CLEAR, store,
+                    listOf("Irreversibly clear the selected memory and its history", conversationId), nativeToken,
+                    { uiProtection.requireEffectSelection() }) { store.clearAll(MemoryStore.Actor.USER) }
+            } }
+            clearConfirmStep = 0
+            result.onSuccess { statusMessage = context.getString(R.string.memory_cleared); onMemoryChanged() }
+                .onFailure { statusMessage = memoryErrorText(context, it.message) }
+        }
     }
+
 }
 
 @Composable
@@ -300,7 +271,6 @@ internal fun MemoryEditorDestination(
     onBack: () -> Unit,
     onMissingFile: () -> Unit,
 ) {
-    val uiProtection = memoryUiProtection(onBack) ?: return
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var loading by rememberSaveable(path, isNew) { mutableStateOf(true) }
@@ -318,10 +288,18 @@ internal fun MemoryEditorDestination(
     var conflictDelete by rememberSaveable(path, isNew) { mutableStateOf(false) }
     var discardDialog by rememberSaveable(path, isNew) { mutableStateOf(false) }
     var deleteDialog by rememberSaveable(path, isNew) { mutableStateOf(false) }
+    var loaded by rememberSaveable(path, isNew) { mutableStateOf(false) }
     val dirty = editingNew || name != savedName || description != savedDescription || body != savedBody
     val isIndex = path == MemoryConstants.ROOT_INDEX || path.endsWith("/${MemoryConstants.ROOT_INDEX}")
 
+    val nativeToken = rememberMemoryEffectToken(store, "editor", path, isNew)
+    val uiProtection = memoryViewProtection(store, "editor:$path:$isNew", onClose = onBack,
+        draftHash = NativeActionPolicy.binding(path, name, description, body)) ?: return
+    val nativeActions = remember(context) { MemoryNativeActions(context) }
+
     fun applyDocument(document: MemoryUiLogic.EditorDocument, revision: Long, newFile: Boolean) {
+        if (loaded) uiProtection.draftChanged(NativeActionPolicy.binding(path, document.name, document.description, document.body))
+        loaded = true
         name = document.name
         description = document.description
         body = document.body
@@ -337,9 +315,10 @@ internal fun MemoryEditorDestination(
     fun loadDisk() {
         scope.launch {
             val result = withContext(Dispatchers.IO) { runCatching {
-                uiProtection.requireHumanUiInteraction()
-                val text = store.readUserFile(path)
-                MemoryUiLogic.parseDocument(path, text) to store.latestRevisionId(path)
+                uiProtection.read {
+                    val text = store.readUserFile(path)
+                    MemoryUiLogic.parseDocument(path, text) to store.latestRevisionId(path)
+                }
             } }
             withContext(Dispatchers.Main) {
                 result.onSuccess { (document, revision) -> applyDocument(document, revision, false) }
@@ -349,7 +328,7 @@ internal fun MemoryEditorDestination(
                             editingNew = true
                             name = ""; description = ""; body = ""
                             savedName = ""; savedDescription = ""; savedBody = ""
-                            expectedRevision = withContext(Dispatchers.IO) { store.latestRevisionId(path) }
+                            expectedRevision = withContext(Dispatchers.IO) { uiProtection.read { store.latestRevisionId(path) } }
                             status = context.getString(R.string.memory_conflict_file_removed)
                             conflict = false
                         }
@@ -357,29 +336,32 @@ internal fun MemoryEditorDestination(
             }
         }
     }
-    LaunchedEffect(path, isNew) {
+    LaunchedEffect(path, isNew, uiProtection.state) {
+        if (loaded) return@LaunchedEffect
         if (isNew) {
-            applyDocument(MemoryUiLogic.parseDocument(path, ""), withContext(Dispatchers.IO) { store.latestRevisionId(path) }, true)
+            applyDocument(MemoryUiLogic.parseDocument(path, ""), withContext(Dispatchers.IO) { uiProtection.read { store.latestRevisionId(path) } }, true)
         } else loadDisk()
     }
 
-    fun requestBack() { if (dirty) discardDialog = true else onBack() }
+    fun requestBack() { if (dirty) discardDialog = true else uiProtection.navigate(onBack) }
     BackHandler(enabled = !discardDialog && !deleteDialog && !conflict) { requestBack() }
     fun save(overwrite: Boolean = false) {
-        if (!uiProtection.allowsHumanUiAction()) return
+        if (!uiProtection.allowsUiAction()) return
+        val revision = expectedRevision
+        val serialized = try { MemoryUiLogic.serializeDocument(path, name, description, body) }
+        catch (e: IllegalArgumentException) { error = memoryErrorText(context, e.message); return }
         scope.launch {
-            val serialized = try { MemoryUiLogic.serializeDocument(path, name, description, body) }
-            catch (e: IllegalArgumentException) { error = memoryErrorText(context, e.message); return@launch }
             loading = true
             val result = withContext(Dispatchers.IO) { runCatching {
-                uiProtection.requireHumanUiInteraction()
-                store.writeUserFile(path, serialized, expectedRevision, overwrite, conversationId)
+                nativeActions.run(NativeActionPolicy.Operation.MEMORY_MODIFY, store,
+                    listOf("Save note", path, serialized, revision.toString(), overwrite.toString(), conversationId), nativeToken,
+                    { uiProtection.requireEffectSelection() }) { store.writeUserFile(path, serialized, revision, overwrite, conversationId) }
             } }
             withContext(Dispatchers.Main) {
                 loading = false
                 result.onSuccess {
                     onMemoryChanged()
-                    onBack()
+                    uiProtection.navigate(onBack)
                 }.onFailure {
                     if (it is MemoryStore.RevisionConflictException) { conflict = true; conflictDelete = false }
                     else error = memoryErrorText(context, it.message)
@@ -388,18 +370,20 @@ internal fun MemoryEditorDestination(
         }
     }
     fun delete(overwrite: Boolean = false) {
-        if (!uiProtection.allowsHumanUiAction()) return
+        if (!uiProtection.allowsUiAction()) return
+        val revision = expectedRevision
         scope.launch {
             loading = true
             val result = withContext(Dispatchers.IO) { runCatching {
-                uiProtection.requireHumanUiInteraction()
-                store.deleteUserFile(path, expectedRevision, overwrite, conversationId)
+                nativeActions.run(NativeActionPolicy.Operation.MEMORY_DELETE, store,
+                    listOf("Delete note", path, revision.toString(), overwrite.toString(), conversationId), nativeToken,
+                    { uiProtection.requireEffectSelection() }) { store.deleteUserFile(path, revision, overwrite, conversationId) }
             } }
             withContext(Dispatchers.Main) {
                 loading = false
                 result.onSuccess {
                     onMemoryChanged()
-                    onBack()
+                    uiProtection.navigate(onBack)
                 }.onFailure {
                     if (it is MemoryStore.RevisionConflictException) { conflict = true; conflictDelete = true }
                     else error = memoryErrorText(context, it.message)
@@ -408,11 +392,15 @@ internal fun MemoryEditorDestination(
         }
     }
     MemoryEditor(path, isIndex, editingNew, name, description, body, loading, error, status,
-        { name = it }, { description = it }, { body = it }, { save() }, { deleteDialog = true }, { status = null })
+        { value -> runCatching { uiProtection.draftChanged(NativeActionPolicy.binding(path, value, description, body)); name = value }.onFailure { error=it.message; uiProtection.invalidate() } },
+        { value -> runCatching { uiProtection.draftChanged(NativeActionPolicy.binding(path, name, value, body)); description = value }.onFailure { error=it.message; uiProtection.invalidate() } },
+        { value -> runCatching { uiProtection.draftChanged(NativeActionPolicy.binding(path, name, description, value)); body = value }.onFailure { error=it.message; uiProtection.invalidate() } },
+        { save() }, { delete() }, { status = null }, uiProtection.captureReviewNeeded,
+        { runCatching { uiProtection.approveDraftCapture() }.onFailure { error = it.message } })
     if (discardDialog) AlertDialog(onDismissRequest = { discardDialog = false },
         title = { Text(stringResource(R.string.memory_unsaved_title)) },
         text = { ScrollableDialogContent { Text(stringResource(R.string.memory_unsaved_text)) } },
-        confirmButton = { TextButton(onClick = { discardDialog = false; onBack() }) { Text(stringResource(R.string.memory_discard)) } },
+        confirmButton = { TextButton(onClick = { discardDialog = false; uiProtection.navigate(onBack) }) { Text(stringResource(R.string.memory_discard)) } },
         dismissButton = { TextButton(onClick = { discardDialog = false }) { Text(stringResource(R.string.cancel)) } })
     if (deleteDialog) AlertDialog(onDismissRequest = { deleteDialog = false },
         title = { Text(stringResource(R.string.memory_delete_title)) },
@@ -436,9 +424,11 @@ internal fun MemoryHistoryDestination(
     onMemoryChanged: () -> Unit,
     onBack: () -> Unit,
 ) {
-    val uiProtection = memoryUiProtection(onBack) ?: return
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val nativeToken = rememberMemoryEffectToken(store, "history")
+    val uiProtection = memoryViewProtection(store, "history", onClose = onBack) ?: return
+    val context = LocalContext.current
+    val nativeActions = remember(context) { MemoryNativeActions(context) }
     var revisions by remember { mutableStateOf(emptyList<MemoryStore.Revision>()) }
     var actor by remember { mutableStateOf<MemoryStore.Actor?>(null) }
     var actorMenu by remember { mutableStateOf(false) }
@@ -447,22 +437,25 @@ internal fun MemoryHistoryDestination(
     var status by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(store) {
         val result = withContext(Dispatchers.IO) { runCatching {
-            uiProtection.requireHumanUiInteraction()
-            store.listRevisionsForUser(null, null)
+            uiProtection.read { store.listRevisionsForUser(null, null) }
         } }
         result.onSuccess { revisions = it }.onFailure { status = memoryErrorText(context, it.message) }
     }
     fun restore(id: Long) { scope.launch {
-        val result = withContext(Dispatchers.IO) { runCatching { uiProtection.requireHumanUiInteraction(); store.restoreRevisionForUser(id, conversationId) } }
+        val result = withContext(Dispatchers.IO) { runCatching { nativeActions.run(NativeActionPolicy.Operation.MEMORY_RESTORE, store,
+            listOf("Restore revision", id.toString(), conversationId), nativeToken,
+            { uiProtection.requireEffectSelection() }) { store.restoreRevisionForUser(id, conversationId) } } }
         withContext(Dispatchers.Main) {
-            result.onSuccess { onMemoryChanged(); onBack() }
+            result.onSuccess { onMemoryChanged(); uiProtection.navigate(onBack) }
                 .onFailure { status = memoryErrorText(context, it.message) }
         }
     } }
     fun undo() { scope.launch {
-        val result = withContext(Dispatchers.IO) { runCatching { uiProtection.requireHumanUiInteraction(); store.undoLastForUser(conversationId) } }
+        val result = withContext(Dispatchers.IO) { runCatching { nativeActions.run(NativeActionPolicy.Operation.MEMORY_RESTORE, store,
+            listOf("Undo latest revision", conversationId), nativeToken,
+            { uiProtection.requireEffectSelection() }) { store.undoLastForUser(conversationId) } } }
         withContext(Dispatchers.Main) {
-            result.onSuccess { onMemoryChanged(); onBack() }
+            result.onSuccess { onMemoryChanged(); uiProtection.navigate(onBack) }
                 .onFailure { status = memoryErrorText(context, it.message) }
         }
     } }
@@ -706,9 +699,14 @@ private fun MemoryEditor(
     onSave: () -> Unit,
     onDelete: () -> Unit,
     onClearStatus: () -> Unit,
+    captureReviewNeeded: Boolean,
+    onApproveCapture: () -> Unit,
 ) {
     val context = LocalContext.current
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (captureReviewNeeded) Button(onClick = onApproveCapture, modifier = Modifier.testTag("memory-draft-capture-approve")) {
+            Text(stringResource(R.string.memory_native_draft_capture_once))
+        }
         Text(path, fontFamily = FontFamily.Monospace, fontSize = 12.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
         if (!isIndex) {
@@ -754,8 +752,6 @@ private fun MemoryHistory(
     onRestore: (Long) -> Unit,
     onUndoLast: () -> Unit,
 ) {
-    var pendingRestore by remember { mutableStateOf<Long?>(null) }
-    var confirmUndo by remember { mutableStateOf(false) }
     val actorLabelText = actorFilter?.let { actorLabel(it) } ?: stringResource(R.string.memory_history_all_actors)
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -777,7 +773,7 @@ private fun MemoryHistory(
                         }
                     }
                 }
-                Button(onClick = { confirmUndo = true }, enabled = revisions.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
+                Button(onClick = onUndoLast, enabled = revisions.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
                     Icon(LucideIcons.RotateCcw, null); Spacer(Modifier.size(8.dp, 1.dp)); Text(stringResource(R.string.memory_undo_last), softWrap = true)
                 }
             }
@@ -815,7 +811,7 @@ private fun MemoryHistory(
                                 Text(prefix + line.text, color = tint, fontFamily = FontFamily.Monospace, fontSize = 10.sp, lineHeight = 14.sp)
                             }
                         }
-                        OutlinedButton(onClick = { pendingRestore = revision.id }, modifier = Modifier.fillMaxWidth()) {
+                        OutlinedButton(onClick = { onRestore(revision.id) }, modifier = Modifier.fillMaxWidth()) {
                             Text(stringResource(R.string.memory_restore_version), softWrap = true)
                         }
                     }
@@ -823,24 +819,7 @@ private fun MemoryHistory(
             }
         }
     }
-    pendingRestore?.let { revisionId ->
-        AlertDialog(onDismissRequest = { pendingRestore = null },
-            title = { Text(stringResource(R.string.memory_restore_title)) },
-            text = { ScrollableDialogContent { Text(stringResource(R.string.memory_restore_confirm, revisionId)) } },
-            confirmButton = { Button(onClick = { pendingRestore = null; onRestore(revisionId) }, modifier = Modifier.fillMaxWidth()) {
-                Text(stringResource(R.string.memory_restore_version), softWrap = true)
-            } },
-            dismissButton = { TextButton(onClick = { pendingRestore = null }) { Text(stringResource(R.string.cancel)) } })
-    }
-    if (confirmUndo) {
-        AlertDialog(onDismissRequest = { confirmUndo = false },
-            title = { Text(stringResource(R.string.memory_undo_title)) },
-            text = { ScrollableDialogContent { Text(stringResource(R.string.memory_undo_confirm)) } },
-            confirmButton = { Button(onClick = { confirmUndo = false; onUndoLast() }, modifier = Modifier.fillMaxWidth()) {
-                Text(stringResource(R.string.memory_undo_last), softWrap = true)
-            } },
-            dismissButton = { TextButton(onClick = { confirmUndo = false }) { Text(stringResource(R.string.cancel)) } })
-    }
+
 }
 
 @Composable
@@ -874,4 +853,11 @@ private fun memoryErrorText(context: android.content.Context, message: String?):
 private fun displayTimestamp(value: String): String {
     if (value.isBlank()) return ""
     return value.replace('T', ' ').removeSuffix("Z").take(16)
+}
+
+/** Existing feature switches remain explicit user configuration; a view grant does not turn them on. */
+private fun memoryPreferenceChange(change: () -> Unit) {
+    val lease = MemoryUiAutomationGuard.enterProtectedSurface()
+    try { if (lease.isReadyForUser) { lease.requireHumanUiInteraction(); change() } }
+    finally { lease.close() }
 }

@@ -595,7 +595,7 @@ class GmailApiContractTest {
         }
     }
 
-    @Test fun encodedDisplayNameNeverBecomesObservedSenderTrustThroughMessageSearchOrThreadReads() {
+    @Test fun encodedDisplayNameNeverBecomesObservedSenderOrAnExtraPolicyAfterReads() {
         val encoded = "=?UTF-8?Q?support=40other.example=2C?= <actual@example.com>"
         for (operation in listOf(GmailConnector.GET_MESSAGE, GmailConnector.SEARCH_MESSAGES, GmailConnector.GET_THREAD)) {
             val parent = withHeader(message(), "From", encoded)
@@ -610,9 +610,24 @@ class GmailApiContractTest {
             connector.beginAgentRun(0, "Read my mail")
             val readArgs = if (operation == GmailConnector.SEARCH_MESSAGES) JSONObject().put("query", "") else JSONObject().put("id", if (operation == GmailConnector.GET_THREAD) "thread1" else "m1")
             connector.invoke(operation, readArgs, CancellationToken.uncancellable())
+            // Verify the recorded identity directly: ALLOW admission intentionally no longer
+            // doubles as a query for the private observed-sender context.
+            val runs = GmailConnector::class.java.getDeclaredField("runTrust").apply { isAccessible = true }
+                .get(connector) as Map<*, *>
+            val run = requireNotNull(runs[0L])
+            val observed = run.javaClass.getDeclaredField("observedSenders").apply { isAccessible = true }
+                .get(run) as Set<*>
+            assertEquals(operation, setOf("actual@example.com"), observed)
+            // Both valid, explicitly selected addresses follow the configured action policy.
+            // The encoded display name does not become mailbox identity or force another ASK.
             connector.validateAutonomousWrite(GmailConnector.SEND_MESSAGE, args().put("to", "actual@example.com"), 0)
+            connector.validateAutonomousWrite(GmailConnector.SEND_MESSAGE, args().put("to", "support@other.example"), 0)
             assertTrue(operation, runCatching { connector.validateAutonomousWrite(GmailConnector.SEND_MESSAGE,
-                args().put("to", "support@other.example"), 0) }.exceptionOrNull() is AutonomousWriteValidationFailure)
+                args().put("to", "not-an-address"), 0) }.isFailure)
+            connector.endAgentRun(0)
+            assertTrue(operation, runCatching { connector.validateAutonomousWrite(GmailConnector.SEND_MESSAGE,
+                args().put("to", "actual@example.com"), 0) }.isFailure)
+            assertTrue(api.calls.all { it.method == "GET" })
         }
     }
 

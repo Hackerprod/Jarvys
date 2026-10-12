@@ -332,6 +332,7 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
       }
       token.throwIfCancelled();
       byte[] body = request.toString().getBytes(StandardCharsets.UTF_8);
+      NativeEffectDispatchScope.beforeDispatch();
       try (OutputStream output = connection.getOutputStream()) {
         output.write(body);
         output.flush();

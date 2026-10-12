@@ -80,6 +80,13 @@ class ConnectedConnectorPermissionScreensTest {
         assertEquals("policy is pinned to the row's right edge", row.right, control.right, 1f)
         assertEquals("policy stays vertically centered", row.center.y, control.center.y, 1f)
         assertTrue("policy touch target remains at least 48 dp tall", control.height >= 48f)
+        if (prefix.startsWith("connector-policy-")) {
+            val origin = compose.onNodeWithTag("$prefix-origin").performScrollTo().assertIsDisplayed()
+                .fetchSemanticsNode().boundsInRoot
+            val visibleRow = compose.onNodeWithTag("$prefix-row", useUnmergedTree = true)
+                .fetchSemanticsNode().boundsInRoot
+            assertTrue("provenance remains below the centered policy row", origin.top >= visibleRow.bottom - 1f)
+        }
     }
     private fun capture(name: String) = compose.runOnIdle { captureConnectedPermissionWindows(compose.activity, name) }
 

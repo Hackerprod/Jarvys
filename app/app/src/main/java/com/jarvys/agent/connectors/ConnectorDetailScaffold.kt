@@ -278,14 +278,21 @@ internal fun ConnectorPolicySelector(
                 ) }
             }
         }
-        origin?.let { source -> Text(stringResource(when (source) {
-            ActionPolicyOrigin.CATALOG_DEFAULT -> com.jarvys.agent.R.string.action_policy_origin_default
-            ActionPolicyOrigin.USER -> com.jarvys.agent.R.string.action_policy_origin_user
-            ActionPolicyOrigin.LEGACY_UNKNOWN -> com.jarvys.agent.R.string.action_policy_origin_legacy
-            ActionPolicyOrigin.INVALID -> com.jarvys.agent.R.string.action_policy_origin_invalid
-            ActionPolicyOrigin.INHERITED_SERVER_DEFAULT -> com.jarvys.agent.R.string.action_policy_origin_inherited
-        }), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        origin?.let { ConnectorPolicyOriginCaption(it) }
         if (editError) Text(stringResource(com.jarvys.agent.R.string.action_policy_edit_unavailable),
             color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
     }
+}
+
+/** Keep this outside a permission row when the row must center the actionable button. */
+@Composable
+internal fun ConnectorPolicyOriginCaption(origin: ActionPolicyOrigin, modifier: Modifier = Modifier) {
+    Text(stringResource(when (origin) {
+        ActionPolicyOrigin.CATALOG_DEFAULT -> R.string.action_policy_origin_default
+        ActionPolicyOrigin.USER -> R.string.action_policy_origin_user
+        ActionPolicyOrigin.LEGACY_UNKNOWN -> R.string.action_policy_origin_legacy
+        ActionPolicyOrigin.INVALID -> R.string.action_policy_origin_invalid
+        ActionPolicyOrigin.INHERITED_SERVER_DEFAULT -> R.string.action_policy_origin_inherited
+    }), modifier = modifier, style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant)
 }

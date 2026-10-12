@@ -86,14 +86,35 @@ class CodingExecutionToolsTest {
 
     @Test fun crossInstanceCodingPolicyAbaAtLaunchInvalidatesExactSnapshot() {
         val f = Fixture(folder.newFolder(), AutonomyPolicy.ALLOW)
+        val originalAuthorization = f.autonomy.projectAuthorization()
+        val originalVersion = f.scope.version()
+        var reachedLaunchBoundary = false
         f.beforeLaunch = {
+            reachedLaunchBoundary = true
             val other = LinuxExecAutonomy(f.store, { true })
             other.setProjectPolicyFromUi(AutonomyPolicy.DENY)
             other.setProjectPolicyFromUi(AutonomyPolicy.ALLOW)
         }
         val result = f.execute()
+        assertTrue(reachedLaunchBoundary)
         assertEquals(0, f.executed)
-        if (result.success) assertEquals("FAILED", JSONObject(result.content).getString("state"))
+        assertEquals(0, f.requests)
+        assertEquals(AutonomyPolicy.ALLOW, f.autonomy.projectPolicy())
+        assertNotEquals(originalAuthorization, f.autonomy.projectAuthorization())
+        // The tool returns a job receipt, not a claim that a process ran. Exact-snapshot
+        // revocation before launch is NOT_STARTED; FAILED would imply an executed command.
+        assertTrue(result.content, result.success)
+        val receipt = JSONObject(result.content)
+        assertEquals("NOT_STARTED", receipt.getString("state"))
+        assertTrue(receipt.getBoolean("terminal"))
+        assertTrue(receipt.isNull("started_at"))
+        assertTrue(receipt.isNull("exit_code"))
+        val job = f.jobs.list("chat/bot/1", f.scope).single()
+        assertEquals(receipt.getString("job_id"), job.id)
+        assertEquals(CodingJobManager.State.NOT_STARTED, job.state)
+        assertNull(job.startedAt)
+        assertNull(job.exitCode)
+        assertEquals(originalVersion, f.scope.version())
     }
 
     @Test fun statusIsInspectionOnlyAndDisclosesTheEffectiveCodingPolicy() {

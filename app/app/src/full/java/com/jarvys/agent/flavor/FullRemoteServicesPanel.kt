@@ -78,6 +78,7 @@ import com.jarvys.agent.connectors.ConnectorDetailSection
 import com.jarvys.agent.connectors.ConnectorDetailScaffold
 import com.jarvys.agent.connectors.ConnectorPolicyChoice
 import com.jarvys.agent.connectors.ConnectorPolicySelector
+import com.jarvys.agent.connectors.ConnectorPolicyOriginCaption
 import com.jarvys.agent.connectors.ConnectorPermissionRow
 
 /** Display/test identifier for an actual scope, including the trailing-slash full-mail scope. */
@@ -414,9 +415,11 @@ internal fun GoogleServiceCard(
                             AutonomyPolicy.ASK -> R.string.connector_policy_ask
                             AutonomyPolicy.ALLOW -> R.string.connector_policy_allow
                             AutonomyPolicy.DENY -> R.string.connector_policy_deny
-                        }, choices, subjectKey = "$connectorId/${operation.name}", origin = registry.configuredAutonomyOrigin(definition, operation), modifier = Modifier.testTag("google-policy-${operation.name}-control")
+                        }, choices, subjectKey = "$connectorId/${operation.name}", modifier = Modifier.testTag("google-policy-${operation.name}-control")
                             .semantics { contentDescription = fullLabel })
                     })
+                    ConnectorPolicyOriginCaption(registry.configuredAutonomyOrigin(definition, operation),
+                        Modifier.fillMaxWidth().testTag("google-policy-${operation.name}-origin"))
                     policyError?.let { error -> Text(error, color = MaterialTheme.colorScheme.error,
                         fontSize = 12.sp, modifier = Modifier.fillMaxWidth().testTag("google-policy-${operation.name}-error")) }
                     // Keep explanatory text full-width. In the narrow label column it can make a

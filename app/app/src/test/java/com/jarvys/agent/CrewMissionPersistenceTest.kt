@@ -35,7 +35,7 @@ class CrewMissionPersistenceTest {
             "RUNNING", "", 100L, 0L, listOf(bot), listOf(question))
         store.appendCrewMissionSnapshot(snapshot)
         val ledger = File(temp.root, "jarvys/conversations/$session.jsonl").readText()
-        assertTrue(ledger.contains("\"crewSchemaVersion\":3"))
+        assertTrue(ledger.contains("\"crewSchemaVersion\":${CrewMissionSnapshot.SCHEMA_VERSION}"))
         assertFalse(ledger.contains("tokensUsed"))
 
         val migrated = store.recoverCrewMissions(session).single()

@@ -94,8 +94,34 @@ class NativeActionPolicyTest {
         request.admit(CancellationToken.uncancellable())
     }
     @Test fun operationCatalogHasExactlyTheReviewedSemanticFamilies() {
-        assertEquals(14, NativeActionPolicy.Operation.entries.size)
-        assertEquals(14, NativeActionPolicy.Operation.entries.map { it.id }.distinct().size)
+        val expectedIds = setOf(
+            "diagnostics.read",
+            "workspaces.create", "workspaces.delegate", "workspaces.read", "workspaces.deliver",
+            "memory.view", "memory.modify", "memory.delete", "memory.restore", "memory.clear",
+            "memory.export", "memory.share_personal", "memory.reflection.run",
+            "bots.create", "bots.mascot.compile",
+            "tasks.create", "tasks.update", "tasks.cancel", "tasks.view",
+            "factory.identity.create", "factory.identity.backup.export",
+            "factory.identity.backup.import", "factory.identity.reconcile",
+        )
+        val actualIds = NativeActionPolicy.Operation.entries.map { it.id }
+        assertEquals(expectedIds, actualIds.toSet())
+        assertEquals("Semantic action IDs must be unique", actualIds.size, actualIds.distinct().size)
         assertFalse(NativeActionPolicy.Operation.entries.any { it.id.contains("crew") || it.id.contains("stop") })
+    }
+
+    @Test fun workspaceDeliveryCatalogAllowsFreshRequestsWithoutOverridingSavedChoices() {
+        val operation = NativeActionPolicy.Operation.WORKSPACE_DELIVER
+        val descriptor = com.jarvys.agent.connectors.ActionPolicyDefaults.descriptor(NativeActionPolicy.CONNECTOR_ID, operation.id)
+        assertEquals("workspaces.deliver", descriptor.operationName)
+        assertEquals(AutonomyPolicy.ALLOW, descriptor.defaultPolicy)
+        assertEquals("settings/native_permissions", descriptor.settingsSurface)
+        for (mode in AutonomyPolicy.entries) {
+            val store = InMemoryConnectorAutonomyStore()
+            if (mode != AutonomyPolicy.ALLOW) store.setPolicy(NativeActionPolicy.CONNECTOR_ID, operation.id, mode)
+            val policy = NativeActionPolicy(store)
+            assertEquals(mode, policy.snapshot(operation).policy)
+            assertEquals(AutonomyPolicy.ALLOW, policy.snapshot(NativeActionPolicy.Operation.WORKSPACE_READ).policy)
+        }
     }
 }

@@ -16,6 +16,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -210,7 +211,9 @@ class MemoryLanguageQ2Test {
             }
         }
         compose.onNodeWithText("Open memory").performClick()
-        compose.waitForIdle()
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithTag("memory-reflection-card").fetchSemanticsNodes().isNotEmpty()
+        }
         compose.onNodeWithTag("memory-reflection-card").assertIsDisplayed()
         language = "es"
         compose.waitForIdle()

@@ -47,6 +47,8 @@ public final class BotCatalogTool implements CoreTool {
         return context != null && mainSession(depth, sessionId);
     }
 
+    static boolean isAvailableForSession(String sessionId) { return mainSession(0, sessionId); }
+
     private static boolean mainSession(int depth, String sessionId) {
         return depth == 0 && sessionId != null && !sessionId.isEmpty()
                 && !ProactiveConversation.SESSION_ID.equals(sessionId)

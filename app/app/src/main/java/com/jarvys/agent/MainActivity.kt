@@ -1,5 +1,8 @@
 package com.jarvys.agent
 
+import com.jarvys.agent.workspaces.*
+import androidx.compose.runtime.saveable.rememberSaveable
+
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
@@ -258,6 +261,8 @@ private object Routes {
     const val CREW_EMPTY = AppNavigationBackPolicy.CREW_EMPTY
     const val CREW = AppNavigationBackPolicy.CREW
     const val CREW_BOT = AppNavigationBackPolicy.CREW_BOT
+    const val COORDINATED_WORKSPACE = AppNavigationBackPolicy.COORDINATED_WORKSPACE
+    const val COORDINATED_FILES = AppNavigationBackPolicy.COORDINATED_FILES
     const val WORKSPACE_PREVIEW = AppNavigationBackPolicy.WORKSPACE_PREVIEW
     const val ARTIFACT_PREVIEW = AppNavigationBackPolicy.ARTIFACT_PREVIEW
     fun crew(missionId: String) = CrewNavigationRoutes.mission(missionId)
@@ -393,7 +398,7 @@ class MainActivity : ComponentActivity() {
         memoryEnabled = memoryStore.isEnabled()
         showMemoryDisclosure = memoryEnabled && !memoryStore.hasShownDisclosure()
         refreshReflectionUiState(conversationSessionId)
-        showReflectionDisclosure = memoryEnabled && reflectionEnabled && !reflectionPreferences.disclosureShown()
+        showReflectionDisclosure = false // Action policy owns any required reflection review.
         uiPreferences = JarvysUiPreferences(this)
         proactivePreferences = ProactivePreferences(this)
         // The default-off upgrade path purges P0-era pending notification payloads before they can be consumed.
@@ -422,7 +427,8 @@ class MainActivity : ComponentActivity() {
         conversationSessionId = savedInstanceState?.getString(STATE_SESSION_ID)
             ?: intent?.getStringExtra(EXTRA_OPEN_CHAT_SESSION)
             ?: getSharedPreferences("jarvys_chat", MODE_PRIVATE).getString("active_session_id", null)
-            ?: java.util.UUID.randomUUID().toString()
+            ?: WorkspaceIdentity.CENTRAL_SESSION
+        if (WorkspaceIdentity.isExecutionSession(conversationSessionId)) conversationSessionId = WorkspaceIdentity.CENTRAL_SESSION
         val openingProactiveThread = conversationSessionId == ProactiveConversation.SESSION_ID
         if (openingProactiveThread) {
             selectedHistoryRunId = null
@@ -586,6 +592,8 @@ class MainActivity : ComponentActivity() {
                     onRefreshProactiveStatus = ::refreshProactiveStatus,
                     onSelectHistory = ::selectHistoryRun,
                     onNewChat = ::newChat,
+                    onOpenCentral = ::openCentralWorkspaceChat,
+                    onWorkspaceControl = ::applyWorkspaceControl,
                     onCaptureContext = ::markCaptureContext,
                     onToggleRunSkill = ::toggleRunSkill,
                     onImportSkill = ::launchSkillImport,
@@ -612,6 +620,7 @@ class MainActivity : ComponentActivity() {
         migrateMemorySeedsAsync()
         if (::providersRepository.isInitialized) providersRepository.refresh()
         refreshUi()
+        WorkspaceResultDelivery.scheduleCatalog(applicationContext)
         if (::connectorRegistry.isInitialized) connectorRegistry.refreshStates()
         if (::memoryStore.isInitialized) refreshMemoryStatus()
         if (::reflectionPreferences.isInitialized) refreshReflectionUiState(conversationSessionId)
@@ -638,6 +647,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         val session = intent.getStringExtra(EXTRA_OPEN_CHAT_SESSION)?.takeIf { it.matches(Regex("[A-Za-z0-9_.-]{1,100}")) }
+            ?.let { if (WorkspaceIdentity.isExecutionSession(it)) WorkspaceIdentity.CENTRAL_SESSION else it }
             ?: return
         proactiveTargetMessageId = intent.getStringExtra(EXTRA_OPEN_PROACTIVE_MESSAGE_ID)
         if (session != conversationSessionId) {
@@ -742,7 +752,8 @@ class MainActivity : ComponentActivity() {
         }
         val sessionId = conversationSessionId
         val enabledSkillIds = skillRepository.enabledForRun().filter { it.metadata.id in selectedSkillIds }.map { it.metadata.id }
-        if (conversationTitle == null) conversationTitle = ConversationTitle.fromFirstMessage(message)
+        if (WorkspaceIdentity.isCentral(sessionId)) conversationTitle = getString(R.string.workspace_central_chat)
+        else if (conversationTitle == null) conversationTitle = ConversationTitle.fromFirstMessage(message)
         if (attachmentDrafts.submit(sessionId, message, ArrayList(enabledSkillIds), chatWithoutMemory)) {
             goalInput = ""
             selectedHistoryRunId = null
@@ -858,7 +869,6 @@ class MainActivity : ComponentActivity() {
         }
         if (enabled && !memoryStore.hasShownDisclosure()) showMemoryDisclosure = true
         if (!enabled) showReflectionDisclosure = false
-        else if (reflectionEnabled && !reflectionPreferences.disclosureShown()) showReflectionDisclosure = true
         refreshMemoryStatus()
     }
 
@@ -888,7 +898,6 @@ class MainActivity : ComponentActivity() {
     private fun updateReflectionEnabled(value: Boolean) {
         reflectionPreferences.setEnabled(value)
         reflectionEnabled = value
-        if (value && memoryEnabled && !reflectionPreferences.disclosureShown()) showReflectionDisclosure = true
         if (!value) {
             MemoryReflectionRuntime.cancelAll()
             advanceAllReflectionCheckpoints("automatic reflection disabled")
@@ -1057,7 +1066,14 @@ ${event.text}
     private fun undoMemoryRevisionFromChat(revisionId: Long) {
         val sessionId = conversationSessionId
         memoryExecutor.execute {
-            val result = runCatching { memoryStore.forConversation(sessionId).undoRevision(revisionId, MemoryStore.Actor.USER, sessionId) }
+            val selected = memoryStore.forConversation(sessionId)
+            val result = runCatching {
+                MemoryNativeActions(this).run(NativeActionPolicy.Operation.MEMORY_RESTORE, selected,
+                    listOf("Undo exact chat memory revision", revisionId.toString(), sessionId), CancellationToken.uncancellable(),
+                    { check(conversationSessionId == sessionId && lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) && !isFinishing && !isDestroyed) }) {
+                    selected.undoRevision(revisionId, MemoryStore.Actor.USER, sessionId)
+                }
+            }
             runOnUiThread {
                 result.onSuccess {
                     toast(getString(R.string.memory_chat_undo_done))
@@ -1073,7 +1089,12 @@ ${event.text}
         val sessionId = conversationSessionId
         memoryExecutor.execute {
             val result = runCatching {
-                val revisions = memoryStore.forConversation(sessionId).undoReflectionGroup(reflectionId, sessionId)
+                val selected = memoryStore.forConversation(sessionId)
+                val revisions = MemoryNativeActions(this).run(NativeActionPolicy.Operation.MEMORY_RESTORE, selected,
+                    listOf("Undo exact reflection group", reflectionId, sessionId), CancellationToken.uncancellable(),
+                    { check(conversationSessionId == sessionId && lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) && !isFinishing && !isDestroyed) }) {
+                    selected.undoReflectionGroup(reflectionId, sessionId)
+                }
                 localRunStore.appendReflectionUndoEvent(sessionId, reflectionId)
                 revisions
             }
@@ -1096,16 +1117,12 @@ ${event.text}
         }
         if (AgentRunUiState.state.value.running || AgentRunUiState.state.value.compacting
             || MemoryReflectionRuntime.isAnyRunning()) return
-        if (!reflectionPreferences.disclosureShown()) {
-            manualReflectionAfterDisclosure = true
-            showReflectionDisclosure = true
-            return
-        }
         AgentForegroundService.startMemoryReflection(this, conversationSessionId,
             MemoryReflectionCoordinator.TRIGGER_MANUAL, true)
     }
 
     private fun stopCurrentWork() {
+        WorkspaceCoordinator.cancelPendingControls()
         attachmentDrafts.cancelSubmission()
         ProactiveRunController.cancelAll()
         val state = AgentRunUiState.state.value
@@ -1118,6 +1135,45 @@ ${event.text}
     private fun persistCrewMode(mode: CrewMode) {
         crewModeChoice = mode
         CrewMode.write(this, mode)
+    }
+
+    private fun openCentralWorkspaceChat() {
+        if (!WorkspaceIdentity.isCentral(conversationSessionId)) goalInput = ""
+        persistConversationSession(WorkspaceIdentity.CENTRAL_SESSION)
+        conversationTitle = getString(R.string.workspace_central_chat)
+        selectedHistoryRunId = null
+        historyEvents = emptyList()
+        showingNewChat = false
+        selectedSkillIds = emptySet()
+        AgentRunUiState.restoreSession(conversationSessionId, emptyList())
+        restoreConversationSession(conversationSessionId)
+    }
+
+    private fun applyWorkspaceControl(workspaceId: String, assignmentId: String, revision: Long,
+                                      type: WorkspaceControlType, text: String) {
+        openCentralWorkspaceChat()
+        conversationActionPending = true
+        val owner = java.lang.ref.WeakReference(this)
+        val admissionPending = java.util.concurrent.atomic.AtomicBoolean(true)
+        WorkspaceCoordinator(applicationContext).enqueueNativeControl(workspaceId, assignmentId, revision, type, text,
+            onAdmitted = {
+                owner.get()?.let { activity -> activity.runOnUiThread {
+                    if (!activity.isDestroyed) {
+                        if (admissionPending.compareAndSet(true, false)) activity.conversationActionPending = false
+                        if (WorkspaceIdentity.isCentral(activity.conversationSessionId))
+                            activity.restoreConversationSession(WorkspaceIdentity.CENTRAL_SESSION)
+                    }
+                } }
+            }) { result ->
+            owner.get()?.let { activity -> activity.runOnUiThread {
+                if (!activity.isDestroyed) {
+                    if (admissionPending.compareAndSet(true, false)) activity.conversationActionPending = false
+                    if (WorkspaceIdentity.isCentral(activity.conversationSessionId))
+                        activity.restoreConversationSession(WorkspaceIdentity.CENTRAL_SESSION)
+                    result.exceptionOrNull()?.let { activity.toast(activity.getString(R.string.workspace_control_failed), Toast.LENGTH_LONG) }
+                }
+            } }
+        }
     }
 
     private fun newChat() {
@@ -1243,6 +1299,7 @@ ${event.text}
         val historyItem = runHistory.firstOrNull { it.id == runId }
         conversationTitle = historyItem?.title
         val sessionId = historyItem?.sessionId ?: runId
+        if (WorkspaceIdentity.isExecutionSession(sessionId)) { openCentralWorkspaceChat(); return }
         persistConversationSession(sessionId)
         historyExecutor.execute {
             runCatching { localRunStore.recoverCrewMissions(sessionId) }
@@ -1284,7 +1341,8 @@ ${event.text}
     private fun restoreConversationSession(sessionId: String) {
         historyExecutor.execute {
             runCatching { localRunStore.recoverCrewMissions(sessionId) }
-            val title = if (sessionId == ProactiveConversation.SESSION_ID) ProactiveConversation.title(this)
+            val title = if (WorkspaceIdentity.isCentral(sessionId)) getString(R.string.workspace_central_chat)
+            else if (sessionId == ProactiveConversation.SESSION_ID) ProactiveConversation.title(this)
             else runCatching {
                 localRunStore.readConversationTitle(sessionId)
                     ?: ConversationTitle.fromFirstMessage(localRunStore.readFirstUserMessage(sessionId))
@@ -1293,7 +1351,7 @@ ${event.text}
                 localRunStore.readConversationTimeline(sessionId)
             }.getOrDefault(emptyList())
             runOnUiThread {
-                if (conversationSessionId == sessionId && selectedHistoryRunId == null && events.isNotEmpty()) {
+                if (conversationSessionId == sessionId && selectedHistoryRunId == null) {
                     AgentRunUiState.restoreSession(sessionId, events)
                 }
                 if (conversationSessionId == sessionId && selectedHistoryRunId == null && title != null) {
@@ -1304,6 +1362,7 @@ ${event.text}
     }
 
     private fun requestConversationTitle(sessionId: String, submittedMessage: String) {
+        if (WorkspaceIdentity.isCentral(sessionId) || WorkspaceIdentity.isExecutionSession(sessionId)) return
         sessionTitleExecutor.execute {
             if (!localRunStore.claimConversationTitleGeneration(sessionId)) return@execute
             try {
@@ -1355,6 +1414,10 @@ ${event.text}
 
     private fun applyConversationAction(sessionId: String, action: ConversationAction, title: String?) {
         if (conversationActionPending) return
+        if ((action == ConversationAction.DELETE || action == ConversationAction.ARCHIVE) &&
+            (WorkspaceIdentity.isCentral(sessionId) || WorkspaceIdentity.isExecutionSession(sessionId))) {
+            toast(getString(R.string.workspace_reserved_conversation)); return
+        }
         if (action == ConversationAction.DELETE && isManagedSystemConversation(sessionId)) {
             toast(getString(R.string.drawer_system_chat_delete))
             return
@@ -1542,6 +1605,8 @@ private fun JarvysApp(
     onRefreshProactiveStatus: () -> Unit,
     onSelectHistory: (String?) -> Unit,
     onNewChat: () -> Unit,
+    onOpenCentral: () -> Unit,
+    onWorkspaceControl: (String, String, Long, WorkspaceControlType, String) -> Unit,
     onCaptureContext: () -> Unit,
     onToggleRunSkill: (String) -> Unit,
     onImportSkill: () -> Unit,
@@ -1598,6 +1663,41 @@ private fun JarvysApp(
             }
         }
     }
+    val workspaceRevision by WorkspaceChanges.revision.collectAsState()
+    var workspaceRows by remember { mutableStateOf(emptyList<WorkspaceSidebarRow>()) }
+    var workspaceAfter by rememberSaveable { mutableStateOf<String?>(null) }
+    var workspacePageHistory by rememberSaveable { mutableStateOf(emptyList<String>()) }
+    var workspaceNext by remember { mutableStateOf<String?>(null) }
+    var workspaceLoading by remember { mutableStateOf(true) }
+    var workspaceError by remember { mutableStateOf<String?>(null) }
+    var workspaceReload by remember { mutableIntStateOf(0) }
+    LaunchedEffect(workspaceRevision, workspaceAfter, workspaceReload) {
+        workspaceLoading = true; workspaceError = null; workspaceNext = null; workspaceRows = emptyList()
+        try {
+            val page = withContext(Dispatchers.IO) { WorkspaceProjection.sidebarPage(context.applicationContext, workspaceAfter) }
+            workspaceRows = page.rows; workspaceNext = page.nextCursor
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { workspaceError = context.getString(R.string.workspace_catalog_load_error) }
+        workspaceLoading = false
+    }
+    var correctionWorkspace by rememberSaveable { mutableStateOf<String?>(null) }
+    var correctionAssignment by rememberSaveable { mutableStateOf<String?>(null) }
+    var correctionRevision by rememberSaveable { mutableStateOf(0L) }
+    var correctionText by rememberSaveable { mutableStateOf("") }
+    if (correctionWorkspace != null && correctionAssignment != null) AlertDialog(
+        onDismissRequest = { correctionWorkspace = null; correctionAssignment = null; correctionText = "" },
+        title = { Text(stringResource(R.string.workspace_correct)) },
+        text = { Column {
+            Text(stringResource(R.string.workspace_correction_target, correctionWorkspace!!, correctionAssignment!!))
+            OutlinedTextField(value = correctionText, onValueChange = { correctionText = it },
+                label = { Text(stringResource(R.string.workspace_correction_text)) })
+        } },
+        confirmButton = { TextButton(enabled = correctionText.isNotBlank() && !conversationActionPending, onClick = {
+            onWorkspaceControl(correctionWorkspace!!, correctionAssignment!!, correctionRevision, WorkspaceControlType.CORRECT, correctionText)
+            correctionWorkspace = null; correctionAssignment = null; correctionText = ""
+        }) { Text(stringResource(R.string.workspace_send_correction)) } },
+        dismissButton = { TextButton(onClick = { correctionWorkspace = null; correctionAssignment = null; correctionText = "" }) { Text(stringResource(android.R.string.cancel)) } },
+    )
     val navEntry by navController.currentBackStackEntryAsState()
     val route = navEntry?.destination?.route ?: Routes.CHAT
     val routeTaskId = navEntry?.arguments?.getString("taskId")
@@ -1666,12 +1766,33 @@ private fun JarvysApp(
     JarvysShellFrame(
         drawerState = drawerState,
         mainMascotMode = mainMascotMode,
+        centralMascotCentered = route == Routes.CHAT && WorkspaceIdentity.isCentral(conversationSessionId),
         mascotVisibleSessionId = conversationSessionId,
         mascotLiveConversationVisible = mascotLiveConversationVisible,
         drawerGesturesEnabled = !drawerNavigationPending && route != Routes.WORKSPACE_PREVIEW && route != Routes.ARTIFACT_PREVIEW,
         drawerContent = {
             ConversationDrawer(
                 history = runHistory,
+                centralSelected = route == Routes.CHAT && WorkspaceIdentity.isCentral(conversationSessionId),
+                onOpenCentral = { navigateFromDrawer { onOpenCentral(); navController.navigate(Routes.CHAT) { launchSingleTop = true } } },
+                workspaces = workspaceRows,
+                workspacesLoading = workspaceLoading,
+                workspaceError = workspaceError,
+                canPreviousWorkspacePage = workspacePageHistory.isNotEmpty(),
+                canFirstWorkspacePage = workspaceAfter != null,
+                canNextWorkspacePage = workspaceNext != null,
+                onPreviousWorkspacePage = { if (!workspaceLoading && workspacePageHistory.isNotEmpty()) {
+                    workspaceLoading = true
+                    workspaceAfter = workspacePageHistory.last().ifEmpty { null }; workspacePageHistory = workspacePageHistory.dropLast(1)
+                } },
+                onNextWorkspacePage = { if (!workspaceLoading) workspaceNext?.let { next ->
+                    workspaceLoading = true
+                    workspacePageHistory = workspacePushCursor(workspacePageHistory, workspaceAfter); workspaceAfter = next
+                } },
+                onFirstWorkspacePage = { if (!workspaceLoading) { workspaceLoading = true; workspaceAfter = null; workspacePageHistory = emptyList() } },
+                onRetryWorkspaces = { if (!workspaceLoading) { workspaceLoading = true; workspaceReload++ } },
+                selectedWorkspaceId = navEntry?.arguments?.getString("workspaceId"),
+                onOpenWorkspace = { id -> navigateFromDrawer { navController.navigate("workspace/$id") { launchSingleTop = true } } },
                 isDrawerOpen = drawerState.isOpen,
                 onCloseDrawer = { if (!drawerNavigationPending) scope.launch { drawerState.close() } },
                 activeSessionId = conversationSessionId,
@@ -1807,6 +1928,28 @@ private fun JarvysApp(
                 )
             }
             NavHost(navController = navController, startDestination = Routes.CHAT, modifier = Modifier.padding(padding)) {
+                composable(Routes.COORDINATED_WORKSPACE,
+                    arguments = listOf(navArgument("workspaceId") { type = NavType.StringType })) { entry ->
+                    val id = entry.arguments?.getString("workspaceId").orEmpty()
+                    WorkspaceRoute(id,
+                        onCorrect = { assignment, revision ->
+                            onOpenCentral(); navController.navigate(Routes.CHAT) { launchSingleTop = true }
+                            correctionWorkspace = id; correctionAssignment = assignment; correctionRevision = revision; correctionText = ""
+                        },
+                        onPause = { assignment, revision ->
+                            onWorkspaceControl(id, assignment, revision, WorkspaceControlType.PAUSE, context.getString(R.string.workspace_pause_request))
+                            navController.navigate(Routes.CHAT) { launchSingleTop = true }
+                        },
+                        onResume = { assignment, revision ->
+                            onWorkspaceControl(id, assignment, revision, WorkspaceControlType.RESUME, context.getString(R.string.workspace_resume_request))
+                            navController.navigate(Routes.CHAT) { launchSingleTop = true }
+                        },
+                        onOpenFiles = { navController.navigate("workspace/$id/files") { launchSingleTop = true } })
+                }
+                composable(Routes.COORDINATED_FILES,
+                    arguments = listOf(navArgument("workspaceId") { type = NavType.StringType })) { entry ->
+                    WorkspaceFilesRoute(entry.arguments?.getString("workspaceId").orEmpty())
+                }
                 composable(Routes.CHAT) {
                     val conversationKey = selectedHistoryRunId ?: if (showingNewChat) "new" else agentState.sessionId ?: conversationSessionId
                     Crossfade(targetState = conversationKey,

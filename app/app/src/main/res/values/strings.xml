@@ -1428,4 +1428,9 @@ Their exit results are unknown. Do not repeat them automatically. Review project
     <string name="factory_operation_review_title">Allow this operation?</string>
     <string name="factory_operation_review_disclosure">Review the exact request from this installed Factory app. This approval applies only to this request.</string>
     <string name="factory_operation_review_approve">Allow once</string>
+    <string name="native_permission_workspace_create">Create durable workspaces</string>
+    <string name="native_permission_workspace_delegate">Delegate workspace work</string>
+    <string name="native_permission_workspace_read">Read workspace results</string>
+    <string name="native_permission_workspace_deliver">Deliver workspace files to central</string>
+    <string name="workspace_policy_disclosure">Applies to this exact workspace action. Worker capabilities and Android or provider permissions remain independent.</string>
 </resources>

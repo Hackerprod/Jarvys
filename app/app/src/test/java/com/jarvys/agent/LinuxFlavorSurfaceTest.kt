@@ -24,10 +24,16 @@ class LinuxFlavorSurfaceTest {
             assertEquals(listOf("linux_status", "linux_setup", "linux_exec", "linux_uninstall"),
                 mainTools.map { it.declaration().name })
             assertNotNull(mainPrompt)
-            assertTrue(mainPrompt!!.contains("PRoot is not a sandbox"))
-            // v28 retains per-command approval by default and adds the user's explicit Allow always opt-in.
-            assertTrue(mainPrompt.contains("Every command requires user approval unless the user has enabled Allow always."))
-            assertTrue(mainPrompt.contains("linux_setup asks for explicit consent."))
+            assertTrue(mainPrompt!!.contains("PRoot is not a security sandbox"))
+            assertTrue(mainPrompt.contains("grants no real root privileges"))
+            assertTrue(mainPrompt.contains("does not guarantee guest network access"))
+            // UX44 keeps saved choices and real setup constraints while making every action configurable.
+            assertTrue(mainPrompt.contains("Setup, command execution and removal have separate Allow/Ask/Deny settings"))
+            assertTrue(mainPrompt.contains("defaulting to Allow only when no saved choice exists"))
+            assertTrue(mainPrompt.contains("Ask reviews the exact action once and Deny blocks it."))
+            assertTrue(mainPrompt.contains("Setup uses the pinned official release and checks PRoot."))
+            assertTrue(mainPrompt.contains("supply delete_workspace explicitly or ask the user whether to keep their workspace"))
+            assertTrue(mainPrompt.contains("inspect state rather than replaying"))
         } else {
             assertTrue(mainTools.isEmpty())
             assertNull(mainPrompt)

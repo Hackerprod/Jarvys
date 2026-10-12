@@ -46,6 +46,7 @@ import java.io.File
 import kotlin.coroutines.resume
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -61,7 +62,12 @@ import org.robolectric.annotation.GraphicsMode
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [34], qualifiers = "en-rUS-w360dp-h800dp-port-mdpi", shadows = [ReactionMagnifierShadow::class])
 class AssistantTextSelectionTest {
-    @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
+    // Match MessageReactionUiTest: parser completion must enqueue View work on the
+    // test clock instead of resuming owner observation through an unconfined worker.
+    @OptIn(ExperimentalTestApi::class)
+    @get:Rule val compose = createAndroidComposeRule<ComponentActivity>(
+        effectContext = StandardTestDispatcher(),
+    )
     private val menu = SelectionMenu()
     private val openedUris = mutableListOf<String>()
     private val uriHandler = object : UriHandler {
@@ -156,8 +162,7 @@ class AssistantTextSelectionTest {
         compose.waitForIdle()
         assertTrue(scroller.fetchSemanticsNode().config[SemanticsProperties.HorizontalScrollAxisRange].value() > 0f)
         assertNull("A short scroll must not open selection", menu.provider)
-        scroller.performTouchInput { swipeRight() }
-        compose.waitForIdle()
+        returnCodeToStart(scroller)
         select(code, "localAnswer", fontSize = 12f)
         assertEquals("localAnswer", copy())
     }
@@ -318,15 +323,42 @@ class AssistantTextSelectionTest {
                 }
             }
         }
+        // Finish two existing native layout/draw passes before polling parser readiness.
+        awaitReactionDrawIdle(compose)
     }
 
     private fun awaitText(text: String, fontSize: Float = 14f): SemanticsNodeInteraction {
-        compose.waitUntil(5_000) {
-            val nodes = compose.onAllNodesWithText(text, useUnmergedTree = true).fetchSemanticsNodes()
-            nodes.size == 1 && layout(compose.onNodeWithText(text, useUnmergedTree = true)).layoutInput.style.fontSize.value == fontSize
+        var observed = "not sampled"
+        try {
+            compose.waitUntil(5_000) {
+                val nodes = compose.onAllNodesWithText(text, useUnmergedTree = true).fetchSemanticsNodes()
+                val actualFont = if (nodes.size == 1)
+                    layout(compose.onNodeWithText(text, useUnmergedTree = true)).layoutInput.style.fontSize.value else null
+                observed = "matches=${nodes.size} font=$actualFont bounds=${nodes.map { it.boundsInRoot }}"
+                nodes.size == 1 && actualFont == fontSize
+            }
+        } catch (failure: ComposeTimeoutException) {
+            throw AssertionError("Markdown body was not ready at ${fontSize}sp: $observed; " +
+                "autoAdvance=${compose.mainClock.autoAdvance} clock=${compose.mainClock.currentTime}", failure)
         }
         compose.waitForIdle()
         return compose.onNodeWithText(text, useUnmergedTree = true)
+    }
+
+    /** A reverse swipe need not undo the preceding fling. Verify the actual code origin. */
+    private fun returnCodeToStart(scroller: SemanticsNodeInteraction) {
+        fun offset() = scroller.fetchSemanticsNode().config[SemanticsProperties.HorizontalScrollAxisRange].value()
+        repeat(8) { attempt ->
+            val before = offset()
+            if (before == 0f) return
+            scroller.performTouchInput { swipeRight() }
+            compose.mainClock.advanceTimeBy(2_000)
+            compose.waitForIdle()
+            val after = offset()
+            assertTrue("Code return swipe made no progress: attempt=$attempt before=$before after=$after",
+                after == 0f || after < before - 0.5f)
+        }
+        assertTrue("Code origin remains clipped after eight real swipes: offset=${offset()}", offset() == 0f)
     }
 
     private fun layout(node: SemanticsNodeInteraction): TextLayoutResult {
@@ -338,7 +370,13 @@ class AssistantTextSelectionTest {
     private fun select(text: String, word: String, fontSize: Float = 14f) {
         val node = awaitText(text, fontSize)
         val glyph = layout(node).getBoundingBox(text.indexOf(word) + word.length / 2).center
-        node.performTouchInput { longClick(glyph) }
+        val target = node.assertIsDisplayed().fetchSemanticsNode()
+        val visible = target.boundsInRoot
+        val rootGlyph = target.positionInRoot + glyph
+        assertTrue("Selection word is clipped: word=$word glyph=$rootGlyph visible=$visible " +
+            "position=${target.positionInRoot} size=${target.size}", visible.contains(rootGlyph))
+        // Touch injection is relative to clipped bounds, TextLayoutResult to the whole text.
+        node.performTouchInput { longClick(rootGlyph - visible.topLeft) }
         compose.waitUntil(5_000) { menu.provider != null }
         compose.waitForIdle()
     }

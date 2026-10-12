@@ -62,7 +62,7 @@ object ActionPolicyDefaults {
             "delete_messages", "create_label", "update_label", "delete_label"))
         register("drive", listOf("search_files", "get_file_metadata", "read_file", "create_file", "download_file",
             "export_file", "update_file", "create_folder"))
-        register("native", listOf("memory.view", "memory.modify", "memory.delete", "memory.restore", "memory.clear",
+        register("native", listOf("workspaces.create", "workspaces.delegate", "workspaces.read", "workspaces.deliver", "diagnostics.read", "memory.view", "memory.modify", "memory.delete", "memory.restore", "memory.clear",
             "memory.export", "memory.share_personal", "memory.reflection.run", "bots.create", "bots.mascot.compile",
             "tasks.create", "tasks.update", "tasks.cancel", "tasks.view",
             "factory.identity.create", "factory.identity.backup.export", "factory.identity.backup.import", "factory.identity.reconcile"))

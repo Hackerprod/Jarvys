@@ -1,8 +1,16 @@
 <div align="center">
 
-## Desarrollo actual: UX44
+## Entrega actual: UX43 v87
 
-La entrega vigente sigue siendo Factory v84. UX44 amplía la política configurable «Permitir siempre / Preguntar / Denegar» a las demás herramientas y conectores. El primer checkpoint pasó 42 regresiones focalizadas. La segunda integración compiló y ejecutó 155 casos, con dos fallos diagnosticados y corregidos pendientes de repetir. MCP, Linux, bots, identidades y herramientas de tareas están integrados; memoria sigue en revisión. Los cambios posteriores aún requieren compilación y validación conjunta; no es una nueva entrega. La migración conserva decisiones guardadas y no conecta cuentas ni concede permisos Android/OAuth. Alcance implementado, integración pendiente y límites: [política de acciones UX44](docs/UX44_ACTION_POLICY.md).
+En desarrollo: v88 añade referencias durables de resultados y avisos locales deduplicados en central, con lectura exacta y política configurable. El primer gate focal pasó; la versión aún necesita validación final y no se ha entregado. [Contrato del nuevo lote](docs/UX43_RESULT_DELIVERY.md).
+
+UX43 v87 (`1.2.80-WORKSPACES`) está validado, firmado con D7 y enviado el 12 de octubre de 2026 a las 10:26 UTC. El primer vertical incorpora Jarvys central, espacios duraderos con identidad independiente, vistas de resultados y archivos, entrega explícita de archivos al central y controles dirigidos de corrección, pausa y reanudación. Conserva los chats existentes y no repite acciones inciertas al restaurar. [Alcance y límites](docs/UX43_CENTRAL_WORKSPACES.md).
+
+Cobertura afectada aprobada: 1.763 Full (1.194 casos de workers cerrados, 543 de suites terminales sin cambios y 26 sustituciones frescas) y 1.721 Play frescas. Las entradas y cada identidad de caso están reconciliadas; no es una nueva ejecución universal de todas las pruebas. Núcleo/runtime/SDK se retienen por igualdad exacta. Lint conserva 46 errores Full y 37 Play históricos, sin errores ni advertencias nuevos; añade una sugerencia informativa de optimización por variante. El primer empaquetado Release falló sin causa detallada y el reintento exacto pasó; ambas evidencias se conservan. Auditoría independiente de tres APK y archivo firmado persistido aprobada. APK ARM64: 20.590.227 bytes, SHA-256 `4d062369ee8f1b356a7762a41c259efc1a1d23aa317eb335b054d3b9172afe5d`. Instalación y aceptación física sin verificar. La comunicación durable automática al central, memoria por espacio y proactividad coordinada siguen pendientes; UX34 conserva sus gates y CrewAI permanece al final.
+
+UX45 v86 permanece incorporado: diagnósticos locales acotados de excepciones Java/Kotlin y fallos de proveedor, consultables mediante `app_diagnostics`, sin reporter HTTP automático. Los metadatos seleccionados al consultar al modelo entran en su conversación normal. No garantiza capturar ANR, fallos nativos, OOM ni toda excepción recuperada. [Contrato de diagnóstico local](docs/UX45_LOCAL_DIAGNOSTICS.md).
+
+La autonomía configurable UX44 v85 permanece incorporada: conectores nativos y Google, MCP, Linux/Coding, bots, identidades, tareas y memoria conservan decisiones guardadas, revocación y permisos Android/OAuth reales. [Alcance y límites UX44](docs/UX44_ACTION_POLICY.md).
 
   <img src="app/artwork/jarvys-app-icon-source.png" width="150" alt="Jarvys robot: silver body, dark visor and cyan eyes" />
   <h1>Jarvys</h1>
@@ -365,7 +373,7 @@ When reporting a bug, include the app version/flavor, Android and WebView versio
 
 ## Roadmap and documentation
 
-The authoritative queue is [Pending.md](Pending.md). The v84 Factory software batch is validated and delivered. Current open themes include device-dependent acceptance, a local-inference engine/model decision, context-work gates, broader autonomy migration, the later central Jarvys/spaces architecture and CrewAI analysis at the end of the queue. Their presence in the queue does not mean they are enabled. The current Factory/Coding scope implements the requested default Allow always policy. Broader UX44 migration outside that scope remains separately tracked.
+The authoritative queue is [Pending.md](Pending.md). Factory v84, the broader UX44 v85 autonomy batch, and UX45 v86 local diagnostics are validated and delivered. The current authorized development batch is the first central Jarvys/durable-workspaces vertical; its later roadmap stages remain pending. CrewAI remains at the end. Device-dependent acceptance, the local-inference engine/model choice and independent context-work gates remain open; their presence in the queue does not mean they are enabled.
 
 - [Main agent](app/MAIN_AGENT.md) · [Crew](app/CREW_TASKS.md) · [Coding](app/CODING_AGENT.md)
 - [Memory](app/MEMORY_SCOPE.md) · [Continuous missions](app/CONTINUOUS_MISSIONS.md)
