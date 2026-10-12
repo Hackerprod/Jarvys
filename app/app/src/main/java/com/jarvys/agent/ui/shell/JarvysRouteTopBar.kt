@@ -61,6 +61,7 @@ fun JarvysRouteTopBar(
 ) {
     val reducedMotion = LocalReducedMotion.current
     if (!route.showTopBar) return
+    val centeredMascot = centralMascotCentered && route.action == AppRouteAction.CHAT
     // Move the same UX40 menu, keeping opt-in, lifecycle and reduced-motion gates intact.
     val accountMenu: @Composable () -> Unit = {
         JarvysMascotAccountMenu(
@@ -68,6 +69,7 @@ fun JarvysRouteTopBar(
             visibleSessionId = mascotVisibleSessionId,
             liveConversationVisible = mascotLiveConversationVisible,
             surfaceVisible = mascotSurfaceVisible,
+            mascotSize = if (centeredMascot) 84.dp else 30.dp,
         ) { closeMenu ->
             DropdownMenuItem(text = { Text(stringResource(R.string.drawer_settings)) },
                 leadingIcon = { Icon(LucideIcons.Settings, contentDescription = null) },
@@ -94,8 +96,10 @@ fun JarvysRouteTopBar(
             Icon(LucideIcons.Menu, contentDescription = stringResource(R.string.drawer_open), modifier = Modifier.size(20.dp))
         } else com.jarvys.agent.AppRouteBackButton(onFallback = onBack)
     }
-    if (centralMascotCentered && route.action == AppRouteAction.CHAT) {
+    if (centeredMascot) {
         CenterAlignedTopAppBar(
+            // Reserve layout height; scaling the image alone would clip or overlap the chat.
+            expandedHeight = 96.dp,
             title = { Box(Modifier.testTag("jarvys-topbar-title")) { accountMenu() } },
             navigationIcon = navigationIcon,
             actions = {

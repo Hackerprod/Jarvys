@@ -2,6 +2,8 @@
 
 ## Entrega actual: mascota estática v90
 
+En preparación: ajuste v91 de la mascota central a 84 dp (2,8×), con cabecera de 96 dp más insets. Las 24 pruebas focales Full/Play pasan; el APK nuevo aún requiere cierre de compilación y auditoría. Launcher, imagen original, otros bots y animación permanecen como en v90.
+
 v90 (`1.2.83-MASCOT`) está validada y firmada con D7. Incorpora la imagen exacta proporcionada como icono y mascota estática de Jarvys, con quince derivados de launcher reproducibles. El robot animado anterior queda inactivo incluso con consentimiento previo; las mascotas de otros bots y Factory siguen intactas. La animación triste entregada por separado todavía no se integra. [Contrato de identidad](docs/MASCOT_STATIC_IDENTITY.md).
 
 Envío aceptado el 12 de octubre de 2026 a las 20:41 UTC mediante ZIP: extraer antes de instalar. El APK superaba el límite de adjunto directo de 20 MiB; el contenedor conserva exactamente el APK firmado. ZIP: 19.757.301 bytes, SHA-256 `e6440d7ca51b6aa31293168d4d2be4257adaef37d80360c9e50951179b2a41da`. APK ARM64 interior: 21.311.123 bytes, SHA-256 `c1fb78dd5b7fc6651b459f34eef9fac6d185de1670778886e0b6b6c38f7d8710`. Ambos contenidos persistidos verificados.

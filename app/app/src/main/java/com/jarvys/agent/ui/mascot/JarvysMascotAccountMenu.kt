@@ -18,6 +18,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -46,11 +47,12 @@ internal fun JarvysMascotAccountMenu(
     visibleSessionId: String?,
     liveConversationVisible: Boolean,
     surfaceVisible: Boolean,
+    mascotSize: Dp = 30.dp,
     content: @Composable (closeMenu: () -> Unit) -> Unit,
 ) {
     // These keys close local menus/dialogs and dispose renderers; process consent is separate.
     key(visibleSessionId, liveConversationVisible, surfaceVisible) {
-        JarvysMascotAccountMenuSession(mode, visibleSessionId, liveConversationVisible, surfaceVisible, content)
+        JarvysMascotAccountMenuSession(mode, visibleSessionId, liveConversationVisible, surfaceVisible, mascotSize, content)
     }
 }
 
@@ -60,6 +62,7 @@ private fun JarvysMascotAccountMenuSession(
     visibleSessionId: String?,
     liveConversationVisible: Boolean,
     surfaceVisible: Boolean,
+    mascotSize: Dp,
     content: @Composable (closeMenu: () -> Unit) -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
@@ -90,10 +93,10 @@ private fun JarvysMascotAccountMenuSession(
         JarvysMascotProcessConsent.session.accepts(renderEpoch, latestResumed, latestVisible)
     Box {
         IconButton(onClick = { menuOpen = true },
-            modifier = Modifier.size(48.dp).then(viewport.modifier).testTag("jarvys-account-menu")
+            modifier = Modifier.size(maxOf(48.dp, mascotSize)).then(viewport.modifier).testTag("jarvys-account-menu")
                 .semantics { contentDescription = accountDescription }) {
             key(session.generation) {
-                JarvysMascotIcon(Modifier.size(30.dp).testTag("jarvys-topbar-mascot"),
+                JarvysMascotIcon(Modifier.size(mascotSize).testTag("jarvys-topbar-mascot"),
                     mode = mode,
                     animationOptedIn = isCurrent(),
                     isAnimationCurrent = { isCurrent() },
