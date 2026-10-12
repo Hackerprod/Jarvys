@@ -28,7 +28,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
-/** Never enables a known live mode or taps pilot Start: host tests must not invoke JNI. */
+/** The current identity stays static even with legacy consent and known live modes; no JNI. */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [34], qualifiers = "en-rUS-w360dp-h900dp-port-mdpi")
@@ -50,11 +50,8 @@ class JarvysMascotUiTest {
         compose.waitForIdle()
     }
 
-    private fun enableUnknownMode() {
-        openMenu()
-        compose.onNodeWithTag("jarvys-mascot-toggle").performClick()
-        compose.onNodeWithText(compose.activity.getString(R.string.jarvys_mascot_warning)).assertExists()
-        compose.onNodeWithTag("jarvys-mascot-confirm-enable").performClick()
+    private fun seedLegacyConsent() {
+        compose.runOnIdle { JarvysMascotProcessConsent.enable(true, true) }
         compose.waitForIdle()
         noNative()
     }
@@ -92,25 +89,27 @@ class JarvysMascotUiTest {
         }
     }
 
-    @Test fun explicitUnknownModeOptInIsNonNativeAndBackgroundRetainsConsent() {
+    @Test fun legacyKnownModeConsentIsNonNativeAndBackgroundRetainsData() {
         compose.setContent { MaterialTheme {
             CompositionLocalProvider(LocalReducedMotion provides true) {
-                JarvysMascotAccountMenu(null, "session", true, true) {}
+                JarvysMascotAccountMenu(2, "session", true, true) {}
             }
         } }
-        enableUnknownMode()
+        seedLegacyConsent()
         compose.activityRule.scenario.moveToState(Lifecycle.State.STARTED)
         compose.waitForIdle()
         noNative()
         compose.activityRule.scenario.moveToState(Lifecycle.State.RESUMED)
         compose.waitForIdle()
         openMenu()
-        compose.onNodeWithText(compose.activity.getString(R.string.jarvys_mascot_disable)).assertExists()
+        assertEquals(true, JarvysMascotProcessConsent.session.optedIn)
+        compose.onNodeWithTag("jarvys-mascot-toggle").assertDoesNotExist()
+        compose.onNodeWithTag("jarvys-mascot-visual-test").assertDoesNotExist()
         compose.onNodeWithText(compose.activity.getString(R.string.jarvys_mascot_enable)).assertDoesNotExist()
         noNative()
     }
 
-    @Test fun chatDrawerOffscreenAndRouteRecreationRetainConsentUntilExplicitStop() {
+    @Test fun chatDrawerOffscreenAndRouteRecreationStayStaticWithLegacyConsent() {
         var sessionId by mutableStateOf("one")
         var liveVisible by mutableStateOf(true)
         var surfaceVisible by mutableStateOf(true)
@@ -120,18 +119,20 @@ class JarvysMascotUiTest {
             if (showAccount) Box(Modifier.offset {
                 IntOffset(0, (if (onScreen) 0.dp else 2000.dp).roundToPx())
             }) {
-                JarvysMascotAccountMenu(null, sessionId, liveVisible, surfaceVisible) { close ->
+                JarvysMascotAccountMenu(7, sessionId, liveVisible, surfaceVisible) { close ->
                     DropdownMenuItem(text = { Text("Close test menu") }, onClick = close)
                 }
             }
         } }
         fun assertRetained() {
             openMenu()
-            compose.onNodeWithText(compose.activity.getString(R.string.jarvys_mascot_disable)).assertExists()
+            assertEquals(true, JarvysMascotProcessConsent.session.optedIn)
+            compose.onNodeWithTag("jarvys-mascot-toggle").assertDoesNotExist()
+            compose.onNodeWithTag("jarvys-mascot-visual-test").assertDoesNotExist()
             compose.onNodeWithText("Close test menu").performClick()
             noNative()
         }
-        enableUnknownMode()
+        seedLegacyConsent()
         compose.runOnIdle { sessionId = "two" }
         assertRetained()
         compose.runOnIdle { liveVisible = false }
@@ -152,27 +153,38 @@ class JarvysMascotUiTest {
         noNative()
         compose.runOnIdle { showAccount = true }
         assertRetained()
+        compose.runOnIdle { JarvysMascotProcessConsent.revoke() }
         openMenu()
-        compose.onNodeWithTag("jarvys-mascot-toggle").performClick()
-        openMenu()
-        compose.onNodeWithText(compose.activity.getString(R.string.jarvys_mascot_enable)).assertExists()
+        compose.onNodeWithTag("jarvys-mascot-toggle").assertDoesNotExist()
+        compose.onNodeWithTag("jarvys-mascot-visual-test").assertDoesNotExist()
         noNative()
     }
 
-    @Test fun historyCannotOptInAndOriginalJarvysVisualTestOpensStatic() {
+    @Test fun historyDoesNotExposeLegacyToggleOrVisualTest() {
         compose.setContent { MaterialTheme {
-            JarvysMascotAccountMenu(null, "history", false, true) {}
+            JarvysMascotAccountMenu(null, "history", false, true) {
+                DropdownMenuItem(text = { Text("Existing history action") }, onClick = {})
+            }
         } }
         openMenu()
-        compose.onNodeWithTag("jarvys-mascot-toggle").assertIsNotEnabled()
-        compose.onNodeWithTag("jarvys-mascot-visual-test").performClick()
-        compose.onNodeWithTag("mascot-pilot-screen").assertExists()
-        compose.onNodeWithTag("mascot-pilot-phase")
-            .assertTextEquals(compose.activity.getString(R.string.mascot_pilot_phase, "STATIC"))
-        compose.onNodeWithTag("mascot-pilot-stop").assertIsNotEnabled()
-        noNative()
-        compose.onNodeWithTag("mascot-pilot-close").performClick()
+        compose.onNodeWithText("Existing history action").assertExists()
+        compose.onNodeWithTag("jarvys-mascot-toggle").assertDoesNotExist()
+        compose.onNodeWithTag("jarvys-mascot-visual-test").assertDoesNotExist()
         compose.onNodeWithTag("mascot-pilot-screen").assertDoesNotExist()
         noNative()
+    }
+
+    @Test fun directSharedRendererIgnoresLegacyOptInAcrossAllModes() {
+        var mode by mutableStateOf<Int?>(null)
+        compose.setContent { MaterialTheme {
+            JarvysMascotIcon(Modifier.size(72.dp).testTag("shared-identity"),
+                mode = mode, animationOptedIn = true, isAnimationCurrent = { true })
+        } }
+        for (candidate in listOf(null, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)) {
+            compose.runOnIdle { mode = candidate }
+            compose.onNodeWithTag("shared-identity")
+                .assert(SemanticsMatcher.expectValue(JarvysMascotPresentationKey, "static"))
+            noNative()
+        }
     }
 }

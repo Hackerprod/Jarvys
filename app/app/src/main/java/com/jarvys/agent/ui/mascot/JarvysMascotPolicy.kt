@@ -1,5 +1,8 @@
 package com.jarvys.agent.ui.mascot
 
+// The current user-provided identity is static. Legacy robot assets stay dormant for recovery.
+internal fun jarvysMascotAnimationAvailable(): Boolean = false
+
 /** Only these typed, evidence-backed projections are supported by the bounded live integration. */
 internal fun jarvysMascotKnownLiveMode(mode: Int?): Boolean = when (mode) {
     2, 6, 7, 8 -> true
@@ -13,4 +16,4 @@ internal fun jarvysMascotKnownLiveMode(mode: Int?): Boolean = when (mode) {
  */
 internal fun jarvysMascotMayPrepare(
     mode: Int?, optedIn: Boolean, resumed: Boolean, visible: Boolean,
-): Boolean = jarvysMascotKnownLiveMode(mode) && optedIn && resumed && visible
+): Boolean = jarvysMascotAnimationAvailable() && jarvysMascotKnownLiveMode(mode) && optedIn && resumed && visible

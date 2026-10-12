@@ -1,14 +1,14 @@
-# Jarvys application icon (UX32)
+# Jarvys application icon (static identity v90)
 
-The owner supplied `artwork/jarvys-app-icon-source.png` on 2026-10-09 for future
-Jarvys builds. Version 49 / 1.2.42-UX32 is the first build using it; the already
-completed v48 artifacts remain unchanged.
+The owner supplied the current `artwork/jarvys-app-icon-source.png` on 2026-10-12.
+Version 90 / 1.2.83-MASCOT is the first planned build using this new identity;
+previous delivered APKs remain unchanged. See [scope and status](../docs/MASCOT_STATIC_IDENTITY.md).
 
 ## Source and preservation
 
-- Original PNG: 1269 × 1240, RGBA, 1,093,892 bytes.
-- SHA-256: `5e0f5ae21b58bb4fbdea80abc80af69cea3095354374293e5f1b06fe969558a4`.
-- The source is retained byte-for-byte outside packaged Android resources.
+- Original PNG: 1254 × 1254, RGBA, 834,511 bytes.
+- SHA-256: `2c003833dc3f14883705a3fdcc1e694ebec06e82ea8a15b6c14e0300737fef52`.
+- The source is retained byte-for-byte in artwork and the shared static mascot resource.
 - Its partial transparency, small matte remnants, pose and colors are preserved.
   No repainting, cutout cleanup, alpha normalization or generated artwork is used.
 
@@ -31,7 +31,7 @@ dependency, so building the app needs no Python or Pillow installation.
   is proportionally fitted to 60 dp width and centered within the 108 dp layer.
   Its meaningful artwork fits the central 66 dp safe circle. The central 72 dp
   viewport maps to the same apparent scale as the legacy icon.
-- No monochrome mark is invented: a solid robot silhouette loses the supplied
+- No monochrome mark is invented: a solid mascot silhouette loses the supplied
   face and eyes. Android 16 QPR2 and later may automatically theme icons even
   without an application-provided monochrome layer; launcher behavior varies.
 - No separate splash graphic or startup code is introduced. Android 12+ uses
@@ -39,10 +39,10 @@ dependency, so building the app needs no Python or Pillow installation.
   behavior still require physical-device acceptance; host icon previews are
   not system-splash screenshots.
 
-The source includes near-invisible alpha-1 pixels outside the robot. Some can be
+The source includes near-invisible alpha-1 pixels outside the mascot. Some can be
 masked by Android, as with any foreground's outer area; all meaningful artwork
-(including antennae, hands and feet) must remain visible. Do not shrink the
-robot to accommodate stray near-transparent background pixels.
+(including the curled tuft, ears, hands and feet) must remain visible. Do not shrink the
+mascot to accommodate stray near-transparent background pixels.
 
 ## Separate icon systems
 
@@ -55,17 +55,17 @@ factory manifest and embedded template remain unchanged. Factory-created apps
 have their own caller-supplied icon. Factory source icon SHA-256:
 `4a20adff2fb6a52ef3db2dd5e2f703f82aaa76bb901bea409804b51b9c3bed6f`.
 
-Bot artwork, connector icons, package ID, label, permissions and signing identity
-are unaffected. No key is created by this feature.
+Custom-bot artwork, connector icons, package ID, label, permissions and signing identity
+are unaffected. Jarvys chief/captain surfaces use the same new static identity. No key is created by this feature.
 
 ## Acceptance
 
 `LauncherIconTest` covers API 24/25 legacy resolution, API 26/32/35 adaptive
 resolution, manifest identity, density dimensions, alpha, source hashes,
 notification/factory separation and native-rendered launcher/round agreement.
-Set `JARVYS_UX32_CAPTURE_DIR` to retain the native icon images. Run both complete
-distribution test suites, runtime tests, JavaScript SDK tests and lint comparison
-against the previous baseline. Verify final APK resource resolution, version,
+Set `JARVYS_UX32_CAPTURE_DIR` to retain the native icon images. Run the reviewed affected launcher/mascot/toolbar/custom-bot classes in both
+distributions and compare lint against the previous baseline. Retain unchanged
+Factory/runtime/SDK evidence only with exact source and input equality. Verify final APK resource resolution, version,
 unchanged permissions/factory assets, CRC, alignment and existing-key signature.
 
 Review the actual foreground and legacy files at native sizes, plus circle,

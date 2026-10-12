@@ -84,11 +84,12 @@ class LauncherIconTest {
     fun densityAssetsAndOriginalArtworkMatchContract() {
         val root = appRoot()
         val source = File(root, "artwork/jarvys-app-icon-source.png")
-        assertEquals("5e0f5ae21b58bb4fbdea80abc80af69cea3095354374293e5f1b06fe969558a4", sha(source))
+        assertEquals("2c003833dc3f14883705a3fdcc1e694ebec06e82ea8a15b6c14e0300737fef52", sha(source))
         val original = BitmapFactory.decodeFile(source.path)
-        assertEquals(1269, original.width)
-        assertEquals(1240, original.height)
+        assertEquals(1254, original.width)
+        assertEquals(1254, original.height)
         assertTrue(original.hasAlpha())
+        assertEquals(sha(source), sha(File(root, "app/src/main/res/drawable-nodpi/jarvys_mascot_static.png")))
         mapOf("mdpi" to 1.0, "hdpi" to 1.5, "xhdpi" to 2.0, "xxhdpi" to 3.0, "xxxhdpi" to 4.0)
             .forEach { (density, scale) ->
                 for (name in listOf("ic_launcher", "ic_launcher_round")) {
@@ -121,24 +122,24 @@ class LauncherIconTest {
     @Test
     @Config(sdk = [26, 32, 35], qualifiers = "en-rUS-xxxhdpi")
     @GraphicsMode(GraphicsMode.Mode.NATIVE)
-    fun adaptiveAndRoundNativePreviewsUseSameRobot() {
+    fun adaptiveAndRoundNativePreviewsUseSameMascot() {
         fun render(id: Int): Bitmap = Bitmap.createBitmap(288, 288, Bitmap.Config.ARGB_8888).also { bitmap ->
             drawable(id).apply { setBounds(0, 0, 288, 288); draw(Canvas(bitmap)) }
         }
         val launcher = render(R.mipmap.ic_launcher)
         val round = render(R.mipmap.ic_launcher_round)
         assertTrue(launcher.sameAs(round))
-        var cyan = 0
+        var blue = 0
         var light = 0
         for (y in 0 until launcher.height) for (x in 0 until launcher.width) {
             val pixel = launcher.getPixel(x, y)
             if (Color.alpha(pixel) > 240) {
-                if (Color.red(pixel) < 110 && Color.green(pixel) > 150 && Color.blue(pixel) > 180) cyan++
+                if (Color.blue(pixel) > Color.red(pixel) + 20 && Color.blue(pixel) > Color.green(pixel) + 10) blue++
                 if (Color.red(pixel) > 170 && Color.green(pixel) > 170 && Color.blue(pixel) > 170) light++
             }
         }
-        assertTrue("Robot cyan lights must be visible", cyan > 500)
-        assertTrue("Robot white body must be visible", light > 3000)
+        assertTrue("Mascot blue highlights must be visible", blue > 500)
+        assertTrue("Mascot white body must be visible", light > 3000)
         val destination = System.getenv("JARVYS_UX32_CAPTURE_DIR")?.takeIf { it.isNotBlank() }
         if (destination != null) {
             val directory = File(destination).apply { check(isDirectory || mkdirs()) }

@@ -79,13 +79,13 @@ private fun JarvysMascotAccountMenuSession(
         if (!viewport.visible || !eligible) warningOpen = false
     }
     DisposableEffect(surface) { onDispose { surface.active = false } }
-    val canEnable = eligible && resumed && viewport.visible
+    val canEnable = jarvysMascotAnimationAvailable() && eligible && resumed && viewport.visible
     val accountDescription = stringResource(R.string.jarvys_account_menu)
     val latestMode by rememberUpdatedState(mode)
     val latestResumed by rememberUpdatedState(resumed)
     val latestVisible by rememberUpdatedState(viewport.visible)
     val renderEpoch = session.generation
-    fun isCurrent() = surface.active && eligible && !menuOpen && !warningOpen && !pilotOpen &&
+    fun isCurrent() = jarvysMascotAnimationAvailable() && surface.active && eligible && !menuOpen && !warningOpen && !pilotOpen &&
         jarvysMascotKnownLiveMode(latestMode) &&
         JarvysMascotProcessConsent.session.accepts(renderEpoch, latestResumed, latestVisible)
     Box {
@@ -109,29 +109,31 @@ private fun JarvysMascotAccountMenuSession(
         }
         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
             content { menuOpen = false }
-            DropdownMenuItem(
-                text = { Text(stringResource(if (session.optedIn) R.string.jarvys_mascot_disable else R.string.jarvys_mascot_enable)) },
-                leadingIcon = { Icon(LucideIcons.Bot, contentDescription = null) },
-                enabled = canEnable || session.optedIn,
-                modifier = Modifier.testTag("jarvys-mascot-toggle"),
-                onClick = {
-                    menuOpen = false
-                    if (session.optedIn) revoke() else warningOpen = true
-                },
-            )
-            DropdownMenuItem(
-                text = { Text(stringResource(R.string.jarvys_mascot_visual_test)) },
-                enabled = resumed && surfaceVisible,
-                modifier = Modifier.testTag("jarvys-mascot-visual-test"),
-                onClick = { menuOpen = false; pilotOpen = true },
-            )
+            if (jarvysMascotAnimationAvailable()) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(if (session.optedIn) R.string.jarvys_mascot_disable else R.string.jarvys_mascot_enable)) },
+                    leadingIcon = { Icon(LucideIcons.Bot, contentDescription = null) },
+                    enabled = canEnable || session.optedIn,
+                    modifier = Modifier.testTag("jarvys-mascot-toggle"),
+                    onClick = {
+                        menuOpen = false
+                        if (session.optedIn) revoke() else warningOpen = true
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.jarvys_mascot_visual_test)) },
+                    enabled = resumed && surfaceVisible,
+                    modifier = Modifier.testTag("jarvys-mascot-visual-test"),
+                    onClick = { menuOpen = false; pilotOpen = true },
+                )
+            }
             if (playbackFailed) DropdownMenuItem(
                 text = { Text(stringResource(R.string.jarvys_mascot_unavailable)) },
                 enabled = false, onClick = {},
             )
         }
     }
-    if (warningOpen) AlertDialog(
+    if (jarvysMascotAnimationAvailable() && warningOpen) AlertDialog(
         onDismissRequest = { warningOpen = false },
         title = { Text(stringResource(R.string.jarvys_mascot_warning_title)) },
         text = { ScrollableDialogContent {
@@ -151,7 +153,7 @@ private fun JarvysMascotAccountMenuSession(
             Text(stringResource(R.string.jarvys_mascot_keep_static))
         } },
     )
-    if (pilotOpen && surfaceVisible) {
+    if (jarvysMascotAnimationAvailable() && pilotOpen && surfaceVisible) {
         val context = LocalContext.current.applicationContext
         Dialog(onDismissRequest = { pilotOpen = false },
             properties = DialogProperties(usePlatformDefaultWidth = false)) {

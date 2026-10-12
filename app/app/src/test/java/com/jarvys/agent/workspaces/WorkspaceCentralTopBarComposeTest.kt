@@ -50,7 +50,7 @@ class WorkspaceCentralTopBarComposeTest {
         compose.onAllNodesWithTag("jarvys-account-menu").assertCountEquals(1)
         compose.onNodeWithTag("jarvys-mascot-native").assertDoesNotExist()
         compose.onNodeWithTag("jarvys-account-menu").performClick()
-        compose.onNodeWithTag("jarvys-mascot-toggle").assertExists()
+        compose.onNodeWithTag("jarvys-mascot-toggle").assertDoesNotExist()
         compose.onNodeWithText(compose.activity.getString(R.string.drawer_settings)).performClick()
         assertEquals(1, settings)
         compose.onNodeWithContentDescription(compose.activity.getString(R.string.drawer_new_chat)).performClick()

@@ -46,7 +46,7 @@ internal fun JarvysMascotIcon(
     isAnimationCurrent: () -> Boolean = { animationOptedIn },
 ) {
     // Even lifecycle/viewport bookkeeping is unnecessary on the permanent static identity path.
-    if (!animationOptedIn || !jarvysMascotKnownLiveMode(mode)) {
+    if (!jarvysMascotAnimationAvailable() || !animationOptedIn || !jarvysMascotKnownLiveMode(mode)) {
         Box(modifier.semantics {
             this[JarvysMascotSourceKey] = "principal:jarvys-mascot"
             this[JarvysMascotPresentationKey] = "static"

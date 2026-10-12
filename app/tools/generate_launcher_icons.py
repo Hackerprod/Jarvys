@@ -16,7 +16,7 @@ from PIL import Image, ImageDraw
 
 APP = Path(__file__).resolve().parents[1]
 SOURCE = APP / "artwork/jarvys-app-icon-source.png"
-SOURCE_SHA256 = "5e0f5ae21b58bb4fbdea80abc80af69cea3095354374293e5f1b06fe969558a4"
+SOURCE_SHA256 = "2c003833dc3f14883705a3fdcc1e694ebec06e82ea8a15b6c14e0300737fef52"
 RES = APP / "app/src/main/res"
 DENSITIES = {"mdpi": 1, "hdpi": 1.5, "xhdpi": 2, "xxhdpi": 3, "xxxhdpi": 4}
 BACKGROUND = (17, 24, 39, 255)
@@ -26,7 +26,7 @@ FILTER = Image.Resampling.LANCZOS
 def load_source() -> Image.Image:
     assert hashlib.sha256(SOURCE.read_bytes()).hexdigest() == SOURCE_SHA256, "Source artwork changed"
     source = Image.open(SOURCE)
-    assert source.mode == "RGBA" and source.size == (1269, 1240)
+    assert source.mode == "RGBA" and source.size == (1254, 1254)
     return source
 
 

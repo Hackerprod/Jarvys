@@ -6,13 +6,13 @@ El hotfix v89 (`1.2.82-RUNTIME-HOTFIX`) está validado, firmado con D7 y enviado
 
 Pruebas afectadas frescas: 260 Full y 260 Play, sin fallos; núcleo/runtime/SDK retenidos por igualdad exacta. No es una nueva ejecución universal. Lint conserva los mismos 46 errores Full y 37 Play históricos, sin diagnósticos nuevos. Tres APK y archivo firmado persistido auditados independientemente. APK ARM64: 20.618.899 bytes, SHA-256 `e62e2ebd86ed6209006fadf404a1e3a360cc7dd87e7910b1bb1099aec20be7ef`. Instalación y aceptación física sin verificar. La causa concreta del fallo del teléfono sigue sin confirmar.
 
-Siguiente cambio autorizado: nuevo icono y mascota estática con la imagen proporcionada. La animación triste entregada por separado todavía no se integra. La nueva identidad no está incluida en v89. Las capas restantes UX43 siguen pendientes: memoria por espacio, comunicación durable restante y proactividad; UX34 conserva sus gates y CrewAI permanece al final. Las referencias durables de resultados de v88 siguen incorporadas. [Contrato UX43](docs/UX43_RESULT_DELIVERY.md).
+En desarrollo, todavía sin entrega: v90 con nuevo icono y mascota estática usando la imagen proporcionada. [Contrato de identidad](docs/MASCOT_STATIC_IDENTITY.md). La animación triste entregada por separado todavía no se integra. La nueva identidad no está incluida en v89. Las capas restantes UX43 siguen pendientes: memoria por espacio, comunicación durable restante y proactividad; UX34 conserva sus gates y CrewAI permanece al final. Las referencias durables de resultados de v88 siguen incorporadas. [Contrato UX43](docs/UX43_RESULT_DELIVERY.md).
 
 UX45 v86 permanece incorporado: diagnósticos locales acotados de excepciones Java/Kotlin y fallos de proveedor, consultables mediante `app_diagnostics`, sin reporter HTTP automático. Los metadatos seleccionados al consultar al modelo entran en su conversación normal. No garantiza capturar ANR, fallos nativos, OOM ni toda excepción recuperada. [Contrato de diagnóstico local](docs/UX45_LOCAL_DIAGNOSTICS.md).
 
 La autonomía configurable UX44 v85 permanece incorporada: conectores nativos y Google, MCP, Linux/Coding, bots, identidades, tareas y memoria conservan decisiones guardadas, revocación y permisos Android/OAuth reales. [Alcance y límites UX44](docs/UX44_ACTION_POLICY.md).
 
-  <img src="app/artwork/jarvys-app-icon-source.png" width="150" alt="Jarvys robot: silver body, dark visor and cyan eyes" />
+  <img src="app/artwork/jarvys-app-icon-source.png" width="150" alt="Jarvys mascot: white character with blue-violet eyes and a glowing star" />
   <h1>Jarvys</h1>
   <p><strong>An Android workspace for AI agents, device automation and app creation.</strong></p>
   <p>Chat with a captain. Delegate to a Crew. Build with Coding. Keep control of the actions.</p>

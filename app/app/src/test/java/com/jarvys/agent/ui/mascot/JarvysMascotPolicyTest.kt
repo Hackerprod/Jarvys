@@ -9,12 +9,15 @@ import org.junit.Test
 
 /** Pure policy coverage; no Android native loader, worker or renderer is used. */
 class JarvysMascotPolicyTest {
-    @Test fun onlyExplicitSupportedWireValuesCanPrepareLivePlayback() {
+    @Test fun currentStaticIdentityBlocksEvenPreviouslySupportedLiveModes() {
         for (mode in listOf(null, -1, 0, 1, 3, 4, 5, 9, Int.MAX_VALUE)) {
             assertFalse(jarvysMascotKnownLiveMode(mode))
             assertFalse(jarvysMascotMayPrepare(mode, true, true, true))
         }
-        for (mode in listOf(2, 6, 7, 8)) assertTrue(jarvysMascotMayPrepare(mode, true, true, true))
+        for (mode in listOf(2, 6, 7, 8)) {
+            assertTrue(jarvysMascotKnownLiveMode(mode))
+            assertFalse(jarvysMascotMayPrepare(mode, true, true, true))
+        }
     }
 
     @Test fun explicitConsentResumedAndVisibleAreAllRequired() {
@@ -28,7 +31,7 @@ class JarvysMascotPolicyTest {
     @Test fun unknownOrClosedGateCannotLoadOrInitialize() = runBlocking {
         var loads = 0
         var inits = 0
-        for (mode in listOf(null, 0, 1, 3, 4, 5, 9)) {
+        for (mode in listOf(null, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)) {
             val result = prepareMascotPilot(
                 isCurrent = { jarvysMascotMayPrepare(mode, true, true, true) },
                 verifiedLoad = { loads++; byteArrayOf(1) },
@@ -49,7 +52,7 @@ class JarvysMascotPolicyTest {
         assertFalse(jarvysMascotMayPrepare(2, consent.optedIn, false, true))
         assertFalse(jarvysMascotMayPrepare(2, consent.optedIn, true, false))
         assertFalse(jarvysMascotMayPrepare(null, consent.optedIn, true, true))
-        assertTrue(jarvysMascotMayPrepare(7, consent.optedIn, true, true))
+        assertFalse(jarvysMascotMayPrepare(7, consent.optedIn, true, true))
     }
 
     @Test fun temporaryConsentCannotSurviveRevocationOrNewProcess() {
