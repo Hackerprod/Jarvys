@@ -1,6 +1,6 @@
 # UX43: durable local result references
 
-Development slice v88 / `1.2.81-WORKSPACE-RESULTS`; not yet a validated or delivered APK. The delivered v87 behavior and its evidence remain documented separately in [the first vertical](UX43_CENTRAL_WORKSPACES.md).
+Delivered software slice v88 / `1.2.81-WORKSPACE-RESULTS`, accepted on 2026-10-12 at 16:45:36 UTC. The delivered v87 behavior and its evidence remain documented separately in [the first vertical](UX43_CENTRAL_WORKSPACES.md).
 
 ## Exact evidence and identity
 
@@ -24,6 +24,12 @@ App resume schedules a finite paginated catalog scan. Process-local reconciliati
 
 No server push, proactive inference, memory sharing, legacy chat migration or UX34 gated phase is included. Remaining UX43 memory/proactivity work and CrewAI keep their Pending order.
 
-## Development evidence
+## Validation and delivery
 
-The initial focused Full run compiled production and passed 96 cases across six classes with no failures, errors or omissions. Its offline guard recorded zero blocked attempts. Later reviewed STOP-handoff and malformed-discriminator fixes require their own focused replacement evidence and the final proportional integration gate. No final APK acceptance is claimed here.
+Frozen APK source: `30d27e1748ce055f78496f05f92e0abbe3c5725c`. Independently reconciled affected coverage: 1,209 Full cases in 144 classes and 1,196 Play cases in 140 classes, with each failed class replaced completely and exact input/bytecode bindings. Other app tests remain historical. Core/runtime/template/SDK evidence is retained only by verified equality. This is not a fresh universal suite.
+
+Both host lint tasks retain their failures: the same 46 Full and 37 Play errors and all warning/hint identities as v87. Two interrupted analysis attempts remain in the evidence; no OOM or deadlock was established. The final build/lint environment used a 3 GiB daemon heap without changing production configuration or detectors. All three builds and Release Vital completed. Preserved test workers recorded 15 blocked network attempts; unknown destinations prevent a global no-network-attempt claim.
+
+Independent exact APK review covered manifests, resources, assets, native payloads, complete DEX deltas and ART profiles. The signed ARM64 payload was independently downloaded and verified: retained D7 v2/v3 identity, 260 exact retained payloads, CRC and 16 KiB alignment. Delivery accepted: 20,614,803 bytes, SHA-256 `070eda8122ff4a9cf8ba0649789162c24722be360fbdfce002a060bd06aa31f3`. Physical installation and OEM behavior remain unverified.
+
+The subsequently reported repeated internal chat phases and generic task/diagnostics failure are a separate hotfix priority. This delivery is not evidence that those reported symptoms are corrected. New UX43 layers are paused for that investigation.
