@@ -1689,7 +1689,8 @@ private fun JarvysApp(
         title = { Text(stringResource(R.string.workspace_correct)) },
         text = { ScrollableDialogContent {
             Text(stringResource(R.string.workspace_correction_target, correctionWorkspace!!, correctionAssignment!!))
-            OutlinedTextField(value = correctionText, onValueChange = { correctionText = it },
+            JarvysTextField(value = correctionText, onValueChange = { correctionText = it },
+                singleLine = false,
                 label = { Text(stringResource(R.string.workspace_correction_text)) })
         } },
         confirmButton = { TextButton(enabled = correctionText.isNotBlank() && !conversationActionPending, onClick = {

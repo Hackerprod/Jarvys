@@ -15,7 +15,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import kotlinx.coroutines.test.StandardTestDispatcher
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
@@ -45,7 +47,8 @@ import org.robolectric.annotation.GraphicsMode
 @Config(sdk = [34], qualifiers = "en-rUS-w360dp-h800dp-port-mdpi",
     shadows = [ArtifactOsShadow::class, ArtifactOsShadow.Descriptor::class])
 class DeliveredFileUiTest {
-    @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
+    @OptIn(ExperimentalTestApi::class)
+    @get:Rule val compose = createAndroidComposeRule<ComponentActivity>(effectContext = StandardTestDispatcher())
 
     @Test fun restoredFileShowsMetadataAndWorkingScopedControlsInLightTheme() = restoredFile(false)
     @Test fun restoredFileShowsMetadataAndWorkingScopedControlsInDarkTheme() = restoredFile(true)
