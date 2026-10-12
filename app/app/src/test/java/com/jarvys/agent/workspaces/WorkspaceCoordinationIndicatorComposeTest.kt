@@ -34,20 +34,20 @@ class WorkspaceCoordinationIndicatorComposeTest {
                 workspaces = listOf(WorkspaceSidebarRow("space", "Project", WorkspaceUiStatus.WAITING,
                     coordination = summary.value)), onOpenWorkspace = { opened = it })
         } }
-        compose.onAllNodesWithTag("workspace-coordination-indicator").assertCountEquals(1)
+        compose.onAllNodesWithTag("workspace-coordination-indicator", useUnmergedTree = true).assertCountEquals(1)
         compose.onNodeWithText(compose.activity.getString(R.string.workspace_coordination_live, 3)).assertExists()
         compose.onNodeWithTag("drawer-workspace-space").performClick()
         assertEquals("space", opened)
         compose.runOnIdle { summary.value = WorkspaceCoordinationSummary(uncertain = 1, reviewRequired = true, pageLimited = true) }
-        compose.onAllNodesWithTag("workspace-coordination-indicator").assertCountEquals(1)
+        compose.onAllNodesWithTag("workspace-coordination-indicator", useUnmergedTree = true).assertCountEquals(1)
         compose.onNodeWithText(compose.activity.getString(R.string.workspace_coordination_live, 3)).assertDoesNotExist()
         compose.onNodeWithText(compose.activity.getString(R.string.workspace_coordination_uncertain, 1)).assertExists()
         compose.onNodeWithText(compose.activity.getString(R.string.workspace_coordination_review)).assertExists()
         compose.onNodeWithText(compose.activity.getString(R.string.workspace_coordination_page_scope)).assertExists()
         compose.runOnIdle { summary.value = WorkspaceCoordinationSummary(historical = 3) }
-        compose.onNodeWithTag("workspace-coordination-indicator").assertDoesNotExist()
+        compose.onNodeWithTag("workspace-coordination-indicator", useUnmergedTree = true).assertDoesNotExist()
         compose.runOnIdle { summary.value = WorkspaceCoordinationSummary() }
-        compose.onNodeWithTag("workspace-coordination-indicator").assertDoesNotExist()
+        compose.onNodeWithTag("workspace-coordination-indicator", useUnmergedTree = true).assertDoesNotExist()
         compose.onNodeWithText("model_wait", substring = true).assertDoesNotExist()
         compose.onNodeWithText("model_response", substring = true).assertDoesNotExist()
     }
@@ -57,7 +57,7 @@ class WorkspaceCoordinationIndicatorComposeTest {
             WorkspaceDetailScreen(WorkspaceDetailUiState("space", "Project", WorkspaceUiStatus.INTERRUPTED,
                 coordination = WorkspaceCoordinationSummary(historical = 2)), { _, _ -> }, { _, _ -> }, { _, _ -> }, {})
         } }
-        compose.onAllNodesWithTag("workspace-coordination-indicator").assertCountEquals(1)
+        compose.onAllNodesWithTag("workspace-coordination-indicator", useUnmergedTree = true).assertCountEquals(1)
         compose.onNodeWithText(compose.activity.getString(R.string.workspace_coordination_historical, 2)).assertExists()
         compose.onNodeWithText(compose.activity.getString(R.string.workspace_coordination_live, 2)).assertDoesNotExist()
         compose.onAllNodes(hasSetTextAction()).assertCountEquals(0)
