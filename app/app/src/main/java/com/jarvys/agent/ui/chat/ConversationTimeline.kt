@@ -144,8 +144,9 @@ fun ConversationTimeline(
     runSnapshot: AgentRunUiSnapshot? = null,
     allowMessageEntrance: Boolean = true,
 ) {
-    val latestAnswerId = events.lastOrNull { it.kind == "assistant" && it.stage == null }?.messageId
-    val entryKeys = events.map(ChatMessageArrivalPolicy::key)
+    val visibleEvents = ConversationVisibility.project(events)
+    val latestAnswerId = visibleEvents.lastOrNull { it.kind == "assistant" && it.stage == null }?.messageId
+    val entryKeys = visibleEvents.map(ChatMessageArrivalPolicy::key)
     val snapshotAllowsArrival = runSnapshot?.let { it.running || it.outcome != null } ?: isRunning
     val canAnimateArrival = allowMessageEntrance && snapshotAllowsArrival
     val seenEntryKeys = remember(conversationKey) { entryKeys.toMutableSet() }
@@ -157,7 +158,7 @@ fun ConversationTimeline(
     androidx.compose.runtime.key(conversationKey) {
         ChatMessageList(
             conversationKey = conversationKey,
-            messages = events,
+            messages = visibleEvents,
             targetMessage = { targetMessageId != null && it.messageId == targetMessageId },
             isRunning = isRunning,
             messageKey = { it.id },
@@ -194,7 +195,7 @@ fun ConversationTimeline(
             },
             newestItems = {
                 if (isRunning) item(key = "assistant-working") {
-                    AssistantWorkingMarker(AgentRunUiSnapshot(running = true, events = events))
+                    AssistantWorkingMarker(AgentRunUiSnapshot(running = true, events = visibleEvents))
                 }
             },
             fixedItems = {
@@ -520,8 +521,7 @@ private fun RunProgressLine(event: AgentRunUiEvent) {
                 modifier = Modifier.padding(5.dp).size(14.dp))
         }
         Column(Modifier.weight(1f).padding(bottom = 4.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            event.stage?.let { Text(it, color = MaterialTheme.colorScheme.secondary,
-                style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold) }
+            // Remaining progress notices keep their useful text, never an internal stage identifier.
             Text(event.text, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
         }
     }

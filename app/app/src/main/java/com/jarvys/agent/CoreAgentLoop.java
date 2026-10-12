@@ -421,7 +421,7 @@ public final class CoreAgentLoop {
         try {
             while (true) {
                 token.throwIfCancelled();
-                if (limits.maxModelTurns > 0 && modelTurns >= limits.maxModelTurns) throw new IllegalStateException("Agent reached its configured model-turn limit");
+                if (limits.maxModelTurns > 0 && modelTurns >= limits.maxModelTurns) throw new AgentModelTurnLimitException();
                 List<ToolSpec> declarations = tools.declarations();
                 if (turnContextProvider != null) {
                     List<IncomingMessage> incoming = turnContextProvider.takeDurableMessages();

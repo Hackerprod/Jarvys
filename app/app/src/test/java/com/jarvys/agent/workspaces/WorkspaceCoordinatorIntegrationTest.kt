@@ -78,6 +78,69 @@ class WorkspaceCoordinatorIntegrationTest {
         context.deleteDatabase(WorkspaceRegistry.DATABASE_NAME)
     }
 
+    @Test fun crewOffKeepsAssignmentPreparedAndSamePayloadCanStartAfterUserEnablesCrew() {
+        val scope = workspace("crew-off")
+        CrewMode.write(context, CrewMode.OFF)
+        val failure = assertThrows(WorkspacePreAdmissionException::class.java) { delegate(scope) }
+        assertEquals(WorkspacePreAdmissionException.Reason.CREW_DISABLED, failure.reason)
+        val prepared = WorkspaceRegistry(context).use { it.listAssignments(scope.workspaceId).single() }
+        assertEquals(WorkspaceAssignmentState.PREPARED, prepared.state)
+        assertNull(prepared.botId)
+        assertTrue(managerLookups.isEmpty())
+        assertEquals(0, modelCalls.get())
+        CrewMode.write(context, CrewMode.AUTO) // Simulates the user's explicit settings action.
+        val admitted = delegate(scope)
+        await(bot(scope, admitted))
+        assertEquals(prepared.assignmentId, admitted.getString("assignment_id"))
+        assertEquals(1, modelCalls.get())
+    }
+
+    @Test fun rejectedRoleRemainsPreparedAndDoesNotInventAnUncertainSpawn() {
+        val scope = workspace("bad-role")
+        val failure = assertThrows(WorkspacePreAdmissionException::class.java) {
+            coordinator.delegate(scope.workspaceId, "bad-role", "unknown-role", MISSION, null, null,
+                "standard", REQUEST_ID, ORIGINAL_REQUEST, CancellationToken.cancellable(), noAdmission)
+        }
+        assertEquals(WorkspacePreAdmissionException.Reason.WORKER_CONFIGURATION_REJECTED, failure.reason)
+        val prepared = WorkspaceRegistry(context).use { it.listAssignments(scope.workspaceId).single() }
+        assertEquals(WorkspaceAssignmentState.PREPARED, prepared.state)
+        assertNull(prepared.botId)
+        assertFalse(prepared.needsReconciliation)
+        assertTrue(managers.getValue(scope.executionSessionId).bots().isEmpty())
+        assertTrue(managers.getValue(scope.executionSessionId).missionSnapshots().isEmpty())
+        assertEquals(0, modelCalls.get())
+    }
+
+    @Test fun roleRevokedAfterPreflightStaysUncertainAndSameKeyCannotReplay() {
+        val available = AtomicBoolean(true)
+        managerFactory = { session -> manager(session, CoreAgentLoop.Model { _, _, _, _ ->
+            modelCalls.incrementAndGet(); done()
+        }).also { manager ->
+            manager.configureProfiles({ role -> if (role == "race-profile" && available.get())
+                com.jarvys.agent.crew.CrewRole("race-profile", "Synthetic worker", "test", "Instructions", emptyList(), null)
+                else null })
+        } }
+        val scope = workspace("post-preflight-revocation")
+        val admissions = AtomicInteger()
+        val revokeAtStarted = Runnable {
+            // prepareAssignment, explicit preflight admission, then markStarted's beforeWrite.
+            if (admissions.incrementAndGet() == 3) available.set(false)
+        }
+        fun attempt(admission: Runnable) = coordinator.delegate(scope.workspaceId, "race", "race-profile",
+            MISSION, null, null, "standard", REQUEST_ID, ORIGINAL_REQUEST, CancellationToken.cancellable(), admission)
+        val failure = assertThrows(IllegalArgumentException::class.java) { attempt(revokeAtStarted) }
+        val uncertain = WorkspaceRegistry(context).use { it.listAssignments(scope.workspaceId).single() }
+        assertEquals(WorkspaceAssignmentState.UNCERTAIN, uncertain.state)
+        assertTrue(uncertain.needsReconciliation)
+        available.set(true)
+        val duplicate = attempt(noAdmission)
+        assertEquals(uncertain.assignmentId, duplicate.getString("assignment_id"))
+        assertEquals("UNCERTAIN", duplicate.getString("admission_state"))
+        assertTrue(duplicate.getBoolean("no_replay"))
+        assertTrue(managers.getValue(scope.executionSessionId).bots().isEmpty())
+        assertEquals(0, modelCalls.get())
+    }
+
     @Test fun delegatesUseDistinctExecutionSessionsAndDuplicatePayloadDoesNotSpawnAgain() {
         val firstScope = workspace("first")
         val secondScope = workspace("second")

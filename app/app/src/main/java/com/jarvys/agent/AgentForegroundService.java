@@ -692,7 +692,6 @@ public final class AgentForegroundService extends Service {
     LocalRunStore conversationStore = new LocalRunStore(this);
     String chatMessage = userFacingFailure("");
     boolean userMessageRecorded = userMessageAlreadyRecorded;
-    boolean diagnosticReported = false;
     String userMessageId = existingUserMessageId;
     AgentErrorReporter.AttachmentScope privateContentScope = null;
     try {
@@ -843,23 +842,17 @@ public final class AgentForegroundService extends Service {
       }
       if ("STOPPED".equals(result.outcome)) lastRunReport = chatMessage;
     } catch (RuntimeException failure) {
-      String message =
-          failure.getMessage() == null ? failure.getClass().getSimpleName() : failure.getMessage();
-      if (!diagnosticReported && !token.isCancelled()) {
-        reportAgentFailure(
-            null,
-            null,
-            message,
-            failure.getClass().getName(),
-            android.util.Log.getStackTraceString(failure),
-            "");
+      if (!token.isCancelled()) {
+        // Preserve bounded structural evidence inside the existing private-content scope.
+        // The recorder never retains messages, bodies, filenames or arbitrary stack text.
+        LocalDiagnostics.recoverable(this, LocalDiagnostics.Origin.SERVICE, failure);
       }
       boolean stopped = token.isStoppedByUser();
       boolean timedOut = token.isTimedOut() && !stopped;
       chatMessage =
           stopped
               ? AppLanguageRuntime.localizedContext(this).getString(R.string.agent_run_stopped)
-              : timedOut ? AgentResultPresentation.timeout(this) : userFacingFailure(message);
+              : timedOut ? AgentResultPresentation.timeout(this) : AgentResultPresentation.failure(this, failure);
       if (userMessageRecorded) {
         try {
           conversationStore.appendConversationMessage(
@@ -925,31 +918,6 @@ public final class AgentForegroundService extends Service {
   private void finishCoreRun(CancellationToken token, String report) {
     if (StopController.getInstance().completeRun(token)) {
       lastRunReport = report;
-    }
-  }
-
-  private void reportAgentFailure(
-      Integer httpStatus,
-      String responseBody,
-      String message,
-      String exceptionType,
-      String stackTrace,
-      String failedModel) {
-    try {
-      ProviderSettings settings = new ProviderSettings(this);
-      String model =
-          failedModel == null || failedModel.isEmpty() ? settings.getModel() : failedModel;
-      AgentErrorReporter.report(
-          this,
-          settings.getProvider().name(),
-          model,
-          httpStatus,
-          responseBody,
-          message,
-          exceptionType,
-          stackTrace);
-    } catch (RuntimeException ignored) {
-      // The reporter is best-effort and must not change the failed run's result.
     }
   }
 

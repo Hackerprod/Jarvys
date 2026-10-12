@@ -95,6 +95,32 @@ class CentralWorkspaceToolTest {
         else -> NativeActionPolicy.Operation.WORKSPACE_READ
     }
 
+    @Test fun knownPreAdmissionRejectionReturnsActionableCodeWithoutPrivateCause() {
+        val backend = Backend().apply { beforeAdmission = {
+            throw WorkspacePreAdmissionException(WorkspacePreAdmissionException.Reason.CREW_DISABLED,
+                IllegalStateException("private-secret-marker"))
+        } }
+        val result = tool(backend).execute(delegate, CancellationToken.uncancellable())
+        assertFalse(result.success)
+        val error = JSONObject(result.content)
+        assertEquals("workspace_error", error.getString("kind"))
+        assertEquals("CREW_DISABLED", error.getString("code"))
+        assertEquals("NOT_STARTED", error.getString("worker_admission"))
+        assertTrue(error.getString("message").contains("enable Crew"))
+        assertFalse(result.content.contains("private-secret-marker"))
+        assertTrue(backend.calls.isEmpty())
+    }
+
+    @Test fun arbitraryBackendFailureNeverClaimsWorkerWasNotStarted() {
+        val backend = Backend().apply { afterAdmission = { error("private-secret-marker") } }
+        val result = tool(backend).execute(delegate, CancellationToken.uncancellable())
+        assertFalse(result.success)
+        assertTrue(result.content.contains("may already have started"))
+        assertFalse(result.content.contains("NOT_STARTED"))
+        assertFalse(result.content.contains("private-secret-marker"))
+        assertEquals(1, backend.calls.size)
+    }
+
     @Test fun publicConstructorRequiresInjectedBackendAndLocalizedLabels() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val constructed = CentralWorkspaceTool(context, WorkspaceIdentity.CENTRAL_SESSION, request, userText,

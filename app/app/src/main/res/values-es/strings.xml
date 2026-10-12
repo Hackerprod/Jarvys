@@ -983,7 +983,8 @@ description: Preferencias explícitas sobre idioma, tono, estilo y forma de ayud
     <string name="agent_run_unconfirmed">El agente terminó sin confirmar el resultado. Revísalo manualmente antes de darlo por completado.</string>
     <string name="agent_failure_http">No se pudo completar la tarea: el proveedor rechazó la solicitud (HTTP %1$s). Revisa el modelo e inténtalo de nuevo.</string>
     <string name="agent_failure_network">No se pudo conectar con el proveedor. Comprueba internet e inténtalo de nuevo.</string>
-    <string name="agent_failure_generic">No se pudo completar la tarea. Verifica la conexión y la configuración del proveedor, e inténtalo de nuevo.</string>
+    <string name="agent_failure_turn_limit">La tarea alcanzó su límite de pasos de ejecución. El trabajo puede estar incompleto. Revisa los resultados disponibles antes de reintentar.</string>
+    <string name="agent_failure_generic">No se pudo completar la tarea. Revisa los resultados disponibles o consulta los diagnósticos de la app antes de reintentar.</string>
     <string name="agent_timeout_result">Se alcanzó el plazo solicitado. Puede haber trabajo parcial; revisa los resultados existentes antes de continuar.</string>
     <string name="agent_loop_result">Jarvys detuvo la tarea al detectar llamadas repetidas sin avance. Puede haber trabajo parcial; revísalo o pide que continúe.</string>
     <string name="agent_start_accessibility_required">No se inició: activa Jarvys en Ajustes → Accesibilidad.</string>

@@ -19,6 +19,37 @@ import org.junit.Test;
 public class CrewWorkspaceMissionAdmissionTest {
     private static final CoreToolRegistry EMPTY = new CoreToolRegistry(Collections.emptyList());
 
+    @Test public void preflightCreatesNoMissionBotOrModelCallAndDoesNotChangeLegacyCursor() throws Exception {
+        AtomicInteger calls = new AtomicInteger();
+        try (CrewManager manager = manager(calls)) {
+            manager.beginMission("legacy", "Original legacy request");
+            manager.validateSpawnForMission("workspace-A", "Original request", "custom", "Task",
+                    Collections.emptyList(), "Worker", CrewMissionAccess.STANDARD);
+            assertTrue(manager.bots().isEmpty());
+            assertEquals(0, calls.get());
+            assertEquals(1, manager.missionSnapshots().size());
+            assertEquals("legacy", manager.missionSnapshots().get(0).missionId);
+            CrewManager.Bot legacy = manager.spawn("custom", "Legacy task", Collections.emptyList(), "Legacy");
+            assertEquals("legacy", legacy.missionId);
+            await(legacy);
+        }
+    }
+
+    @Test public void preflightUsesExistingRoleToolAndReadOnlyRulesWithoutCreatingAMission() {
+        try (CrewManager manager = manager(new AtomicInteger())) {
+            assertThrows(IllegalArgumentException.class, () -> manager.validateSpawnForMission(
+                    "workspace-A", "Original", "missing-role", "Task", null, null, CrewMissionAccess.STANDARD));
+            assertThrows(IllegalArgumentException.class, () -> manager.validateSpawnForMission(
+                    "workspace-A", "Original", "custom", "Task", Collections.singletonList("apk_factory"),
+                    "Worker", CrewMissionAccess.STANDARD));
+            assertThrows(IllegalArgumentException.class, () -> manager.validateSpawnForMission(
+                    "workspace-A", "Original", "custom", "Task", Collections.emptyList(),
+                    "Worker", CrewMissionAccess.READ_ONLY));
+            assertTrue(manager.bots().isEmpty());
+            assertTrue(manager.missionSnapshots().isEmpty());
+        }
+    }
+
     @Test public void explicitMissionsKeepExactRequestsAndDoNotReplaceLegacyCursor() throws Exception {
         try (CrewManager manager = manager(new AtomicInteger())) {
             manager.beginMission("legacy", "Original legacy request");

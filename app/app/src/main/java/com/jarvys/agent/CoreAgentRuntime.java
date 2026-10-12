@@ -1203,6 +1203,18 @@ public final class CoreAgentRuntime {
     };
   }
 
+  /** Report actual saved worker availability; workspace reads remain available when Crew is OFF. */
+  static String workspaceFactoryDiscovery(CrewMode mode) {
+    if (!mode.enabled()) {
+      return "\nAPK factory discovery: Crew is OFF in the saved settings, so workspace worker admission "
+          + "and APK creation are unavailable. Do not call workspaces action=delegate or promise to build. "
+          + "Ask the user to enable Crew if they want a new APK; never enable it automatically. "
+          + "Existing workspace reads, results and file delivery remain available under their saved policies. ";
+    }
+    return "\nAPK factory discovery: for Android APK requests, use workspaces to create or select "
+        + "a workspace, then use workspaces action=delegate with role=coding and its workspace_id. ";
+  }
+
   private CrewMode crewMode() {
     return this.context == null ? CrewMode.OFF : CrewMode.read(this.context);
   }
@@ -1760,8 +1772,7 @@ public final class CoreAgentRuntime {
     }
     if (mainChat) {
       if (declared.contains(com.jarvys.agent.workspaces.CentralWorkspaceTool.NAME)) {
-        prompt.append("\nAPK factory discovery: for Android APK requests, use workspaces to create or select "
-            + "a workspace, then use workspaces action=delegate with role=coding and its workspace_id. ");
+        prompt.append(workspaceFactoryDiscovery(crewMode()));
       } else {
         prompt.append("\nAPK factory discovery: delegate Android APK requests to the built-in Coding bot "
             + "with crew_spawn role=coding when Crew is available. "

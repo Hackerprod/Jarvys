@@ -170,7 +170,14 @@ class CentralWorkspaceTool internal constructor(
                 return CoreToolResult.success(output)
             }
         } catch (cancelled: CancellationException) { throw cancelled }
-        catch (_: Exception) {
+        catch (rejected: WorkspacePreAdmissionException) {
+            com.jarvys.agent.LocalDiagnostics.recoverable(com.jarvys.agent.LocalDiagnostics.Origin.TOOL, rejected)
+            return CoreToolResult.failure(JSONObject().put("kind", "workspace_error")
+                .put("code", rejected.reason.name).put("worker_admission", "NOT_STARTED")
+                .put("message", rejected.reason.safeMessage).toString())
+        } catch (failure: Exception) {
+            // Record only the existing minimized diagnostic metadata, never raw exception text.
+            com.jarvys.agent.LocalDiagnostics.recoverable(com.jarvys.agent.LocalDiagnostics.Origin.TOOL, failure)
             return CoreToolResult.failure("Workspace request could not complete. Check arguments and saved workspace permission. " +
                 "An effect may already have started; read current state before retrying and reuse the same key and payload.")
         }

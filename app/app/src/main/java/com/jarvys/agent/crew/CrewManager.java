@@ -695,6 +695,53 @@ public final class CrewManager implements AutoCloseable {
         return CrewRoleTemplates.all(captainTools);
     }
 
+    /**
+     * Read-only preflight of the existing admission rules. No mission, bot, checkpoint,
+     * executor task or model request is created. This is an observation, not a reservation:
+     * spawnForMission rechecks the same rules after the caller's durable STARTED boundary.
+     */
+    public void validateSpawnForMission(String missionId, String originalInstructions, String roleId,
+            String mission, List<String> requestedTools, String requestedName,
+            CrewMissionAccess missionAccess) {
+        if (missionId == null || missionId.trim().isEmpty() || originalInstructions == null)
+            throw new IllegalArgumentException("Exact mission identity and original request are required");
+        resolveAdmissionRole(roleId, mission, requestedTools, requestedName, missionAccess);
+        synchronized (missionAdmissionLock) {
+            MissionState state = missions.get(missionId);
+            if (state != null && (!state.originalInstructions.equals(originalInstructions)
+                    || !"RUNNING".equals(state.status)))
+                throw new IllegalStateException("Mission request changed or is no longer accepting assignments");
+        }
+    }
+
+    private CrewRole resolveAdmissionRole(String roleId, String mission, List<String> requestedTools,
+            String requestedName, CrewMissionAccess missionAccess) {
+        if (mission == null || mission.trim().isEmpty()) throw new IllegalArgumentException("mission must be a non-empty string");
+        CrewRole role;
+        if ("custom".equalsIgnoreCase(roleId)) {
+            if (requestedName == null || requestedName.trim().isEmpty()) throw new IllegalArgumentException("custom role name is required");
+            if (requestedTools == null) throw new IllegalArgumentException("custom role tools are required");
+            role = CrewRoleTemplates.custom(requestedName, mission, requestedTools, captainTools);
+        } else {
+            role = templates().stream().filter((candidate)->candidate.id.equalsIgnoreCase(roleId) || candidate.name.equalsIgnoreCase(roleId)).findFirst().orElse(null);
+            if (role == null) role = profileResolver.apply(roleId);
+            if (role == null) throw new IllegalArgumentException("Unknown Crew role: " + roleId);
+            if (requestedTools != null) {
+                List<String> selected = validateRequestedTools(requestedTools, capabilityNames(role));
+                if (!role.tools.containsAll(selected)) throw new IllegalArgumentException("Requested tools exceed this role\'s capabilities");
+                role = role.withTools(selected);
+            }
+        }
+        if (missionAccess == CrewMissionAccess.READ_ONLY
+                && (role.profileVersion <= 0 || role.workspaceMode != CrewProfile.WorkspaceMode.CONVERSATION_PROJECT)) {
+            throw new IllegalArgumentException("read_only requires a versioned conversation-project profile");
+        }
+        role = role.withMissionAccess(missionAccess);
+        validateRole(role);
+        validateCurrentProfile(role);
+        return role;
+    }
+
     /** Explicit mission admission, without changing the legacy captain cursor. */
     public Bot spawnForMission(String missionId, String originalInstructions, String roleId,
             String mission, List<String> requestedTools, String requestedName,
@@ -732,29 +779,7 @@ public final class CrewManager implements AutoCloseable {
 
     private Bot spawnAdmitted(String roleId, String mission, List<String> requestedTools, String requestedName,
             CrewMissionAccess missionAccess, Object taskTitle, String explicitMissionId, String originalInstructions) {
-        if (mission == null || mission.trim().isEmpty()) throw new IllegalArgumentException("mission must be a non-empty string");
-        CrewRole role;
-        if ("custom".equalsIgnoreCase(roleId)) {
-            if (requestedName == null || requestedName.trim().isEmpty()) throw new IllegalArgumentException("custom role name is required");
-            if (requestedTools == null) throw new IllegalArgumentException("custom role tools are required");
-            role = CrewRoleTemplates.custom(requestedName, mission, requestedTools, captainTools);
-        } else {
-            role = templates().stream().filter((candidate)->candidate.id.equalsIgnoreCase(roleId) || candidate.name.equalsIgnoreCase(roleId)).findFirst().orElse(null);
-            if (role == null) role = profileResolver.apply(roleId);
-            if (role == null) throw new IllegalArgumentException("Unknown Crew role: " + roleId);
-            if (requestedTools != null) {
-                List<String> selected = validateRequestedTools(requestedTools, capabilityNames(role));
-                if (!role.tools.containsAll(selected)) throw new IllegalArgumentException("Requested tools exceed this role\'s capabilities");
-                role = role.withTools(selected);
-            }
-        }
-        if (missionAccess == CrewMissionAccess.READ_ONLY
-                && (role.profileVersion <= 0 || role.workspaceMode != CrewProfile.WorkspaceMode.CONVERSATION_PROJECT)) {
-            throw new IllegalArgumentException("read_only requires a versioned conversation-project profile");
-        }
-        role = role.withMissionAccess(missionAccess);
-        validateRole(role);
-        validateCurrentProfile(role);
+        CrewRole role = resolveAdmissionRole(roleId, mission, requestedTools, requestedName, missionAccess);
         String id = "bot-" + UUID.randomUUID();
         String name = requestedName == null || requestedName.trim().isEmpty() ? role.name : requestedName.trim();
         MissionState missionState;

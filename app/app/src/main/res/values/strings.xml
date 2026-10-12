@@ -983,7 +983,8 @@ description: Explicit preferences about language, tone, style, and how to help t
     <string name="agent_run_unconfirmed">The agent finished without confirming the result. Review it manually before marking it complete.</string>
     <string name="agent_failure_http">Could not complete the task: the provider rejected the request (HTTP %1$s). Check the selected model and try again.</string>
     <string name="agent_failure_network">Could not connect to the provider. Check your internet connection and try again.</string>
-    <string name="agent_failure_generic">Could not complete the task. Check your connection and provider settings, then try again.</string>
+    <string name="agent_failure_turn_limit">The task reached its execution-step limit. Work may be partial. Inspect the available results before retrying.</string>
+    <string name="agent_failure_generic">Could not complete the task. Review the available results or consult the app diagnostics before retrying.</string>
     <string name="agent_timeout_result">The requested deadline was reached. Progress may be partial; review existing results before continuing.</string>
     <string name="agent_loop_result">Jarvys stopped the task after detecting repeated calls without progress. Some work may be partially complete; review it or ask Jarvys to continue.</string>
     <string name="agent_start_accessibility_required">Not started: enable Jarvys in Settings → Accessibility.</string>

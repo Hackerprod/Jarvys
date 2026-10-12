@@ -91,8 +91,21 @@ class WorkspaceCoordinator internal constructor(context: Context,
                 role, mission, tools, name, CrewMissionAccess.parse(missionAccess), admission)
             // A duplicate request returns the original receipt. STARTED is not proof of failed spawning.
             if (prepared.state != WorkspaceAssignmentState.PREPARED) return@use assignmentJson(prepared, null, 2000)
-            check(CrewMode.read(app).enabled()) { "Crew is disabled in the saved settings" }
+            if (!CrewMode.read(app).enabled())
+                throw WorkspacePreAdmissionException(WorkspacePreAdmissionException.Reason.CREW_DISABLED)
             val manager = managerFor(scope.executionSessionId)
+            // Only this explicitly non-mutating preflight can report NOT_STARTED. A later
+            // revocation/race or arbitrary spawn failure remains uncertain and is never replayed.
+            admission.run()
+            try {
+                manager.validateSpawnForMission(prepared.missionId, prepared.originalUserRequest,
+                    prepared.role, prepared.missionText, prepared.tools, prepared.name, prepared.missionAccess)
+            } catch (cancelled: java.util.concurrent.CancellationException) { throw cancelled }
+            catch (rejected: IllegalArgumentException) {
+                throw WorkspacePreAdmissionException(WorkspacePreAdmissionException.Reason.WORKER_CONFIGURATION_REJECTED, rejected)
+            } catch (rejected: IllegalStateException) {
+                throw WorkspacePreAdmissionException(WorkspacePreAdmissionException.Reason.WORKER_CONFIGURATION_REJECTED, rejected)
+            }
             val started = store.markStarted(workspaceId, prepared.assignmentId, prepared.revision,
                 CrewProcessIdentity.ID, admission)
             WorkspaceChanges.changed()

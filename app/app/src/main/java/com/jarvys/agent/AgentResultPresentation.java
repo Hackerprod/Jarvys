@@ -22,13 +22,29 @@ final class AgentResultPresentation {
         return AppLanguageRuntime.localizedContext(context).getString(R.string.agent_timeout_result);
     }
 
-    static String failure(Context context, String details) {
+    /** Unstructured legacy text cannot establish whether a provider caused the failure. */
+    static String failure(Context context, String ignoredDetails) {
+        return AppLanguageRuntime.localizedContext(context).getString(R.string.agent_failure_generic);
+    }
+
+    /** Classify only typed evidence; never inspect exception text or expose it in the chat. */
+    static String failure(Context context, Throwable failure) {
         Context localized = AppLanguageRuntime.localizedContext(context);
-        String value = details == null ? "" : details;
-        java.util.regex.Matcher http = java.util.regex.Pattern.compile("HTTP (4\\d\\d|5\\d\\d)").matcher(value);
-        if (http.find()) return localized.getString(R.string.agent_failure_http, http.group(1));
-        String lower = value.toLowerCase(java.util.Locale.ROOT);
-        if (lower.contains("network") || lower.contains("connect")) return localized.getString(R.string.agent_failure_network);
+        java.util.Set<Throwable> seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        Throwable cause = failure;
+        for (int depth = 0; cause != null && depth < LocalDiagnostics.MAX_CAUSES && seen.add(cause); depth++) {
+            if (cause instanceof AgentModelTurnLimitException)
+                return localized.getString(R.string.agent_failure_turn_limit);
+            if (cause instanceof ProviderHttpException) {
+                int status = ((ProviderHttpException) cause).httpStatus;
+                if (status >= 400 && status <= 599)
+                    return localized.getString(R.string.agent_failure_http, Integer.toString(status));
+            }
+            if (cause instanceof ProviderTransportException)
+                return localized.getString(R.string.agent_failure_network);
+            try { cause = cause.getCause(); }
+            catch (Throwable unavailable) { break; }
+        }
         return localized.getString(R.string.agent_failure_generic);
     }
 }

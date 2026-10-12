@@ -51,9 +51,11 @@ class AgentResultPresentationTest {
         for (language in listOf(AppLanguageChoice.ENGLISH, AppLanguageChoice.SPANISH)) {
             AppLanguageRuntime.select(context, language)
             val localized = AppLanguageRuntime.localizedContext(context)
-            assertEquals(localized.getString(R.string.agent_failure_http, "401"),
+            assertEquals(localized.getString(R.string.agent_failure_turn_limit),
+                AgentResultPresentation.failure(context, AgentModelTurnLimitException()))
+            assertEquals(localized.getString(R.string.agent_failure_generic),
                 AgentResultPresentation.failure(context, "HTTP 401 synthetic private detail"))
-            assertEquals(localized.getString(R.string.agent_failure_network),
+            assertEquals(localized.getString(R.string.agent_failure_generic),
                 AgentResultPresentation.failure(context, "network synthetic private detail"))
             assertEquals(localized.getString(R.string.agent_failure_generic),
                 AgentResultPresentation.failure(context, "synthetic private detail"))
