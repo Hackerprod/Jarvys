@@ -88,7 +88,7 @@ class TaskRunLedger(private val ledger: File) {
     }
 
     /** A confirmed history deletion removes that task's rows and preserves all other tasks' ledger rows. */
-    fun clearTask(taskId: String) = withLock {
+    fun clearTask(taskId: String, beforeWrite: (List<TaskRunRecord>) -> Unit = {}) = withLock {
         if (!ledger.isFile) return@withLock
         val temporary = File(ledger.parentFile, "${ledger.name}.${java.util.UUID.randomUUID()}.tmp")
         try {
@@ -101,10 +101,12 @@ class TaskRunLedger(private val ledger: File) {
                     output.fd.sync()
                 }
             }
+            beforeWrite(readLatestLocked().runs.values.filter { it.taskId == taskId })
             try {
                 java.nio.file.Files.move(temporary.toPath(), ledger.toPath(),
                     java.nio.file.StandardCopyOption.ATOMIC_MOVE, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
             } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+                beforeWrite(readLatestLocked().runs.values.filter { it.taskId == taskId })
                 java.nio.file.Files.move(temporary.toPath(), ledger.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
             }
             TaskDataChanges.invalidate()

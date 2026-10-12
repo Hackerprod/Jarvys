@@ -6,6 +6,9 @@ import android.util.AtomicFile
 import androidx.test.core.app.ApplicationProvider
 import com.android.apksig.ApkVerifier
 import com.jarvys.agent.coding.ProjectScope
+import com.jarvys.agent.NativeActionPolicy
+import com.jarvys.agent.NativeActionPolicy.Operation
+import com.jarvys.agent.connectors.AutonomyPolicy
 import com.jarvys.factory.contract.ManifestPlan
 import org.json.JSONArray
 import org.json.JSONObject
@@ -678,6 +681,88 @@ class FactorySigningIdentityRecoveryTest {
         // state() reads the key once; export must not unwrap a second time after revocation.
         assertEquals(unwrapCalls + 1, f.protection.unwrapCalls)
         assertArrayEquals(before, f.recordFile.readBytes())
+    }
+
+    @Test fun deniedAdmissionBeforeReservationLeavesNoIdentityOrWrappingKey() {
+        val f = Fixture()
+        val policy = NativeActionPolicy.inMemory()
+        val request = policy.prepare(Operation.IDENTITY_CREATE, NativeActionPolicy.binding(APP_ID, fingerprint(primary)))
+        policy.set(Operation.IDENTITY_CREATE, AutonomyPolicy.DENY)
+        rejects { f.identities.createRecoverableAfterApproval(primary, beforeEffect = { request.admit() }) }
+        assertFalse(f.recordFile.exists())
+        assertEquals(0, f.protection.wrapCalls)
+        assertTrue(f.protection.keys.isEmpty())
+        request.close()
+    }
+
+    @Test fun revocationAfterAdmittedReservationPreventsWrapAndRetainsExactPin() {
+        val f = Fixture()
+        val policy = NativeActionPolicy.inMemory()
+        val request = policy.prepare(Operation.IDENTITY_CREATE, NativeActionPolicy.binding(APP_ID, fingerprint(primary)))
+        var admissions = 0
+        rejects {
+            f.identities.createRecoverableAfterApproval(primary, beforeEffect = {
+                request.admit()
+                if (++admissions == 1) policy.set(Operation.IDENTITY_CREATE, AutonomyPolicy.DENY)
+            }, stillApproved = { request.requireCurrent(); true })
+        }
+        assertEquals(1, admissions)
+        assertEquals("reserved", f.json().getString("state"))
+        assertEquals(fingerprint(primary), f.json().getString("certificateSha256"))
+        assertEquals(0, f.protection.wrapCalls)
+        rejects { f.state() }
+        request.close()
+    }
+
+    @Test fun revocationWhileWrappingPreventsReadyWriteWithoutHoldingPolicyLock() {
+        val f = Fixture()
+        val policy = NativeActionPolicy.inMemory()
+        val request = policy.prepare(Operation.IDENTITY_CREATE, NativeActionPolicy.binding(APP_ID, fingerprint(primary)))
+        val executor = Executors.newSingleThreadExecutor()
+        f.protection.afterWrap = {
+            executor.submit { policy.set(Operation.IDENTITY_CREATE, AutonomyPolicy.DENY) }.get(5, TimeUnit.SECONDS)
+        }
+        try {
+            rejects { f.identities.createRecoverableAfterApproval(primary,
+                beforeEffect = { request.admit() }, stillApproved = { request.requireCurrent(); true }) }
+            assertEquals(1, f.protection.wrapCalls)
+            assertEquals("reserved", f.json().getString("state"))
+            assertFalse(f.json().has("protectedKey"))
+            assertTrue(f.protection.lastWrapBuffer!!.all { it == 0.toByte() })
+            rejects { f.state() }
+        } finally { request.close(); executor.shutdownNow() }
+    }
+
+    @Test fun deniedImportReadyCommitPreservesExistingIdentityAndVersionEvidence() {
+        val f = Fixture()
+        f.create()
+        f.record(9, HASH_B)
+        val before = f.recordFile.readBytes()
+        val policy = NativeActionPolicy.inMemory()
+        val request = policy.prepare(Operation.IDENTITY_IMPORT, NativeActionPolicy.binding(APP_ID, f.snapshot().orEmpty()))
+        f.protection.afterWrap = { policy.set(Operation.IDENTITY_IMPORT, AutonomyPolicy.DENY) }
+        rejects { f.identities.importRecoverableAfterApproval(primary, f.snapshot(),
+            beforeEffect = { request.admit() }, stillApproved = { request.requireCurrent(); true }) }
+        assertArrayEquals(before, f.recordFile.readBytes())
+        assertEquals(9, f.state().lastVersion)
+        assertEquals(HASH_B, f.state().lastApkSha256)
+        request.close()
+    }
+
+    @Test fun deniedReconciliationAdmissionCannotWriteDeclaredHistory() {
+        val f = Fixture()
+        f.identities.importRecoverableAfterApproval(primary, null)
+        val state = f.state()
+        val before = f.recordFile.readBytes()
+        val policy = NativeActionPolicy.inMemory(AutonomyPolicy.ASK)
+        val request = policy.prepare(Operation.IDENTITY_RECONCILE, NativeActionPolicy.binding(APP_ID, "9"))
+        rejects { f.identities.reconcileAfterApproval(APP_ID, state, 9, beforeEffect = { request.admit() }) }
+        assertArrayEquals(before, f.recordFile.readBytes())
+        request.approveOnce { }
+        f.identities.reconcileAfterApproval(APP_ID, state, 9, beforeEffect = { request.admit() })
+        assertEquals(9, f.state().lastVersion)
+        assertEquals("user_declared_floor", f.state().continuityResolution)
+        request.close()
     }
 
     @Test fun atomicFileBackupRecoversPreviousDurableRecordWithoutRotatingIdentity() {

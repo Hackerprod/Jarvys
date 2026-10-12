@@ -8,6 +8,30 @@ enum class ActionPolicyOrigin { CATALOG_DEFAULT, INHERITED_SERVER_DEFAULT, USER,
 /** A descriptor never makes an unavailable operation available or broadens a capability scope. */
 data class ActionPolicyDescriptor(val connectorId: String, val operationName: String) {
     val defaultPolicy: AutonomyPolicy get() = AutonomyPolicy.ALLOW
+    val family: String get() = when {
+        connectorId.startsWith("mcp:") -> "mcp"
+        connectorId == "native" -> operationName.substringBefore('.')
+        else -> connectorId
+    }
+    val settingsSurface: String get() = when {
+        connectorId.startsWith("mcp:") -> "connectors/server/tools"
+        connectorId == "native" -> "settings/native_permissions"
+        connectorId == "factory" -> "settings/factory_permissions"
+        connectorId == "coding" || connectorId == "linux" -> "connectors/linux"
+        else -> "connectors/$connectorId/actions"
+    }
+    val effectBoundary: String get() = when {
+        connectorId.startsWith("mcp:") -> "authenticated_tool_dispatch_and_retry"
+        connectorId == "gmail" || connectorId == "drive" -> "account_bound_provider_dispatch_and_retry"
+        connectorId == "native" -> "exact_scope_native_effect"
+        connectorId == "factory" -> "authenticated_app_operation_commit"
+        connectorId == "linux" && operationName in setOf("linux_setup", "linux_uninstall") -> "maintenance_phase_and_commit"
+        connectorId == "coding" || connectorId == "linux" -> "bounded_process_launch"
+        else -> "android_read_or_effect_dispatch"
+    }
+    /** Descriptive only: the adapter independently enforces these actual grants and capability ceilings. */
+    val availabilityIsIndependent: Boolean get() = true
+    val policyBackend: String get() = if (connectorId == "factory") "authenticated_factory_subject" else "connector_action_store"
 }
 
 /** All current and future registered action families use this one absent-value default. */
@@ -17,6 +41,10 @@ object ActionPolicyDefaults {
     private val actions = linkedMapOf<Pair<String, String>, ActionPolicyDescriptor>()
 
     init {
+        // Factory retains its authenticated per-app store; catalog inclusion never creates a second decision.
+        register("factory", com.jarvys.agent.apkfactory.FactoryOperationPolicy.Operation.entries.map { it.id })
+        register("linux", listOf("linux_exec", "linux_setup", "linux_uninstall"))
+        register("coding", listOf("project_exec"))
         register("calendar", listOf("search_events", "create_event"))
         register("contacts", listOf("search", "get_contact_detail", "create_contact"))
         register("phone", listOf("open_dialer", "place_call"))
@@ -36,6 +64,7 @@ object ActionPolicyDefaults {
             "export_file", "update_file", "create_folder"))
         register("native", listOf("memory.view", "memory.modify", "memory.delete", "memory.restore", "memory.clear",
             "memory.export", "memory.share_personal", "memory.reflection.run", "bots.create", "bots.mascot.compile",
+            "tasks.create", "tasks.update", "tasks.cancel", "tasks.view",
             "factory.identity.create", "factory.identity.backup.export", "factory.identity.backup.import", "factory.identity.reconcile"))
     }
 

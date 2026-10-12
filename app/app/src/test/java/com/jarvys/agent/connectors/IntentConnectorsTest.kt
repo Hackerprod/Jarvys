@@ -29,23 +29,24 @@ class IntentConnectorsTest {
         override fun openDialer(phoneNumber: String) { opened++ }
     }
 
-    @Test fun phoneOpsUseStrictNumbersAndKeepDialerInteractionUnallowable() {
+    @Test fun phoneOpsUseStrictNumbersAndSavedAskCanDenyDialerLaunch() {
         val definition = DialerConnector.definition(FakePhoneGateway(), { false }, { false })
         val schema = DialerConnector.dialerSchema()
         assertEquals("string", schema.getJSONObject("properties").getJSONObject("phoneNumber").getString("type"))
         assertTrue(definition.readPermissions.isEmpty())
         assertTrue(definition.writePermissions.contains(Manifest.permission.CALL_PHONE))
         assertEquals(listOf(DialerConnector.OPEN_DIALER, DialerConnector.PLACE_CALL), definition.operations.map { it.name })
-        assertFalse(definition.operations.first().autonomyAllowed)
+        assertTrue(definition.operations.first().autonomyAllowed)
         val summaries = mutableListOf<ApprovalSummary>()
         val registry = ConnectorRegistry.createForTests(FakeConnectorPreferences(), { false }, rejectingApprovalGate(summaries::add))
         registry.register(definition)
         registry.connect(DialerConnector.ID)
         val operation = definition.operations.first()
+        registry.setAutonomyPolicy(definition, operation, AutonomyPolicy.ASK)
         val rejected = runCatching {
             registry.invoke(definition, operation, JSONObject().put("phoneNumber", "+15551234567"), token)
         }.exceptionOrNull()
-        assertTrue(rejected?.message.orEmpty().contains("no la reintentes"))
+        assertTrue(rejected?.message.orEmpty().contains("do not retry automatically"))
         assertEquals(ApprovalIntentKind.DIAL, summaries.single().activityIntent?.kind)
         assertEquals("tel:+15551234567", summaries.single().activityIntent?.dataUri)
         assertTrue(runCatching { DialerConnector.normalizePhone("12+3") }.isFailure)
@@ -70,10 +71,13 @@ class IntentConnectorsTest {
         gateway.placeFailure = SecurityException("Telecom rejected request")
         val fallback = connector.invokePrepared(operation, args, connector.prepareWrite(operation, args, token), token)
         assertEquals(1, gateway.opened)
-        assertEquals("dialer_opened", fallback.getString("status"))
+        assertEquals("dialer_launch_requested", fallback.getString("status"))
         assertEquals("+15551234567", fallback.getString("phoneNumber"))
         assertEquals(false, fallback.getBoolean("callPlaced"))
+        assertTrue(fallback.getString("message").contains("presentation is not confirmed"))
         assertTrue(fallback.getString("message").contains("press Call"))
+        assertEquals(1, gateway.placed)
+        assertFalse(fallback.has("callStarted"))
     }
 
     @Test fun successfulCallGuidanceAvoidsRepeatingConnectionCaveatWithoutClaimingConnection() {
@@ -91,31 +95,40 @@ class IntentConnectorsTest {
         assertFalse(description.contains("such as"))
     }
 
-    @Test fun deniedCallPhonePermissionLaunchesDialerFallbackFromTheApprovalCard() {
+    @Test fun deniedCallPhonePermissionRequestsExactlyOneDialerLaunchFromTheRegistry() {
         val gateway = FakePhoneGateway()
         val definition = DialerConnector.definition(gateway, { false }, { false })
         var summary: ApprovalSummary? = null
+        val launched = mutableListOf<ApprovalIntentSpec>()
         lateinit var gate: ApprovalGate
         gate = ApprovalGate(1_000, object : ApprovalPresenter {
             override fun show(id: String, value: ApprovalSummary) {
                 summary = value
-                gate.resolve(id, ApprovalDecision.PERMISSION_FALLBACK_LAUNCHED)
+                gate.resolve(id, ApprovalDecision.PERMISSION_DENIED)
             }
             override fun update(id: String, decision: ApprovalDecision) = Unit
         })
-        val registry = ConnectorRegistry.createForTests(FakeConnectorPreferences(), { false }, gate)
+        val registry = ConnectorRegistry.createForTestsWithAutonomy(
+            FakeConnectorPreferences(), { false }, gate, InMemoryConnectorAutonomyStore(),
+            NoopAutonomyActionNotifier, launchIntent = { launched += it },
+        )
         registry.register(definition)
         registry.connect(DialerConnector.ID)
+        registry.setAutonomyPolicy(definition, definition.operations.last(), AutonomyPolicy.ASK)
         val result = registry.invoke(definition, definition.operations.last(),
             JSONObject().put("phoneNumber", "+15551234567"), token)
         assertEquals(Manifest.permission.CALL_PHONE, summary?.permission)
         assertEquals(ApprovalIntentKind.DIAL, summary?.permissionDeniedIntent?.kind)
-        assertEquals("dialer_opened", result.getString("status"))
+        assertEquals("dialer_launch_requested", result.getString("status"))
         assertFalse(result.getBoolean("callPlaced"))
         assertEquals(0, gateway.placed)
+        assertEquals(0, gateway.opened)
+        assertEquals(listOf(summary?.permissionDeniedIntent), launched)
+        assertEquals("tel:+15551234567", launched.single().dataUri)
+        assertTrue(result.getString("message").contains("presentation is not confirmed"))
     }
 
-    @Test fun smsSchemaAndIntentOnlyPrefillDraftAfterApproval() {
+    @Test fun smsSchemaAndConfiguredPolicyOnlyRequestAnUnsentDraft() {
         val definition = SmsComposerConnector.definition()
         val schema = SmsComposerConnector.smsSchema()
         assertEquals("string", schema.getJSONObject("properties").getJSONObject("to").getString("type"))
@@ -125,20 +138,25 @@ class IntentConnectorsTest {
         assertTrue(definition.readPermissions.isEmpty())
         assertFalse(definition.writePermissions.contains(Manifest.permission.SEND_SMS))
         assertEquals("send_sms", definition.operations.single().name)
-        assertFalse(definition.operations.single().autonomyAllowed)
+        assertTrue(definition.operations.single().autonomyAllowed)
         assertFalse(com.jarvys.agent.proactive.ProactiveReadOnlyToolFactory.connectorAllowlist.values
             .flatten().contains("send_sms"))
 
         val summaries = mutableListOf<ApprovalSummary>()
-        val registry = ConnectorRegistry.createForTests(FakeConnectorPreferences(), { false }, rejectingApprovalGate(summaries::add))
+        val launched = mutableListOf<ApprovalIntentSpec>()
+        val registry = ConnectorRegistry.createForTestsWithAutonomy(
+            FakeConnectorPreferences(), { false }, rejectingApprovalGate(summaries::add),
+            InMemoryConnectorAutonomyStore(), NoopAutonomyActionNotifier, launchIntent = { launched += it },
+        )
         registry.register(definition)
         registry.connect(SmsComposerConnector.ID)
         val operation = definition.operations.single()
+        registry.setAutonomyPolicy(definition, operation, AutonomyPolicy.ASK)
         val body = "Please call me after lunch. " + "Review the details carefully. ".repeat(60)
         val rejected = runCatching {
             registry.invoke(definition, operation, JSONObject().put("to", "+15551234567").put("body", body), token)
         }.exceptionOrNull()
-        assertTrue(rejected?.message.orEmpty().contains("no la reintentes"))
+        assertTrue(rejected?.message.orEmpty().contains("do not retry automatically"))
         val intent = summaries.single().activityIntent
         assertEquals(ApprovalIntentKind.SMS_COMPOSE, intent?.kind)
         assertEquals("smsto:+15551234567", intent?.dataUri)
@@ -148,24 +166,28 @@ class IntentConnectorsTest {
         assertEquals(Intent.ACTION_SENDTO, externalIntent.action)
         assertEquals(Uri.parse("smsto:+15551234567"), externalIntent.data)
         assertEquals(body, externalIntent.getStringExtra("sms_body"))
-        val prepared = SmsComposerConnector().prepareWrite(SmsComposerConnector.COMPOSE,
+        assertTrue(launched.isEmpty())
+        registry.setAutonomyPolicy(definition, operation, AutonomyPolicy.ALLOW)
+        val result = registry.invoke(definition, operation,
             JSONObject().put("to", "+15551234567").put("body", body), token)
-        val result = SmsComposerConnector().invokePrepared(SmsComposerConnector.COMPOSE,
-            JSONObject(), prepared, token)
+        assertEquals(listOf(intent), launched)
+        assertEquals(1, summaries.size)
         assertFalse(result.getBoolean("sent"))
-        assertEquals("sms_draft_opened", result.getString("status"))
+        assertEquals("sms_composer_launch_requested", result.getString("status"))
+        assertTrue(result.getString("message").contains("presentation is not confirmed"))
+        assertFalse(result.has("opened"))
         assertTrue(runCatching {
             SmsComposerConnector().prepareWrite(SmsComposerConnector.COMPOSE,
                 JSONObject().put("to", "555123").put("body", ""), token)
         }.isFailure)
     }
 
-    @Test fun emailDraftBuildsMailtoIntentAndCanNeverUsePersistentAllow() {
+    @Test fun emailDraftBuildsExactMailtoIntentAndRespectsSavedAskThenAllow() {
         val definition = EmailIntentConnector.definition()
         val op = definition.operations.single()
         assertEquals(EmailIntentConnector.COMPOSE, op.name)
         assertTrue(op.write)
-        assertFalse(op.autonomyAllowed)
+        assertTrue(op.autonomyAllowed)
         val parsed = EmailIntentPolicy.parse("a@example.com", "Hello world", "Line one\nLine two",
             "b@example.org", "c@example.net")
         val mailto = EmailIntentPolicy.mailto(parsed)
@@ -176,18 +198,94 @@ class IntentConnectorsTest {
         assertTrue(mailto.contains("body=Line%20one%0ALine%20two"))
 
         val summaries = mutableListOf<ApprovalSummary>()
-        val registry = ConnectorRegistry.createForTests(FakeConnectorPreferences(), { false }, rejectingApprovalGate(summaries::add))
+        val launched = mutableListOf<ApprovalIntentSpec>()
+        val registry = ConnectorRegistry.createForTestsWithAutonomy(
+            FakeConnectorPreferences(), { false }, rejectingApprovalGate(summaries::add),
+            InMemoryConnectorAutonomyStore(), NoopAutonomyActionNotifier, launchIntent = { launched += it },
+        )
         registry.register(definition)
         registry.connect(EmailIntentConnector.ID)
+        registry.setAutonomyPolicy(definition, op, AutonomyPolicy.ASK)
         val failure = runCatching {
             registry.invoke(definition, op, JSONObject().put("to", "a@example.com")
                 .put("subject", "Sensitive subject").put("body", "A body"), token)
         }.exceptionOrNull()
-        assertTrue(failure?.message.orEmpty().contains("no la reintentes"))
+        assertTrue(failure?.message.orEmpty().contains("do not retry automatically"))
         assertEquals(ApprovalIntentKind.EMAIL_COMPOSE, summaries.single().activityIntent?.kind)
-        assertEquals(false, summaries.single().allowAlwaysAvailable)
+        assertEquals(true, summaries.single().allowAlwaysAvailable)
         assertTrue(summaries.single().lines.any { it.contains("Sensitive subject") })
+        assertTrue(launched.isEmpty())
+        registry.setAutonomyPolicy(definition, op, AutonomyPolicy.ALLOW)
+        val result = registry.invoke(definition, op, JSONObject().put("to", "a@example.com")
+            .put("subject", "Sensitive subject").put("body", "A body"), token)
+        assertEquals(listOf(summaries.single().activityIntent), launched)
+        assertEquals("a@example.com", launched.single().extras["to"])
+        assertEquals("Sensitive subject", launched.single().extras["subject"])
+        assertEquals("A body", launched.single().extras["body"])
+        assertEquals("email_composer_launch_requested", result.getString("status"))
+        assertFalse(result.getBoolean("sent"))
+        assertTrue(result.getString("message").contains("presentation is not confirmed"))
+        assertEquals(1, summaries.size)
         assertTrue(runCatching { EmailIntentPolicy.parse("not-an-address", "", "x") }.isFailure)
         assertTrue(runCatching { EmailIntentPolicy.parse("a@example.com\r\nBcc:x@y.com", "", "x") }.isFailure)
+    }
+
+    @Test fun defaultAllowDialerLaunchIsDispatchedExactlyOnceWithoutPlacingACall() {
+        val gateway = FakePhoneGateway()
+        val definition = DialerConnector.definition(gateway, { false }, { false })
+        val operation = definition.operations.first { it.name == DialerConnector.OPEN_DIALER }
+        val launched = mutableListOf<ApprovalIntentSpec>()
+        val registry = ConnectorRegistry.createForTestsWithAutonomy(
+            FakeConnectorPreferences(), { false }, rejectingApprovalGate { error("Default ALLOW must not ask") },
+            InMemoryConnectorAutonomyStore(), NoopAutonomyActionNotifier, launchIntent = { launched += it },
+        )
+        registry.register(definition)
+        registry.connect(definition.id)
+        assertEquals(AutonomyPolicy.ALLOW, registry.autonomyPolicy(definition, operation))
+        val result = registry.invoke(definition, operation, JSONObject().put("phoneNumber", "+15551234567"), token)
+        assertEquals(listOf(ApprovalIntentSpec(ApprovalIntentKind.DIAL, "tel:+15551234567")), launched)
+        assertEquals(0, gateway.placed)
+        assertEquals(0, gateway.opened)
+        assertEquals("dialer_launch_requested", result.getString("status"))
+        assertFalse(result.getBoolean("callPlaced"))
+        assertTrue(result.getString("message").contains("presentation is not confirmed"))
+    }
+
+    @Test fun legacyUiLaunchReceiptCannotCauseASecondDispatch() {
+        val gateway = FakePhoneGateway()
+        val definition = DialerConnector.definition(gateway, { false }, { false })
+        val operation = definition.operations.first { it.name == DialerConnector.PLACE_CALL }
+        val launched = mutableListOf<ApprovalIntentSpec>()
+        lateinit var gate: ApprovalGate
+        gate = ApprovalGate(1_000, object : ApprovalPresenter {
+            override fun show(id: String, summary: ApprovalSummary) {
+                gate.resolve(id, ApprovalDecision.PERMISSION_FALLBACK_LAUNCHED)
+            }
+            override fun update(id: String, decision: ApprovalDecision) = Unit
+        })
+        val registry = ConnectorRegistry.createForTestsWithAutonomy(
+            FakeConnectorPreferences(), { false }, gate, InMemoryConnectorAutonomyStore(),
+            NoopAutonomyActionNotifier, launchIntent = { launched += it },
+        )
+        registry.register(definition)
+        registry.connect(definition.id)
+        registry.setAutonomyPolicy(definition, operation, AutonomyPolicy.ASK)
+        val failure = runCatching {
+            registry.invoke(definition, operation, JSONObject().put("phoneNumber", "+15551234567"), token)
+        }.exceptionOrNull()
+        assertTrue(failure?.message.orEmpty().contains("Legacy UI effect receipt"))
+        assertTrue(launched.isEmpty())
+        assertEquals(0, gateway.placed)
+        assertEquals(0, gateway.opened)
+    }
+
+    @Test fun smsGuidanceUsesConfiguredPolicyAndDoesNotPromisePresentation() {
+        val note = SmsComposerConnector.definition().usageNote()
+        assertTrue(note.contains("configured action policy"))
+        assertFalse(note.contains("after ApprovalGate"))
+        assertFalse(note.contains("prepared/opened"))
+        assertTrue(note.contains("launch", ignoreCase = true))
+        assertTrue(note.contains("not that the composer appeared", ignoreCase = true))
+        assertTrue(note.contains("tap Send"))
     }
 }

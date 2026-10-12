@@ -33,6 +33,29 @@ class LinuxEnvironment(
     override fun availableBytes(): Long = installer.availableBytes()
     override fun supportsArm64(): Boolean = Build.SUPPORTED_ABIS.contains("arm64-v8a")
     override fun workspacePath(): String = paths.workspace.absolutePath
+    override fun rootfsPath(): String = paths.rootfs.absolutePath
+    override fun installForProbeAdmitted(progress: (LinuxInstallState) -> Unit, token: CancellationToken,
+                                         beforeEffect: () -> Unit): LinuxInstallState =
+        installer.install(token, progress, retainArchiveForProbe = true, beforeEffect = beforeEffect)
+    override fun markProbeFailureAdmitted(code: String, detail: String, beforeEffect: () -> Unit) =
+        installer.markProbeFailure(code, detail, beforeEffect)
+    override fun markProbeSuccessAdmitted(beforeEffect: () -> Unit) = installer.markProbeSuccess(beforeEffect)
+    override fun uninstallAdmitted(beforeEffect: () -> Unit) {
+        processExecutor.withLaunchesSuspended {
+            beforeEffect()
+            processExecutor.terminateAllAndWait()
+            installer.uninstall(beforeEffect)
+        }
+    }
+    override fun deleteWorkspaceAdmitted(beforeEffect: () -> Unit) = installer.deleteWorkspace(beforeEffect)
+    override fun probeAdmitted(token: CancellationToken, beforeEffect: () -> Unit): LinuxProbeResult {
+        token.throwIfCancelled(); beforeEffect()
+        return LinuxProbe(paths.rootfs, nativeLibraryDir(),
+            makeExecutable = { file -> beforeEffect(); file.setExecutable(true, false) },
+            executor = LinuxProbeExecutor { command, callback ->
+                execAdmitted(command, "/", null, callback, token, beforeEffect)
+            }).probe().also { token.throwIfCancelled() }
+    }
     override fun markProbeFailure(code: String, detail: String) = installer.markProbeFailure(code, detail)
     override fun markProbeSuccess() = installer.markProbeSuccess()
     override fun uninstall() {
@@ -53,6 +76,10 @@ class LinuxEnvironment(
                       token: com.jarvys.agent.CancellationToken): LinuxExecResult {
         return execute(command, cwd, timeoutMillis, callback, token, null) { }
     }
+
+    override fun execAdmitted(command: String, cwd: String, timeoutMillis: Long?, callback: LinuxOutputCallback,
+                              token: CancellationToken, beforeLaunch: () -> Unit): LinuxExecResult =
+        execute(command, cwd, timeoutMillis, callback, token, null, beforeLaunch)
 
     override fun projectStatus(scope: ProjectScope, cwd: String, requiredTools: List<String>): LinuxProjectStatus =
         LinuxProjectPaths.inspect(paths.rootfs, nativeLibraryDir(), scope, cwd, supportsArm64(), state(),

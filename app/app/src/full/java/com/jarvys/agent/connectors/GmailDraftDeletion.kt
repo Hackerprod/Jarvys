@@ -58,7 +58,7 @@ internal class GmailDraftDeletion(
         verifyAccount(reviewed.account, reviewed.epoch, token)
         val latest = readDraft(reviewed.id, "raw", reviewed.revision, reviewed.epoch, token)
         check(rawDigest(latest) == reviewed.rawDigest) {
-            "Draft content changed after approval; read and approve it again. No delete was sent."
+            "Draft content changed during this action; read the current content and prepare a fresh request. No delete was sent."
         }
         // The transport also proves the exact mutation token, including after token refresh.
         verifyAccount(reviewed.account, reviewed.epoch, token)
@@ -123,7 +123,7 @@ internal class GmailDraftDeletion(
         require(account.length in 3..320 && account.none { it.isWhitespace() || it.isISOControl() } && '@' in account) {
             "Gmail did not prove a valid account"
         }
-        check(expected == null || account == expected) { "Google account changed after approval; no delete was sent" }
+        check(expected == null || account == expected) { "Google account changed during this action; no delete was sent" }
         token.throwIfCancelled()
         checkEpoch(epoch)
         return account

@@ -11,7 +11,7 @@ class EmailIntentConnector : ConnectorRuntime {
     override fun connect(configuration: Map<String, String>, secrets: Map<String, String>) = Unit
     override fun disconnect() = Unit
     override fun invoke(operation: String, arguments: JSONObject, token: CancellationToken): JSONObject =
-        error("Email composition must pass through the connector approval gate")
+        error("Email composition must pass through the connector action-policy gate")
 
     override fun prepareWrite(operation: String, arguments: JSONObject, token: CancellationToken): ConnectorWritePreparation {
         require(operation == COMPOSE) { "Unknown email operation: $operation" }
@@ -92,7 +92,7 @@ class EmailIntentConnector : ConnectorRuntime {
             runtime = EmailIntentConnector(),
             displayNameResourceId = R.string.connector_label_email,
             descriptionResourceId = R.string.connector_description_email,
-            usageNoteProvider = { "Email composition opens a prefilled system mail draft according to the configured action policy. Jarvys never sends it; the user reviews and taps Send in their mail app." },
+            usageNoteProvider = { "Email composition requests a prefilled system mail composer according to the configured action policy. A successful result confirms Android accepted the launch request, not that the composer appeared. Jarvys never sends it; the user reviews and taps Send in their mail app." },
         )
     }
 }

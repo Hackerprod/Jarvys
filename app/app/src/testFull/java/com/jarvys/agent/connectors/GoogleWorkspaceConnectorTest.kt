@@ -15,7 +15,7 @@ class GoogleWorkspaceConnectorTest {
         val requests = mutableListOf<Triple<String, String, String?>>()
         val responses = ArrayDeque<GoogleHttpResponse>()
         val grants = GoogleOAuthProtocol.ALLOWED_SCOPES.toMutableSet()
-        override fun verifyGmailAccount(capability: String, expectedAccount: String?, token: CancellationToken, epoch: Long): String {
+        override fun verifyGmailAccount(capability: String, expectedAccount: String?, token: CancellationToken, epoch: Long, beforeDispatch: (() -> Unit)?): String {
             token.throwIfCancelled()
             check(epoch == currentAuthorizationEpoch()) { "Google account epoch changed" }
             check(expectedAccount == null || expectedAccount == "fixture@example.test") { "Google account changed" }

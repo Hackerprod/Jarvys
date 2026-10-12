@@ -14,6 +14,9 @@ import com.jarvys.agent.connectors.ApprovalDecision
 import com.jarvys.agent.connectors.ApprovalGate
 import com.jarvys.agent.connectors.ApprovalPresenter
 import com.jarvys.agent.connectors.ApprovalSummary
+import com.jarvys.agent.connectors.AutonomyPolicy
+import com.jarvys.agent.connectors.InMemoryConnectorAutonomyStore
+import com.jarvys.agent.linux.LinuxExecAutonomy
 import com.jarvys.agent.linux.LinuxExecResult
 import com.jarvys.agent.linux.LinuxInstallPhase
 import com.jarvys.agent.linux.LinuxInstallState
@@ -38,7 +41,226 @@ class LinuxToolsTest {
     private val context get() = ApplicationProvider.getApplicationContext<android.content.Context>()
     private val budget = CorePromptBudget(4096, 256, 1, 256, 4096)
 
-    @Test fun setupRequiresExplicitConsentBeforeAnyInstallAndReportsProgressAndProbe() {
+    @Test fun freshPrincipalAllowExecutesWithoutAsking() {
+        val runtime = FakeLinuxRuntime(ready = true)
+        val autonomy = LinuxExecAutonomy(InMemoryConnectorAutonomyStore(), { true })
+        val gate = ApprovalGate(2_000, object : ApprovalPresenter {
+            override fun show(id: String, summary: ApprovalSummary) { error("Default Allow must not ask") }
+            override fun update(id: String, decision: ApprovalDecision) = Unit
+        })
+        val result = create(runtime, approvalGate = gate, autonomy = autonomy).getValue("linux_exec")
+            .execute(mapOf("command" to "literal fixture"), CancellationToken.cancellable())
+        assertTrue(result.content, result.success); assertEquals(1, runtime.execCalls)
+    }
+
+    @Test fun policyAbaAndUninstallBetweenPreparationAndLaunchPreventExecution() {
+        for (uninstall in listOf(false, true)) {
+            val runtime = FakeLinuxRuntime(ready = true)
+            val autonomy = LinuxExecAutonomy(InMemoryConnectorAutonomyStore(), { true })
+            runtime.beforeAdmittedLaunch = {
+                if (uninstall) autonomy.withUninstallReset { }
+                else { autonomy.setPolicyFromUi(AutonomyPolicy.DENY); autonomy.setPolicyFromUi(AutonomyPolicy.ALLOW) }
+            }
+            val result = create(runtime, autonomy = autonomy).getValue("linux_exec")
+                .execute(mapOf("command" to "literal fixture"), CancellationToken.cancellable())
+            assertFalse(result.success); assertEquals(0, runtime.execCalls)
+            assertEquals(AutonomyPolicy.ALLOW, autonomy.policy())
+        }
+    }
+
+    @Test fun exactPrincipalAllowCardReceiptExecutesOnceAndPersists() {
+        val runtime = FakeLinuxRuntime(ready = true)
+        val autonomy = LinuxExecAutonomy(InMemoryConnectorAutonomyStore(), { true })
+        autonomy.setPolicyFromUi(AutonomyPolicy.ASK)
+        var approvals = 0
+        lateinit var gate: ApprovalGate
+        gate = ApprovalGate(2_000, object : ApprovalPresenter {
+            override fun show(id: String, summary: ApprovalSummary) {
+                approvals++
+                gate.enableAlwaysFromUi(id)
+                gate.resolve(id, ApprovalDecision.APPROVED_ALLOW_ALWAYS)
+            }
+            override fun update(id: String, decision: ApprovalDecision) = Unit
+        })
+        val tool = create(runtime, approvalGate = gate, autonomy = autonomy).getValue("linux_exec")
+        repeat(2) { assertTrue(tool.execute(mapOf("command" to "literal fixture"), CancellationToken.cancellable()).success) }
+        assertEquals(1, approvals); assertEquals(2, runtime.execCalls)
+        assertEquals(AutonomyPolicy.ALLOW, autonomy.policy())
+    }
+
+    @Test fun freshSetupAllowsWithoutCardButDenyBlocksEvenAnInstalledProbe() {
+        val runtime = FakeLinuxRuntime()
+        val autonomy = LinuxExecAutonomy(InMemoryConnectorAutonomyStore(), { false })
+        runtime.beforeInstallEffect = { assertFalse(com.jarvys.agent.MemoryUiAutomationGuard.isProtected()) }
+        val ready = create(runtime, autonomy = autonomy, decisionAvailability = { false })
+            .getValue("linux_setup").execute(emptyMap(), CancellationToken.cancellable())
+        assertTrue(ready.content, ready.success)
+        assertEquals(1, runtime.installCalls)
+        assertEquals(1, runtime.probeCalls)
+        autonomy.setMaintenancePolicyFromUi(LinuxExecAutonomy.SETUP_OPERATION_NAME, AutonomyPolicy.DENY)
+        val denied = create(runtime, autonomy = autonomy).getValue("linux_setup")
+            .execute(emptyMap(), CancellationToken.cancellable())
+        assertFalse(denied.success)
+        assertEquals(1, runtime.probeCalls)
+        assertEquals(1, runtime.installCalls)
+    }
+
+    @Test fun setupAskHasOneProtectedExactReviewAndStaleApprovalCannotInstall() {
+        for (revoke in listOf(false, true)) {
+            val runtime = FakeLinuxRuntime()
+            val autonomy = LinuxExecAutonomy(InMemoryConnectorAutonomyStore(), { false })
+            autonomy.setMaintenancePolicyFromUi(LinuxExecAutonomy.SETUP_OPERATION_NAME, AutonomyPolicy.ASK)
+            val gate = UserDecisionGate()
+            var cards = 0
+            val presenter = object : UserDecisionPresenter {
+                override fun isAvailable() = true
+                override fun show(id: String, spec: UserDecisionSpec) {
+                    cards++
+                    assertTrue(com.jarvys.agent.MemoryUiAutomationGuard.isProtected())
+                    assertTrue(spec.body.contains(runtime.rootfsPath()))
+                    assertTrue(spec.body.contains(com.jarvys.agent.linux.LinuxCatalog.SHA256))
+                    if (revoke) {
+                        autonomy.setMaintenancePolicyFromUi(LinuxExecAutonomy.SETUP_OPERATION_NAME, AutonomyPolicy.DENY)
+                        autonomy.setMaintenancePolicyFromUi(LinuxExecAutonomy.SETUP_OPERATION_NAME, AutonomyPolicy.ASK)
+                    }
+                    gate.resolve(id, UserDecisionResult.Selected(spec.options.first { it.id == "install" }))
+                }
+                override fun update(id: String, result: UserDecisionResult) = Unit
+            }
+            val result = create(runtime, autonomy = autonomy, decisionGate = gate, decisionPresenter = presenter)
+                .getValue("linux_setup").execute(emptyMap(), CancellationToken.cancellable())
+            assertEquals(!revoke, result.success)
+            assertEquals(1, cards)
+            assertEquals(if (revoke) 0 else 1, runtime.installCalls)
+            assertFalse(com.jarvys.agent.MemoryUiAutomationGuard.isProtected())
+        }
+    }
+
+    @Test fun setupRechecksBeforeInstallAndBeforePostInstallProbeWithoutClaimingRollback() {
+        for (afterInstall in listOf(false, true)) {
+            val runtime = FakeLinuxRuntime()
+            val autonomy = LinuxExecAutonomy(InMemoryConnectorAutonomyStore(), { false })
+            if (!afterInstall) runtime.beforeInstallEffect = {
+                autonomy.setMaintenancePolicyFromUi(LinuxExecAutonomy.SETUP_OPERATION_NAME, AutonomyPolicy.DENY)
+            }
+            val tool = create(runtime, autonomy = autonomy).getValue("linux_setup")
+            val result = tool.execute(emptyMap(), CancellationToken.cancellable()) {
+                if (afterInstall && runtime.state().phase == LinuxInstallPhase.READY)
+                    autonomy.setMaintenancePolicyFromUi(LinuxExecAutonomy.SETUP_OPERATION_NAME, AutonomyPolicy.DENY)
+            }
+            assertFalse(result.success)
+            assertEquals(if (afterInstall) 1 else 0, runtime.installCalls)
+            assertEquals(0, runtime.probeCalls)
+            assertEquals(if (afterInstall) LinuxInstallPhase.READY else LinuxInstallPhase.NOT_INSTALLED, runtime.state().phase)
+            assertFalse(runtime.probeMarkedReady)
+        }
+    }
+
+    @Test fun explicitUninstallAllowNeedsNoCardAndStrictBooleanCannotInventAChoice() {
+        for (delete in listOf(false, true)) {
+            val runtime = FakeLinuxRuntime(ready = true)
+            val autonomy = LinuxExecAutonomy(InMemoryConnectorAutonomyStore(), { true })
+            runtime.beforeUninstallEffect = { assertFalse(com.jarvys.agent.MemoryUiAutomationGuard.isProtected()) }
+            val result = create(runtime, autonomy = autonomy, decisionAvailability = { false })
+                .getValue("linux_uninstall").execute(mapOf("delete_workspace" to delete), CancellationToken.cancellable())
+            assertTrue(result.content, result.success)
+            assertEquals(1, runtime.uninstallCalls)
+            assertEquals(if (delete) 1 else 0, runtime.workspaceDeleteCalls)
+        }
+        for (invalid in listOf("true", 1, JSONObject.NULL)) {
+            val runtime = FakeLinuxRuntime(ready = true)
+            val result = create(runtime).getValue("linux_uninstall")
+                .execute(mapOf("delete_workspace" to invalid), CancellationToken.cancellable())
+            assertFalse(result.success)
+            assertEquals(0, runtime.uninstallCalls)
+            assertEquals(0, runtime.workspaceDeleteCalls)
+        }
+    }
+
+    @Test fun uninstallAskOrMissingChoiceUsesOneProtectedCardWithOnlyTheExactAllowedOptions() {
+        for (requested in listOf<Boolean?>(null, false, true)) {
+            val runtime = FakeLinuxRuntime(ready = true)
+            val autonomy = LinuxExecAutonomy(InMemoryConnectorAutonomyStore(), { true })
+            if (requested != null) autonomy.setMaintenancePolicyFromUi(LinuxExecAutonomy.UNINSTALL_OPERATION_NAME, AutonomyPolicy.ASK)
+            val gate = UserDecisionGate()
+            var cards = 0
+            val presenter = object : UserDecisionPresenter {
+                override fun isAvailable() = true
+                override fun show(id: String, spec: UserDecisionSpec) {
+                    cards++
+                    assertTrue(com.jarvys.agent.MemoryUiAutomationGuard.isProtected())
+                    assertTrue(spec.body.contains(runtime.rootfsPath()))
+                    assertTrue(spec.body.contains(runtime.workspacePath()))
+                    assertEquals(when (requested) {
+                        null -> listOf("keep_workspace", "delete_workspace", "cancel")
+                        false -> listOf("keep_workspace", "cancel")
+                        true -> listOf("delete_workspace", "cancel")
+                    }, spec.options.map { it.id })
+                    gate.resolve(id, UserDecisionResult.Selected(spec.options.first()))
+                }
+                override fun update(id: String, result: UserDecisionResult) = Unit
+            }
+            val args = requested?.let { mapOf<String, Any>("delete_workspace" to it) } ?: emptyMap()
+            val result = create(runtime, autonomy = autonomy, decisionGate = gate, decisionPresenter = presenter)
+                .getValue("linux_uninstall").execute(args, CancellationToken.cancellable())
+            assertTrue(result.content, result.success)
+            assertEquals(1, cards)
+            assertEquals(if (requested == true) 1 else 0, runtime.workspaceDeleteCalls)
+            assertFalse(com.jarvys.agent.MemoryUiAutomationGuard.isProtected())
+        }
+    }
+
+    @Test fun uninstallDenyHasNoCardAndRevocationAfterRootfsLeavesWorkspaceWithPartialReceipt() {
+        val deniedRuntime = FakeLinuxRuntime(ready = true)
+        val denied = LinuxExecAutonomy(InMemoryConnectorAutonomyStore(), { true })
+        denied.setMaintenancePolicyFromUi(LinuxExecAutonomy.UNINSTALL_OPERATION_NAME, AutonomyPolicy.DENY)
+        val deniedResult = create(deniedRuntime, autonomy = denied, decisionAvailability = { error("Deny must not request a card") })
+            .getValue("linux_uninstall").execute(emptyMap(), CancellationToken.cancellable())
+        assertFalse(deniedResult.success)
+        assertEquals(0, deniedRuntime.uninstallCalls)
+
+        val runtime = FakeLinuxRuntime(ready = true)
+        val autonomy = LinuxExecAutonomy(InMemoryConnectorAutonomyStore(), { true })
+        autonomy.setPolicyFromUi(AutonomyPolicy.ASK)
+        autonomy.setProjectPolicyFromUi(AutonomyPolicy.DENY)
+        runtime.afterUninstall = {
+            autonomy.setMaintenancePolicyFromUi(LinuxExecAutonomy.UNINSTALL_OPERATION_NAME, AutonomyPolicy.DENY)
+        }
+        val result = create(runtime, autonomy = autonomy).getValue("linux_uninstall")
+            .execute(mapOf("delete_workspace" to true), CancellationToken.cancellable())
+        assertFalse(result.success)
+        assertTrue(result.content.contains("Linux was removed"))
+        assertEquals(1, runtime.uninstallCalls)
+        assertEquals(0, runtime.workspaceDeleteCalls)
+        assertEquals(AutonomyPolicy.ASK, autonomy.policy())
+        assertEquals(AutonomyPolicy.DENY, autonomy.projectPolicy())
+        assertEquals(AutonomyPolicy.DENY, autonomy.maintenanceAuthorization(LinuxExecAutonomy.UNINSTALL_OPERATION_NAME).policy)
+    }
+
+    @Test fun maintenanceCardCannotOpenOverAnAutomatedInteractionAndStopSkipsWorkspace() {
+        val runtime = FakeLinuxRuntime()
+        val autonomy = LinuxExecAutonomy(InMemoryConnectorAutonomyStore(), { true })
+        autonomy.setMaintenancePolicyFromUi(LinuxExecAutonomy.SETUP_OPERATION_NAME, AutonomyPolicy.ASK)
+        val action = com.jarvys.agent.MemoryUiAutomationGuard.beginAsyncAction(
+            com.jarvys.agent.MemoryUiAutomationGuard.captureAutomationEpoch())
+        try {
+            val result = create(runtime, autonomy = autonomy).getValue("linux_setup")
+                .execute(emptyMap(), CancellationToken.cancellable())
+            assertFalse(result.success)
+            assertEquals(0, runtime.installCalls)
+        } finally { action.close() }
+        assertFalse(com.jarvys.agent.MemoryUiAutomationGuard.isProtected())
+        val token = CancellationToken.cancellable()
+        runtime.afterUninstall = { token.cancel() }
+        val failure = runCatching { create(runtime, autonomy = autonomy).getValue("linux_uninstall")
+            .execute(mapOf("delete_workspace" to true), token) }.exceptionOrNull()
+        assertTrue(failure is java.util.concurrent.CancellationException)
+        assertTrue(failure!!.message.orEmpty().contains("Linux was removed"))
+        assertEquals(1, runtime.uninstallCalls)
+        assertEquals(0, runtime.workspaceDeleteCalls)
+    }
+
+    @Test fun setupAskRequiresExplicitConsentBeforeAnyInstallAndReportsProgressAndProbe() {
         val runtime = FakeLinuxRuntime()
         val gate = UserDecisionGate()
         var presented: UserDecisionSpec? = null
@@ -256,8 +478,12 @@ class LinuxToolsTest {
         decisionPresenter: UserDecisionPresenter? = null,
         decisionAvailability: () -> Boolean = { true },
         budget: CorePromptBudget = this.budget,
+        autonomy: LinuxExecAutonomy = LinuxExecAutonomy(InMemoryConnectorAutonomyStore().apply {
+            setPolicy(LinuxExecAutonomy.CONNECTOR_ID, LinuxExecAutonomy.OPERATION_NAME, AutonomyPolicy.ASK)
+            setPolicy(LinuxExecAutonomy.CONNECTOR_ID, LinuxExecAutonomy.SETUP_OPERATION_NAME, AutonomyPolicy.ASK)
+        }, { runtime.state().phase == LinuxInstallPhase.READY }),
     ): Map<String, CoreTool> = FlavorLinuxTools.createForRuntime(context, "linux-tool-test", 0, budget,
-        runtime, approvalGate, decisionGate, decisionPresenter, decisionAvailability)
+        runtime, approvalGate, decisionGate, decisionPresenter, decisionAvailability, autonomy)
         .associateBy { it.declaration().name }
 
     private fun decisionPresenter(optionId: String?): Pair<UserDecisionGate, UserDecisionPresenter> {
@@ -303,6 +529,25 @@ class LinuxToolsTest {
         var lastCommand = ""
         var lastCwd = ""
         var lastTimeout: Long? = null
+        var beforeAdmittedLaunch: () -> Unit = { }
+        var beforeInstallEffect: () -> Unit = { }
+        var beforeUninstallEffect: () -> Unit = { }
+        var afterUninstall: () -> Unit = { }
+        override fun installForProbeAdmitted(progress: (LinuxInstallState) -> Unit, token: CancellationToken,
+                                             beforeEffect: () -> Unit): LinuxInstallState {
+            beforeInstallEffect(); beforeEffect()
+            return installForProbe(progress, token)
+        }
+        override fun uninstallAdmitted(beforeEffect: () -> Unit) {
+            beforeUninstallEffect(); beforeEffect(); uninstall(); afterUninstall()
+        }
+
+
+        override fun execAdmitted(command: String, cwd: String, timeoutMillis: Long?, callback: LinuxOutputCallback,
+                                  token: CancellationToken, beforeLaunch: () -> Unit): LinuxExecResult {
+            beforeAdmittedLaunch(); beforeLaunch()
+            return exec(command, cwd, timeoutMillis, callback, token)
+        }
 
         override fun state() = current
         override fun availableBytes() = 8_000_000_000L

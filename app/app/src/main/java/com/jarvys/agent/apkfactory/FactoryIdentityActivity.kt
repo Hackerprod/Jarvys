@@ -23,6 +23,9 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import com.jarvys.agent.AppLanguageRuntime
 import com.jarvys.agent.R
+import com.jarvys.agent.NativeActionPolicy
+import com.jarvys.agent.MemoryUiAutomationGuard
+import com.jarvys.agent.NativeActionPolicy.Operation
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.security.PrivateKey
@@ -31,7 +34,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * User-only identity management. No tool, Intent extra, web bridge or saved state accepts secrets.
+ * Exact policy-bound identity management. No Intent extra, web bridge or saved state accepts secrets.
  * SAF selection happens BEFORE passphrase entry, so a picker never retains a plaintext secret.
  * Background/recreation revokes pending approval. Already-started atomic commits may finish.
  */
@@ -39,17 +42,21 @@ open class FactoryIdentityActivity : ComponentActivity() {
     private enum class Action { CREATE, EXPORT, IMPORT }
     private data class Picker(val action: Action, val appId: String?, val state: FactorySigningIdentity.State?)
     private data class SelectedDocument(val picker: Picker, val uri: Uri)
-    private data class ImportPreview(val material: FactoryIdentityBackup.Material, val expectedRecord: String?)
+    private data class ImportPreview(val material: FactoryIdentityBackup.Material, val expectedRecord: String?, val uri: Uri)
 
     private val worker = Executors.newSingleThreadExecutor()
     private val identities by lazy { identityStore() }
-    private var foreground = false
+    private val policies by lazy { actionPolicy() }
+    @Volatile private var foreground = false
+    @Volatile private var authorization: NativeActionPolicy.Request? = null
+    private var creation: FactoryIdentityBackup.Material? = null
     private var picker: Picker? = null
     private var selectedDocument: SelectedDocument? = null
     private var operation: AtomicBoolean? = null
     private var preview: ImportPreview? = null
     private var encryptedInput: ByteArray? = null
     private var dialog: AlertDialog? = null
+    private var dialogProtection: MemoryUiAutomationGuard.Lease? = null
     private val secretFields = mutableListOf<EditText>()
     private val pendingPasswords = CopyOnWriteArrayList<CharArray>()
     private val actionButtons = mutableListOf<Button>()
@@ -64,6 +71,8 @@ open class FactoryIdentityActivity : ComponentActivity() {
     }
 
     internal open fun identityStore(): FactorySigningIdentity = FactorySigningIdentity(applicationContext)
+    internal open fun actionPolicy(): NativeActionPolicy = NativeActionPolicy(applicationContext)
+    internal open fun showIdentityDialog(dialog: AlertDialog) = dialog.show()
 
     override fun attachBaseContext(newBase: Context) {
         super.attachBaseContext(AppLanguageRuntime.attachBaseContext(newBase))
@@ -117,7 +126,7 @@ open class FactoryIdentityActivity : ComponentActivity() {
         foreground = true
         selectedDocument?.let {
             selectedDocument = null
-            if (it.picker.action == Action.IMPORT) readImport(it.uri) else showPassphrase(it)
+            prepareSelectedDocument(it)
         }
         updateEnabled()
     }
@@ -144,26 +153,39 @@ open class FactoryIdentityActivity : ComponentActivity() {
 
     private fun preparePicker(action: Action) {
         if (!canStart()) return
+        val appId = if (action == Action.IMPORT) null else validatedAppId() ?: return
+        val operation = when (action) {
+            Action.CREATE -> Operation.IDENTITY_CREATE
+            Action.EXPORT -> Operation.IDENTITY_EXPORT
+            Action.IMPORT -> Operation.IDENTITY_IMPORT
+        }
+        if (beginPolicy(operation, action.name, appId.orEmpty(), "select_document") == null) return
         if (action == Action.IMPORT) {
             launchPicker(Picker(action, null, null))
             return
         }
-        val appId = validatedAppId() ?: return
-        startWork(work = { _ -> identities.state(appId) }) { state ->
+        startWork(work = { active ->
+            requireCurrent(authorization ?: error("Missing identity authorization"), active)
+            identities.state(appId!!)
+        }) { state ->
             if (action == Action.CREATE && state.existing) {
+                finishPolicy()
                 showStatus(R.string.factory_identity_existing)
             } else if (action == Action.EXPORT && (!state.existing || state.mode != "recoverable")) {
+                finishPolicy()
                 showStatus(R.string.factory_identity_legacy)
             } else {
-                showApproval(getString(if (action == Action.CREATE) R.string.factory_identity_create else R.string.factory_identity_export),
-                    getString(if (action == Action.CREATE) R.string.factory_identity_create_disclosure else R.string.factory_identity_export_disclosure, appId),
-                    R.string.factory_identity_choose_file) { launchPicker(Picker(action, appId, state)) }
+                // SAF is an actual destination selection, not the product authorization review.
+                rebindPolicy(action.name, appId!!, stateBinding(state), "select_document")
+                launchPicker(Picker(action, appId, state))
             }
         }
     }
 
     private fun launchPicker(request: Picker) {
         if (!foreground || isFinishing || isDestroyed || picker != null) return
+        try { authorization?.requireCurrent() ?: error("Missing identity request") }
+        catch (_: Exception) { cancelSensitiveState(); showStatus(R.string.identity_action_policy_changed); return }
         picker = request
         updateEnabled()
         try {
@@ -171,6 +193,7 @@ open class FactoryIdentityActivity : ComponentActivity() {
             else createDocument.launch("${request.appId}-signing-identity.jfi")
         } catch (_: Exception) {
             picker = null
+            finishPolicy()
             showStatus(R.string.factory_identity_picker_unavailable)
             updateEnabled()
         }
@@ -181,6 +204,7 @@ open class FactoryIdentityActivity : ComponentActivity() {
         picker = null
         if (uri == null || uri.scheme != "content") {
             selectedDocument = null
+            finishPolicy()
             showStatus(R.string.factory_identity_cancelled)
             updateEnabled()
             return
@@ -189,24 +213,59 @@ open class FactoryIdentityActivity : ComponentActivity() {
         if (foreground) {
             val selected = selectedDocument!!
             selectedDocument = null
-            if (request.action == Action.IMPORT) readImport(selected.uri) else showPassphrase(selected)
+            prepareSelectedDocument(selected)
+        }
+    }
+
+    private fun prepareSelectedDocument(selected: SelectedDocument) {
+        try {
+            rebindPolicy(selected.picker.action.name, selected.picker.appId.orEmpty(),
+                selected.picker.state?.let(::stateBinding).orEmpty(), selected.uri.toString())
+            when (selected.picker.action) {
+                Action.IMPORT -> readImport(selected.uri)
+                Action.EXPORT -> showPassphrase(selected)
+                Action.CREATE -> startWork(work = { active ->
+                    requireCurrent(authorization ?: error("Missing identity authorization"), active)
+                    val pair = FactoryPortableCertificate.generate()
+                    FactoryIdentityBackup.Material(selected.picker.appId!!, pair.key, pair.certificate, 0, null)
+                }, discard = { destroyKey(it.key) }) { material ->
+                    creation = material
+                    // The transient key is never persisted before backup verification. Bind its actual
+                    // certificate before the single final ASK review, rather than approving an unknown key.
+                    rebindPolicy(Action.CREATE.name, material.appId, stateBinding(selected.picker.state!!),
+                        selected.uri.toString(), FactoryIdentityBackup.fingerprint(material.certificate), "0")
+                    showPassphrase(selected)
+                }
+            }
+        } catch (_: Exception) {
+            cancelSensitiveState()
+            showStatus(R.string.identity_action_policy_changed)
         }
     }
 
     private fun showPassphrase(selected: SelectedDocument) {
+        val request = authorization ?: return
+        request.requireCurrent()
         val form = column()
+        val certificate = creation?.certificate?.let(FactoryIdentityBackup::fingerprint)
+            ?: selected.picker.state?.fingerprint.orEmpty()
+        form.addView(TextView(this).apply {
+            text = getString(R.string.identity_action_backup_exact, selected.picker.appId.orEmpty(), certificate,
+                selected.picker.state!!.lastVersion, selected.uri.toString())
+        })
         form.addView(label(R.string.factory_identity_passphrase_help))
         val first = passwordField(R.string.factory_identity_passphrase, "factory-identity-passphrase")
         val confirm = passwordField(R.string.factory_identity_passphrase_confirm, "factory-identity-passphrase-confirm")
         form.addView(first)
         form.addView(confirm)
-        val accepted = CheckBox(this).apply { setText(R.string.factory_identity_backup_ack); disablePersistence(this) }
-        form.addView(accepted)
+        val accepted = if (request.requiresApproval) CheckBox(this).apply {
+            setText(R.string.factory_identity_backup_ack); disablePersistence(this); form.addView(this)
+        } else null
         val feedback = label(R.string.factory_identity_empty)
         form.addView(feedback)
         showForm(getString(if (selected.picker.action == Action.CREATE) R.string.factory_identity_create else R.string.factory_identity_export),
-            form, R.string.factory_identity_approve_save) {
-            if (!accepted.isChecked) { feedback.setText(R.string.factory_identity_ack_required); return@showForm }
+            form, if (request.requiresApproval) R.string.factory_identity_approve_save else R.string.identity_action_save_backup) {
+            if (accepted != null && !accepted.isChecked) { feedback.setText(R.string.factory_identity_ack_required); return@showForm }
             val passphrase = copyCharacters(first)
             val confirmation = copyCharacters(confirm)
             val valid = try { FactoryIdentityBackup.validatePassphrase(passphrase); passphrase.contentEquals(confirmation) }
@@ -218,79 +277,97 @@ open class FactoryIdentityActivity : ComponentActivity() {
                 clearSecretFields()
                 return@showForm
             }
+            try { approveFromForm(request) }
+            catch (failure: Exception) { wipeCharacters(passphrase); throw failure }
             dismissDialog()
-            saveBackup(selected, passphrase)
+            saveBackup(selected, passphrase, request)
         }
     }
 
-    private fun saveBackup(selected: SelectedDocument, passphrase: CharArray) {
-        startWork(work = { approved ->
-            var material: FactoryIdentityBackup.Material? = null
+    private fun saveBackup(selected: SelectedDocument, passphrase: CharArray, request: NativeActionPolicy.Request) {
+        val created = creation
+        creation = null // The worker owns the transient key and destroys it even after cancellation.
+        startWork(work = { active ->
+            var material: FactoryIdentityBackup.Material? = created
             var container: ByteArray? = null
+            val current = { requireCurrent(request, active); true }
+            val admit = { request.admit { check(active.get() && authorization === request) } }
             try {
-                check(approved.get())
+                current()
                 material = if (selected.picker.action == Action.CREATE) {
-                    val pair = FactoryPortableCertificate.generate()
-                    FactoryIdentityBackup.Material(selected.picker.appId!!, pair.key, pair.certificate, 0, null)
-                } else identities.exportRecoverableAfterApproval(selected.picker.appId!!, selected.picker.state!!, approved::get)
-                check(approved.get())
+                    check(identities.state(selected.picker.appId!!) == selected.picker.state) { "Identity changed before backup creation" }
+                    created ?: error("Missing exact creation material")
+                } else identities.exportRecoverableAfterApproval(selected.picker.appId!!, selected.picker.state!!,
+                    beforeEffect = admit, stillApproved = current)
+                current()
                 container = FactoryIdentityBackup.encrypt(material, passphrase)
                 check(container.size <= FactoryIdentityBackup.MAX_CONTAINER_BYTES)
-                check(approved.get())
+                // Opening with wt can truncate the selected document; it is itself an admitted effect.
+                admit()
                 contentResolver.openOutputStream(selected.uri, "wt")?.use { stream ->
-                    check(approved.get())
+                    admit()
                     stream.write(container)
                     stream.flush()
                 } ?: error("Unavailable document")
-                check(approved.get())
-                // A provider may silently truncate or append despite a successful close. Verify the
-                // exact bounded ciphertext before committing a new local identity. This still says
-                // nothing about cloud sync, later durability or independent restoration.
+                current()
+                // Exact ciphertext readback is evidence of this write only, never a claim of cloud
+                // durability, an independent safe copy, or a tested restoration.
                 val readback = contentResolver.openInputStream(selected.uri)?.use {
-                    readBounded(it, FactoryIdentityBackup.MAX_CONTAINER_BYTES, approved)
+                    readBounded(it, FactoryIdentityBackup.MAX_CONTAINER_BYTES, active) { current() }
                 } ?: error("Backup readback unavailable")
                 try { check(java.security.MessageDigest.isEqual(container, readback)) { "Backup readback differs" } }
                 finally { readback.fill(0) }
-                check(approved.get())
-                if (selected.picker.action == Action.CREATE) identities.createRecoverableAfterApproval(material, approved::get)
+                current()
+                if (selected.picker.action == Action.CREATE) identities.createRecoverableAfterApproval(material,
+                    beforeEffect = admit, stillApproved = current)
             } finally {
                 wipeCharacters(passphrase)
                 container?.fill(0)
                 material?.let { destroyKey(it.key) }
             }
         }, failureMessage = R.string.factory_identity_save_failed) {
+            finishPolicy()
             showStatus(if (selected.picker.action == Action.CREATE) R.string.factory_identity_created else R.string.factory_identity_exported)
         }
     }
 
     private fun readImport(uri: Uri) {
-        startWork(work = { approved ->
-            contentResolver.openInputStream(uri)?.use { readBounded(it, FactoryIdentityBackup.MAX_CONTAINER_BYTES, approved) }
-                ?: error("Unavailable document")
+        val selectedRequest = authorization ?: return
+        startWork(work = { active ->
+            requireCurrent(selectedRequest, active)
+            contentResolver.openInputStream(uri)?.use {
+                readBounded(it, FactoryIdentityBackup.MAX_CONTAINER_BYTES, active) { requireCurrent(selectedRequest, active) }
+            } ?: error("Unavailable document")
         }, discard = { it.fill(0) }) { bytes ->
             encryptedInput = bytes
             val form = column()
-            form.addView(label(R.string.factory_identity_import_help))
+            form.addView(label(if (selectedRequest.requiresApproval) R.string.factory_identity_import_help else R.string.identity_action_import_allowed_help))
+            form.addView(TextView(this).apply { text = getString(R.string.identity_action_document, uri.toString()) })
             val password = passwordField(R.string.factory_identity_passphrase, "factory-identity-passphrase")
             form.addView(password)
-            showForm(getString(R.string.factory_identity_import), form, R.string.factory_identity_unlock) {
+            showForm(getString(R.string.factory_identity_import), form,
+                if (selectedRequest.requiresApproval) R.string.factory_identity_unlock else R.string.identity_action_unlock_import) {
+                selectedRequest.requireCurrent()
                 val passphrase = copyCharacters(password)
-                val encrypted = encryptedInput ?: return@showForm
+                val encrypted = encryptedInput ?: run { wipeCharacters(passphrase); return@showForm }
                 encryptedInput = null
                 dismissDialog()
-                startWork(work = { approved ->
+                startWork(work = { active ->
                     var material: FactoryIdentityBackup.Material? = null
                     try {
-                        check(approved.get())
+                        requireCurrent(selectedRequest, active)
                         material = FactoryIdentityBackup.decrypt(encrypted, passphrase)
-                        check(approved.get())
-                        ImportPreview(material, identities.recoverySnapshot(material.appId))
+                        requireCurrent(selectedRequest, active)
+                        ImportPreview(material, identities.recoverySnapshot(material.appId), uri)
                     } catch (failure: Exception) {
                         material?.let { destroyKey(it.key) }
                         throw failure
                     } finally { wipeCharacters(passphrase); encrypted.fill(0) }
                 }, discard = { destroyKey(it.material.key) }, failureMessage = R.string.factory_identity_unlock_failed) { imported ->
                     preview = imported
+                    rebindPolicy(Action.IMPORT.name, imported.material.appId, imported.expectedRecord.orEmpty(),
+                        FactoryIdentityBackup.fingerprint(imported.material.certificate), imported.material.lastVersion.toString(),
+                        imported.material.lastApkSha256.orEmpty(), imported.uri.toString())
                     showImportPreview(imported)
                 }
             }
@@ -298,25 +375,47 @@ open class FactoryIdentityActivity : ComponentActivity() {
     }
 
     private fun showImportPreview(imported: ImportPreview) {
+        val request = authorization ?: return
         val material = imported.material
+        val restore = {
+            check(preview === imported)
+            request.requireCurrent()
+            preview = null // The operation now owns the key and clears it in finally.
+            startWork(work = { active ->
+                try {
+                    identities.importRecoverableAfterApproval(material, imported.expectedRecord,
+                        beforeEffect = { request.admit { check(active.get() && authorization === request) } },
+                        stillApproved = { requireCurrent(request, active); true })
+                } finally { destroyKey(material.key) }
+            }) { finishPolicy(); showStatus(R.string.factory_identity_restored) }
+        }
+        if (!request.requiresApproval) {
+            restore()
+            return
+        }
         showApproval(getString(R.string.factory_identity_restore_title),
             getString(R.string.factory_identity_restore_preview, material.appId,
-                FactoryIdentityBackup.fingerprint(material.certificate), material.lastVersion),
+                FactoryIdentityBackup.fingerprint(material.certificate), material.lastVersion) + "\n\n" +
+                getString(R.string.identity_action_document, imported.uri.toString()),
             R.string.factory_identity_approve_restore) {
-            if (preview !== imported) return@showApproval
-            preview = null // The operation now owns the key and clears it in finally.
-            startWork(work = { approved ->
-                try { identities.importRecoverableAfterApproval(material, imported.expectedRecord, approved::get) }
-                finally { destroyKey(material.key) }
-            }) { showStatus(R.string.factory_identity_restored) }
+            approveFromForm(request)
+            dismissDialog()
+            restore()
         }
     }
 
     private fun prepareReconciliation() {
         if (!canStart()) return
         val appId = validatedAppId() ?: return
-        startWork(work = { _ -> identities.state(appId) }) { state ->
-            if (!state.existing || state.mode != "recoverable") { showStatus(R.string.factory_identity_legacy); return@startWork }
+        if (beginPolicy(Operation.IDENTITY_RECONCILE, appId, "review_version_floor") == null) return
+        startWork(work = { active ->
+            requireCurrent(authorization ?: error("Missing identity authorization"), active)
+            identities.state(appId)
+        }) { state ->
+            if (!state.existing || state.mode != "recoverable") {
+                finishPolicy(); showStatus(R.string.factory_identity_legacy); return@startWork
+            }
+            val initial = rebindPolicy(appId, stateBinding(state), "review_version_floor")
             val form = column()
             form.addView(TextView(this).apply {
                 text = getString(R.string.factory_identity_reconcile_help, appId, state.fingerprint.orEmpty(), state.lastVersion,
@@ -331,27 +430,65 @@ open class FactoryIdentityActivity : ComponentActivity() {
                 disablePersistence(this)
             }
             form.addView(floor)
+            // This is a factual declaration about latest release evidence, never implicit ALLOW consent.
             val checked = CheckBox(this).apply { setText(R.string.factory_identity_reconcile_ack); disablePersistence(this) }
             form.addView(checked)
             val feedback = label(R.string.factory_identity_empty)
             form.addView(feedback)
-            showForm(getString(R.string.factory_identity_reconcile), form, R.string.factory_identity_approve_floor) {
+            showForm(getString(R.string.factory_identity_reconcile), form,
+                if (initial.requiresApproval) R.string.factory_identity_approve_floor else R.string.identity_action_save_floor) {
+                initial.requireCurrent()
                 val value = floor.text.toString().toIntOrNull()
                 if (!checked.isChecked || value == null || value < state.lastVersion || value < 0) {
                     feedback.setText(R.string.factory_identity_floor_invalid)
                     return@showForm
                 }
+                val request = rebindPolicy(appId, stateBinding(state), value.toString(), "user_declared_floor")
+                approveFromForm(request)
                 dismissDialog()
-                startWork(work = { approved -> identities.reconcileAfterApproval(appId, state, value, approved::get) }) {
-                    showStatus(R.string.factory_identity_reconciled)
-                }
+                startWork(work = { active ->
+                    identities.reconcileAfterApproval(appId, state, value,
+                        beforeEffect = { request.admit { check(active.get() && authorization === request) } },
+                        stillApproved = { requireCurrent(request, active); true })
+                }) { finishPolicy(); showStatus(R.string.factory_identity_reconciled) }
             }
         }
     }
 
+    private fun beginPolicy(operation: Operation, vararg values: String): NativeActionPolicy.Request? = try {
+        policies.prepare(operation, NativeActionPolicy.binding(*values)).also { authorization = it }
+    } catch (_: Exception) { showStatus(R.string.identity_action_policy_changed); null }
+
+    private fun rebindPolicy(vararg values: String): NativeActionPolicy.Request {
+        val previous = authorization ?: error("Missing identity authorization")
+        return previous.rebind(NativeActionPolicy.binding(*values)).also { authorization = it }
+    }
+
+    private fun requireCurrent(request: NativeActionPolicy.Request, active: AtomicBoolean) {
+        check(active.get() && authorization === request) { "Identity action was interrupted" }
+        request.requireCurrent()
+    }
+
+    private fun approveFromForm(request: NativeActionPolicy.Request) {
+        request.requireCurrent()
+        if (request.requiresApproval) request.approveOnce {
+            check(authorization === request && foreground && !isFinishing && !isDestroyed &&
+                dialog?.isShowing == true && operation == null) { "Identity review is no longer active" }
+            (dialogProtection ?: error("Missing protected identity review")).requireHumanUiInteraction()
+        }
+    }
+
+    private fun finishPolicy() { authorization?.close(); authorization = null }
+
+    private fun stateBinding(state: FactorySigningIdentity.State): String = NativeActionPolicy.binding(
+        state.existing.toString(), state.fingerprint.orEmpty(), state.lastVersion.toString(), state.recordSha256.orEmpty(),
+        state.mode, state.lastApkSha256.orEmpty(), state.continuityKnown.toString(), state.continuityResolution,
+        state.lastScope?.toString().orEmpty())
+
     private fun <T> startWork(work: (AtomicBoolean) -> T, discard: (T) -> Unit = {},
                               failureMessage: Int = R.string.factory_identity_operation_failed, success: (T) -> Unit) {
         if (!foreground || operation != null || isFinishing || isDestroyed) return
+        val request = authorization ?: return
         val approved = AtomicBoolean(true)
         operation = approved
         showStatus(R.string.factory_identity_working)
@@ -363,7 +500,10 @@ open class FactoryIdentityActivity : ComponentActivity() {
                     result.getOrNull()?.let(discard)
                 } else {
                     operation = null
-                    result.fold(success, { showStatus(failureMessage) })
+                    result.fold({ value ->
+                        try { requireCurrent(request, approved); success(value) }
+                        catch (_: Exception) { discard(value); cancelSensitiveState(); showStatus(R.string.identity_action_policy_changed) }
+                    }, { cancelSensitiveState(); showStatus(failureMessage) })
                     updateEnabled()
                 }
             }
@@ -372,41 +512,102 @@ open class FactoryIdentityActivity : ComponentActivity() {
 
     private fun showApproval(title: String, message: String, approvalLabel: Int, approved: () -> Unit) {
         val form = column().apply { addView(TextView(this@FactoryIdentityActivity).apply { text = message }) }
-        showForm(title, form, approvalLabel) { dismissDialog(); approved() }
+        showForm(title, form, approvalLabel, approved)
     }
 
     private fun showForm(title: String, form: LinearLayout, approvalLabel: Int, approved: () -> Unit) {
         if (!foreground || isFinishing || isDestroyed) return
-        val scroll = ScrollView(this).apply { addView(form); disablePersistence(this) }
-        val created = AlertDialog.Builder(this).setTitle(title).setView(scroll)
-            .setPositiveButton(approvalLabel, null)
-            .setNegativeButton(android.R.string.cancel) { _, _ -> cancelSensitiveState() }
-            .create()
-        dialog = created
-        created.window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        created.setOnCancelListener { cancelSensitiveState() }
-        created.setOnDismissListener {
-            clearSecretFields()
-            if (dialog === created) dialog = null
+        // Only real passphrase/key, ASK, and factual recovery forms enter this boundary. The
+        // ordinary status surface, actual SAF picker, and ALLOW background effects do not.
+        val protection = MemoryUiAutomationGuard.enterProtectedSurface()
+        if (!protection.isReadyForUser) {
+            protection.close()
+            cancelSensitiveState()
+            showStatus(R.string.identity_action_reopen_manually)
+            return
+        }
+        var created: AlertDialog? = null
+        try {
+            val scroll = ScrollView(this).apply { addView(form); disablePersistence(this) }
+            val review = AlertDialog.Builder(this).setTitle(title).setView(scroll)
+                .setPositiveButton(approvalLabel, null)
+                .setNegativeButton(android.R.string.cancel) { _, _ -> cancelSensitiveState() }
+                .create()
+            created = review
+            dialog = review
+            dialogProtection = protection
+            review.window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            review.setOnCancelListener { cancelSensitiveState() }
+            review.setOnDismissListener {
+                if (dialog === review) {
+                    // A framework dismissal not initiated by our accepted action is cancellation.
+                    dialog = null
+                    if (dialogProtection === protection) dialogProtection = null
+                    cancelSensitiveState()
+                }
+                releaseDialogProtection(review, protection)
+                updateEnabled()
+            }
+            showIdentityDialog(review)
+            review.window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            review.window?.decorView?.filterTouchesWhenObscured = true
+            review.getButton(AlertDialog.BUTTON_POSITIVE).filterTouchesWhenObscured = true
+            review.getButton(AlertDialog.BUTTON_NEGATIVE).filterTouchesWhenObscured = true
+            review.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                if (foreground && dialog === review && operation == null) {
+                    if (!protection.isReadyForUser) {
+                        cancelSensitiveState()
+                        showStatus(R.string.identity_action_reopen_manually)
+                        return@setOnClickListener
+                    }
+                    try {
+                        check(dialogProtection === protection)
+                        protection.requireHumanUiInteraction()
+                        approved()
+                    } catch (_: Exception) { cancelSensitiveState(); showStatus(R.string.identity_action_policy_changed) }
+                }
+            }
             updateEnabled()
+        } catch (_: Exception) {
+            cancelSensitiveState()
+            releaseDialogProtection(created, protection)
+            showStatus(R.string.identity_action_reopen_manually)
         }
-        created.show()
-        created.window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        created.window?.decorView?.filterTouchesWhenObscured = true
-        created.getButton(AlertDialog.BUTTON_POSITIVE).filterTouchesWhenObscured = true
-        created.getButton(AlertDialog.BUTTON_NEGATIVE).filterTouchesWhenObscured = true
-        created.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-            if (foreground && dialog === created && operation == null) approved()
-        }
-        updateEnabled()
     }
 
-    private fun dismissDialog() { dialog?.dismiss(); dialog = null; clearSecretFields() }
+    private fun dismissDialog() {
+        val previous = dialog
+        val protection = dialogProtection
+        dialog = null
+        dialogProtection = null
+        clearSecretFields()
+        previous?.dismiss()
+        releaseDialogProtection(previous, protection)
+    }
+
+    /** A dismissed dialog must leave the view tree before automation can observe/click again. */
+    private fun releaseDialogProtection(review: AlertDialog?, protection: MemoryUiAutomationGuard.Lease?) {
+        if (protection == null) return
+        val decor = review?.window?.decorView
+        if (decor == null || !decor.isAttachedToWindow) { protection.close(); return }
+        decor.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(view: View) = Unit
+            override fun onViewDetachedFromWindow(view: View) {
+                protection.close()
+                view.removeOnAttachStateChangeListener(this)
+            }
+        })
+        // Handle a detach that raced adding the observer without clearing a live surface.
+        if (!decor.isAttachedToWindow) protection.close()
+    }
 
     private fun cancelSensitiveState(interrupted: Boolean = false) {
-        val hadPending = operation != null || preview != null || dialog != null || encryptedInput != null
+        val hadPending = operation != null || preview != null || dialog != null || encryptedInput != null || authorization != null
         operation?.set(false)
         operation = null
+        finishPolicy()
+        creation?.let { destroyKey(it.key) }
+        creation = null
         pendingPasswords.forEach { it.fill('\u0000') }
         pendingPasswords.clear()
         picker = null
@@ -488,12 +689,14 @@ open class FactoryIdentityActivity : ComponentActivity() {
     companion object {
         private fun destroyKey(key: PrivateKey) = FactoryIdentityBackup.destroyBestEffort(key)
 
-        internal fun readBounded(input: InputStream, limit: Int, approved: AtomicBoolean): ByteArray {
+        internal fun readBounded(input: InputStream, limit: Int, approved: AtomicBoolean,
+                                 requireCurrent: () -> Unit = {}): ByteArray {
             val buffer = ByteArray(4096)
             val output = ByteArrayOutputStream()
             try {
                 while (true) {
                     check(approved.get())
+                    requireCurrent()
                     val count = input.read(buffer)
                     if (count < 0) return output.toByteArray()
                     check(count > 0 && output.size() <= limit - count) { "Invalid or oversized identity backup" }

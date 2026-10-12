@@ -129,7 +129,7 @@ class GmailConnector(
             attachments = emptyList()
             details += review.attachments
             val exact = fetchDraft(draftId, "raw", token, authorizationEpoch).getJSONObject("message")
-            check(exact.optString("id") == revision) { "Draft changed during review; read it again before approving." }
+            check(exact.optString("id") == revision) { "Draft changed during preparation; read it again before preparing a fresh request." }
             storedRaw = exact.optString("raw")
             require(storedRaw.isNotBlank()) { "Draft MIME snapshot is missing" }
             GmailContent.decode(storedRaw, MAX_RAW_BYTES) // Validate base64 and bound before retaining a snapshot.
@@ -211,8 +211,36 @@ class GmailConnector(
             args.put("to", draft.to).put("cc", draft.cc).put("bcc", draft.bcc), attachment = snapshot)
     }
 
+    private class PreparedRead(val owner: GmailConnector, val operation: String, val arguments: String,
+        val epoch: Long, val account: String?)
+
+    override fun prepareRead(operation: String, arguments: JSONObject, token: CancellationToken): ConnectorWritePreparation {
+        token.throwIfCancelled()
+        require(!(operation in WRITES || operation in GmailManagement.WRITES)) { "A write cannot use read preparation" }
+        val frozen = JSONObject(arguments.toString())
+        val epoch = oauth.currentAuthorizationEpoch()
+        val account = oauth.currentAccountIdentity()
+        check(epoch == oauth.currentAuthorizationEpoch()) { "Google connection changed during read preparation" }
+        return ConnectorWritePreparation(ApprovalSummary(operation, listOf(frozen.toString())), frozen,
+            PreparedRead(this, operation, frozen.toString(), epoch, account))
+    }
+
     override fun invokeReadPrepared(operation: String, arguments: JSONObject, preparation: ConnectorWritePreparation,
-                                    token: CancellationToken): JSONObject = invokePrepared(operation, arguments, preparation, token)
+                                    token: CancellationToken): JSONObject {
+        val read = preparation.attachment as? PreparedRead ?: error("Prepared Google read identity is missing")
+        fun validateRead() {
+            token.throwIfCancelled()
+            check(read.owner === this && read.operation == operation && read.arguments == arguments.toString()) {
+                "Google read changed after preparation"
+            }
+            check(read.epoch == oauth.currentAuthorizationEpoch() &&
+                (read.account == null || read.account == oauth.currentAccountIdentity())) { "Google account changed after read preparation" }
+        }
+        validateRead()
+        return oauth.withAdmission({ validateRead(); preparation.authorizeEffect?.invoke(); validateRead() }) {
+            invoke(operation, arguments, token)
+        }
+    }
 
     override fun invokePrepared(operation: String, arguments: JSONObject, preparation: ConnectorWritePreparation,
                                 token: CancellationToken): JSONObject = oauth.withAdmission(preparation.authorizeEffect) {
@@ -227,16 +255,16 @@ class GmailConnector(
         if (operation in GmailManagement.WRITES) return management.execute(operation, preparation, token)
         val reviewed = preparation.attachment as? ReviewedWrite ?: error("Reviewed Gmail content is missing")
         require(reviewed.owner === this && reviewed.operation == operation) { "Gmail approval does not match this action" }
-        check(oauth.currentAuthorizationEpoch() == reviewed.authorizationEpoch) { "Google authorization changed after approval; review this action again." }
+        check(oauth.currentAuthorizationEpoch() == reviewed.authorizationEpoch) { "Google authorization changed during this action; prepare a fresh request under the current policy." }
         requireWriteScope(operation)
         oauth.verifyGmailAccount(writeScope(operation), reviewed.account, token, reviewed.authorizationEpoch)
         check(!reviewed.attempted.get() && !writeJournal.isUncertain(reviewed.intentHash)) { AMBIGUOUS_WRITE }
         if (reviewed.draftId.isNotBlank()) {
             val latest = fetchDraft(reviewed.draftId, "raw", token, reviewed.authorizationEpoch).getJSONObject("message")
-            check(latest.optString("id") == reviewed.revision) { "Draft changed after approval; read and approve its new revision." }
+            check(latest.optString("id") == reviewed.revision) { "Draft changed during this action; read its current revision and prepare a fresh request." }
             if (reviewed.originalRawHash.isNotBlank()) check(GmailContent.digest(latest.optString("raw")
                     .toByteArray(StandardCharsets.US_ASCII)) == reviewed.originalRawHash) {
-                "Draft content changed after approval; read and approve it again."
+                "Draft content changed during this action; read the current content and prepare a fresh request."
             }
         }
         val endpoint = when (operation) {

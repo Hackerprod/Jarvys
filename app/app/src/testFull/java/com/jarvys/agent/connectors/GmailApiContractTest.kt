@@ -33,7 +33,7 @@ class GmailApiContractTest {
             return super<GoogleRestAuthorization>.requestBytes(scope, method, url, body, contentType, token, maxResponseBytes, requestHeaders, expectedAuthorizationEpoch, beforeDispatch)
         }
         fun respond(value: JSONObject, status: Int = 200) { replies += { GoogleHttpResponse(status, value.toString()) } }
-        override fun verifyGmailAccount(capability: String, expectedAccount: String?, token: CancellationToken, epoch: Long): String {
+        override fun verifyGmailAccount(capability: String, expectedAccount: String?, token: CancellationToken, epoch: Long, beforeDispatch: (() -> Unit)?): String {
             token.throwIfCancelled()
             check(epoch == currentAuthorizationEpoch()) { "Google account epoch changed" }
             check(expectedAccount == null || expectedAccount == "fixture@example.test") { "Google account changed" }
@@ -85,6 +85,18 @@ class GmailApiContractTest {
         assertTrue("Unexpected failure: ${error?.message}", error!!.message.orEmpty().contains(fragment, true))
     }
 
+    @Test fun readPreparationPinsEpochBeforeAskWithoutFetchingMail() {
+        val api = Api(); val connector = runtime(api)
+        val args = JSONObject().put("id", "m1")
+        val read = connector.prepareRead(GmailConnector.GET_MESSAGE, args, CancellationToken.uncancellable())
+        assertTrue(api.calls.isEmpty())
+        api.epoch++
+        assertFailure("account changed") {
+            connector.invokeReadPrepared(GmailConnector.GET_MESSAGE, args, read, CancellationToken.uncancellable())
+        }
+        assertTrue(api.calls.isEmpty())
+    }
+
     @Test fun exactSendAndReadCarryAdmissionAtTheirActualDispatch() {
         val api = Api().apply { respond(sent()); respond(message()) }
         val connector = runtime(api)
@@ -94,8 +106,8 @@ class GmailApiContractTest {
         connector.invokePrepared(GmailConnector.SEND_MESSAGE, prepared.executionArguments, prepared, CancellationToken.uncancellable())
         assertEquals(1, admissions)
         val readArgs = JSONObject().put("id", "m1")
-        val read = ConnectorWritePreparation(ApprovalSummary("Read message", emptyList()), readArgs,
-            authorizeEffect = { admissions++ })
+        val read = connector.prepareRead(GmailConnector.GET_MESSAGE, readArgs, CancellationToken.uncancellable())
+            .copy(authorizeEffect = { admissions++ })
         connector.invokeReadPrepared(GmailConnector.GET_MESSAGE, readArgs, read, CancellationToken.uncancellable())
         assertEquals(2, admissions)
         assertEquals(listOf("POST", "GET"), api.calls.map { it.method })

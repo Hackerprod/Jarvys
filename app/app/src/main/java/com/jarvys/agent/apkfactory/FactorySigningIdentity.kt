@@ -22,7 +22,7 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 import javax.security.auth.x500.X500Principal
 
-/** Legacy keys never become exportable. Recoverable identities are an explicit native-UI choice. */
+/** Legacy keys never become exportable. Recoverable identities use exact native action authorization. */
 internal open class FactorySigningIdentity(
     private val context: Context,
     private val protection: PortableProtection = AndroidPortableProtection(),
@@ -120,24 +120,28 @@ internal open class FactorySigningIdentity(
     /** Snapshot supports repair of a pinned reserved record even when the local wrapping key is gone. */
     fun recoverySnapshot(appId: String): String? = synchronized(LOCK) { digest(record(appId)) }
 
-    /** Called by secure native UI only, after the user has saved their encrypted backup. */
-    fun createRecoverableAfterApproval(material: FactoryIdentityBackup.Material, stillApproved: () -> Boolean = { true }) = synchronized(LOCK) {
+    /** Called after the exact encrypted backup has been written and read back successfully. */
+    fun createRecoverableAfterApproval(material: FactoryIdentityBackup.Material, beforeEffect: () -> Unit = {},
+        stillApproved: () -> Boolean = { true }) = synchronized(LOCK) {
         check(stillApproved()) { "Identity creation was cancelled" }
         FactoryIdentityBackup.validateMaterial(material)
         require(material.lastVersion == 0 && material.lastApkSha256 == null) { "New identities cannot claim previous releases" }
         check(!state(material.appId).existing) { "An existing identity cannot be converted or replaced" }
-        persistPortable(material, continuityKnown = true, resolution = "local_history", old = null, stillApproved = stillApproved)
+        persistPortable(material, continuityKnown = true, resolution = "local_history", old = null, stillApproved = stillApproved, beforeEffect = beforeEffect)
     }
-    fun exportRecoverableAfterApproval(appId: String, expectedState: State, stillApproved: () -> Boolean = { true }): FactoryIdentityBackup.Material = synchronized(LOCK) {
+    fun exportRecoverableAfterApproval(appId: String, expectedState: State, beforeEffect: () -> Unit = {},
+        stillApproved: () -> Boolean = { true }): FactoryIdentityBackup.Material = synchronized(LOCK) {
         check(stillApproved()) { "Backup export was cancelled" }
         check(state(appId) == expectedState && expectedState.existing && expectedState.mode == RECOVERABLE) {
             "Only the unchanged recoverable identity can be exported. Legacy AndroidKeyStore keys are non-exportable."
         }
         check(stillApproved()) { "Backup export was cancelled" }
+        beforeEffect()
         val identity = portableIdentity(record(appId)!!)
         FactoryIdentityBackup.Material(appId, identity.key, identity.certificate, expectedState.lastVersion, expectedState.lastApkSha256)
     }
-    fun importRecoverableAfterApproval(material: FactoryIdentityBackup.Material, expectedRecordSha256: String?, stillApproved: () -> Boolean = { true }) = synchronized(LOCK) {
+    fun importRecoverableAfterApproval(material: FactoryIdentityBackup.Material, expectedRecordSha256: String?, beforeEffect: () -> Unit = {},
+        stillApproved: () -> Boolean = { true }) = synchronized(LOCK) {
         check(stillApproved()) { "Backup import was cancelled" }
         FactoryIdentityBackup.validateMaterial(material)
         val old = record(material.appId)
@@ -159,10 +163,11 @@ internal open class FactorySigningIdentity(
             material.lastVersion > priorVersion -> material.lastApkSha256
             else -> priorSha ?: material.lastApkSha256
         }
-        persistPortable(material.copy(lastVersion = version, lastApkSha256 = sha), false, "restored_unknown", old, stillApproved)
+        persistPortable(material.copy(lastVersion = version, lastApkSha256 = sha), false, "restored_unknown", old, stillApproved, beforeEffect)
     }
     /** A user-declared floor is explicit uncertainty resolution, not proof of the latest release. */
-    fun reconcileAfterApproval(appId: String, expectedState: State, versionFloor: Int, stillApproved: () -> Boolean = { true }) = synchronized(LOCK) {
+    fun reconcileAfterApproval(appId: String, expectedState: State, versionFloor: Int, beforeEffect: () -> Unit = {},
+        stillApproved: () -> Boolean = { true }) = synchronized(LOCK) {
         check(stillApproved()) { "Version reconciliation was cancelled" }
         check(state(appId) == expectedState && expectedState.existing && expectedState.mode == RECOVERABLE) { "Identity changed during reconciliation" }
         require(versionFloor >= expectedState.lastVersion) { "A restored version floor cannot decrease" }
@@ -170,7 +175,7 @@ internal open class FactorySigningIdentity(
         if (versionFloor > expectedState.lastVersion) { saved.remove("lastApkSha256"); saved.remove("lastSignedScope") }
         saved.put("lastVersion", versionFloor).put("continuityKnown", true).put("continuityResolution", "user_declared_floor")
         check(stillApproved()) { "Version reconciliation was cancelled" }
-        save(appId, saved)
+        save(appId, saved, beforeEffect = beforeEffect)
     }
     // Shared lock covers signing through publication and all identity mutations, across service instances.
     open fun recordSigned(appId: String, fingerprint: String, versionCode: Int, apkSha: String, scope: FactorySigningScope? = null) = synchronized(LOCK) {
@@ -235,7 +240,7 @@ internal open class FactorySigningIdentity(
             }
         } finally { bytes.fill(0) }
     }
-    private fun persistPortable(material: FactoryIdentityBackup.Material, continuityKnown: Boolean, resolution: String, old: JSONObject?, stillApproved: () -> Boolean) {
+    private fun persistPortable(material: FactoryIdentityBackup.Material, continuityKnown: Boolean, resolution: String, old: JSONObject?, stillApproved: () -> Boolean, beforeEffect: () -> Unit) {
         val fingerprint = hash(material.certificate.encoded)
         val saved = JSONObject().put("schemaVersion", 2).put("mode", RECOVERABLE).put("appId", material.appId)
             .put("certificateSha256", fingerprint).put("certificate", encode(material.certificate.encoded))
@@ -246,11 +251,19 @@ internal open class FactorySigningIdentity(
         // Pin identity/version BEFORE any persistent key action. An interruption cannot authorize a new identity.
         // Existing ready records remain intact until replacement is fully encrypted and ready for AtomicFile.
         check(stillApproved()) { "Identity save was cancelled before its durable commit" }
-        FactoryArtifactAuthority.invalidate(material.appId)
-        if (old == null) save(material.appId, JSONObject(saved.toString()).put("state", "reserved"))
+        val admitEffect = {
+            check(stillApproved()) { "Identity save was cancelled before its durable effect" }
+            beforeEffect()
+        }
+        if (old == null) save(material.appId, JSONObject(saved.toString()).put("state", "reserved"), beforeEffect = admitEffect)
+        check(stillApproved()) { "Identity save was cancelled before reading key material" }
         val bytes = material.key.encoded ?: error("Portable private key encoding unavailable")
-        try { saved.put("protectedKey", protection.wrap(material.appId, fingerprint, bytes)) } finally { bytes.fill(0) }
-        save(material.appId, saved.put("state", "ready"))
+        try {
+            // A reserved identity is retained if revocation wins before key wrapping or the ready commit.
+            admitEffect()
+            saved.put("protectedKey", protection.wrap(material.appId, fingerprint, bytes))
+        } finally { bytes.fill(0) }
+        save(material.appId, saved.put("state", "ready"), beforeEffect = admitEffect)
     }
     private fun java.io.InputStream.readBytesBounded(limit: Int): ByteArray {
         val out = java.io.ByteArrayOutputStream()
@@ -258,12 +271,15 @@ internal open class FactorySigningIdentity(
         while (true) { val count = read(buffer); if (count < 0) return out.toByteArray()
             check(out.size() + count <= limit) { "Signing identity record exceeds its size limit" }; out.write(buffer, 0, count) }
     }
-    private fun save(appId: String, value: JSONObject, preserveRetainedArtifacts: Boolean = false) {
+    private fun save(appId: String, value: JSONObject, preserveRetainedArtifacts: Boolean = false,
+                     beforeEffect: () -> Unit = {}) {
+        val target = file(appId)
+        val bytes = value.toString().toByteArray(Charsets.UTF_8)
+        // Admission is a short check immediately before the durable write, never around its IO.
+        beforeEffect()
         FactoryArtifactAuthority.beforeIdentityWrite(appId, preserveRetainedArtifacts)
         try {
             check(directory.isDirectory || directory.mkdirs()) { "Cannot prepare identity storage" }
-            val target = file(appId)
-            val bytes = value.toString().toByteArray(Charsets.UTF_8)
             val stream = target.startWrite()
             try {
                 stream.write(bytes)

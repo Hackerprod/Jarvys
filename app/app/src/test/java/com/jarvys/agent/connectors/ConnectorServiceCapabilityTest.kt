@@ -20,22 +20,33 @@ class ConnectorServiceCapabilityTest {
         val definition = ConnectorDefinition("test", "Test", "1", "Test", operations = listOf(op), runtime = runtime, operationAccessGranted = { scope })
         val registry = ConnectorRegistry.createForTests(FakeConnectorPreferences(), { true }, rejectingApprovalGate { shown++ })
         registry.register(definition); registry.connect("test")
+        registry.setAutonomyPolicy(definition, op, AutonomyPolicy.ASK)
         assertTrue(runCatching { registry.invoke(definition, op, JSONObject(), CancellationToken.uncancellable()) }.isFailure)
         assertEquals(0, shown); assertEquals(0, runtime.effects)
-        assertTrue(runCatching { registry.setAutonomyPolicy(definition, op, AutonomyPolicy.ALLOW) }.isFailure)
+        // Choosing a policy never grants the provider capability it still needs.
+        registry.setAutonomyPolicy(definition, op, AutonomyPolicy.ALLOW)
+        assertEquals(AutonomyPolicy.ALLOW, registry.configuredAutonomyPolicy(definition, op))
+        assertTrue(runCatching { registry.invoke(definition, op, JSONObject(), CancellationToken.uncancellable()) }.isFailure)
+        assertEquals(0, shown); assertEquals(0, runtime.effects)
+        registry.setAutonomyPolicy(definition, op, AutonomyPolicy.ASK)
         scope = true
         assertTrue(runCatching { registry.invoke(definition, op, JSONObject(), CancellationToken.uncancellable()) }.isFailure)
         assertEquals(1, shown); assertEquals(0, runtime.effects)
     }
-    @Test fun staleOperationCannotDowngradeAnIrreversibleCatalogEntryToReadOrAllow() {
+    @Test fun staleOperationCannotDowngradeACatalogWriteOrBypassSavedAsk() {
         val runtime = Runtime(); val op = ConnectorOperation("delete", "Delete", JSONObject(), write = true, autonomyAllowed = false)
         val definition = ConnectorDefinition("test", "Test", "1", "Test", operations = listOf(op), runtime = runtime)
         var summary: ApprovalSummary? = null
         val registry = ConnectorRegistry.createForTests(FakeConnectorPreferences(), { true }, rejectingApprovalGate { summary = it })
         registry.register(definition); registry.connect("test")
+        registry.setAutonomyPolicy(definition, op, AutonomyPolicy.ASK)
         val stale = op.copy(write = false, autonomyAllowed = true)
         assertTrue(runCatching { registry.invoke(definition, stale, JSONObject(), CancellationToken.uncancellable()) }.isFailure)
-        assertNotNull(summary); assertFalse(summary!!.allowAlwaysAvailable); assertEquals(0, runtime.effects)
+        assertNotNull(summary); assertTrue(summary!!.allowAlwaysAvailable); assertEquals(0, runtime.effects)
+        assertEquals("Permanent action", summary!!.title)
+        assertEquals(definition.id, summary!!.autonomyConnectorId)
+        assertEquals(op.name, summary!!.autonomyOperationName)
+        assertEquals(AutonomyPolicy.ASK, registry.configuredAutonomyPolicy(definition, op))
     }
     @Test fun removedOperationCannotInvokeItsOldRuntimeHandle() {
         val runtime = Runtime(); val definition = ConnectorDefinition("test", "Test", "1", "Test", runtime = runtime)

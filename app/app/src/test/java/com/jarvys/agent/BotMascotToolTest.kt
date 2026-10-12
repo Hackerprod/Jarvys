@@ -45,7 +45,7 @@ class BotMascotToolTest {
     private fun source(name:String="nimbo")=requireNotNull(javaClass.getResourceAsStream("/bot-mascot-scenes/$name.json")).bufferedReader().use { it.readText() }
     private fun service(session:String="mascot-main")=BotMascotService(repository,store,session,{ summary,token ->
         approvals++;summaries+=summary;approvalEffect?.invoke(token);decision
-    })
+    }, NativeActionPolicy.inMemory(com.jarvys.agent.connectors.AutonomyPolicy.ASK))
     private fun bot()=repository.create(CrewProfile("custom-mascot-tool",1,"Cloud","Custom helper","Follow the requested objective.",emptyList(),listOf("board_read")),listOf("board_read"),emptyList())
     private fun args(id:String="custom-mascot-tool",revision:Int=1,request:String="mascot-1",design:String="nimbo")=linkedMapOf<String,Any>(
         "request_id" to request,"bot_id" to id,"expected_revision" to revision,"visual_description" to "An original floating cloud with expressive dew drops and distinct state poses.","scene_json" to source(design))
@@ -54,11 +54,11 @@ class BotMascotToolTest {
         "workspace_mode" to "legacy_chat","icon_prompt" to "A friendly original cloud","visual_description" to "A cloud with moving droplets and distinct calm state poses.","mascot_scene_json" to source())
     private fun creator(failMascot:Boolean=false)=BotCreationTool(BotCreationService(repository,"mascot-main",{listOf("board_read")},{emptyList()},
         { summary,token->approvals++;summaries+=summary;approvalEffect?.invoke(token);decision },{false},
-        { _,_,_,_->throw AssertionError("No image service should run") },
-        { id,revision,request,description,scene,token->
+        { _,_,_,_,_->throw AssertionError("No image service should run") },
+        { id,revision,request,description,scene,token,authorization->
             if(failMascot)throw IllegalStateException("private failure")
-            service().assign(id,revision,request,description,scene,token,false).definition
-        }))
+            service().assign(id,revision,request,description,scene,token,false,authorization).definition
+        }, NativeActionPolicy.inMemory(com.jarvys.agent.connectors.AutonomyPolicy.ASK)))
 
     @Test fun compilesOriginalSourceLocallyAndPersistsHonestIndependentVisualMetadata() {
         val original=bot();val result=BotMascotTool(service()).execute(args(),CancellationToken.uncancellable())
@@ -122,7 +122,7 @@ class BotMascotToolTest {
         for(text in listOf(result.content,catalog.content,tool.auditDetail(args()))){assertFalse(text.contains(source()));assertFalse(text.contains(args()["visual_description"] as String));assertFalse(text.contains("bot_mascots"));assertFalse(text.contains("source.json"))}
         assertTrue(catalog.content.contains("LOCAL_COMPILED"));assertFalse(catalog.content.contains("Follow the requested objective"))
     }
-    @Test fun createBotAuthorsMascotWithoutImageAccessAndReviewsOnlyOnce() {
+    @Test fun createBotSharesExactCombinedAskWithoutImageAccess() {
         val result=creator().execute(createArgs(),CancellationToken.uncancellable());assertTrue(result.content,result.success)
         val value=JSONObject(result.content);assertTrue(value.getBoolean("saved"));assertTrue(value.getBoolean("mascot_compiled"));assertFalse(value.getBoolean("icon_complete"));assertEquals(1,approvals)
         val saved=repository.definition(value.getString("bot_id"));assertNotNull(saved.mascot);assertEquals(1,saved.profile.version);assertEquals(2,saved.revision)
@@ -143,8 +143,8 @@ class BotMascotToolTest {
         var images=0
         val tool=BotCreationTool(BotCreationService(repository,"mascot-main",{listOf("board_read")},{emptyList()},
             { _,_->ApprovalDecision.APPROVED },{true},
-            { _,_,_,_->images++;throw AssertionError("Concurrent icon must be preserved") },
-            { id,revision,_,_,_,_->repository.setIcon(id,revision,"12345678-1234-1234-1234-123456789abc.png");throw IllegalStateException("CAS changed") }))
+            { _,_,_,_,_->images++;throw AssertionError("Concurrent icon must be preserved") },
+            { id,revision,_,_,_,_,_->repository.setIcon(id,revision,"12345678-1234-1234-1234-123456789abc.png");throw IllegalStateException("CAS changed") }))
         val result=tool.execute(createArgs(),CancellationToken.uncancellable());assertTrue(result.content,result.success)
         val saved=repository.definitions().single{!it.builtIn};assertEquals(2,saved.revision);assertEquals("12345678-1234-1234-1234-123456789abc.png",saved.iconRef);assertEquals(0,images)
     }
@@ -157,6 +157,52 @@ class BotMascotToolTest {
         for(description in listOf("Bad\u0085description","Bad\ud800description"))
             assertFalse(BotMascotTool(service()).execute(args()+("visual_description" to description),CancellationToken.uncancellable()).success)
         assertEquals(0,approvals)
+    }
+
+    @Test fun creationUsesBothPoliciesAndOnlyTheRequiredExactCard() {
+        for ((parentMode, childMode, expectedCards) in listOf(
+            Triple(com.jarvys.agent.connectors.AutonomyPolicy.ALLOW, com.jarvys.agent.connectors.AutonomyPolicy.DENY, 0),
+            Triple(com.jarvys.agent.connectors.AutonomyPolicy.ALLOW, com.jarvys.agent.connectors.AutonomyPolicy.ASK, 1),
+            Triple(com.jarvys.agent.connectors.AutonomyPolicy.ASK, com.jarvys.agent.connectors.AutonomyPolicy.ASK, 1),
+        )) {
+            val folder = temporary.newFolder()
+            val repo = CrewProfileRepository(folder)
+            val mascotStore = BotMascotStoreTestSupport.store(folder)
+            val policy = NativeActionPolicy.inMemory()
+            policy.set(NativeActionPolicy.Operation.BOT_CREATE, parentMode)
+            policy.set(NativeActionPolicy.Operation.BOT_MASCOT, childMode)
+            var cards = 0
+            val approve: (ApprovalSummary, CancellationToken) -> ApprovalDecision = { summary, _ ->
+                cards++; assertTrue(summary.lines.any { it.contains(BotMascotService.digest(source())) })
+                ApprovalDecision.APPROVED
+            }
+            val mascot = BotMascotService(repo, mascotStore, "mascot-main", approve, policy)
+            val creation = BotCreationService(repo, "mascot-main", { listOf("board_read") }, { emptyList() }, approve,
+                { false }, { _, _, _, _, _ -> error("No icon request") },
+                { id, revision, request, description, scene, token, link ->
+                    mascot.assign(id, revision, request, description, scene, token, true, link).definition
+                }, policy)
+            val result = creation.create(createArgs(), CancellationToken.uncancellable())
+            assertEquals(expectedCards, cards)
+            if (childMode == com.jarvys.agent.connectors.AutonomyPolicy.DENY) {
+                assertFalse(result.success); assertTrue(repo.definitions().all { it.builtIn })
+            } else {
+                assertTrue(result.content, result.success)
+                assertNotNull(repo.definitions().single { !it.builtIn }.mascot)
+            }
+        }
+    }
+    @Test fun childRevocationDuringPreparationPreventsMascotPublication() {
+        val original = bot()
+        val policy = NativeActionPolicy.inMemory()
+        val revokingStore = BotMascotStoreTestSupport.store(temporary.root, {
+            policy.set(NativeActionPolicy.Operation.BOT_MASCOT, com.jarvys.agent.connectors.AutonomyPolicy.DENY)
+            java.util.UUID.randomUUID().toString()
+        }, BotMascotStore.MAX_TOTAL_BYTES, BotMascotStore.MAX_TOTAL_PACKAGES)
+        val service = BotMascotService(repository, revokingStore, "mascot-main", { _, _ -> error("Default ALLOW") }, policy)
+        assertFalse(BotMascotTool(service).execute(args(), CancellationToken.uncancellable()).success)
+        assertEquals(original.revision, repository.definition(original.id).revision)
+        assertNull(repository.definition(original.id).mascot)
     }
 
 }

@@ -43,7 +43,7 @@ class DialerConnector(
     override fun disconnect() = Unit
 
     override fun invoke(operation: String, arguments: JSONObject, token: CancellationToken): JSONObject =
-        error("Phone actions must pass through the connector approval gate")
+        error("Phone actions must pass through the connector action-policy gate")
 
     override fun prepareWrite(operation: String, arguments: JSONObject, token: CancellationToken): ConnectorWritePreparation {
         require(operation == OPEN_DIALER || operation == PLACE_CALL) { "Unknown phone operation: $operation" }
@@ -126,7 +126,7 @@ class DialerConnector(
         .put("untrusted_content", false).put("status", "dialer_launch_requested")
         .put("phoneNumber", number)
         .put("callPlaced", false)
-        .put("message", "Android accepted the dialer launch request; presentation is not confirmed. Jarvys did not initiate the call.")
+        .put("message", "Android accepted the dialer launch request; presentation is not confirmed. Jarvys did not initiate the call. If the dialer appears, press Call there to place it.")
 
     companion object {
         const val ID = "phone"
@@ -159,7 +159,7 @@ class DialerConnector(
                 ConnectorOperation(
                     name = OPEN_DIALER,
                     displayLabel = "Open Phone Dialer",
-                    description = "After approval, open ACTION_DIAL. The user presses Call in the system dialer; this operation cannot use Allow.",
+                    description = "Request ACTION_DIAL according to the configured action policy. The user presses Call in the system dialer.",
                     inputSchema = dialerSchema(),
                     write = true,
                     limits = mapOf("phoneNumberChars" to MAX_NUMBER_CHARS),
@@ -171,7 +171,7 @@ class DialerConnector(
                 ConnectorOperation(
                     name = PLACE_CALL,
                     displayLabel = "Place Phone Call",
-                    description = "Request a call through TelecomManager.placeCall with CALL_PHONE after approval or explicit Allow. If the call request fails, open ACTION_DIAL and require the user to press Call. Emergency and USSD numbers are rejected.",
+                    description = "Request a call through TelecomManager.placeCall with CALL_PHONE according to the configured action policy. If the call request fails, open ACTION_DIAL and require the user to press Call. Emergency and USSD numbers are rejected.",
                     inputSchema = dialerSchema(),
                     write = true,
                     requiredPermissions = listOf(Manifest.permission.CALL_PHONE),
@@ -216,7 +216,7 @@ class SmsComposerConnector : ConnectorRuntime {
     override fun disconnect() = Unit
 
     override fun invoke(operation: String, arguments: JSONObject, token: CancellationToken): JSONObject =
-        error("SMS composition must pass through the connector approval gate")
+        error("SMS composition must pass through the connector action-policy gate")
 
     override fun prepareWrite(operation: String, arguments: JSONObject, token: CancellationToken): ConnectorWritePreparation {
         require(operation == COMPOSE) { "Unknown SMS operation: $operation" }
@@ -273,7 +273,7 @@ class SmsComposerConnector : ConnectorRuntime {
             operations = listOf(ConnectorOperation(
                 name = COMPOSE,
                 displayLabel = "Compose SMS",
-                description = "Normal chat only. Resolve a requested contact with contacts read tools; never choose between homonyms. After ApprovalGate approval, open ACTION_SENDTO with smsto: and a prefilled draft. Does not read SMS or send; the user presses Send in the system messaging app.",
+                description = "Normal chat only. Resolve a requested contact with contacts read tools; never choose between homonyms. According to the configured action policy, request ACTION_SENDTO with smsto: and a prefilled draft. Does not read SMS or send; the user presses Send in the system messaging app.",
                 inputSchema = smsSchema(),
                 write = true,
                 autonomyAllowed = true,
@@ -284,7 +284,7 @@ class SmsComposerConnector : ConnectorRuntime {
             runtime = SmsComposerConnector(),
             displayNameResourceId = R.string.connector_label_sms_composer,
             descriptionResourceId = R.string.connector_description_sms_composer,
-            usageNoteProvider = { "The send_sms tool only opens a prefilled system messaging draft after ApprovalGate. Resolve contacts using read-only contact tools and ask the user about homonyms. Jarvys cannot read SMS or confirm sending; say the draft was prepared/opened and the user must tap Send." },
+            usageNoteProvider = { "The send_sms tool requests a prefilled system messaging composer under the configured action policy. Resolve contacts using contact tools and ask the user about homonyms. A successful result proves only that Android accepted the launch request, not that the composer appeared or a message was sent. The user must tap Send in the messaging app." },
         )
 
         internal fun smsSchema() = JSONObject().put("type", "object")

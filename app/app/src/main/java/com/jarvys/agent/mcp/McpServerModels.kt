@@ -6,10 +6,16 @@ enum class McpTransport { AUTO, STREAMABLE_HTTP, LEGACY_SSE }
 enum class McpAuthMode { NONE, BEARER, OAUTH }
 enum class McpToolSelectionMode { DEFAULT_ALL, ALL, CUSTOM, NONE }
 enum class McpToolAccess { READ, WRITE }
+
+/** Persisted policy provenance is distinct from tool selection and provider grants. */
+enum class McpInitialPolicyOrigin { COMMON_DEFAULT, EXPLICIT_CURRENT, LEGACY_UNKNOWN, INVALID }
 enum class McpInitialToolPolicy {
     ASK, ALLOW, DENY;
 
     companion object {
+        fun defaultPolicy(): McpInitialToolPolicy = valueOf(com.jarvys.agent.connectors.ActionPolicyDefaults
+            .descriptor("mcp-server", "initial_tool_policy").defaultPolicy.name)
+
         fun apply(config: McpServerConfig, discovered: List<McpToolConfig>): McpInitialToolPolicyResult =
             McpInitialToolPolicyApplication.apply(config, discovered)
 
@@ -42,9 +48,12 @@ data class McpServerConfig(
     val tools: List<McpToolConfig> = emptyList(),
     val toolSelectionMode: McpToolSelectionMode = McpToolSelectionMode.DEFAULT_ALL,
     val catalogServiceId: String? = null,
-    val initialToolPolicy: McpInitialToolPolicy = McpInitialToolPolicy.ASK,
+    val initialToolPolicy: McpInitialToolPolicy = McpInitialToolPolicy.defaultPolicy(),
     val githubToolsets: Set<String> = com.jarvys.agent.connectors.GitHubOperationPolicy.defaultToolsets,
     val githubToolPreferences: Map<String, String> = emptyMap(),
+    val initialToolPolicyOrigin: McpInitialPolicyOrigin = McpInitialPolicyOrigin.COMMON_DEFAULT,
+    /** Preserve a corrupt raw value on unrelated saves until the policy is explicitly repaired. */
+    val invalidInitialToolPolicyJson: String? = null,
 )
 
 data class McpToolConfig(
@@ -84,4 +93,6 @@ data class McpToolDefinition(
     val catalogServiceId: String? = null,
     val annotations: McpToolAnnotations? = null,
     val access: McpToolAccess = McpToolAccess.WRITE,
+    /** Custom server fallback; a saved exact action policy always takes precedence. */
+    val inheritedPolicy: com.jarvys.agent.connectors.AutonomyPolicy? = null,
 )

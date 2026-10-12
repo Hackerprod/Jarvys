@@ -99,7 +99,7 @@ class NotificationsConnectorTest {
         }
     }
 
-    @Test fun replyDismissAndOpenMustPassApprovalBeforeGatewayActionsRun() {
+    @Test fun savedAskDenialBlocksReplyDismissAndOpenBeforeGatewayActionsRun() {
         val gateway = FakeNotificationGateway().apply { items = listOf(item(1, 100, hasReply = true)) }
         val definition = NotificationsConnector.definition(gateway) { true }
         val summaries = mutableListOf<ApprovalSummary>()
@@ -113,10 +113,12 @@ class NotificationsConnectorTest {
         )
         actionArguments.forEach { (operationName, arguments) ->
             val operation = definition.operations.first { it.name == operationName }
+            registry.setAutonomyPolicy(definition, operation, AutonomyPolicy.ASK)
             val failure = runCatching { registry.invoke(definition, operation, arguments, token) }.exceptionOrNull()
-            assertTrue(failure?.message.orEmpty().contains("no la reintentes"))
+            assertTrue(failure?.message.orEmpty().contains("do not retry automatically"))
         }
         assertEquals(3, summaries.size)
+        assertEquals(actionArguments.keys.toList(), summaries.map { it.autonomyOperationName })
         assertEquals(0, gateway.replyCount)
         assertEquals(0, gateway.dismissCount)
         assertEquals(0, gateway.openCount)

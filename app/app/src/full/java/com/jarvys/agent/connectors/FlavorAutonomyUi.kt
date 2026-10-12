@@ -5,12 +5,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -26,10 +22,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -67,7 +59,8 @@ object FlavorAutonomyUi {
             ApprovalGate.INSTANCE.resolveFromUi(event.approvalId ?: "") {
                 var decision = ApprovalDecision.APPROVED_ALLOW_FAILED
                 approveAndAllowAlways({
-                    if (project) autonomy.setProjectPolicyFromUi(AutonomyPolicy.ALLOW)
+                    if (ApprovalGate.INSTANCE.enableAlwaysFromUi(event.approvalId ?: "")) null
+                    else if (project) autonomy.setProjectPolicyFromUi(AutonomyPolicy.ALLOW)
                     else autonomy.setPolicyFromUi(AutonomyPolicy.ALLOW)
                 }, onStatusDetail) { decision = it }
                 decision
@@ -88,9 +81,8 @@ object FlavorAutonomyUi {
             onDispose { lifecycle.removeObserver(observer) }
         }
         val installed = remember(autonomy, revision, resumed) { autonomy.installed() }
-        if (!installed) return false
-        val policy = remember(autonomy, revision) { autonomy.policy() }
-        val projectPolicy = remember(autonomy, revision) { autonomy.projectPolicy() }
+        val policy = remember(autonomy, revision, resumed) { autonomy.policy() }
+        val projectPolicy = remember(autonomy, revision, resumed) { autonomy.projectPolicy() }
         var failure by remember { mutableStateOf<ConnectorUiText?>(null) }
         val context = LocalContext.current
         val label = stringResource(R.string.full_linux_autonomy_switch)
@@ -108,15 +100,37 @@ object FlavorAutonomyUi {
                         Text(label, style = MaterialTheme.typography.bodyMedium)
                         Text(status, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    Switch(checked = policy == AutonomyPolicy.ALLOW,
-                        onCheckedChange = { failure = autonomy.setPolicyFromUi(if (it) AutonomyPolicy.ALLOW else AutonomyPolicy.ASK) },
-                        modifier = Modifier.testTag("linux-autonomy-switch").semantics { contentDescription = label; stateDescription = status })
                 }
+                ActionPolicyControl(policy, "linux-policy-control", autonomy.authorization().snapshot.origin) { failure = autonomy.setPolicyFromUi(it) }
+                if (!installed) Text(stringResource(R.string.full_linux_exec_not_installed),
+                    Modifier.padding(horizontal = 16.dp, vertical = 8.dp).testTag("linux-policy-unavailable"),
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 failure?.let { Text(it.resolve(context), Modifier.padding(horizontal = 16.dp, vertical = 8.dp), color = MaterialTheme.colorScheme.error) }
             }
+            MaintenanceControls(autonomy, LinuxExecAutonomy.SETUP_OPERATION_NAME, R.string.full_linux_setup_policy_label)
+            MaintenanceControls(autonomy, LinuxExecAutonomy.UNINSTALL_OPERATION_NAME, R.string.full_linux_uninstall_policy_label)
             CodingControls(autonomy, projectPolicy)
         }
         return true
+    }
+
+    @Composable private fun MaintenanceControls(autonomy: LinuxExecAutonomy, operation: String, label: Int) {
+        val context = LocalContext.current
+        var failure by remember(operation) { mutableStateOf<ConnectorUiText?>(null) }
+        var refresh by remember(operation) { mutableIntStateOf(0) }
+        val authorization = refresh.let { autonomy.maintenanceAuthorization(operation) }
+        JarvysGroup {
+            Column(Modifier.fillMaxWidth().testTag("$operation-policy-controls")) {
+                Text(stringResource(label), Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    style = MaterialTheme.typography.bodyMedium)
+                ActionPolicyControl(authorization.policy, "$operation-policy-control", authorization.snapshot.origin) {
+                    failure = autonomy.setMaintenancePolicyFromUi(operation, it)
+                    refresh++
+                }
+                failure?.let { Text(it.resolve(context), Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    color = MaterialTheme.colorScheme.error) }
+            }
+        }
     }
 
     @Composable private fun CodingControls(autonomy: LinuxExecAutonomy, policy: AutonomyPolicy) {
@@ -124,27 +138,25 @@ object FlavorAutonomyUi {
         var failure by remember { mutableStateOf<ConnectorUiText?>(null) }
         JarvysSectionLabel(stringResource(R.string.full_coding_autonomy_title), Modifier.padding(start = 4.dp))
         JarvysGroup {
-            Column(Modifier.fillMaxWidth().testTag("coding-autonomy-controls").selectableGroup()) {
+            Column(Modifier.fillMaxWidth().testTag("coding-autonomy-controls")) {
                 Text(stringResource(R.string.full_coding_autonomy_description),
                     Modifier.padding(16.dp), style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
-                listOf(AutonomyPolicy.ALLOW, AutonomyPolicy.ASK, AutonomyPolicy.DENY).forEach { choice ->
-                    val label = stringResource(when (choice) {
-                        AutonomyPolicy.ALLOW -> R.string.connector_policy_allow_automatically
-                        AutonomyPolicy.ASK -> R.string.connector_policy_ask_each_time
-                        AutonomyPolicy.DENY -> R.string.connector_policy_deny_action
-                    })
-                    Row(Modifier.fillMaxWidth().testTag("coding-policy-${choice.name.lowercase(java.util.Locale.ROOT)}")
-                        .selectable(selected = policy == choice, role = Role.RadioButton,
-                            onClick = { failure = autonomy.setProjectPolicyFromUi(choice) })
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        RadioButton(selected = policy == choice, onClick = null)
-                        Text(label, style = MaterialTheme.typography.bodyMedium)
-                    }
-                }
+                ActionPolicyControl(policy, "coding-policy-control", autonomy.projectAuthorization().snapshot.origin) { failure = autonomy.setProjectPolicyFromUi(it) }
                 failure?.let { Text(it.resolve(context), Modifier.padding(horizontal = 16.dp, vertical = 8.dp), color = MaterialTheme.colorScheme.error) }
             }
         }
     }
+
+    @Composable private fun ActionPolicyControl(policy: AutonomyPolicy, tag: String, origin: ActionPolicyOrigin, onSelect: (AutonomyPolicy) -> Unit) {
+        fun label(choice: AutonomyPolicy): Int = when (choice) {
+            AutonomyPolicy.ALLOW -> R.string.connector_policy_allow_automatically
+            AutonomyPolicy.ASK -> R.string.connector_policy_ask_each_time
+            AutonomyPolicy.DENY -> R.string.connector_policy_deny_action
+        }
+        ConnectorPolicySelector(label(policy), AutonomyPolicy.entries.map { choice ->
+            ConnectorPolicyChoice(label(choice)) { onSelect(choice) }
+        }, subjectKey = tag, origin = origin, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).testTag(tag))
+    }
+
 }

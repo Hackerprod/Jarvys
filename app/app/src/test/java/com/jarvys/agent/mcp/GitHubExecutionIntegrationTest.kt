@@ -127,7 +127,7 @@ class GitHubExecutionIntegrationTest {
         assertTrue(h.nativeRequests.isEmpty())
     }
 
-    @Test fun everyReviewedGitHubWriteStillAsksWithLegacyAllowAndReadOnlyAnnotations() {
+    @Test fun everyGitHubWriteOffersAllModesAndSavedAskStillRequiresExactReview() {
         val writes = linkedMapOf(
             "create_branch" to target().put("branch", "feature/review").put("from_branch", "main"),
             "issue_write" to issueArgs(),
@@ -152,8 +152,9 @@ class GitHubExecutionIntegrationTest {
             val definition = h.repository.exposedTools().single { it.wireName == name }
             assertEquals("Server annotations must not authorize $name", McpToolAccess.WRITE, definition.access)
             h.store.setPolicy("mcp:${h.config.id}", name, AutonomyPolicy.ALLOW)
-            assertEquals(AutonomyPolicy.ASK, h.approval.policy(definition))
-            assertThrows(IllegalArgumentException::class.java) { h.approval.setPolicy(definition, AutonomyPolicy.ALLOW) }
+            assertEquals(AutonomyPolicy.ALLOW, h.approval.policy(definition))
+            h.approval.setPolicy(definition, AutonomyPolicy.ALLOW)
+            h.approval.setPolicy(definition, AutonomyPolicy.ASK)
             val future = h.start(name, args)
             val (id, summary) = h.awaitApproval()
             assertFalse(summary.allowAlwaysAvailable)
@@ -164,6 +165,32 @@ class GitHubExecutionIntegrationTest {
         }
         assertTrue(h.calls.isEmpty())
         assertTrue(h.nativeRequests.isEmpty())
+    }
+
+    @Test fun allowGitHubWriteKeepsExactTargetAndUncertainReplayProtection() {
+        val h = harness(listOf(remote("issue_write")))
+        h.enable("issue_write")
+        h.store.setPolicy("mcp:${h.config.id}", "issue_write", AutonomyPolicy.ALLOW)
+        h.remoteResponse = { _, _ -> throw IOException("simulated unknown result") }
+        val args = issueArgs()
+        assertThrows(IllegalStateException::class.java) { h.call("issue_write", args) }
+        assertEquals(1, h.calls.size)
+        assertTrue(h.presenter.shown.isEmpty())
+        assertTrue(h.journal.isUncertain(h.intent("issue_write", args)))
+        assertThrows(IllegalStateException::class.java) { h.call("issue_write", args) }
+        assertEquals(1, h.calls.size)
+    }
+
+    @Test fun askAccountReadCanBeReviewedWithoutInventingRepositoryTarget() {
+        val h = harness(listOf(remote("get_me", true)))
+        h.enable("get_me")
+        h.store.setPolicy("mcp:${h.config.id}", "get_me", AutonomyPolicy.ASK)
+        val pending = h.start("get_me", JSONObject())
+        val (id, summary) = h.awaitApproval()
+        assertTrue(summary.lines.any { it.contains("connected GitHub account") })
+        h.gate.resolve(id, ApprovalDecision.APPROVED)
+        pending.get(5, TimeUnit.SECONDS)
+        assertEquals("get_me", h.calls.single().first)
     }
 
     @Test fun changingBearerAccountDuringApprovalPreventsDispatchAndDoesNotReserveIntent() {
@@ -211,7 +238,7 @@ class GitHubExecutionIntegrationTest {
         val (id, _) = h.awaitApproval()
         h.store.setPolicy("mcp:${h.config.id}", "issue_write", AutonomyPolicy.DENY)
         h.gate.resolve(id, ApprovalDecision.APPROVED)
-        assertTrue(h.failure(future) is IllegalArgumentException)
+        assertTrue(h.failure(future) is IllegalStateException)
         assertTrue(h.calls.isEmpty())
         assertFalse(h.journal.isUncertain(h.intent("issue_write", issueArgs())))
     }
@@ -663,6 +690,9 @@ class GitHubExecutionIntegrationTest {
         fun enable(vararg names: String) = names.forEach { name ->
             check(repository.get(config.id)!!.tools.any { it.wireName == name }) { "Undiscovered fixture tool $name" }
             repository.updateToolEnabled(config.id, name, true)
+            // Existing review-race fixtures explicitly select ASK. Reads retain the common ALLOW default.
+            val definition = repository.exposedTools().single { it.wireName == name }
+            if (definition.access == McpToolAccess.WRITE) store.setPolicy("mcp:${config.id}", name, AutonomyPolicy.ASK)
         }
         fun discover(tools: List<McpToolConfig>) = discovery(tools)
         fun call(name: String, args: JSONObject): JSONObject = manager.callTool(config.id, name, args, CancellationToken.uncancellable())

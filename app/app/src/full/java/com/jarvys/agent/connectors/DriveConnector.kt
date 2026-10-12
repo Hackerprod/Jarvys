@@ -123,8 +123,36 @@ class DriveConnector(
             frozenArguments, prepared)
     }
 
+    private class PreparedRead(val owner: DriveConnector, val operation: String, val arguments: String,
+        val epoch: Long, val account: String?)
+
+    override fun prepareRead(operation: String, arguments: JSONObject, token: CancellationToken): ConnectorWritePreparation {
+        token.throwIfCancelled()
+        require(!(operation in WRITE_OPERATIONS)) { "A write cannot use read preparation" }
+        val frozen = JSONObject(arguments.toString())
+        val epoch = oauth.currentAuthorizationEpoch()
+        val account = oauth.currentAccountIdentity()
+        check(epoch == oauth.currentAuthorizationEpoch()) { "Google connection changed during read preparation" }
+        return ConnectorWritePreparation(ApprovalSummary(operation, listOf(frozen.toString())), frozen,
+            PreparedRead(this, operation, frozen.toString(), epoch, account))
+    }
+
     override fun invokeReadPrepared(operation: String, arguments: JSONObject, preparation: ConnectorWritePreparation,
-                                    token: CancellationToken): JSONObject = invokePrepared(operation, arguments, preparation, token)
+                                    token: CancellationToken): JSONObject {
+        val read = preparation.attachment as? PreparedRead ?: error("Prepared Google read identity is missing")
+        fun validateRead() {
+            token.throwIfCancelled()
+            check(read.owner === this && read.operation == operation && read.arguments == arguments.toString()) {
+                "Google read changed after preparation"
+            }
+            check(read.epoch == oauth.currentAuthorizationEpoch() &&
+                (read.account == null || read.account == oauth.currentAccountIdentity())) { "Google account changed after read preparation" }
+        }
+        validateRead()
+        return oauth.withAdmission({ validateRead(); preparation.authorizeEffect?.invoke(); validateRead() }) {
+            invoke(operation, arguments, token)
+        }
+    }
 
     override fun invokePrepared(operation: String, arguments: JSONObject, preparation: ConnectorWritePreparation,
                                 token: CancellationToken): JSONObject = oauth.withAdmission(preparation.authorizeEffect) {
@@ -137,7 +165,7 @@ class DriveConnector(
         token.throwIfCancelled()
         val frozen = preparation.attachment as? PreparedWrite ?: error("Drive write has no approved snapshot")
         require(frozen.owner === preparationOwner && frozen.operation == operation && frozen.arguments == arguments.toString()) {
-            "Drive write changed after preparation; request approval again"
+            "Drive write changed after preparation; prepare a fresh request under the current policy"
         }
         requireAuthorizationEpoch(frozen.authorizationEpoch)
         check(!frozen.used.get()) { "This Drive write was already attempted; check its outcome before preparing another write" }
@@ -147,14 +175,14 @@ class DriveConnector(
             val latest = fetchMetadata(previous.id, frozen.shared, GoogleOAuthProtocol.DRIVE_FILE, token, frozen.authorizationEpoch)
             validateUpdateTarget(latest, frozen.driveId)
             require(previous.fingerprint == latest.fingerprint && previous.etag == latest.etag) {
-                "The Drive file changed after approval. Read the latest version and request approval again."
+                "The Drive file changed during this action. Read the latest version and prepare a fresh request under the current policy."
             }
         }
         frozen.parent?.let { previous ->
             val latest = fetchMetadata(previous.id, frozen.shared, GoogleOAuthProtocol.DRIVE_FILE, token, frozen.authorizationEpoch)
             validateParent(latest, frozen.driveId)
             require(previous.fingerprint == latest.fingerprint) {
-                "The destination folder changed after approval; request approval again"
+                "The destination folder changed during this action; prepare a fresh request under the current policy"
             }
         }
         token.throwIfCancelled()
@@ -388,7 +416,7 @@ class DriveConnector(
 
     private fun requireAuthorizationEpoch(expected: Long) {
         check(oauth.currentAuthorizationEpoch() == expected) {
-            "Google account or authorization changed after Drive preparation; prepare the action again and request a new approval"
+            "Google account or authorization changed after Drive preparation; prepare the action again under the current policy"
         }
     }
 
@@ -441,7 +469,7 @@ class DriveConnector(
 
     private fun requireWriteSuccess(status: Int, message: () -> String) {
         when {
-            status == 412 -> error("Drive file changed during update; no automatic retry was made. Read it again and request approval.")
+            status == 412 -> error("Drive file changed during update; no automatic retry was made. Read it again and prepare a fresh request under the current policy.")
             status >= 500 || status == 408 -> error("Drive write outcome is uncertain (HTTP $status). Check Drive before retrying; this write will not be replayed automatically.")
             status !in 200..299 -> error(message())
         }

@@ -35,8 +35,16 @@ public final class BotIconService {
     }
 
     private BotIconService(Context context, String sessionId, ProviderSettings settings, SecretStore secrets) {
+        this(context, sessionId, settings, secrets, () -> { });
+    }
+
+    BotIconService(Context context, String sessionId, ProviderSettings settings, Runnable admission) {
+        this(context, sessionId, settings, SecretStore.get(context.getApplicationContext()), admission);
+    }
+
+    private BotIconService(Context context, String sessionId, ProviderSettings settings, SecretStore secrets, Runnable admission) {
         this(context, sessionId, settings, secrets, new CrewProfileRepository(context), new BotIconStore(context),
-                new CodexImageGenerationClient(new CodexOAuthManager(secrets), settings));
+                new CodexImageGenerationClient(new CodexOAuthManager(secrets), settings, admission));
     }
 
     BotIconService(Context context, String sessionId, ProviderSettings settings, SecretStore secrets,
@@ -56,6 +64,12 @@ public final class BotIconService {
 
     /** Blocking; invoke from the UI's I/O scope with a standalone cancellable token. */
     public BotDefinition generateAndAssign(String botId, int expectedRevision, String prompt, CancellationToken token) {
+        return generateAndAssign(botId, expectedRevision, prompt, token, () -> { });
+    }
+
+    /** The enclosing reviewed creation binds each new provider/publication effect to its live policy. */
+    public BotDefinition generateAndAssign(String botId, int expectedRevision, String prompt, CancellationToken token, Runnable authorizeEffect) {
+        java.util.Objects.requireNonNull(authorizeEffect);
         if (token == null) throw new IllegalArgumentException("Cancellation token is required");
         token.throwIfCancelled();
         if (token.isCrewRun() || !isAvailable()) throw unavailable();
@@ -76,11 +90,13 @@ public final class BotIconService {
              CommitGate commitGate = new CommitGate(token)) {
             // Forward the complete freeform prompt verbatim. No topic map, role instructions,
             // implicit references, files, chat messages, or previous images are sent.
+            authorizeEffect.run();
             CodexImageGenerationClient.GeneratedImage generated = client.generate(sessionId, prompt, "1024x1024", token);
             token.throwIfCancelled();
             if (generated == null || !"image/png".equals(generated.mimeType)) {
                 throw new Failure(Reason.INVALID_IMAGE, "The image service did not return a valid PNG icon.");
             }
+            authorizeEffect.run();
             stagedRef = icons.save(botId, generated.bytes, token);
             token.throwIfCancelled();
             if (!isAvailable()) throw unavailable();
@@ -90,6 +106,7 @@ public final class BotIconService {
                 requireEditable(current(botId), expectedRevision);
                 // Repository CAS is serialized with other edits/disable/icon operations. It only
                 // changes iconRef/revision, preserving the active CrewProfile runtime snapshot.
+                authorizeEffect.run();
                 saved[0] = repository.setIcon(botId, expectedRevision, newRef);
             });
             committed = true;

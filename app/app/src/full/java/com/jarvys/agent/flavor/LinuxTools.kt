@@ -63,6 +63,17 @@ private fun unavailable(context: Context) = CoreToolResult.failure(
 private fun safeFailure(context: Context, sanitizer: LinuxOutputSanitizer, failure: Throwable): CoreToolResult =
     CoreToolResult.failure(sanitizer.scrub(failure.message ?: failure.javaClass.simpleName))
 
+/** Only real maintenance reviews/choices protect the visible card from automated device input. */
+private fun protectedLinuxDecision(request: () -> UserDecisionResult): UserDecisionResult {
+    val protection = com.jarvys.agent.MemoryUiAutomationGuard.enterProtectedSurface()
+    try {
+        if (!protection.isReadyForUser) return UserDecisionResult.Unavailable
+        val result = request()
+        protection.requireHumanUiInteraction()
+        return result
+    } finally { protection.close() }
+}
+
 internal abstract class LinuxToolBase(
     protected val context: Context,
     protected val sessionId: String,
@@ -144,9 +155,10 @@ internal class LinuxSetupTool(
     private val decisionAvailability: () -> Boolean,
     private val sanitizer: LinuxOutputSanitizer,
     surfaceAvailable: (Context?, String?, Int) -> Boolean,
+    private val autonomy: LinuxExecAutonomy = LinuxExecAutonomy.get(context),
 ) : LinuxToolBase(context, sessionId, surfaceAvailable) {
     override fun declaration() = linuxSpec(LINUX_SETUP_NAME,
-        "Request explicit installation consent, install Ubuntu Base, then verify it with the PRoot probe.",
+        "Install the pinned Ubuntu Base release and verify PRoot under the Linux setup ALLOW/ASK/DENY policy.",
         emptyObjectSchema())
 
     override fun execute(arguments: Map<String, Any>, token: CancellationToken): CoreToolResult =
@@ -159,41 +171,63 @@ internal class LinuxSetupTool(
             token.throwIfCancelled()
             if (!ensureAvailable()) return unavailable(context)
             if (!runtime.supportsArm64()) return CoreToolResult.failure(linuxText(context, R.string.full_linux_unsupported_abi))
+            val authorization = autonomy.maintenanceAuthorization(LinuxExecAutonomy.SETUP_OPERATION_NAME)
+            if (authorization.policy == AutonomyPolicy.DENY) return CoreToolResult.failure(
+                linuxText(context, R.string.full_linux_maintenance_denied))
             val existing = runtime.state()
+            val rootfs = runtime.rootfsPath()
+            val workspace = runtime.workspacePath()
+            var approvedAsk = false
+            if (authorization.policy == AutonomyPolicy.ASK) {
+                when (val decision = requestDecision(setupDecisionSpec(rootfs, workspace, existing), token)) {
+                    is UserDecisionResult.Selected -> if (decision.option.id == OPTION_INSTALL) approvedAsk = true
+                        else return CoreToolResult.failure(linuxText(context, R.string.full_linux_setup_dismissed))
+                    UserDecisionResult.Dismissed, UserDecisionResult.Cancelled ->
+                        return CoreToolResult.failure(linuxText(context, R.string.full_linux_setup_dismissed))
+                    UserDecisionResult.Unavailable ->
+                        return CoreToolResult.failure(linuxText(context, R.string.full_linux_setup_unavailable))
+                }
+            }
+            var initialStateVerified = false
+            fun admitEffect() {
+                // Runtime/file checks stay outside the short policy/STOP lock.
+                check(runtime.supportsArm64() && runtime.rootfsPath() == rootfs && runtime.workspacePath() == workspace) {
+                    "Linux setup target changed; review the current environment"
+                }
+                if (!initialStateVerified) check(runtime.state() == existing) { "Linux installation state changed after preparation" }
+                autonomy.admitMaintenance(authorization, approvedAsk, token) {
+                    check(ensureAvailable()) { "Linux setup is no longer available for this conversation" }
+                }
+                initialStateVerified = true
+            }
             if (existing.phase == LinuxInstallPhase.READY) {
                 progress.onProgress(linuxText(context, R.string.full_linux_progress_probe))
-                val probe = runtime.probe()
+                val probe = runtime.probeAdmitted(token, ::admitEffect)
                 if (probe.ready) {
-                    runtime.markProbeSuccess()
+                    runtime.markProbeSuccessAdmitted(::admitEffect)
                     return CoreToolResult.success(JSONObject().put("status", "already_ready")
                         .put("message", linuxText(context, R.string.full_linux_setup_already_ready))
                         .put("probe", linuxProbeJson(probe, sanitizer)).toString())
                 }
                 val detail = LinuxFailureDiagnostics.probe(probe, sanitizer::scrub)
-                runtime.markProbeFailure(probe.status.name.lowercase(Locale.ROOT), detail)
+                runtime.markProbeFailureAdmitted(probe.status.name.lowercase(Locale.ROOT), detail, ::admitEffect)
                 return setupFailure(detail)
             }
-            when (val decision = requestDecision(setupDecisionSpec(), token)) {
-                is UserDecisionResult.Selected -> if (decision.option.id != OPTION_INSTALL) {
-                    return CoreToolResult.failure(linuxText(context, R.string.full_linux_setup_dismissed))
-                }
-                UserDecisionResult.Dismissed, UserDecisionResult.Cancelled ->
-                    return CoreToolResult.failure(linuxText(context, R.string.full_linux_setup_dismissed))
-                UserDecisionResult.Unavailable ->
-                    return CoreToolResult.failure(linuxText(context, R.string.full_linux_setup_unavailable))
-            }
-            val installed = runtime.installForProbe({ state -> progress.onProgress(progressMessage(state)) }, token)
+            val installed = runtime.installForProbeAdmitted({ state ->
+                progress.onProgress(progressMessage(state))
+            }, token, ::admitEffect)
+            token.throwIfCancelled()
             if (installed.phase != LinuxInstallPhase.READY) {
                 return setupFailure(installed.failureDetail.ifBlank { installed.failureCode.ifBlank { installed.phase.name } })
             }
             progress.onProgress(linuxText(context, R.string.full_linux_progress_probe))
-            val probe = runtime.probe()
+            val probe = runtime.probeAdmitted(token, ::admitEffect)
             if (!probe.ready) {
                 val detail = LinuxFailureDiagnostics.probe(probe, sanitizer::scrub)
-                runtime.markProbeFailure(probe.status.name.lowercase(Locale.ROOT), detail)
+                runtime.markProbeFailureAdmitted(probe.status.name.lowercase(Locale.ROOT), detail, ::admitEffect)
                 return setupFailure(detail)
             }
-            runtime.markProbeSuccess()
+            runtime.markProbeSuccessAdmitted(::admitEffect)
             return CoreToolResult.success(JSONObject().put("status", "ready")
                 .put("version", installed.version).put("architecture", installed.arch)
                 .put("size_bytes", installed.sizeBytes).put("probe", linuxProbeJson(probe, sanitizer))
@@ -206,22 +240,31 @@ internal class LinuxSetupTool(
     }
 
     private fun setupFailure(detail: String): CoreToolResult = CoreToolResult.failure(
-        linuxText(context, R.string.full_linux_setup_failed_detail, sanitizer.scrub(detail)))
+        linuxText(context, R.string.full_linux_setup_failed_detail,
+            linuxText(context, R.string.full_linux_setup_partial_notice) + "\n" + sanitizer.scrub(detail)))
 
-    private fun setupDecisionSpec(): UserDecisionSpec {
+    private fun setupDecisionSpec(rootfs: String, workspace: String, state: LinuxInstallState): UserDecisionSpec {
         val c = AppLanguageRuntime.localizedContext(context.applicationContext)
         val body = c.getString(R.string.full_linux_setup_consent_body,
             com.jarvys.agent.linux.LinuxCatalog.VERSION, com.jarvys.agent.linux.LinuxCatalog.ARCH,
             Formatter.formatFileSize(c, com.jarvys.agent.linux.LinuxCatalog.DOWNLOAD_BYTES),
             Formatter.formatFileSize(c, com.jarvys.agent.linux.LinuxCatalog.EXTRACTED_BYTES),
             Formatter.formatFileSize(c, runtime.availableBytes()))
-        return UserDecisionSpec(c.getString(R.string.full_linux_setup_consent_title), body, listOf(
+        return UserDecisionSpec(c.getString(R.string.full_linux_setup_consent_title), body + "\n" +
+            c.getString(R.string.full_linux_maintenance_targets, rootfs, workspace) + "\n" +
+            c.getString(R.string.full_linux_setup_exact_release, com.jarvys.agent.linux.LinuxCatalog.URL,
+                com.jarvys.agent.linux.LinuxCatalog.SHA256, state.phase.name), listOf(
             UserDecisionOption(OPTION_INSTALL, c.getString(R.string.full_linux_setup_install), role = UserDecisionRole.PRIMARY),
             UserDecisionOption(OPTION_LATER, c.getString(R.string.full_linux_setup_later)),
         ), allowDismiss = false)
     }
 
     private fun requestDecision(spec: UserDecisionSpec, token: CancellationToken): UserDecisionResult {
+        if (!decisionAvailability()) return UserDecisionResult.Unavailable
+        return protectedLinuxDecision { requestDecisionUnprotected(spec, token) }
+    }
+
+    private fun requestDecisionUnprotected(spec: UserDecisionSpec, token: CancellationToken): UserDecisionResult {
         if (!decisionAvailability()) return UserDecisionResult.Unavailable
         val options = spec.options.map { option -> linkedMapOf<String, Any>(
             "id" to option.id, "label" to option.label,
@@ -294,18 +337,31 @@ internal class LinuxExecTool(
             if (runtime.state().phase != LinuxInstallPhase.READY) {
                 return CoreToolResult.failure(linuxText(context, R.string.full_linux_exec_not_installed))
             }
-            val policy = autonomy.policy()
-            if (policy == AutonomyPolicy.DENY) return CoreToolResult.failure(linuxText(context, R.string.full_linux_autonomy_denied))
-            val automatic = policy == AutonomyPolicy.ALLOW
-            if (!automatic) {
-                val decision = approvalGate.request(commandApproval(command, cwd, timeoutMillis), token)
-                if (decision !in setOf(ApprovalDecision.APPROVED, ApprovalDecision.APPROVED_ALLOW_ALWAYS, ApprovalDecision.APPROVED_ALLOW_FAILED))
-                    return CoreToolResult.failure(approvalResultMessage(decision))
+            var authorization = autonomy.authorization()
+            if (authorization.policy == AutonomyPolicy.DENY) return CoreToolResult.failure(linuxText(context, R.string.full_linux_autonomy_denied))
+            var approvedAsk = false
+            if (authorization.policy == AutonomyPolicy.ASK) {
+                var alwaysReceipt: LinuxExecAutonomy.Authorization? = null
+                val decision = approvalGate.request(commandApproval(command, cwd, timeoutMillis).copy(
+                    enableAlways = { alwaysReceipt = autonomy.allowFromApproval(authorization) },
+                ), token)
+                when (decision) {
+                    ApprovalDecision.APPROVED, ApprovalDecision.APPROVED_ALLOW_FAILED -> approvedAsk = true
+                    ApprovalDecision.APPROVED_ALLOW_ALWAYS -> authorization = requireNotNull(alwaysReceipt) {
+                        "The exact Linux Allow policy receipt is missing; command not launched"
+                    }
+                    else -> return CoreToolResult.failure(approvalResultMessage(decision))
+                }
             }
-            token.throwIfCancelled()
-            if (autonomy.policy() == AutonomyPolicy.DENY) return CoreToolResult.failure(linuxText(context, R.string.full_linux_autonomy_denied))
-            if (automatic && autonomy.policy() != AutonomyPolicy.ALLOW) return CoreToolResult.failure(linuxText(context, R.string.full_linux_autonomy_changed))
-            if (automatic) autonomy.recordAutomaticExecution(sanitizer.scrub(command), sanitizer.scrub(cwd))?.let {
+            fun admitCommand() {
+                // Runtime state may inspect files; perform that work before the short policy/STOP lock.
+                check(runtime.supportsArm64() && runtime.state().phase == LinuxInstallPhase.READY) { "Linux environment is unavailable" }
+                autonomy.admit(authorization, approvedAsk, token) {
+                    check(ensureAvailable()) { "Linux command is no longer available for this conversation" }
+                }
+            }
+            admitCommand()
+            if (authorization.policy == AutonomyPolicy.ALLOW) autonomy.recordAutomaticExecution(sanitizer.scrub(command), sanitizer.scrub(cwd))?.let {
                 return CoreToolResult.failure(it.resolve(context))
             }
 
@@ -319,16 +375,14 @@ internal class LinuxExecTool(
             })
             val started = android.os.SystemClock.elapsedRealtime()
             token.throwIfCancelled()
-            if (autonomy.policy() == AutonomyPolicy.DENY) return CoreToolResult.failure(linuxText(context, R.string.full_linux_autonomy_denied))
-            if (automatic && autonomy.policy() != AutonomyPolicy.ALLOW) return CoreToolResult.failure(linuxText(context, R.string.full_linux_autonomy_changed))
-            val execution = runtime.exec(command, cwd, timeoutMillis, LinuxOutputCallback { stream, text ->
+            val execution = runtime.execAdmitted(command, cwd, timeoutMillis, LinuxOutputCallback { stream, text ->
                 val message = if (stream == LinuxOutputStream.STDOUT) {
                     stdout.append(text)
                 } else {
                     stderr.append(text)
                 }
                 outputProgress.append(stream, text)
-            }, token)
+            }, token, ::admitCommand)
             outputProgress.finish()
             val stdoutResult = stdout.finish()
             val stderrResult = stderr.finish()
@@ -410,47 +464,90 @@ internal class LinuxUninstallTool(
     private val autonomy: LinuxExecAutonomy = LinuxExecAutonomy.get(context),
 ) : LinuxToolBase(context, sessionId, surfaceAvailable) {
     override fun declaration() = linuxSpec(LINUX_UNINSTALL_NAME,
-        "Remove the private Linux rootfs after the user chooses whether /workspace should be kept.", emptyObjectSchema())
+        "Remove the private Linux rootfs under its ALLOW/ASK/DENY policy. Set delete_workspace explicitly or ask the user to choose.",
+        strictSchema(mapOf("delete_workspace" to mapOf("type" to "boolean")), emptyList()))
 
     override fun execute(arguments: Map<String, Any>, token: CancellationToken): CoreToolResult {
+        var rootfsRemoved = false
         return try {
-            requireNoArguments(arguments)
+            require((arguments.keys - setOf("delete_workspace")).isEmpty()) { "Unexpected uninstall parameter" }
+            val requestedDeletion = if (arguments.containsKey("delete_workspace")) {
+                arguments["delete_workspace"] as? Boolean ?: error("delete_workspace must be a boolean")
+            } else null
             token.throwIfCancelled()
             if (!ensureAvailable()) return unavailable(context)
-            when (val decision = requestDecision(uninstallDecisionSpec(), token)) {
-                is UserDecisionResult.Selected -> when (decision.option.id) {
-                    OPTION_KEEP_WORKSPACE -> {
-                        autonomy.withUninstallReset { runtime.uninstall() }
-                        CoreToolResult.success(linuxText(context, R.string.full_linux_uninstall_done_keep))
+            val authorization = autonomy.maintenanceAuthorization(LinuxExecAutonomy.UNINSTALL_OPERATION_NAME)
+            if (authorization.policy == AutonomyPolicy.DENY) return CoreToolResult.failure(
+                linuxText(context, R.string.full_linux_maintenance_denied))
+            val rootfs = runtime.rootfsPath()
+            val workspace = runtime.workspacePath()
+            val existing = runtime.state()
+            var deleteWorkspace = requestedDeletion
+            var approvedAsk = false
+            if (requestedDeletion == null || authorization.policy == AutonomyPolicy.ASK) {
+                when (val decision = requestDecision(uninstallDecisionSpec(requestedDeletion, rootfs, workspace), token)) {
+                    is UserDecisionResult.Selected -> when (decision.option.id) {
+                        OPTION_KEEP_WORKSPACE -> { deleteWorkspace = false; approvedAsk = true }
+                        OPTION_DELETE_WORKSPACE -> { deleteWorkspace = true; approvedAsk = true }
+                        else -> return CoreToolResult.failure(linuxText(context, R.string.full_linux_uninstall_dismissed))
                     }
-                    OPTION_DELETE_WORKSPACE -> {
-                        autonomy.withUninstallReset { runtime.uninstall(); runtime.deleteWorkspace() }
-                        CoreToolResult.success(linuxText(context, R.string.full_linux_uninstall_done_all))
-                    }
-                    else -> CoreToolResult.failure(linuxText(context, R.string.full_linux_uninstall_dismissed))
+                    UserDecisionResult.Unavailable -> return CoreToolResult.failure(linuxText(context, R.string.full_linux_uninstall_unavailable))
+                    else -> return CoreToolResult.failure(linuxText(context, R.string.full_linux_uninstall_dismissed))
                 }
-                UserDecisionResult.Unavailable -> CoreToolResult.failure(linuxText(context, R.string.full_linux_uninstall_unavailable))
-                else -> CoreToolResult.failure(linuxText(context, R.string.full_linux_uninstall_dismissed))
             }
+            val removeWorkspace = requireNotNull(deleteWorkspace) { "A workspace choice is required" }
+            check(requestedDeletion == null || requestedDeletion == removeWorkspace) { "Workspace choice changed" }
+            check(runtime.state() == existing && runtime.rootfsPath() == rootfs && runtime.workspacePath() == workspace) {
+                "Linux removal target changed after preparation"
+            }
+            autonomy.withAdmittedUninstall(authorization, approvedAsk, token, validate = {
+                check(ensureAvailable()) { "Linux removal is no longer available for this conversation" }
+            }) { admitPolicy ->
+                fun admitEffect() {
+                    // Never query the runtime while holding the policy store's admission lock.
+                    check(runtime.rootfsPath() == rootfs && runtime.workspacePath() == workspace) {
+                        "Linux removal target changed"
+                    }
+                    if (!rootfsRemoved) check(runtime.state() == existing) { "Linux environment changed before removal" }
+                    admitPolicy()
+                }
+                runtime.uninstallAdmitted(::admitEffect)
+                rootfsRemoved = true
+                if (removeWorkspace) runtime.deleteWorkspaceAdmitted(::admitEffect)
+            }
+            CoreToolResult.success(linuxText(context, if (removeWorkspace) R.string.full_linux_uninstall_done_all
+                else R.string.full_linux_uninstall_done_keep))
         } catch (cancelled: java.util.concurrent.CancellationException) {
+            if (rootfsRemoved) throw java.util.concurrent.CancellationException(
+                linuxText(context, R.string.full_linux_uninstall_partial, "STOP")).apply { initCause(cancelled) }
             throw cancelled
         } catch (failure: RuntimeException) {
-            CoreToolResult.failure(linuxText(context, R.string.full_linux_uninstall_failed,
+            CoreToolResult.failure(linuxText(context, if (rootfsRemoved) R.string.full_linux_uninstall_partial
+                else R.string.full_linux_uninstall_failed,
                 sanitizer.scrub(failure.message ?: failure.javaClass.simpleName)))
         }
     }
 
-    private fun uninstallDecisionSpec() = UserDecisionSpec(
-        linuxText(context, R.string.full_linux_uninstall_title), linuxText(context, R.string.full_linux_uninstall_body),
-        listOf(
-            UserDecisionOption(OPTION_KEEP_WORKSPACE, linuxText(context, R.string.full_linux_uninstall_keep_workspace),
-                role = UserDecisionRole.PRIMARY),
-            UserDecisionOption(OPTION_DELETE_WORKSPACE, linuxText(context, R.string.full_linux_uninstall_delete_workspace),
-                role = UserDecisionRole.DESTRUCTIVE),
-            UserDecisionOption(OPTION_CANCEL, linuxText(context, R.string.full_linux_uninstall_cancel)),
-        ), allowDismiss = false)
+    private fun uninstallDecisionSpec(deleteWorkspace: Boolean?, rootfs: String, workspace: String): UserDecisionSpec {
+        val keep = UserDecisionOption(OPTION_KEEP_WORKSPACE, linuxText(context, R.string.full_linux_uninstall_keep_workspace),
+            role = UserDecisionRole.PRIMARY)
+        val delete = UserDecisionOption(OPTION_DELETE_WORKSPACE, linuxText(context, R.string.full_linux_uninstall_delete_workspace),
+            role = UserDecisionRole.DESTRUCTIVE)
+        val choices = when (deleteWorkspace) { false -> listOf(keep); true -> listOf(delete); null -> listOf(keep, delete) }
+        val body = if (deleteWorkspace == null) linuxText(context, R.string.full_linux_uninstall_body)
+            else linuxText(context, if (deleteWorkspace) R.string.full_linux_uninstall_delete_workspace
+                else R.string.full_linux_uninstall_keep_workspace)
+        return UserDecisionSpec(linuxText(context, R.string.full_linux_uninstall_title),
+            body + "\n" + linuxText(context, R.string.full_linux_maintenance_targets, rootfs, workspace),
+            choices + UserDecisionOption(OPTION_CANCEL, linuxText(context, R.string.full_linux_uninstall_cancel)), allowDismiss = false)
+    }
 
     private fun requestDecision(spec: UserDecisionSpec, token: CancellationToken): UserDecisionResult {
+        if (!decisionAvailability()) return UserDecisionResult.Unavailable
+        return protectedLinuxDecision { requestDecisionUnprotected(spec, token) }
+    }
+
+    private fun requestDecisionUnprotected(spec: UserDecisionSpec, token: CancellationToken): UserDecisionResult {
         if (!decisionAvailability()) return UserDecisionResult.Unavailable
         val options = spec.options.map { option -> linkedMapOf<String, Any>(
             "id" to option.id, "label" to option.label,

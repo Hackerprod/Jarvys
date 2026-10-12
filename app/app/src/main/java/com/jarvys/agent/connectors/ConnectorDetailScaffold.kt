@@ -34,6 +34,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
@@ -231,16 +232,60 @@ internal fun ConnectorPolicySelector(
     choices: List<ConnectorPolicyChoice>,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    origin: ActionPolicyOrigin? = null,
+    subjectKey: String,
+    optionTags: Map<Int, String> = emptyMap(),
 ) {
-    var expanded by remember(selectedLabelResource, choices.size, enabled) { mutableStateOf(false) }
-    Box(Modifier.fillMaxWidth()) {
-        ConnectorPolicyButton(selectedLabelResource, onClick = { expanded = true },
-            enabled = enabled, modifier = modifier)
-        DropdownMenu(expanded = expanded && enabled, onDismissRequest = { expanded = false }) {
-            choices.forEach { choice -> DropdownMenuItem(
-                text = { Text(stringResource(choice.labelResource)) },
-                onClick = { expanded = false; choice.onSelect() },
-            ) }
+    var expanded by remember(subjectKey) { mutableStateOf(false) }
+    var editLease by remember(subjectKey) { mutableStateOf<com.jarvys.agent.MemoryUiAutomationGuard.Lease?>(null) }
+    var editError by remember(subjectKey) { mutableStateOf(false) }
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    fun dismiss() {
+        expanded = false
+        editLease?.close()
+        editLease = null
+    }
+    androidx.compose.runtime.DisposableEffect(lifecycle, subjectKey) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_PAUSE) dismiss()
         }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer); editLease?.close(); editLease = null }
+    }
+    androidx.compose.runtime.LaunchedEffect(enabled) { if (!enabled) dismiss() }
+    Column(Modifier.fillMaxWidth()) {
+        Box(Modifier.fillMaxWidth()) {
+            ConnectorPolicyButton(selectedLabelResource, onClick = {
+                dismiss()
+                if (!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) { editError = true; return@ConnectorPolicyButton }
+                val lease = com.jarvys.agent.MemoryUiAutomationGuard.enterProtectedSurface()
+                if (!lease.isReadyForUser) { lease.close(); editError = true }
+                else { editError = false; editLease = lease; expanded = true }
+            }, enabled = enabled, modifier = modifier)
+            DropdownMenu(expanded = expanded && enabled, onDismissRequest = { dismiss() }) {
+                choices.forEach { choice -> DropdownMenuItem(
+                    modifier = optionTags[choice.labelResource]?.let { Modifier.testTag(it) } ?: Modifier,
+                    text = { Text(stringResource(choice.labelResource)) },
+                    onClick = {
+                        val lease = editLease
+                        try {
+                            check(lease != null && lease.isReadyForUser && lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) { "Policy edit is no longer active" }
+                            lease.requireHumanUiInteraction()
+                            choice.onSelect()
+                        } catch (_: RuntimeException) { editError = true }
+                        finally { dismiss() }
+                    },
+                ) }
+            }
+        }
+        origin?.let { source -> Text(stringResource(when (source) {
+            ActionPolicyOrigin.CATALOG_DEFAULT -> com.jarvys.agent.R.string.action_policy_origin_default
+            ActionPolicyOrigin.USER -> com.jarvys.agent.R.string.action_policy_origin_user
+            ActionPolicyOrigin.LEGACY_UNKNOWN -> com.jarvys.agent.R.string.action_policy_origin_legacy
+            ActionPolicyOrigin.INVALID -> com.jarvys.agent.R.string.action_policy_origin_invalid
+            ActionPolicyOrigin.INHERITED_SERVER_DEFAULT -> com.jarvys.agent.R.string.action_policy_origin_inherited
+        }), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        if (editError) Text(stringResource(com.jarvys.agent.R.string.action_policy_edit_unavailable),
+            color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
     }
 }

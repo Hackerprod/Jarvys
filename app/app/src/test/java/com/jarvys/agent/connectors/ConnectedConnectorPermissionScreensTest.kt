@@ -83,7 +83,7 @@ class ConnectedConnectorPermissionScreensTest {
     }
     private fun capture(name: String) = compose.runOnIdle { captureConnectedPermissionWindows(compose.activity, name) }
 
-    @Test fun connectedCalendarRouteKeepsReadStaticAndDispatchesEachPolicyOnce() = calendar(1f, false)
+    @Test fun connectedCalendarRouteConfiguresReadAndWritePoliciesOnceWithoutExecuting() = calendar(1f, false)
 
     @Test @Config(qualifiers = "es-rES-w320dp-h800dp-port-mdpi")
     fun connectedCalendarSpanishLargeTextKeepsPoliciesAtRightCenter() = calendar(2f, true)
@@ -91,7 +91,15 @@ class ConnectedConnectorPermissionScreensTest {
     private fun calendar(scale: Float, dark: Boolean) {
         val registry = ConnectorRegistry.createForTestsWithAutonomy(PermissionConnectionPreferences(), { true }, gate,
             store, NoopAutonomyActionNotifier)
-        val definition = CalendarConnector.definition(compose.activity)
+        val toolCalls = AtomicInteger()
+        val definition = CalendarConnector.definition(compose.activity).copy(runtime = object : ConnectorRuntime {
+            override fun connect(configuration: Map<String, String>, secrets: Map<String, String>) = Unit
+            override fun disconnect() = Unit
+            private fun unexpected(): Nothing { toolCalls.incrementAndGet(); error("Policy editing must not execute calendar tools") }
+            override fun prepareRead(operation: String, arguments: JSONObject, token: CancellationToken): ConnectorWritePreparation = unexpected()
+            override fun prepareWrite(operation: String, arguments: JSONObject, token: CancellationToken): ConnectorWritePreparation = unexpected()
+            override fun invoke(operation: String, arguments: JSONObject, token: CancellationToken): JSONObject = unexpected()
+        })
         registry.register(definition)
         registry.connect(definition.id)
         assertEquals(ConnectorState.CONNECTED, registry.state(definition))
@@ -105,9 +113,9 @@ class ConnectedConnectorPermissionScreensTest {
         compose.onNodeWithTag("connectors-detail-screen").assertIsDisplayed()
         val read = "connector-policy-${CalendarConnector.SEARCH}"
         val write = "connector-policy-${CalendarConnector.CREATE}"
-        compose.onNodeWithTag("$read-control").assertHasNoClickAction()
+        compose.onNodeWithTag("$read-control").assertHasClickAction()
         assertPolicy("$read-control", R.string.connector_policy_allow)
-        assertPolicy("$write-control", R.string.connector_policy_ask)
+        assertPolicy("$write-control", R.string.connector_policy_allow)
         geometry(read); geometry(write)
         capture("calendar-connected-${if (dark) "es-dark-large" else "en-light"}")
         compose.onNodeWithTag("$write-control").performClick()
@@ -121,6 +129,22 @@ class ConnectedConnectorPermissionScreensTest {
         assertPolicy("$write-control", R.string.connector_policy_allow)
         assertEquals(listOf(AutonomyPolicy.DENY, AutonomyPolicy.ASK, AutonomyPolicy.ALLOW), store.changes.map { it.third })
         assertPolicy("$read-control", R.string.connector_policy_allow)
+        pick("$read-control", R.string.connector_policy_deny)
+        assertPolicy("$read-control", R.string.connector_policy_deny)
+        assertPolicy("$write-control", R.string.connector_policy_allow)
+        pick("$read-control", R.string.connector_policy_ask)
+        assertPolicy("$read-control", R.string.connector_policy_ask)
+        pick("$read-control", R.string.connector_policy_allow)
+        assertPolicy("$read-control", R.string.connector_policy_allow)
+        assertEquals(listOf(
+            Triple(definition.id, CalendarConnector.CREATE, AutonomyPolicy.DENY),
+            Triple(definition.id, CalendarConnector.CREATE, AutonomyPolicy.ASK),
+            Triple(definition.id, CalendarConnector.CREATE, AutonomyPolicy.ALLOW),
+            Triple(definition.id, CalendarConnector.SEARCH, AutonomyPolicy.DENY),
+            Triple(definition.id, CalendarConnector.SEARCH, AutonomyPolicy.ASK),
+            Triple(definition.id, CalendarConnector.SEARCH, AutonomyPolicy.ALLOW),
+        ), store.changes)
+        assertEquals(0, toolCalls.get())
         geometry(read); geometry(write)
     }
 
@@ -166,7 +190,7 @@ class ConnectedConnectorPermissionScreensTest {
         McpToolConfig(name, "fixture_$name", description, "{}", enabled,
             McpToolAnnotations(readOnlyHint = read, destructiveHint = destructive, title = title))
 
-    @Test fun connectedGitHubReadChoicesPreserveSelectedWritesAndNeverOfferWriteAllow() {
+    @Test fun connectedGitHubAllActionModesKeepExposureAndCredentialsSeparate() {
         val fixture = connectedMcp("github", listOf(tool("get_me", "Read GitHub profile", read = true),
             tool("issue_write", "Create or update repository issue")))
         val credentials = fixture.vault.values.toMap()
@@ -176,11 +200,14 @@ class ConnectedConnectorPermissionScreensTest {
         geometry(read); geometry(write)
         capture("github-connected-read-write")
         compose.onNodeWithTag("$write-control").performScrollTo().performClick()
-        compose.onNode(hasText(compose.activity.getString(R.string.remote_service_policy_allow)) and hasAnyAncestor(isPopup())).assertDoesNotExist()
-        capture("github-write-menu-ask-deny")
+        compose.onNode(hasText(compose.activity.getString(R.string.remote_service_policy_allow)) and hasAnyAncestor(isPopup())).assertExists()
+        capture("github-write-menu-all-modes")
         compose.onNode(hasText(compose.activity.getString(R.string.remote_service_policy_ask)) and hasAnyAncestor(isPopup())).performClick()
         assertEquals(1, store.changes.size)
         pick("$read-control", R.string.remote_service_policy_deny)
+        assertTrue(fixture.repository.get(fixture.serverId)!!.tools.first { it.wireName == "get_me" }.enabled)
+        assertPolicy("$read-control", R.string.remote_service_policy_deny)
+        compose.onNodeWithTag("remote-exposure-get_me-switch").performScrollTo().performClick()
         assertFalse(fixture.repository.get(fixture.serverId)!!.tools.first { it.wireName == "get_me" }.enabled)
         assertTrue(fixture.repository.get(fixture.serverId)!!.tools.first { it.wireName == "issue_write" }.enabled)
         compose.onNodeWithText(compose.activity.getString(R.string.mcp_enable_all_reads)).performScrollTo().performClick()
@@ -189,13 +216,13 @@ class ConnectedConnectorPermissionScreensTest {
             fixture.repository.get(fixture.serverId)!!.tools.first { it.wireName == "issue_write" }.enabled)
         pick("$write-control", R.string.remote_service_policy_deny)
         assertPolicy("$write-control", R.string.remote_service_policy_deny)
-        assertEquals(2, store.changes.size)
+        assertEquals(3, store.changes.size)
         assertEquals(credentials, fixture.vault.values)
         assertEquals(1, sessions.get()); assertEquals(0, dispatches.get())
     }
 
     @Test @Config(qualifiers = "es-rES-w320dp-h800dp-port-mdpi")
-    fun connectedCatalogMcpLongLabelUsesSharedSlotAndKeepsDestructiveGuard() {
+    fun connectedCatalogMcpLongLabelOffersEveryModeForDestructiveTools() {
         val fixture = connectedMcp("notion", listOf(tool("update_page", "Actualizar una página con un título suficientemente largo"),
             tool("delete_page", "Eliminar una página", destructive = true)))
         show(2f, true) { RemoteServicesSection(fixture.repository, fixture.manager, fixture.oauth, selectedId = "notion") }
@@ -204,7 +231,7 @@ class ConnectedConnectorPermissionScreensTest {
         pick("remote-policy-update_page-control", R.string.remote_service_policy_allow)
         assertPolicy("remote-policy-update_page-control", R.string.remote_service_policy_allow)
         compose.onNodeWithTag("remote-policy-delete_page-control").performScrollTo().performClick()
-        compose.onNode(hasText(compose.activity.getString(R.string.remote_service_policy_allow)) and hasAnyAncestor(isPopup())).assertDoesNotExist()
+        compose.onNode(hasText(compose.activity.getString(R.string.remote_service_policy_allow)) and hasAnyAncestor(isPopup())).assertExists()
         compose.onNode(hasText(compose.activity.getString(R.string.remote_service_policy_ask)) and hasAnyAncestor(isPopup())).performClick()
         assertEquals(listOf(AutonomyPolicy.ALLOW, AutonomyPolicy.ASK), store.changes.map { it.third })
         assertEquals(1, sessions.get()); assertEquals(0, dispatches.get()); assertTrue(fixture.vault.values.isEmpty())
@@ -234,18 +261,20 @@ class ConnectedConnectorPermissionScreensTest {
         compose.onNodeWithText(full).assertExists()
         capture("custom-mcp-expanded-policy-popup")
         compose.onNode(hasText(compose.activity.getString(R.string.remote_service_policy_deny)) and hasAnyAncestor(isPopup())).performClick()
-        assertEquals(listOf("update_record" to false), enabledChanges)
+        assertTrue(enabledChanges.isEmpty())
         assertEquals(listOf(AutonomyPolicy.DENY), store.changes.map { it.third })
         compose.onNodeWithText(full).assertExists()
         pick("mcp-policy-update_record-control", R.string.remote_service_policy_ask)
         pick("mcp-policy-update_record-control", R.string.remote_service_policy_allow)
-        assertEquals(listOf("update_record" to false, "update_record" to true, "update_record" to true), enabledChanges)
+        assertTrue(enabledChanges.isEmpty())
+        compose.onNodeWithTag("mcp-exposure-update_record-switch").performScrollTo().performClick()
+        assertEquals(listOf("update_record" to false), enabledChanges)
         assertEquals(listOf(AutonomyPolicy.DENY, AutonomyPolicy.ASK, AutonomyPolicy.ALLOW), store.changes.map { it.third })
         compose.onNodeWithText("Update record").performScrollTo().performClick()
         compose.onNodeWithText(full).assertDoesNotExist()
         compose.onNodeWithTag("mcp-policy-delete_record-control").performScrollTo().performClick()
-        compose.onNode(hasText(compose.activity.getString(R.string.remote_service_policy_allow)) and hasAnyAncestor(isPopup())).assertDoesNotExist()
-        assertEquals(3, enabledChanges.size); assertEquals(0, dispatches.get())
+        compose.onNode(hasText(compose.activity.getString(R.string.remote_service_policy_allow)) and hasAnyAncestor(isPopup())).assertExists()
+        assertEquals(1, enabledChanges.size); assertEquals(0, dispatches.get())
     }
 
     @Test @Config(qualifiers = "es-rES-w320dp-h800dp-port-mdpi")

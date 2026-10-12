@@ -18,6 +18,10 @@ import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.TextView
 import com.jarvys.agent.R
+import com.jarvys.agent.NativeActionPolicy
+import com.jarvys.agent.MemoryUiAutomationGuard
+import com.jarvys.agent.NativeActionPolicy.Operation
+import com.jarvys.agent.connectors.AutonomyPolicy
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.OutputStream
@@ -55,9 +59,17 @@ class FactoryIdentityActivityTest {
 
     class TestIdentityActivity : FactoryIdentityActivity() {
         internal override fun identityStore(): FactorySigningIdentity = providedStore ?: object : FactorySigningIdentity(this@TestIdentityActivity) {
-            override fun state(appId: String): State = testState
+            override fun state(appId: String): State { stateReads++; return testState }
+        }
+        internal override fun actionPolicy(): NativeActionPolicy = policy
+        internal override fun showIdentityDialog(dialog: AlertDialog) {
+            if (failDialogShow) throw IllegalStateException("Synthetic protected-dialog show failure")
+            super.showIdentityDialog(dialog)
         }
         companion object {
+            internal var failDialogShow = false
+            internal var policy = NativeActionPolicy.inMemory(AutonomyPolicy.ASK)
+            internal var stateReads = 0
             internal var providedStore: FactorySigningIdentity? = null
             internal var testState = FactorySigningIdentity.State(false, null, 0)
         }
@@ -65,12 +77,21 @@ class FactoryIdentityActivityTest {
 
     @Before fun setUp() {
         TestIdentityActivity.providedStore = null
+        TestIdentityActivity.failDialogShow = false
+        assertFalse(MemoryUiAutomationGuard.isProtected())
+        TestIdentityActivity.policy = NativeActionPolicy.inMemory(AutonomyPolicy.ASK)
+        TestIdentityActivity.stateReads = 0
         TestIdentityActivity.testState = FactorySigningIdentity.State(false, null, 0)
         controller = Robolectric.buildActivity(TestIdentityActivity::class.java).setup()
         activity = controller.get()
     }
 
-    @After fun tearDown() { controller.pause().stop().destroy(); TestIdentityActivity.providedStore = null }
+    @After fun tearDown() {
+        controller.pause().stop().destroy()
+        shadowOf(Looper.getMainLooper()).idle()
+        TestIdentityActivity.providedStore = null
+        assertFalse(MemoryUiAutomationGuard.isProtected())
+    }
 
     @Test fun activityIsSecureAndDoesNotAutomaticallyLaunchAFilePicker() {
         assertTrue(activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0)
@@ -131,11 +152,9 @@ class FactoryIdentityActivityTest {
         assertNull(shadowOf(activity).nextStartedActivityForResult)
     }
 
-    @Test fun createRequiresDisclosureThenPickerBeforeAnyPasswordAndPickerSurvivesStopSave() {
+    @Test fun createSelectsExactDocumentBeforeSingleFinalReviewAndPickerSurvivesStopSave() {
         startCreate()
-        val disclosure = latestDialog()
-        assertNull(disclosure.findViewById<View>(android.R.id.edit))
-        disclosure.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+        assertFalse(ShadowAlertDialog.getLatestAlertDialog()?.isShowing == true)
         val request = shadowOf(activity).nextStartedActivityForResult!!
         assertEquals(Intent.ACTION_CREATE_DOCUMENT, request.intent.action)
         assertEquals("application/octet-stream", request.intent.type)
@@ -145,6 +164,7 @@ class FactoryIdentityActivityTest {
         activity.activityResultRegistry.dispatchResult(request.requestCode, Activity.RESULT_OK,
             Intent().setData(Uri.parse("content://factory-test/create")))
         controller.restart().start().resume().visible()
+        await { ShadowAlertDialog.getLatestAlertDialog()?.isShowing == true }
         val password = latestDialog().window!!.decorView.findViewWithTag<EditText>("factory-identity-passphrase")
         assertNotNull(password)
         assertEquals("", password.text.toString())
@@ -277,8 +297,8 @@ class FactoryIdentityActivityTest {
                 }
             } finally { raw.fill(0) }
             button("factory-identity-export").performClick()
-            await { ShadowAlertDialog.getLatestAlertDialog()?.isShowing == true }
-            latestDialog().getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+            await { shadowOf(activity).peekNextStartedActivityForResult() != null }
+            assertFalse(ShadowAlertDialog.getLatestAlertDialog()?.isShowing == true)
             val request = shadowOf(activity).nextStartedActivityForResult!!
             val exportUri = Uri.parse("content://factory-test/export")
             val exported = ByteArrayOutputStream()
@@ -379,12 +399,241 @@ class FactoryIdentityActivityTest {
         assertThrows(IllegalStateException::class.java) { FactoryIdentityActivity.readBounded(emptyRead, 2, AtomicBoolean(true)) }
     }
 
+    @Test fun allFourDeniedActionsStopBeforeStateReadOrDocumentSelection() {
+        for (operation in listOf(Operation.IDENTITY_CREATE, Operation.IDENTITY_EXPORT, Operation.IDENTITY_IMPORT, Operation.IDENTITY_RECONCILE)) {
+            TestIdentityActivity.policy.set(operation, AutonomyPolicy.DENY)
+        }
+        field("factory-identity-app-id").setText("com.example.factoryui")
+        for (tag in listOf("factory-identity-create", "factory-identity-export", "factory-identity-import", "factory-identity-reconcile")) {
+            button(tag).performClick()
+            assertEquals(activity.getString(R.string.identity_action_policy_changed), status())
+        }
+        assertEquals(0, TestIdentityActivity.stateReads)
+        assertNull(shadowOf(activity).nextStartedActivityForResult)
+        assertFalse(ShadowAlertDialog.getLatestAlertDialog()?.isShowing == true)
+    }
+
+    @Test fun defaultAllowCreatesAndExportsWithoutProductApprovalCheckbox() {
+        TestIdentityActivity.policy = NativeActionPolicy.inMemory()
+        val store = installRamStore()
+        val uri = Uri.parse("content://factory-test/create")
+        val output = ByteArrayOutputStream()
+        shadowOf(activity.contentResolver).registerOutputStream(uri, output)
+        shadowOf(activity.contentResolver).registerInputStreamSupplier(uri) { ByteArrayInputStream(output.toByteArray()) }
+        openCreatePassword()
+        val form = latestDialog()
+        assertTrue(allChildren(form.window!!.decorView).filterIsInstance<CheckBox>().isEmpty())
+        assertEquals(activity.getString(R.string.identity_action_save_backup), form.getButton(AlertDialog.BUTTON_POSITIVE).text.toString())
+        val text = allChildren(form.window!!.decorView).filterIsInstance<TextView>().joinToString { it.text.toString() }
+        assertTrue(text.contains("com.example.factoryui"))
+        assertTrue(text.contains(uri.toString()))
+        fillBackupPasswordsAndApprove()
+        await { status() == activity.getString(R.string.factory_identity_created) }
+        val state = store.state("com.example.factoryui")
+        assertTrue(state.existing)
+        button("factory-identity-export").performClick()
+        await { shadowOf(activity).peekNextStartedActivityForResult() != null }
+        val request = shadowOf(activity).nextStartedActivityForResult!!
+        // Registered in-memory streams do not implement a provider's "wt" truncation. Give
+        // the export its own selected document so the fixture cannot append to the create backup.
+        val exportUri = Uri.parse("content://factory-test/allow-export")
+        val exported = ByteArrayOutputStream()
+        shadowOf(activity.contentResolver).registerOutputStream(exportUri, exported)
+        shadowOf(activity.contentResolver).registerInputStreamSupplier(exportUri) { ByteArrayInputStream(exported.toByteArray()) }
+        activity.activityResultRegistry.dispatchResult(request.requestCode, Activity.RESULT_OK, Intent().setData(exportUri))
+        val export = latestDialog()
+        assertTrue(allChildren(export.window!!.decorView).filterIsInstance<CheckBox>().isEmpty())
+        assertTrue(allChildren(export.window!!.decorView).filterIsInstance<TextView>().any { it.text.contains(state.fingerprint!!) })
+        fillBackupPasswordsAndApprove()
+        await { status() == activity.getString(R.string.factory_identity_exported) }
+        assertEquals(state, store.state("com.example.factoryui"))
+    }
+
+    @Test fun askBackupHasExactlyOneExactReviewAfterDocumentSelection() {
+        openCreatePassword()
+        val form = latestDialog()
+        assertEquals(1, allChildren(form.window!!.decorView).filterIsInstance<CheckBox>().size)
+        val text = allChildren(form.window!!.decorView).filterIsInstance<TextView>().joinToString { it.text.toString() }
+        assertTrue(text.contains("com.example.factoryui"))
+        assertTrue(text.contains("content://factory-test/create"))
+        assertTrue(Regex("[a-f0-9]{64}").containsMatchIn(text))
+        assertEquals(activity.getString(R.string.factory_identity_approve_save), form.getButton(AlertDialog.BUTTON_POSITIVE).text.toString())
+    }
+
+    @Test fun policyChangeDuringPickerCannotAdoptNewAskOrDenyAllowRevision() {
+        TestIdentityActivity.policy = NativeActionPolicy.inMemory()
+        for (mode in listOf(AutonomyPolicy.ASK, AutonomyPolicy.DENY)) {
+            TestIdentityActivity.policy.set(Operation.IDENTITY_CREATE, AutonomyPolicy.ALLOW)
+            startCreate()
+            val request = shadowOf(activity).nextStartedActivityForResult!!
+            TestIdentityActivity.policy.set(Operation.IDENTITY_CREATE, mode)
+            if (mode == AutonomyPolicy.DENY) TestIdentityActivity.policy.set(Operation.IDENTITY_CREATE, AutonomyPolicy.ALLOW)
+            activity.activityResultRegistry.dispatchResult(request.requestCode, Activity.RESULT_OK,
+                Intent().setData(Uri.parse("content://factory-test/stale")))
+            assertEquals(activity.getString(R.string.identity_action_policy_changed), status())
+            assertFalse(ShadowAlertDialog.getLatestAlertDialog()?.isShowing == true)
+            assertTrue(button("factory-identity-create").isEnabled)
+        }
+    }
+
+    @Test fun deniedAfterBackupWriteStopsLocalCreationWithoutReplayingOutput() {
+        TestIdentityActivity.policy = NativeActionPolicy.inMemory()
+        val store = installRamStore()
+        var writes = 0
+        val output = object : ByteArrayOutputStream() {
+            override fun write(bytes: ByteArray, offset: Int, count: Int) {
+                super.write(bytes, offset, count)
+                writes++
+                TestIdentityActivity.policy.set(Operation.IDENTITY_CREATE, AutonomyPolicy.DENY)
+            }
+        }
+        shadowOf(activity.contentResolver).registerOutputStream(Uri.parse("content://factory-test/create"), output)
+        openCreatePassword()
+        fillBackupPasswordsAndApprove()
+        await { status() == activity.getString(R.string.factory_identity_save_failed) }
+        assertEquals(1, writes)
+        assertTrue(output.size() > 0)
+        assertNull(store.recoverySnapshot("com.example.factoryui"))
+        assertNull(shadowOf(activity).nextStartedActivityForResult)
+    }
+
+    @Test fun allowImportUnlocksAndImportsButNeverInventsVersionReconciliation() {
+        TestIdentityActivity.policy = NativeActionPolicy.inMemory()
+        val store = installRamStore()
+        val pair = FactoryPortableCertificate.generate()
+        val material = FactoryIdentityBackup.Material("com.example.restoreui", pair.key, pair.certificate, 9, "a".repeat(64))
+        val passphrase = "Synthetic native UI fixture passphrase".toCharArray()
+        val bytes = try { FactoryIdentityBackup.encrypt(material, passphrase) } finally { passphrase.fill('\u0000') }
+        val uri = Uri.parse("content://factory-test/allow-backup")
+        shadowOf(activity.contentResolver).registerInputStream(uri, ByteArrayInputStream(bytes))
+        button("factory-identity-import").performClick()
+        val request = shadowOf(activity).nextStartedActivityForResult!!
+        activity.activityResultRegistry.dispatchResult(request.requestCode, Activity.RESULT_OK, Intent().setData(uri))
+        await { ShadowAlertDialog.getLatestAlertDialog()?.isShowing == true }
+        val unlock = latestDialog()
+        assertEquals(activity.getString(R.string.identity_action_unlock_import), unlock.getButton(AlertDialog.BUTTON_POSITIVE).text.toString())
+        unlock.window!!.decorView.findViewWithTag<EditText>("factory-identity-passphrase").setText("Synthetic native UI fixture passphrase")
+        unlock.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+        await { status() == activity.getString(R.string.factory_identity_restored) }
+        assertFalse(ShadowAlertDialog.getLatestAlertDialog()?.isShowing == true)
+        val restored = store.state(material.appId)
+        assertEquals(9, restored.lastVersion)
+        assertFalse(restored.continuityKnown)
+        field("factory-identity-app-id").setText(material.appId)
+        button("factory-identity-reconcile").performClick()
+        await { ShadowAlertDialog.getLatestAlertDialog()?.isShowing == true }
+        val declaration = latestDialog()
+        assertEquals(activity.getString(R.string.identity_action_save_floor), declaration.getButton(AlertDialog.BUTTON_POSITIVE).text.toString())
+        declaration.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+        assertTrue(declaration.isShowing)
+        assertFalse(store.state(material.appId).continuityKnown)
+        allChildren(declaration.window!!.decorView).filterIsInstance<CheckBox>().single().isChecked = true
+        declaration.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+        await { status() == activity.getString(R.string.factory_identity_reconciled) }
+        assertEquals("user_declared_floor", store.state(material.appId).continuityResolution)
+        bytes.fill(0)
+    }
+
+    @Test fun policyRevokedDuringExactImportReviewCannotRestore() {
+        val store = installRamStore()
+        val pair = FactoryPortableCertificate.generate()
+        val material = FactoryIdentityBackup.Material("com.example.restoreui", pair.key, pair.certificate, 0, null)
+        val password = "Synthetic native UI fixture passphrase".toCharArray()
+        val bytes = try { FactoryIdentityBackup.encrypt(material, password) } finally { password.fill('\u0000') }
+        selectValidImport(bytes)
+        TestIdentityActivity.policy.set(Operation.IDENTITY_IMPORT, AutonomyPolicy.DENY)
+        latestDialog().getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+        assertEquals(activity.getString(R.string.identity_action_policy_changed), status())
+        assertNull(store.recoverySnapshot(material.appId))
+        assertFalse(ShadowAlertDialog.getLatestAlertDialog()?.isShowing == true)
+        bytes.fill(0)
+    }
+
+    @Test fun allowStatusAndPickerStayUnguardedButPassphraseBlocksQueuedAutomation() {
+        TestIdentityActivity.policy = NativeActionPolicy.inMemory()
+        assertFalse(MemoryUiAutomationGuard.isProtected())
+        val beforeForm = MemoryUiAutomationGuard.captureAutomationEpoch()
+        startCreate()
+        assertFalse(MemoryUiAutomationGuard.isProtected())
+        val request = shadowOf(activity).nextStartedActivityForResult!!
+        activity.activityResultRegistry.dispatchResult(request.requestCode, Activity.RESULT_OK,
+            Intent().setData(Uri.parse("content://factory-test/guarded")))
+        await { ShadowAlertDialog.getLatestAlertDialog()?.isShowing == true }
+        val form = latestDialog()
+        assertTrue(MemoryUiAutomationGuard.isProtected())
+        var automatedClick = false
+        assertFalse(MemoryUiAutomationGuard.runAutomated(beforeForm) {
+            automatedClick = true
+            form.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+        })
+        assertFalse(automatedClick)
+        form.getButton(AlertDialog.BUTTON_NEGATIVE).performClick()
+        await { !form.isShowing && !MemoryUiAutomationGuard.isProtected() }
+        assertTrue(button("factory-identity-create").isEnabled)
+    }
+
+    @Test fun activeAutomationCannotEnterAskPassphraseOrRecordApproval() {
+        val store = installRamStore()
+        val action = MemoryUiAutomationGuard.beginAsyncAction(MemoryUiAutomationGuard.captureAutomationEpoch())
+        try {
+            startCreate()
+            val request = shadowOf(activity).nextStartedActivityForResult!!
+            activity.activityResultRegistry.dispatchResult(request.requestCode, Activity.RESULT_OK,
+                Intent().setData(Uri.parse("content://factory-test/tainted")))
+            await { status() == activity.getString(R.string.identity_action_reopen_manually) }
+            assertFalse(ShadowAlertDialog.getLatestAlertDialog()?.isShowing == true)
+            assertNull(store.recoverySnapshot("com.example.factoryui"))
+            assertFalse(MemoryUiAutomationGuard.isProtected())
+        } finally { action.close() }
+        assertTrue(button("factory-identity-create").isEnabled)
+        openCreatePassword()
+        assertTrue(MemoryUiAutomationGuard.isProtected())
+    }
+
+    @Test fun activeAutomationCannotDeclareUnknownReleaseHistoryEvenWhenAllowed() {
+        TestIdentityActivity.policy = NativeActionPolicy.inMemory()
+        val store = installRamStore()
+        val pair = FactoryPortableCertificate.generate()
+        val material = FactoryIdentityBackup.Material("com.example.restoreui", pair.key, pair.certificate, 0, null)
+        store.importRecoverableAfterApproval(material, null)
+        val before = store.state(material.appId)
+        assertFalse(before.continuityKnown)
+        field("factory-identity-app-id").setText(material.appId)
+        val action = MemoryUiAutomationGuard.beginAsyncAction(MemoryUiAutomationGuard.captureAutomationEpoch())
+        try {
+            button("factory-identity-reconcile").performClick()
+            await { status() == activity.getString(R.string.identity_action_reopen_manually) }
+            assertFalse(ShadowAlertDialog.getLatestAlertDialog()?.isShowing == true)
+            assertEquals(before, store.state(material.appId))
+            assertFalse(MemoryUiAutomationGuard.isProtected())
+        } finally { action.close() }
+    }
+
+    @Test fun protectedDialogShowFailureAndPauseAlwaysReleaseLease() {
+        TestIdentityActivity.failDialogShow = true
+        startCreate()
+        val request = shadowOf(activity).nextStartedActivityForResult!!
+        activity.activityResultRegistry.dispatchResult(request.requestCode, Activity.RESULT_OK,
+            Intent().setData(Uri.parse("content://factory-test/show-failure")))
+        await { status() == activity.getString(R.string.identity_action_reopen_manually) }
+        assertFalse(MemoryUiAutomationGuard.isProtected())
+        assertFalse(ShadowAlertDialog.getLatestAlertDialog()?.isShowing == true)
+        TestIdentityActivity.failDialogShow = false
+        openCreatePassword()
+        assertTrue(MemoryUiAutomationGuard.isProtected())
+        val form = latestDialog()
+        form.window!!.decorView.findViewWithTag<EditText>("factory-identity-passphrase").setText("Synthetic protected secret")
+        controller.pause().stop()
+        assertFalse(form.isShowing)
+        assertFalse(MemoryUiAutomationGuard.isProtected())
+    }
+
     private fun fillBackupPasswordsAndApprove() {
         val form = latestDialog()
         val root = form.window!!.decorView
         root.findViewWithTag<EditText>("factory-identity-passphrase").setText("Synthetic native UI fixture passphrase")
         root.findViewWithTag<EditText>("factory-identity-passphrase-confirm").setText("Synthetic native UI fixture passphrase")
-        allChildren(root).filterIsInstance<CheckBox>().single().isChecked = true
+        allChildren(root).filterIsInstance<CheckBox>().forEach { it.isChecked = true }
         form.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
     }
 
@@ -436,14 +685,14 @@ class FactoryIdentityActivityTest {
     private fun startCreate() {
         field("factory-identity-app-id").setText("com.example.factoryui")
         button("factory-identity-create").performClick()
-        await { ShadowAlertDialog.getLatestAlertDialog()?.isShowing == true }
+        await { shadowOf(activity).peekNextStartedActivityForResult() != null }
     }
     private fun openCreatePassword() {
         startCreate()
-        latestDialog().getButton(AlertDialog.BUTTON_POSITIVE).performClick()
         val request = shadowOf(activity).nextStartedActivityForResult!!
         activity.activityResultRegistry.dispatchResult(request.requestCode, Activity.RESULT_OK,
             Intent().setData(Uri.parse("content://factory-test/create")))
+        await { ShadowAlertDialog.getLatestAlertDialog()?.isShowing == true }
     }
     private fun latestDialog(): AlertDialog = ShadowAlertDialog.getLatestAlertDialog().also { assertTrue(it.isShowing) }
     private fun field(tag: String): EditText = activity.window.decorView.findViewWithTag(tag)

@@ -62,14 +62,22 @@ class TaskRepository(
             timePrecision = timePrecision, validUntil = validUntil, toolScope = toolScope, delivery = delivery,
             createdBy = createdBy, creatorToolNames = creatorToolNames.toList(), createdAt = now,
             updatedAt = now)
+        return createPreparedIfEquivalent(draft)
+    }
+
+    /** The agent binds this immutable draft before any decision; only derived timing is recomputed. */
+    fun createPreparedIfEquivalent(draft: ScheduledTask, beforeWrite: () -> Unit = {}): TaskCreateResult {
+        val now = clock.millis()
         val candidate = draft.copy(nextRunAt = calculator.nextRunAfter(draft, now))
         ScheduledTaskValidation.validate(candidate)
+        require(candidate.validUntil == null || candidate.validUntil > now) { "validUntil must be in the future" }
+        val schedule = candidate.schedule
         if (schedule is TaskSchedule.At) {
             val at = calculator.resolveLocalDateTime(schedule.localDateTime, schedule.zone)
             require(at > now) { "At schedule must be in the future" }
-            require(validUntil == null || at < validUntil) { "At schedule must be before validUntil" }
+            require(candidate.validUntil == null || at < candidate.validUntil) { "At schedule must be before validUntil" }
         }
-        val result = store.createIfEquivalent(candidate)
+        val result = store.createIfEquivalent(candidate, beforeWrite)
         if (result.created) rearm()
         return result
     }
@@ -81,28 +89,28 @@ class TaskRepository(
     fun nextRunAt(task: ScheduledTask, now: Long = clock.millis()): Long? =
         calculator.nextRunAfter(task, now)
 
-    fun update(task: ScheduledTask, expectedRevision: Long): ScheduledTask {
+    fun update(task: ScheduledTask, expectedRevision: Long, beforeWrite: () -> Unit = {},
+               expectedTask: ScheduledTask? = null): ScheduledTask {
         ScheduledTaskValidation.validate(task)
         val now = clock.millis()
         val next = if (task.state == TaskState.Active) calculator.nextRunAfter(task, now) else task.nextRunAt
-        val saved = store.update(task.copy(nextRunAt = next, updatedAt = now), expectedRevision)
+        val saved = store.update(task.copy(nextRunAt = next, updatedAt = now), expectedRevision, beforeWrite, expectedTask)
         rearm()
         return saved
     }
 
-    fun pause(id: String, expectedRevision: Long): ScheduledTask {
+    fun pause(id: String, expectedRevision: Long, beforeWrite: () -> Unit = {},
+              expectedTask: ScheduledTask? = null): ScheduledTask {
         val task = store.get(id) ?: throw IllegalArgumentException("Task $id was not found")
-        val saved = store.update(task.copy(state = TaskState.Paused, updatedAt = clock.millis()), expectedRevision)
+        val saved = store.update(task.copy(state = TaskState.Paused, updatedAt = clock.millis()), expectedRevision, beforeWrite, expectedTask)
         rearm()
         return saved
     }
 
-    fun resume(id: String, expectedRevision: Long): ScheduledTask {
+    fun resume(id: String, expectedRevision: Long, beforeWrite: () -> Unit = {},
+               expectedTask: ScheduledTask? = null): ScheduledTask {
         val task = store.get(id) ?: throw IllegalArgumentException("Task $id was not found")
         val now = clock.millis()
-        if (task.state is TaskState.NeedsAttention && task.lastRun?.status == "ERROR") {
-            runLedger.markRetryable(task.id, task.lastRun.scheduledFor)
-        }
         val next = when {
             task.validUntil != null && now >= task.validUntil -> null
             task.nextRunAt != null && task.nextRunAt <= now && task.catchUp == TaskCatchUp.SKIP_MISSED -> task.nextRunAt
@@ -111,13 +119,17 @@ class TaskRepository(
             else -> calculator.nextRunAfter(task, now)
         }
         val state = if (task.validUntil != null && now >= task.validUntil) TaskState.Done else TaskState.Active
-        val saved = store.update(task.copy(state = state, nextRunAt = next, updatedAt = now), expectedRevision)
+        val saved = store.update(task.copy(state = state, nextRunAt = next, updatedAt = now), expectedRevision, beforeWrite, expectedTask)
+        if (task.state is TaskState.NeedsAttention && task.lastRun?.status == "ERROR") {
+            // Recovery bookkeeping follows the admitted state change, never a stale revision.
+            runLedger.markRetryable(task.id, task.lastRun.scheduledFor)
+        }
         rearm()
         return saved
     }
 
-    fun delete(id: String, expectedRevision: Long) {
-        store.delete(id, expectedRevision, clock.millis())
+    fun delete(id: String, expectedRevision: Long, beforeWrite: () -> Unit = {}, expectedTask: ScheduledTask? = null) {
+        store.delete(id, expectedRevision, clock.millis(), beforeWrite, expectedTask)
         rearm()
     }
 

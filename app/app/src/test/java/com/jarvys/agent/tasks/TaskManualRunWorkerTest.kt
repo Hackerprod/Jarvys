@@ -76,14 +76,70 @@ class TaskManualRunWorkerTest {
         assertTrue(delivered.single().text.contains("Manual result"))
     }
 
+    @Test fun boundManualWorkRejectsChangedRevisionPayloadOrIncompleteBindingBeforeProcessor() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val clock = Clock.fixed(Instant.parse("2025-03-08T08:00:00Z"), ZoneOffset.UTC)
+        listOf("revision", "same_revision_content", "scope", "incomplete", "exact").forEach { change ->
+            val root = Files.createTempDirectory("manual-bound-task").toFile()
+            val taskFile = File(root, "tasks.jsonl")
+            val tasks = TaskStore(taskFile)
+            val ledger = TaskRunLedger(File(root, "runs.jsonl"))
+            val saved = tasks.create(ScheduledTask(name = "Manual binding", instruction = "Original exact request",
+                schedule = TaskSchedule.Every(ScheduledTaskValidation.MIN_INTERVAL_MILLIS, clock.millis()),
+                createdAt = clock.millis(), toolScope = TaskToolScope("LISTED", emptyList())))
+            val expectedBinding = TaskActionBinding.task("", "manual", saved)
+            when (change) {
+                "revision" -> tasks.update(saved.copy(name = "Later edit"), saved.revision)
+                "same_revision_content" -> taskFile.writeText(org.json.JSONObject(taskFile.readLines().single())
+                    .put("instruction", "Restored changed task").toString() + "\n")
+                "scope" -> tasks.update(saved.copy(toolScope = saved.toolScope.copy(web = true)), saved.revision)
+            }
+            val notifications = FakeNotifications()
+            val loop = FakeLoopFactory()
+            val registry = com.jarvys.agent.connectors.ConnectorRegistry.createForTests(object :
+                com.jarvys.agent.connectors.ConnectorConnectionPreferences {
+                override fun isConnected(id: String) = false
+                override fun setConnected(id: String, connected: Boolean) = Unit
+            }, permissionGranted = { true }, approvalGate = com.jarvys.agent.connectors.ApprovalGate.INSTANCE)
+            val processor = ScheduledTaskProcessor(context, loop, registry, com.jarvys.agent.LocalRunStore(context), clock, notifications)
+            val factory = object : WorkerFactory() {
+                override fun createWorker(appContext: Context, workerClassName: String,
+                                          workerParameters: androidx.work.WorkerParameters): ListenableWorker? =
+                    if (workerClassName == TaskManualRunWorker::class.java.name)
+                        TaskManualRunWorker(appContext, workerParameters, processor, tasks, ledger, clock) else null
+            }
+            val data = androidx.work.Data.Builder().putString(TaskManualRunWorker.KEY_TASK_ID, saved.id)
+                .putString(TaskManualRunWorker.KEY_OCCURRENCE_ID, "manual:${saved.id}:bound")
+                .putLong(TaskManualRunWorker.KEY_SCHEDULED_FOR, clock.millis())
+                .putLong(TaskManualRunWorker.KEY_EXPECTED_REVISION, saved.revision)
+                .apply { if (change != "incomplete") putString(TaskManualRunWorker.KEY_EXPECTED_BINDING, expectedBinding) }
+                .build()
+            val result = runBlocking { TestListenableWorkerBuilder.from(context, TaskManualRunWorker::class.java)
+                .setInputData(data).setWorkerFactory(factory).build().doWork() }
+            if (change == "exact") {
+                assertTrue(result is ListenableWorker.Result.Success)
+                assertEquals(1, loop.calls)
+                assertEquals(1, notifications.results)
+            } else {
+                assertTrue(change, result is ListenableWorker.Result.Failure)
+                assertEquals(0, loop.calls)
+                assertEquals(0, notifications.results)
+                assertTrue(ledger.forTask(saved.id).isEmpty())
+            }
+        }
+    }
+
     private class FakeLoopFactory : ProactiveCoreLoopFactory {
+        var calls = 0
         override fun providerUnavailableReason(context: Context): String? = null
         override fun createLoop(context: Context, sessionId: String, tools: CoreToolRegistry,
                                 systemPrompt: String) = CoreAgentLoop(object : CoreAgentLoop.Model {
             override fun complete(transcript: List<com.jarvys.agent.ConversationTurn>, prompt: String,
-                                  declarations: List<ToolSpec>, token: CancellationToken): ModelReply =
-                ModelReply("", listOf(ModelReply.Call("manual-response", TaskRespondTool.NAME,
+                                  declarations: List<ToolSpec>, token: CancellationToken): ModelReply {
+                calls++
+                return ModelReply("", listOf(ModelReply.Call("manual-response", TaskRespondTool.NAME,
                     mapOf("notify" to true, "title" to "Manual", "body" to "Manual result", "urgency" to "normal"))))
+            }
         }, tools, systemPrompt, sessionId)
     }
 

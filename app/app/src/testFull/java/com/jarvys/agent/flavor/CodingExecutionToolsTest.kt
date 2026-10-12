@@ -49,6 +49,7 @@ class CodingExecutionToolsTest {
         var capability = true
         var decision = ApprovalDecision.APPROVED
         var duringApproval: () -> Unit = { }
+        var useExactAllowCallback = false
         var beforeLaunch: () -> Unit = { }
         lateinit var gate: ApprovalGate
         val jobs = CodingJobManager(files, CodingJobManager.Backend { _, _, _, limit, _, output, launch ->
@@ -62,7 +63,9 @@ class CodingExecutionToolsTest {
                     assertTrue(summary.allowAlwaysAvailable)
                     assertEquals(LinuxExecAutonomy.PROJECT_CONNECTOR_ID, summary.autonomyConnectorId)
                     assertEquals(LinuxExecAutonomy.PROJECT_OPERATION_NAME, summary.autonomyOperationName)
-                    duringApproval(); gate.resolve(id, decision)
+                    duringApproval()
+                    if (useExactAllowCallback) gate.enableAlwaysFromUi(id)
+                    gate.resolve(id, decision)
                 }
                 override fun update(id: String, decision: ApprovalDecision) = Unit
             })
@@ -74,6 +77,25 @@ class CodingExecutionToolsTest {
             tools.getValue(CodingExecutionTools.EXEC).execute(
                 mapOf("command" to "test", "expected_scope_version" to scope.version()) + extra, token)
     }
+    @Test fun explicitCodingAllowIgnoresUnrelatedPrincipalRevocationAtLaunch() {
+        val f = Fixture(folder.newFolder(), AutonomyPolicy.ALLOW)
+        f.beforeLaunch = { f.autonomy.setPolicyFromUi(AutonomyPolicy.DENY) }
+        assertTrue(f.execute().success); assertEquals(1, f.executed)
+        assertEquals(AutonomyPolicy.ALLOW, f.autonomy.projectPolicy())
+    }
+
+    @Test fun crossInstanceCodingPolicyAbaAtLaunchInvalidatesExactSnapshot() {
+        val f = Fixture(folder.newFolder(), AutonomyPolicy.ALLOW)
+        f.beforeLaunch = {
+            val other = LinuxExecAutonomy(f.store, { true })
+            other.setProjectPolicyFromUi(AutonomyPolicy.DENY)
+            other.setProjectPolicyFromUi(AutonomyPolicy.ALLOW)
+        }
+        val result = f.execute()
+        assertEquals(0, f.executed)
+        if (result.success) assertEquals("FAILED", JSONObject(result.content).getString("state"))
+    }
+
     @Test fun statusIsInspectionOnlyAndDisclosesTheEffectiveCodingPolicy() {
         val f = Fixture(folder.newFolder())
         for (policy in listOf(AutonomyPolicy.ALLOW, AutonomyPolicy.ASK, AutonomyPolicy.DENY)) {
@@ -95,7 +117,7 @@ class CodingExecutionToolsTest {
         assertTrue(f.execute().success)
         assertEquals(0, f.requests); assertEquals(3, f.executed)
         assertEquals(3, f.jobs.list("chat/bot/1", f.scope).size)
-        assertEquals(AutonomyPolicy.ASK, f.autonomy.policy())
+        assertEquals(AutonomyPolicy.ALLOW, f.autonomy.policy())
     }
     @Test fun existingLinuxAllowAndDenyRemainEffectiveWithoutCodingOverride() {
         val f = Fixture(folder.newFolder()); f.autonomy.setPolicyFromUi(AutonomyPolicy.ALLOW)
@@ -114,18 +136,18 @@ class CodingExecutionToolsTest {
         val f = Fixture(folder.newFolder(), AutonomyPolicy.ASK); f.decision = ApprovalDecision.DENIED
         assertFalse(f.execute().success); assertEquals(0, f.executed)
         f.decision = ApprovalDecision.APPROVED
-        f.duringApproval = { f.autonomy.setPolicyFromUi(AutonomyPolicy.ASK) }
+        f.duringApproval = { f.autonomy.setProjectPolicyFromUi(AutonomyPolicy.ASK) }
         assertFalse(f.execute().success); assertEquals(0, f.executed)
     }
     @Test fun allowAlwaysApprovesThisCommandAndPersistsOnlyCodingPermission() {
         val f = Fixture(folder.newFolder(), AutonomyPolicy.ASK)
-        f.duringApproval = { assertNull(f.autonomy.setProjectPolicyFromUi(AutonomyPolicy.ALLOW)) }
+        f.useExactAllowCallback = true
         f.decision = ApprovalDecision.APPROVED_ALLOW_ALWAYS
         assertTrue(f.execute().success); assertTrue(f.execute().success)
         assertEquals(1, f.requests); assertEquals(2, f.executed)
         val recreated = LinuxExecAutonomy(f.store, { true })
         assertEquals(AutonomyPolicy.ALLOW, recreated.projectPolicy())
-        assertEquals(AutonomyPolicy.ASK, recreated.policy())
+        assertEquals(AutonomyPolicy.ALLOW, recreated.policy())
     }
     @Test fun allowAlwaysCannotHideRevocationOrPretendTheChoiceWasSaved() {
         val f = Fixture(folder.newFolder(), AutonomyPolicy.ASK)

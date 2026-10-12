@@ -46,10 +46,16 @@ class GoogleApiException(val status: Int?, val reason: GoogleApiFailure) : Illeg
 interface GoogleRestAuthorization {
     /** Opaque, process-local approval context; it is never an account identifier or credential. */
     fun currentAuthorizationEpoch(): Long = 0L
+    /** Locally known verified identity, when available. Never fetch or prompt from read preparation. */
+    fun currentAccountIdentity(): String? = null
     fun isScopeGranted(scope: String): Boolean
-    /** Prove the actual Gmail token account before review/dispatch; unsupported implementations fail closed. */
+    /**
+     * Prove the actual Gmail token account; unsupported implementations fail closed.
+     * Preparation may perform scope/account preflight before review without action admission.
+     * Final invocation must carry beforeDispatch through every proof transport and retry.
+     */
     fun verifyGmailAccount(capability: String, expectedAccount: String?, token: CancellationToken,
-                           epoch: Long): String = error("Gmail account verification is unavailable")
+                           epoch: Long, beforeDispatch: (() -> Unit)? = null): String = error("Gmail account verification is unavailable")
     fun request(scope: String, method: String, url: String, body: String? = null,
                 contentType: String = "application/json"): GoogleHttpResponse
     fun requestCancellable(scope: String, method: String, url: String, body: String? = null,
@@ -110,6 +116,10 @@ internal class GoogleDispatchAuthorization(private val delegate: GoogleRestAutho
         if (explicit == null) return scoped
         return { scoped(); explicit() }
     }
+
+    override fun verifyGmailAccount(capability: String, expectedAccount: String?, token: CancellationToken,
+                                    epoch: Long, beforeDispatch: (() -> Unit)?): String =
+        delegate.verifyGmailAccount(capability, expectedAccount, token, epoch, dispatchHook(beforeDispatch))
 
     override fun requestCancellable(scope: String, method: String, url: String, body: String?, contentType: String,
                                     token: CancellationToken, requestHeaders: Map<String, String>,

@@ -72,7 +72,7 @@ class ContactsConnectorTest {
         }.isFailure)
     }
 
-    @Test fun schemasAreTypedAndCreateUsesSystemInsertIntentOnlyAfterApproval() {
+    @Test fun schemasAreTypedAndSavedAskDenialDoesNotLaunchTheContactEditor() {
         val searchSchema = ContactsConnector.searchSchema()
         assertEquals("string", searchSchema.getJSONObject("properties").getJSONObject("query").getString("type"))
         assertEquals(50, searchSchema.getJSONObject("properties").getJSONObject("limit").getInt("maximum"))
@@ -84,14 +84,20 @@ class ContactsConnectorTest {
         val summaries = mutableListOf<ApprovalSummary>()
         val definition = ContactsConnector.definition(FakeContactsGateway()) { true }
         val preferences = FakeConnectorPreferences()
-        val registry = ConnectorRegistry.createForTests(preferences, { true }, rejectingApprovalGate(summaries::add))
+        val launches = mutableListOf<ApprovalIntentSpec>()
+        val registry = ConnectorRegistry.createForTestsWithAutonomy(
+            preferences, { true }, rejectingApprovalGate(summaries::add),
+            InMemoryConnectorAutonomyStore(), NoopAutonomyActionNotifier, launchIntent = { launches += it },
+        )
         registry.register(definition)
         registry.connect(ContactsConnector.ID)
         val operation = definition.operations.first { it.name == ContactsConnector.CREATE }
+        registry.setAutonomyPolicy(definition, operation, AutonomyPolicy.ASK)
         val args = JSONObject().put("displayName", "Kai").put("phone", "+15550001").put("email", "kai@example.test")
         val rejected = runCatching { registry.invoke(definition, operation, args, token) }.exceptionOrNull()
-        assertTrue(rejected?.message.orEmpty().contains("no la reintentes"))
+        assertTrue(rejected?.message.orEmpty().contains("do not retry automatically"))
         assertEquals(1, summaries.size)
+        assertTrue(launches.isEmpty())
         assertEquals(ApprovalIntentKind.CONTACT_INSERT, summaries.single().activityIntent?.kind)
         assertEquals("Kai", summaries.single().activityIntent?.extras?.get("name"))
         assertFalse(definition.writePermissions.contains(Manifest.permission.WRITE_CONTACTS))

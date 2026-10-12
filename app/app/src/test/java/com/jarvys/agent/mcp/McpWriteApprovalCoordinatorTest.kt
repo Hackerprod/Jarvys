@@ -12,6 +12,8 @@ import com.jarvys.agent.connectors.InMemoryConnectorAutonomyStore
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertFalse
 import org.junit.Test
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executors
@@ -30,7 +32,7 @@ class McpWriteApprovalCoordinatorTest {
         val posted = AtomicInteger()
         override fun canPost() = enabled
         override fun missingRuntimePermission(): String? = null
-        override fun post(record: AutonomyAuditRecord) { posted.incrementAndGet() }
+        override fun post(record: AutonomyAuditRecord) { check(enabled); posted.incrementAndGet() }
     }
 
     private fun writeTool(name: String = "create_issue", destructive: Boolean = false) = McpToolDefinition(
@@ -47,6 +49,7 @@ class McpWriteApprovalCoordinatorTest {
 
     @Test fun askShowsBoundedSummaryAndDeniedWriteNeverCallsRemoteTool() {
         val store = InMemoryConnectorAutonomyStore()
+        store.setPolicy("mcp:catalog_github", "create_issue", AutonomyPolicy.ASK)
         val presenter = Presenter()
         val gate = ApprovalGate(2_000, presenter)
         val coordinator = McpWriteApprovalCoordinator(store, gate, Notifier())
@@ -73,6 +76,7 @@ class McpWriteApprovalCoordinatorTest {
 
     @Test fun approvedAskWriteRunsExactlyOnce() {
         val store = InMemoryConnectorAutonomyStore()
+        store.setPolicy("mcp:catalog_github", "create_issue", AutonomyPolicy.ASK)
         val presenter = Presenter()
         val gate = ApprovalGate(2_000, presenter)
         val coordinator = McpWriteApprovalCoordinator(store, gate, Notifier())
@@ -108,36 +112,113 @@ class McpWriteApprovalCoordinatorTest {
         assertEquals(null, presenter.shown.poll())
     }
 
-    @Test fun denyStopsBeforeCallingAndDestructiveToolsCannotUseAllow() {
+    @Test fun denyBlocksBothReadsAndWritesButEveryActionCanUseAllow() {
+        val store = InMemoryConnectorAutonomyStore()
+        val presenter = Presenter()
+        val coordinator = McpWriteApprovalCoordinator(store, ApprovalGate(2_000, presenter), Notifier(false))
+        var calls = 0
+        for (tool in listOf(writeTool("delete_issue", destructive = true),
+            writeTool("get_issue").copy(access = McpToolAccess.READ),
+            writeTool().copy(catalogServiceId = "github"))) {
+            coordinator.setPolicy(tool, AutonomyPolicy.DENY)
+            assertThrows(McpWriteDeniedException::class.java) {
+                coordinator.execute(tool, JSONObject(), CancellationToken.uncancellable()) { calls++; JSONObject() }
+            }
+            coordinator.setPolicy(tool, AutonomyPolicy.ALLOW)
+            val response = coordinator.execute(tool, JSONObject(), CancellationToken.uncancellable()) { calls++; JSONObject() }
+            if (tool.access == McpToolAccess.WRITE) assertTrue(response.has("notificationWarning"))
+        }
+        assertEquals(3, calls)
+        assertTrue(presenter.shown.isEmpty())
+    }
+
+    @Test fun absentPolicyDefaultsToAllowIncludingReadsAndDoesNotPersistARow() {
+        val store = InMemoryConnectorAutonomyStore()
+        val presenter = Presenter()
+        val coordinator = McpWriteApprovalCoordinator(store, ApprovalGate(2_000, presenter), Notifier(false))
+        val tool = writeTool().copy(access = McpToolAccess.READ)
+        assertEquals(AutonomyPolicy.ALLOW, coordinator.policy(tool))
+        coordinator.execute(tool, JSONObject(), CancellationToken.uncancellable()) { JSONObject() }
+        assertEquals(null, store.savedPolicy("mcp:${tool.serverId}", tool.wireName))
+        assertTrue(presenter.shown.isEmpty())
+    }
+
+    @Test fun serverFallbackNeverOverwritesAnExistingOrReturningToolOverride() {
+        val store = InMemoryConnectorAutonomyStore()
+        val coordinator = McpWriteApprovalCoordinator(store, ApprovalGate(2_000, Presenter()), Notifier())
+        val tool = writeTool().copy(inheritedPolicy = AutonomyPolicy.ASK)
+        assertEquals(AutonomyPolicy.ASK, coordinator.policy(tool))
+        assertEquals(null, store.savedPolicy("mcp:${tool.serverId}", tool.wireName))
+        coordinator.setPolicy(tool, AutonomyPolicy.DENY)
+        assertEquals(AutonomyPolicy.DENY, coordinator.policy(tool.copy(inheritedPolicy = AutonomyPolicy.ALLOW)))
+        coordinator.setPolicy(tool, AutonomyPolicy.ASK)
+        assertEquals(AutonomyPolicy.ASK, coordinator.policy(tool.copy(inheritedPolicy = AutonomyPolicy.DENY)))
+    }
+
+    @Test fun allowToAskAndDenyAllowAbaInvalidateUnadmittedRequest() {
+        for (aba in listOf(false, true)) {
+            val store = InMemoryConnectorAutonomyStore()
+            val coordinator = McpWriteApprovalCoordinator(store, ApprovalGate(2_000, Presenter()), Notifier())
+            val tool = writeTool()
+            var calls = 0
+            assertTrue(runCatching {
+                coordinator.executeWithAdmission(tool, JSONObject(), CancellationToken.uncancellable(), null, null) { admission ->
+                    coordinator.setPolicy(tool, if (aba) AutonomyPolicy.DENY else AutonomyPolicy.ASK)
+                    if (aba) coordinator.setPolicy(tool, AutonomyPolicy.ALLOW)
+                    admission.admit()
+                    calls++; JSONObject()
+                }
+            }.isFailure)
+            assertEquals(0, calls)
+        }
+    }
+
+    @Test fun askReadBindsApprovalToOriginalPolicyRevision() {
         val store = InMemoryConnectorAutonomyStore()
         val presenter = Presenter()
         val gate = ApprovalGate(2_000, presenter)
         val coordinator = McpWriteApprovalCoordinator(store, gate, Notifier())
-        val denied = writeTool("update_issue")
-        coordinator.setPolicy(denied, AutonomyPolicy.DENY)
-        var invoked = false
-        runCatching { coordinator.execute(denied, JSONObject(), CancellationToken.uncancellable()) {
-            invoked = true; JSONObject()
-        } }
-        assertTrue(!invoked)
-        val destructive = writeTool("delete_issue", destructive = true)
-        assertTrue(runCatching { coordinator.setPolicy(destructive, AutonomyPolicy.ALLOW) }.isFailure)
-        // Even a legacy/stale ALLOW setting cannot bypass Ask for a destructive action.
-        store.setPolicy("mcp:catalog_github", destructive.wireName, AutonomyPolicy.ALLOW)
+        val tool = writeTool("read_issue").copy(access = McpToolAccess.READ)
+        coordinator.setPolicy(tool, AutonomyPolicy.ASK)
         val executor = Executors.newSingleThreadExecutor()
+        val calls = AtomicInteger()
         try {
             val future = executor.submit {
-                coordinator.execute(destructive, JSONObject(), CancellationToken.uncancellable()) {
-                    invoked = true; JSONObject()
-                }
+                coordinator.execute(tool, JSONObject(), CancellationToken.uncancellable()) { calls.incrementAndGet(); JSONObject() }
             }
-            val (requestId, summary) = presenter.shown.poll(2, TimeUnit.SECONDS) ?: error("Destructive write did not ask")
-            assertTrue(summary.lines.any { it.contains("High-impact") })
-            gate.resolve(requestId, ApprovalDecision.DENIED)
-            try { future.get(2, TimeUnit.SECONDS); error("Denied destructive write unexpectedly ran") }
-            catch (deniedWrite: ExecutionException) { assertTrue(deniedWrite.cause is McpWriteDeniedException) }
-            assertTrue(!invoked)
+            val (id, summary) = presenter.shown.poll(2, TimeUnit.SECONDS) ?: error("Read approval missing")
+            assertTrue(summary.compactSummary?.fallback?.contains("read") == true)
+            coordinator.setPolicy(tool, AutonomyPolicy.DENY)
+            coordinator.setPolicy(tool, AutonomyPolicy.ASK)
+            gate.resolve(id, ApprovalDecision.APPROVED)
+            assertThrows(ExecutionException::class.java) { future.get(2, TimeUnit.SECONDS) }
+            assertEquals(0, calls.get())
         } finally { executor.shutdownNow() }
+    }
+
+    @Test fun everyDispatchRechecksPolicyAndStopWithoutHoldingLocksAcrossEffect() {
+        val store = InMemoryConnectorAutonomyStore()
+        val coordinator = McpWriteApprovalCoordinator(store, ApprovalGate(2_000, Presenter()), Notifier())
+        val tool = writeTool()
+        val token = CancellationToken.cancellable()
+        var calls = 0
+        assertTrue(runCatching {
+            coordinator.executeWithAdmission(tool, JSONObject(), token, null, null) { admission ->
+                admission.admit(); calls++
+                admission.admit(); calls++ // A verified retry/subrequest gets a fresh, single-use admission.
+                coordinator.setPolicy(tool, AutonomyPolicy.DENY)
+                admission.admit(); calls++; JSONObject()
+            }
+        }.isFailure)
+        assertEquals(2, calls)
+        coordinator.setPolicy(tool, AutonomyPolicy.ALLOW)
+        assertTrue(runCatching {
+            coordinator.executeWithAdmission(tool, JSONObject(), token, null, null) { admission ->
+                token.cancel()
+                admission.admit(); calls++; JSONObject()
+            }
+        }.isFailure)
+        assertEquals(2, calls)
     }
 
     @Test fun deletingRemoteServerClearsItsPersistedWriteGrants() {
@@ -149,6 +230,6 @@ class McpWriteApprovalCoordinatorTest {
 
         coordinator.forgetServer(tool.serverId)
 
-        assertEquals(AutonomyPolicy.ASK, coordinator.policy(tool))
+        assertEquals(AutonomyPolicy.ALLOW, coordinator.policy(tool))
     }
 }

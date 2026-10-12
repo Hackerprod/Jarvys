@@ -7,6 +7,8 @@ import androidx.test.core.app.ApplicationProvider
 import com.jarvys.agent.CancellationToken
 import com.jarvys.agent.CoreTool
 import com.jarvys.agent.CoreToolResult
+import com.jarvys.agent.NativeActionPolicy
+import com.jarvys.agent.connectors.AutonomyPolicy
 import com.jarvys.agent.UserDecisionGate
 import com.jarvys.agent.UserDecisionOption
 import com.jarvys.agent.UserDecisionPresenter
@@ -237,8 +239,9 @@ class TaskManagementToolsTest {
         assertFalse(task.toolScope.tools.contains("workspace_write"))
     }
 
-    @Test fun updateExpansionRequiresBeforeAfterCardWhileRestrictionPauseAndStaleRevisionBehaveSafely() {
+    @Test fun updateAskReviewsBeforeAfterWhileAllowCanPauseAndStaleRevisionRemainsBlocked() {
         val fixture = fixture()
+        fixture.policy.set(NativeActionPolicy.Operation.TASK_UPDATE, AutonomyPolicy.ASK)
         val task = fixture.createTask(instruction = "Read the current status")
         val update = fixture.tools.tool(TaskManagementTools.UPDATE_TASK)
         val expanded = async(update, mapOf("task_id" to task.id,
@@ -262,6 +265,7 @@ class TaskManagementToolsTest {
         fixture.gate.resolve(scheduleCard.id, UserDecisionResult.Dismissed)
         scheduleChange.get(5, TimeUnit.SECONDS)
 
+        fixture.policy.set(NativeActionPolicy.Operation.TASK_UPDATE, AutonomyPolicy.ALLOW)
         val paused = update.execute(mapOf("task_id" to task.id,
             "patch" to mapOf("revision" to task.revision, "state" to "paused")), CancellationToken.uncancellable())
         assertEquals("updated", payload(paused).getString("status"))
@@ -279,6 +283,7 @@ class TaskManagementToolsTest {
         val search = com.jarvys.agent.WebSearchTools.SEARCH
         val fetch = com.jarvys.agent.WebSearchTools.FETCH
         val fixture = fixture(creatorNames = listOf(search, fetch))
+        fixture.policy.set(NativeActionPolicy.Operation.TASK_UPDATE, AutonomyPolicy.ASK)
         val original = fixture.createTask()
         val tool = fixture.tools.tool(TaskManagementTools.UPDATE_TASK)
         val expansion = async(tool, mapOf("task_id" to original.id,
@@ -293,6 +298,7 @@ class TaskManagementToolsTest {
 
         val webTask = fixture.repository.update(original.copy(toolScope = TaskToolScope("LISTED", listOf(search), true)),
             original.revision)
+        fixture.policy.set(NativeActionPolicy.Operation.TASK_UPDATE, AutonomyPolicy.ALLOW)
         val restricted = tool.execute(mapOf("task_id" to original.id,
             "patch" to mapOf("revision" to webTask.revision, "web" to false)), CancellationToken.uncancellable())
         assertEquals("updated", payload(restricted).getString("status"))
@@ -326,6 +332,7 @@ class TaskManagementToolsTest {
         assertEquals(0, direct.presenter.shown.get())
 
         val keeping = fixture()
+        keeping.policy.set(NativeActionPolicy.Operation.TASK_CANCEL, AutonomyPolicy.ASK)
         val keepTask = keeping.createTask()
         keeping.addRun(keepTask.id)
         val keepCall = async(keeping.tools.tool(TaskManagementTools.CANCEL_TASK), mapOf("task_id" to keepTask.id), keeping)
@@ -335,6 +342,7 @@ class TaskManagementToolsTest {
         assertEquals(1, keeping.ledger.forTask(keepTask.id).size)
 
         val clearing = fixture()
+        clearing.policy.set(NativeActionPolicy.Operation.TASK_CANCEL, AutonomyPolicy.ASK)
         val clearTask = clearing.createTask()
         clearing.addRun(clearTask.id)
         val clearCall = async(clearing.tools.tool(TaskManagementTools.CANCEL_TASK), mapOf("task_id" to clearTask.id), clearing)
@@ -358,9 +366,209 @@ class TaskManagementToolsTest {
         assertEquals(2, payload(limited).getJSONObject("content").getJSONArray("runs").length())
     }
 
+    @Test fun defaultAllowCreatesChangesAndCancelsWithoutCardsOrAnUnrequestedTest() {
+        val fixture = fixture(askCreate = false, available = false, presenterAvailable = false)
+        val created = payload(fixture.tools.tool(TaskManagementTools.SCHEDULE_TASK)
+            .execute(scheduleArgs("Read status"), CancellationToken.uncancellable()))
+        val task = fixture.repository.get(created.getString("task_id"))!!
+        assertEquals("created", created.getString("status"))
+        assertTrue(fixture.queued.isEmpty())
+        assertEquals("DEFER", task.toolScope.writes)
+        val updated = payload(fixture.tools.tool(TaskManagementTools.UPDATE_TASK).execute(mapOf(
+            "task_id" to task.id, "patch" to mapOf("revision" to task.revision, "instruction" to "Compare status")),
+            CancellationToken.uncancellable()))
+        assertEquals("updated", updated.getString("status"))
+        fixture.addRun(task.id)
+        val cancelled = payload(fixture.tools.tool(TaskManagementTools.CANCEL_TASK).execute(
+            mapOf("task_id" to task.id), CancellationToken.uncancellable()))
+        assertEquals("kept", cancelled.getString("history"))
+        assertTrue(fixture.repository.list().isEmpty())
+        assertEquals(1, fixture.ledger.forTask(task.id).size)
+        assertEquals(0, fixture.presenter.shown.get())
+    }
+
+    @Test fun denyBlocksEveryAgentTaskToolBeforeMutationOrDisclosure() {
+        val fixture = fixture(askCreate = false)
+        val task = fixture.createTask()
+        fixture.addRun(task.id)
+        val operations = listOf(NativeActionPolicy.Operation.TASK_CREATE, NativeActionPolicy.Operation.TASK_UPDATE,
+            NativeActionPolicy.Operation.TASK_CANCEL, NativeActionPolicy.Operation.TASK_VIEW)
+        operations.forEach { fixture.policy.set(it, AutonomyPolicy.DENY) }
+        val calls = listOf(
+            TaskManagementTools.SCHEDULE_TASK to scheduleArgs("new task"),
+            TaskManagementTools.UPDATE_TASK to mapOf("task_id" to task.id,
+                "patch" to mapOf("revision" to task.revision, "name" to "changed")),
+            TaskManagementTools.CANCEL_TASK to mapOf("task_id" to task.id),
+            TaskManagementTools.LIST_TASKS to emptyMap<String, Any>(),
+            TaskManagementTools.TASK_RUNS to mapOf("task_id" to task.id),
+        )
+        calls.forEach { (name, args) ->
+            assertNotNull(name, runCatching { fixture.tools.tool(name).execute(args, CancellationToken.uncancellable()) }.exceptionOrNull())
+        }
+        assertEquals(task, fixture.repository.get(task.id))
+        assertEquals(1, fixture.ledger.forTask(task.id).size)
+        assertEquals(0, fixture.presenter.shown.get())
+        operations.forEach { assertEquals(AutonomyPolicy.DENY, fixture.policy.snapshot(it).policy) }
+    }
+
+    @Test fun explicitAskAlsoReviewsNarrowingAndNoHistoryCancellationExactlyOnce() {
+        val fixture = fixture()
+        val task = fixture.createTask()
+        fixture.policy.set(NativeActionPolicy.Operation.TASK_UPDATE, AutonomyPolicy.ASK)
+        fixture.policy.set(NativeActionPolicy.Operation.TASK_CANCEL, AutonomyPolicy.ASK)
+        val pause = async(fixture.tools.tool(TaskManagementTools.UPDATE_TASK), mapOf("task_id" to task.id,
+            "patch" to mapOf("revision" to task.revision, "state" to "paused")), fixture)
+        val pauseCard = fixture.presenter.next()
+        fixture.gate.resolve(pauseCard.id, UserDecisionResult.Selected(pauseCard.spec.options[0]))
+        assertEquals("updated", payload(pause.get(5, TimeUnit.SECONDS)).getString("status"))
+        assertEquals(TaskState.Paused, fixture.repository.get(task.id)!!.state)
+        val cancel = async(fixture.tools.tool(TaskManagementTools.CANCEL_TASK), mapOf("task_id" to task.id), fixture)
+        val cancelCard = fixture.presenter.next()
+        assertEquals(listOf("delete_keep_history", "cancel"), cancelCard.spec.options.map { it.id })
+        fixture.gate.resolve(cancelCard.id, UserDecisionResult.Selected(cancelCard.spec.options[0]))
+        assertEquals("cancelled", payload(cancel.get(5, TimeUnit.SECONDS)).getString("status"))
+        assertEquals(2, fixture.presenter.shown.get())
+        assertEquals(AutonomyPolicy.ASK, fixture.policy.snapshot(NativeActionPolicy.Operation.TASK_UPDATE).policy)
+        assertEquals(AutonomyPolicy.ASK, fixture.policy.snapshot(NativeActionPolicy.Operation.TASK_CANCEL).policy)
+    }
+
+    @Test fun policyRevisionChangesWhileAskWaitsInvalidateCreationEvenWhenNewModeIsAllow() {
+        listOf(AutonomyPolicy.DENY, AutonomyPolicy.ALLOW, AutonomyPolicy.ASK).forEach { replacement ->
+            val fixture = fixture()
+            val call = async(fixture.tools.tool(TaskManagementTools.SCHEDULE_TASK), scheduleArgs("Exact creation"), fixture)
+            val card = fixture.presenter.next()
+            fixture.policy.set(NativeActionPolicy.Operation.TASK_CREATE, replacement)
+            fixture.gate.resolve(card.id, UserDecisionResult.Selected(card.spec.options[0]))
+            assertNotNull(runCatching { call.get(5, TimeUnit.SECONDS) }.exceptionOrNull())
+            assertTrue(fixture.repository.list().isEmpty())
+            assertTrue(fixture.queued.isEmpty())
+            assertEquals(1, fixture.presenter.shown.get())
+        }
+    }
+
+    @Test fun concurrentTaskRevisionPreventsApprovedUpdateAndCancellationFromRebasing() {
+        listOf(TaskManagementTools.UPDATE_TASK, TaskManagementTools.CANCEL_TASK).forEach { operation ->
+            val fixture = fixture()
+            val task = fixture.createTask()
+            fixture.policy.set(NativeActionPolicy.Operation.TASK_UPDATE, AutonomyPolicy.ASK)
+            fixture.policy.set(NativeActionPolicy.Operation.TASK_CANCEL, AutonomyPolicy.ASK)
+            val args = if (operation == TaskManagementTools.UPDATE_TASK) mapOf("task_id" to task.id,
+                "patch" to mapOf("revision" to task.revision, "instruction" to "Reviewed mutation"))
+                else mapOf("task_id" to task.id)
+            val call = async(fixture.tools.tool(operation), args, fixture)
+            val card = fixture.presenter.next()
+            val concurrent = fixture.repository.update(task.copy(name = "Concurrent edit"), task.revision)
+            fixture.gate.resolve(card.id, UserDecisionResult.Selected(card.spec.options[0]))
+            assertNotNull(runCatching { call.get(5, TimeUnit.SECONDS) }.exceptionOrNull())
+            assertEquals(concurrent, fixture.repository.get(task.id))
+        }
+    }
+
+    @Test fun concurrentHistoryAfterClearChoiceIsPreservedAndNeverReplayed() {
+        val fixture = fixture()
+        val task = fixture.createTask()
+        fixture.addRun(task.id, 1)
+        fixture.policy.set(NativeActionPolicy.Operation.TASK_CANCEL, AutonomyPolicy.ASK)
+        val call = async(fixture.tools.tool(TaskManagementTools.CANCEL_TASK), mapOf("task_id" to task.id), fixture)
+        val card = fixture.presenter.next()
+        fixture.addRun(task.id, 2)
+        fixture.gate.resolve(card.id, UserDecisionResult.Selected(card.spec.options[0]))
+        val result = payload(call.get(5, TimeUnit.SECONDS))
+        assertEquals("cancelled", result.getString("status"))
+        assertEquals("kept_clear_not_completed", result.getString("history"))
+        assertEquals(2, fixture.ledger.forTask(task.id).size)
+        assertTrue(fixture.repository.list().isEmpty())
+        assertNotNull(runCatching { fixture.tools.tool(TaskManagementTools.CANCEL_TASK).execute(
+            mapOf("task_id" to task.id), CancellationToken.uncancellable()) }.exceptionOrNull())
+        assertEquals(2, fixture.ledger.forTask(task.id).size)
+    }
+
+    @Test fun revocationAfterSaveBlocksOptionalManualEnqueueWithoutReplayingCreation() {
+        val policy = NativeActionPolicy.inMemory()
+        val fixture = fixture(policy = policy, rearm = {
+            policy.set(NativeActionPolicy.Operation.TASK_CREATE, AutonomyPolicy.DENY)
+        })
+        val call = async(fixture.tools.tool(TaskManagementTools.SCHEDULE_TASK), scheduleArgs("Optional test"), fixture)
+        val card = fixture.presenter.next()
+        fixture.gate.resolve(card.id, UserDecisionResult.Selected(card.spec.options[1]))
+        val result = payload(call.get(5, TimeUnit.SECONDS))
+        assertEquals("created", result.getString("status"))
+        assertEquals("not_completed", result.getString("manual_run_status"))
+        assertEquals(1, fixture.repository.list().size)
+        assertTrue(fixture.queued.isEmpty())
+        assertEquals(TaskState.Active, fixture.repository.list().single().state)
+    }
+
+    @Test fun taskReadsAskOnceForTheirExactScopeAndPreserveSavedChoice() {
+        val fixture = fixture()
+        val task = fixture.createTask()
+        fixture.addRun(task.id)
+        fixture.policy.set(NativeActionPolicy.Operation.TASK_VIEW, AutonomyPolicy.ASK)
+        val call = async(fixture.tools.tool(TaskManagementTools.TASK_RUNS), mapOf("task_id" to task.id, "limit" to 1), fixture)
+        val card = fixture.presenter.next()
+        assertTrue(card.spec.body.contains(task.id))
+        fixture.gate.resolve(card.id, UserDecisionResult.Selected(card.spec.options[0]))
+        assertEquals(1, payload(call.get(5, TimeUnit.SECONDS)).getJSONObject("content").getJSONArray("runs").length())
+        assertEquals(1, fixture.presenter.shown.get())
+        assertEquals(AutonomyPolicy.ASK, fixture.policy.snapshot(NativeActionPolicy.Operation.TASK_VIEW).policy)
+        val revoked = async(fixture.tools.tool(TaskManagementTools.LIST_TASKS), emptyMap(), fixture)
+        val next = fixture.presenter.next()
+        fixture.policy.set(NativeActionPolicy.Operation.TASK_VIEW, AutonomyPolicy.DENY)
+        fixture.gate.resolve(next.id, UserDecisionResult.Selected(next.spec.options[0]))
+        assertNotNull(runCatching { revoked.get(5, TimeUnit.SECONDS) }.exceptionOrNull())
+    }
+
+    @Test fun stoppedUpdatesAndCancellationNeverCommitAfterTheirCard() {
+        listOf(TaskManagementTools.UPDATE_TASK, TaskManagementTools.CANCEL_TASK).forEach { operation ->
+            val fixture = fixture()
+            val task = fixture.createTask()
+            fixture.policy.set(NativeActionPolicy.Operation.TASK_UPDATE, AutonomyPolicy.ASK)
+            fixture.policy.set(NativeActionPolicy.Operation.TASK_CANCEL, AutonomyPolicy.ASK)
+            val args = if (operation == TaskManagementTools.UPDATE_TASK) mapOf("task_id" to task.id,
+                "patch" to mapOf("revision" to task.revision, "state" to "paused")) else mapOf("task_id" to task.id)
+            val token = CancellationToken.cancellable()
+            val call = async(fixture.tools.tool(operation), args, fixture, token)
+            fixture.presenter.next()
+            token.cancel()
+            assertEquals("cancelled", payload(call.get(5, TimeUnit.SECONDS)).getString("status"))
+            assertEquals(task, fixture.repository.get(task.id))
+        }
+    }
+
+    @Test fun taskAskCardsProtectUserReviewFromAutomatedDeviceInputAndCloseTheLease() {
+        val fixture = fixture()
+        val call = async(fixture.tools.tool(TaskManagementTools.SCHEDULE_TASK), scheduleArgs("Human choice"), fixture)
+        val card = fixture.presenter.next()
+        assertTrue(com.jarvys.agent.MemoryUiAutomationGuard.isProtected())
+        assertTrue(runCatching { com.jarvys.agent.MemoryUiAutomationGuard.captureAutomationEpoch() }.isFailure)
+        fixture.gate.resolve(card.id, UserDecisionResult.Dismissed)
+        call.get(5, TimeUnit.SECONDS)
+        assertFalse(com.jarvys.agent.MemoryUiAutomationGuard.isProtected())
+        val epoch = com.jarvys.agent.MemoryUiAutomationGuard.captureAutomationEpoch()
+        com.jarvys.agent.MemoryUiAutomationGuard.beginAsyncAction(epoch).use {
+            val result = fixture.tools.tool(TaskManagementTools.SCHEDULE_TASK)
+                .execute(scheduleArgs("Tainted review"), CancellationToken.uncancellable())
+            assertEquals("unavailable", payload(result).getString("status"))
+            assertFalse(com.jarvys.agent.MemoryUiAutomationGuard.isProtected())
+        }
+        assertEquals(1, fixture.presenter.shown.get())
+        assertTrue(fixture.repository.list().isEmpty())
+    }
+
+    @Test fun hiddenTaskAskPresenterCannotAuthorizeALateSelectedResult() {
+        val fixture = fixture()
+        val call = async(fixture.tools.tool(TaskManagementTools.SCHEDULE_TASK), scheduleArgs("Late selection"), fixture)
+        val card = fixture.presenter.next()
+        fixture.presenter.available = false
+        fixture.gate.resolve(card.id, UserDecisionResult.Selected(card.spec.options[0]))
+        assertEquals("unavailable", payload(call.get(5, TimeUnit.SECONDS)).getString("status"))
+        assertTrue(fixture.repository.list().isEmpty())
+        assertFalse(com.jarvys.agent.MemoryUiAutomationGuard.isProtected())
+    }
+
     private data class Card(val id: String, val spec: UserDecisionSpec)
 
-    private class FakePresenter(private val available: Boolean = true) : UserDecisionPresenter {
+    private class FakePresenter(@Volatile var available: Boolean = true) : UserDecisionPresenter {
         private val cards = LinkedBlockingQueue<Card>()
         val shown = AtomicInteger()
         override fun isAvailable() = available
@@ -380,6 +588,7 @@ class TaskManagementToolsTest {
         val queued: MutableList<Pair<String, String>>,
         val turnNames: List<String>,
         val sessionId: String,
+        val policy: NativeActionPolicy,
     ) {
         fun createTask(instruction: String = "Read the current status"): ScheduledTask = repository.create(
             "Diagnostic task", instruction, TaskSchedule.Calendar("08:00", CalendarCadence.DAILY, zone = TaskZone.Iana("UTC")),
@@ -398,21 +607,25 @@ class TaskManagementToolsTest {
         registry: ConnectorRegistry = emptyRegistry(),
         creatorNames: List<String> = emptyList(),
         toolContext: Context = context,
+        askCreate: Boolean = true,
+        policy: NativeActionPolicy = NativeActionPolicy.inMemory(),
+        rearm: () -> Unit = {},
     ): Fixture {
+        if (askCreate) policy.set(NativeActionPolicy.Operation.TASK_CREATE, AutonomyPolicy.ASK)
         val root = Files.createTempDirectory("st2-task-tools").toFile()
         val store = TaskStore(java.io.File(root, "tasks.jsonl"))
         val ledger = TaskRunLedger(java.io.File(root, "runs.jsonl"))
         val zoneProvider = com.jarvys.agent.tasks.TaskZoneProvider { zone }
         val calculator = ScheduleCalculator(clock, zoneProvider)
-        val repository = TaskRepository(context, store, calculator, clock, {}, ledger)
+        val repository = TaskRepository(context, store, calculator, clock, rearm, ledger)
         val gate = UserDecisionGate()
         val presenter = FakePresenter(presenterAvailable)
         val queued = mutableListOf<Pair<String, String>>()
         val sessionId = "st2-tools-${System.nanoTime()}"
         val names = creatorNames.toList()
         val manager = TaskManagementTools(toolContext, sessionId, names, repository, ledger, clock, zoneProvider,
-            gate, { available }, presenter, { id, occurrence -> queued += id to occurrence }, registry)
-        return Fixture(manager, repository, ledger, gate, presenter, clock, zone, queued, names, sessionId)
+            gate, { available }, presenter, { task, occurrence -> queued += task.id to occurrence }, registry, policy)
+        return Fixture(manager, repository, ledger, gate, presenter, clock, zone, queued, names, sessionId, policy)
     }
 
     private fun async(tool: CoreTool, args: Map<String, Any>, fixture: Fixture,

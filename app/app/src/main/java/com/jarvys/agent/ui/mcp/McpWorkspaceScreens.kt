@@ -282,6 +282,7 @@ internal fun McpServerDetailPage(
     onToolEnabled: (String, Boolean) -> Unit,
 ) {
     var toolSearch by remember(server.id) { mutableStateOf("") }
+    var showInheritedPolicyInfo by rememberSaveable(server.id) { mutableStateOf(true) }
     val connected = status.status == McpConnectionStatus.READY
     val reauthorize = status.status in setOf(McpConnectionStatus.AUTH_REQUIRED, McpConnectionStatus.REAUTH_REQUIRED,
         McpConnectionStatus.PERMISSION_REQUIRED) && server.authMode == McpAuthMode.OAUTH
@@ -312,6 +313,16 @@ internal fun McpServerDetailPage(
         onDisconnect = onDisconnect,
         error = status.message.takeIf { it.isNotBlank() && !connected },
         content = {
+            if (showInheritedPolicyInfo && server.catalogServiceId == null && server.initialToolPolicyOrigin in
+                setOf(McpInitialPolicyOrigin.LEGACY_UNKNOWN, McpInitialPolicyOrigin.INVALID)) {
+                Text(stringResource(if (server.initialToolPolicyOrigin == McpInitialPolicyOrigin.INVALID)
+                    R.string.ux44_mcp_invalid_policy else R.string.ux44_mcp_retained_policy),
+                    style = MaterialTheme.typography.bodySmall)
+                Row {
+                    TextButton(onClick = onEdit) { Text(stringResource(R.string.ux44_mcp_edit_fallback)) }
+                    TextButton(onClick = { showInheritedPolicyInfo = false }) { Text(stringResource(R.string.ux44_mcp_dismiss)) }
+                }
+            }
             if (server.tools.size > 12) JarvysTextField(
                 value = toolSearch,
                 onValueChange = { toolSearch = it },
@@ -405,19 +416,18 @@ private fun McpToolPolicyRow(
         McpToolPresentation.toolTitle(tool.wireName, tool.annotations?.title)
     }
     val description = remember(tool.wireName, tool.description) { McpToolPresentation.description(tool.description) }
-    val definition = remember(server.id, tool.wireName, tool.annotations) {
+    val definition = remember(server, tool) {
         McpToolDefinition(server.id, server.alias, tool.wireName, tool.modelName, tool.description,
-            JSONObject(tool.inputSchemaJson), server.catalogServiceId, tool.annotations, access)
+            JSONObject(tool.inputSchemaJson), server.catalogServiceId, tool.annotations, access, server.inheritedActionPolicy())
     }
-    var policy by remember(server.id, tool.wireName) { mutableStateOf(writeApproval.policy(definition)) }
+    var policySnapshot by remember(definition) { mutableStateOf(writeApproval.snapshot(definition)) }
+    val policy = policySnapshot.policy
+    var showPolicyInfo by rememberSaveable(server.id, tool.wireName) { mutableStateOf(true) }
     var expanded by remember(server.id, tool.wireName) { mutableStateOf(false) }
-    val denied = if (access == McpToolAccess.READ) !tool.enabled else !tool.enabled || policy == AutonomyPolicy.DENY
-    val selected = if (access == McpToolAccess.READ) {
-        if (tool.enabled) R.string.remote_service_policy_allow else R.string.remote_service_policy_deny
-    } else when {
-        denied -> R.string.remote_service_policy_deny
-        policy == AutonomyPolicy.ALLOW -> R.string.remote_service_policy_allow
-        else -> R.string.remote_service_policy_ask
+    val selected = when (policy) {
+        AutonomyPolicy.DENY -> R.string.remote_service_policy_deny
+        AutonomyPolicy.ALLOW -> R.string.remote_service_policy_allow
+        AutonomyPolicy.ASK -> R.string.remote_service_policy_ask
     }
     fun setEnabled(enabled: Boolean) {
         runCatching { onEnabled(tool.wireName, enabled) }.onFailure {
@@ -425,22 +435,17 @@ private fun McpToolPolicyRow(
                 McpToolSecurity.MAX_EXPOSED_TOOLS_PER_SERVER), Toast.LENGTH_LONG).show()
         }
     }
-    val choices = if (access == McpToolAccess.READ) listOf(
-        ConnectorPolicyChoice(R.string.remote_service_policy_allow) { setEnabled(true) },
-        ConnectorPolicyChoice(R.string.remote_service_policy_deny) { setEnabled(false) },
-    ) else buildList {
-        add(ConnectorPolicyChoice(R.string.remote_service_policy_ask) {
-            runCatching { writeApproval.setPolicy(definition, AutonomyPolicy.ASK); policy = AutonomyPolicy.ASK; setEnabled(true) }
-        })
-        if (!McpToolSecurity.isDestructive(tool.wireName, tool.annotations)) add(
-            ConnectorPolicyChoice(R.string.remote_service_policy_allow) {
-                runCatching { writeApproval.setPolicy(definition, AutonomyPolicy.ALLOW); policy = AutonomyPolicy.ALLOW; setEnabled(true) }
-                    .onFailure { Toast.makeText(context, R.string.remote_service_write_allow_error, Toast.LENGTH_LONG).show() }
-            },
-        )
-        add(ConnectorPolicyChoice(R.string.remote_service_policy_deny) {
-            runCatching { writeApproval.setPolicy(definition, AutonomyPolicy.DENY); policy = AutonomyPolicy.DENY; setEnabled(false) }
-        })
+    val choices = listOf(
+        AutonomyPolicy.ASK to R.string.remote_service_policy_ask,
+        AutonomyPolicy.ALLOW to R.string.remote_service_policy_allow,
+        AutonomyPolicy.DENY to R.string.remote_service_policy_deny,
+    ).map { (choice, label) ->
+        ConnectorPolicyChoice(label) {
+            runCatching {
+                writeApproval.setPolicy(definition, choice)
+                policySnapshot = writeApproval.snapshot(definition)
+            }.onFailure { Toast.makeText(context, R.string.ux44_mcp_policy_save_error, Toast.LENGTH_LONG).show() }
+        }
     }
     Column(Modifier.fillMaxWidth().alpha(if (enabled) 1f else 0.62f).padding(vertical = 5.dp)) {
         ConnectorPermissionRow(modifier = Modifier.testTag("mcp-policy-${tool.wireName}-row"), content = {
@@ -451,8 +456,20 @@ private fun McpToolPolicyRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall,
                     maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
-        }, permission = { ConnectorPolicySelector(selected, choices, enabled = enabled,
+        }, permission = { ConnectorPolicySelector(selected, choices, subjectKey = "${server.id}/${tool.wireName}", enabled = true,
             modifier = Modifier.testTag("mcp-policy-${tool.wireName}-control")) })
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text(stringResource(R.string.ux44_mcp_enabled), style = MaterialTheme.typography.bodySmall)
+            Switch(checked = tool.enabled, onCheckedChange = ::setEnabled,
+                modifier = Modifier.testTag("mcp-exposure-${tool.wireName}-switch"))
+        }
+        if (!enabled) Text(stringResource(R.string.remote_service_disconnected), style = MaterialTheme.typography.labelSmall)
+        val origin = policySnapshot.origin.toString()
+        if (showPolicyInfo && (origin.contains("LEGACY") || origin.contains("INVALID"))) {
+            Text(stringResource(if (origin.contains("INVALID")) R.string.ux44_mcp_invalid_policy else R.string.ux44_mcp_retained_policy),
+                style = MaterialTheme.typography.bodySmall)
+            TextButton(onClick = { showPolicyInfo = false }) { Text(stringResource(R.string.ux44_mcp_dismiss)) }
+        }
         if (description.isRemoteUntrusted) Text(stringResource(R.string.mcp_remote_untrusted_metadata),
             modifier = Modifier.padding(top = 3.dp), color = MaterialTheme.colorScheme.tertiary,
             style = MaterialTheme.typography.labelSmall)
@@ -486,17 +503,19 @@ private fun McpServerEditor(
     var enabled by rememberSaveable(initial?.id) { mutableStateOf(initial?.enabled ?: true) }
     var clientId by rememberSaveable(initial?.id) { mutableStateOf(initial?.oauthClientId.orEmpty()) }
     var initialToolPolicy by rememberSaveable(initial?.id) {
-        mutableStateOf(initial?.initialToolPolicy ?: McpInitialToolPolicy.ASK)
+        mutableStateOf(initial?.initialToolPolicy ?: McpInitialToolPolicy.defaultPolicy())
     }
+    var initialPolicyEdited by rememberSaveable(initial?.id) { mutableStateOf(false) }
+    var showInitialPolicyInfo by rememberSaveable(initial?.id) { mutableStateOf(true) }
     var bearer by rememberSaveable(initial?.id) { mutableStateOf("") }
     var error by rememberSaveable(initial?.id) { mutableStateOf<String?>(null) }
     var confirmDiscard by rememberSaveable(initial?.id) { mutableStateOf(false) }
     val dirty = if (initial == null) {
         alias.isNotBlank() || endpoint.isNotBlank() || transport != McpTransport.AUTO || authMode != McpAuthMode.NONE ||
-            trusted || !enabled || clientId.isNotBlank() || bearer.isNotBlank() || initialToolPolicy != McpInitialToolPolicy.ASK
+            trusted || !enabled || clientId.isNotBlank() || bearer.isNotBlank() || initialPolicyEdited
     } else {
         alias != initial.alias || endpoint != initial.endpoint || transport != initial.transport || authMode != initial.authMode ||
-            trusted != initial.trustInsecureServer || enabled != initial.enabled || clientId != initial.oauthClientId || bearer.isNotBlank()
+            trusted != initial.trustInsecureServer || enabled != initial.enabled || clientId != initial.oauthClientId || bearer.isNotBlank() || initialPolicyEdited
     }
     fun requestClose() {
         val decision = McpEditorNavigationPolicy.back(dirty, editingExistingServer = initial != null)
@@ -540,7 +559,10 @@ private fun McpServerEditor(
                     oauthClientId = clientId.trim(),
                     tools = initial?.tools.orEmpty(),
                     toolSelectionMode = initial?.toolSelectionMode ?: McpToolSelectionMode.DEFAULT_ALL,
-                    initialToolPolicy = initial?.initialToolPolicy ?: initialToolPolicy,
+                    initialToolPolicy = initialToolPolicy,
+                    initialToolPolicyOrigin = if (initialPolicyEdited) McpInitialPolicyOrigin.EXPLICIT_CURRENT
+                        else initial?.initialToolPolicyOrigin ?: McpInitialPolicyOrigin.COMMON_DEFAULT,
+                    invalidInitialToolPolicyJson = if (initialPolicyEdited) null else initial?.invalidInitialToolPolicyJson,
                 ),
                 bearer,
             )
@@ -612,18 +634,25 @@ private fun McpServerEditor(
                 checked = enabled, onCheckedChange = { enabled = it },
                 switchModifier = Modifier.testTag("mcp-editor-enabled-switch"),
             )
-            if (initial == null) {
+            if (initial?.catalogServiceId == null) {
                 JarvysGroup(modifier = Modifier.testTag("mcp-editor-tool-policy"),
                     contentPadding = PaddingValues(JarvysUiTokens.ScreenPadding)) {
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         ConnectorPermissionRow(content = {
                             JarvysSectionLabel(stringResource(R.string.mcp_initial_tool_permissions))
                         }, permission = {
-                            McpInitialToolPolicySelector(initialToolPolicy, { initialToolPolicy = it })
+                            McpInitialToolPolicySelector(id, initialToolPolicy, { initialToolPolicy = it; initialPolicyEdited = true })
                         })
-                        Text(stringResource(R.string.mcp_initial_tool_permissions_help),
+                        Text(stringResource(R.string.ux44_mcp_initial_policy_help),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodySmall)
+                        if (showInitialPolicyInfo && !initialPolicyEdited && initial?.initialToolPolicyOrigin in
+                            setOf(McpInitialPolicyOrigin.LEGACY_UNKNOWN, McpInitialPolicyOrigin.INVALID)) {
+                            Text(stringResource(if (initial?.initialToolPolicyOrigin == McpInitialPolicyOrigin.INVALID)
+                                R.string.ux44_mcp_invalid_policy else R.string.ux44_mcp_retained_policy),
+                                style = MaterialTheme.typography.bodySmall)
+                            TextButton(onClick = { showInitialPolicyInfo = false }) { Text(stringResource(R.string.ux44_mcp_dismiss)) }
+                        }
                     }
                 }
             }
@@ -642,29 +671,22 @@ private fun McpServerEditor(
 
 @Composable
 private fun McpInitialToolPolicySelector(
+    serverId: String,
     selected: McpInitialToolPolicy,
     onSelect: (McpInitialToolPolicy) -> Unit,
 ) {
-    var expanded by remember { mutableStateOf(false) }
     val choices = listOf(
         McpInitialToolPolicy.ASK to R.string.remote_service_policy_ask,
         McpInitialToolPolicy.ALLOW to R.string.remote_service_policy_allow,
         McpInitialToolPolicy.DENY to R.string.remote_service_policy_deny,
     )
-    val selectedLabel = choices.first { it.first == selected }.second
-    Box(Modifier.fillMaxWidth()) {
-        ConnectorPolicyButton(selectedLabel, onClick = { expanded = true },
-            modifier = Modifier.testTag("mcp-editor-tool-policy-selector"))
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            choices.forEach { (policy, label) ->
-                DropdownMenuItem(
-                    modifier = Modifier.testTag("mcp-editor-tool-policy-option-${policy.name.lowercase(java.util.Locale.ROOT)}"),
-                    text = { Text(stringResource(label)) },
-                    onClick = { expanded = false; onSelect(policy) },
-                )
-            }
-        }
-    }
+    ConnectorPolicySelector(
+        selectedLabelResource = choices.first { it.first == selected }.second,
+        choices = choices.map { (policy, label) -> ConnectorPolicyChoice(label) { onSelect(policy) } },
+        subjectKey = "$serverId/initial-policy",
+        optionTags = choices.associate { (policy, label) -> label to "mcp-editor-tool-policy-option-${policy.name.lowercase(java.util.Locale.ROOT)}" },
+        modifier = Modifier.testTag("mcp-editor-tool-policy-selector"),
+    )
 }
 
 @Composable

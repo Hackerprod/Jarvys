@@ -167,8 +167,8 @@ class ConnectedGooglePermissionScreensTest {
         capture("gmail-connected-scopes-${if (dark) "es-dark-large" else "en-light"}")
         // Selecting the already granted value must not launch consent or widen the grant.
         pick(scopeTag(GoogleOAuthProtocol.GMAIL_READ), R.string.connector_policy_allow)
-        gmail.operations.filter { it.write }.forEach { operation ->
-            geometry(policyTag(operation)); policy(policyTag(operation), R.string.connector_policy_ask)
+        gmail.operations.forEach { operation ->
+            geometry(policyTag(operation)); policy(policyTag(operation), R.string.connector_policy_allow)
             if (operation.name in setOf("modify_messages", "delete_messages", "delete_label")) {
                 capture("gmail-ux31-operation-${operation.name}-${if (dark) "es-dark-large" else "en-light"}")
             }
@@ -177,20 +177,26 @@ class ConnectedGooglePermissionScreensTest {
         assertEquals(setOf(GoogleOAuthProtocol.GMAIL_READ), manager.grantedScopes())
         val guarded = gmail.operations.first { it.name == GmailConnector.SEND_DRAFT }
         compose.onNodeWithTag("${policyTag(guarded)}-control").performScrollTo().performClick()
-        compose.onNode(hasText(compose.activity.getString(R.string.connector_policy_allow)) and hasAnyAncestor(isPopup())).assertDoesNotExist()
+        compose.onNode(hasText(compose.activity.getString(R.string.connector_policy_allow)) and hasAnyAncestor(isPopup())).assertExists()
         capture("gmail-guarded-operation-${if (dark) "es-dark-large" else "en-light"}")
         compose.onNode(hasText(compose.activity.getString(R.string.connector_policy_deny)) and hasAnyAncestor(isPopup())).performClick()
         assertEquals(listOf(Triple(gmail.id, guarded.name, AutonomyPolicy.DENY)), policies.changes)
         // Persisted state AND visible label must update immediately after the callback.
         policy(policyTag(guarded), R.string.connector_policy_deny)
-        gmail.operations.filter { it.write && it != guarded }.forEach { sibling ->
-            assertEquals(AutonomyPolicy.ASK, registry.configuredAutonomyPolicy(gmail, sibling))
-            policy(policyTag(sibling), R.string.connector_policy_ask)
+        gmail.operations.filter { it != guarded }.forEach { sibling ->
+            assertEquals(AutonomyPolicy.ALLOW, registry.configuredAutonomyPolicy(gmail, sibling))
+            policy(policyTag(sibling), R.string.connector_policy_allow)
         }
         assertEquals(setOf(GoogleOAuthProtocol.GMAIL_READ), manager.grantedScopes())
         pick(policyTag(guarded), R.string.connector_policy_ask)
         policy(policyTag(guarded), R.string.connector_policy_ask)
-        assertEquals(listOf(AutonomyPolicy.DENY, AutonomyPolicy.ASK), policies.changes.map { it.third })
+        pick(policyTag(guarded), R.string.connector_policy_allow)
+        policy(policyTag(guarded), R.string.connector_policy_allow)
+        compose.onNodeWithTag("${policyTag(guarded)}-unavailable").performScrollTo().assertExists()
+        assertEquals(listOf(AutonomyPolicy.DENY, AutonomyPolicy.ASK, AutonomyPolicy.ALLOW), policies.changes.map { it.third })
+        assertTrue(policies.changes.all { it.first == gmail.id && it.second == guarded.name })
+        assertEquals(setOf(GoogleOAuthProtocol.GMAIL_READ), manager.grantedScopes())
+        assertFalse(manager.isScopeGranted(GoogleOAuthProtocol.GMAIL_SEND))
         assertTrue(authorizations.isEmpty()); assertEquals(0, requests.get()); assertEquals(0, revocations.get())
     }
 
@@ -216,7 +222,7 @@ class ConnectedGooglePermissionScreensTest {
     }
 
     @Test @Config(qualifiers = "es-rES-w320dp-h800dp-port-mdpi")
-    fun connectedDriveLargeTextPreservesEveryReviewedWriteAndOnlyRequestsDriveFile() {
+    fun connectedDriveLargeTextConfiguresEveryReadAndWriteAndOnlyRequestsDriveFile() {
         seed(setOf(GoogleOAuthProtocol.DRIVE_READ))
         show(false, 2f, true)
         driveScopes.forEach {
@@ -225,13 +231,16 @@ class ConnectedGooglePermissionScreensTest {
         }
         compose.onNodeWithTag("${scopeTag(GoogleOAuthProtocol.DRIVE_READ)}-row", useUnmergedTree = true).performScrollTo()
         capture("drive-connected-scopes-es-dark-large")
-        drive.operations.filter { it.write }.forEach { operation ->
+        drive.operations.forEach { operation ->
             geometry(policyTag(operation))
+            policy(policyTag(operation), R.string.connector_policy_allow)
             compose.onNodeWithTag("${policyTag(operation)}-control").performClick()
-            compose.onNode(hasText(compose.activity.getString(R.string.connector_policy_allow)) and hasAnyAncestor(isPopup())).assertDoesNotExist()
+            compose.onNode(hasText(compose.activity.getString(R.string.connector_policy_allow)) and hasAnyAncestor(isPopup())).assertExists()
             compose.onNode(hasText(compose.activity.getString(R.string.connector_policy_ask)) and hasAnyAncestor(isPopup())).performClick()
         }
-        assertEquals(drive.operations.count { it.write }, policies.changes.size)
+        assertEquals(drive.operations.size, policies.changes.size)
+        assertEquals(drive.operations.map { it.name }, policies.changes.map { it.second })
+        drive.operations.forEach { policy(policyTag(it), R.string.connector_policy_ask) }
         assertTrue(policies.changes.all { it.third == AutonomyPolicy.ASK })
         assertTrue(authorizations.isEmpty())
         pick(scopeTag(GoogleOAuthProtocol.DRIVE_FILE), R.string.connector_add_permission)
@@ -347,8 +356,13 @@ class ConnectedGooglePermissionScreensTest {
     }
 
     @Test @Config(qualifiers = "es-rES-w320dp-h800dp-port-mdpi")
-    fun irreversibleAskDenyPopupsAndLabelScopeUseFullLabelsAtTwoTimesText() {
+    fun irreversibleActionPopupsKeepAllThreeChoicesAndFullLabelsAtTwoTimesText() {
         seed(setOf(GoogleOAuthProtocol.GMAIL_READ, GoogleOAuthProtocol.GMAIL_LABELS, GoogleOAuthProtocol.GMAIL_FULL))
+        // Exercise the saved ASK label without assuming fresh settings require approval.
+        for (name in listOf("delete_messages", "delete_label")) {
+            registry.setAutonomyPolicy(gmail, gmail.operations.first { it.name == name }, AutonomyPolicy.ASK)
+        }
+        policies.changes.clear()
         show(true, 2f, true)
         val labelPrefix = scopeTag(GoogleOAuthProtocol.GMAIL_LABELS)
         geometry(labelPrefix)
@@ -370,8 +384,8 @@ class ConnectedGooglePermissionScreensTest {
             compose.onNodeWithTag("$prefix-control").performClick()
             compose.onNode(hasText(compose.activity.getString(R.string.connector_policy_ask)) and hasAnyAncestor(isPopup())).assertExists()
             compose.onNode(hasText(compose.activity.getString(R.string.connector_policy_deny)) and hasAnyAncestor(isPopup())).assertExists()
-            compose.onNode(hasText(compose.activity.getString(R.string.connector_policy_allow)) and hasAnyAncestor(isPopup())).assertDoesNotExist()
-            capture("gmail-ux31-$name-ask-deny-popup-es-dark-large")
+            compose.onNode(hasText(compose.activity.getString(R.string.connector_policy_allow)) and hasAnyAncestor(isPopup())).assertExists()
+            capture("gmail-ux44-$name-all-policy-choices-popup-es-dark-large")
             compose.onNode(hasText(compose.activity.getString(R.string.connector_policy_deny)) and hasAnyAncestor(isPopup())).performClick()
             policy(prefix, R.string.connector_policy_deny)
             geometry(prefix)
@@ -379,6 +393,27 @@ class ConnectedGooglePermissionScreensTest {
         }
         assertEquals(listOf("delete_messages", "delete_label"), policies.changes.map { it.second })
         assertTrue(policies.changes.all { it.third == AutonomyPolicy.DENY })
+        assertTrue(authorizations.isEmpty()); assertEquals(0, requests.get()); assertEquals(0, revocations.get())
+    }
+
+    @Test fun savedReadAskAndWriteDenyRemainUnchangedWhenOpeningGooglePolicies() {
+        seed(setOf(GoogleOAuthProtocol.GMAIL_READ))
+        val read = gmail.operations.first { !it.write }
+        val write = gmail.operations.first { it.name == GmailConnector.SEND_DRAFT }
+        registry.setAutonomyPolicy(gmail, read, AutonomyPolicy.ASK)
+        registry.setAutonomyPolicy(gmail, write, AutonomyPolicy.DENY)
+        policies.changes.clear()
+        show(true)
+        policy(policyTag(read), R.string.connector_policy_ask)
+        policy(policyTag(write), R.string.connector_policy_deny)
+        assertEquals(AutonomyPolicy.ASK, registry.configuredAutonomyPolicy(gmail, read))
+        assertEquals(AutonomyPolicy.DENY, registry.configuredAutonomyPolicy(gmail, write))
+        gmail.operations.filter { it != read && it != write }.forEach {
+            assertEquals(AutonomyPolicy.ALLOW, registry.configuredAutonomyPolicy(gmail, it))
+        }
+        assertTrue(policies.changes.isEmpty())
+        assertEquals(setOf(GoogleOAuthProtocol.GMAIL_READ), manager.grantedScopes())
+        assertFalse(manager.isScopeGranted(GoogleOAuthProtocol.GMAIL_SEND))
         assertTrue(authorizations.isEmpty()); assertEquals(0, requests.get()); assertEquals(0, revocations.get())
     }
 }

@@ -112,6 +112,9 @@ class SafDocumentPickerCoordinator private constructor() {
     }
 }
 
+internal fun acceptedSafCreateResult(result: androidx.activity.result.ActivityResult): Uri? =
+    if (result.resultCode == android.app.Activity.RESULT_OK) result.data?.data else null
+
 @Composable
 fun SafDocumentPickerHost(context: Context) {
     val coordinator = remember(context) { SafDocumentPickerCoordinator.get(context) }
@@ -122,7 +125,7 @@ fun SafDocumentPickerHost(context: Context) {
         launchedId = null
     }
     val createLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        launchedId?.let { coordinator.complete(it, result.data?.data) }
+        launchedId?.let { coordinator.complete(it, acceptedSafCreateResult(result)) }
         launchedId = null
     }
     LaunchedEffect(pending?.id) {
@@ -199,7 +202,7 @@ class SafDocumentConnector(private val gateway: SafDocumentGateway) : ConnectorR
     override fun invoke(operation: String, arguments: JSONObject, token: com.jarvys.agent.CancellationToken): JSONObject =
         when (operation) {
             PICK_DOCUMENT -> readPicked(token)
-            CREATE_DOCUMENT -> error("Document creation must pass through the connector approval gate")
+            CREATE_DOCUMENT -> error("Document creation must pass through the connector action-policy gate")
             else -> error("Unknown file operation: $operation")
         }
 
@@ -304,7 +307,7 @@ class SafDocumentConnector(private val gateway: SafDocumentGateway) : ConnectorR
                 ),
                 ConnectorOperation(
                     name = CREATE_DOCUMENT, displayLabel = "Create text document",
-                    description = "After approval, open Android's Create Document picker and write a bounded text, JSON, CSV or Markdown document at the user-selected location.",
+                    description = "Under the configured action policy, request Android's Create Document picker and write a bounded text, JSON, CSV or Markdown document at the user-selected location.",
                     inputSchema = createSchema(), write = true, autonomyAllowed = true,
                     displayLabelResourceId = R.string.connector_operation_file_create,
                     descriptionResourceId = R.string.connector_operation_file_create_description,

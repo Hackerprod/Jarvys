@@ -34,7 +34,7 @@ public final class CrewRoleTemplates {
                 available, "board_read", "msg_send", "ask_chief", "report_done"));
         roles.add(role(WRITER, "Redactor", "green", "Draft and refine from the shared board. Do not use network tools.",
                 available, "board_read", "board_post", "msg_send", "ask_chief", "report_done"));
-        roles.add(role(OPERATOR, "Operador", "operator", "Use only the available on-device connector tools. All writes remain subject to the normal ApprovalGate.",
+        roles.add(role(OPERATOR, "Operador", "operator", "Use only the available on-device connector tools. Reads and writes follow their configured action policy: Allow always proceeds, Ask reviews the exact request, and Deny blocks it. Actual Android grants and declared scope still apply.",
                 available, concat(Collections.emptyList(), "board_read", "board_post", "msg_send", "ask_chief", "report_done")));
         return Collections.unmodifiableList(roles);
     }

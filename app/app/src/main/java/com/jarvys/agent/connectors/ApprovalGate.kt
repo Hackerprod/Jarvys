@@ -63,6 +63,7 @@ class ApprovalGate(
     private val presenter: ApprovalPresenter,
 ) {
     private class Pending(val id: String, val token: CancellationToken, val enableAlways: (() -> Unit)?) {
+        val protection = com.jarvys.agent.MemoryUiAutomationGuard.enterProtectedSurface()
         val latch = CountDownLatch(1)
         val decision = AtomicReference<ApprovalDecision?>(null)
         var uiActionStarted = false
@@ -74,26 +75,23 @@ class ApprovalGate(
     fun request(summary: ApprovalSummary, token: CancellationToken): ApprovalDecision {
         token.throwIfCancelled()
         val request = Pending(UUID.randomUUID().toString(), token, summary.enableAlways)
+        if (!request.protection.isReadyForUser) {
+            request.protection.close()
+            error("Approval could not open during an automated interaction. Finish that interaction and request the action again.")
+        }
         synchronized(lock) { pending[request.id] = request }
         try {
             presenter.show(request.id, summary)
-        } catch (failure: RuntimeException) {
-            synchronized(lock) { pending.remove(request.id) }
-            throw failure
-        }
-        val unregisterCancellation = token.registerCancelAction {
-            complete(request.id, ApprovalDecision.CANCELLED)
-        }
-        try {
-            if (!request.latch.await(timeoutMillis, TimeUnit.MILLISECONDS)) {
-                complete(request.id, ApprovalDecision.EXPIRED)
-            }
-        } catch (_: InterruptedException) {
-            Thread.currentThread().interrupt()
-            complete(request.id, ApprovalDecision.CANCELLED)
+            val unregisterCancellation = token.registerCancelAction { complete(request.id, ApprovalDecision.CANCELLED) }
+            try {
+                if (!request.latch.await(timeoutMillis, TimeUnit.MILLISECONDS)) complete(request.id, ApprovalDecision.EXPIRED)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                complete(request.id, ApprovalDecision.CANCELLED)
+            } finally { unregisterCancellation.run() }
         } finally {
-            unregisterCancellation.run()
             synchronized(lock) { pending.remove(request.id) }
+            request.protection.close()
         }
         token.throwIfCancelled()
         return request.decision.get() ?: ApprovalDecision.DENIED
@@ -104,6 +102,7 @@ class ApprovalGate(
         val request = pending[id] ?: error("Approval is no longer pending")
         request.token.throwIfCancelled()
         check(request.decision.get() == null) { "Approval already resolved" }
+        request.protection.requireHumanUiInteraction()
         val enable = request.enableAlways ?: return@synchronized false
         enable()
         true
@@ -125,7 +124,7 @@ class ApprovalGate(
     /** Launch an asynchronous permission prompt once, without resolving its approval early. */
     fun beginUiAction(id: String, action: () -> Unit): Boolean = synchronized(lock) {
         val request = pending[id] ?: return@synchronized false
-        if (request.decision.get() != null || request.uiActionStarted) return@synchronized false
+        if (request.decision.get() != null || request.uiActionStarted || !request.protection.isReadyForUser) return@synchronized false
         var launched = false
         request.token.runIfActive {
             if (!request.token.isCancellationRequested) {
@@ -141,7 +140,7 @@ class ApprovalGate(
     /** Perform optional consent changes only while this exact approval is pending. */
     fun resolveFromUi(id: String, decisionProvider: () -> ApprovalDecision): Boolean = synchronized(lock) {
         val request = pending[id] ?: return@synchronized false
-        if (request.decision.get() != null) return@synchronized false
+        if (request.decision.get() != null || !request.protection.isReadyForUser) return@synchronized false
         // Cancellation can happen while the presenter is showing the card, before request()
         // has registered its cancellation callback. Never run consent side effects in that gap.
         var decision: ApprovalDecision? = null
@@ -157,7 +156,15 @@ class ApprovalGate(
         try { presenter.update(request.id, decision) } finally { request.latch.countDown() }
     }
 
-    private fun complete(id: String, decision: ApprovalDecision): Boolean = resolveFromUi(id) { decision }
+    /** Trusted internal cancellation/expiry/test resolution must never depend on user-surface readiness. */
+    private fun complete(id: String, decision: ApprovalDecision): Boolean = synchronized(lock) {
+        val request = pending[id] ?: return@synchronized false
+        if (request.decision.get() != null) return@synchronized false
+        var resolved: ApprovalDecision? = null
+        request.token.runIfActive { resolved = decision }
+        finish(request, resolved ?: ApprovalDecision.CANCELLED)
+        true
+    }
 
     companion object {
         const val DEFAULT_TIMEOUT_MILLIS = 120_000L

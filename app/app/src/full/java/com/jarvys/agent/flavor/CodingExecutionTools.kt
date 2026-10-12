@@ -112,6 +112,7 @@ class CodingExecutionTools internal constructor(
         val requiredTools = rawTools.filterIsInstance<String>()
         scope.require(ProjectScope.Capability.WRITE)
         var authorization = autonomy.projectAuthorization()
+        var approvedAsk = false
         check(authorization.policy != AutonomyPolicy.DENY) { "Project execution is denied by the current Coding command policy." }
         fun validatePolicy() {
             token.throwIfCancelled()
@@ -146,25 +147,28 @@ class CodingExecutionTools internal constructor(
                 lines += ConnectorUiText(R.string.full_project_exec_prior_outcomes, listOf(ids), "Prior interrupted or uncertain jobs in this project:\n$ids\nTheir exit results are unknown. Do not repeat them automatically. Inspect the project before approving new effects.")
             }
             if (unreadable > 0) lines += ConnectorUiText(R.string.full_project_exec_unreadable_journals, listOf(unreadable), "Unreadable prior job records: $unreadable. They may conceal an uncertain previous effect. Original records are preserved; inspect the project before approving new effects.")
+            var alwaysReceipt: LinuxExecAutonomy.ProjectAuthorization? = null
             val decision = gate.request(ApprovalSummary("Approve project command", lines.map { it.fallback }, allowAlwaysAvailable = true,
                 autonomyConnectorId = LinuxExecAutonomy.PROJECT_CONNECTOR_ID, autonomyOperationName = LinuxExecAutonomy.PROJECT_OPERATION_NAME,
                 localizedTitle = ConnectorUiText(R.string.full_project_exec_title, fallback = "Approve project command"),
-                localizedLines = lines, requester = requester, requesterColorKey = colorKey), token)
+                localizedLines = lines, requester = requester, requesterColorKey = colorKey,
+                enableAlways = { alwaysReceipt = autonomy.allowProjectFromApproval(authorization) }), token)
             when (decision) {
                 ApprovalDecision.APPROVED_ALLOW_ALWAYS -> {
-                    val updated = autonomy.projectAuthorization()
-                    // Accept only the policy transition performed by this card, never intervening revocation.
-                    check(updated.policy == AutonomyPolicy.ALLOW && updated.revision == authorization.revision + 1) {
-                        "Coding permission changed unexpectedly during approval. No command was launched."
+                    authorization = requireNotNull(alwaysReceipt) {
+                        "The exact Coding Allow policy receipt is missing; command not launched."
                     }
-                    authorization = updated
                 }
-                ApprovalDecision.APPROVED, ApprovalDecision.APPROVED_ALLOW_FAILED -> Unit
+                ApprovalDecision.APPROVED, ApprovalDecision.APPROVED_ALLOW_FAILED -> approvedAsk = true
                 else -> return CoreToolResult.failure("Project command was not approved. No command was launched; do not retry through another tool.")
             }
         }
         validate()
-        val result = jobs.start(scope, owner(token), command, cwd, version, timeout, token, ::validate) { completed(token, it) }
+        fun admitLaunch() {
+            validate() // Scope/status/toolchain checks stay outside the short policy/STOP admission lock.
+            autonomy.admitProject(authorization, approvedAsk, token, ::validatePolicy)
+        }
+        val result = jobs.start(scope, owner(token), command, cwd, version, timeout, token, ::admitLaunch) { completed(token, it) }
         return CoreToolResult.success(snapshotJson(result).put("message", "Job accepted. Read or wait with project_jobs; do not report completion while it is pending.").toString())
     }
 

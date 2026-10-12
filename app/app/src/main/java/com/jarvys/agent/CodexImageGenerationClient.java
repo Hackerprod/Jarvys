@@ -61,6 +61,28 @@ public final class CodexImageGenerationClient {
                                 payload, (SecretStore.CodexCredentials) credentials, currentSession, currentToken)));
     }
 
+    /** Native effect admission is rechecked after each credential wait, immediately before every send. */
+    CodexImageGenerationClient(CodexOAuthManager oauth, ProviderSettings settings, Runnable admission) {
+        this(settings, (request, sessionId, token) -> nativeRequest(request, sessionId, token, settings.getModel(), admission,
+                (refresh, active) -> oauth.getValidCredentials(refresh, active),
+                (payload, credentials, currentSession, active) -> OpenAICodexResponsesClient.sendImageRequest(
+                        payload, (SecretStore.CodexCredentials)credentials, currentSession, active)),
+                (request, sessionId, token) -> nativeRequest(request, sessionId, token, EDIT_MODEL, admission,
+                        (refresh, active) -> oauth.getValidCredentials(refresh, active),
+                        (payload, credentials, currentSession, active) -> OpenAICodexImagesClient.sendEditRequest(
+                                payload, (SecretStore.CodexCredentials)credentials, currentSession, active)));
+    }
+
+    static ProviderHttp.Response nativeRequest(JSONObject request, String sessionId, CancellationToken token,
+            String model, Runnable admission, CodexAuthenticatedRequestExecutor.CredentialProvider credentials,
+            CodexAuthenticatedRequestExecutor.Sender sender) {
+        return CodexAuthenticatedRequestExecutor.execute(request, sessionId, token, model, credentials,
+                (payload, value, currentSession, active) -> {
+                    admission.run();
+                    return sender.send(payload, value, currentSession, active);
+                });
+    }
+
     /** Revalidates live mission/account authority for initial dispatch and the existing 401 retry. */
     CodexImageGenerationClient(CodexOAuthManager oauth, ProviderSettings settings, Runnable guard, String account) {
         this(settings, (request, sessionId, token) -> scopedRequest(request, sessionId, token, settings.getModel(), oauth, guard, account, false),

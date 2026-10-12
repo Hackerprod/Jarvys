@@ -1,0 +1,10 @@
+<resources>
+    <string name="identity_action_policy_changed">Esta acción de identidad está bloqueada o cambió su permiso. Una operación ya iniciada podría haber terminado. Revisa la identidad y el documento elegido antes de volver a empezar.</string>
+    <string name="identity_action_backup_exact">ID de aplicación: %1$s\n\nSHA-256 del certificado:\n%2$s\n\nVersión conocida: %3$d\n\nDocumento elegido: %4$s\n\nEste proveedor recibe el respaldo cifrado y su nombre, y puede sincronizarlos. Al guardar se comprueba el contenido cifrado exacto volviéndolo a leer. No demuestra la disponibilidad futura en la nube, una copia segura independiente ni una restauración probada. Para una identidad nueva, la clave temporal solo se guarda localmente cuando esa comprobación termina correctamente.</string>
+    <string name="identity_action_document">Documento elegido: %1$s</string>
+    <string name="identity_action_save_backup">Guardar respaldo cifrado</string>
+    <string name="identity_action_save_floor">Guardar mínimo de versión declarado</string>
+    <string name="identity_action_import_allowed_help">Introduce la contraseña del respaldo elegido para validar e importar su identidad con tu permiso guardado Permitir siempre. Primero se comprueban su integridad, certificado y clave. No se pueden reemplazar identidades antiguas no exportables ni diferentes. La última versión publicada sigue siendo desconocida tras importar, hasta que declares el mínimo de versión.</string>
+    <string name="identity_action_unlock_import">Desbloquear e importar</string>
+    <string name="identity_action_reopen_manually">Vuelve a abrir esta acción de identidad manualmente cuando termine la entrada automatizada. No se pudo abrir el formulario protegido; no se registró una aprobación.</string>
+</resources>

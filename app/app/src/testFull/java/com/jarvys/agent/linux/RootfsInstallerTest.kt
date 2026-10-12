@@ -25,6 +25,103 @@ import java.util.zip.GZIPOutputStream
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class RootfsInstallerTest {
+    @Test fun initialAdmissionDenialDoesNotStartDownloadOrPublishFailure() {
+        val bytes = archive()
+        val root = tempDir()
+        try {
+            val paths = RootfsInstaller.Paths(root)
+            val transport = FakeTransport(bytes)
+            val installer = installer(paths, transport, bytes)
+            val state = installer.state()
+            assertTrue(runCatching { installer.install(CancellationToken.uncancellable(),
+                beforeEffect = { error("setup denied") }) }.isFailure)
+            assertEquals(state, installer.state())
+            assertTrue(transport.offsets.isEmpty())
+            assertFalse(paths.stateFile.exists())
+        } finally { remove(root) }
+    }
+
+    @Test fun revokedCommitKeepsPreviousRootfsAndRecordsFailedStagingWithoutRollbackClaim() {
+        val bytes = archive()
+        val root = tempDir()
+        try {
+            val paths = RootfsInstaller.Paths(root)
+            paths.rootfs.mkdirs()
+            val sentinel = File(paths.rootfs, "previous-fixture").apply { writeText("keep") }
+            val installer = installer(paths, FakeTransport(bytes), bytes)
+            var rejectedCommit = false
+            val state = installer.install(CancellationToken.uncancellable(), beforeEffect = {
+                if (File(paths.staging, "etc/apt/sources.list.d/ubuntu.sources").isFile) {
+                    rejectedCommit = true
+                    error("setup revoked before replacement")
+                }
+            })
+            assertTrue(rejectedCommit)
+            assertEquals(LinuxInstallPhase.FAILED, state.phase)
+            assertEquals("keep", sentinel.readText())
+            assertFalse(File(paths.rootfs, "etc/os-release").exists())
+            assertFalse(paths.staging.exists())
+        } finally { remove(root) }
+    }
+
+    @Test fun revocationAfterRootfsDeletionRetainsLaterTreesAndDoesNotPublishCompletedRemoval() {
+        val bytes = archive()
+        val root = tempDir()
+        try {
+            val paths = RootfsInstaller.Paths(root)
+            val installer = installer(paths, FakeTransport(bytes), bytes)
+            assertEquals(LinuxInstallPhase.READY, installer.install(CancellationToken.uncancellable()).phase)
+            paths.staging.mkdirs()
+            paths.previous.mkdirs()
+            val staged = File(paths.staging, "fixture").apply { writeText("staged") }
+            val previous = File(paths.previous, "fixture").apply { writeText("previous") }
+            paths.archivePart.writeText("retained archive fixture")
+            val originalState = installer.state()
+            var admissions = 0
+            val failure = runCatching {
+                installer.uninstall {
+                    admissions++
+                    check(admissions == 1) { "removal revoked after rootfs deletion" }
+                }
+            }.exceptionOrNull()
+            assertTrue(failure is IllegalStateException)
+            assertEquals(2, admissions)
+            assertFalse(paths.rootfs.exists())
+            assertEquals("staged", staged.readText())
+            assertEquals("previous", previous.readText())
+            assertTrue(paths.archivePart.exists())
+            assertEquals(originalState, installer.state()) // No completed-removal state commit.
+        } finally { remove(root) }
+    }
+
+    @Test fun uninstallRechecksAfterInstallerLockWaitBeforeFirstDeletion() {
+        val bytes = archive()
+        val root = tempDir()
+        try {
+            val paths = RootfsInstaller.Paths(root)
+            val installer = installer(paths, FakeTransport(bytes), bytes)
+            paths.rootfs.mkdirs()
+            val sentinel = File(paths.rootfs, "fixture").apply { writeText("keep") }
+            val lock = RootfsInstaller::class.java.getDeclaredField("lock").apply { isAccessible = true }.get(installer)
+            val started = java.util.concurrent.CountDownLatch(1)
+            val allowed = java.util.concurrent.atomic.AtomicBoolean(true)
+            val failure = java.util.concurrent.atomic.AtomicReference<Throwable?>()
+            lateinit var worker: Thread
+            synchronized(lock) {
+                worker = Thread {
+                    started.countDown()
+                    failure.set(runCatching { installer.uninstall { check(allowed.get()) { "removal revoked while waiting" } } }.exceptionOrNull())
+                }.apply { start() }
+                assertTrue(started.await(2, java.util.concurrent.TimeUnit.SECONDS))
+                allowed.set(false)
+            }
+            worker.join(2_000)
+            assertFalse(worker.isAlive)
+            assertTrue(failure.get() is IllegalStateException)
+            assertEquals("keep", sentinel.readText())
+        } finally { remove(root) }
+    }
+
     @Test fun resumesRangePartialAndPersistsThenReconstructsReadyState() {
         val archive = archive()
         val root = tempDir()

@@ -57,11 +57,54 @@ class McpOAuthManager internal constructor(
         } else "Bearer $access"
     }
 
+    /** Local-only grant identity. Refresh preserves identity; a new grant or changed scope does not. */
+    @Synchronized
+    internal fun authorizationEpoch(config: McpServerConfig): String {
+        if (isGitHubGrant(config)) {
+            val epoch = githubAuthorizationEpoch(config)
+            return epoch + ":" + com.jarvys.agent.connectors.GitHubOperationPolicy.digest(
+                repository.oauthValue(config.id, GITHUB_GRANTED_SCOPES).orEmpty())
+        }
+        requireEndpointBinding(config)
+        return repository.withCurrentOAuthConfig(config) {
+            require(!repository.oauthValue(config.id, ACCESS_TOKEN).isNullOrBlank() ||
+                !repository.oauthValue(config.id, REFRESH_TOKEN).isNullOrBlank()) { "MCP OAuth grant is unavailable" }
+            val client = repository.oauthValue(config.id, OAUTH_CLIENT_BINDING)
+            require(client == null || client == config.oauthClientId) { "MCP OAuth client changed; authorize again" }
+            var epoch = repository.oauthValue(config.id, OAUTH_AUTHORIZATION_EPOCH)?.takeIf(String::isNotBlank)
+            if (epoch == null) {
+                // Only metadata is adopted for a real existing endpoint-bound grant. No grant is invented.
+                epoch = UUID.randomUUID().toString()
+                repository.saveOAuthValue(config.id, OAUTH_CLIENT_BINDING, config.oauthClientId)
+                repository.saveOAuthValue(config.id, OAUTH_AUTHORIZATION_EPOCH, epoch)
+            }
+            require(epoch!!.matches(GITHUB_EPOCH_PATTERN)) { "MCP OAuth identity is invalid; authorize again" }
+            epoch + ":" + com.jarvys.agent.connectors.GitHubOperationPolicy.digest(
+                repository.oauthValue(config.id, OAUTH_GRANTED_SCOPES).orEmpty())
+        }
+    }
+
+    /** Never acquires the OAuth network/refresh monitor or performs refresh inside an admission. */
+    internal fun currentAuthorizationEpoch(config: McpServerConfig): String = repository.withCurrentOAuthConfig(config) {
+        requireEndpointBinding(config)
+        val github = isGitHubGrant(config)
+        val epoch = repository.oauthValue(config.id, if (github) GITHUB_AUTHORIZATION_EPOCH else OAUTH_AUTHORIZATION_EPOCH)
+        require(epoch != null && epoch.matches(GITHUB_EPOCH_PATTERN)) { "MCP OAuth grant changed; reconnect" }
+        if (!github) require(repository.oauthValue(config.id, OAUTH_CLIENT_BINDING) == config.oauthClientId) {
+            "MCP OAuth client changed; authorize again"
+        }
+        require(!repository.oauthValue(config.id, ACCESS_TOKEN).isNullOrBlank() ||
+            !repository.oauthValue(config.id, REFRESH_TOKEN).isNullOrBlank()) { "MCP OAuth grant is unavailable" }
+        epoch + ":" + com.jarvys.agent.connectors.GitHubOperationPolicy.digest(
+            repository.oauthValue(config.id, if (github) GITHUB_GRANTED_SCOPES else OAUTH_GRANTED_SCOPES).orEmpty())
+    }
+
     /** Forces exactly one refresh attempt after an authenticated MCP request receives HTTP 401. */
     @Synchronized
     fun refreshAccessToken(config: McpServerConfig): String {
         requireEndpointBinding(config)
         if (isGitHubGrant(config)) return refreshGitHubAccessToken(config)
+        val expectedEpoch = authorizationEpoch(config)
         val refresh = repository.oauthValue(config.id, REFRESH_TOKEN)
             ?: throw McpReauthRequiredException("MCP OAuth refresh token is unavailable; authorize this server again")
         val tokenEndpoint = repository.oauthValue(config.id, TOKEN_ENDPOINT)
@@ -82,10 +125,14 @@ class McpOAuthManager internal constructor(
         }
         val access = response.optString("access_token")
         if (access.isBlank()) throw McpReauthRequiredException("MCP OAuth refresh returned no access token; authorize again")
-        repository.saveOAuthValue(config.id, ACCESS_TOKEN, access)
-        // OAuth refresh token rotation is optional; retain the previous refresh token when omitted.
-        repository.saveOAuthValue(config.id, REFRESH_TOKEN, McpOAuthRequestRetry.rotatedRefreshToken(response, refresh))
-        repository.saveOAuthValue(config.id, EXPIRES_AT, expiry(response).toString())
+        repository.withCurrentOAuthConfig(config) {
+            require(authorizationEpoch(config) == expectedEpoch) { "MCP OAuth grant changed during refresh" }
+            repository.saveOAuthValue(config.id, ACCESS_TOKEN, access)
+            // OAuth refresh token rotation is optional; retain the previous refresh token when omitted.
+            repository.saveOAuthValue(config.id, REFRESH_TOKEN, McpOAuthRequestRetry.rotatedRefreshToken(response, refresh))
+            repository.saveOAuthValue(config.id, EXPIRES_AT, expiry(response).toString())
+            if (response.has("scope")) repository.saveOAuthValue(config.id, OAUTH_GRANTED_SCOPES, responseScope(response))
+        }
         return "Bearer $access"
     }
 
@@ -131,7 +178,8 @@ class McpOAuthManager internal constructor(
 
     @Synchronized
     fun clear(serverId: String) {
-        listOf(GITHUB_AUTHORIZATION_EPOCH, ACCESS_TOKEN, REFRESH_TOKEN, EXPIRES_AT, TOKEN_ENDPOINT,
+        listOf(GITHUB_AUTHORIZATION_EPOCH, OAUTH_AUTHORIZATION_EPOCH, OAUTH_CLIENT_BINDING,
+            OAUTH_GRANTED_SCOPES, ACCESS_TOKEN, REFRESH_TOKEN, EXPIRES_AT, TOKEN_ENDPOINT,
             RESOURCE, ENDPOINT_BINDING, REVOCATION_ENDPOINT, GITHUB_CLIENT_BINDING,
             GITHUB_REFRESH_EXPIRES_AT, GITHUB_GRANTED_SCOPES).forEach {
             repository.saveOAuthValue(serverId, it, null)
@@ -411,7 +459,8 @@ class McpOAuthManager internal constructor(
         }
         require(clientId.length <= 1024 && clientId.none(Char::isISOControl)) { "OAuth client ID is invalid" }
         val latestConfig = requireCurrentServer(config)
-        if (config.oauthClientId.isBlank()) repository.upsert(latestConfig.copy(oauthClientId = clientId))
+        val grantConfig = latestConfig.copy(oauthClientId = clientId)
+        if (config.oauthClientId.isBlank()) repository.upsert(grantConfig)
 
         val scope = McpCatalogOAuthDiscovery.requestedScope(config.catalogServiceId, challengeHeader, protected).orEmpty()
         val random = SecureRandom()
@@ -455,16 +504,34 @@ class McpOAuthManager internal constructor(
                 ),
             )
             requireCurrentServer(config)
-            repository.saveOAuthValue(config.id, ACCESS_TOKEN, token.getString("access_token"))
-            repository.saveOAuthValue(config.id, REFRESH_TOKEN, token.optString("refresh_token").takeIf(String::isNotBlank))
-            repository.saveOAuthValue(config.id, EXPIRES_AT, expiry(token).toString())
-            repository.saveOAuthValue(config.id, TOKEN_ENDPOINT, tokenEndpoint.toString())
-            repository.saveOAuthValue(config.id, RESOURCE, canonical(resourceUriCanonical))
-            repository.saveOAuthValue(config.id, ENDPOINT_BINDING, config.endpoint)
-            repository.saveOAuthValue(config.id, REVOCATION_ENDPOINT,
-                authorizationMetadata.optString("revocation_endpoint").takeIf(String::isNotBlank)
-                    ?.let { validateHttpsMetadata(it).toString() })
+            synchronized(this@McpOAuthManager) {
+                repository.withCurrentOAuthConfig(grantConfig) {
+                    // Invalidate the previous grant before writing the replacement account data.
+                    repository.saveOAuthValue(config.id, OAUTH_AUTHORIZATION_EPOCH, "pending")
+                    repository.saveOAuthValue(config.id, OAUTH_CLIENT_BINDING, grantConfig.oauthClientId)
+                    repository.saveOAuthValue(config.id, OAUTH_GRANTED_SCOPES, responseScope(token))
+                    repository.saveOAuthValue(config.id, ACCESS_TOKEN, token.getString("access_token"))
+                    repository.saveOAuthValue(config.id, REFRESH_TOKEN, token.optString("refresh_token").takeIf(String::isNotBlank))
+                    repository.saveOAuthValue(config.id, EXPIRES_AT, expiry(token).toString())
+                    repository.saveOAuthValue(config.id, TOKEN_ENDPOINT, tokenEndpoint.toString())
+                    repository.saveOAuthValue(config.id, RESOURCE, canonical(resourceUriCanonical))
+                    repository.saveOAuthValue(config.id, ENDPOINT_BINDING, config.endpoint)
+                    repository.saveOAuthValue(config.id, REVOCATION_ENDPOINT,
+                        authorizationMetadata.optString("revocation_endpoint").takeIf(String::isNotBlank)
+                            ?.let { validateHttpsMetadata(it).toString() })
+                    repository.saveOAuthValue(config.id, OAUTH_AUTHORIZATION_EPOCH, UUID.randomUUID().toString())
+                }
+            }
         }
+    }
+
+    private fun responseScope(response: JSONObject): String? {
+        if (!response.has("scope")) return null
+        val scopes = response.opt("scope") as? String ?: error("OAuth scope metadata is invalid")
+        require(scopes.length <= MAX_GITHUB_SCOPE_CHARS && scopes.none(Char::isISOControl)) {
+            "OAuth scope metadata is invalid"
+        }
+        return scopes.split(' ').filter(String::isNotBlank).sorted().joinToString(" ")
     }
 
     private fun dynamicRegister(endpoint: URI, redirectUri: String, alias: String): String {
@@ -623,6 +690,9 @@ class McpOAuthManager internal constructor(
         private const val MAX_GITHUB_TOKEN_LIFETIME_SECONDS = 31_536_000L
         private val GITHUB_SCOPE_PATTERN = Regex("[A-Za-z0-9:_./-]{1,256}")
         private val GITHUB_EPOCH_PATTERN = Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+        private const val OAUTH_CLIENT_BINDING = "oauth_client_binding"
+        private const val OAUTH_AUTHORIZATION_EPOCH = "oauth_authorization_epoch"
+        private const val OAUTH_GRANTED_SCOPES = "oauth_granted_scopes"
         private const val GITHUB_CLIENT_BINDING = "oauth_github_client_binding"
         private const val GITHUB_AUTHORIZATION_EPOCH = "oauth_github_authorization_epoch"
         private const val GITHUB_REFRESH_EXPIRES_AT = "oauth_github_refresh_expires_at"

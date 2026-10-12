@@ -319,6 +319,7 @@ private fun ConnectorDeviceDetailPage(
                 reads.forEach { operation ->
                     AutonomyPolicyRow(
                         connectorId = definition.id, operation = operation,
+                        origin = registry.configuredAutonomyOrigin(definition, operation),
                         configuredPolicy = registry.configuredAutonomyPolicy(definition, operation),
                         effectivePolicy = registry.autonomyPolicy(definition, operation),
                         effectiveReason = registry.autonomyPolicyUnavailableUiReason(definition, operation),
@@ -330,6 +331,7 @@ private fun ConnectorDeviceDetailPage(
                 writes.forEach { operation ->
                     AutonomyPolicyRow(
                         connectorId = definition.id, operation = operation,
+                        origin = registry.configuredAutonomyOrigin(definition, operation),
                         configuredPolicy = registry.configuredAutonomyPolicy(definition, operation),
                         effectivePolicy = registry.autonomyPolicy(definition, operation),
                         effectiveReason = registry.autonomyPolicyUnavailableUiReason(definition, operation),
@@ -386,6 +388,7 @@ private fun AutonomyPolicyRow(
     connectorId: String,
     operation: ConnectorOperation,
     configuredPolicy: AutonomyPolicy,
+    origin: ActionPolicyOrigin,
     effectivePolicy: AutonomyPolicy,
     effectiveReason: ConnectorUiText?,
     onPolicy: (AutonomyPolicy) -> Unit,
@@ -397,6 +400,8 @@ private fun AutonomyPolicyRow(
     }, permission = {
         ConnectorPolicySelector(
             modifier = Modifier.testTag("connector-policy-${operation.name}-control"),
+            origin = origin,
+            subjectKey = "$connectorId/${operation.name}",
             selectedLabelResource = when (configuredPolicy) {
                 AutonomyPolicy.ASK -> R.string.connector_policy_ask
                 AutonomyPolicy.ALLOW -> R.string.connector_policy_allow

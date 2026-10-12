@@ -49,7 +49,7 @@ class GmailManagementContractTest {
         }.firstOrNull(grants::contains)
         override fun isScopeGranted(scope: String) = effectiveScope(scope) != null
         override fun verifyGmailAccount(capability: String, expectedAccount: String?, token: CancellationToken,
-                                        epoch: Long): String {
+                                        epoch: Long, beforeDispatch: (() -> Unit)?): String {
             val tokenScope = effectiveScope(capability) ?: error("Fake rejected ungranted capability $capability")
             // labels-only tokens cannot call getProfile. This models identity metadata provided by the
             // authorization layer rather than silently borrowing another scope's mailbox account.
@@ -63,7 +63,7 @@ class GmailManagementContractTest {
                 return actual
             }
             val response = requestCancellable(capability, "GET", "${GoogleRestEndpoints.GMAIL}/users/me/profile",
-                token = token, expectedAuthorizationEpoch = epoch)
+                token = token, expectedAuthorizationEpoch = epoch, beforeDispatch = beforeDispatch)
             GoogleRestEndpoints.requireSuccess(response)
             val actual = JSONObject(response.body).getString("emailAddress").lowercase()
             identityProofs += IdentityProof(capability, tokenScope, actual)

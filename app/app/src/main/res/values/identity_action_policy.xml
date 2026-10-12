@@ -1,0 +1,10 @@
+<resources>
+    <string name="identity_action_policy_changed">This identity action is blocked or its permission changed. An already admitted save may have completed. Review the identity and selected document before starting again.</string>
+    <string name="identity_action_backup_exact">Application ID: %1$s\n\nCertificate SHA-256:\n%2$s\n\nKnown version: %3$d\n\nSelected document: %4$s\n\nThis provider receives the encrypted backup and filename and may sync them. Saving verifies the exact ciphertext by reading it back. It does not prove cloud durability, a separate safe copy, or a tested restoration. For a new identity, its temporary key is saved locally only after that verification succeeds.</string>
+    <string name="identity_action_document">Selected document: %1$s</string>
+    <string name="identity_action_save_backup">Save encrypted backup</string>
+    <string name="identity_action_save_floor">Save declared version floor</string>
+    <string name="identity_action_import_allowed_help">Enter the selected backup’s passphrase to validate and import its identity using your saved Allow always permission. Its integrity, certificate and key are checked first. Existing legacy or different identities cannot be replaced. The latest release remains unknown after import until you declare the version floor.</string>
+    <string name="identity_action_unlock_import">Unlock and import</string>
+    <string name="identity_action_reopen_manually">Reopen this identity action manually after automated input has finished. The protected form could not open; no approval was recorded.</string>
+</resources>

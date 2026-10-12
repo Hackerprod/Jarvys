@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="native_permissions_title">Native action permissions</string>
+    <string name="native_permissions_summary">Allow always is the default. Ask reviews the exact action; Deny blocks it. These choices do not grant Android permissions, account access or another conversation’s data. Memory viewing applies only to the selected native review, separately from sharing.</string>
+    <string name="native_permission_memory_view">View or capture the selected native memory review</string>
+    <string name="native_permission_memory_modify">Edit selected memory</string>
+    <string name="native_permission_memory_delete">Delete selected memory note</string>
+    <string name="native_permission_memory_restore">Restore or undo memory changes</string>
+    <string name="native_permission_memory_clear">Clear selected memory and history</string>
+    <string name="native_permission_memory_export">Export selected memory</string>
+    <string name="native_permission_memory_share">Share an exact PERSONAL memory snapshot</string>
+    <string name="native_permission_memory_reflection">Run memory reflection</string>
+    <string name="native_permission_bot_create">Create a custom bot</string>
+    <string name="native_permission_bot_mascot">Compile a custom bot mascot</string>
+    <string name="native_permission_identity_create">Create a recoverable identity and backup</string>
+    <string name="native_permission_identity_export">Export an encrypted signing identity backup</string>
+    <string name="native_permission_identity_import">Import an encrypted signing identity backup</string>
+    <string name="native_permission_identity_reconcile">Record the supplied signing version floor</string>
+    <string name="native_permission_origin_default">Catalog default</string>
+    <string name="native_permission_origin_user">Your saved choice</string>
+    <string name="native_permission_origin_legacy">Previous choice with unknown origin, preserved</string>
+    <string name="native_permission_origin_invalid">Invalid saved setting; review required</string>
+</resources>

@@ -34,7 +34,7 @@ class GmailDraftDeletionTest {
         val writes get() = calls.filter { it.method != "GET" }
         override fun isScopeGranted(scope: String) = scope in grants
         override fun currentAuthorizationEpoch() = epoch
-        override fun verifyGmailAccount(capability: String, expectedAccount: String?, token: CancellationToken, epoch: Long): String {
+        override fun verifyGmailAccount(capability: String, expectedAccount: String?, token: CancellationToken, epoch: Long, beforeDispatch: (() -> Unit)?): String {
             token.throwIfCancelled()
             check(epoch == this.epoch) { "Account epoch changed" }
             check(capability in grants) { "Scope missing" }

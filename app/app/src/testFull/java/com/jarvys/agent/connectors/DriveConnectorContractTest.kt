@@ -73,14 +73,24 @@ class DriveConnectorContractTest {
         }
     }
 
+    @Test fun preparedDriveReadCannotMoveToAnotherAccountEpoch() {
+        val auth = FakeAuthorization(); val runtime = DriveConnector(auth, FakeArtifacts())
+        val args = JSONObject().put("id", "file-1")
+        val read = runtime.prepareRead(DriveConnector.GET_FILE_METADATA, args, token())
+        assertTrue(auth.requests.isEmpty())
+        auth.epoch++
+        failure { runtime.invokeReadPrepared(DriveConnector.GET_FILE_METADATA, args, read, token()) }
+        assertTrue(auth.requests.isEmpty())
+    }
+
     @Test fun readAdmissionIsUsedAndScopeAvailabilityDoesNotChangePolicies() {
         val auth = FakeAuthorization().apply { metadata() }
         val definition = DriveConnector.definition(auth, FakeArtifacts())
         val runtime = definition.runtime!!
         val args = JSONObject().put("id", "file-1")
         var admissions = 0
-        val prepared = ConnectorWritePreparation(ApprovalSummary("Read Drive metadata", emptyList()), args,
-            authorizeEffect = { admissions++ })
+        val prepared = runtime.prepareRead(DriveConnector.GET_FILE_METADATA, args, token())
+            .copy(authorizeEffect = { admissions++ })
         runtime.invokeReadPrepared(DriveConnector.GET_FILE_METADATA, args, prepared, token())
         assertEquals(1, admissions)
         auth.grants.remove(GoogleOAuthProtocol.DRIVE_FILE)

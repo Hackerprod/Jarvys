@@ -18,10 +18,18 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
+internal enum class McpDispatchKind { TOOL_CALL, SESSION_RECOVERY, RESPONSE_RESUME }
+
 internal interface McpProtocolSession : AutoCloseable {
     val serverInfo: McpServerInfo
     val tools: List<McpToolConfig>
     fun callTool(name: String, arguments: JSONObject, token: CancellationToken): JSONObject
+    /** Implementations with internal retries must call this hook at every wire-dispatch boundary. */
+    fun callTool(name: String, arguments: JSONObject, token: CancellationToken,
+                 beforeDispatch: (McpDispatchKind) -> Unit): JSONObject {
+        beforeDispatch(McpDispatchKind.TOOL_CALL)
+        return callTool(name, arguments, token)
+    }
 }
 
 internal object McpEndpointPolicy {
@@ -185,6 +193,8 @@ internal object McpTransportClient {
         onMessage: (JSONObject) -> Unit = {},
         token: CancellationToken? = null,
         safeToReplay: Boolean = body.optString("method") != "tools/call",
+        beforeDispatch: (McpDispatchKind) -> Unit = {},
+        dispatchKind: McpDispatchKind = McpDispatchKind.TOOL_CALL,
     ): JSONObject {
         var accepted = false
         val id = body.optString("id").takeIf(String::isNotBlank)
@@ -194,7 +204,7 @@ internal object McpTransportClient {
             token?.throwIfCancelled()
             if (token != null) unregisterCancellation = token.registerCancelAction { connection.disconnect() }
             if (version != null && version != "2024-11-05") connection.setRequestProperty("MCP-Protocol-Version", version)
-            writeJson(connection, body)
+            writeJson(connection, body) { beforeDispatch(dispatchKind) }
             val code = responseCode(connection)
             if (code == 404 && sessionId != null) throw SessionExpiredException()
             if (code !in 200..299) throw httpError(code, connection.getHeaderField("WWW-Authenticate"), connection.getHeaderField("Retry-After"))
@@ -215,7 +225,7 @@ internal object McpTransportClient {
                     try {
                         readSseResponse(connection.inputStream, id, onMessage)
                     } catch (closed: IncompleteSseResponse) {
-                        resumeStream(endpoint, config, authorization, sessionId, version, id, closed, onMessage, token)
+                        resumeStream(endpoint, config, authorization, sessionId, version, id, closed, onMessage, token, beforeDispatch)
                     }
                 }
                 else -> throw IllegalStateException("MCP server returned unsupported content type: ${type.take(100)}")
@@ -233,11 +243,12 @@ internal object McpTransportClient {
         }
     }
 
-    private fun postNotification(endpoint: URI, config: McpServerConfig, authorization: String?, sessionId: String?, version: String?, body: JSONObject) {
+    private fun postNotification(endpoint: URI, config: McpServerConfig, authorization: String?, sessionId: String?, version: String?, body: JSONObject,
+                                 beforeDispatch: () -> Unit = {}) {
         val connection = open(endpoint.toURL(), config, authorization, "POST", sessionId, requestAccept())
         try {
             if (version != null && version != "2024-11-05") connection.setRequestProperty("MCP-Protocol-Version", version)
-            writeJson(connection, body)
+            writeJson(connection, body, beforeDispatch)
             val code = responseCode(connection)
             if (code !in 200..299) throw httpError(code, connection.getHeaderField("WWW-Authenticate"), connection.getHeaderField("Retry-After"))
         } finally {
@@ -274,9 +285,10 @@ internal object McpTransportClient {
         return connection
     }
 
-    private fun writeJson(connection: HttpURLConnection, json: JSONObject) {
+    private fun writeJson(connection: HttpURLConnection, json: JSONObject, beforeDispatch: () -> Unit = {}) {
         val bytes = json.toString().toByteArray(StandardCharsets.UTF_8)
         connection.setFixedLengthStreamingMode(bytes.size)
+        beforeDispatch()
         connection.outputStream.use { output -> output.write(bytes) }
     }
 
@@ -345,6 +357,7 @@ internal object McpTransportClient {
         initialClose: IncompleteSseResponse,
         onMessage: (JSONObject) -> Unit,
         token: CancellationToken?,
+        beforeDispatch: (McpDispatchKind) -> Unit,
     ): JSONObject {
         var closed = initialClose
         repeat(MAX_SSE_RESUMES) {
@@ -362,6 +375,7 @@ internal object McpTransportClient {
             try {
                 if (token != null) unregisterCancellation = token.registerCancelAction { connection.disconnect() }
                 if (version != null && version != "2024-11-05") connection.setRequestProperty("MCP-Protocol-Version", version)
+                beforeDispatch(McpDispatchKind.RESPONSE_RESUME)
                 val code = responseCode(connection)
                 if (code != 200) throw httpError(code, connection.getHeaderField("WWW-Authenticate"), connection.getHeaderField("Retry-After"))
                 try {
@@ -463,11 +477,15 @@ internal object McpTransportClient {
         @Volatile override var tools: List<McpToolConfig> = emptyList()
             private set
 
-        override fun callTool(name: String, arguments: JSONObject, token: CancellationToken): JSONObject = synchronized(this) {
+        override fun callTool(name: String, arguments: JSONObject, token: CancellationToken): JSONObject =
+            callTool(name, arguments, token) { }
+
+        override fun callTool(name: String, arguments: JSONObject, token: CancellationToken,
+                              beforeDispatch: (McpDispatchKind) -> Unit): JSONObject = synchronized(this) {
             ensureOpen()
             token.throwIfCancelled()
             val params = JSONObject().put("name", name).put("arguments", arguments)
-            callWithRecovery("tools/call", params, token)
+            callWithRecovery("tools/call", params, token, beforeDispatch)
         }
 
         fun refreshTools() = synchronized(this) {
@@ -476,7 +494,8 @@ internal object McpTransportClient {
             onToolsChanged(tools)
         }
 
-        private fun callWithRecovery(method: String, params: JSONObject, token: CancellationToken? = null): JSONObject {
+        private fun callWithRecovery(method: String, params: JSONObject, token: CancellationToken? = null,
+                                     beforeDispatch: (McpDispatchKind) -> Unit = {}): JSONObject {
             val id = nextId.getAndIncrement().toString()
             val safeRead = method == "tools/list" || method == "tools/call" && tools.firstOrNull {
                 it.wireName == params.optString("name")
@@ -486,10 +505,10 @@ internal object McpTransportClient {
             while (true) {
                 token?.throwIfCancelled()
                 try {
-                    return request(endpoint, config, authorization, sessionId, version, rpcRequest(method, id, params), ::handleServerMessage, token, safeRead)
+                    return request(endpoint, config, authorization, sessionId, version, rpcRequest(method, id, params), ::handleServerMessage, token, safeRead, beforeDispatch)
                 } catch (expired: SessionExpiredException) {
                     if (!safeRead || recovered) throw McpHttpStatusException(404)
-                    sessionId = initializeAgain(); recovered = true
+                    sessionId = initializeAgain(beforeDispatch); recovered = true
                 } catch (status: McpHttpStatusException) {
                     if (!safeRead || status.statusCode !in setOf(429, 500, 502, 503, 504) || retries++ >= 2 || (status.retryAfterSeconds ?: 0) > 5) throw status
                     var remaining = status.retryAfterSeconds?.times(1000) ?: (250L * retries + (0..100).random())
@@ -502,14 +521,15 @@ internal object McpTransportClient {
             }
         }
 
-        private fun initializeAgain(): String? {
+        private fun initializeAgain(beforeDispatch: (McpDispatchKind) -> Unit): String? {
             val id = nextId.getAndIncrement().toString()
-            val response = request(endpoint, config, authorization, null, null, rpcRequest("initialize", id, initializeParams()), ::handleServerMessage)
+            val response = request(endpoint, config, authorization, null, null, rpcRequest("initialize", id, initializeParams()), ::handleServerMessage,
+                beforeDispatch = beforeDispatch, dispatchKind = McpDispatchKind.SESSION_RECOVERY)
             val result = response.getJSONObject("result")
             version = result.optString("protocolVersion")
             require(version in supportedVersions) { "MCP server negotiated unsupported protocol version: $version" }
             postNotification(endpoint, config, authorization, response.optString("__mcpSessionId").takeIf(String::isNotBlank), version,
-                rpcNotification("notifications/initialized", JSONObject()))
+                rpcNotification("notifications/initialized", JSONObject())) { beforeDispatch(McpDispatchKind.SESSION_RECOVERY) }
             return response.optString("__mcpSessionId").takeIf(String::isNotBlank)
         }
 
@@ -619,13 +639,14 @@ internal object McpTransportClient {
             }, "JarvysMcpSse-${config.id.take(8)}").apply { isDaemon = true; start() }
         }
 
-        fun request(method: String, id: String, params: JSONObject, token: CancellationToken? = null): JSONObject {
+        fun request(method: String, id: String, params: JSONObject, token: CancellationToken? = null,
+                    beforeDispatch: () -> Unit = {}): JSONObject {
             check(!closed) { "MCP session is closed" }
             token?.throwIfCancelled()
             val queue = LinkedBlockingQueue<JSONObject>(1)
             pending[id] = queue
             try {
-                post(rpcRequest(method, id, params), expectingResponse = true, token = token)
+                post(rpcRequest(method, id, params), expectingResponse = true, token = token, beforeDispatch = beforeDispatch)
                 val deadline = System.currentTimeMillis() + RESPONSE_TIMEOUT_MS
                 var response: JSONObject? = null
                 while (response == null && System.currentTimeMillis() < deadline) {
@@ -654,7 +675,14 @@ internal object McpTransportClient {
         override fun callTool(name: String, arguments: JSONObject, token: CancellationToken): JSONObject =
             request("tools/call", nextId.getAndIncrement().toString(), JSONObject().put("name", name).put("arguments", arguments), token)
 
-        private fun post(body: JSONObject, expectingResponse: Boolean, token: CancellationToken? = null) {
+        override fun callTool(name: String, arguments: JSONObject, token: CancellationToken,
+                              beforeDispatch: (McpDispatchKind) -> Unit): JSONObject =
+            request("tools/call", nextId.getAndIncrement().toString(), JSONObject().put("name", name).put("arguments", arguments), token) {
+                beforeDispatch(McpDispatchKind.TOOL_CALL)
+            }
+
+        private fun post(body: JSONObject, expectingResponse: Boolean, token: CancellationToken? = null,
+                         beforeDispatch: () -> Unit = {}) {
             val connection = open(postEndpoint.toURL(), config, authorization, "POST", null, requestAccept())
             var unregisterCancellation: Runnable = Runnable { }
             try {
@@ -664,7 +692,7 @@ internal object McpTransportClient {
                     sseConnection.disconnect()
                 }
                 if (version.isNotBlank() && version != "2024-11-05") connection.setRequestProperty("MCP-Protocol-Version", version)
-                writeJson(connection, body)
+                writeJson(connection, body, beforeDispatch)
                 val code = responseCode(connection)
                 if (code !in 200..299) throw httpError(code, connection.getHeaderField("WWW-Authenticate"), connection.getHeaderField("Retry-After"))
                 val responseBody = runCatching { readBounded(connection.inputStream) }.getOrDefault("")

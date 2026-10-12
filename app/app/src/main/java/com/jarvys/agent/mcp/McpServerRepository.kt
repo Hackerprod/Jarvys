@@ -25,6 +25,17 @@ private class EncryptedMcpCredentialVault(private val store: SecretStore) : McpC
 class McpServerRepository internal constructor(context: Context, private val secrets: McpCredentialVault) {
     private val preferences = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     private val lock = Any()
+    private var observedServerJson = preferences.getString(KEY_SERVERS, "[]")
+    private val authorityRevisions = mutableMapOf<String, Long>()
+    private var storageHealthy = true
+
+    /** Monotonic for this process: approval cannot survive config/exposure ABA edits. */
+    internal fun authorityRevision(serverId: String): Long = synchronized(lock) {
+        check(storageHealthy && preferences.getString(KEY_SERVERS, "[]") == observedServerJson) {
+            "MCP settings changed or could not be saved; restart Jarvys to reload them before running actions"
+        }
+        authorityRevisions[serverId] ?: 0L
+    }
     private val _servers = MutableStateFlow(readServers())
     val servers: StateFlow<List<McpServerConfig>> = _servers.asStateFlow()
 
@@ -94,8 +105,10 @@ class McpServerRepository internal constructor(context: Context, private val sec
 
     fun upsert(config: McpServerConfig) = synchronized(lock) {
         validateConfig(config)
+        val previous = get(config.id)
         val next = _servers.value.filterNot { it.id == config.id } + config
         persist(next)
+        if (previous != config) authorityRevisions[config.id] = (authorityRevisions[config.id] ?: 0L) + 1L
         _servers.value = next
     }
 
@@ -112,9 +125,11 @@ class McpServerRepository internal constructor(context: Context, private val sec
         upsert(current.copy(
             tools = current.tools.map { if (it.wireName == wireName) it.copy(enabled = enabled) else it },
             toolSelectionMode = McpToolSelectionMode.CUSTOM,
-            githubToolPreferences = rememberGitHubChoices(current) + current.tools.filter { it.wireName == wireName }.associate {
-                it.wireName to "${McpToolSecurity.classify(current.catalogServiceId, it.wireName, it.annotations).name}:$enabled"
-            },
+            githubToolPreferences = if (current.catalogServiceId == "github") {
+                rememberGitHubChoices(current) + current.tools.filter { it.wireName == wireName }.associate {
+                    it.wireName to "${McpToolSecurity.classify(current.catalogServiceId, it.wireName, it.annotations).name}:$enabled"
+                }
+            } else current.githubToolPreferences,
         ))
     }
 
@@ -131,18 +146,22 @@ class McpServerRepository internal constructor(context: Context, private val sec
     }
 
     private fun rememberGitHubChoices(config: McpServerConfig): Map<String, String> =
-        if (config.catalogServiceId != "github") emptyMap() else (config.githubToolPreferences + config.tools.associate {
+        // Older non-GitHub selections also populated this map. Leave that unrelated metadata intact:
+        // clearing it during unchanged rediscovery must not invalidate an outstanding action lease.
+        if (config.catalogServiceId != "github") config.githubToolPreferences else (config.githubToolPreferences + config.tools.associate {
             it.wireName to "${McpToolSecurity.classify(config.catalogServiceId, it.wireName, it.annotations).name}:${it.enabled}"
         }).entries.toList().takeLast(512).associate { it.toPair() }
 
     fun delete(serverId: String) = synchronized(lock) {
         val next = _servers.value.filterNot { it.id == serverId }
         persist(next)
+        authorityRevisions[serverId] = (authorityRevisions[serverId] ?: 0L) + 1L
         _servers.value = next
         secrets.clear(serverId)
     }
 
     fun exposedTools(): List<McpToolDefinition> = _servers.value
+        .onEach { server -> com.jarvys.agent.connectors.ActionPolicyDefaults.register("mcp:${server.id}", server.tools.map { it.wireName }) }
         .filter { it.enabled }
         .flatMap { server ->
             McpToolSecurity.exposedEnabledTools(server.tools).mapNotNull { tool ->
@@ -157,6 +176,7 @@ class McpServerRepository internal constructor(context: Context, private val sec
                         catalogServiceId = server.catalogServiceId,
                         annotations = tool.annotations,
                         access = McpToolSecurity.classify(server.catalogServiceId, tool.wireName, tool.annotations),
+                        inheritedPolicy = server.inheritedActionPolicy(),
                     )
                 }.getOrNull()
             }
@@ -198,6 +218,16 @@ class McpServerRepository internal constructor(context: Context, private val sec
             // means the user never chose an opt-in list.
             McpToolSelectionMode.DEFAULT_ALL
         }
+        val rawPolicy = item.opt("initialToolPolicy")
+        val parsedPolicy = (rawPolicy as? String)?.let { runCatching { McpInitialToolPolicy.valueOf(it) }.getOrNull() }
+        val origin = when {
+            !item.has("initialToolPolicy") -> McpInitialPolicyOrigin.COMMON_DEFAULT
+            parsedPolicy == null -> McpInitialPolicyOrigin.INVALID
+            item.optInt("initialToolPolicySchema", 0) == 1 -> runCatching {
+                McpInitialPolicyOrigin.valueOf(item.getString("initialToolPolicyOrigin"))
+            }.getOrDefault(McpInitialPolicyOrigin.LEGACY_UNKNOWN)
+            else -> McpInitialPolicyOrigin.LEGACY_UNKNOWN
+        }
         return McpServerConfig(
             id = item.getString("id"),
             alias = item.getString("alias"),
@@ -219,12 +249,19 @@ class McpServerRepository internal constructor(context: Context, private val sec
             githubToolsets = item.optJSONArray("githubToolsets")?.let { groups ->
                 (0 until groups.length()).map { groups.getString(it) }.toSet().also(com.jarvys.agent.connectors.GitHubOperationPolicy::validateToolsets)
             } ?: com.jarvys.agent.connectors.GitHubOperationPolicy.defaultToolsets,
-            initialToolPolicy = runCatching { McpInitialToolPolicy.valueOf(item.optString("initialToolPolicy", "ASK")) }
-                .getOrDefault(McpInitialToolPolicy.ASK),
+            initialToolPolicy = if (!item.has("initialToolPolicy")) McpInitialToolPolicy.defaultPolicy()
+                else parsedPolicy ?: McpInitialToolPolicy.DENY,
+            initialToolPolicyOrigin = origin,
+            invalidInitialToolPolicyJson = if (parsedPolicy == null && item.has("initialToolPolicy"))
+                JSONArray().put(rawPolicy ?: JSONObject.NULL).toString() else null,
         )
     }
 
     private fun persist(configs: List<McpServerConfig>) {
+        // Never serialize a stale cache over restored decisions or revive a failed persistence authority.
+        check(storageHealthy && preferences.getString(KEY_SERVERS, "[]") == observedServerJson) {
+            "MCP settings changed or could not be saved; restart Jarvys to reload them before editing"
+        }
         val array = JSONArray()
         configs.forEach { config ->
             val tools = JSONArray()
@@ -252,15 +289,21 @@ class McpServerRepository internal constructor(context: Context, private val sec
                     .put("oauthClientId", config.oauthClientId)
                     .put("catalogServiceId", config.catalogServiceId ?: "")
                     .put("toolSelectionMode", config.toolSelectionMode.name)
-                    .put("initialToolPolicy", config.initialToolPolicy.name)
+                    .put("initialToolPolicy", config.invalidInitialToolPolicyJson?.let { JSONArray(it).get(0) }
+                        ?: config.initialToolPolicy.name)
+                    .put("initialToolPolicySchema", 1)
+                    .put("initialToolPolicyOrigin", config.initialToolPolicyOrigin.name)
                     .put("githubToolsets", JSONArray(config.githubToolsets.sorted()))
                     .put("githubToolPreferences", JSONObject(config.githubToolPreferences))
                     .put("tools", tools),
             )
         }
-        check(preferences.edit().putString(KEY_SERVERS, array.toString()).commit()) {
-            "Could not persist MCP server settings"
+        if (!preferences.edit().putString(KEY_SERVERS, array.toString()).commit()) {
+            // Failed commits may still change SharedPreferences memory. Never admit using stale UI data.
+            storageHealthy = false
+            error("Could not persist MCP server settings")
         }
+        observedServerJson = array.toString()
     }
 
     private fun validateConfig(config: McpServerConfig) {

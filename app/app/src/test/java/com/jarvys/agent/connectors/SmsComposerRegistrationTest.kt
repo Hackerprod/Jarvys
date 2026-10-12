@@ -19,7 +19,7 @@ class SmsComposerRegistrationTest {
         assertEquals("send_sms", operation.name)
         assertEquals("send_sms", com.jarvys.agent.CoreConnectorTool.toolName(SmsComposerConnector.ID, operation.name))
         assertTrue(operation.write)
-        assertFalse(operation.autonomyAllowed)
+        assertTrue(operation.autonomyAllowed)
         assertTrue(sms.writePermissions.isEmpty())
         assertTrue(operation.requiredPermissions.isEmpty())
         assertFalse(com.jarvys.agent.proactive.ProactiveReadOnlyToolFactory.connectorAllowlist[SmsComposerConnector.ID]

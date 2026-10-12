@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="action_policy_edit_unavailable">Finish any automated interaction, then reopen this policy choice. If saving failed, review the retained setting.</string>
+    <string name="action_policy_origin_default">Default: Allow always.</string>
+    <string name="action_policy_origin_user">Saved choice.</string>
+    <string name="action_policy_origin_legacy">Preserved earlier choice; its original source is unknown. You can change it here.</string>
+    <string name="action_policy_origin_invalid">Saved decision is invalid or unavailable. It cannot authorize automatic execution. Review this setting.</string>
+    <string name="action_policy_origin_inherited">Inherited action policy. An explicit choice here overrides that inherited decision.</string>
+</resources>

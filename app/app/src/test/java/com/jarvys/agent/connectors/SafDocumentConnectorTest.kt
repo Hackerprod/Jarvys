@@ -16,12 +16,14 @@ class SafDocumentConnectorTest {
         var selectedName = "picked.txt"
         var selectedMime = "text/plain"
         var selectedBytes = "hello".toByteArray()
+        var createCount = 0
         var createdName = ""
         var createdMime = ""
         val written = ByteArrayOutputStream()
         override fun open(types: Array<String>, token: CancellationToken): SafPickedDocument =
             SafPickedDocument(selectedName, selectedMime, ByteArrayInputStream(selectedBytes))
         override fun create(name: String, mimeType: String, token: CancellationToken): OutputStream {
+            createCount++
             createdName = name
             createdMime = mimeType
             return written
@@ -49,17 +51,32 @@ class SafDocumentConnectorTest {
         assertTrue(SafDocumentPolicy.isTextMime("text/markdown"))
     }
 
-    @Test fun createFileIsAWriteAndDoesNotWriteBeforeApproval() {
+    @Test fun createFilePreparationAndSavedAskDenialHaveNoEffectBeforeAllow() {
         val gateway = Gateway()
         val definition = SafDocumentConnector.definition(gateway)
         val op = definition.operations.single { it.name == SafDocumentConnector.CREATE_DOCUMENT }
-        assertFalse(op.autonomyAllowed)
+        assertTrue(op.write)
+        assertTrue(op.autonomyAllowed)
         val token = CancellationToken.uncancellable()
         val args = JSONObject().put("name", "notes.txt").put("mime", "text/plain").put("content", "approved content")
         val preparation = definition.runtime!!.prepareWrite(op.name, args, token)
         assertEquals("", gateway.written.toString())
         assertTrue(preparation.approval.lines.any { it.contains("approved content") })
-        val result = definition.runtime.invokePrepared(op.name, preparation.executionArguments, preparation, token)
+        val summaries = mutableListOf<ApprovalSummary>()
+        val registry = ConnectorRegistry.createForTests(FakeConnectorPreferences(), { false }, rejectingApprovalGate(summaries::add))
+        registry.register(definition)
+        registry.connect(definition.id)
+        registry.setAutonomyPolicy(definition, op, AutonomyPolicy.ASK)
+        val rejection = runCatching { registry.invoke(definition, op, args, token) }.exceptionOrNull()
+        assertTrue(rejection?.message.orEmpty().contains("do not retry automatically"))
+        assertEquals(1, summaries.size)
+        assertEquals(0, gateway.createCount)
+        assertEquals("", gateway.createdName)
+        assertEquals("", gateway.written.toString())
+        registry.setAutonomyPolicy(definition, op, AutonomyPolicy.ALLOW)
+        val result = registry.invoke(definition, op, args, token)
+        assertEquals(1, gateway.createCount)
+        assertEquals(1, summaries.size)
         assertEquals("notes.txt", gateway.createdName)
         assertEquals("text/plain", gateway.createdMime)
         assertEquals("approved content", gateway.written.toString("UTF-8"))

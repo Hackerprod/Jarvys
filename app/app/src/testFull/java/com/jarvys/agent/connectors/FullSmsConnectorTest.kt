@@ -50,7 +50,7 @@ class FullSmsConnectorTest {
         }.isFailure)
     }
 
-    @Test fun fullSmsReaderHasNoWriteOperationAndApprovedDraftIsTheOnlySendPath() {
+    @Test fun fullSmsReaderHasNoWriteOperationAndConfiguredDraftNeverSendsSms() {
         val definition = FullSmsConnector.definition(FakeSmsGateway(), { true })
         assertEquals(listOf(FullSmsConnector.LIST_SMS), definition.operations.map { it.name })
         assertTrue(definition.operations.none { it.write })
@@ -61,14 +61,26 @@ class FullSmsConnectorTest {
         val operation = draft.operations.single()
         assertEquals("send_sms", operation.name)
         assertTrue(operation.write)
-        assertFalse(operation.autonomyAllowed)
+        assertTrue(operation.autonomyAllowed)
         assertEquals("send_sms", CoreConnectorTool.toolName(draft.id, operation.name))
         assertTrue(draft.writePermissions.isEmpty())
         assertTrue(draft.operations.single().requiredPermissions.isEmpty())
-        val prepared = SmsComposerConnector().prepareWrite(operation.name,
+        val launched = mutableListOf<ApprovalIntentSpec>()
+        val registry = ConnectorRegistry.createForTestsWithAutonomy(
+            FakeConnectorPreferences(), { false }, rejectingApprovalGate { error("Default ALLOW must not ask") },
+            InMemoryConnectorAutonomyStore(), NoopAutonomyActionNotifier, launchIntent = { launched += it },
+        )
+        registry.register(draft)
+        registry.connect(draft.id)
+        assertEquals(AutonomyPolicy.ALLOW, registry.autonomyPolicy(draft, operation))
+        val result = registry.invoke(draft, operation,
             JSONObject().put("to", "+15551234567").put("body", "Review before sending"), token)
-        val result = SmsComposerConnector().invokePrepared(operation.name, JSONObject(), prepared, token)
-        assertEquals("sms_draft_opened", result.getString("status"))
+        assertEquals("sms_composer_launch_requested", result.getString("status"))
+        assertEquals(1, launched.size)
+        assertEquals(ApprovalIntentKind.SMS_COMPOSE, launched.single().kind)
+        assertEquals("smsto:+15551234567", launched.single().dataUri)
+        assertEquals("Review before sending", launched.single().extras["sms_body"])
+        assertTrue(result.getString("message").contains("presentation is not confirmed"))
         assertFalse(result.getBoolean("sent"))
         assertFalse(draft.writePermissions.contains(Manifest.permission.SEND_SMS))
     }

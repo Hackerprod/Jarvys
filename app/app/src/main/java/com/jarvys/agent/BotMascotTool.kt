@@ -54,7 +54,7 @@ class BotMascotTool internal constructor(private val service: BotMascotService) 
                 "scene_json" to text(SCENE_GUIDE, BotMascotSceneCompiler.MAX_SOURCE_BYTES),
             )
             ToolSpec(NAME,"jarvys/bots","Compile and save an original animated mascot for an existing custom bot, locally on the phone, only when requested by the user. " +
-                "Review is required; original editable scene and immutable versioned bytes are saved with an idempotent receipt. No image service, CLI or new network service is used. " +
+                "The native mascot policy defaults to Allow always; Ask reviews the exact scene and Deny blocks it. Original editable scene and immutable versioned bytes are saved with an idempotent receipt. No image service, CLI or new network service is used. " +
                 "LOCAL_COMPILED proves local compilation, not Android rendering acceptance. A temporary visual test is available in the saved custom bot editor; normal avatars remain the static PNG/glyph fallback. Never claim playback is verified from compilation alone. " +
                 "Read list_bots first; never guess IDs. Built-ins are immutable. This changes presentation only, not prompts, tools, permissions or running tasks. Main chat only.",
                 "bots",ToolSpec.Status.IMPLEMENTED,emptyMap(),FIELDS.toList(),mapOf("type" to "object","properties" to p,"required" to FIELDS.toList(),"additionalProperties" to false))
@@ -68,15 +68,16 @@ internal class BotMascotService(
     private val store: BotMascotStore,
     private val sessionId: String,
     private val approve: (ApprovalSummary, CancellationToken) -> ApprovalDecision,
+    private val nativePolicy: NativeActionPolicy = NativeActionPolicy.inMemory(),
 ) {
     constructor(context: Context, sessionId: String): this(CrewProfileRepository(context),BotMascotStore(context),sessionId,
-        { summary, token -> ApprovalGate.INSTANCE.request(summary,token) })
+        { summary, token -> ApprovalGate.INSTANCE.request(summary,token) }, NativeActionPolicy(context))
     fun available(token: CancellationToken) = !token.isCrewRun && sessionId.isNotBlank() &&
         sessionId != com.jarvys.agent.proactive.ProactiveConversation.SESSION_ID && sessionId != com.jarvys.agent.tasks.ScheduledTaskConversation.SESSION_ID
 
-    /** requireApproval=false is used only inside the already-reviewed create_bot transaction. */
+    /** Every path resolves the child policy; a parent creation link adds, never replaces, authority. */
     fun assign(id: String, revision: Int, request: String, description: String, source: String,
-               token: CancellationToken, requireApproval: Boolean): CrewProfileRepository.MascotAssignment {
+               token: CancellationToken, requireApproval: Boolean, parentAuthorization: NativeActionPolicy.LinkedRequest? = null): CrewProfileRepository.MascotAssignment {
         token.throwIfCancelled()
         require(available(token)) { "Mascot authoring is available only in the main chat." }
         BotMascotDescriptor.requireOperationId(request)
@@ -92,23 +93,33 @@ internal class BotMascotService(
         val bytes = ByteArray(buffer.remaining()).also { buffer.get(it) }
         val operation = "mascot-" + digest(sessionId + "\u0000" + request)
         val payload = digest(JSONArray(listOf(id,description,digest(source))).toString())
+        val exactBinding = binding(sessionId, id, revision, request, description, source)
+        val authorization = parentAuthorization?.also { it.requireBinding(exactBinding) }?.child
+            ?: nativePolicy.prepare(NativeActionPolicy.Operation.BOT_MASCOT, exactBinding)
+        try {
+        authorization.requireCurrent()
+        parentAuthorization?.requireChild(authorization)
         repository.mascotOperation(id,operation,payload)?.let { return it }
         editable(repository.definition(id),revision)
         // Validate the full product source before approval or disk writes, but never regenerate on a durable retry.
         val compiled = BotMascotSceneCompiler.compileProduct(bytes)
-        if (requireApproval) {
+        if (authorization.requiresApproval) {
             val summary = ApprovalSummary(title="Create mascot: ${compiled.validation.name}", lines=listOf(
                 "Design and movement: $description", "Contract: bot-mascot-v1; nine states and nine static reduced-motion poses.",
                 "Local scene: ${compiled.validation.complexity.nodeCount} nodes, ${compiled.validation.complexity.keyframeCount} keyframes; source SHA-256: ${digest(source)}",
                 "Compiled locally without a CLI, image service or new network service. Normal avatars remain PNG/glyph; the saved custom bot editor offers a temporary, unverified Android visual test.",
                 "Presentation only. Instructions, capabilities, skills and connector approvals remain unchanged."),allowAlwaysAvailable=false)
-            require(approve(summary,token)==ApprovalDecision.APPROVED) { "Mascot authoring was not approved. The existing visual was kept." }
+            authorization.authorize(summary, token, approve)
         }
         token.throwIfCancelled()
+        check(!authorization.requiresApproval) { "The exact mascot request requires approval" }
+        authorization.requireCurrent()
+        parentAuthorization?.requireChild(authorization)
         repository.mascotOperation(id,operation,payload)?.let { return it }
         editable(repository.definition(id),revision)
         var prepared: BotMascotStore.ValidatedPackage? = null
         try {
+            authorization.admit(token) { parentAuthorization?.admitParent(authorization) }
             prepared = store.prepare(id,description,bytes,{ input, cancellation ->
                 cancellation.throwIfCancelled()
                 // No caller can supply a .riv; every package goes through the bounded product compiler.
@@ -116,6 +127,7 @@ internal class BotMascotService(
             },token)
             var saved: CrewProfileRepository.MascotAssignment? = null
             BotIconService.CommitGate(token).use { gate -> gate.commit {
+                authorization.admit(token) { parentAuthorization?.admitParent(authorization) }
                 saved = repository.setMascot(id,revision,checkNotNull(prepared),operation,payload)
             } }
             return checkNotNull(saved)
@@ -125,6 +137,7 @@ internal class BotMascotService(
                 try { store.cleanupUnassigned(repository,id,it.descriptor().packageRef) } catch (_: RuntimeException) { }
             }
         }
+        } finally { if (parentAuthorization == null) authorization.close() }
     }
     private fun editable(bot: BotDefinition, revision: Int) {
         require(!bot.builtIn && !CrewProfileRepository.isBuiltInId(bot.id)) { "Built-in bot visuals cannot be changed." }
@@ -140,6 +153,9 @@ internal class BotMascotService(
         .put("android_playback_verified",false).put("playback","static_default_manual_visual_test")
         .put("next_step","Inspect list_bots. The scene is compiled and saved; this does not establish Android playback acceptance. Do not recreate the bot.")
     companion object {
+        internal fun binding(session: String, id: String, revision: Int, request: String, description: String, source: String): String =
+            NativeActionPolicy.binding(session, id, revision.toString(), request,
+                digest(JSONArray(listOf(id, description, digest(source))).toString()))
         internal fun digest(value: String) = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(StandardCharsets.UTF_8))
             .joinToString("") { (it.toInt() and 255).toString(16).padStart(2,'0') }
     }

@@ -91,6 +91,8 @@ enum class ConnectorPresentationGroup { ON_DEVICE, SERVICES }
 interface ConnectorRuntime {
     fun connect(configuration: Map<String, String>, secrets: Map<String, String>)
     fun disconnect()
+    fun prepareRead(operation: String, arguments: JSONObject, token: CancellationToken): ConnectorWritePreparation =
+        ConnectorWritePreparation(ApprovalSummary(operation, listOf(arguments.toString().take(4096))), JSONObject(arguments.toString()))
     fun prepareWrite(operation: String, arguments: JSONObject, token: CancellationToken): ConnectorWritePreparation
     fun invokePrepared(operation: String, arguments: JSONObject, preparation: ConnectorWritePreparation,
                        token: CancellationToken): JSONObject = invoke(operation, arguments, token)
@@ -179,7 +181,10 @@ class ConnectorRegistry private constructor(
         configuredAutonomyPolicy(definition, operation)
 
     fun configuredAutonomyPolicy(definition: ConnectorDefinition, operation: ConnectorOperation): AutonomyPolicy =
-        autonomyStore.policy(definition.id, operation.name)
+        runCatching { autonomyStore.policy(definition.id, operation.name) }.getOrDefault(AutonomyPolicy.ASK)
+
+    fun configuredAutonomyOrigin(definition: ConnectorDefinition, operation: ConnectorOperation): ActionPolicyOrigin =
+        runCatching { autonomyStore.snapshot(definition.id, operation.name).origin }.getOrDefault(ActionPolicyOrigin.INVALID)
 
     /** Availability is independent from the saved decision; it never silently changes ALLOW to ASK. */
     fun autonomyPolicyUnavailableReason(definition: ConnectorDefinition, operation: ConnectorOperation): String? {
@@ -348,10 +353,7 @@ class ConnectorRegistry private constructor(
         var snapshot = autonomyStore.snapshot(current.id, selectedOperation.name)
         check(snapshot.policy != AutonomyPolicy.DENY) { "This action is denied by its saved policy" }
         val preparation = if (selectedOperation.write) runtime.prepareWrite(selectedOperation.name, executionArguments, token)
-            else ConnectorWritePreparation(ApprovalSummary(
-                title = selectedOperation.displayLabel,
-                lines = listOf(selectedOperation.description, executionArguments.toString().take(4096)),
-            ), executionArguments)
+            else runtime.prepareRead(selectedOperation.name, executionArguments, token)
         val preparedArguments = preparation.executionArguments.toString()
         var approvedAsk = false
         var alwaysDecision: ActionPolicySnapshot? = null
@@ -445,7 +447,7 @@ class ConnectorRegistry private constructor(
         else definition.writePermissions
 
     private fun autonomousActionSummary(result: JSONObject): String = when (result.optString("status")) {
-        "dialer_opened" -> "Dialer opened"
+        "dialer_launch_requested" -> "Dialer launch requested"
         "call_requested", "telecom_call_request_submitted" -> "Call requested"
         else -> "Completed automatically"
     }

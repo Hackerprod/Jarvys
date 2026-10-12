@@ -8,17 +8,18 @@ import com.jarvys.agent.BuildConfig
 import java.io.File
 
 /** Observable policies make duplicate dispatches visible without invoking a real connector. */
-internal class RecordingPermissionStore : ConnectorAutonomyStore {
-    private val delegate = InMemoryConnectorAutonomyStore()
+internal class RecordingPermissionStore(private val delegate: InMemoryConnectorAutonomyStore = InMemoryConnectorAutonomyStore()) : ConnectorAutonomyStore by delegate {
     val changes = mutableListOf<Triple<String, String, AutonomyPolicy>>()
-    override fun policy(connectorId: String, operationName: String) = delegate.policy(connectorId, operationName)
-    override fun setPolicy(connectorId: String, operationName: String, policy: AutonomyPolicy) {
+    override fun setPolicy(connectorId: String, operationName: String, policy: AutonomyPolicy) = setPolicyChecked(connectorId, operationName, policy)
+    override fun setPolicyChecked(connectorId: String, operationName: String, policy: AutonomyPolicy) {
+        delegate.setPolicyChecked(connectorId, operationName, policy)
         changes += Triple(connectorId, operationName, policy)
-        delegate.setPolicy(connectorId, operationName, policy)
     }
-    override fun clearPolicies(connectorId: String) = delegate.clearPolicies(connectorId)
-    override fun appendAudit(record: AutonomyAuditRecord) = delegate.appendAudit(record)
-    override fun recentAudit(connectorId: String, limit: Int) = delegate.recentAudit(connectorId, limit)
+    override fun setPolicyAndSnapshot(connectorId: String, operationName: String, policy: AutonomyPolicy): ActionPolicySnapshot {
+        val result = delegate.setPolicyAndSnapshot(connectorId, operationName, policy)
+        changes += Triple(connectorId, operationName, policy)
+        return result
+    }
 }
 
 internal class PermissionConnectionPreferences : ConnectorConnectionPreferences {

@@ -39,7 +39,7 @@ class TaskStore(private val ledger: File) {
     }
 
     /** Atomic name/instruction/schedule deduplication for chat confirmations racing across processes. */
-    fun createIfEquivalent(task: ScheduledTask): TaskCreateResult = withLock {
+    fun createIfEquivalent(task: ScheduledTask, beforeWrite: () -> Unit = {}): TaskCreateResult = withLock {
         ScheduledTaskValidation.validate(task)
         val current = readLatestLocked()
         val equivalent = current.rows.values.asSequence().filterNot(Snapshot::deleted).map(Snapshot::task)
@@ -47,31 +47,38 @@ class TaskStore(private val ledger: File) {
         if (equivalent != null) return@withLock TaskCreateResult(equivalent, false)
         if (current.rows.containsKey(task.id)) throw StaleTaskRevisionException("Task ${task.id} already exists")
         val initial = task.copy(revision = 1L)
+        beforeWrite()
         appendLocked(encode(initial, deleted = false))
         TaskCreateResult(initial, true)
     }
 
-    fun update(task: ScheduledTask, expectedRevision: Long): ScheduledTask = withLock {
+    fun update(task: ScheduledTask, expectedRevision: Long, beforeWrite: () -> Unit = {},
+               expectedTask: ScheduledTask? = null): ScheduledTask = withLock {
         val current = readLatestLocked().rows[task.id]
             ?: throw StaleTaskRevisionException("Task ${task.id} no longer exists")
         if (current.deleted || current.task.revision != expectedRevision) {
             throw StaleTaskRevisionException(
                 "Task ${task.id} revision changed: expected $expectedRevision, found ${current.task.revision}")
         }
+        check(expectedTask == null || current.task == expectedTask) { "Task content changed after preparation" }
         val updated = task.copy(revision = expectedRevision + 1L)
         ScheduledTaskValidation.validate(updated)
+        beforeWrite()
         appendLocked(encode(updated, deleted = false))
         updated
     }
 
-    fun delete(id: String, expectedRevision: Long, deletedAt: Long): ScheduledTask = withLock {
+    fun delete(id: String, expectedRevision: Long, deletedAt: Long, beforeWrite: () -> Unit = {},
+               expectedTask: ScheduledTask? = null): ScheduledTask = withLock {
         val current = readLatestLocked().rows[id]
             ?: throw StaleTaskRevisionException("Task $id no longer exists")
         if (current.deleted || current.task.revision != expectedRevision) {
             throw StaleTaskRevisionException(
                 "Task $id revision changed: expected $expectedRevision, found ${current.task.revision}")
         }
+        check(expectedTask == null || current.task == expectedTask) { "Task content changed after preparation" }
         val tombstone = current.task.copy(revision = expectedRevision + 1L, updatedAt = deletedAt)
+        beforeWrite()
         appendLocked(encode(tombstone, deleted = true))
         tombstone
     }

@@ -76,6 +76,7 @@ import com.jarvys.agent.mcp.McpServerRepository
 import com.jarvys.agent.mcp.McpToolAccess
 import com.jarvys.agent.mcp.McpToolDefinition
 import com.jarvys.agent.mcp.McpToolSecurity
+import com.jarvys.agent.mcp.inheritedActionPolicy
 import com.jarvys.agent.mcp.RemoteMcpDisconnectFlow
 import com.jarvys.agent.connectors.AutonomyPolicy
 import org.json.JSONObject
@@ -501,11 +502,13 @@ private fun RemoteMcpToolRow(
 ) {
     val context = LocalContext.current
     val access = McpToolSecurity.classify(service.id, tool.wireName, tool.annotations)
-    val definition = remember(server.id, tool.wireName, tool.annotations) {
+    val definition = remember(server, tool) {
         McpToolDefinition(server.id, server.alias, tool.wireName, tool.modelName, tool.description,
-            JSONObject(tool.inputSchemaJson), service.id, tool.annotations, access)
+            JSONObject(tool.inputSchemaJson), service.id, tool.annotations, access, server.inheritedActionPolicy())
     }
-    var policy by remember(server.id, tool.wireName) { mutableStateOf(connections.writeApproval.policy(definition)) }
+    var policySnapshot by remember(definition) { mutableStateOf(connections.writeApproval.snapshot(definition)) }
+    val policy = policySnapshot.policy
+    var showPolicyInfo by remember(server.id, tool.wireName) { mutableStateOf(true) }
     val label = remember(tool.wireName, tool.annotations?.title) {
         tool.annotations?.title?.let { McpToolSecurity.sanitizeRemoteText(it, 80) }?.takeIf(String::isNotBlank)
             ?: tool.wireName.replace(Regex("([a-z0-9])([A-Z])"), "$1 $2")
@@ -513,48 +516,42 @@ private fun RemoteMcpToolRow(
                     word.lowercase().replaceFirstChar { it.titlecase() }
                 }.take(80)
     }
-    val displayedPolicy = when {
-        !tool.enabled -> AutonomyPolicy.DENY
-        access == McpToolAccess.READ -> AutonomyPolicy.ALLOW
-        else -> policy
-    }
-    val selectedResource = when (displayedPolicy) {
+    val selectedResource = when (policy) {
         AutonomyPolicy.ASK -> R.string.remote_service_policy_ask
         AutonomyPolicy.ALLOW -> R.string.remote_service_policy_allow
         AutonomyPolicy.DENY -> R.string.remote_service_policy_deny
     }
-    val choices = if (access == McpToolAccess.READ) listOf(
-        ConnectorPolicyChoice(R.string.remote_service_policy_allow) {
-            runCatching { repository.updateToolEnabled(server.id, tool.wireName, true) }.onFailure { showToolLimit(context) }
-        },
-        ConnectorPolicyChoice(R.string.remote_service_policy_deny) {
-            runCatching { repository.updateToolEnabled(server.id, tool.wireName, false) }.onFailure { showToolLimit(context) }
-        },
-    ) else buildList {
-        add(ConnectorPolicyChoice(R.string.remote_service_policy_ask) {
+    val choices = listOf(
+        AutonomyPolicy.ASK to R.string.remote_service_policy_ask,
+        AutonomyPolicy.ALLOW to R.string.remote_service_policy_allow,
+        AutonomyPolicy.DENY to R.string.remote_service_policy_deny,
+    ).map { (choice, labelResource) ->
+        ConnectorPolicyChoice(labelResource) {
             runCatching {
-                connections.writeApproval.setPolicy(definition, AutonomyPolicy.ASK); policy = AutonomyPolicy.ASK
-                if (!tool.enabled) repository.updateToolEnabled(server.id, tool.wireName, true)
-            }
-        })
-        if (service.id != "github" && !McpToolSecurity.isDestructive(tool.wireName, tool.annotations)) add(ConnectorPolicyChoice(R.string.remote_service_policy_allow) {
-            runCatching {
-                connections.writeApproval.setPolicy(definition, AutonomyPolicy.ALLOW); policy = AutonomyPolicy.ALLOW
-                if (!tool.enabled) repository.updateToolEnabled(server.id, tool.wireName, true)
-            }.onFailure { Toast.makeText(context, R.string.remote_service_write_allow_error, Toast.LENGTH_LONG).show() }
-        })
-        add(ConnectorPolicyChoice(R.string.remote_service_policy_deny) {
-            runCatching {
-                connections.writeApproval.setPolicy(definition, AutonomyPolicy.DENY); policy = AutonomyPolicy.DENY
-                if (tool.enabled) repository.updateToolEnabled(server.id, tool.wireName, false)
-            }
-        })
+                connections.writeApproval.setPolicy(definition, choice)
+                policySnapshot = connections.writeApproval.snapshot(definition)
+            }.onFailure { Toast.makeText(context, R.string.ux44_mcp_policy_save_error, Toast.LENGTH_LONG).show() }
+        }
     }
-    ConnectorPermissionRow(modifier = Modifier.padding(vertical = 3.dp).testTag("remote-policy-${tool.wireName}-row"), content = {
-        Text(label, maxLines = 2, overflow = TextOverflow.Ellipsis,
-            fontSize = 14.sp, fontWeight = FontWeight.Medium)
-    }, permission = { ConnectorPolicySelector(selectedResource, choices,
-        modifier = Modifier.testTag("remote-policy-${tool.wireName}-control")) })
+    Column {
+        ConnectorPermissionRow(modifier = Modifier.padding(vertical = 3.dp).testTag("remote-policy-${tool.wireName}-row"), content = {
+            Text(label, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                fontSize = 14.sp, fontWeight = FontWeight.Medium)
+        }, permission = { ConnectorPolicySelector(selectedResource, choices, subjectKey = "${server.id}/${tool.wireName}",
+            modifier = Modifier.testTag("remote-policy-${tool.wireName}-control")) })
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text(stringResource(R.string.ux44_mcp_enabled), style = MaterialTheme.typography.bodySmall)
+            Switch(checked = tool.enabled, onCheckedChange = { enabled ->
+                runCatching { repository.updateToolEnabled(server.id, tool.wireName, enabled) }.onFailure { showToolLimit(context) }
+            }, modifier = Modifier.testTag("remote-exposure-${tool.wireName}-switch"))
+        }
+        val origin = policySnapshot.origin.toString()
+        if (showPolicyInfo && (origin.contains("LEGACY") || origin.contains("INVALID"))) {
+            Text(stringResource(if (origin.contains("INVALID")) R.string.ux44_mcp_invalid_policy else R.string.ux44_mcp_retained_policy),
+                style = MaterialTheme.typography.bodySmall)
+            TextButton(onClick = { showPolicyInfo = false }) { Text(stringResource(R.string.ux44_mcp_dismiss)) }
+        }
+    }
 }
 
 private fun showToolLimit(context: Context) {

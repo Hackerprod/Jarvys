@@ -69,6 +69,8 @@ class GoogleOAuthManager internal constructor(
 
     private fun changed() = synchronized(_stateRevision) { _stateRevision.value = revision.incrementAndGet() }
     override fun currentAuthorizationEpoch(): Long = session.currentEpoch()
+    override fun currentAccountIdentity(): String? = if (isIdentityMode()) identityAccountEmail()
+        else gmailVerifiedAccount?.takeIf { it.first == currentAuthorizationEpoch() }?.second
     fun isAuthorizationInProgress(): Boolean = session.hasInteractive()
     fun revocationState(): GoogleRevocationState = revokeState
     fun configuredClientId(): String = preferences.getString(CLIENT_ID, "").orEmpty()
@@ -214,7 +216,8 @@ class GoogleOAuthManager internal constructor(
         actual
     }
 
-    private fun proveGmailAccount(access: AuthorizedAccess, expected: String?, lease: GoogleAuthorizationSession.Lease): String {
+    private fun proveGmailAccount(access: AuthorizedAccess, expected: String?, lease: GoogleAuthorizationSession.Lease,
+                                  beforeDispatch: (() -> Unit)?): String {
         // Native identity is bound by the selected Account in AuthorizationClient. A null account is
         // never identity evidence: prove it with the exact token and pin the returned profile instead.
         if (access.owner == null && access.nativeAccount != null) {
@@ -225,7 +228,7 @@ class GoogleOAuthManager internal constructor(
             // AuthorizationResult may omit email. Prove an already-granted read token, then obtain
             // a fresh feature token with that explicit Account; never reuse the unbound token.
             val baseline = authorizedAccess(GoogleOAuthProtocol.GMAIL_READ, lease)
-            val account = proveGmailAccount(baseline, expected, lease)
+            val account = proveGmailAccount(baseline, expected, lease, beforeDispatch)
             val pinned = authorizeIdentity(access.scope, lease, allowResolution = false)
             access.token = pinned.accessToken
             access.nativeAccount = pinned.accountEmail?.takeIf(String::isNotBlank)
@@ -237,13 +240,15 @@ class GoogleOAuthManager internal constructor(
         val response = GoogleRequestExecutor(transport).execute(profileScope, "GET", GMAIL_PROFILE_ENDPOINT,
             null, "application/json", lease.token, GoogleApiLimits.MAX_RESPONSE_BYTES, emptyMap(),
             accessToken = { session.withCurrent(lease) { access.token } },
-            refresh = { refreshAccess(access, lease) }, repeatedUnauthorized = { clearAccess(access, lease) })
+            refresh = { refreshAccess(access, lease) }, repeatedUnauthorized = { clearAccess(access, lease) },
+            beforeDispatch = beforeDispatch)
         GoogleRestEndpoints.requireSuccess(GoogleHttpResponse(response.status, response.body.toString(Charsets.UTF_8), response.headers))
         val account = runCatching { JSONObject(response.body.toString(Charsets.UTF_8)).optString("emailAddress") }.getOrDefault("")
         return pinGmailAccount(account, expected, lease)
     }
 
-    override fun verifyGmailAccount(capability: String, expectedAccount: String?, token: CancellationToken, epoch: Long): String {
+    override fun verifyGmailAccount(capability: String, expectedAccount: String?, token: CancellationToken,
+                                    epoch: Long, beforeDispatch: (() -> Unit)?): String {
         validateScope(capability)
         require(capability in GMAIL_CAPABILITIES) { "Only Gmail accounts can be verified here" }
         token.throwIfCancelled()
@@ -255,7 +260,7 @@ class GoogleOAuthManager internal constructor(
             session.acquire(expectedEpoch = epoch)
         }
         val unlink = token.registerCancelAction { lease.token.cancel() }
-        return try { proveGmailAccount(authorizedAccess(capability, lease), expectedAccount, lease) }
+        return try { proveGmailAccount(authorizedAccess(capability, lease), expectedAccount, lease, beforeDispatch) }
         finally { unlink.run(); session.release(lease) }
     }
 
@@ -451,7 +456,7 @@ class GoogleOAuthManager internal constructor(
             val access = authorizedAccess(scope, lease)
             val gmailWrite = scope in GMAIL_CAPABILITIES && method != "GET"
             val expectedAccount = if (gmailWrite) try {
-                proveGmailAccount(access, gmailVerifiedAccount?.takeIf { it.first == lease.generation }?.second, lease)
+                proveGmailAccount(access, gmailVerifiedAccount?.takeIf { it.first == lease.generation }?.second, lease, beforeDispatch)
             } catch (error: Exception) {
                 // This marker is emitted only before the mutation executor is entered. A later
                 // refresh/proof failure is not marked pre-dispatch because an attempt already ran.
@@ -462,7 +467,13 @@ class GoogleOAuthManager internal constructor(
                 maxResponseBytes, requestHeaders, accessToken = { session.withCurrent(lease) { access.token } },
                 refresh = {
                     refreshAccess(access, lease)
-                    if (gmailWrite) proveGmailAccount(access, expectedAccount, lease)
+                    if (gmailWrite) try {
+                        proveGmailAccount(access, expectedAccount, lease, beforeDispatch)
+                    } catch (error: GooglePreDispatchAuthorizationException) {
+                        // The first mutation already reached transport. A denied proof retry must
+                        // not erase its journal reservation or imply that the whole write was unsent.
+                        throw IllegalStateException("Google authorization changed after a rejected write attempt; fresh review is required", error)
+                    }
                 }, repeatedUnauthorized = { clearAccess(access, lease) }, beforeDispatch = beforeDispatch).also { response ->
                     session.withCurrent(lease) { Unit }
                     // Management's explicit profile reads also pin its exact selected token's identity.

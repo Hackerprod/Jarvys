@@ -19,12 +19,13 @@ class CalendarConnectorTest {
         var queriedIds: List<Long>? = null
         var results = emptyList<CalendarEventRecord>()
         var inserted: CalendarEventDraft? = null
+        var insertCount = 0
         override fun calendars() = listed
         override fun instances(startTimeMs: Long, endTimeMs: Long, calendarIds: List<Long>?, limit: Int): List<CalendarEventRecord> {
             queriedStart = startTimeMs; queriedEnd = endTimeMs; queriedIds = calendarIds; queriedLimit = limit
             return results.take(limit)
         }
-        override fun insert(draft: CalendarEventDraft): Long { inserted = draft; return 712L }
+        override fun insert(draft: CalendarEventDraft): Long { insertCount++; inserted = draft; return 712L }
     }
 
     @Test fun searchDefaultsToSevenDaysAndCapsItemsAndTextAsUntrusted() {
@@ -133,7 +134,7 @@ class CalendarConnectorTest {
         assertEquals("No hay un calendario visible, sincronizado y escribible disponible", failure?.message)
     }
 
-    @Test fun registryRequiresApprovalAndWritePermissionBeforeInserting() {
+    @Test fun registryHonorsSavedAskAndRequiresWritePermissionBeforeInserting() {
         val gateway = FakeGateway().apply {
             listed = listOf(CalendarDescriptor(9, "Writable", true, true, 700))
         }
@@ -160,11 +161,13 @@ class CalendarConnectorTest {
             { it == Manifest.permission.READ_CALENDAR || (it == Manifest.permission.WRITE_CALENDAR && writeGranted) }, rejectedGate)
         registry.register(definition)
         registry.connect("calendar")
+        registry.setAutonomyPolicy(definition, operation, AutonomyPolicy.ASK)
         val arguments = JSONObject().put("title", "Review").put("startTimeMs", now + 10_000)
             .put("endTimeMs", now + 20_000)
         val rejection = runCatching { registry.invoke(definition, operation, arguments, token()) }.exceptionOrNull()
-        assertTrue(rejection?.message.orEmpty().startsWith("El usuario rechazó la acción; no la reintentes"))
+        assertTrue(rejection?.message.orEmpty().startsWith("The user denied this action; do not retry automatically"))
         assertEquals(null, gateway.inserted)
+        assertEquals(0, gateway.insertCount)
 
         var captured: ApprovalSummary? = null
         val approvedGate = gateResolving(ApprovalDecision.APPROVED) {
@@ -174,10 +177,12 @@ class CalendarConnectorTest {
         val allowedRegistry = ConnectorRegistry.createForTests(preferences,
             { it == Manifest.permission.READ_CALENDAR || (it == Manifest.permission.WRITE_CALENDAR && writeGranted) }, approvedGate)
         allowedRegistry.register(definition)
+        allowedRegistry.setAutonomyPolicy(definition, operation, AutonomyPolicy.ASK)
         val allowedResult = allowedRegistry.invoke(definition, operation, arguments, token())
         assertEquals(Manifest.permission.WRITE_CALENDAR, captured?.permission)
         assertEquals(9L, gateway.inserted?.calendarId)
         assertEquals(712L, allowedResult.getLong("eventId"))
+        assertEquals(1, gateway.insertCount)
     }
 
     @Test fun resultTotalSizeIsBoundedEvenForManyLargeFields() {

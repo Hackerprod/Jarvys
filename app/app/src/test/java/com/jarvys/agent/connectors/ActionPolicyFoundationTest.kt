@@ -44,6 +44,23 @@ class ActionPolicyFoundationTest {
         store.admit(snapshot)
     }
 
+    @Test fun catalogCoversEveryDeviceAndFactoryOperationWithoutCreatingSavedChoices() {
+        val catalog = ActionPolicyDefaults.registeredActions().associateBy { it.connectorId to it.operationName }
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val expected = ConnectorRegistry.deviceDefinitions(context).flatMap { definition ->
+            definition.operations.map { definition.id to it.name }
+        } + com.jarvys.agent.NativeActionPolicy.Operation.entries.map { "native" to it.id } +
+            com.jarvys.agent.apkfactory.FactoryOperationPolicy.Operation.entries.map { "factory" to it.id } +
+            listOf("linux" to "linux_exec", "linux" to "linux_setup", "linux" to "linux_uninstall", "coding" to "project_exec")
+        expected.forEach { key ->
+            val descriptor = catalog[key]
+            assertNotNull("Missing policy catalog entry: $key", descriptor)
+            assertEquals(AutonomyPolicy.ALLOW, descriptor!!.defaultPolicy)
+            assertTrue(descriptor.availabilityIsIndependent)
+        }
+        assertTrue(preferences.all.isEmpty())
+    }
+
     @Test fun legacyValidValuesArePreservedWithIdempotentUnknownProvenance() {
         for (choice in AutonomyPolicy.entries) {
             check(preferences.edit().clear().putString(key, choice.name).commit())

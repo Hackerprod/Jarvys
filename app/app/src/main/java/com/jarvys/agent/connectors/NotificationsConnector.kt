@@ -36,9 +36,9 @@ class NotificationsConnector(
         token.throwIfCancelled()
         return when (operation) {
             LIST_RECENT -> listRecent(arguments, token)
-            DISMISS -> error("Notification actions must pass through the connector approval gate")
-            OPEN -> error("Notification actions must pass through the connector approval gate")
-            REPLY -> error("Notification actions must pass through the connector approval gate")
+            DISMISS -> error("Notification actions must pass through the connector action-policy gate")
+            OPEN -> error("Notification actions must pass through the connector action-policy gate")
+            REPLY -> error("Notification actions must pass through the connector action-policy gate")
             else -> error("Unknown notification operation: $operation")
         }
     }
@@ -197,7 +197,7 @@ class NotificationsConnector(
                     ConnectorOperation(
                         name = DISMISS,
                         displayLabel = "Dismiss Notification",
-                        description = "After approval, dismiss one currently active notification by its key.",
+                        description = "Under the configured action policy, dismiss one currently active notification by its key.",
                         inputSchema = keySchema(),
                         write = true,
                         displayLabelResourceId = R.string.connector_operation_notifications_dismiss,
@@ -206,7 +206,7 @@ class NotificationsConnector(
                     ConnectorOperation(
                         name = OPEN,
                         displayLabel = "Open Notification",
-                        description = "After approval, open one notification's contentIntent in its originating app.",
+                        description = "Under the configured action policy, request one notification's contentIntent in its originating app.",
                         inputSchema = keySchema(),
                         write = true,
                         displayLabelResourceId = R.string.connector_operation_notifications_open,
@@ -215,7 +215,7 @@ class NotificationsConnector(
                     ConnectorOperation(
                         name = REPLY,
                         displayLabel = "Reply to Notification",
-                        description = "After approval, send replyText through the notification's RemoteInput action. Only notifications offering text reply are supported.",
+                        description = "Under the configured action policy, send replyText through the notification's RemoteInput action. Only notifications offering text reply are supported.",
                         inputSchema = replySchema(),
                         write = true,
                         limits = mapOf("replyTextChars" to MAX_REPLY_CHARS),

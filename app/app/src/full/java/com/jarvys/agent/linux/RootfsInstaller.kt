@@ -131,62 +131,71 @@ class RootfsInstaller(
     }
 
     fun install(token: CancellationToken, onProgress: (LinuxInstallState) -> Unit = {},
-                retainArchiveForProbe: Boolean = false): LinuxInstallState = synchronized(lock) {
+                retainArchiveForProbe: Boolean = false, beforeEffect: () -> Unit = {}): LinuxInstallState = synchronized(lock) {
+        // Admission happens after the installer lock wait. Once a phase starts, its cleanup and
+        // failure bookkeeping may finish; a later revocation does not roll that phase back.
+        fun admit() { token.throwIfCancelled(); beforeEffect(); token.throwIfCancelled() }
+        admit() // A rejected initial action must not create directories or publish failure state.
         var phase = LinuxInstallPhase.DOWNLOADING
         try {
             paths.linuxDir.mkdirs()
             paths.workspace.mkdirs()
             publish(LinuxInstallState(LinuxInstallPhase.DOWNLOADING,
                 bytes = paths.archivePart.takeIf(File::isFile)?.length() ?: 0L,
-                total = release.downloadBytes), onProgress)
+                total = release.downloadBytes), onProgress, ::admit)
+            admit()
             recoverPart()
             val offset = paths.archivePart.takeIf(File::isFile)?.length() ?: 0L
             val required = (release.downloadBytes - offset).coerceAtLeast(0) + release.extractedBytes
             if (availableBytes(paths.linuxDir) < required) throw InstallFailure("insufficient_space", "Not enough free space")
-            if (paths.archivePart.length() != release.downloadBytes) download(token, onProgress)
+            if (paths.archivePart.length() != release.downloadBytes) download(token, onProgress, ::admit)
             token.throwIfCancelled()
             phase = LinuxInstallPhase.VERIFYING
-            publish(LinuxInstallState(LinuxInstallPhase.VERIFYING, release.downloadBytes, release.downloadBytes), onProgress)
+            publish(LinuxInstallState(LinuxInstallPhase.VERIFYING, release.downloadBytes, release.downloadBytes), onProgress, ::admit)
             val actualHash = sha256(paths.archivePart)
             if (!actualHash.equals(release.sha256, ignoreCase = true)) {
                 paths.archivePart.delete()
                 throw InstallFailure("checksum_mismatch", "Rootfs SHA-256 mismatch")
             }
+            admit()
             deleteTree(paths.staging)
             phase = LinuxInstallPhase.EXTRACTING
             publish(LinuxInstallState(LinuxInstallPhase.EXTRACTING, release.downloadBytes,
-                release.downloadBytes), onProgress)
+                release.downloadBytes), onProgress, ::admit)
             if (!paths.staging.mkdirs()) throw IOException("Cannot create rootfs staging directory")
             var lastProgressAt = 0L
             val extraction = GZIPInputStream(BufferedInputStream(FileInputStream(paths.archivePart))).use { gzip ->
                 extractor.extract(gzip, paths.staging) { progress ->
-                    token.throwIfCancelled()
+                    admit()
                     current = current.copy(extractedEntries = progress.entries, lastEntrySeen = progress.path)
                     val now = android.os.SystemClock.elapsedRealtime()
                     if (lastProgressAt == 0L || now - lastProgressAt >= EXTRACTION_PROGRESS_INTERVAL_MS) {
-                        publish(current, onProgress)
+                        publish(current, onProgress, ::admit)
                         lastProgressAt = now
                     }
                 }
             }
             publish(current.copy(extractedEntries = extraction.entries, skippedEntries = extraction.skippedEntries,
-                degradedEntries = extraction.degradedEntries, hardlinksCopied = extraction.hardlinksCopied), onProgress)
+                degradedEntries = extraction.degradedEntries, hardlinksCopied = extraction.hardlinksCopied), onProgress, ::admit)
             token.throwIfCancelled()
             phase = LinuxInstallPhase.PATCHING
-            publish(current.copy(phase = LinuxInstallPhase.PATCHING), onProgress)
+            publish(current.copy(phase = LinuxInstallPhase.PATCHING), onProgress, ::admit)
+            admit()
             patcher.patch(paths.staging, release.arch)
             val inspection = RootfsInspector.inspect(paths.staging, release.arch)
             token.throwIfCancelled()
+            admit()
             replaceRootfs()
             val installedSize = treeSize(paths.rootfs)
+            admit()
             publish(LinuxInstallState(LinuxInstallPhase.READY, release.downloadBytes,
                 release.downloadBytes, extractedEntries = extraction.entries,
                 lastEntrySeen = current.lastEntrySeen, skippedEntries = extraction.skippedEntries,
                 degradedEntries = extraction.degradedEntries, hardlinksCopied = extraction.hardlinksCopied,
                 version = release.version, distro = inspection.distro, versionId = inspection.versionId,
                 codename = inspection.codename, arch = release.arch,
-                installedAt = System.currentTimeMillis(), sizeBytes = installedSize), onProgress)
-            if (!retainArchiveForProbe) paths.archivePart.delete()
+                installedAt = System.currentTimeMillis(), sizeBytes = installedSize), onProgress, ::admit)
+            if (!retainArchiveForProbe) { admit(); paths.archivePart.delete() }
             current
         } catch (failure: Throwable) {
             deleteTree(paths.staging)
@@ -224,13 +233,13 @@ class RootfsInstaller(
         }
     }
 
-    fun uninstall() = synchronized(lock) {
-        deleteTree(paths.rootfs)
-        deleteTree(paths.staging)
-        deleteTree(paths.previous)
-        paths.archivePart.delete()
-        // Workspace is user data: explicit removal is a separate future operation.
-        publish(LinuxInstallState())
+    fun uninstall(beforeEffect: () -> Unit = {}) = synchronized(lock) {
+        beforeEffect(); deleteTree(paths.rootfs)
+        beforeEffect(); deleteTree(paths.staging)
+        beforeEffect(); deleteTree(paths.previous)
+        beforeEffect(); paths.archivePart.delete()
+        // Workspace is user data: its explicit removal remains a separate admitted phase.
+        beforeEffect(); publish(LinuxInstallState())
     }
 
     fun availableBytes(): Long {
@@ -238,30 +247,35 @@ class RootfsInstaller(
         return availableBytes(paths.linuxDir)
     }
 
-    fun markProbeFailure(code: String, detail: String) = synchronized(lock) {
+    fun markProbeFailure(code: String, detail: String, beforeEffect: () -> Unit = {}) = synchronized(lock) {
         if (!paths.rootfs.isDirectory) return@synchronized
+        beforeEffect()
         publish(current.copy(phase = LinuxInstallPhase.FAILED, failureCode = "probe_${code.ifBlank { "failed" }}",
             failureDetail = failureSanitizer(detail)))
     }
 
-    fun markProbeSuccess() = synchronized(lock) {
+    fun markProbeSuccess(beforeEffect: () -> Unit = {}) = synchronized(lock) {
         if (!paths.rootfs.isDirectory) return@synchronized
+        beforeEffect()
         val ready = current.copy(phase = LinuxInstallPhase.READY, failureCode = "", failureDetail = "",
             version = release.version, arch = release.arch,
             sizeBytes = current.sizeBytes.takeIf { it > 0 } ?: treeSize(paths.rootfs))
-        publish(ready)
-        paths.archivePart.delete()
+        beforeEffect(); publish(ready)
+        beforeEffect(); paths.archivePart.delete()
     }
 
-    fun deleteWorkspace() = synchronized(lock) { deleteTree(paths.workspace) }
+    fun deleteWorkspace(beforeEffect: () -> Unit = {}) = synchronized(lock) { beforeEffect(); deleteTree(paths.workspace) }
 
-    private fun download(token: CancellationToken, onProgress: (LinuxInstallState) -> Unit) {
+    private fun download(token: CancellationToken, onProgress: (LinuxInstallState) -> Unit, beforeEffect: () -> Unit) {
         var offset = paths.archivePart.takeIf(File::isFile)?.length() ?: 0L
+        beforeEffect()
         var session = transport.open(release.url, offset)
         if (offset > 0 && (session.statusCode != 206 || session.rangeStart != offset)) {
             session.close()
+            beforeEffect()
             paths.archivePart.delete()
             offset = 0
+            beforeEffect()
             session = transport.open(release.url, 0)
         }
         if (session.statusCode != if (offset > 0) 206 else 200) {
@@ -271,6 +285,7 @@ class RootfsInstaller(
         val active = session
         val unregister = token.registerCancelAction { active.close() }
         try {
+            beforeEffect()
             FileOutputStream(paths.archivePart, offset > 0).use { output ->
                 active.input.use { input ->
                     val buffer = ByteArray(64 * 1024)
@@ -280,9 +295,10 @@ class RootfsInstaller(
                         val count = input.read(buffer)
                         if (count < 0) break
                         if (count == 0) continue
+                        beforeEffect()
                         output.write(buffer, 0, count)
                         bytes += count
-                        publish(LinuxInstallState(LinuxInstallPhase.DOWNLOADING, bytes, release.downloadBytes), onProgress)
+                        publish(LinuxInstallState(LinuxInstallPhase.DOWNLOADING, bytes, release.downloadBytes), onProgress, beforeEffect)
                     }
                     output.fd.sync()
                 }
@@ -313,7 +329,8 @@ class RootfsInstaller(
         deleteTree(paths.previous)
     }
 
-    private fun publish(state: LinuxInstallState, callback: (LinuxInstallState) -> Unit = {}) {
+    private fun publish(state: LinuxInstallState, callback: (LinuxInstallState) -> Unit = {}, beforeEffect: () -> Unit = {}) {
+        beforeEffect()
         current = state
         val props = Properties().apply {
             setProperty("phase", state.phase.name); setProperty("bytes", state.bytes.toString())

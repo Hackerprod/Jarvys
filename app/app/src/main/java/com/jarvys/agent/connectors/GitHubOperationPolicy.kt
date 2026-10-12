@@ -116,11 +116,16 @@ internal object GitHubOperationPolicy {
 
     /** All target fields remain visible; content previews explicitly state any truncation and digest. */
     fun approvalLines(name: String, args: JSONObject): List<String> = buildList {
-        add("Repository: ${target(args)}")
+        val repositoryTarget = args.has("owner") && args.has("repo")
+        if (repositoryTarget) add("Repository: ${target(args)}")
+        else {
+            require(name in readNames) { "GitHub writes require an exact repository" }
+            add("Account: the connected GitHub account")
+        }
         add("Operation: $name${args.optString("method").takeIf(String::isNotBlank)?.let { " / $it" }.orEmpty()}")
         if (highImpact(name, args)) add("High-impact action: review deletion, workflow, merge, or history consequences.")
         val keys = args.keys().asSequence().toList().sorted()
-        keys.filter { it !in setOf("owner", "repo", "method") }.forEach { key ->
+        keys.filter { it != "method" && (!repositoryTarget || it !in setOf("owner", "repo")) }.forEach { key ->
             val value = args.opt(key)
             when {
                 Regex("token|secret|password|authorization|credential|api[_-]?key", RegexOption.IGNORE_CASE).containsMatchIn(key) -> add("$key: [redacted]")

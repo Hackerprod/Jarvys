@@ -65,7 +65,7 @@ class BotCreationToolTest {
         "capabilities" to listOf("board_read"), "skill_ids" to emptyList<String>(), "workspace_mode" to "legacy_chat",
         "icon_prompt" to "An origami owl inspecting a cobalt circuit, no lettering",
     )
-    private fun tool(repo: CrewProfileRepository = repository, sessionId: String = session): BotCreationTool {
+    private fun tool(repo: CrewProfileRepository = repository, sessionId: String = session, policy: NativeActionPolicy = NativeActionPolicy.inMemory(com.jarvys.agent.connectors.AutonomyPolicy.ASK)): BotCreationTool {
         val client = CodexImageGenerationClient(settings, { request, _, token ->
             imageCount++
             assertEquals(1, request.getJSONArray("input").length())
@@ -77,7 +77,29 @@ class BotCreationToolTest {
         val imageService = BotIconService(context, sessionId, settings, secrets, repo, icons, client)
         return BotCreationTool(BotCreationService(repo, sessionId, { caps }, { availableSkills }, { summary, token ->
             approvalCount++; summaries += summary; approvalEffect?.invoke(token); approved
-        }, { available }, imageService::generateAndAssign))
+        }, { available }, { id, revision, prompt, token, authorization ->
+            imageService.generateAndAssign(id, revision, prompt, token, { authorization.admit { token.throwIfCancelled() } })
+        }, nativePolicy = policy))
+    }
+
+    @Test fun allowDefaultCreatesWithoutReviewAndDenyHasNoSaveOrImageEffect() {
+        available = false
+        assertTrue(tool(policy = NativeActionPolicy.inMemory()).execute(arguments("allow-new"), CancellationToken.uncancellable()).success)
+        assertEquals(0, approvalCount)
+        val count = repository.definitions().size
+        assertFalse(tool(policy = NativeActionPolicy.inMemory(com.jarvys.agent.connectors.AutonomyPolicy.DENY))
+            .execute(arguments("deny-new"), CancellationToken.uncancellable()).success)
+        assertEquals(count, repository.definitions().size); assertEquals(0, imageCount)
+    }
+    @Test fun revocationAfterProviderDispatchKeepsSavedBotButStopsIconPublication() {
+        val policy = NativeActionPolicy.inMemory()
+        imageEffect = { policy.set(NativeActionPolicy.Operation.BOT_CREATE, com.jarvys.agent.connectors.AutonomyPolicy.DENY) }
+        val result = tool(policy = policy).execute(arguments("revoke-icon"), CancellationToken.uncancellable())
+        assertTrue(result.content, result.success)
+        val value = JSONObject(result.content)
+        assertTrue(value.getBoolean("saved")); assertFalse(value.getBoolean("icon_complete"))
+        assertEquals(1, imageCount); assertEquals(0, approvalCount)
+        assertEquals(1, repository.definitions().count { !it.builtIn })
     }
 
     @Test fun scriptedMainLoopCreatesFullBotPersistsAndFindsItNextTurnAfterRestart() {

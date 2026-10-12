@@ -354,6 +354,7 @@ internal fun GoogleServiceCard(
                             ConnectorPolicyChoice(R.string.connector_policy_deny) { disconnectScopes(scope) },
                         ) else listOf(ConnectorPolicyChoice(R.string.connector_add_permission) { authorizeScope(scope) })
                         ConnectorPolicySelector(
+                            subjectKey = "google-scope/$scope",
                             modifier = Modifier.testTag("google-scope-${googleScopeName(scope)}-control")
                                 .semantics { contentDescription = fullLabel },
                             selectedLabelResource = if (granted) R.string.connector_policy_allow else R.string.connector_add_permission,
@@ -384,19 +385,26 @@ internal fun GoogleServiceCard(
             val actions = definition?.operations.orEmpty()
             if (definition != null && actions.isNotEmpty()) ConnectorDetailSection(stringResource(R.string.connector_section_tools)) {
                 actions.forEach { operation ->
-                    val configured = remember(registry, definition, operation, autonomyRevision) {
+                    var policyRefresh by remember(operation.name) { mutableStateOf(0L) }
+                    var policyError by remember(operation.name) { mutableStateOf<String?>(null) }
+                    val configured = remember(registry, definition, operation, autonomyRevision, policyRefresh) {
                         registry.configuredAutonomyPolicy(definition, operation)
                     }
                     val requiredScope = if (connectorId == GmailConnector.ID) GmailConnector.requiredScope(operation.name)
                         else DriveConnector.requiredScope(operation.name)
                     val scopeAvailable = requiredScope != null && manager.isScopeGranted(requiredScope)
-                    val choices = buildList {
-                        add(ConnectorPolicyChoice(R.string.connector_policy_ask) { registry.setAutonomyPolicy(definition, operation, AutonomyPolicy.ASK) })
-                        add(ConnectorPolicyChoice(R.string.connector_policy_allow) {
-                            registry.setAutonomyPolicy(definition, operation, AutonomyPolicy.ALLOW)
-                        })
-                        add(ConnectorPolicyChoice(R.string.connector_policy_deny) { registry.setAutonomyPolicy(definition, operation, AutonomyPolicy.DENY) })
+                    val setPolicy: (AutonomyPolicy) -> Unit = { choice ->
+                        policyError = runCatching { registry.setAutonomyPolicy(definition, operation, choice) }
+                            .exceptionOrNull()?.let { it.message?.takeIf(String::isNotBlank)
+                                ?: context.getString(R.string.connector_allow_failed) }
+                        // Even a failed durable write can change or invalidate persisted state.
+                        policyRefresh++
                     }
+                    val choices = listOf(
+                        ConnectorPolicyChoice(R.string.connector_policy_ask) { setPolicy(AutonomyPolicy.ASK) },
+                        ConnectorPolicyChoice(R.string.connector_policy_allow) { setPolicy(AutonomyPolicy.ALLOW) },
+                        ConnectorPolicyChoice(R.string.connector_policy_deny) { setPolicy(AutonomyPolicy.DENY) },
+                    )
                     val fullLabel = if (operation.displayLabelResourceId != 0) context.getString(operation.displayLabelResourceId)
                         else operation.displayLabel
                     GooglePermissionRow(tagPrefix = "google-policy-${operation.name}", content = {
@@ -406,9 +414,11 @@ internal fun GoogleServiceCard(
                             AutonomyPolicy.ASK -> R.string.connector_policy_ask
                             AutonomyPolicy.ALLOW -> R.string.connector_policy_allow
                             AutonomyPolicy.DENY -> R.string.connector_policy_deny
-                        }, choices, modifier = Modifier.testTag("google-policy-${operation.name}-control")
+                        }, choices, subjectKey = "$connectorId/${operation.name}", origin = registry.configuredAutonomyOrigin(definition, operation), modifier = Modifier.testTag("google-policy-${operation.name}-control")
                             .semantics { contentDescription = fullLabel })
                     })
+                    policyError?.let { error -> Text(error, color = MaterialTheme.colorScheme.error,
+                        fontSize = 12.sp, modifier = Modifier.fillMaxWidth().testTag("google-policy-${operation.name}-error")) }
                     // Keep explanatory text full-width. In the narrow label column it can make a
                     // single 2x-text row taller than the viewport and clip the centered selector.
                     if (!scopeAvailable) Text(stringResource(R.string.full_google_operation_scope_unavailable),

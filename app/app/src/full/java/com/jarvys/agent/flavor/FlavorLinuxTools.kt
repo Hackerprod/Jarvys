@@ -83,7 +83,7 @@ object FlavorLinuxTools {
         return listOf(
             LinuxStatusTool(localized, sessionId, runtime, redactor, ::available),
             LinuxSetupTool(localized, sessionId, runtime, decisionGate, decisionPresenter,
-                decisionAvailability, redactor, ::available),
+                decisionAvailability, redactor, ::available, autonomy),
             LinuxExecTool(localized, sessionId, runtime, approvalGate, redactor, budget, ::available, autonomy),
             LinuxUninstallTool(localized, sessionId, runtime, decisionGate, decisionPresenter,
                 decisionAvailability, redactor, ::available, autonomy),
@@ -161,7 +161,7 @@ object FlavorLinuxTools {
         validateProfileResume(selectedNames, LinuxExecAutonomy.get(context.applicationContext))
 
     internal fun validateProfileResume(selectedNames: List<String>, autonomy: LinuxExecAutonomy) {
-        if (CodingExecutionTools.EXEC in selectedNames) check(autonomy.policy() != AutonomyPolicy.DENY) {
+        if (CodingExecutionTools.EXEC in selectedNames) check(autonomy.projectPolicy() != AutonomyPolicy.DENY) {
             "Project execution is denied by the current command policy; resume did not start"
         }
     }

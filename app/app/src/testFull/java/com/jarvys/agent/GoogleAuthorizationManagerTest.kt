@@ -613,6 +613,215 @@ class GoogleAuthorizationManagerTest {
         assertTrue(runCatching { unsupported.verifyGmailAccount(scope, null, CancellationToken.uncancellable(), 0) }.isFailure)
     }
 
+    @Test fun scopedProofAdmissionRejectsRevocationDuringRecursiveCredentialWait() {
+        val credentialStarted = CountDownLatch(1)
+        val releaseCredential = CountDownLatch(1)
+        val allowed = java.util.concurrent.atomic.AtomicBoolean(true)
+        val admissions = java.util.concurrent.atomic.AtomicInteger()
+        val failure = java.util.concurrent.atomic.AtomicReference<Throwable?>()
+        var profileReads = 0
+        val identity = Identity().apply {
+            email = null
+            beforeGrant = {
+                if (authorizeCalls == 2) {
+                    credentialStarted.countDown()
+                    check(releaseCredential.await(2, TimeUnit.SECONDS)) { "Fake credential wait timed out" }
+                }
+            }
+        }
+        val manager = GoogleOAuthManager(app, GoogleHttpTransport { method, url, _, _ ->
+            assertEquals("GET", method)
+            assertTrue(url.endsWith("/profile"))
+            profileReads++
+            GoogleHttpResponse(200, """{"emailAddress":"owner@example.test"}""")
+        }, identity)
+        seedScopes(scope, GoogleOAuthProtocol.GMAIL_SEND)
+        app.getSharedPreferences("jarvys_full_oauth_config", Context.MODE_PRIVATE).edit()
+            .remove("google_identity_account_email").commit()
+        val epoch = manager.currentAuthorizationEpoch()
+        val wrapped = GoogleDispatchAuthorization(manager)
+        val worker = Thread {
+            failure.set(runCatching {
+                wrapped.withAdmission({ admissions.incrementAndGet(); check(allowed.get()) { "Action policy revoked" } }) {
+                    wrapped.verifyGmailAccount(GoogleOAuthProtocol.GMAIL_SEND, null,
+                        CancellationToken.cancellable(), epoch)
+                }
+            }.exceptionOrNull())
+        }.apply { start() }
+        try {
+            assertTrue(credentialStarted.await(2, TimeUnit.SECONDS))
+            allowed.set(false)
+        } finally {
+            releaseCredential.countDown()
+            worker.join(2_000)
+        }
+        assertFalse(worker.isAlive)
+        assertTrue(failure.get() is GooglePreDispatchAuthorizationException)
+        assertEquals(1, admissions.get())
+        assertEquals(0, profileReads)
+        assertEquals(listOf(setOf(GoogleOAuthProtocol.GMAIL_SEND), setOf(scope)), identity.requestedScopes)
+        assertEquals(epoch, manager.currentAuthorizationEpoch())
+        assertEquals(setOf(scope, GoogleOAuthProtocol.GMAIL_SEND), manager.grantedScopes())
+        assertEquals(false, identity.allowsResolution)
+
+        // A separate preparation preflight has no action hook. A failed invocation's lexical
+        // callback must not leak onto the next call on the same thread.
+        identity.beforeGrant = {}
+        assertTrue(runCatching {
+            wrapped.withAdmission({ error("Scoped fixture failure") }) {
+                wrapped.verifyGmailAccount(scope, null, CancellationToken.cancellable(), epoch)
+            }
+        }.exceptionOrNull() is GooglePreDispatchAuthorizationException)
+        assertEquals("owner@example.test", wrapped.verifyGmailAccount(scope, null,
+            CancellationToken.cancellable(), epoch))
+        assertEquals(1, profileReads)
+    }
+
+    @Test fun profileProofRetryRequiresFreshAdmissionAfter401AndTransientFailure() {
+        for (status in listOf(401, 503)) {
+            var allowed = true
+            var admissions = 0
+            var profileReads = 0
+            var refreshes = 0
+            val manager = GoogleOAuthManager(app, GoogleHttpTransport { method, url, _, _ ->
+                if (url == GoogleOAuthProtocol.TOKEN_ENDPOINT) {
+                    refreshes++
+                    allowed = false
+                    GoogleHttpResponse(200, """{"access_token":"fake-refreshed-access","expires_in":3600}""")
+                } else {
+                    assertEquals("GET", method)
+                    assertTrue(url.endsWith("/profile"))
+                    profileReads++
+                    if (status == 503) allowed = false
+                    GoogleHttpResponse(status, "{}")
+                }
+            }, Identity())
+            seedLegacy(manager, "gmail_read", setOf(scope))
+            val wrapped = GoogleDispatchAuthorization(manager)
+            val failure = runCatching {
+                wrapped.withAdmission({ admissions++; check(allowed) { "Action policy revoked before proof retry" } }) {
+                    wrapped.verifyGmailAccount(scope, null, CancellationToken.cancellable(), manager.currentAuthorizationEpoch())
+                }
+            }.exceptionOrNull()
+            assertTrue("status=$status", failure is GooglePreDispatchAuthorizationException)
+            assertEquals(2, admissions)
+            assertEquals(1, profileReads)
+            assertEquals(if (status == 401) 1 else 0, refreshes)
+        }
+    }
+
+    @Test fun requestBytesProofChecksActionAfterExpiredCredentialRefreshBeforeAnyProfileOrMutation() {
+        var allowed = true
+        var admissions = 0
+        var refreshes = 0
+        var apiCalls = 0
+        val manager = GoogleOAuthManager(app, GoogleHttpTransport { _, url, _, _ ->
+            if (url == GoogleOAuthProtocol.TOKEN_ENDPOINT) {
+                refreshes++
+                allowed = false
+                GoogleHttpResponse(200, """{"access_token":"fake-refreshed-access","expires_in":3600}""")
+            } else {
+                apiCalls++
+                GoogleHttpResponse(200, """{"emailAddress":"owner@example.test"}""")
+            }
+        }, Identity())
+        seedLegacy(manager, "gmail_compose", setOf(GoogleOAuthProtocol.GMAIL_COMPOSE), 0)
+        val wrapped = GoogleDispatchAuthorization(manager)
+        val failure = runCatching {
+            wrapped.withAdmission({ admissions++; check(allowed) { "Action policy revoked during token wait" } }) {
+                wrapped.requestBytes(GoogleOAuthProtocol.GMAIL_COMPOSE, "POST",
+                    "https://gmail.googleapis.com/gmail/v1/users/me/drafts", "{}".toByteArray(),
+                    token = CancellationToken.cancellable(), expectedAuthorizationEpoch = manager.currentAuthorizationEpoch())
+            }
+        }.exceptionOrNull()
+        assertTrue(failure is GooglePreDispatchAuthorizationException)
+        assertEquals(1, refreshes)
+        assertEquals(1, admissions)
+        assertEquals(0, apiCalls)
+    }
+
+    @Test fun deniedProfileProofAfterMutation401PreservesConservativeJournalClassification() {
+        var allowed = true
+        var admissions = 0
+        var profileReads = 0
+        var mutations = 0
+        var refreshes = 0
+        val manager = GoogleOAuthManager(app, GoogleHttpTransport { method, url, _, _ ->
+            when {
+                url == GoogleOAuthProtocol.TOKEN_ENDPOINT -> {
+                    refreshes++
+                    allowed = false
+                    GoogleHttpResponse(200, """{"access_token":"fake-refreshed-access","expires_in":3600}""")
+                }
+                url.endsWith("/profile") -> {
+                    assertEquals("GET", method)
+                    profileReads++
+                    GoogleHttpResponse(200, """{"emailAddress":"owner@example.test"}""")
+                }
+                else -> { assertEquals("POST", method); mutations++; GoogleHttpResponse(401, "{}") }
+            }
+        }, Identity())
+        seedLegacy(manager, "gmail_compose", setOf(GoogleOAuthProtocol.GMAIL_COMPOSE))
+        val wrapped = GoogleDispatchAuthorization(manager)
+        val failure = runCatching {
+            wrapped.withAdmission({ admissions++; check(allowed) { "Action policy revoked during refresh" } }) {
+                wrapped.requestCancellable(GoogleOAuthProtocol.GMAIL_COMPOSE, "POST",
+                    "https://gmail.googleapis.com/gmail/v1/users/me/drafts", "{}",
+                    token = CancellationToken.cancellable(), expectedAuthorizationEpoch = manager.currentAuthorizationEpoch())
+            }
+        }.exceptionOrNull()
+        assertNotNull(failure)
+        assertFalse(failure is GooglePreDispatchAuthorizationException)
+        assertTrue(failure!!.cause is GooglePreDispatchAuthorizationException)
+        assertEquals(3, admissions)
+        assertEquals(1, profileReads)
+        assertEquals(1, mutations)
+        assertEquals(1, refreshes)
+    }
+
+    @Test fun bothLexicalAndExplicitAdmissionReachEveryProofAndMutationAfter401() {
+        var lexicalAdmissions = 0
+        var explicitAdmissions = 0
+        var lastApiAdmission = 0
+        var profileReads = 0
+        var mutations = 0
+        var refreshes = 0
+        val manager = GoogleOAuthManager(app, GoogleHttpTransport { method, url, _, _ ->
+            if (url == GoogleOAuthProtocol.TOKEN_ENDPOINT) {
+                refreshes++
+                GoogleHttpResponse(200, """{"access_token":"fake-refreshed-access","expires_in":3600}""")
+            } else {
+                assertEquals(lastApiAdmission + 1, lexicalAdmissions)
+                assertEquals(lexicalAdmissions, explicitAdmissions)
+                lastApiAdmission = lexicalAdmissions
+                if (url.endsWith("/profile")) {
+                    assertEquals("GET", method)
+                    profileReads++
+                    GoogleHttpResponse(200, """{"emailAddress":"owner@example.test"}""")
+                } else {
+                    assertEquals("POST", method)
+                    mutations++
+                    GoogleHttpResponse(if (mutations == 1) 401 else 200, "{}")
+                }
+            }
+        }, Identity())
+        seedLegacy(manager, "gmail_compose", setOf(GoogleOAuthProtocol.GMAIL_COMPOSE))
+        val wrapped = GoogleDispatchAuthorization(manager)
+        wrapped.withAdmission({ lexicalAdmissions++ }) {
+            wrapped.verifyGmailAccount(GoogleOAuthProtocol.GMAIL_COMPOSE, null, CancellationToken.cancellable(),
+                manager.currentAuthorizationEpoch(), beforeDispatch = { explicitAdmissions++ })
+            wrapped.requestBytes(GoogleOAuthProtocol.GMAIL_COMPOSE, "POST",
+                "https://gmail.googleapis.com/gmail/v1/users/me/drafts", "{}".toByteArray(),
+                token = CancellationToken.cancellable(), expectedAuthorizationEpoch = manager.currentAuthorizationEpoch(),
+                beforeDispatch = { explicitAdmissions++ })
+        }
+        assertEquals(5, lexicalAdmissions)
+        assertEquals(5, explicitAdmissions)
+        assertEquals(3, profileReads)
+        assertEquals(2, mutations)
+        assertEquals(1, refreshes)
+    }
+
     @Test fun legacyReadAndComposeTokensForDifferentAccountsCannotShareOneApprovalEpoch() {
         var mutations = 0
         val manager = GoogleOAuthManager(app, GoogleHttpTransport { method, url, headers, _ ->

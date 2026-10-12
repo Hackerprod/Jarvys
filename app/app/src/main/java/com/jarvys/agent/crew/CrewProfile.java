@@ -68,7 +68,7 @@ public final class CrewProfile {
     public static CrewProfile codingDefault() {
         CrewProfile previous = codingVersionTwo();
         return new CrewProfile(previous.id, 3, previous.name,
-                "Implement and verify scoped project changes; supported Full commands require approval, and offline APKs use the factory skill.",
+                "Implement and verify scoped project changes; supported Full commands follow their configured execution policy, and offline APKs use the factory skill.",
                 com.jarvys.agent.coding.CodingAgentInstructions.PROMPT, previous.skillIds,
                 previous.capabilities, previous.workspaceMode);
     }

@@ -194,6 +194,8 @@ class Ux21ConnectorPermissionInteractionTest {
         assertTrue(changed.isEmpty())
         compose.onNodeWithTag("mcp-policy-create_event_12-control").performClick()
         menuChoice(R.string.remote_service_policy_deny).performClick()
+        assertTrue("Policy changes do not alter selected tool exposure", changed.isEmpty())
+        compose.onNodeWithTag("mcp-exposure-create_event_12-switch").performScrollTo().performClick()
         assertEquals(listOf("create_event_12" to false), changed)
         search.assertTextContains("operation 12")
         compose.onAllNodes(isPopup()).assertCountEquals(0)
@@ -218,7 +220,7 @@ class Ux21ConnectorPermissionInteractionTest {
         val title = compose.onNodeWithText(compose.activity.getString(R.string.mcp_initial_tool_permissions),
             useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
         val control = compose.onNodeWithTag("mcp-editor-tool-policy-selector").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
-        val help = compose.onNodeWithText(compose.activity.getString(R.string.mcp_initial_tool_permissions_help),
+        val help = compose.onNodeWithText(compose.activity.getString(R.string.ux44_mcp_initial_policy_help),
             useUnmergedTree = true).assertIsDisplayed().fetchSemanticsNode().boundsInRoot
         val density = compose.activity.resources.displayMetrics.density
         assertTrue("Editor title clears fixed trailing control", title.right + 7f * density <= control.left)
@@ -228,7 +230,7 @@ class Ux21ConnectorPermissionInteractionTest {
         assertTrue("Help is not squeezed into the title column", help.right > control.left)
         assertTrue("Control stays within the narrow editor", control.right <= 320f * density)
         assertTrue("Editor target remains at least 48dp", control.height >= 48f * density)
-        val label = compose.onNode(hasText(compose.activity.getString(R.string.remote_service_policy_ask)) and
+        val label = compose.onNode(hasText(compose.activity.getString(R.string.remote_service_policy_allow)) and
             hasAnyAncestor(hasTestTag("mcp-editor-tool-policy-selector")), useUnmergedTree = true)
         label.assertPolicyTextFits()
         assertEquals("Editor label is centered within its target", control.center.y, label.fetchSemanticsNode().boundsInRoot.center.y, 1f)

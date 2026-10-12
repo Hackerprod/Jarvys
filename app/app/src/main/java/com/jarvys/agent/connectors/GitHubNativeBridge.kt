@@ -31,6 +31,8 @@ class GitHubNativePreparedCall internal constructor(val wireName: String, val ar
 /** The coordinator must check the captured account/authorization epoch on EVERY invocation. */
 fun interface GitHubNativeAuthorization {
     fun authorizationHeader(token: CancellationToken): String
+    /** Called after header acquisition and before each actual HTTP attempt, including read retries. */
+    fun beforeDispatch(request: GitHubNativeRequest, token: CancellationToken) = Unit
 }
 
 class GitHubNativeRequest internal constructor(val operation: String, val bodyJson: String, val mutation: Boolean) {
@@ -461,6 +463,8 @@ class GitHubNativeBridge(
             val header = authorization.authorizationHeader(token)
             if (!validAuthorization(header)) throw GitHubNativeException(GitHubNativeFailure.UNAUTHORIZED)
             token.throwIfCancelled()
+            // Outside the transport catch: a denied admission proves no HTTP request was issued.
+            authorization.beforeDispatch(request, token)
             val response = try { transport.execute(request, header, token) } catch (error: Exception) {
                 if (mutation) throw ambiguous()
                 token.throwIfCancelled()

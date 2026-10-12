@@ -3,6 +3,7 @@ package com.jarvys.agent.mcp
 import android.content.Context
 import com.jarvys.agent.CancellationToken
 import com.jarvys.agent.R
+import com.jarvys.agent.connectors.ActionPolicySnapshot
 import com.jarvys.agent.connectors.AndroidAutonomyActionNotifier
 import com.jarvys.agent.connectors.ApprovalDecision
 import com.jarvys.agent.connectors.ApprovalGate
@@ -14,96 +15,83 @@ import com.jarvys.agent.connectors.ConnectorAutonomyStore
 import com.jarvys.agent.connectors.SharedPreferencesConnectorAutonomyStore
 import org.json.JSONObject
 
-/** MCP writes bridge to Jarvys' existing persisted Autonomy policies, notifier and ApprovalGate. */
+/** All remote actions use the same persisted decision; grants and tool exposure stay independent. */
 class McpWriteApprovalCoordinator(
     private val autonomyStore: ConnectorAutonomyStore,
     private val approvalGate: ApprovalGate,
     private val notifier: com.jarvys.agent.connectors.AutonomyActionNotifier,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
-    fun policy(tool: McpToolDefinition): AutonomyPolicy = autonomyStore.policy(connectorId(tool), tool.wireName).let {
-        if (tool.catalogServiceId == "github" && it == AutonomyPolicy.ALLOW) AutonomyPolicy.ASK else it
-    }
+    fun snapshot(tool: McpToolDefinition): ActionPolicySnapshot = tool.inheritedPolicy?.let {
+        autonomyStore.snapshot(connectorId(tool), tool.wireName, it)
+    } ?: autonomyStore.snapshot(connectorId(tool), tool.wireName)
+
+    fun policy(tool: McpToolDefinition): AutonomyPolicy = snapshot(tool).policy
 
     fun setPolicy(tool: McpToolDefinition, policy: AutonomyPolicy) {
-        require(tool.catalogServiceId != "github" || policy != AutonomyPolicy.ALLOW) { "GitHub writes require review of their exact repository and method" }
-        require(tool.access == McpToolAccess.WRITE) { "Autonomy policy only applies to MCP write tools" }
-        require(policy != AutonomyPolicy.ALLOW || !McpToolSecurity.isDestructive(tool.wireName, tool.annotations)) {
-            "Destructive MCP tools cannot use Allow"
-        }
-        if (policy == AutonomyPolicy.ALLOW) require(notifier.canPost()) {
-            "Enable Jarvys notifications before enabling Allow mode"
-        }
-        autonomyStore.setPolicy(connectorId(tool), tool.wireName, policy)
+        autonomyStore.setPolicyChecked(connectorId(tool), tool.wireName, policy)
     }
 
-    /** Clears persistent write grants when a remote server is removed or disconnected. */
+    /** Explicit server removal clears its policies; discovery never clears or overwrites tombstones. */
     fun forgetServer(serverId: String) = autonomyStore.clearPolicies("mcp:$serverId")
 
-    fun execute(
-        tool: McpToolDefinition,
-        arguments: JSONObject,
-        token: CancellationToken,
-        action: () -> JSONObject,
-    ): JSONObject = execute(tool, arguments, token, null, action)
+    fun execute(tool: McpToolDefinition, arguments: JSONObject, token: CancellationToken,
+                action: () -> JSONObject): JSONObject = execute(tool, arguments, token, null, null, action)
 
-    fun execute(
-        tool: McpToolDefinition,
-        arguments: JSONObject,
-        token: CancellationToken,
-        requester: String?,
-        action: () -> JSONObject,
-    ): JSONObject = execute(tool, arguments, token, requester, null, action)
+    fun execute(tool: McpToolDefinition, arguments: JSONObject, token: CancellationToken,
+                requester: String?, action: () -> JSONObject): JSONObject =
+        execute(tool, arguments, token, requester, null, action)
 
-    fun execute(
+    fun execute(tool: McpToolDefinition, arguments: JSONObject, token: CancellationToken,
+                requester: String?, requesterColorKey: String?, action: () -> JSONObject): JSONObject =
+        executeWithAdmission(tool, arguments, token, requester, requesterColorKey) { admission ->
+            admission.admit()
+            action()
+        }
+
+    /**
+     * The request owner must admit immediately before EACH dispatch, including a definitive-401 retry
+     * or a GitHub preflight. The reviewed request stays frozen in that owner. Network/UI never runs
+     * under the policy or STOP lock. A later policy/config revision invalidates the whole request.
+     */
+    internal fun executeWithAdmission(
         tool: McpToolDefinition,
         arguments: JSONObject,
         token: CancellationToken,
         requester: String?,
         requesterColorKey: String?,
-        action: () -> JSONObject,
+        action: (McpActionAdmission) -> JSONObject,
     ): JSONObject {
-        if (tool.access == McpToolAccess.READ) return action()
-        val key = connectorId(tool)
-        val configured = autonomyStore.policy(key, tool.wireName)
-        if (configured == AutonomyPolicy.DENY) throw McpWriteDeniedException("Remote write is denied by the saved per-tool policy")
+        token.throwIfCancelled()
+        val decision = snapshot(tool)
+        if (decision.policy == AutonomyPolicy.DENY) throw McpWriteDeniedException("Remote action is denied by its saved policy")
+        val approvedAsk = decision.policy == AutonomyPolicy.ASK
+        if (approvedAsk) requestApproval(tool, arguments, token, requester, requesterColorKey)
+        val admission = McpActionAdmission(autonomyStore, decision, token, approvedAsk)
+        val result = action(admission)
+        if (decision.policy == AutonomyPolicy.ALLOW && tool.access == McpToolAccess.WRITE) auditAndNotify(tool, result)
+        return result
+    }
 
-        val destructive = McpToolSecurity.isDestructive(tool.wireName, tool.annotations)
-        val automatic = tool.catalogServiceId != "github" && configured == AutonomyPolicy.ALLOW && !destructive && notifier.canPost()
-        if (automatic) {
-            token.throwIfCancelled()
-            val result = action()
-            auditAndNotify(tool, result)
-            return result
-        }
-
+    private fun requestApproval(tool: McpToolDefinition, arguments: JSONObject, token: CancellationToken,
+                                requester: String?, requesterColorKey: String?) {
         val title = tool.annotations?.title?.takeIf(String::isNotBlank) ?: tool.wireName
         val args = if (tool.catalogServiceId == "github") emptyList() else McpToolSecurity.approvalArgumentSummary(arguments)
         val localizedLines = buildList {
-            add(ConnectorUiText(R.string.remote_write_approval_warning,
-                fallback = "The remote service controls this tool and its descriptions. Review the target and arguments before approving."))
+            add(ConnectorUiText(fallback = "The remote service controls this tool and its descriptions. Review the exact target and arguments."))
             if (tool.catalogServiceId == "github") com.jarvys.agent.connectors.GitHubOperationPolicy.approvalLines(tool.wireName, arguments).forEach {
                 add(ConnectorUiText(fallback = it))
             }
             args.forEach { (name, value) ->
                 add(ConnectorUiText(R.string.remote_write_approval_argument, listOf(name, value), "$name: $value"))
             }
-            if (configured == AutonomyPolicy.ALLOW && destructive) {
-                add(ConnectorUiText(fallback = "High-impact writes always require confirmation."))
-            }
-            if (configured == AutonomyPolicy.ALLOW && !notifier.canPost()) {
-                add(ConnectorUiText(fallback = "Allow mode is unavailable while Android notifications are disabled."))
-            }
         }
         val summary = ApprovalSummary(
             title = "${tool.serverAlias} · $title",
             lines = localizedLines.map { it.fallback },
             allowAlwaysAvailable = false,
-            localizedTitle = ConnectorUiText(R.string.remote_write_approval_title,
-                listOf(tool.serverAlias, title), "${tool.serverAlias} · $title"),
             localizedLines = localizedLines,
-            compactSummary = ConnectorUiText(R.string.remote_write_approval_summary,
-                fallback = "Remote service write action"),
+            compactSummary = ConnectorUiText(fallback = if (tool.access == McpToolAccess.READ) "Remote service read action" else "Remote service write action"),
             requester = requester,
             requesterColorKey = requesterColorKey,
         )
@@ -114,17 +102,12 @@ class McpWriteApprovalCoordinator(
             ApprovalDecision.CANCELLED -> throw java.util.concurrent.CancellationException("Remote service approval was cancelled")
             else -> throw McpWriteDeniedException("Remote service action was not approved")
         }
-        token.throwIfCancelled()
-        return action()
     }
 
     private fun auditAndNotify(tool: McpToolDefinition, result: JSONObject) {
         val record = AutonomyAuditRecord(
-            timestampMillis = clock(),
-            connectorId = connectorId(tool),
-            connectorName = tool.serverAlias,
-            operationName = tool.wireName,
-            operationLabel = tool.annotations?.title ?: tool.wireName,
+            timestampMillis = clock(), connectorId = connectorId(tool), connectorName = tool.serverAlias,
+            operationName = tool.wireName, operationLabel = tool.annotations?.title ?: tool.wireName,
             summary = "Remote MCP write completed; result omitted from audit",
         )
         if (runCatching { autonomyStore.appendAudit(record) }.isFailure) {
@@ -144,6 +127,29 @@ class McpWriteApprovalCoordinator(
                 McpWriteApprovalCoordinator(store, ApprovalGate.INSTANCE,
                     AndroidAutonomyActionNotifier(context.applicationContext)).also { instance = it }
             }
+        }
+    }
+}
+
+/** A logical request's approval is reusable only for its verified subrequests/definitive retries. */
+internal class McpActionAdmission(
+    private val store: ConnectorAutonomyStore,
+    private val baseline: ActionPolicySnapshot,
+    private val token: CancellationToken,
+    private val approvedAsk: Boolean,
+) {
+    fun checkCurrent() { store.snapshotMatching(baseline) }
+
+    fun admit(validate: () -> Unit = {}) {
+        val candidate = store.snapshotMatching(baseline)
+        if (!token.runIfActive {
+            store.admit(candidate, approvedAsk = approvedAsk) {
+                token.throwIfCancelled()
+                validate()
+            }
+        }) {
+            token.throwIfCancelled()
+            throw java.util.concurrent.CancellationException("Remote action was stopped before admission")
         }
     }
 }

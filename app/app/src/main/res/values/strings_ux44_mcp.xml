@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="ux44_mcp_enabled">Enabled for model context</string>
+    <string name="ux44_mcp_policy_save_error">The action policy could not be saved. Reopen settings before running this action.</string>
+    <string name="ux44_mcp_initial_policy_help">Fallback action policy for this server. Saved per-tool choices take precedence. Tool selection and actual account permissions remain separate.</string>
+    <string name="ux44_mcp_retained_policy">An older saved choice was retained because its origin is unknown. You can change it with this policy menu.</string>
+    <string name="ux44_mcp_invalid_policy">This saved policy is invalid and stays restricted. Select a policy to repair it.</string>
+    <string name="ux44_mcp_dismiss">Dismiss</string>
+    <string name="ux44_mcp_edit_fallback">Edit fallback policy</string>
+</resources>

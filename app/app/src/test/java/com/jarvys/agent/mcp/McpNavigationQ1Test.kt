@@ -220,11 +220,11 @@ class McpNavigationQ1Test {
         assertFalse(source.contains("localListRow"))
     }
 
-    @Test fun addRouteShowsInitialAskSelectorAndPersistsDenyWhileEditHidesIt() {
+    @Test fun addRouteDefaultsAllowAndExistingServerPolicyRemainsEditable() {
         showGraph()
         compose.onNodeWithTag("mcp-add-server").performClick()
         compose.onNodeWithTag("mcp-editor-tool-policy").performScrollTo().assertIsDisplayed()
-        val ask = compose.activity.getString(R.string.remote_service_policy_ask)
+        val ask = compose.activity.getString(R.string.remote_service_policy_allow)
         compose.onNodeWithTag("mcp-editor-tool-policy-selector").performScrollTo().assertTextContains(ask)
         compose.onNodeWithTag("mcp-editor-tool-policy-selector").performClick()
         compose.onNodeWithTag("mcp-editor-tool-policy-option-deny").assertIsDisplayed().performClick()
@@ -240,14 +240,14 @@ class McpNavigationQ1Test {
         nav.get().navigate(AppNavigationBackPolicy.editMcpServer(saved.id))
         compose.waitForIdle()
         compose.onNodeWithTag("mcp-server-editor").assertIsDisplayed()
-        compose.onAllNodesWithTag("mcp-editor-tool-policy").assertCountEquals(0)
+        compose.onNodeWithTag("mcp-editor-tool-policy").performScrollTo().assertIsDisplayed()
     }
 
     @Test fun addRouteCanPersistInitialAllowPolicy() {
         showGraph()
         compose.onNodeWithTag("mcp-add-server").performClick()
         compose.onNodeWithTag("mcp-editor-tool-policy-selector").performScrollTo().assertTextContains(
-            compose.activity.getString(R.string.remote_service_policy_ask))
+            compose.activity.getString(R.string.remote_service_policy_allow))
         compose.onNodeWithTag("mcp-editor-tool-policy-selector").performClick()
         compose.onNodeWithTag("mcp-editor-tool-policy-option-allow").assertIsDisplayed().performClick()
         compose.onNodeWithTag("mcp-editor-alias").performTextInput("Allow default server")

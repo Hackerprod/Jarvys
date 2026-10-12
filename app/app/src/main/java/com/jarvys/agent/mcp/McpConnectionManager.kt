@@ -5,6 +5,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import com.jarvys.agent.connectors.GitHubOperationPolicy
+import com.jarvys.agent.connectors.GitHubNativeAuthorization
+import com.jarvys.agent.connectors.GitHubNativeRequest
 import com.jarvys.agent.connectors.GitHubNativeBridge
 import com.jarvys.agent.connectors.GitHubNativeException
 import com.jarvys.agent.connectors.GitHubNativeFailure
@@ -67,18 +69,18 @@ class McpConnectionManager internal constructor(
             runCatching { previous?.close() }
             if (owner.get() != expectedGeneration) return@execute
             try {
-                val epoch = githubEpoch(config)
+                val epoch = authorizationEpoch(config)
                 val discoveryOwner = java.util.concurrent.atomic.AtomicReference<McpProtocolSession?>()
                 val session = connectWithSingleRefresh(config) {
                     owner.get() == expectedGeneration &&
                         (discoveryOwner.get() == null && sessions[serverId] == null || sessions[serverId] === discoveryOwner.get()) &&
                         repository.get(serverId)?.let { sameConnection(config, it) } == true &&
-                        runCatching { githubEpoch(config) }.getOrNull() == epoch
+                        runCatching { authorizationEpoch(config) }.getOrNull() == epoch
                 }
                 discoveryOwner.set(session)
                 val admitted = synchronized(owner) {
                     val latest = repository.get(serverId)
-                    if (owner.get() != expectedGeneration || latest == null || !sameConnection(config, latest) || epoch != runCatching { githubEpoch(config) }.getOrNull()) false
+                    if (owner.get() != expectedGeneration || latest == null || !sameConnection(config, latest) || epoch != runCatching { authorizationEpoch(config) }.getOrNull()) false
                     else {
                         sessions[serverId] = session
                         if (epoch != null) sessionEpochs[serverId] = epoch
@@ -138,19 +140,29 @@ class McpConnectionManager internal constructor(
         token.throwIfCancelled()
         val prepared = if (config.catalogServiceId == "github") GitHubOperationPolicy.prepare(config, tool, arguments)
             else JSONObject(arguments.toString())
-        val expectedEpoch = githubEpoch(config)
+        val expectedEpoch = authorizationEpoch(config)
         val expectedGeneration = generation(serverId).get()
+        val expectedRevision = repository.authorityRevision(serverId)
         if (expectedEpoch != null && sessionEpochs[serverId] != expectedEpoch) {
-            throw McpReauthRequiredException("GitHub account changed; reconnect before running this operation")
+            throw McpReauthRequiredException("MCP account or grant changed; reconnect before running this operation")
         }
         if (config.catalogServiceId == "github" && tool.access == McpToolAccess.WRITE &&
             githubJournal.isUncertain(GitHubOperationPolicy.intentHash(config, tool.wireName, prepared))) {
             throw IllegalStateException("GitHub write outcome is unresolved; verify the existing action before requesting another approval")
         }
         return try {
-            writeApproval.execute(tool, prepared, token, requester, requesterColorKey) {
-                if (config.catalogServiceId == "github") executeGitHub(config, session, tool, prepared, expectedEpoch!!, expectedGeneration, token)
-                else callToolWithSingleRefresh(config, session, tool.wireName, prepared, token)
+            writeApproval.executeWithAdmission(tool, prepared, token, requester, requesterColorKey) { admission ->
+                if (config.catalogServiceId == "github") executeGitHub(config, session, tool, prepared,
+                    expectedEpoch!!, expectedGeneration, expectedRevision, token, admission)
+                else callToolWithSingleRefresh(config, session, tool.wireName, prepared, token,
+                    beforeDispatch = { dispatchSession, _ ->
+                        admission.admit { requireMcpLease(config, tool, expectedEpoch, expectedGeneration,
+                            expectedRevision, token, dispatchSession) }
+                    },
+                    beforeRequest = {
+                        admission.checkCurrent()
+                        requireMcpLease(config, tool, expectedEpoch, expectedGeneration, expectedRevision, token)
+                    })
             }
         } catch (cancelled: CancellationException) {
             sessions.remove(serverId, session)
@@ -196,15 +208,16 @@ class McpConnectionManager internal constructor(
         arguments: JSONObject,
         token: CancellationToken,
         onDefinitiveRejection: () -> Unit = {},
-        beforeDispatch: () -> Unit = {},
+        beforeDispatch: (McpProtocolSession, McpDispatchKind) -> Unit = { _, _ -> },
         beforeRequest: () -> Unit = {},
     ): JSONObject {
         val requestGeneration = generation(config.id).get()
         var ownedSession = originalSession
         try {
             beforeRequest()
-            beforeDispatch()
-            return originalSession.callTool(wireName, arguments, token)
+            return originalSession.callTool(wireName, JSONObject(arguments.toString()), token) { kind ->
+                beforeDispatch(originalSession, kind)
+            }
         } catch (unauthorized: McpTransportClient.McpAuthorizationException) {
             if (config.authMode != McpAuthMode.OAUTH) throw unauthorized
             onDefinitiveRejection()
@@ -226,12 +239,12 @@ class McpConnectionManager internal constructor(
                     oauthManager.refreshAccessToken(config)
                     beforeRequest()
                     val discoveryOwner = java.util.concurrent.atomic.AtomicReference<McpProtocolSession?>(originalSession)
-                    val discoveryEpoch = githubEpoch(config)
+                    val discoveryEpoch = authorizationEpoch(config)
                     val replacement = sessionFactory(config, authorizationHeader(config)) {
                         discovered -> synchronized(generation(config.id)) {
                             if (generation(config.id).get() == requestGeneration && sessions[config.id] === discoveryOwner.get() &&
                                 repository.get(config.id)?.let { sameConnection(config, it) } == true &&
-                                runCatching { githubEpoch(config) }.getOrNull() == discoveryEpoch) {
+                                runCatching { authorizationEpoch(config) }.getOrNull() == discoveryEpoch) {
                                 persistDiscoveredTools(config.id, discovered, config)
                             }
                         }
@@ -243,7 +256,7 @@ class McpConnectionManager internal constructor(
                             beforeRequest()
                             sessions[config.id] = replacement
                             ownedSession = replacement
-                            githubEpoch(config)?.let { sessionEpochs[config.id] = it }
+                            authorizationEpoch(config)?.let { sessionEpochs[config.id] = it }
                             persistDiscoveredTools(config.id, replacement.tools, config)
                         }
                     } catch (failure: Exception) { replacement.close(); throw failure }
@@ -255,8 +268,9 @@ class McpConnectionManager internal constructor(
                 token.throwIfCancelled()
                 try {
                     beforeRequest()
-                    beforeDispatch()
-                    retrySession.callTool(wireName, arguments, token)
+                    retrySession.callTool(wireName, JSONObject(arguments.toString()), token) { kind ->
+                        beforeDispatch(retrySession, kind)
+                    }
                 } catch (unauthorized: McpTransportClient.McpAuthorizationException) {
                     onDefinitiveRejection()
                     sessions.remove(config.id, retrySession)
@@ -279,48 +293,91 @@ class McpConnectionManager internal constructor(
         }
     }
 
-    private fun githubEpoch(config: McpServerConfig): String? = when {
-        config.catalogServiceId != "github" -> null
-        config.authMode == McpAuthMode.OAUTH -> oauthManager.githubAuthorizationEpoch(config)
-        config.authMode == McpAuthMode.BEARER -> repository.bearerAuthorizationEpoch(config)
-        else -> throw McpReauthRequiredException("GitHub requires an authenticated account")
+    private fun authorizationEpoch(config: McpServerConfig): String? = when (config.authMode) {
+        McpAuthMode.OAUTH -> oauthManager.authorizationEpoch(config)
+        McpAuthMode.BEARER -> repository.bearerAuthorizationEpoch(config)
+        McpAuthMode.NONE -> {
+            require(config.catalogServiceId != "github") { "GitHub requires an authenticated account" }
+            null
+        }
     }
 
-    private fun requireGitHubLease(config: McpServerConfig, tool: McpToolDefinition, epoch: String, expectedGeneration: Long, token: CancellationToken) {
+    private fun currentAuthorizationEpoch(config: McpServerConfig): String? = when (config.authMode) {
+        McpAuthMode.OAUTH -> oauthManager.currentAuthorizationEpoch(config)
+        McpAuthMode.BEARER -> repository.bearerAuthorizationEpoch(config)
+        McpAuthMode.NONE -> null
+    }
+
+    /** Local, bounded checks only. Called again inside every final policy admission. */
+    private fun requireMcpLease(config: McpServerConfig, tool: McpToolDefinition, epoch: String?,
+                                expectedGeneration: Long, expectedRevision: Long, token: CancellationToken,
+                                dispatchSession: McpProtocolSession? = null) {
         token.throwIfCancelled()
-        require(generation(config.id).get() == expectedGeneration && sessionEpochs[config.id] == epoch) { "GitHub connection changed during review" }
-        val current = repository.get(config.id) ?: throw McpReauthRequiredException("GitHub was disconnected")
-        require(current.enabled && current.endpoint == config.endpoint && current.authMode == config.authMode &&
-            current.oauthClientId == config.oauthClientId && current.githubToolsets == config.githubToolsets &&
-            current.catalogServiceId == "github" && githubEpoch(current) == epoch) {
-            "GitHub configuration or account changed during review; prepare a new operation"
+        require(generation(config.id).get() == expectedGeneration &&
+            repository.authorityRevision(config.id) == expectedRevision) { "MCP configuration changed during this request" }
+        require(epoch == null || sessionEpochs[config.id] == epoch) { "MCP session grant changed" }
+        val current = repository.get(config.id) ?: throw McpReauthRequiredException("MCP was disconnected")
+        require(sameConnection(config, current) && current.initialToolPolicy == config.initialToolPolicy &&
+            current.initialToolPolicyOrigin == config.initialToolPolicyOrigin && currentAuthorizationEpoch(current) == epoch) {
+            "MCP configuration or account changed; prepare a new operation"
         }
-        val currentTool = repository.exposedTools().firstOrNull { it.serverId == tool.serverId && it.wireName == tool.wireName && it.access == tool.access }
-            ?: throw IllegalArgumentException("GitHub tool permission changed during review; no operation was sent")
-        if (tool.wireName == "merge_pull_request") require(currentTool.inputSchema.optJSONObject("properties")?.has("expectedHeadSha") == true) {
-            "GitHub merge precondition changed during review; no operation was sent"
+        require(sessions[config.id] != null && (dispatchSession == null || sessions[config.id] === dispatchSession)) {
+            "MCP session was replaced; prepare a new operation"
         }
-        if (tool.access == McpToolAccess.WRITE) require(writeApproval.policy(tool) != com.jarvys.agent.connectors.AutonomyPolicy.DENY) {
-            "GitHub write permission was disabled during review"
+        val currentTool = repository.exposedTools().firstOrNull { it.serverId == tool.serverId && it.wireName == tool.wireName }
+            ?: throw IllegalArgumentException("MCP tool is disabled or unavailable; no operation was sent")
+        require(currentTool.access == tool.access && currentTool.modelName == tool.modelName &&
+            currentTool.catalogServiceId == tool.catalogServiceId && currentTool.annotations == tool.annotations &&
+            currentTool.inputSchema.toString() == tool.inputSchema.toString() &&
+            currentTool.inheritedPolicy == tool.inheritedPolicy) { "MCP tool schema or classification changed; prepare a new operation" }
+    }
+
+    private fun requireGitHubLease(config: McpServerConfig, tool: McpToolDefinition, epoch: String,
+                                   expectedGeneration: Long, expectedRevision: Long, token: CancellationToken) {
+        requireMcpLease(config, tool, epoch, expectedGeneration, expectedRevision, token)
+        if (tool.wireName == "merge_pull_request") require(tool.inputSchema.optJSONObject("properties")?.has("expectedHeadSha") == true) {
+            "GitHub merge precondition changed; no operation was sent"
         }
     }
 
     private fun executeGitHub(config: McpServerConfig, session: McpProtocolSession, tool: McpToolDefinition,
-                              args: JSONObject, epoch: String, expectedGeneration: Long, token: CancellationToken): JSONObject {
-        requireGitHubLease(config, tool, epoch, expectedGeneration, token)
+                              args: JSONObject, epoch: String, expectedGeneration: Long, expectedRevision: Long,
+                              token: CancellationToken, admission: McpActionAdmission): JSONObject {
+        requireGitHubLease(config, tool, epoch, expectedGeneration, expectedRevision, token)
         val write = tool.access == McpToolAccess.WRITE
         val intent = GitHubOperationPolicy.intentHash(config, tool.wireName, args)
         var reserved = false
-        fun beforeMutation() {
-            requireGitHubLease(config, tool, epoch, expectedGeneration, token)
+        fun reserveMutation() {
+            requireGitHubLease(config, tool, epoch, expectedGeneration, expectedRevision, token)
             if (!reserved) { githubJournal.reserve(intent); reserved = true }
         }
+        fun admitDispatch(mutation: Boolean, dispatchSession: McpProtocolSession? = null) {
+            // Reserve durably BEFORE admission, but clear a reservation if nothing was dispatched.
+            if (mutation) reserveMutation()
+            try {
+                admission.admit { requireMcpLease(config, tool, epoch, expectedGeneration,
+                    expectedRevision, token, dispatchSession) }
+            } catch (failure: Exception) {
+                if (mutation && reserved) {
+                    check(githubJournal.resolve(intent)) { "No write dispatched, but local safety state could not be released" }
+                    reserved = false
+                }
+                throw failure
+            }
+        }
         fun authorization(): String {
-            requireGitHubLease(config, tool, epoch, expectedGeneration, token)
+            admission.checkCurrent()
+            requireGitHubLease(config, tool, epoch, expectedGeneration, expectedRevision, token)
             val header = if (config.authMode == McpAuthMode.BEARER) repository.bearerAuthorizationHeader(config, epoch)
                 else requireNotNull(authorizationHeader(config))
-            requireGitHubLease(config, tool, epoch, expectedGeneration, token)
+            requireGitHubLease(config, tool, epoch, expectedGeneration, expectedRevision, token)
             return header
+        }
+        val nativeAuthorization = object : GitHubNativeAuthorization {
+            override fun authorizationHeader(token: CancellationToken): String = authorization()
+            override fun beforeDispatch(request: GitHubNativeRequest, token: CancellationToken) {
+                admitDispatch(request.mutation)
+            }
         }
         try {
             val response = if (githubBridge.handles(tool.wireName)) {
@@ -328,30 +385,35 @@ class McpConnectionManager internal constructor(
                 while (true) {
                     try {
                         val native = githubBridge.prepare(tool.wireName, args)
-                        val result = githubBridge.execute(native, { authorization() }, token, ::beforeMutation)
+                        val result = githubBridge.execute(native, nativeAuthorization, token) {
+                            admission.checkCurrent()
+                            requireGitHubLease(config, tool, epoch, expectedGeneration, expectedRevision, token)
+                        }
                         if (reserved && !githubJournal.resolve(intent)) addSafetyNotice(result, "Completed, but local safety state could not be cleared; do not repeat this action.")
                         return result
                     } catch (error: GitHubNativeException) {
                         if (error.reason != GitHubNativeFailure.UNAUTHORIZED || refreshed || config.authMode != McpAuthMode.OAUTH) throw error
                         // 401 is a definitive rejection. Never retry an ambiguous native mutation.
                         if (reserved) { check(githubJournal.resolve(intent)); reserved = false }
-                        requireGitHubLease(config, tool, epoch, expectedGeneration, token)
+                        admission.checkCurrent()
+                        requireGitHubLease(config, tool, epoch, expectedGeneration, expectedRevision, token)
                         oauthManager.invalidateAccessToken(config); oauthManager.refreshAccessToken(config); refreshed = true
-                        requireGitHubLease(config, tool, epoch, expectedGeneration, token)
+                        requireGitHubLease(config, tool, epoch, expectedGeneration, expectedRevision, token)
                     }
                 }
                 @Suppress("UNREACHABLE_CODE") JSONObject()
             } else {
                 if (write) {
-                    githubBridge.validateMcpTarget(tool.wireName, args, { authorization() }, token)
-                    beforeMutation()
+                    githubBridge.validateMcpTarget(tool.wireName, args, nativeAuthorization, token)
                 }
                 val result = callToolWithSingleRefresh(config, session, tool.wireName, args, token, onDefinitiveRejection = {
                     if (reserved) { check(githubJournal.resolve(intent)) { "GitHub rejected the write, but local safety state could not be released" }; reserved = false }
-                }, beforeDispatch = {
-                    requireGitHubLease(config, tool, epoch, expectedGeneration, token)
-                    if (write && !reserved) beforeMutation()
-                }) { requireGitHubLease(config, tool, epoch, expectedGeneration, token) }
+                }, beforeDispatch = { dispatchSession, kind ->
+                    admitDispatch(write && kind == McpDispatchKind.TOOL_CALL, dispatchSession)
+                }) {
+                    admission.checkCurrent()
+                    requireGitHubLease(config, tool, epoch, expectedGeneration, expectedRevision, token)
+                }
                 val callResult = result.optJSONObject("result")
                 if (write && (callResult == null || callResult.optJSONArray("content") == null ||
                     callResult.has("isError") && callResult.opt("isError") !is Boolean)) {
@@ -391,27 +453,9 @@ class McpConnectionManager internal constructor(
         } else emptyList()
         val application = McpInitialToolPolicy.apply(current, remote + native)
         repository.updateTools(serverId, application.tools)
-        application.newWritePolicies.forEach { (wireName, policy) ->
-            val tool = application.tools.firstOrNull { it.wireName == wireName } ?: return@forEach
-            val access = McpToolSecurity.classify(current.catalogServiceId, wireName, tool.annotations)
-            val definition = McpToolDefinition(
-                serverId = current.id,
-                serverAlias = current.alias,
-                wireName = wireName,
-                modelName = tool.modelName,
-                description = tool.description,
-                inputSchema = runCatching { JSONObject(tool.inputSchemaJson) }.getOrDefault(JSONObject()),
-                catalogServiceId = current.catalogServiceId,
-                annotations = tool.annotations,
-                access = access,
-            )
-            val saved = runCatching { writeApproval.setPolicy(definition, policy) }
-            // ALLOW depends on the same notification prerequisite as the per-tool selector;
-            // keep the just-discovered write on Ask if that prerequisite is currently unavailable.
-            if (saved.isFailure && policy == com.jarvys.agent.connectors.AutonomyPolicy.ALLOW) {
-                runCatching { writeApproval.setPolicy(definition, com.jarvys.agent.connectors.AutonomyPolicy.ASK) }
-            }
-        }
+        // Per-tool overrides and tombstones remain authoritative. Missing decisions inherit the
+        // preserved server policy at resolution; discovery never materializes or overwrites them.
+
     }
 
     fun closeServer(serverId: String) = disconnect(serverId)
