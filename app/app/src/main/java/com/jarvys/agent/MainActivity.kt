@@ -1687,7 +1687,7 @@ private fun JarvysApp(
     if (correctionWorkspace != null && correctionAssignment != null) AlertDialog(
         onDismissRequest = { correctionWorkspace = null; correctionAssignment = null; correctionText = "" },
         title = { Text(stringResource(R.string.workspace_correct)) },
-        text = { Column {
+        text = { ScrollableDialogContent {
             Text(stringResource(R.string.workspace_correction_target, correctionWorkspace!!, correctionAssignment!!))
             OutlinedTextField(value = correctionText, onValueChange = { correctionText = it },
                 label = { Text(stringResource(R.string.workspace_correction_text)) })
