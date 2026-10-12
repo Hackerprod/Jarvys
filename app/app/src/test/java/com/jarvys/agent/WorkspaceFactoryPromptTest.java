@@ -41,6 +41,18 @@ public class WorkspaceFactoryPromptTest {
     }
   }
 
+  @Test public void coordinationGuidanceRequiresDeclaredCentralToolAndKeepsLocalNoticeSemantics() {
+    String central = runtime.instructions(new CoreToolRegistry(
+        Collections.singletonList(new Stub("workspaces"))), true);
+    assertTrue(central.contains("Local metadata notices do not launch model turns"));
+    assertTrue(central.contains("results/read_result"));
+    assertTrue(central.contains("inbox/read_message"));
+    assertTrue(central.contains("reply only to an eligible live request"));
+    assertFalse(central.contains("There is no automatic background delivery"));
+    String ordinary = runtime.instructions(new CoreToolRegistry(Collections.emptyList()), true);
+    assertFalse(ordinary.contains("Local metadata notices do not launch model turns"));
+  }
+
   @Test public void enabledCrewRoutesFactoryWhileOffDoesNotPromiseAWorker() {
     for (com.jarvys.agent.crew.CrewMode mode : Arrays.asList(
         com.jarvys.agent.crew.CrewMode.AUTO, com.jarvys.agent.crew.CrewMode.ALWAYS)) {

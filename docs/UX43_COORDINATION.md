@@ -1,6 +1,6 @@
 # UX43: causal local coordination
 
-Development checkpoint, not a delivered APK. The current delivered version remains v91. First integrated Full Debug Kotlin/Java compilation passed on 2026-10-12 at 21:57 UTC. Independent contract/source review and bounded direct tests are available; integrated behavior, UI and artifact acceptance remain pending.
+Development checkpoint, not a delivered APK. The current delivered version remains v91. First integrated Full Debug Kotlin/Java compilation passed on 2026-10-12 at 21:57 UTC. Independent contract/source review and bounded direct tests are available. Seventeen delivery-seam tests pass against those integrated FullDebug classes. Final affected Full/Play execution, UI and artifact acceptance for v92 / `1.2.85-COORDINATION` remain pending.
 
 ## Evidence and authority
 
@@ -14,7 +14,7 @@ The central-only `workspaces` tool exposes `inbox`, `read_message` and `reply`. 
 
 Inbox pages contain bounded metadata and an exact continuation cursor. Content pages use `coordination-content-json-ascii-v1`: concatenate `content_json_fragment` in offset order before parsing the complete text/refs JSON. The serialized-content digest is distinct from the immutable evidence digest. Existing output budgets remain enforced without silently truncating bodies or references.
 
-The native drawer/detail shows a consolidated metadata indicator for the inspected bounded page. Historical or interrupted requests are not presented as live work. Internal conversation and ledger records remain excluded from the ordinary visible chat, model transcript, reflection and compaction; useful final responses and actionable errors retain their existing presentation.
+The native drawer/detail shows a consolidated metadata indicator for the inspected bounded page. Historical or interrupted requests are not presented as live work. New internal evidence/reference/notice/reply rows are not injected directly into visible chat, model context, reflection or compaction. Authorized tool reads remain available to the model in its normal transcript. Useful final responses and actionable errors retain their existing presentation.
 
 ## Exact reply and recovery
 
