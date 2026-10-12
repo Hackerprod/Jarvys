@@ -1,7 +1,7 @@
 # Jarvys application icon (static identity v90)
 
 The owner supplied the current `artwork/jarvys-app-icon-source.png` on 2026-10-12.
-Version 90 / 1.2.83-MASCOT is the first planned build using this new identity;
+Version 90 / 1.2.83-MASCOT is the first delivered build using this new identity;
 previous delivered APKs remain unchanged. See [scope and status](../docs/MASCOT_STATIC_IDENTITY.md).
 
 ## Source and preservation

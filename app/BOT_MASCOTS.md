@@ -1,6 +1,6 @@
 # Local mascot authoring (UX40, in progress)
 
-**Current identity v90 (development):** Jarvys now uses the exact new user-provided PNG as a static avatar and launcher icon. Both the legacy Jarvys experimental toggle and visual-test entry are hidden, and renderer preparation is blocked even with old process consent. The old robot assets and controls below are preserved as historical/dormant implementation. The separately delivered sad animation is not integrated. Custom-bot compilation/playback remains unchanged. See [current identity contract](../docs/MASCOT_STATIC_IDENTITY.md).
+**Current identity v90 (delivered):** Jarvys now uses the exact new user-provided PNG as a static avatar and launcher icon. Both the legacy Jarvys experimental toggle and visual-test entry are hidden, and renderer preparation is blocked even with old process consent. The old robot assets and controls below are preserved as historical/dormant implementation. The separately delivered sad animation is not integrated. Custom-bot compilation/playback remains unchanged. See [current identity contract](../docs/MASCOT_STATIC_IDENTITY.md).
 
 
 **Delivered v57 debug pilot:** the first choreography (v2) was rejected. The broader, several-second v3 candidate is integrated and its resource/UI/lint/package host gates pass. Physical Android acceptance remains open and playback requires explicit experimental activation.
