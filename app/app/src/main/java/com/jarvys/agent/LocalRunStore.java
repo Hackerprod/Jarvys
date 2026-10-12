@@ -2680,7 +2680,7 @@ public final class LocalRunStore {
     }
 
     private static void ensureDirectory(File directory) {
-        if (!directory.exists() && !directory.mkdirs()) {
+        if (!directory.exists() && !directory.mkdirs() && !directory.isDirectory()) {
             throw new IllegalStateException("Could not create app-private storage at " + directory);
         }
     }
