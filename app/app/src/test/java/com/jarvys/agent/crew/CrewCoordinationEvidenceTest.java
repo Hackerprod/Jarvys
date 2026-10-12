@@ -30,7 +30,9 @@ public class CrewCoordinationEvidenceTest {
     }
     @Test public void strictEnvelopeRejectsMalformedTamperedOrCoercedFields() throws Exception {
         CrewCoordinationEvidence value = source("message", "BLOCKER", "blocked", Collections.emptyList());
-        for (String key : new ArrayList<>(value.toJson().keySet())) {
+        Iterator<String> fieldNames = value.toJson().keys();
+        while (fieldNames.hasNext()) {
+            String key = fieldNames.next();
             JSONObject row = value.toJson(); row.remove(key);
             assertThrows("Missing " + key, IllegalArgumentException.class, () -> CrewCoordinationEvidence.fromJsonStrict(row));
         }
