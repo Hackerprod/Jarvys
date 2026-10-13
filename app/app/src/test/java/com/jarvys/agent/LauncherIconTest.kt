@@ -69,7 +69,7 @@ class LauncherIconTest {
     fun adaptiveLayersAreOpaqueBackgroundAndTransparentBitmap() {
         listOf(R.mipmap.ic_launcher, R.mipmap.ic_launcher_round).forEach { id ->
             val icon = drawable(id) as AdaptiveIconDrawable
-            assertEquals(Color.rgb(17, 24, 39), (icon.background as ColorDrawable).color)
+            assertEquals(Color.rgb(20, 29, 46), (icon.background as ColorDrawable).color)
             val foreground = icon.foreground as BitmapDrawable
             assertEquals(108, foreground.intrinsicWidth)
             assertEquals(108, foreground.intrinsicHeight)

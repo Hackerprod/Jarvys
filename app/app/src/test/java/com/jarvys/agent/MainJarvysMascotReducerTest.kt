@@ -113,11 +113,11 @@ class MainJarvysMascotReducerTest {
         deliver(call)
         AgentRunUiState.showApproval("approval", "Approve read", listOf("Details"), null)
         assertEquals(LiveMascotTool("first", false), snapshot().liveMascotTool)
-        assertNull(mode())
+        assertEquals(5, mode())
         deliver(call)
         deliver(activity(eventId = "duplicate-start"))
         deliver(activity(stage = "tool_progress"))
-        assertNull(mode())
+        assertEquals(5, mode())
         AgentRunUiState.updateApproval("approval", "APPROVED")
         deliver(activity(stage = "tool_progress", eventId = "after-approval"))
         assertNull(mode())
@@ -134,7 +134,7 @@ class MainJarvysMascotReducerTest {
         assertEquals(LiveMascotTool("first", false), snapshot().liveMascotTool)
         deliver(call)
         deliver(activity(stage = "tool_progress"))
-        assertNull(mode())
+        assertEquals(5, mode())
         AgentRunUiState.updateUserDecision(session, "decision", "RESOLVED", "one", "One")
         deliver(activity(eventId = "duplicate-after-decision"))
         assertNull(mode())
@@ -251,7 +251,7 @@ class MainJarvysMascotReducerTest {
         AgentRunUiState.showApproval("approval", "Approve", emptyList(), null)
         AgentRunUiState.restoreSession(session, persisted)
         assertEquals(LiveMascotTool("first", false), snapshot().liveMascotTool)
-        assertNull(mode())
+        assertEquals(5, mode())
     }
 
     @Test fun navigationKeepsOwnershipWithoutShowingActivityInAnotherChat() {
@@ -280,7 +280,7 @@ class MainJarvysMascotReducerTest {
         assertEquals(LiveMascotTool("first", false), snapshot().liveMascotTool)
         deliver(activity())
         deliver(activity(stage = "tool_progress"))
-        assertNull(mode())
+        assertEquals(5, mode())
     }
 
     @Test fun hiddenCompletionCannotResurrectMarkerOnReturn() {

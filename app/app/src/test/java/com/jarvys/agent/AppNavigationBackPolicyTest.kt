@@ -1,5 +1,9 @@
 package com.jarvys.agent
 
+import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import com.jarvys.agent.ui.chat.awaitReactionDrawIdle
+import org.junit.Rule
+import org.robolectric.annotation.GraphicsMode
 import androidx.test.core.app.ApplicationProvider
 import androidx.work.testing.WorkManagerTestInitHelper
 import org.junit.Assert.assertEquals
@@ -12,11 +16,14 @@ import org.junit.Test
 import java.io.File
 
 @RunWith(RobolectricTestRunner::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [34])
 class AppNavigationBackPolicyTest {
-    @Test fun explicitNavigationGraphHasOnlyChatAsRootAndBackForEveryOtherRoute() {
+    @get:Rule val compose = createEmptyComposeRule()
+
+    @Test fun explicitNavigationGraphHasChatAndWorkspacesRootsWithBackForEveryOtherRoute() {
         assertEquals(listOf(
-            "chat", "settings", "settings/preferences", "settings/archived-chats", "scheduled-tasks",
+            "chat", "workspaces", "settings", "settings/preferences", "settings/archived-chats", "scheduled-tasks",
             "providers", "providers/openai", "providers/openrouter", "providers/custom", "providers/service/{serviceId}",
             "mcp", "mcp/new", "mcp/server/{serverId}", "mcp/server/{serverId}/edit",
             "skills", "connectors", "connectors/device/{connectorId}",
@@ -25,19 +32,27 @@ class AppNavigationBackPolicyTest {
             "tasks", "tasks/detail/{taskId}", "bots", "crew", "crew/{missionId}",
             "crew/{missionId}/bot/{botId}", "workspace/{workspaceId}", "workspace/{workspaceId}/files", "workspace-preview/{projectId}", "artifact-preview/{sessionId}/{artifactId}",
         ), AppNavigationBackPolicy.registeredRoutePatterns)
-        assertEquals(setOf("chat"), AppNavigationBackPolicy.rootRoutes)
+        assertEquals(setOf("chat", "workspaces"), AppNavigationBackPolicy.rootRoutes)
         AppNavigationBackPolicy.registeredRoutePatterns.forEach { route ->
-            assertEquals(route != "chat", AppNavigationBackPolicy.requiresBack(route))
+            assertEquals(route !in setOf("chat", "workspaces"), AppNavigationBackPolicy.requiresBack(route))
         }
         assertFalse(AppNavigationBackPolicy.requiresBack("chat"))
+        assertFalse(AppNavigationBackPolicy.requiresBack("workspaces"))
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val singleton = SecretStore::class.java.getDeclaredField("singleton").apply { isAccessible = true }
         singleton.set(null, SecretStore(context.getSharedPreferences("n1a-route-graph-secrets", 0)))
         WorkManagerTestInitHelper.initializeTestWorkManager(context)
+        compose.mainClock.autoAdvance = false
         try {
             val activity = org.robolectric.Robolectric.buildActivity(MainActivity::class.java).setup()
             try {
-                org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+                compose.mainClock.advanceTimeBy(64)
+                awaitReactionDrawIdle(compose, activity.get())
+                val catalog = AppNavigationBackPolicy.metadata(context, "workspaces", "Independent title", null, null)
+                assertTrue(catalog.isRoot)
+                assertTrue(catalog.showTopBar)
+                assertEquals(context.getString(R.string.workspace_sidebar_heading), catalog.title)
+                assertEquals(AppRouteAction.NONE, catalog.action)
                 val actualGraphRoutes = activity.get().navGraphRoutePatternsForTest()
                 assertEquals(AppNavigationBackPolicy.registeredRoutePatterns.toSet(), actualGraphRoutes)
             } finally {

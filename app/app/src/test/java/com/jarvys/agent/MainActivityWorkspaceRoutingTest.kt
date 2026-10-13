@@ -2,7 +2,13 @@ package com.jarvys.agent
 
 import android.content.Context
 import android.content.Intent
-import android.os.Looper
+import android.net.Uri
+import androidx.compose.ui.test.*
+import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.navigation.NavHostController
+import com.jarvys.agent.ui.chat.awaitReactionDrawIdle
+import com.jarvys.agent.workspaces.WORKSPACE_PAGE_SIZE
+import org.junit.Rule
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.core.app.ApplicationProvider
 import androidx.work.testing.WorkManagerTestInitHelper
@@ -31,6 +37,10 @@ import org.robolectric.annotation.GraphicsMode
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [34], qualifiers = "en-rUS-w360dp-h800dp-port-mdpi")
 class MainActivityWorkspaceRoutingTest {
+    // Install Compose's clock before any real Activity is launched. Infinite visual animations stay
+    // present, while tests advance finite frames instead of draining Robolectric's Choreographer.
+    @get:Rule val compose = createEmptyComposeRule()
+
     private val context: Context get() = ApplicationProvider.getApplicationContext()
     private val store: LocalRunStore get() = LocalRunStore(context)
     private val legacy = "ux43-legacy-${UUID.randomUUID()}"
@@ -43,6 +53,7 @@ class MainActivityWorkspaceRoutingTest {
     private val activity: MainActivity get() = requireNotNull(controller).get()
 
     @Before fun setUp() {
+        compose.mainClock.autoAdvance = false
         ViewModelProvider.AndroidViewModelFactory::class.java.getDeclaredField("_instance")
             .apply { isAccessible = true }.set(null, null)
         secretSingleton.set(null, SecretStore(context.getSharedPreferences("ux43-route-test-secrets", 0)))
@@ -71,7 +82,7 @@ class MainActivityWorkspaceRoutingTest {
                     executor(value, field).apply { shutdown(); awaitTermination(10, TimeUnit.SECONDS) }
                 } }
         }
-        Shadows.shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(32))
+        compose.waitForIdle()
         AgentRunUiState.bindGeneration(legacy, Long.MAX_VALUE)
         AgentRunUiState.stopPendingGeneration(legacy, Long.MAX_VALUE)
         AgentRunUiState.resetSession("ux43-route-cleanup")
@@ -159,10 +170,169 @@ class MainActivityWorkspaceRoutingTest {
         }
     }
 
+    @Test fun realDrawerCatalogDetailFilesAndBackPreserveIndependentDraftAndBothAttachmentOwners() {
+        val workspace = WorkspaceRegistry(context).use {
+            it.createWorkspace("navigation-detail", "Recorded navigation workspace")
+        }
+        val original = transcript(legacy)
+        start()
+        await { selected() == legacy && AgentRunUiState.state.value.sessionId == legacy &&
+            AgentRunUiState.state.value.events.isNotEmpty() }
+        settleNativeFrame()
+        val draftText = "Unsent independent draft survives workspace browsing"
+        compose.onNode(hasSetTextAction()).performTextInput(draftText)
+        val draftBytes = "Unsent attachment retains its owner and bytes".toByteArray()
+        val draftUri = Uri.parse("content://navigation-fixture/unsent.txt")
+        Shadows.shadowOf(context.contentResolver).registerInputStream(draftUri, ByteArrayInputStream(draftBytes))
+        val draftOwner = ViewModelProvider(activity)[AttachmentDraftViewModel::class.java]
+        compose.runOnIdle { draftOwner.addUris(legacy, listOf(draftUri), ChatAttachment.Kind.FILE) }
+        await { draftOwner.drafts.value.singleOrNull()?.attachment != null }
+        val draftBefore = draftOwner.drafts.value.single()
+        val pendingFile = requireNotNull(draftBefore.attachment)
+        assertArrayEquals(draftBytes, AttachmentStore(context).resolve(legacy, pendingFile).readBytes())
+
+        openDrawer()
+        compose.onAllNodesWithTag("drawer-open-workspaces").assertCountEquals(1)
+        compose.onNodeWithText(workspace.title).assertDoesNotExist()
+        compose.onNodeWithTag("drawer-open-central").assertIsNotSelected()
+        // Native rapid taps must still create exactly one catalog destination.
+        compose.onNodeWithTag("drawer-open-workspaces").performTouchInput {
+            click(); advanceEventTime(20); click()
+        }
+        awaitRoute(AppNavigationBackPolicy.WORKSPACES)
+        await { compose.onAllNodesWithTag("workspace-list-row-${workspace.workspaceId}")
+            .fetchSemanticsNodes().isNotEmpty() }
+        settleNativeFrame()
+        compose.onNodeWithTag("drawer-header").assertIsNotDisplayed()
+        compose.onNodeWithTag("workspace-list").assertIsDisplayed()
+        compose.onNodeWithContentDescription(context.getString(R.string.drawer_open)).assertIsDisplayed()
+        compose.onNodeWithTag("jarvys-back").assertDoesNotExist()
+        assertEquals(1, navigation().currentBackStack.value.count { it.destination.route == AppNavigationBackPolicy.WORKSPACES })
+        assertNull("Catalog must not create a Crew manager", CoreAgentRuntime.crewManagerForSession(workspace.executionSessionId))
+        assertEquals(legacy, selected())
+        assertEquals(legacy, AgentRunUiState.state.value.sessionId)
+        assertEquals(listOf(draftBefore), draftOwner.drafts.value)
+
+        openDrawer()
+        compose.onNodeWithTag("drawer-open-workspaces").assertIsSelected()
+        compose.onNodeWithTag("drawer-open-central").assertIsNotSelected()
+        systemBack()
+        compose.onNodeWithTag("drawer-header").assertIsNotDisplayed()
+        assertEquals(AppNavigationBackPolicy.WORKSPACES, navigation().currentDestination?.route)
+        tapTag("workspace-list-row-${workspace.workspaceId}")
+        awaitRoute(AppNavigationBackPolicy.COORDINATED_WORKSPACE)
+        await { compose.onAllNodesWithTag("workspace-open-files").fetchSemanticsNodes().isNotEmpty() }
+        settleNativeFrame()
+        compose.onNodeWithTag("jarvys-back").assertIsDisplayed()
+        compose.onNodeWithText(workspace.title).assertIsDisplayed()
+        tapTag("workspace-open-files")
+        awaitRoute(AppNavigationBackPolicy.COORDINATED_FILES)
+        compose.onNodeWithText(context.getString(R.string.workspace_file_read_only)).assertIsDisplayed()
+        tapTag("jarvys-back")
+        awaitRoute(AppNavigationBackPolicy.COORDINATED_WORKSPACE)
+        systemBack()
+        awaitRoute(AppNavigationBackPolicy.WORKSPACES)
+        compose.onNodeWithContentDescription(context.getString(R.string.drawer_open)).assertIsDisplayed()
+        compose.onNodeWithTag("jarvys-back").assertDoesNotExist()
+        systemBack()
+        awaitRoute(AppNavigationBackPolicy.CHAT_ROOT)
+        compose.onNode(hasSetTextAction()).assertTextEquals(draftText)
+        compose.onNodeWithTag("pending-attachment-${draftBefore.id}").assertIsDisplayed()
+        assertSame(draftOwner, ViewModelProvider(activity)[AttachmentDraftViewModel::class.java])
+        assertEquals(listOf(draftBefore), draftOwner.drafts.value)
+        assertEquals(original, transcript(legacy))
+        assertEquals(legacy, selected())
+        assertEquals(legacy, AgentRunUiState.state.value.sessionId)
+        assertArrayEquals(bytes, AttachmentStore(context).resolve(legacy, attachment).readBytes())
+        assertArrayEquals(draftBytes, AttachmentStore(context).resolve(legacy, pendingFile).readBytes())
+        WorkspaceRegistry(context).use { registry ->
+            assertEquals(listOf(workspace), registry.listWorkspaces())
+            assertTrue(registry.listAssignments(workspace.workspaceId).isEmpty())
+        }
+    }
+
+    @Test fun realCatalogNextPreviousAndFirstBrowseBoundedPagesWithoutStartingCrew() {
+        val rows = WorkspaceRegistry(context).use { registry ->
+            repeat(WORKSPACE_PAGE_SIZE + 1) { registry.createWorkspace("navigation-page-$it", "Catalog project $it") }
+            registry.listWorkspaces(100)
+        }
+        start()
+        await { selected() == legacy && AgentRunUiState.state.value.sessionId == legacy }
+        openDrawer()
+        tapTag("drawer-open-workspaces")
+        awaitRoute(AppNavigationBackPolicy.WORKSPACES)
+        val firstId = rows.first().workspaceId
+        val lastId = rows.last().workspaceId
+        await { compose.onAllNodesWithTag("workspace-list-row-$firstId").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("workspace-list").performScrollToNode(hasTestTag("workspace-next-page"))
+        settleNativeFrame()
+        tapTag("workspace-next-page")
+        await { compose.onAllNodesWithTag("workspace-list-row-$lastId").fetchSemanticsNodes().isNotEmpty() }
+        settleNativeFrame()
+        compose.onNodeWithTag("workspace-list-row-$lastId").assertIsDisplayed()
+        compose.onNodeWithTag("workspace-list-row-$firstId").assertDoesNotExist()
+        compose.onNodeWithTag("workspace-next-page").assertDoesNotExist()
+        tapTag("workspace-previous-page")
+        await { compose.onAllNodesWithTag("workspace-list-row-$lastId").fetchSemanticsNodes().isEmpty() &&
+            compose.onAllNodesWithTag("workspace-list-loading").fetchSemanticsNodes().isEmpty() }
+        compose.onNodeWithTag("workspace-list").performScrollToNode(hasTestTag("workspace-list-row-$firstId"))
+        settleNativeFrame()
+        compose.onNodeWithTag("workspace-list-row-$firstId").assertIsDisplayed()
+        compose.onNodeWithTag("workspace-list").performScrollToNode(hasTestTag("workspace-next-page"))
+        settleNativeFrame()
+        tapTag("workspace-next-page")
+        await { compose.onAllNodesWithTag("workspace-list-row-$lastId").fetchSemanticsNodes().isNotEmpty() }
+        settleNativeFrame()
+        tapTag("workspace-first-page")
+        await { compose.onAllNodesWithTag("workspace-list-row-$lastId").fetchSemanticsNodes().isEmpty() &&
+            compose.onAllNodesWithTag("workspace-list-loading").fetchSemanticsNodes().isEmpty() }
+        compose.onNodeWithTag("workspace-list").performScrollToNode(hasTestTag("workspace-list-row-$firstId"))
+        settleNativeFrame()
+        compose.onNodeWithTag("workspace-list-row-$firstId").assertIsDisplayed()
+        rows.forEach { assertNull("Catalog browsing started ${it.workspaceId}", CoreAgentRuntime.crewManagerForSession(it.executionSessionId)) }
+        WorkspaceRegistry(context).use { registry ->
+            assertEquals(rows, registry.listWorkspaces(100))
+            rows.forEach { assertTrue(registry.listAssignments(it.workspaceId).isEmpty()) }
+        }
+        assertEquals(legacy, selected())
+        assertEquals(legacy, AgentRunUiState.state.value.sessionId)
+    }
+
+    private fun navigation(): NavHostController = MainActivity::class.java.getDeclaredField("activeNavController")
+        .apply { isAccessible = true }.get(activity) as NavHostController
+
+    private fun awaitRoute(route: String) {
+        await { navigation().currentDestination?.route == route }
+        settleNativeFrame()
+    }
+
+    private fun openDrawer() {
+        settleNativeFrame()
+        compose.onNodeWithContentDescription(context.getString(R.string.drawer_open)).performTouchInput { click() }
+        settleNativeFrame()
+        compose.onNodeWithTag("drawer-header").assertIsDisplayed()
+    }
+
+    private fun tapTag(tag: String) {
+        settleNativeFrame()
+        compose.onNodeWithTag(tag).assertIsDisplayed().performTouchInput { click() }
+        settleNativeFrame()
+    }
+
+    private fun systemBack() {
+        compose.runOnIdle { activity.onBackPressedDispatcher.onBackPressed() }
+        settleNativeFrame()
+    }
+
+    private fun settleNativeFrame() {
+        compose.mainClock.advanceTimeBy(600)
+        awaitReactionDrawIdle(compose, activity)
+    }
+
     private fun start(intent: Intent = Intent(context, MainActivity::class.java)) {
         controller = Robolectric.buildActivity(MainActivity::class.java, intent).setup()
         activities += activity
-        Shadows.shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(32))
+        settleNativeFrame()
     }
 
     private fun invoke(name: String, types: Array<Class<*>> = emptyArray(), args: Array<Any> = emptyArray()): Any? =
@@ -186,7 +356,8 @@ class MainActivityWorkspaceRoutingTest {
     private fun await(condition: () -> Boolean) {
         val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
         do {
-            Shadows.shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(32))
+            compose.mainClock.advanceTimeBy(48)
+            compose.waitForIdle()
             if (condition()) return
             Thread.sleep(10)
         } while (System.nanoTime() < end)

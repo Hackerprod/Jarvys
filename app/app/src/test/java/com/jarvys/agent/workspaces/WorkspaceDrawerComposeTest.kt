@@ -16,7 +16,9 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "en-rUS-w360dp-h900dp-port-mdpi")
 class WorkspaceDrawerComposeTest {
@@ -25,9 +27,8 @@ class WorkspaceDrawerComposeTest {
 
     private val legacy = RunHistoryItem("record-old", "Original independent goal", "CHAT", 0, 0, 1.0,
         "legacy-session", "Independent conversation")
-    private val workspace = WorkspaceSidebarRow("workspace", "Research workspace", WorkspaceUiStatus.WAITING)
 
-    @Test fun workspaceShelfPrecedesIndependentHistoryAndNeverExposesExecutionChats() {
+    @Test fun workspaceEntryPrecedesIndependentHistoryAndNeverExposesExecutionChats() {
         val calls = mutableListOf<String>()
         val execution = WorkspaceIdentity.executionSessionId("11111111-1111-1111-1111-111111111111")
         compose.setContent { MaterialTheme {
@@ -37,16 +38,16 @@ class WorkspaceDrawerComposeTest {
                 WorkspaceIdentity.CENTRAL_SESSION, "Hidden active central", "Central goal", true, null, true,
                 { calls += "new" }, { calls += "resume-active" }, { calls += it }, { calls += "settings" },
                 onOpenBots = { calls += "bots" }, onOpenScheduledTasks = { calls += "scheduled" },
-                centralSelected = true, onOpenCentral = { calls += "central" }, workspaces = listOf(workspace),
-                onOpenWorkspace = { calls += it })
+                centralSelected = true, onOpenCentral = { calls += "central" },
+                onOpenWorkspaces = { calls += "workspace" })
         } }
         compose.onNodeWithTag("drawer-open-central").assertIsSelected().performClick()
-        compose.onNodeWithTag("drawer-workspace-workspace").assertIsNotSelected().performClick()
+        compose.onNodeWithTag("drawer-open-workspaces").assertIsNotSelected().performClick()
         compose.onNodeWithText("Hidden central history").assertDoesNotExist()
         compose.onNodeWithText("Hidden execution history").assertDoesNotExist()
         compose.onNodeWithText("Hidden active central").assertDoesNotExist()
         compose.onNodeWithTag("drawer-pinned-heading").assertDoesNotExist()
-        val workspaceBottom = compose.onNodeWithTag("drawer-workspace-workspace").fetchSemanticsNode().boundsInRoot.bottom
+        val workspaceBottom = compose.onNodeWithTag("drawer-open-workspaces").fetchSemanticsNode().boundsInRoot.bottom
         val historyTop = compose.onNodeWithText("Independent conversation").fetchSemanticsNode().boundsInRoot.top
         assertTrue("Workspaces precede legacy history", workspaceBottom < historyTop)
         compose.onNodeWithText("Independent conversation").performClick()
@@ -55,6 +56,30 @@ class WorkspaceDrawerComposeTest {
         }
         compose.onNodeWithTag("drawer-open-settings").performClick()
         assertEquals(listOf("central", "workspace", "record-old", "new", "bots", "scheduled", "settings"), calls)
+    }
+
+    @Test fun workspaceDestinationHasOneSelectedEntryAndNoSelectedIndependentChat() {
+        compose.setContent { MaterialTheme {
+            ConversationDrawer(listOf(legacy), legacy.sessionId, legacy.title, legacy.goal, true,
+                null, false, {}, {}, {}, {}, onOpenCentral = {}, onOpenWorkspaces = {}, workspacesSelected = true)
+        } }
+        compose.onAllNodesWithTag("drawer-open-workspaces").assertCountEquals(1)
+        compose.onNodeWithTag("drawer-open-workspaces").assertIsSelected()
+        compose.onNodeWithTag("drawer-open-central").assertIsNotSelected()
+        compose.onNodeWithText("Independent conversation").assertIsNotSelected()
+        compose.onNodeWithText("Agent").assertIsDisplayed()
+        compose.onNodeWithTag("drawer-workspaces-empty").assertDoesNotExist()
+    }
+
+    @Test @Config(qualifiers = "es-rES-w360dp-h900dp-port-mdpi")
+    fun centralEntryUsesLocalizedAgentLabelInSpanish() {
+        compose.setContent { MaterialTheme {
+            ConversationDrawer(emptyList(), WorkspaceIdentity.CENTRAL_SESSION, null, "", false,
+                null, true, {}, {}, {}, {}, onOpenCentral = {}, onOpenWorkspaces = {}, centralSelected = true)
+        } }
+        compose.onNodeWithTag("drawer-open-central").assertIsSelected()
+        compose.onNodeWithText("Agente").assertIsDisplayed()
+        compose.onAllNodesWithTag("drawer-open-workspaces").assertCountEquals(1)
     }
 
     @Test fun ordinaryHistoryFiltersReservedSessionsEvenWithDefaultOptionalProps() {
@@ -75,12 +100,12 @@ class WorkspaceDrawerComposeTest {
         val restoration = StateRestorationTester(compose)
         restoration.setContent { MaterialTheme {
             ConversationDrawer(listOf(legacy), "new", null, "", false, null, true, {}, {}, {}, {},
-                isDrawerOpen = open.value, onCloseDrawer = { closed++ }, onOpenCentral = {}, workspaces = listOf(workspace))
+                isDrawerOpen = open.value, onCloseDrawer = { closed++ }, onOpenCentral = {}, onOpenWorkspaces = {})
         } }
         compose.onNodeWithTag("drawer-search-toggle").performClick()
         compose.onNodeWithTag("drawer-search").performTextInput("missing")
         compose.onNodeWithTag("drawer-search-empty").performScrollTo().assertIsDisplayed()
-        compose.onNodeWithTag("drawer-workspace-workspace").assertExists()
+        compose.onNodeWithTag("drawer-open-workspaces").assertExists()
         compose.runOnIdle { open.value = false }
         compose.onNodeWithTag("drawer-search").assertIsNotFocused()
         compose.runOnIdle { open.value = true }
@@ -95,9 +120,10 @@ class WorkspaceDrawerComposeTest {
 
     @Test fun noWorkspaceRecordsDoNotInventAWorkspaceOrCommands() {
         compose.setContent { MaterialTheme {
-            ConversationDrawer(emptyList(), "new", null, "", false, null, true, {}, {}, {}, {}, onOpenCentral = {})
+            ConversationDrawer(emptyList(), "new", null, "", false, null, true, {}, {}, {}, {}, onOpenCentral = {}, onOpenWorkspaces = {})
         } }
-        compose.onNodeWithTag("drawer-workspaces-empty").assertIsDisplayed()
+        compose.onNodeWithTag("drawer-open-workspaces").assertIsDisplayed()
+        compose.onNodeWithTag("drawer-workspaces-empty").assertDoesNotExist()
         compose.onNodeWithText(compose.activity.getString(R.string.workspace_pause)).assertDoesNotExist()
         compose.onNodeWithTag("drawer-new-chat").assertIsDisplayed()
     }

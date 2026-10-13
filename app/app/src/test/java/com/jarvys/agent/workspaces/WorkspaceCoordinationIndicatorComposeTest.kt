@@ -32,14 +32,12 @@ class WorkspaceCoordinationIndicatorComposeTest {
         val summary = mutableStateOf(WorkspaceCoordinationSummary(live = 3))
         var opened = ""
         compose.setContent { MaterialTheme {
-            ConversationDrawer(emptyList(), WorkspaceIdentity.CENTRAL_SESSION, null, "", false, null, true,
-                {}, {}, {}, {}, onOpenCentral = {},
-                workspaces = listOf(WorkspaceSidebarRow("space", "Project", WorkspaceUiStatus.WAITING,
+            WorkspaceListScreen(workspaces = listOf(WorkspaceSidebarRow("space", "Project", WorkspaceUiStatus.WAITING,
                     coordination = summary.value)), onOpenWorkspace = { opened = it })
         } }
         compose.onAllNodesWithTag("workspace-coordination-indicator", useUnmergedTree = true).assertCountEquals(1)
         compose.onNodeWithText(quantityText(R.plurals.workspace_coordination_live, 3)).assertExists()
-        compose.onNodeWithTag("drawer-workspace-space").performClick()
+        compose.onNodeWithTag("workspace-list-row-space").performClick()
         assertEquals("space", opened)
         compose.runOnIdle { summary.value = WorkspaceCoordinationSummary(uncertain = 1, reviewRequired = true, pageLimited = true) }
         compose.onAllNodesWithTag("workspace-coordination-indicator", useUnmergedTree = true).assertCountEquals(1)

@@ -18,7 +18,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -33,6 +33,8 @@ import com.jarvys.agent.JarvysUiTokens
 import com.jarvys.agent.LucideIcons
 import com.jarvys.agent.R
 import com.jarvys.agent.ui.mascot.JarvysMascotAccountMenu
+import com.jarvys.agent.ui.mascot.JarvysHeaderActivity
+import com.jarvys.agent.ui.mascot.JarvysHeaderFailureTracker
 import com.jarvys.agent.ui.motion.LocalReducedMotion
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -62,7 +64,31 @@ fun JarvysRouteTopBar(
     val reducedMotion = LocalReducedMotion.current
     if (!route.showTopBar) return
     val centeredMascot = centralMascotCentered && route.action == AppRouteAction.CHAT
-    // Move the same UX40 menu, keeping opt-in, lifecycle and reduced-motion gates intact.
+    // Fresh terminal events require this mounted header to have observed the same generation running.
+    val terminalTracker = remember(mascotVisibleSessionId) { JarvysHeaderFailureTracker() }
+    var failedRunId by remember(mascotVisibleSessionId) { mutableStateOf<String?>(null) }
+    var interruptedRunId by remember(mascotVisibleSessionId) { mutableStateOf<String?>(null) }
+    val liveVisible = mascotLiveConversationVisible && mascotSurfaceVisible
+        && agentSnapshot.sessionId == mascotVisibleSessionId
+    LaunchedEffect(agentSnapshot.runId, agentSnapshot.liveRunIdentity, agentSnapshot.running,
+        agentSnapshot.outcome, liveVisible) {
+        failedRunId = terminalTracker.observe(agentSnapshot.runId, agentSnapshot.running,
+            agentSnapshot.outcome, liveVisible, agentSnapshot.liveRunIdentity)
+        interruptedRunId = terminalTracker.interruptedRunId
+    }
+    val liveActivity = if (liveVisible && agentSnapshot.running && !agentSnapshot.compacting
+        && agentSnapshot.interactiveOwnerSessionId == mascotVisibleSessionId) when {
+        mainMascotMode == 5 && agentSnapshot.liveUserWaitId != null -> JarvysHeaderActivity.WAITING
+        mainMascotMode == 2 && agentSnapshot.liveMascotTool?.eligibleToAnimate == true -> JarvysHeaderActivity.WORKING
+        mainMascotMode == 1 && agentSnapshot.liveModelWaitId != null -> JarvysHeaderActivity.THINKING
+        else -> null
+    } else null
+    val liveActivityKey = when (liveActivity) {
+        JarvysHeaderActivity.WAITING -> agentSnapshot.liveUserWaitId
+        JarvysHeaderActivity.WORKING -> agentSnapshot.liveMascotTool?.executionId
+        JarvysHeaderActivity.THINKING -> agentSnapshot.liveModelWaitId?.toString()
+        null -> null
+    }?.let { "$mascotVisibleSessionId:$it" }
     val accountMenu: @Composable () -> Unit = {
         JarvysMascotAccountMenu(
             mode = mainMascotMode,
@@ -70,6 +96,12 @@ fun JarvysRouteTopBar(
             liveConversationVisible = mascotLiveConversationVisible,
             surfaceVisible = mascotSurfaceVisible,
             mascotSize = if (centeredMascot) 84.dp else 30.dp,
+            originalHeaderAnimation = true,
+            failedRunId = failedRunId,
+            interruptedRunId = interruptedRunId,
+            liveActivity = liveActivity,
+            liveActivityKey = liveActivityKey,
+            levitate = centeredMascot,
         ) { closeMenu ->
             DropdownMenuItem(text = { Text(stringResource(R.string.drawer_settings)) },
                 leadingIcon = { Icon(LucideIcons.Settings, contentDescription = null) },

@@ -110,7 +110,7 @@ class CentralMascotScaleComposeTest {
         compose.onNodeWithTag("jarvys-mascot-native").assertDoesNotExist()
         nav.performTouchInput { click() }
         create.performTouchInput { click() }
-        menu.performTouchInput { click() }
+        menu.performTouchInput { longClick() }
         awaitReactionDrawIdle(compose)
         compose.onNodeWithText(compose.activity.getString(R.string.drawer_settings)).performTouchInput { click() }
         assertEquals(1, drawer)

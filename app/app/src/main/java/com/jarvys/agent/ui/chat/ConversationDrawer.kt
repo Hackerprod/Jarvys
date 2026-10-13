@@ -93,19 +93,9 @@ fun ConversationDrawer(
     onCloseDrawer: () -> Unit = {},
     centralSelected: Boolean = false,
     onOpenCentral: (() -> Unit)? = null,
-    workspaces: List<WorkspaceSidebarRow> = emptyList(),
-    selectedWorkspaceId: String? = null,
-    onOpenWorkspace: (String) -> Unit = {},
+    onOpenWorkspaces: (() -> Unit)? = null,
+    workspacesSelected: Boolean = false,
     reservedSessionIds: Set<String> = emptySet(),
-    workspacesLoading: Boolean = false,
-    workspaceError: String? = null,
-    canPreviousWorkspacePage: Boolean = false,
-    canFirstWorkspacePage: Boolean = false,
-    canNextWorkspacePage: Boolean = false,
-    onPreviousWorkspacePage: () -> Unit = {},
-    onNextWorkspacePage: () -> Unit = {},
-    onFirstWorkspacePage: () -> Unit = {},
-    onRetryWorkspaces: () -> Unit = {},
 ) {
     val configuration = LocalConfiguration.current
     val listState = rememberLazyListState()
@@ -201,52 +191,27 @@ fun ConversationDrawer(
                         Surface(shape = RoundedCornerShape(13.dp),
                             color = if (centralSelected) MaterialTheme.colorScheme.primaryContainer
                                 else MaterialTheme.colorScheme.surface) {
-                            DrawerMenuRow(stringResource(R.string.workspace_central_chat), LucideIcons.Bot,
-                                Modifier.testTag("drawer-open-central").semantics { selected = centralSelected }, onOpenCentral)
-                        }
-                    }
-                    if (onOpenCentral != null || workspaces.isNotEmpty()) {
-                        item(key = "workspace-heading") {
-                            DrawerGroupHeading(stringResource(R.string.workspace_sidebar_heading), "drawer-workspaces-heading")
-                        }
-                        if (workspacesLoading) item(key = "workspace-loading") {
-                            Text(stringResource(R.string.workspace_loading), Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
-                                .testTag("drawer-workspaces-loading"))
-                        }
-                        if (workspaceError != null) item(key = "workspace-error") {
-                            Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp).testTag("drawer-workspaces-error")) {
-                                Text(workspaceError, color = MaterialTheme.colorScheme.error)
-                                androidx.compose.material3.TextButton(onClick = onRetryWorkspaces) {
-                                    Text(stringResource(R.string.workspace_retry))
-                                }
-                            }
-                        }
-                        if (!workspacesLoading && workspaceError == null && workspaces.isEmpty()) item(key = "workspace-empty") {
-                            Text(stringResource(if (canFirstWorkspacePage) R.string.workspace_page_empty else R.string.workspace_sidebar_empty),
-                                Modifier.padding(horizontal = 12.dp, vertical = 8.dp).testTag("drawer-workspaces-empty"),
-                                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        items(workspaces, key = { "workspace-" + it.id }) { workspace ->
-                            val selected = selectedWorkspaceId == workspace.id
-                            Surface(shape = RoundedCornerShape(13.dp),
-                                color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface) {
-                                Column(Modifier.fillMaxWidth().heightIn(min = 56.dp)
-                                    .testTag("drawer-workspace-${workspace.id}").semantics { this.selected = selected }
-                                    .clickable(enabled = actionsEnabled && !workspacesLoading && workspaceError == null, role = Role.Button) { onOpenWorkspace(workspace.id) }
-                                    .padding(horizontal = 12.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    Text(workspaceDisplayText(workspace.title, stringResource(R.string.workspace_title), 256),
-                                        style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                    WorkspaceStatusText(workspace.status)
-                                    com.jarvys.agent.workspaces.WorkspaceCoordinationIndicator(workspace.coordination)
-                                    if (workspace.statusPageLimited) Text(stringResource(R.string.workspace_status_page_scope),
-                                        style = MaterialTheme.typography.bodySmall)
-                                }
+                            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                                .testTag("drawer-open-central").semantics { selected = centralSelected }
+                                .clickable(enabled = actionsEnabled, role = Role.Button, onClick = onOpenCentral)
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                                androidx.compose.foundation.Image(
+                                    painter = androidx.compose.ui.res.painterResource(R.drawable.jarvys_mascot_static),
+                                    contentDescription = null, modifier = Modifier.size(23.dp),
+                                    contentScale = androidx.compose.ui.layout.ContentScale.Fit)
+                                Text(stringResource(R.string.drawer_agent), style = MaterialTheme.typography.titleMedium)
                             }
                         }
                     }
-                    if (canFirstWorkspacePage || canNextWorkspacePage) item(key = "workspace-pages") {
-                        WorkspacePageButtons(canPreviousWorkspacePage, canFirstWorkspacePage, canNextWorkspacePage,
-                            !workspacesLoading && actionsEnabled, onPreviousWorkspacePage, onNextWorkspacePage, onFirstWorkspacePage)
+                    if (onOpenWorkspaces != null) item(key = "workspaces-navigation") {
+                        Surface(shape = RoundedCornerShape(13.dp),
+                            color = if (workspacesSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface) {
+                            DrawerMenuRow(stringResource(R.string.workspace_sidebar_heading), LucideIcons.Layers2,
+                                Modifier.testTag("drawer-open-workspaces").semantics { selected = workspacesSelected },
+                                onOpenWorkspaces, enabled = actionsEnabled)
+                        }
                     }
                     item(key = "primary-navigation") {
                         Column {
@@ -266,7 +231,7 @@ fun ConversationDrawer(
                             val active = activeVisible && record.sessionId == activeSessionId
                             ConversationSessionRow(drawerConversationTitle(if (active) activeTitle else record.title,
                                 if (active) activeGoal else record.goal, stringResource(R.string.drawer_chat_fallback)),
-                                selected = isChatRoute && !centralSelected && selectedWorkspaceId == null && if (active) selectedHistoryId == null else selectedHistoryId == record.id,
+                                selected = isChatRoute && !centralSelected && !workspacesSelected && if (active) selectedHistoryId == null else selectedHistoryId == record.id,
                                 active = active, onClick = { if (active) onResumeActive() else onOpenHistory(record.id) },
                                 pinned = record.pinned, archived = false, actionsEnabled = actionsEnabled,
                                 showPinnedMarker = false, verticalOverflow = true,
@@ -287,7 +252,7 @@ fun ConversationDrawer(
                         val active = activeVisible && record.sessionId == activeSessionId
                         ConversationSessionRow(drawerConversationTitle(if (active) activeTitle else record.title,
                             if (active) activeGoal else record.goal, stringResource(R.string.drawer_chat_fallback)),
-                            selected = isChatRoute && !centralSelected && selectedWorkspaceId == null && if (active) selectedHistoryId == null else selectedHistoryId == record.id,
+                            selected = isChatRoute && !centralSelected && !workspacesSelected && if (active) selectedHistoryId == null else selectedHistoryId == record.id,
                             active = active, onClick = { if (active) onResumeActive() else onOpenHistory(record.id) },
                             pinned = record.pinned, archived = false, actionsEnabled = actionsEnabled,
                             showPinnedMarker = false, verticalOverflow = true,
@@ -325,8 +290,8 @@ private fun DrawerGroupHeading(title: String, tag: String) {
 
 @Composable
 private fun DrawerMenuRow(title: String, icon: androidx.compose.ui.graphics.vector.ImageVector,
-    modifier: Modifier = Modifier, onClick: () -> Unit) {
-    Row(modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(role = Role.Button, onClick = onClick)
+    modifier: Modifier = Modifier, onClick: () -> Unit, enabled: Boolean = true) {
+    Row(modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(enabled = enabled, role = Role.Button, onClick = onClick)
         .padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp)) {
         Icon(icon, contentDescription = null, modifier = Modifier.size(23.dp), tint = MaterialTheme.colorScheme.primary)

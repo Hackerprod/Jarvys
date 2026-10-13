@@ -19,7 +19,7 @@ SOURCE = APP / "artwork/jarvys-app-icon-source.png"
 SOURCE_SHA256 = "2c003833dc3f14883705a3fdcc1e694ebec06e82ea8a15b6c14e0300737fef52"
 RES = APP / "app/src/main/res"
 DENSITIES = {"mdpi": 1, "hdpi": 1.5, "xhdpi": 2, "xxhdpi": 3, "xxxhdpi": 4}
-BACKGROUND = (17, 24, 39, 255)
+BACKGROUND = (20, 29, 46, 255)
 FILTER = Image.Resampling.LANCZOS
 
 

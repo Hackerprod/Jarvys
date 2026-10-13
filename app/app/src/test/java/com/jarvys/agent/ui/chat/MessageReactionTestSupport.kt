@@ -10,6 +10,7 @@ import android.widget.Magnifier
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.SemanticsNodeInteraction
+import androidx.compose.ui.test.junit4.ComposeTestRule
 import androidx.compose.ui.test.junit4.AndroidComposeTestRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
@@ -92,12 +93,16 @@ internal fun awaitReactionFileReady(
 }
 
 /** Flushes actual View layout/draw after Compose settles; captures remain host-rendered native pixels. */
-internal fun awaitReactionDrawIdle(compose: AndroidComposeTestRule<ActivityScenarioRule<ComponentActivity>, ComponentActivity>) {
+internal fun awaitReactionDrawIdle(compose: AndroidComposeTestRule<ActivityScenarioRule<ComponentActivity>, ComponentActivity>) =
+    awaitReactionDrawIdle(compose, compose.activity)
+
+/** Also supports a real Activity launched after an empty Compose rule installs its controlled clock. */
+internal fun awaitReactionDrawIdle(compose: ComposeTestRule, activity: ComponentActivity) {
     compose.waitForIdle()
     repeat(2) {
         compose.mainClock.advanceTimeByFrame()
         compose.runOnIdle {
-            val root = compose.activity.window.decorView
+            val root = activity.window.decorView
             val metrics = root.resources.displayMetrics
             val configuration = root.resources.configuration
             val width = (configuration.screenWidthDp * metrics.density).toInt()

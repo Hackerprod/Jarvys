@@ -10,6 +10,7 @@ internal object ConversationVisibility {
     )
 
     fun visible(event: AgentRunUiEvent): Boolean {
+        if (event.kind == "memory" && event.stage == "SEED") return false
         if (event.kind == "progress" && event.stage in internalStages) return false
         // A model preamble accompanying tool calls is not the final user-facing answer.
         if (event.kind == "assistant" && event.stage == "PROGRESS") return false

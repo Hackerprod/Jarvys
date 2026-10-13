@@ -1,10 +1,14 @@
 <div align="center">
 
-## En desarrollo: acuses de incorporación UX43 v93
+## En desarrollo: recuperación y animaciones v96
 
-El corte actual añade evidencia durable de que una respuesta exacta o corrección nativa se incorporó a un punto de control del trabajador. El acuse es independiente de la aceptación local y no acredita comprensión, cumplimiento ni finalización. Se reutilizan el checkpoint y ledger existentes, sin repetir trabajo al reabrir; también se corrigen los tres contadores EN/ES para 0/1/2. La precompilación Android del primer corte pasó. Validación afectada, revisión de APK, firma y entrega de v93 pendientes. Las animaciones recibidas se evalúan por separado y no están integradas. [Contrato](docs/UX43_CHECKPOINT_INCORPORATION.md).
+Este corte reconstruye de forma explícita las fuentes v94/v95 que no sobrevivieron al reinicio del entorno, desde el respaldo remoto v93 y el APK v95 firmado conservado. No se afirma identidad de fuente con las entregas anteriores. Recupera los acuses, el mapa de mascota, la fila Agente/Agent y la lista propia de Workspaces; añade correcciones de descarga, rutas canónicas, levitación con Rive y ausencia de flash al pulsar. Validación integrada, APK, firma y entrega de v96 pendientes. [Contrato y procedencia](docs/RECOVERY_ANIMATIONS_V96.md).
 
-## Entrega actual: coordinación durable UX43 v92
+## Última entrega confirmada: Workspaces v95
+
+El 13-10-2026 a las 06:24:55 UTC se enviaron las dos partes del ZIP de v95. APK ARM64: 25.636.585 bytes, SHA-256 `04f2b91a4741aa9a05d3f893a151f827133343216ff8996fb5011fb941522205`, firma D7. Incluye Idle local, otros estados remotos y lista propia de Workspaces. El usuario confirmó que Idle parpadea; informó que no levita y no ve las otras animaciones. Las correcciones actuales se validan como fuente nueva. v93 no tuvo entrega independiente: sus acuses/plurales se incluyeron en v94.
+
+## Entrega anterior: coordinación durable UX43 v92
 
 v92 (`1.2.85-COORDINATION`) conserva preguntas, hallazgos y bloqueos ligados a la misión/ciclo del trabajador. El central puede leerlos con identidad y hash exactos y responder a una solicitud que siga activa. El indicador nativo reúne los avisos útiles; la coordinación interna sigue fuera del chat visible. Aceptación local de una respuesta no significa consumo ni resolución, y reabrir no repite trabajo. [Contrato](docs/UX43_COORDINATION.md).
 

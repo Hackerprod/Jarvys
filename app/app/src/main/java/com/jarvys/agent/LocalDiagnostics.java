@@ -47,6 +47,11 @@ import org.json.JSONObject;
 public final class LocalDiagnostics {
     public enum Origin { UNCAUGHT, PROVIDER, TOOL, FACTORY, SERVICE, ACTIVITY, RUNTIME }
 
+    /** Closed, content-free animation diagnostics. No caller text is accepted. */
+    public enum AnimationStage { INDEX, DOWNLOAD, INTEGRITY, CACHE, INIT, IMPORT, DECODE, ATTACH, SURFACE, FIRST_FRAME, TIMEOUT, CONTEXT_LOSS }
+    public enum AnimationStatus { STARTED, READY, FAILED, UNAVAILABLE }
+    public enum AnimationId { IDLE, SAD, THINKING, WORKING, WAITING, INTERRUPTED, TAUNT, CATALOG }
+
     static final int SLOT_COUNT = 32;
     static final int MAX_RECORD_BYTES = 16 * 1024;
     static final int MAX_CAUSES = 8;
@@ -66,6 +71,14 @@ public final class LocalDiagnostics {
     private final String expectedBase;
     private final String expectedDirectory;
     private final LongSupplier clock;
+    private final boolean[][][] animationSeen = new boolean[AnimationId.values().length][AnimationStage.values().length][AnimationStatus.values().length];
+    private static final java.util.concurrent.ThreadPoolExecutor ANIMATION_WRITER =
+            new java.util.concurrent.ThreadPoolExecutor(1, 1, 0L, java.util.concurrent.TimeUnit.MILLISECONDS,
+                    new java.util.concurrent.ArrayBlockingQueue<>(16), runnable -> {
+                        Thread thread = new Thread(runnable, "jarvys-animation-diagnostics");
+                        thread.setDaemon(true);
+                        return thread;
+                    }, new java.util.concurrent.ThreadPoolExecutor.DiscardPolicy());
 
     public static LocalDiagnostics get(Context context) {
         LocalDiagnostics current = instance;
@@ -110,6 +123,43 @@ public final class LocalDiagnostics {
         try {
             if (context != null && !AgentErrorReporter.attachmentReportsSuppressed()) get(context).record(origin, failure, false);
         } catch (Throwable ignored) { }
+    }
+
+    public static void animation(Context context, AnimationStage stage, AnimationStatus status, AnimationId id) {
+        try {
+            if (context != null && !AgentErrorReporter.attachmentReportsSuppressed()) {
+                Context app = context.getApplicationContext();
+                if (app != null && stage != null && status != null && id != null) {
+                    // Bounded, best-effort background writes; the rendering thread never waits for disk.
+                    ANIMATION_WRITER.execute(() -> {
+                        try { get(app).animationRecord(stage, status, id); }
+                        catch (Throwable ignored) { }
+                    });
+                }
+            }
+        } catch (Throwable ignored) { }
+    }
+
+    boolean animationRecord(AnimationStage stage, AnimationStatus status, AnimationId id) {
+        if (stage == null || status == null || id == null || Boolean.TRUE.equals(CAPTURING.get())) return false;
+        try {
+            if (AgentErrorReporter.attachmentReportsSuppressed()) return false;
+            CAPTURING.set(true);
+            long now = clock.getAsLong();
+            JSONObject row = header(Origin.RUNTIME, status == AnimationStatus.FAILED ? "recoverable" : "info",
+                    "animation", now, null);
+            row.put("animation_stage", stage.name());
+            row.put("animation_status", status.name());
+            row.put("animation_id", id.name());
+            synchronized (animationSeen) {
+                // One persisted observation of each closed triple per process, not a live-state store.
+                if (animationSeen[id.ordinal()][stage.ordinal()][status.ordinal()]) return false;
+                if (!persist(row, now)) return false;
+                animationSeen[id.ordinal()][stage.ordinal()][status.ordinal()] = true;
+                return true;
+            }
+        } catch (Throwable ignored) { return false; }
+        finally { CAPTURING.remove(); }
     }
 
     /** Legacy reporting retains only a validated HTTP status; every legacy text argument is discarded. */
@@ -336,7 +386,12 @@ public final class LocalDiagnostics {
 
     private static JSONObject validate(JSONObject raw, long now, boolean includeFrames) {
         try {
-            if (!keys(raw, "schema", "id", "time_ms", "version_code", "flavor", "sdk", "origin",
+            boolean animation = "animation".equals(raw.opt("kind"));
+            if (animation) {
+                if (!keys(raw, "schema", "id", "time_ms", "version_code", "flavor", "sdk", "origin",
+                        "severity", "kind", "http_status", "causes", "truncated",
+                        "animation_stage", "animation_status", "animation_id")) return null;
+            } else if (!keys(raw, "schema", "id", "time_ms", "version_code", "flavor", "sdk", "origin",
                     "severity", "kind", "http_status", "causes", "truncated")) return null;
             if (integer(raw.opt("schema"), 1, 1, -1) != 1 || !(raw.opt("id") instanceof String)
                     || !validId((String) raw.opt("id"))) return null;
@@ -345,8 +400,8 @@ public final class LocalDiagnostics {
             long sdk = integer(raw.opt("sdk"), 1, 1000, -1);
             if (time < 0 || expired(time, now) || future(time, now) || version < 0 || sdk < 0) return null;
             String flavor = fixed(raw.opt("flavor"), "play", "full");
-            String severity = fixed(raw.opt("severity"), "recoverable", "fatal");
-            String kind = fixed(raw.opt("kind"), "exception", "compatibility");
+            String severity = animation ? fixed(raw.opt("severity"), "recoverable", "info") : fixed(raw.opt("severity"), "recoverable", "fatal");
+            String kind = fixed(raw.opt("kind"), "exception", "compatibility", "animation");
             String origin = raw.opt("origin") instanceof String ? (String) raw.opt("origin") : "";
             try { Origin.valueOf(origin); } catch (IllegalArgumentException invalid) { return null; }
             if (flavor == null || severity == null || kind == null || !(raw.opt("truncated") instanceof Boolean)) return null;
@@ -357,7 +412,20 @@ public final class LocalDiagnostics {
             if (inputCauses.length() > MAX_CAUSES || ("exception".equals(kind) && inputCauses.length() == 0)
                     || ("compatibility".equals(kind) && (inputCauses.length() != 0
                     || !"RUNTIME".equals(origin) || !"recoverable".equals(severity)))) return null;
+            if (animation) {
+                AnimationStage.valueOf(raw.getString("animation_stage"));
+                AnimationId.valueOf(raw.getString("animation_id"));
+                AnimationStatus animationStatus = AnimationStatus.valueOf(raw.getString("animation_status"));
+                if (!"RUNTIME".equals(origin) || status != JSONObject.NULL || inputCauses.length() != 0
+                        || raw.getBoolean("truncated")
+                        || !(animationStatus == AnimationStatus.FAILED ? "recoverable" : "info").equals(severity)) return null;
+            }
             JSONObject result = new JSONObject();
+            if (animation) {
+                result.put("animation_stage", raw.getString("animation_stage"));
+                result.put("animation_status", raw.getString("animation_status"));
+                result.put("animation_id", raw.getString("animation_id"));
+            }
             result.put("schema", 1); result.put("id", raw.getString("id")); result.put("time_ms", time);
             result.put("version_code", version); result.put("flavor", flavor); result.put("sdk", sdk);
             result.put("origin", origin); result.put("severity", severity); result.put("kind", kind);

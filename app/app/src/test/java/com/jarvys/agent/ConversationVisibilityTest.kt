@@ -24,6 +24,23 @@ class ConversationVisibilityTest {
         assertEquals("private coordination", evidence.last().text)
     }
 
+    @Test fun onlyMemorySeedIsHiddenWhileExistingMemoryAndOtherSeedKindsRemain() {
+        val seed = AgentRunUiEvent(1L, "memory", "SEED", "Internal initial seed")
+        val existing = listOf(
+            AgentRunUiEvent(2L, "memory", "WRITE", "Saved preference"),
+            AgentRunUiEvent(3L, "memory", "EDIT", "Updated preference"),
+            AgentRunUiEvent(4L, "memory", "DELETE", "Removed preference"),
+            AgentRunUiEvent(5L, "memory", null, "Memory note"),
+            AgentRunUiEvent(6L, "memory", "seed", "Non-SEED stage"),
+            AgentRunUiEvent(7L, "user", "SEED", "User text stays"),
+            AgentRunUiEvent(8L, "assistant", "SEED", "Answer stays"),
+        )
+        val evidence = listOf(seed) + existing
+        assertEquals(existing, ConversationVisibility.project(evidence))
+        assertEquals(seed, evidence.first())
+        assertEquals(8, evidence.size)
+    }
+
     @Test fun errorsFinalAnswersDecisionsAndUsefulToolResultsStayVisible() {
         val events = listOf(
             AgentRunUiEvent(1L, "user", null, "model_wait"),

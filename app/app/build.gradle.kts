@@ -31,8 +31,8 @@ android {
         applicationId = if (recoveryTestBuild) "com.jarvys.agent.recoverytest" else "com.jarvys.agent"
         minSdk = 24
         targetSdk = 35
-        versionCode = 93
-        versionName = "1.2.86-CHECKPOINT" + if (recoveryTestBuild) "-test" else ""
+        versionCode = 96
+        versionName = "1.2.89-ANIMATION-RECOVERY" + if (recoveryTestBuild) "-test" else ""
         manifestPlaceholders["jarvysApplicationLabel"] = if (recoveryTestBuild) "Jarvys Prueba" else "@string/app_name"
         manifestPlaceholders["jarvysNotificationListenerLabel"] =
             if (recoveryTestBuild) "Jarvys Prueba: notificaciones" else "@string/notification_listener_label"
@@ -79,6 +79,8 @@ android {
 dependencies {
     implementation(project(":factory-contract"))
     implementation(project(":factory-runtime-core"))
+    // Dedicated cookie/auth-free animation transport; Kotlin remains 2.2.20. Apache-2.0.
+    implementation("com.squareup.okhttp3:okhttp:5.2.3")
     implementation("androidx.webkit:webkit:1.14.0")
     // Pinned to the APK factory signing/verification contract; upgrade only with its dedicated compatibility validation.
     //noinspection GradleDependency

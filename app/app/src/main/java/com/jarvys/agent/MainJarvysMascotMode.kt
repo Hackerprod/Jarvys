@@ -12,8 +12,13 @@ fun mainJarvysMascotMode(
     if (!liveConversationVisible || visibleSessionId.isNullOrBlank()
         || snapshot.sessionId != visibleSessionId || snapshot.compacting) return null
     if (snapshot.running) {
-        return if (snapshot.interactiveOwnerSessionId == visibleSessionId
-            && snapshot.liveMascotTool?.eligibleToAnimate == true) 2 else null
+        if (snapshot.interactiveOwnerSessionId != visibleSessionId) return null
+        return when {
+            snapshot.liveUserWaitId != null -> 5
+            snapshot.liveMascotTool?.eligibleToAnimate == true -> 2
+            snapshot.liveModelWaitId != null -> 1
+            else -> null
+        }
     }
     return when (snapshot.outcome) {
         "COMPLETED" -> 6

@@ -224,6 +224,10 @@ data class AgentRunUiSnapshot(
     val reflectionStatus: String? = null,
     val reflectionLastSuccessMillis: Long = 0L,
     val liveMascotTool: LiveMascotTool? = null,
+    // Current process/generation evidence only, never inferred from restored timeline rows.
+    val liveModelWaitId: Long? = null,
+    val liveUserWaitId: String? = null,
+    val liveRunIdentity: String? = null,
 )
 
 
@@ -281,6 +285,9 @@ object AgentRunUiState {
             running = true,
             outcome = null,
             liveMascotTool = null,
+            liveModelWaitId = null,
+            liveUserWaitId = null,
+            liveRunIdentity = null,
             events = events,
             compacting = false,
             compactionStatus = null,
@@ -323,6 +330,9 @@ object AgentRunUiState {
             running = true,
             outcome = null,
             liveMascotTool = null,
+            liveModelWaitId = null,
+            liveUserWaitId = null,
+            liveRunIdentity = null,
             compacting = false,
             compactionStatus = null,
         )
@@ -467,7 +477,8 @@ object AgentRunUiState {
         val current = _state.value
         _state.value = current.copy(sessionId = sessionId, compacting = true, compactionStatus = message,
             liveMascotTool = if (current.sessionId == sessionId)
-                current.liveMascotTool?.copy(eligibleToAnimate = false) else null)
+                current.liveMascotTool?.copy(eligibleToAnimate = false) else null,
+            liveModelWaitId = null, liveUserWaitId = null)
     }
 
     @JvmStatic
@@ -543,7 +554,10 @@ object AgentRunUiState {
         activeGeneration = generation
         ownedRunActive = true
         _state.value = _state.value.copy(interactiveOwnerSessionId = sessionId,
-            liveMascotTool = if (generationChanged) null else _state.value.liveMascotTool)
+            liveMascotTool = if (generationChanged) null else _state.value.liveMascotTool,
+            liveModelWaitId = if (generationChanged) null else _state.value.liveModelWaitId,
+            liveUserWaitId = if (generationChanged) null else _state.value.liveUserWaitId,
+            liveRunIdentity = if (_state.value.sessionId == sessionId) "$sessionId:$generation" else null)
         if (_state.value.sessionId == sessionId) _state.value = _state.value.copy(running = true, outcome = null)
     }
 
@@ -556,7 +570,7 @@ object AgentRunUiState {
         bindGeneration(sessionId, generation)
         if (_state.value.sessionId != sessionId) {
             ownedLiveSnapshot = AgentRunUiSnapshot(sessionId = sessionId, goal = goal, running = true,
-                interactiveOwnerSessionId = sessionId,
+                interactiveOwnerSessionId = sessionId, liveRunIdentity = "$sessionId:$generation",
                 events = listOf(event("user", goal).copyAttachments(attachments)))
         }
     }
@@ -577,7 +591,10 @@ object AgentRunUiState {
         val stillOwnsRun = ownedRunActive && ownedSessionId == sessionId
         _state.value = _state.value.copy(running = stillOwnsRun,
             outcome = if (stillOwnsRun) _state.value.outcome else "FAILED",
-            liveMascotTool = if (stillOwnsRun) _state.value.liveMascotTool else null)
+            liveMascotTool = if (stillOwnsRun) _state.value.liveMascotTool else null,
+            liveModelWaitId = if (stillOwnsRun) _state.value.liveModelWaitId else null,
+            liveUserWaitId = if (stillOwnsRun) _state.value.liveUserWaitId else null,
+            liveRunIdentity = if (stillOwnsRun) _state.value.liveRunIdentity else null)
         refreshPersistedSession(sessionId, events)
     }
 
@@ -591,7 +608,8 @@ object AgentRunUiState {
         if (ownedRunActive && ownedSessionId == sessionId && activeGeneration == generation) {
             ownedRunActive = false
             ownedLiveSnapshot = null
-            _state.value = _state.value.copy(interactiveOwnerSessionId = null, liveMascotTool = null)
+            _state.value = _state.value.copy(interactiveOwnerSessionId = null, liveMascotTool = null,
+                liveModelWaitId = null, liveUserWaitId = null)
             if (_state.value.sessionId == sessionId) _state.value = _state.value.copy(running = false, outcome = "STOPPED", events = interruptActivities(_state.value.events))
         }
     }
@@ -602,7 +620,8 @@ object AgentRunUiState {
         if (ownedRunActive && ownedSessionId == sessionId && activeGeneration == generation) {
             ownedRunActive = false
             ownedLiveSnapshot = null
-            _state.value = _state.value.copy(interactiveOwnerSessionId = null, liveMascotTool = null)
+            _state.value = _state.value.copy(interactiveOwnerSessionId = null, liveMascotTool = null,
+                liveModelWaitId = null, liveUserWaitId = null)
             if (_state.value.sessionId == sessionId) complete(runId, outcome, text, messageId, durationMs)
         }
     }
@@ -619,7 +638,10 @@ object AgentRunUiState {
     fun onProgress(stage: String, message: String) = synchronized(lock) {
         val current = _state.value
         if (!current.running) return@synchronized
-        if (stage == "thinking") return@synchronized
+        if (stage == "thinking") {
+            _state.value = current.copy(liveModelWaitId = null, liveUserWaitId = null)
+            return@synchronized
+        }
         val kind = if (stage == "tool_call" || stage == "tool_result" || stage == "tool_error") "tool" else "progress"
         val progress = when (stage) {
             "tool_call" -> AgentRunUiEvent.toolEvent(nextEventId++, stage, message.trim(), null, null, null,
@@ -633,12 +655,21 @@ object AgentRunUiState {
             }
             else -> event(kind, message, stage)
         }
+        val modelWaiting = stage == "model_wait" && ownedRunActive
+            && ownedSessionId == current.sessionId
+            && current.interactiveOwnerSessionId == current.sessionId && !current.compacting
         if (kind == "tool") {
             val events = pendingProgress.fold(current.events) { accumulated, buffered -> append(accumulated, buffered) }
             pendingProgress.clear()
-            _state.value = current.copy(events = append(events, progress))
+            _state.value = current.copy(events = append(events, progress),
+                liveModelWaitId = null, liveUserWaitId = null)
         } else {
             pendingProgress.add(progress)
+            _state.value = current.copy(
+                liveModelWaitId = progress.id.takeIf { modelWaiting },
+                liveMascotTool = if (modelWaiting) null else current.liveMascotTool,
+                liveUserWaitId = null,
+            )
         }
     }
 
@@ -670,7 +701,7 @@ object AgentRunUiState {
         } else {
             events.add(updated)
         }
-        _state.value = current.copy(events = events.takeLast(MAX_EVENTS))
+        _state.value = current.copy(events = events.takeLast(MAX_EVENTS), liveModelWaitId = null)
     }
 
     @JvmStatic
@@ -699,7 +730,8 @@ object AgentRunUiState {
         }
         val updated = AgentRunUiEvent.activityEvent(old?.id ?: nextEventId++, projected).copy(toolActivityEvents = history)
         if (index < 0) events.add(updated) else events[index] = updated
-        _state.value = current.copy(events = events.takeLast(MAX_EVENTS), liveMascotTool = liveMascotTool)
+        _state.value = current.copy(events = events.takeLast(MAX_EVENTS),
+            liveMascotTool = liveMascotTool, liveModelWaitId = null)
     }
 
     private fun interruptActivities(events: List<AgentRunUiEvent>): List<AgentRunUiEvent> = events.map { event ->
@@ -711,6 +743,8 @@ object AgentRunUiState {
 
     @JvmStatic
     fun memoryChanged(revision: MemoryStore.Revision) = synchronized(lock) {
+        // Seed remains journaled by MemoryStore; only its live chat presentation is suppressed.
+        if (revision.operation == "SEED") return@synchronized
         val current = _state.value
         if (!current.running || current.sessionId != revision.conversationId
             || revision.actor == MemoryStore.Actor.USER || revision.actor == MemoryStore.Actor.REFLECTION) return@synchronized
@@ -773,7 +807,9 @@ object AgentRunUiState {
             approvalRequesterColorKey = requesterColorKey,
         )
         publishOwnedSnapshot(current.copy(events = append(events, card),
-            liveMascotTool = current.liveMascotTool?.copy(eligibleToAnimate = false)))
+            liveMascotTool = current.liveMascotTool?.copy(eligibleToAnimate = false),
+            liveModelWaitId = null,
+            liveUserWaitId = if (ownedRunActive && ownedSessionId == current.sessionId) "approval:$id" else null))
     }
 
     @JvmStatic
@@ -784,7 +820,8 @@ object AgentRunUiState {
         if (index < 0) return@synchronized
         val events = current.events.toMutableList()
         events[index] = events[index].copy(stage = status, approvalStatus = status)
-        publishOwnedSnapshot(current.copy(events = events))
+        publishOwnedSnapshot(current.copy(events = events,
+            liveUserWaitId = current.liveUserWaitId?.takeUnless { it == "approval:$id" && status != "PENDING" }))
     }
 
     @JvmStatic
@@ -833,7 +870,9 @@ object AgentRunUiState {
             decisionAllowDismiss = allowDismiss, decisionStatus = "PENDING",
         ))
         _state.value = current.copy(events = append(events.dropLast(1), events.last()),
-            liveMascotTool = current.liveMascotTool?.copy(eligibleToAnimate = false))
+            liveMascotTool = current.liveMascotTool?.copy(eligibleToAnimate = false),
+            liveModelWaitId = null,
+            liveUserWaitId = if (ownedRunActive && ownedSessionId == current.sessionId) "decision:$id" else null)
     }
 
     @JvmStatic
@@ -846,7 +885,8 @@ object AgentRunUiState {
         val events = current.events.toMutableList()
         events[index] = events[index].copy(stage = status, decisionStatus = status,
             decisionOptionId = optionId, decisionOptionLabel = optionLabel)
-        _state.value = current.copy(events = events)
+        _state.value = current.copy(events = events,
+            liveUserWaitId = current.liveUserWaitId?.takeUnless { it == "decision:$id" && status != "PENDING" })
     }
 
     @JvmStatic
@@ -866,6 +906,8 @@ object AgentRunUiState {
             running = false,
             outcome = outcome,
             liveMascotTool = null,
+            liveModelWaitId = null,
+            liveUserWaitId = null,
             compacting = false,
             compactionStatus = null,
             events = append(interruptActivities(current.events), assistant),
@@ -881,6 +923,8 @@ object AgentRunUiState {
             running = false,
             outcome = "COMPLETED",
             liveMascotTool = null,
+            liveModelWaitId = null,
+            liveUserWaitId = null,
             compacting = false,
             compactionStatus = null,
             events = append(interruptActivities(current.events), event("assistant", answer)),
@@ -895,6 +939,8 @@ object AgentRunUiState {
             running = false,
             outcome = "FAILED",
             liveMascotTool = null,
+            liveModelWaitId = null,
+            liveUserWaitId = null,
             compacting = false,
             compactionStatus = null,
             events = append(interruptActivities(current.events), event("result", message, "FAILED")),
@@ -910,6 +956,8 @@ object AgentRunUiState {
             running = false,
             outcome = "FAILED",
             liveMascotTool = null,
+            liveModelWaitId = null,
+            liveUserWaitId = null,
             compacting = false,
             compactionStatus = null,
             events = append(interruptActivities(current.events), event("result", message, "FAILED")),
@@ -925,6 +973,8 @@ object AgentRunUiState {
             running = false,
             outcome = "FAILED",
             liveMascotTool = null,
+            liveModelWaitId = null,
+            liveUserWaitId = null,
             compacting = false,
             compactionStatus = null,
             events = append(interruptActivities(current.events), event("assistant", message, "FAILED")),

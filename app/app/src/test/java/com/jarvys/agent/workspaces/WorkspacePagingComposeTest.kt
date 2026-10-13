@@ -26,19 +26,18 @@ class WorkspacePagingComposeTest {
         val loading = mutableStateOf(false)
         var retried = 0
         compose.setContent { MaterialTheme {
-            ConversationDrawer(emptyList(), "ordinary", null, "", false, null, true, {}, {}, {}, {},
-                onOpenCentral = {}, workspaceError = if (failed.value) "Catalog unavailable" else null,
+            WorkspaceListScreen(emptyList(), onOpenWorkspace = {}, workspaceError = if (failed.value) "Catalog unavailable" else null,
                 workspacesLoading = loading.value, onRetryWorkspaces = { retried++ })
         } }
-        compose.onNodeWithTag("drawer-workspaces-error").assertExists()
-        compose.onNodeWithTag("drawer-workspaces-empty").assertDoesNotExist()
+        compose.onNodeWithTag("workspace-list-error").assertExists()
+        compose.onNodeWithTag("workspace-list-empty").assertDoesNotExist()
         compose.onNodeWithText(compose.activity.getString(R.string.workspace_retry)).performClick()
         assertEquals(1, retried)
         compose.runOnIdle { failed.value = false; loading.value = true }
-        compose.onNodeWithTag("drawer-workspaces-loading").assertExists()
-        compose.onNodeWithTag("drawer-workspaces-empty").assertDoesNotExist()
+        compose.onNodeWithTag("workspace-list-loading").assertExists()
+        compose.onNodeWithTag("workspace-list-empty").assertDoesNotExist()
         compose.runOnIdle { loading.value = false }
-        compose.onNodeWithTag("drawer-workspaces-empty").assertExists()
+        compose.onNodeWithTag("workspace-list-empty").assertExists()
     }
 
     @Test fun detailPageButtonsReturnNavigationOnlyAndExposeLimitedSummary() {

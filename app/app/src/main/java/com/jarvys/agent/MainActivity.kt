@@ -261,6 +261,7 @@ private object Routes {
     const val CREW_EMPTY = AppNavigationBackPolicy.CREW_EMPTY
     const val CREW = AppNavigationBackPolicy.CREW
     const val CREW_BOT = AppNavigationBackPolicy.CREW_BOT
+    const val WORKSPACES = AppNavigationBackPolicy.WORKSPACES
     const val COORDINATED_WORKSPACE = AppNavigationBackPolicy.COORDINATED_WORKSPACE
     const val COORDINATED_FILES = AppNavigationBackPolicy.COORDINATED_FILES
     const val WORKSPACE_PREVIEW = AppNavigationBackPolicy.WORKSPACE_PREVIEW
@@ -1776,24 +1777,8 @@ private fun JarvysApp(
                 history = runHistory,
                 centralSelected = route == Routes.CHAT && WorkspaceIdentity.isCentral(conversationSessionId),
                 onOpenCentral = { navigateFromDrawer { onOpenCentral(); navController.navigate(Routes.CHAT) { launchSingleTop = true } } },
-                workspaces = workspaceRows,
-                workspacesLoading = workspaceLoading,
-                workspaceError = workspaceError,
-                canPreviousWorkspacePage = workspacePageHistory.isNotEmpty(),
-                canFirstWorkspacePage = workspaceAfter != null,
-                canNextWorkspacePage = workspaceNext != null,
-                onPreviousWorkspacePage = { if (!workspaceLoading && workspacePageHistory.isNotEmpty()) {
-                    workspaceLoading = true
-                    workspaceAfter = workspacePageHistory.last().ifEmpty { null }; workspacePageHistory = workspacePageHistory.dropLast(1)
-                } },
-                onNextWorkspacePage = { if (!workspaceLoading) workspaceNext?.let { next ->
-                    workspaceLoading = true
-                    workspacePageHistory = workspacePushCursor(workspacePageHistory, workspaceAfter); workspaceAfter = next
-                } },
-                onFirstWorkspacePage = { if (!workspaceLoading) { workspaceLoading = true; workspaceAfter = null; workspacePageHistory = emptyList() } },
-                onRetryWorkspaces = { if (!workspaceLoading) { workspaceLoading = true; workspaceReload++ } },
-                selectedWorkspaceId = navEntry?.arguments?.getString("workspaceId"),
-                onOpenWorkspace = { id -> navigateFromDrawer { navController.navigate("workspace/$id") { launchSingleTop = true } } },
+                onOpenWorkspaces = { navigateFromDrawer { navController.navigate(Routes.WORKSPACES) { launchSingleTop = true } } },
+                workspacesSelected = route == Routes.WORKSPACES || route == Routes.COORDINATED_WORKSPACE || route == Routes.COORDINATED_FILES,
                 isDrawerOpen = drawerState.isOpen,
                 onCloseDrawer = { if (!drawerNavigationPending) scope.launch { drawerState.close() } },
                 activeSessionId = conversationSessionId,
@@ -1929,6 +1914,28 @@ private fun JarvysApp(
                 )
             }
             NavHost(navController = navController, startDestination = Routes.CHAT, modifier = Modifier.padding(padding)) {
+                composable(Routes.WORKSPACES) {
+                    com.jarvys.agent.workspaces.WorkspaceListScreen(
+                        workspaces = workspaceRows,
+                        workspacesLoading = workspaceLoading,
+                        workspaceError = workspaceError,
+                        canPreviousWorkspacePage = workspacePageHistory.isNotEmpty(),
+                        canFirstWorkspacePage = workspaceAfter != null,
+                        canNextWorkspacePage = workspaceNext != null,
+                        onPreviousWorkspacePage = { if (!workspaceLoading && workspacePageHistory.isNotEmpty()) {
+                            workspaceLoading = true
+                            workspaceAfter = workspacePageHistory.last().ifEmpty { null }; workspacePageHistory = workspacePageHistory.dropLast(1)
+                        } },
+                        onNextWorkspacePage = { if (!workspaceLoading) workspaceNext?.let { next ->
+                            workspaceLoading = true
+                            workspacePageHistory = workspacePushCursor(workspacePageHistory, workspaceAfter); workspaceAfter = next
+                        } },
+                        onFirstWorkspacePage = { if (!workspaceLoading) { workspaceLoading = true; workspaceAfter = null; workspacePageHistory = emptyList() } },
+                        onRetryWorkspaces = { if (!workspaceLoading) { workspaceLoading = true; workspaceReload++ } },
+                        actionsEnabled = !conversationActionPending && !drawerNavigationPending,
+                        onOpenWorkspace = { id -> navController.navigate("workspace/$id") { launchSingleTop = true } },
+                    )
+                }
                 composable(Routes.COORDINATED_WORKSPACE,
                     arguments = listOf(navArgument("workspaceId") { type = NavType.StringType })) { entry ->
                     val id = entry.arguments?.getString("workspaceId").orEmpty()
