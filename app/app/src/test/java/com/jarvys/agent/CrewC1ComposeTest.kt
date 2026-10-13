@@ -233,10 +233,10 @@ class CrewC1ComposeTest {
             bot.awaitTermination()
             assertTrue(observedTranscript.get().any { it.role == "user" && it.content == "Check the updated date" })
             val inboxObservations = observedTranscript.get().filter {
-                it.kind == ConversationTurn.Kind.TOOL_RESULT && it.toolName == CoreAgentLoop.INBOX_TOOL
+                it.kind == ConversationTurn.Kind.MESSAGE && it.role == "user" && it.incomingMetadata != null
             }
             assertTrue("Crew inbox observations must remain explicitly untrusted",
-                inboxObservations.any { it.content.contains("UNTRUSTED CREW DATA") })
+                inboxObservations.any { it.incomingMetadata.untrusted })
             assertFalse("trusted user text must not enter the untrusted envelope",
                 inboxObservations.any { it.content.contains("Check the updated date") })
             assertFalse("trusted user text is carried by its genuine user transcript message",

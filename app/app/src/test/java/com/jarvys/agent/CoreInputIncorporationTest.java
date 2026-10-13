@@ -30,11 +30,17 @@ public class CoreInputIncorporationTest {
         assertEquals(CrewInputIncorporation.TransportKind.USER, user.transportKind);
         assertEquals(CrewInputIncorporation.transportSha256(correction.text), user.transportSha256);
         assertEquals(CrewInputIncorporation.TransportKind.INBOX, reply.transportKind);
-        String actual = saved.transcript.stream().filter(turn -> ("crew-message-" + answer.id).equals(turn.toolCallId))
-                .findFirst().get().content;
-        assertEquals(CrewInputIncorporation.transportSha256(actual), reply.transportSha256);
-        assertTrue(actual.contains("UNTRUSTED"));
-        assertFalse(saved.transcript.stream().anyMatch(turn -> "user".equals(turn.role) && turn.content.contains(answer.text)));
+        ConversationTurn actual = saved.transcript.stream().filter(turn -> turn.incomingMetadata != null
+                && answer.id.equals(turn.incomingMetadata.id))
+                .findFirst().get();
+        assertEquals(answer.text, actual.content);
+        assertEquals(CrewInputIncorporation.transportSha256(actual.content), reply.transportSha256);
+        assertTrue(actual.incomingMetadata.untrusted);
+        assertEquals("crew", actual.incomingMetadata.source);
+        assertEquals("chief", actual.incomingMetadata.sender);
+        assertEquals("ANSWER", actual.incomingMetadata.type);
+        assertFalse(saved.transcript.stream().anyMatch(turn -> turn.kind == ConversationTurn.Kind.TOOL_CALLS
+                && turn.toolCalls.stream().anyMatch(call -> CoreAgentLoop.INBOX_TOOL.equals(call.name))));
         loop.setCheckpointScope(NEXT);
         loop.run("next", saved.transcript, CancellationToken.uncancellable(), null);
         assertEquals(FIRST, loop.checkpointSnapshot().incorporations.get(answer.id).firstIncorporationCycleId);

@@ -79,6 +79,7 @@ final class CodexImageGenerationTool implements CoreTool {
     }
 
     @Override public ToolSpec declaration() { return declaration; }
+    @Override public ExecutionMode executionMode() { return ExecutionMode.SEQUENTIAL; }
 
     @Override public CoreToolResult execute(Map<String, Object> arguments, CancellationToken token) {
         try (AgentErrorReporter.AttachmentScope ignored = AgentErrorReporter.suppressForAttachments()) {

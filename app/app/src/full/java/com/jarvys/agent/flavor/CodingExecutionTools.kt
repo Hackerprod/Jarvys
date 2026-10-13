@@ -40,6 +40,9 @@ class CodingExecutionTools internal constructor(
 
     private inner class Tool(private val name: String) : CoreTool {
         override fun canDelegate() = false
+        // Status is inspection only; jobs can wait/cancel and exec owns the project writer lease.
+        override fun executionMode() = if (name == STATUS) CoreTool.ExecutionMode.PARALLEL
+            else CoreTool.ExecutionMode.SEQUENTIAL
         override fun auditDetail(arguments: Map<String, Any>): String? = if (name != EXEC) null else
             "${sanitizer.scrub(requester)} | Project ${scope.id()}\n${sanitizer.scrub(arguments["command"] as? String)}\nProject cwd: ${sanitizer.scrub(arguments["cwd"] as? String ?: ".")}"
         override fun declaration(): ToolSpec {

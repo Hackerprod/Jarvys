@@ -79,6 +79,9 @@ internal abstract class LinuxToolBase(
     protected val sessionId: String,
     private val surfaceAvailable: (Context?, String?, Int) -> Boolean,
 ) : CoreTool {
+    // Setup, execution and uninstall share one mutable Linux installation and approval surface.
+    override fun executionMode() = CoreTool.ExecutionMode.SEQUENTIAL
+
     protected fun ensureAvailable(): Boolean = surfaceAvailable(context, sessionId, 0)
     protected fun requireNoArguments(arguments: Map<String, Any>) {
         require(arguments.isEmpty()) { "Unexpected parameter(s): ${arguments.keys.sorted().joinToString()}" }
@@ -92,6 +95,9 @@ internal class LinuxStatusTool(
     private val sanitizer: LinuxOutputSanitizer,
     surfaceAvailable: (Context?, String?, Int) -> Boolean,
 ) : LinuxToolBase(context, sessionId, surfaceAvailable) {
+    // This only reads installation/probe state; the modifying Linux tools remain sequential.
+    override fun executionMode() = CoreTool.ExecutionMode.PARALLEL
+
     override fun declaration() = linuxSpec(LINUX_STATUS_NAME,
         "Read the optional Linux installation state and, when installed, the PRoot probe result.", emptyObjectSchema())
 

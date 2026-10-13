@@ -93,6 +93,7 @@ public class ProviderDiagnosticsTransportTest {
             assertEquals("prior source", wire.getJSONArray("messages").getJSONObject(1).getString("content"));
             assertEquals("current user", wire.getJSONArray("messages").getJSONObject(2).getString("content"));
             assertEquals("fixture_read", wire.getJSONArray("tools").getJSONObject(0).getJSONObject("function").getString("name"));
+            assertTrue(wire.getBoolean("parallel_tool_calls"));
             assertEquals(FOOTER_LITERAL, reply.text); // No footer interpretation in phase 0.
             assertTrue(reply.calls.isEmpty());
             assertEquals(Integer.valueOf(15), reply.contextTokensUsed);
@@ -140,6 +141,7 @@ public class ProviderDiagnosticsTransportTest {
         assertTrue(wire.getBoolean("stream"));
         assertEquals("synthetic system", wire.getString("instructions"));
         assertEquals(2, wire.getJSONArray("input").length());
+        assertTrue(wire.getBoolean("parallel_tool_calls"));
         assertEquals("prior source", wire.getJSONArray("input").getJSONObject(0).getString("content"));
         assertEquals("current user", wire.getJSONArray("input").getJSONObject(1).getJSONArray("content").getJSONObject(0).getString("text"));
         assertEquals("fixture_read", wire.getJSONArray("tools").getJSONObject(0).getString("name"));

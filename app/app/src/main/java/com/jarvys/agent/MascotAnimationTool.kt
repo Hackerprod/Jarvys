@@ -33,6 +33,8 @@ class MascotAnimationTool internal constructor(
         ),
     )
 
+    override fun executionMode() = CoreTool.ExecutionMode.SEQUENTIAL
+
     override fun execute(arguments: Map<String, Any>?, token: CancellationToken): CoreToolResult {
         token.throwIfCancelled()
         if (token.isCrewRun || !BotCatalogTool.isAvailableForSession(sessionId)) {

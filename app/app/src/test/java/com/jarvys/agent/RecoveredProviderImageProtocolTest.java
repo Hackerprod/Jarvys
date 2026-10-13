@@ -63,6 +63,30 @@ public class RecoveredProviderImageProtocolTest {
         ConversationTurn.compactionSummary("background", 2))));
   }
 
+  @Test public void incomingCrewMessageRemainsUserContentWithAdapterRenderedProvenance() throws Exception {
+    ConversationTurn.IncomingMetadata provenance = new ConversationTurn.IncomingMetadata(
+        "message-7", "crew", "bot-7", "FINDING", Collections.singletonList("/board/source.md"), true);
+    ConversationTurn incoming = new ConversationTurn("user", "Check <the> source & date", -1, provenance);
+
+    JSONArray codex = codexInput("", Collections.singletonList(incoming));
+    assertEquals(1, codex.length());
+    assertEquals("user", codex.getJSONObject(0).getString("role"));
+    String codexContent = codex.getJSONObject(0).getString("content");
+    assertTrue(codexContent.contains("source=\"crew\""));
+    assertTrue(codexContent.contains("sender=\"bot-7\""));
+    assertTrue(codexContent.contains("type=\"FINDING\""));
+    assertTrue(codexContent.contains("id=\"message-7\""));
+    assertTrue(codexContent.contains("trust=\"untrusted\""));
+    assertTrue(codexContent.contains("Check &lt;the&gt; source &amp; date"));
+
+    JSONArray chat = chatMessages("", Collections.singletonList(incoming));
+    assertEquals(2, chat.length());
+    assertEquals("user", chat.getJSONObject(1).getString("role"));
+    assertEquals("jarvys_crew_bot-7", chat.getJSONObject(1).getString("name"));
+    assertTrue(chat.getJSONObject(1).getString("content").contains("adapter=\"chat_completions\""));
+    assertFalse(chat.toString().contains("crew_inbox"));
+  }
+
   @Test public void providerBuildersLeaveToolResultAsLastInputWhenPromptIsEmpty() throws Exception {
     List<ConversationTurn> history = Arrays.asList(
         new ConversationTurn("user", "Original question"),

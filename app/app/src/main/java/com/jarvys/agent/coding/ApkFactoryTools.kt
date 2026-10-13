@@ -17,6 +17,7 @@ object ApkFactoryTools {
         Tool(FactoryProjectService(context, scope, owner, ApprovalGate.INSTANCE, available::getAsBoolean))
 
     internal class Tool(private val service: FactoryProjectService) : CoreTool {
+        override fun executionMode() = CoreTool.ExecutionMode.SEQUENTIAL
         override fun canDelegate() = false
         override fun declaration(): ToolSpec {
             val properties = linkedMapOf<String, Any>(

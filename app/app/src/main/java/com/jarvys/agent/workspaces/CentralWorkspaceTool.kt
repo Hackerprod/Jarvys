@@ -144,6 +144,8 @@ class CentralWorkspaceTool internal constructor(
                 "offset" to mapOf("type" to "integer", "minimum" to 0, "maximum" to Int.MAX_VALUE, "default" to 0),
             )))
 
+    override fun executionMode() = CoreTool.ExecutionMode.SEQUENTIAL
+
     override fun execute(arguments: Map<String, Any>?, token: CancellationToken): CoreToolResult {
         token.throwIfCancelled()
         if (!isAvailableForSession(sessionId) || token.isCrewRun)

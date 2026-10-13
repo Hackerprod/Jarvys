@@ -595,6 +595,7 @@ class TaskManagementTools @JvmOverloads constructor(
         private val handler: (Map<String, Any>, CancellationToken) -> CoreToolResult,
     ) : CoreTool {
         private val requiredFields = required.toList()
+        override fun executionMode() = CoreTool.ExecutionMode.SEQUENTIAL
         override fun declaration() = ToolSpec(toolName, "jarvys/tasks", description, "conversation",
             ToolSpec.Status.IMPLEMENTED, emptyMap(), requiredFields, schema)
         override fun execute(arguments: Map<String, Any>, token: CancellationToken): CoreToolResult {

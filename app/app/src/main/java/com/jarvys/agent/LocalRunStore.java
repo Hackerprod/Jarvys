@@ -2012,6 +2012,21 @@ public final class LocalRunStore {
         return active;
     }
 
+    /** Durable steering inputs appended after the user message that started the active run. */
+    public synchronized List<JSONObject> readUserMessagesAfter(String sessionId, String messageId) {
+        if (messageId == null || messageId.isEmpty()) return Collections.emptyList();
+        boolean afterCursor = false;
+        List<JSONObject> pending = new ArrayList<>();
+        for (JSONObject row : readConversationRows(sessionId)) {
+            if (!afterCursor) {
+                if (messageId.equals(row.optString("messageId", ""))) afterCursor = true;
+                continue;
+            }
+            if ("user".equals(row.optString("role")) && row.has("content")) pending.add(row);
+        }
+        return Collections.unmodifiableList(pending);
+    }
+
     public synchronized ReflectionPayload buildReflectionPayload(String sessionId) {
         return buildReflectionPayload(sessionId, null, false);
     }

@@ -110,6 +110,8 @@ public final class MessageReactionTool implements CoreTool {
                 "chat", ToolSpec.Status.IMPLEMENTED, properties, Arrays.asList("message_id", "emoji"), schema);
     }
 
+    @Override public ExecutionMode executionMode() { return ExecutionMode.SEQUENTIAL; }
+
     private static Map<String, Object> stringProperty(String description) {
         Map<String, Object> value = new LinkedHashMap<>();
         value.put("type", "string");

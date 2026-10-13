@@ -13,7 +13,7 @@ import java.util.concurrent.atomic.AtomicReference
 
 class CrewC1cTest {
     private fun inboxEvidence(transcript: List<ConversationTurn>) = transcript.filter {
-        it.kind == ConversationTurn.Kind.TOOL_RESULT && it.toolName == CoreAgentLoop.INBOX_TOOL
+        it.kind == ConversationTurn.Kind.MESSAGE && it.role == "user" && it.incomingMetadata != null
     }.joinToString("\n") { it.content }
 
     private val emptyTools get() = CoreToolRegistry(emptyList())

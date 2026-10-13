@@ -24,6 +24,7 @@ class BotCreationTool internal constructor(private val service: BotCreationServi
     override fun auditDetail(arguments: Map<String, Any>?) = "Review and create a custom bot"
     private val specification by lazy { buildDeclaration() }
     override fun declaration(): ToolSpec = specification
+    override fun executionMode() = CoreTool.ExecutionMode.SEQUENTIAL
     private fun buildDeclaration(): ToolSpec {
         fun text(description: String, max: Int) = mapOf("type" to "string", "description" to description, "minLength" to 1, "maxLength" to max)
         fun choices(values: List<String>, limit: Int = 128) = mapOf("type" to "array", "items" to if (values.isEmpty()) mapOf("type" to "string") else mapOf("type" to "string", "enum" to values), "maxItems" to if (values.isEmpty()) 0 else limit, "uniqueItems" to true)

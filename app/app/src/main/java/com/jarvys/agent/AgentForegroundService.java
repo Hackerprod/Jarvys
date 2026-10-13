@@ -56,13 +56,6 @@ public final class AgentForegroundService extends Service {
             thread.setDaemon(true);
             return thread;
           });
-  interface ReplacementRunner {
-    void run(CancellationToken token, String sessionId, String requestId, String text,
-        ArrayList<String> skills, boolean memoryDisabled);
-  }
-  ReplacementRunner replacementRunner = (token, session, requestId, text, skills, memoryDisabled) ->
-      runRealAgent(token, text, skills, session, text, true, memoryDisabled, false, requestId);
-
   /** Instance seam for testing the real service lifecycle without external provider calls. */
   interface MainChatRunner {
     CoreAgentLoop.Result run(CoreAgentRuntime runtime, String goal, List<ConversationTurn> history,
@@ -77,17 +70,6 @@ public final class AgentForegroundService extends Service {
       new CoreAgentRuntime(context, session, skills, CorePromptBudget.standard(), memoryDisabled);
 
   private final AtomicInteger activeReflectionTasks = new AtomicInteger();
-  private final AtomicInteger replacementTransitions = new AtomicInteger();
-  private final Object lifecycleLock = new Object();
-  private boolean stopping;
-
-  private boolean reserveReplacement() {
-    synchronized (lifecycleLock) {
-      if (stopping || currentInstance != this) return false;
-      replacementTransitions.incrementAndGet();
-      return true;
-    }
-  }
 
   @Override
   protected void attachBaseContext(Context base) {
@@ -296,7 +278,7 @@ public final class AgentForegroundService extends Service {
     else context.startService(intent);
   }
 
-  /** Explicit plain-text replacement, serialized after the cancelled worker. Never auto-resumed. */
+  /** Persist a steering message for the active main-chat loop to consume at its next checkpoint. */
   public static boolean interruptAndSend(Context context, String sessionId, String text,
       ArrayList<String> skills, boolean memoryDisabled) {
     AgentForegroundService service = currentInstance;
@@ -304,71 +286,10 @@ public final class AgentForegroundService extends Service {
         || !sessionId.equals(AgentRunUiState.INSTANCE.getState().getValue().getSessionId())
         || !sessionId.equals(AgentRunUiState.INSTANCE.getState().getValue().getInteractiveOwnerSessionId())
         || !AgentRunUiState.INSTANCE.getState().getValue().getRunning()
-        || AgentRunUiState.INSTANCE.getState().getValue().getCompacting()
         || AgentRunUiState.INSTANCE.getState().getValue().getReflecting()
-        || StopController.getInstance().isStopped() || !service.reserveReplacement()) return false;
-    LocalRunStore store;
-    // Persistence precedes cancellation and clearing the composer. The input is recoverable even
-    // if the service is destroyed or STOP cancels the queued replacement before it starts.
-    StopController controller = StopController.getInstance();
-    try {
-      store = new LocalRunStore(context);
-      String requestId = store.appendInterruptRequest(sessionId, text, skills, memoryDisabled);
-      controller.stopRun(); // Its cancellation callbacks stop only this captain's Crew and approvals.
-      CancellationToken replacement = controller.beginRun();
-      if (replacement != null) {
-        com.jarvys.agent.proactive.BackgroundRunController.INSTANCE.interactiveStarted(replacement.generation());
-        AgentRunUiState.bindGeneration(sessionId, replacement.generation());
-        java.util.concurrent.atomic.AtomicBoolean workerStarted = new java.util.concurrent.atomic.AtomicBoolean(false);
-        Runnable unregister = replacement.registerCancelAction(() -> {
-          if (!workerStarted.get()) {
-            com.jarvys.agent.proactive.BackgroundRunController.INSTANCE.interactiveFinished(replacement.generation());
-            AgentRunUiState.stopPendingGeneration(sessionId, replacement.generation());
-          }
-        });
-        try {
-          Future<?> future = service.worker.submit(() -> {
-            workerStarted.set(true);
-            unregister.run();
-            try {
-              replacement.throwIfCancelled();
-              org.json.JSONObject pending = replacement.callIfActive(
-                  () -> store.dispatchInterruptRequest(sessionId, requestId), null);
-              if (pending == null) return;
-              AgentRunUiState.refreshPersistedSession(sessionId, store.readConversationTimeline(sessionId));
-              service.replacementRunner.run(replacement, sessionId, requestId, pending.optString("content"),
-                  skills, memoryDisabled);
-            } catch (RuntimeException unavailable) {
-              // The inert input remains visible and selectable; never silently replay it.
-              boolean stopped = replacement.isStoppedByUser();
-              String outcome = stopped ? "STOPPED" : "FAILED";
-              String message = service.getString(stopped ? R.string.agent_run_stopped : R.string.chat_interrupt_start_failed);
-              try {
-                if (store.readConversationMessage(sessionId, requestId) != null)
-                  store.appendConversationMessage(sessionId, "assistant", message, null, "", requestId, outcome);
-              } catch (RuntimeException ignored) { }
-              AgentRunUiState.completeGeneration(sessionId, replacement.generation(), "replacement-end",
-                  outcome, message, "", 0L);
-            } finally {
-              unregister.run();
-              AgentRunUiState.stopPendingGeneration(sessionId, replacement.generation());
-              com.jarvys.agent.proactive.BackgroundRunController.INSTANCE.interactiveFinished(replacement.generation());
-              controller.completeRun(replacement);
-              service.stopServiceIfIdle();
-            }
-          });
-          controller.attachFuture(replacement, future);
-        } catch (RuntimeException rejected) {
-          unregister.run();
-          AgentRunUiState.stopPendingGeneration(sessionId, replacement.generation());
-          com.jarvys.agent.proactive.BackgroundRunController.INSTANCE.interactiveFinished(replacement.generation());
-          controller.completeRun(replacement);
-        }
-      }
-    } finally {
-      service.replacementTransitions.decrementAndGet();
-      service.stopServiceIfIdle();
-    }
+        || StopController.getInstance().isStopped() || text == null || text.trim().isEmpty()) return false;
+    LocalRunStore store = new LocalRunStore(context);
+    store.appendConversationMessage(sessionId, "user", text);
     AgentRunUiState.refreshPersistedSession(sessionId, store.readConversationTimeline(sessionId));
     return true;
   }
@@ -735,6 +656,7 @@ public final class AgentForegroundService extends Service {
       List<String> usedSkillIds = new ArrayList<>();
       for (SkillEntry skill : enabledSkills) usedSkillIds.add(skill.getMetadata().getId());
       CoreAgentRuntime runtime = runtimeFactory.create(this, sessionId, enabledSkills, memoryDisabledForConversation);
+      runtime.setMainChatSteeringCursor(userMessageId);
       skills.markUsed(usedSkillIds);
       final String reflectionUserMessageId = userMessageId == null ? "" : userMessageId;
       CoreAgentLoop.ProgressListener progress =
@@ -960,12 +882,8 @@ public final class AgentForegroundService extends Service {
 
   private void stopServiceIfIdle() {
     boolean noCrew = !CoreAgentRuntime.hasActiveCrewBots();
-    synchronized (lifecycleLock) {
-      if (StopController.getInstance().isStopped() && activeReflectionTasks.get() == 0
-          && replacementTransitions.get() == 0 && noCrew) {
-        stopping = true;
-        stopSelf();
-      }
+    if (StopController.getInstance().isStopped() && activeReflectionTasks.get() == 0 && noCrew) {
+      stopSelf();
     }
   }
 

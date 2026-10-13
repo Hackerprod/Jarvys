@@ -612,6 +612,16 @@ public final class CrewCheckpointStore {
             jSONObject2.put("content", sanitizeText(turn.content));
             jSONObject2.put("originalMessageIndex", turn.originalMessageIndex);
             jSONObject2.put("summarizedMessageCount", turn.summarizedMessageCount);
+            if (turn.incomingMetadata != null) {
+                ConversationTurn.IncomingMetadata provenance = turn.incomingMetadata;
+                JSONObject encoded = new JSONObject().put("id", sanitizeText(provenance.id))
+                        .put("source", sanitizeText(provenance.source))
+                        .put("sender", sanitizeText(provenance.sender))
+                        .put("type", sanitizeText(provenance.type))
+                        .put("references", new JSONArray(provenance.references))
+                        .put("untrusted", provenance.untrusted);
+                jSONObject2.put("incomingMetadata", encoded);
+            }
             if (!turn.providerOutputItems.isEmpty())
                 jSONObject2.put("providerOutputItems", ProviderOutputItemsCodec.encode(turn.providerOutputItems));
             if (turn.kind == ConversationTurn.Kind.MODEL_ERROR)
@@ -662,7 +672,8 @@ public final class CrewCheckpointStore {
                     transcript.add(ConversationTurn.assistantReply(content,
                             row.getInt("originalMessageIndex"),
                             ProviderOutputItemsCodec.decode(row.optJSONArray("providerOutputItems"))));
-                else transcript.add(new ConversationTurn(role, content, row.getInt("originalMessageIndex")));
+                else transcript.add(new ConversationTurn(role, content, row.getInt("originalMessageIndex"),
+                        decodeIncomingMetadata(row.optJSONObject("incomingMetadata"))));
             } else if (kind == ConversationTurn.Kind.COMPACTION_SUMMARY) {
                 transcript.add(ConversationTurn.restoredCompactionSummary(content, row.getInt("summarizedMessageCount")));
             } else if (kind == ConversationTurn.Kind.TOOL_RESULT) {
@@ -711,6 +722,15 @@ public final class CrewCheckpointStore {
             }
         }
         return new CoreAgentLoop.Checkpoint(transcript, incoming, states, value.getInt("genuineUserIndex"), incorporations);
+    }
+
+    private static ConversationTurn.IncomingMetadata decodeIncomingMetadata(JSONObject row) throws Exception {
+        if (row == null) return null;
+        JSONArray references = row.getJSONArray("references");
+        List<String> decoded = new ArrayList<>();
+        for (int index = 0; index < references.length(); index++) decoded.add(references.getString(index));
+        return new ConversationTurn.IncomingMetadata(required(row, "id"), required(row, "source"),
+                required(row, "sender"), required(row, "type"), decoded, row.getBoolean("untrusted"));
     }
 
     private static Map<String, Object> decodeMap(JSONObject object) throws Exception {

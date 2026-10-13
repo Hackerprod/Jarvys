@@ -19,6 +19,7 @@ class BotMascotTool internal constructor(private val service: BotMascotService) 
     override fun canDelegate() = false
     override fun auditDetail(arguments: Map<String, Any>?) = "Review and compile a custom bot mascot locally"
     override fun declaration() = SPEC
+    override fun executionMode() = CoreTool.ExecutionMode.SEQUENTIAL
     override fun execute(arguments: Map<String, Any>?, token: CancellationToken): CoreToolResult {
         token.throwIfCancelled()
         if (!service.available(token)) return CoreToolResult.failure("Mascot authoring is available only in the main chat.")

@@ -82,6 +82,7 @@ public final class CoreAgentRuntime {
   private final List<SkillEntry> skills;
   private final boolean webSearchEnabledForConversation;
   private final List<CoreTool> workspaceTools;
+  private volatile String mainChatSteeringCursor = "";
 
   public static List<CrewMissionSnapshot> crewSnapshots() {
     List<CrewMissionSnapshot> result = new ArrayList<>();
@@ -257,6 +258,10 @@ public final class CoreAgentRuntime {
         listener);
   }
 
+  void setMainChatSteeringCursor(String userMessageId) {
+    mainChatSteeringCursor = userMessageId == null ? "" : userMessageId;
+  }
+
   private CoreAgentLoop.Result runInternal(
       final String request,
       List<ConversationTurn> history,
@@ -332,10 +337,14 @@ public final class CoreAgentRuntime {
       final CoreToolRegistry runToolRegistry = toolRegistry;
       final String runInstructions = instructions(runToolRegistry, mainChat) + (reactionTool == null ? "" : "\n\n" + MessageReactionTool.GUIDANCE);
       CoreAgentLoop.Model scopedModel = requestModel(model, runToolRegistry, mainChat, reactionTool);
+      CoreAgentLoop.TurnContextProvider turnContextProvider = mainChat && depth == 0 && context != null
+              && MessageReactionTool.isOrdinaryChat(sessionId) && !mainChatSteeringCursor.isEmpty()
+              ? new MainChatTurnContextProvider(new LocalRunStore(context), sessionId, mainChatSteeringCursor)
+              : null;
       CoreAgentLoop loop =
           new CoreAgentLoop(
               scopedModel, toolRegistry, runInstructions, sessionId, budget, compactor,
-              new ProviderRetryWaiter());
+              CoreAgentLoop.ToolResultBudget.BOUNDED, turnContextProvider, new ProviderRetryWaiter());
       if (transcriptStore != null) transcriptStore.attach(loop, history);
       CoreAgentLoop.Result result = AgentResultPresentation.localize(context, loop.run(request, history, attachments, token, listener));
       if (crewManager != null) {

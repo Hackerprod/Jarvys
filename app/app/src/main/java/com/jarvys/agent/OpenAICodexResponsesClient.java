@@ -161,7 +161,7 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
       if (tools != null && !tools.isEmpty()) {
         request.put("tools", responseTools(tools));
         request.put("tool_choice", "auto");
-        request.put("parallel_tool_calls", false);
+        request.put("parallel_tool_calls", true);
       }
       return request;
     } catch (Exception e) {
@@ -201,11 +201,12 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
         } else if (!turn.providerOutputItems.isEmpty()) {
           appendProviderOutputItems(input, turn);
         } else {
-          Object parts = turn.modelContent;
+          String modelContent = turn.renderedModelContent("responses");
+          Object parts = modelContent;
           if (!turn.images.isEmpty()) {
             JSONArray content =
                 new JSONArray()
-                    .put(new JSONObject().put("type", "input_text").put("text", turn.modelContent));
+                    .put(new JSONObject().put("type", "input_text").put("text", modelContent));
             for (ConversationTurn.Image image : turn.images) {
               content.put(
                   new JSONObject().put("type", "input_image").put("image_url", image.dataUrl()));

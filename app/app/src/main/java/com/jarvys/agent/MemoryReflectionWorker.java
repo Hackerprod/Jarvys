@@ -86,6 +86,7 @@ public final class MemoryReflectionWorker {
             List<CoreTool> guardedTools = new ArrayList<>();
             for (CoreTool original : memoryTools) guardedTools.add(new CoreTool() {
                 @Override public ToolSpec declaration() { return original.declaration(); }
+                @Override public ExecutionMode executionMode() { return original.executionMode(); }
                 @Override public boolean canDelegate() { return original.canDelegate(); }
                 @Override public String auditDetail(java.util.Map<String,Object> args) { return original.auditDetail(args); }
                 @Override public CoreToolResult execute(java.util.Map<String,Object> args, CancellationToken active) {

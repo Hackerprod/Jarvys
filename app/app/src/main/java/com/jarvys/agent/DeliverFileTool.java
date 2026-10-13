@@ -37,6 +37,7 @@ final class DeliverFileTool implements CoreTool {
                 "workspace", ToolSpec.Status.IMPLEMENTED, properties, Collections.singletonList("path"));
     }
     @Override public ToolSpec declaration() { return spec; }
+    @Override public ExecutionMode executionMode() { return ExecutionMode.SEQUENTIAL; }
     @Override public boolean canDelegate() { return false; }
     @Override public String auditDetail(Map<String, Object> arguments) { return "Deliver a local file to this conversation"; }
 

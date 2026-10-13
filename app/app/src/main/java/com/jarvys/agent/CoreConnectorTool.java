@@ -43,6 +43,8 @@ public final class CoreConnectorTool implements CoreTool {
     }
 
     @Override public ToolSpec declaration() { return declaration; }
+    // Connector calls may request permission, mutate a device, or publish an artifact.
+    @Override public ExecutionMode executionMode() { return ExecutionMode.SEQUENTIAL; }
     String groupName() { return "connector:" + definition.getId(); }
     String displayName() { return operation.getDisplayLabel(); }
     String usageNote() { return definition.usageNote(); }

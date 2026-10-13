@@ -3,6 +3,7 @@ package com.jarvys.agent;
 import com.jarvys.agent.mcp.McpConnectionManager;
 import com.jarvys.agent.mcp.McpToolDefinition;
 import com.jarvys.agent.mcp.McpToolSecurity;
+import com.jarvys.agent.mcp.McpToolAccess;
 
 import org.json.JSONObject;
 
@@ -31,6 +32,9 @@ final class CoreMcpTool implements CoreTool {
     }
 
     @Override public ToolSpec declaration() { return declaration; }
+    @Override public ExecutionMode executionMode() {
+        return definition.getAccess() == McpToolAccess.READ ? ExecutionMode.PARALLEL : ExecutionMode.SEQUENTIAL;
+    }
 
     String groupName() { return "mcp_server:" + definition.getServerId(); }
     CoreMcpTool withRequester(String name, String colorKey) { return new CoreMcpTool(connections, definition, name, colorKey); }

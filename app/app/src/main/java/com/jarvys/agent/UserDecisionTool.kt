@@ -28,6 +28,8 @@ class UserDecisionTool @JvmOverloads constructor(
         listOf("title", "body", "options"), schema(),
     )
 
+    override fun executionMode() = CoreTool.ExecutionMode.SEQUENTIAL
+
     override fun execute(arguments: Map<String, Any>, token: CancellationToken): CoreToolResult {
         val spec = parse(arguments)
         val presenter = presenterOverride ?: object : UserDecisionPresenter {

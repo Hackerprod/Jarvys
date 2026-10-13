@@ -87,6 +87,8 @@ public final class DelegateSubtaskTool implements CoreTool {
     return this.declaration;
   }
 
+  @Override public ExecutionMode executionMode() { return ExecutionMode.SEQUENTIAL; }
+
   @Override // com.jarvys.agent.CoreTool
   public CoreToolResult execute(Map<String, Object> arguments, CancellationToken token) {
     Object rawObjective = arguments.get("objective");

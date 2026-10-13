@@ -6,12 +6,19 @@ import java.util.Map;
  * Tool contract owned by the new conversation core; it has no Android/legacy dispatcher dependency.
  */
 public interface CoreTool {
+  enum ExecutionMode { PARALLEL, SEQUENTIAL }
+
   interface ProgressListener {
     void onProgress(String message);
   }
 
   default boolean canDelegate() {
     return true;
+  }
+
+  /** Independent tools run concurrently; shared state or interactive effects opt into ordering. */
+  default ExecutionMode executionMode() {
+    return ExecutionMode.PARALLEL;
   }
 
   default String auditDetail(Map<String, Object> arguments) {

@@ -60,6 +60,10 @@ public final class ConversationCompactionPolicy {
         if (transcript != null) for (ConversationTurn turn : transcript) {
             if (turn.kind == ConversationTurn.Kind.MODEL_ERROR) continue;
             bytes += utf8(turn.content) + utf8(turn.thinking) + (long) turn.imageCount * 4_800L + 24;
+            if (turn.incomingMetadata != null && turn.incomingMetadata.untrusted) {
+                bytes += utf8(turn.incomingMetadata.render("", "adapter"))
+                        + utf8(turn.incomingMetadata.chatMessageName());
+            }
             for (ModelReply.Call call : turn.toolCalls) bytes += utf8(call.name) + utf8(call.arguments.toString()) + 48;
             for (ModelReply.ProviderOutputItem item : turn.providerOutputItems)
                 if (item.kind == ModelReply.ProviderOutputItem.Kind.REASONING) bytes += utf8(item.value);

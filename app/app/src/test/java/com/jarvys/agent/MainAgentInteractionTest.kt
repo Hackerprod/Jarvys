@@ -99,62 +99,48 @@ class MainAgentInteractionTest {
         assertFalse(AgentRunUiState.state.value.events.any { it.stage == "QUEUED" })
     }
 
-    @Test fun stopBeforeDispatchPreservesInertTextAndClosesQueuedGeneration() {
+    @Test fun steeringDuringAnActiveRunPersistsWithoutStoppingThatRun() {
         withHeldWorker { service, context, session, release ->
-            var runs = 0
-            service.replacementRunner = AgentForegroundService.ReplacementRunner { _,_,_,_,_,_ -> runs++ }
             assertTrue(AgentForegroundService.interruptAndSend(context, session, "new request", arrayListOf(), false))
             assertTrue(AgentRunUiState.state.value.running)
-            assertEquals(1, LocalRunStore(context).readConversationMessages(session).size)
+            assertFalse(StopController.getInstance().isStopped)
+            assertTrue(LocalRunStore(context).readConversationMessages(session).any {
+                it.optString("role") == "user" && it.optString("content") == "new request"
+            })
             StopController.getInstance().stopRun()
             assertFalse(AgentRunUiState.state.value.running)
             release.countDown()
             worker(service).submit {}.get(5, TimeUnit.SECONDS)
-            assertEquals(0, runs)
-            val restored = LocalRunStore(context).readConversationTimeline(session)
-            assertTrue(restored.any { it.stage == "QUEUED" && it.text == "new request" })
+            assertFalse(LocalRunStore(context).readConversationTimeline(session).any { it.stage == "QUEUED" })
         }
     }
 
-    @Test fun replacementWaitsForOldWorkerThenDispatchesAndRebinds() {
+    @Test fun steeringDoesNotLaunchAReplacementOrChangeTheActiveGeneration() {
         withHeldWorker { service, context, session, release ->
-            val invoked = CountDownLatch(1)
-            val correct = AtomicBoolean(false)
-            service.replacementRunner = AgentForegroundService.ReplacementRunner { token, chat, id, text, skills, memory ->
-                correct.set(release.count == 0L && chat == session && text == "follow up" && skills == arrayListOf("safe") && memory
-                    && LocalRunStore(context).latestUserMessageId(session) == id
-                    && AgentRunUiState.state.value.events.none { it.stage == "QUEUED" })
-                AgentRunUiState.beginRun(chat, text)
-                AgentRunUiState.bindGeneration(chat, token.generation())
-                AgentRunUiState.completeGeneration(chat, token.generation(), "r", "COMPLETED", "done", "m", 0)
-                invoked.countDown()
-            }
             assertTrue(AgentForegroundService.interruptAndSend(context, session, "follow up", arrayListOf("safe"), true))
-            assertEquals(1L, invoked.count)
+            assertTrue(AgentRunUiState.state.value.running)
+            assertFalse(StopController.getInstance().isStopped)
+            assertEquals("follow up", LocalRunStore(context).readConversationMessages(session).last().optString("content"))
             release.countDown()
-            assertTrue(invoked.await(5, TimeUnit.SECONDS))
             worker(service).submit {}.get(5, TimeUnit.SECONDS)
-            assertTrue(correct.get())
-            assertEquals("COMPLETED", AgentRunUiState.state.value.outcome)
+            assertTrue(AgentRunUiState.state.value.running)
         }
     }
 
-    @Test fun rapidReplacementsNeverRunSupersededPendingInput() {
+    @Test fun steeringMessagesRemainDurableInArrivalOrder() {
         withHeldWorker { service, context, session, release ->
-            val observed = java.util.concurrent.CopyOnWriteArrayList<String>()
-            service.replacementRunner = AgentForegroundService.ReplacementRunner { _,_,_,text,_,_ -> observed.add(text) }
             assertTrue(AgentForegroundService.interruptAndSend(context, session, "B", arrayListOf(), false))
             assertTrue(AgentForegroundService.interruptAndSend(context, session, "C", arrayListOf(), false))
+            val rows = LocalRunStore(context).readConversationMessages(session)
+                .filter { it.optString("role") == "user" }.map { it.optString("content") }
+            assertEquals(listOf("original", "B", "C"), rows)
             release.countDown()
             worker(service).submit {}.get(5, TimeUnit.SECONDS)
-            assertEquals(listOf("C"), observed)
-            val timeline = LocalRunStore(context).readConversationTimeline(session)
-            assertTrue(timeline.any { it.stage == "QUEUED" && it.text == "B" })
-            assertFalse(timeline.any { it.stage == "QUEUED" && it.text == "C" })
+            assertTrue(AgentRunUiState.state.value.running)
         }
     }
 
-    @Test fun cancelledApprovalCannotLaunchAfterReplacement() {
+    @Test fun steeringPreservesAnActiveApprovalUntilTheUserStopsTheRun() {
         withHeldWorker { service, context, session, release ->
             val cancelled = AtomicInteger()
             val controller = StopController.getInstance()
@@ -162,35 +148,26 @@ class MainAgentInteractionTest {
                 .get(controller) as java.util.concurrent.atomic.AtomicLong
             val old = CancellationToken(controller, oldGeneration.get())
             old.registerCancelAction { cancelled.incrementAndGet() }
-            service.replacementRunner = AgentForegroundService.ReplacementRunner { _,_,_,_,_,_ -> }
             assertTrue(AgentForegroundService.interruptAndSend(context, session, "instead inspect", arrayListOf(), false))
-            assertEquals(1, cancelled.get())
-            assertFalse(old.runIfActive { fail("stale approved effect") })
+            assertEquals(0, cancelled.get())
+            assertTrue(old.runIfActive { })
             StopController.getInstance().stopRun()
+            assertEquals(1, cancelled.get())
+            assertFalse(old.runIfActive { fail("stopped run must reject approval") })
             release.countDown()
         }
     }
 
-    @Test fun rejectedExecutorKeepsInputAndUnlocksComposer() {
+    @Test fun steeringRemainsDurableWhenTheServiceExecutorIsShuttingDown() {
         withHeldWorker { service, context, session, release ->
             worker(service).shutdown()
             assertTrue(AgentForegroundService.interruptAndSend(context, session, "preserved", arrayListOf(), false))
-            assertFalse(AgentRunUiState.state.value.running)
-            assertTrue(LocalRunStore(context).readConversationTimeline(session).any { it.stage == "QUEUED" && it.text == "preserved" })
+            assertTrue(AgentRunUiState.state.value.running)
+            assertTrue(LocalRunStore(context).readConversationMessages(session).any {
+                it.optString("role") == "user" && it.optString("content") == "preserved"
+            })
             release.countDown()
-        }
-    }
-
-    @Test fun deletedConversationCannotDispatchOrLeaveRunStuck() {
-        withHeldWorker { service, context, session, release ->
-            val invoked = AtomicInteger()
-            service.replacementRunner = AgentForegroundService.ReplacementRunner { _,_,_,_,_,_ -> invoked.incrementAndGet() }
-            assertTrue(AgentForegroundService.interruptAndSend(context, session, "never run", arrayListOf(), false))
-            LocalRunStore(context).deleteConversation(session)
-            release.countDown()
-            worker(service).submit {}.get(5, TimeUnit.SECONDS)
-            assertEquals(0, invoked.get())
-            assertFalse(AgentRunUiState.state.value.running)
+            StopController.getInstance().stopRun()
         }
     }
 
@@ -201,7 +178,6 @@ class MainAgentInteractionTest {
             val old = CancellationToken(controller, (field.get(controller) as java.util.concurrent.atomic.AtomicLong).get())
             val idle = AgentForegroundService::class.java.getDeclaredMethod("stopServiceIfIdle").apply { isAccessible = true }
             old.registerCancelAction { idle.invoke(service) }
-            service.replacementRunner = AgentForegroundService.ReplacementRunner { _,_,_,_,_,_ -> }
             assertTrue(AgentForegroundService.interruptAndSend(context, session, "reserved", arrayListOf(), false))
             assertFalse(org.robolectric.Shadows.shadowOf(service).isStoppedBySelf)
             StopController.getInstance().stopRun()
@@ -262,10 +238,10 @@ class MainAgentInteractionTest {
         AgentRunUiState.completeGeneration("approval-owner", 81, "r", "STOPPED", "stopped", "m", 0)
     }
 
-    @Test fun actualApprovalGateIsCancelledByReplacement() = approvalReplacement(false)
-    @Test fun approvalCannotApproveInPresenterRegistrationCancellationGap() = approvalReplacement(true)
+    @Test fun steeringKeepsAnActiveApprovalResolvable() = approvalSteering(gap = false, stopAfterSteering = false)
+    @Test fun explicitStopBlocksApprovalDuringPresenterRegistrationGap() = approvalSteering(gap = true, stopAfterSteering = true)
 
-    private fun approvalReplacement(gap: Boolean) {
+    private fun approvalSteering(gap: Boolean, stopAfterSteering: Boolean) {
         withHeldWorker { service, context, session, release ->
             val controller = StopController.getInstance()
             val field = controller.javaClass.getDeclaredField("generation").apply { isAccessible = true }
@@ -284,12 +260,15 @@ class MainAgentInteractionTest {
             try {
                 assertTrue(shown.await(5, TimeUnit.SECONDS))
                 assertTrue(AgentForegroundService.interruptAndSend(context, session, "inspect instead", arrayListOf(), false))
+                if (stopAfterSteering) StopController.getInstance().stopRun()
                 var effects = 0
-                assertFalse(gate.resolveFromUi(id.get()) { effects++; com.jarvys.agent.connectors.ApprovalDecision.APPROVED })
-                assertEquals(0, effects)
+                val resolved = gate.resolveFromUi(id.get()) { effects++; com.jarvys.agent.connectors.ApprovalDecision.APPROVED }
+                assertEquals(!stopAfterSteering, resolved)
+                assertEquals(if (stopAfterSteering) 0 else 1, effects)
                 finishShow.countDown(); request.get(5, TimeUnit.SECONDS)
                 assertFalse(gate.isPending(id.get()))
-                StopController.getInstance().stopRun(); release.countDown()
+                if (!stopAfterSteering) StopController.getInstance().stopRun()
+                release.countDown()
             } finally { finishShow.countDown(); pool.shutdownNow() }
         }
     }
@@ -390,29 +369,6 @@ class MainAgentInteractionTest {
             assertTrue(store.readModelTranscriptRows(session).isEmpty())
         } finally {
             StopController.getInstance().stopRun(); serviceController.destroy()
-        }
-    }
-
-    @Test fun stoppedReplacementBoundaryRemainsStoppedRatherThanFailed() = replacementBoundaryOutcome(true)
-    @Test fun failedReplacementBoundaryIsRecordedAsFailed() = replacementBoundaryOutcome(false)
-
-    private fun replacementBoundaryOutcome(stopped: Boolean) {
-        withHeldWorker { service, context, session, release ->
-            service.replacementRunner = AgentForegroundService.ReplacementRunner { _,_,_,_,_,_ ->
-                if (stopped) {
-                    StopController.getInstance().stopRun()
-                    throw java.util.concurrent.CancellationException("fixture stop before model")
-                }
-                throw IllegalStateException("fixture setup failure")
-            }
-            assertTrue(AgentForegroundService.interruptAndSend(context, session, "new instruction", arrayListOf(), false))
-            release.countDown()
-            worker(service).submit {}.get(5, TimeUnit.SECONDS)
-            val expected = if (stopped) "STOPPED" else "FAILED"
-            assertEquals(expected, AgentRunUiState.state.value.outcome)
-            assertFalse(AgentRunUiState.state.value.running)
-            assertFalse(com.jarvys.agent.proactive.BackgroundRunController.isInteractiveActive())
-            assertEquals(expected, LocalRunStore(context).readConversationMessages(session).last().optString("status"))
         }
     }
 

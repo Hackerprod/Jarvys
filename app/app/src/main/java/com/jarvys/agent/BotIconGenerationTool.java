@@ -49,6 +49,7 @@ public final class BotIconGenerationTool implements CoreTool {
 
     @Override public boolean canDelegate() { return false; }
     @Override public ToolSpec declaration() { return declaration; }
+    @Override public ExecutionMode executionMode() { return ExecutionMode.SEQUENTIAL; }
     @Override public String auditDetail(Map<String, Object> arguments) { return "Explicit custom bot icon generation"; }
 
     @Override public CoreToolResult execute(Map<String, Object> arguments, CancellationToken token) {

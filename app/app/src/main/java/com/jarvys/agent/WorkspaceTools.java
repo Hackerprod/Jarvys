@@ -233,6 +233,11 @@ public final class WorkspaceTools {
       return this.declaration;
     }
 
+    @Override // Mutations, previews and device-affecting workspace actions share state.
+    public ExecutionMode executionMode() {
+      return ExecutionMode.SEQUENTIAL;
+    }
+
     String string(Map<String, Object> arguments, String key) {
       Object value = arguments.get(key);
       if (!(value instanceof String)) {
@@ -276,6 +281,8 @@ public final class WorkspaceTools {
               "boolean"),
           Collections.emptyList());
     }
+
+    @Override public ExecutionMode executionMode() { return ExecutionMode.PARALLEL; }
 
     @Override // com.jarvys.agent.CoreTool
     public CoreToolResult execute(Map<String, Object> arguments, CancellationToken token) {
@@ -329,6 +336,8 @@ public final class WorkspaceTools {
               "string"),
           Collections.singletonList("path"));
     }
+
+    @Override public ExecutionMode executionMode() { return ExecutionMode.PARALLEL; }
 
     @Override // com.jarvys.agent.CoreTool
     public CoreToolResult execute(Map<String, Object> arguments, CancellationToken token) {
@@ -556,6 +565,8 @@ public final class WorkspaceTools {
           WorkspaceTools.properties("query", "string", "zone", "string", "limit", "integer"),
           Collections.singletonList("query"));
     }
+
+    @Override public ExecutionMode executionMode() { return ExecutionMode.PARALLEL; }
 
     @Override // com.jarvys.agent.CoreTool
     public CoreToolResult execute(Map<String, Object> arguments, CancellationToken token) {

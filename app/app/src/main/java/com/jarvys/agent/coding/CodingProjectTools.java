@@ -396,6 +396,12 @@ public final class CodingProjectTools {
       return this.spec;
     }
 
+    @Override // Project searches and reads are independent; every action-capable tool is ordered.
+    public ExecutionMode executionMode() {
+      return name.equals("ls") || name.equals("read") || name.equals("coding_glob")
+              || name.equals("coding_grep") ? ExecutionMode.PARALLEL : ExecutionMode.SEQUENTIAL;
+    }
+
     @Override // com.jarvys.agent.CoreTool
     public CoreToolResult execute(Map<String, Object> arguments, CancellationToken token) {
       token.throwIfCancelled();

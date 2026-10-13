@@ -9,6 +9,7 @@ import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 
 class ProactiveRespondCoreTool(context: Context, private val decisionSink: ProactiveDecisionSink) : CoreTool {
+    override fun executionMode() = CoreTool.ExecutionMode.SEQUENTIAL
     private val app = context.applicationContext
 
     override fun declaration() = ToolSpec(

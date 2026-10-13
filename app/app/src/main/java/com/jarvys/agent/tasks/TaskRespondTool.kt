@@ -19,6 +19,7 @@ data class TaskResponse(
 
 /** The sole terminal tool for a silent scheduled run. */
 class TaskRespondTool(private val allowSilence: Boolean = true) : CoreTool {
+    override fun executionMode() = CoreTool.ExecutionMode.SEQUENTIAL
     private val response = AtomicReference<TaskResponse?>(null)
 
     override fun declaration(): ToolSpec = ToolSpec(NAME, "jarvys/tasks", DESCRIPTION, "scheduled_task",

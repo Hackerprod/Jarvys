@@ -11,6 +11,8 @@ public final class ConversationTurn {
   public final List<Image> images;
   public final Kind kind;
   public final String modelContent;
+  /** Structural provenance for a real incoming user message; never a synthetic tool event. */
+  public final IncomingMetadata incomingMetadata;
   public final int originalMessageIndex;
   public final String role;
   public final int summarizedMessageCount;
@@ -29,6 +31,48 @@ public final class ConversationTurn {
     TOOL_CALLS,
     TOOL_RESULT,
     MODEL_ERROR
+  }
+
+  public static final class IncomingMetadata {
+    public final String id;
+    public final List<String> references;
+    public final String sender;
+    public final String source;
+    public final String type;
+    public final boolean untrusted;
+
+    public IncomingMetadata(String id, String source, String sender, String type,
+                            List<String> references, boolean untrusted) {
+      this.id = id == null ? "" : id;
+      this.source = source == null ? "unknown" : source;
+      this.sender = sender == null ? "unknown" : sender;
+      this.type = type == null ? "message" : type;
+      this.references = immutable(references);
+      this.untrusted = untrusted;
+    }
+
+    String render(String content, String adapter) {
+      StringBuilder value = new StringBuilder("<jarvys_incoming source=\"")
+          .append(xml(source)).append("\" sender=\"").append(xml(sender))
+          .append("\" type=\"").append(xml(type)).append("\" id=\"")
+          .append(xml(id)).append("\" trust=\"").append(untrusted ? "untrusted" : "user")
+          .append("\" adapter=\"").append(xml(adapter)).append("\">\n");
+      for (String reference : references) value.append("<reference>").append(xml(reference))
+          .append("</reference>\n");
+      return value.append("<content>").append(xml(content)).append("</content>\n")
+          .append("</jarvys_incoming>").toString();
+    }
+
+    private static String xml(String text) {
+      return text == null ? "" : text.replace("&", "&amp;").replace("<", "&lt;")
+          .replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&apos;");
+    }
+
+    public String chatMessageName() {
+      String value = "jarvys_" + source + "_" + sender;
+      String safe = value.replaceAll("[^A-Za-z0-9_-]", "_");
+      return safe.length() <= 64 ? safe : safe.substring(0, 64);
+    }
   }
 
   public static final class Image {
@@ -55,7 +99,12 @@ public final class ConversationTurn {
   }
 
   public ConversationTurn(String role, String content, int originalMessageIndex) {
-    this(role, content, originalMessageIndex, null, 0, Collections.emptyList());
+    this(role, content, originalMessageIndex, null, 0, Collections.emptyList(), null);
+  }
+
+  public ConversationTurn(String role, String content, int originalMessageIndex,
+                          IncomingMetadata incomingMetadata) {
+    this(role, content, originalMessageIndex, null, 0, Collections.emptyList(), incomingMetadata);
   }
 
   private ConversationTurn(
@@ -64,16 +113,20 @@ public final class ConversationTurn {
       int originalMessageIndex,
       String thinking,
       int imageCount,
-      List<ChatAttachment> attachments) {
+      List<ChatAttachment> attachments,
+      IncomingMetadata incomingMetadata) {
     if (!"user".equals(role) && !"assistant".equals(role)) {
       throw new IllegalArgumentException("Conversation role must be user or assistant");
     }
     if (!"user".equals(role) && attachments != null && !attachments.isEmpty()) {
       throw new IllegalArgumentException("Attachments belong only to user messages");
     }
+    if (incomingMetadata != null && !"user".equals(role))
+      throw new IllegalArgumentException("Incoming provenance belongs only to user messages");
     this.role = role;
     this.content = content == null ? "" : content;
     this.kind = Kind.MESSAGE;
+    this.incomingMetadata = incomingMetadata;
     this.toolCalls = Collections.emptyList();
     this.providerOutputItems = Collections.emptyList();
     this.modelErrorCode = "";
@@ -95,6 +148,16 @@ public final class ConversationTurn {
     this.imageCount = Math.max(Math.max(0, imageCount), attachedImages);
     this.modelContent = this.content;
     this.images = Collections.emptyList();
+  }
+
+  private ConversationTurn(
+      String role,
+      String content,
+      int originalMessageIndex,
+      String thinking,
+      int imageCount,
+      List<ChatAttachment> attachments) {
+    this(role, content, originalMessageIndex, thinking, imageCount, attachments, null);
   }
 
   private ConversationTurn(
@@ -135,6 +198,7 @@ public final class ConversationTurn {
     this.imageCount = 0;
     this.attachments = Collections.emptyList();
     this.modelContent = this.content;
+    this.incomingMetadata = null;
     this.images = Collections.emptyList();
   }
 
@@ -152,6 +216,7 @@ public final class ConversationTurn {
     this.thinking = raw.thinking;
     this.attachments = raw.attachments;
     this.modelContent = modelContent == null ? raw.content : modelContent;
+    this.incomingMetadata = raw.incomingMetadata;
     this.images = immutable(images);
     this.imageCount = Math.max(raw.imageCount, this.images.size());
   }
@@ -248,6 +313,12 @@ public final class ConversationTurn {
     return new ConversationTurn(this, modelContent, images);
   }
 
+  /** Provider-specific representation keeps the actual message as user content with provenance delimiters. */
+  public String renderedModelContent(String adapter) {
+    return incomingMetadata == null || !incomingMetadata.untrusted
+        ? modelContent : incomingMetadata.render(modelContent, adapter);
+  }
+
   static boolean hasCurrentUserMessage(List<ConversationTurn> history) {
     if (history == null || history.isEmpty()) {
       return false;
@@ -272,6 +343,7 @@ public final class ConversationTurn {
             this.originalMessageIndex,
             this.thinking,
             0,
-            Collections.emptyList());
+            Collections.emptyList(),
+            this.incomingMetadata);
   }
 }

@@ -42,6 +42,8 @@ class AppDiagnosticsTool internal constructor(
                 "id" to mapOf("type" to "string", "description" to "Exact diagnostic ID returned by list."),
                 "limit" to mapOf("type" to "integer", "minimum" to 1, "maximum" to 10),
             )))
+    // Approval and diagnostic access share interactive state.
+    override fun executionMode() = CoreTool.ExecutionMode.SEQUENTIAL
 
     override fun execute(arguments: Map<String, Any>?, token: CancellationToken): CoreToolResult {
         token.throwIfCancelled()

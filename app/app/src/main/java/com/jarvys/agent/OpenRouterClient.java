@@ -117,7 +117,7 @@ public final class OpenRouterClient implements ModelProviderClient {
       if (!tools.isEmpty()) {
         request.put("tools", toolDeclarations(tools));
         request.put("tool_choice", "auto");
-        request.put("parallel_tool_calls", false);
+        request.put("parallel_tool_calls", true);
       }
     } catch (Exception e) {
       throw new IllegalStateException("Could not prepare OpenRouter request", e);
@@ -214,11 +214,12 @@ public final class OpenRouterClient implements ModelProviderClient {
                   .put("tool_call_id", turn.toolCallId)
                   .put("content", turn.content));
         } else {
-          Object parts = turn.modelContent;
+          String modelContent = turn.renderedModelContent("chat_completions");
+          Object parts = modelContent;
           if (!turn.images.isEmpty()) {
             JSONArray content =
                 new JSONArray()
-                    .put(new JSONObject().put("type", "text").put("text", turn.modelContent));
+                    .put(new JSONObject().put("type", "text").put("text", modelContent));
             for (ConversationTurn.Image image : turn.images) {
               content.put(
                   new JSONObject()
@@ -227,7 +228,10 @@ public final class OpenRouterClient implements ModelProviderClient {
             }
             parts = content;
           }
-          messages.put(new JSONObject().put("role", turn.role).put("content", parts));
+          JSONObject message = new JSONObject().put("role", turn.role).put("content", parts);
+          if (turn.incomingMetadata != null && turn.incomingMetadata.untrusted)
+            message.put("name", turn.incomingMetadata.chatMessageName());
+          messages.put(message);
         }
       }
     }

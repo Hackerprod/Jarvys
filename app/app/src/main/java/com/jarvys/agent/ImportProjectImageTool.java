@@ -32,6 +32,7 @@ final class ImportProjectImageTool implements CoreTool {
                 "image", ToolSpec.Status.IMPLEMENTED, fields, Arrays.asList("image_ref", "path", "expected_sha256", "expected_scope_version"));
     }
     @Override public ToolSpec declaration() { return spec; }
+    @Override public ExecutionMode executionMode() { return ExecutionMode.SEQUENTIAL; }
     @Override public boolean canDelegate() { return false; }
     @Override public String auditDetail(Map<String,Object> arguments) { return "Copy one selected image into this conversation's project"; }
     @Override public CoreToolResult execute(Map<String,Object> args, CancellationToken token) {

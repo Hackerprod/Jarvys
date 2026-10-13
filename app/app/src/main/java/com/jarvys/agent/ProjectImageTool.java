@@ -69,6 +69,7 @@ final class ProjectImageTool implements CoreTool {
         return CodexImageGenerationTool.isAvailable(context, new ProviderSettings(context), 0, session);
     }
     @Override public ToolSpec declaration() { return spec; }
+    @Override public ExecutionMode executionMode() { return ExecutionMode.SEQUENTIAL; }
     @Override public boolean canDelegate() { return false; }
     @Override public String auditDetail(Map<String,Object> arguments) { return "Work with a scoped project image"; }
 

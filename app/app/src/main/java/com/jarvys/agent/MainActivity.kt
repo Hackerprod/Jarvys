@@ -734,7 +734,7 @@ class MainActivity : ComponentActivity() {
         val text = goalInput
         if (text.isBlank()) return
         val state = AgentRunUiState.state.value
-        if (!state.running || state.compacting || state.reflecting || state.sessionId != conversationSessionId) return
+        if (!state.running || state.reflecting || state.sessionId != conversationSessionId) return
         val skills = ArrayList(skillRepository.enabledForRun().filter { it.metadata.id in selectedSkillIds }.map { it.metadata.id })
         runCatching { AgentForegroundService.interruptAndSend(this, conversationSessionId, text, skills, chatWithoutMemory) }
             .onSuccess { accepted -> if (accepted && goalInput == text) goalInput = "" }
@@ -1842,7 +1842,7 @@ private fun JarvysApp(
                     canInterrupt = agentState.running && agentState.sessionId == conversationSessionId
                         && agentState.interactiveOwnerSessionId == conversationSessionId
                         && MessageReactionTool.isOrdinaryChat(conversationSessionId)
-                        && !agentState.compacting && !agentState.reflecting,
+                        && !agentState.reflecting,
                     pendingAttachments = pendingAttachments,
                     attachmentSessionId = conversationSessionId,
                     attachmentSending = attachmentSending,

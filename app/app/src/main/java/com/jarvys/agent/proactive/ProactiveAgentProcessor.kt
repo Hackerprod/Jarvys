@@ -129,6 +129,7 @@ object ProactiveReadOnlyToolFactory {
 /** Connector output is also redacted before becoming a model tool-result turn. */
 private class ProactiveRedactingConnectorTool(private val delegate: CoreTool) : CoreTool {
     override fun declaration(): ToolSpec = delegate.declaration()
+    override fun executionMode() = delegate.executionMode()
 
     override fun execute(arguments: Map<String, Any>, token: CancellationToken): CoreToolResult {
         val result = delegate.execute(arguments, token)

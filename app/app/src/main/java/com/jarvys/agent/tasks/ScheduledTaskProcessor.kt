@@ -280,6 +280,7 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
         private val redactOutput: Boolean,
     ) : CoreTool {
         override fun declaration(): ToolSpec = delegate.declaration()
+        override fun executionMode() = delegate.executionMode()
 
         override fun execute(arguments: Map<String, Any>, token: CancellationToken): CoreToolResult {
             val name = delegate.declaration().name
