@@ -1,6 +1,9 @@
 package com.jarvys.agent.workspaces
 
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.Modifier
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.*
@@ -73,12 +76,21 @@ class WorkspaceCoordinationIndicatorComposeTest {
         val counters = listOf(R.plurals.workspace_coordination_live,
             R.plurals.workspace_coordination_uncertain, R.plurals.workspace_coordination_historical)
         compose.setContent { MaterialTheme {
-            WorkspaceCoordinationIndicator(summary.value, showHistory = showHistory.value)
+            // Keep a real window-sized host while the zero-counter child has no layout node.
+            Box(Modifier.fillMaxSize()) {
+                WorkspaceCoordinationIndicator(summary.value, showHistory = showHistory.value)
+            }
         } }
         compose.onNodeWithTag("workspace-coordination-indicator").assertDoesNotExist()
         for (count in 1..2) {
             compose.runOnIdle {
                 summary.value = WorkspaceCoordinationSummary(live = count, uncertain = count, historical = count)
+            }
+            compose.waitUntil(5_000) {
+                compose.onAllNodesWithTag("workspace-coordination-indicator").fetchSemanticsNodes().size == 1 &&
+                    counters.all { resource ->
+                        compose.onAllNodesWithText(quantityText(resource, count)).fetchSemanticsNodes().size == 1
+                    }
             }
             compose.onAllNodesWithTag("workspace-coordination-indicator").assertCountEquals(1)
             counters.forEach { resource ->
@@ -89,12 +101,19 @@ class WorkspaceCoordinationIndicatorComposeTest {
             compose.onAllNodes(hasSetTextAction(), useUnmergedTree = true).assertCountEquals(0)
         }
         compose.runOnIdle { showHistory.value = false }
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithText(quantityText(R.plurals.workspace_coordination_historical, 2)).fetchSemanticsNodes().isEmpty()
+        }
         compose.onNodeWithText(quantityText(R.plurals.workspace_coordination_historical, 2)).assertDoesNotExist()
         compose.onNodeWithText(quantityText(R.plurals.workspace_coordination_live, 2)).assertIsDisplayed()
         compose.onNodeWithText(quantityText(R.plurals.workspace_coordination_uncertain, 2)).assertIsDisplayed()
         compose.runOnIdle {
             showHistory.value = true
             summary.value = WorkspaceCoordinationSummary(reviewRequired = true, pageLimited = true, unavailable = true)
+        }
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithText(compose.activity.getString(R.string.workspace_coordination_unavailable))
+                .fetchSemanticsNodes().size == 1
         }
         compose.onAllNodesWithTag("workspace-coordination-indicator").assertCountEquals(1)
         counters.forEach { resource ->
@@ -107,6 +126,9 @@ class WorkspaceCoordinationIndicatorComposeTest {
         compose.onAllNodes(hasClickAction(), useUnmergedTree = true).assertCountEquals(0)
         compose.onAllNodes(hasSetTextAction(), useUnmergedTree = true).assertCountEquals(0)
         compose.runOnIdle { summary.value = WorkspaceCoordinationSummary() }
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithTag("workspace-coordination-indicator").fetchSemanticsNodes().isEmpty()
+        }
         compose.onNodeWithTag("workspace-coordination-indicator").assertDoesNotExist()
     }
 
