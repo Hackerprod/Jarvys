@@ -61,6 +61,62 @@ public class CodexResponsesTerminalTest {
         fixture.assertClosedOnce();
     }
 
+    @Test public void emptyCompletedOutputRecoversMessageFromOutputItemDone() throws Exception {
+        JSONObject value = completed("");
+        value.getJSONObject("response").put("output", new JSONArray());
+        Fixture fixture = fixture(sse(doneMessage("Texto recuperado")) + sse(value), true, 3);
+        assertEquals("Texto recuperado", fixture.complete().text);
+        fixture.assertClosedOnce();
+    }
+
+    @Test public void emptyCompletedOutputRecoversOnlyCompletedFunctionCall() throws Exception {
+        JSONObject value = completed("");
+        value.getJSONObject("response").put("output", new JSONArray());
+        Fixture fixture = fixture(sse(doneCall(call())) + sse(value), true, 2);
+        ModelReply reply = fixture.complete();
+        assertEquals(1, reply.calls.size());
+        assertEquals("fixture_write", reply.calls.get(0).name);
+        fixture.assertClosedOnce();
+    }
+
+    @Test public void outputItemDoneWithNonCompletedFunctionCallDoesNotCreateToolCall() throws Exception {
+        JSONObject value = completed("");
+        value.getJSONObject("response").put("output", new JSONArray());
+        Fixture fixture = fixture(sse(doneCall(call().put("status", "in_progress"))) + sse(value), true, 2);
+        ModelReply reply = fixture.complete();
+        assertTrue(reply.calls.isEmpty());
+        assertEquals("", reply.text);
+        fixture.assertClosedOnce();
+    }
+
+    @Test public void completedOutputWinsWithoutDuplicatingMatchingDoneItems() throws Exception {
+        JSONObject value = completed("");
+        value.getJSONObject("response").put("output", new JSONArray()
+                .put(message("Answer")).put(call()));
+        String stream = sse(doneMessage("Answer")) + sse(doneCall(call())) + sse(value);
+        ModelReply reply = fixture(stream, true, 4).complete();
+        assertEquals("Answer", reply.text);
+        assertEquals(1, reply.calls.size());
+        assertEquals("synthetic-call", reply.calls.get(0).id);
+    }
+
+    @Test public void textDeltasAreLastResortAndNeverCreateCalls() throws Exception {
+        JSONObject value = completed("");
+        value.getJSONObject("response").put("output", new JSONArray());
+        String delta = sse(new JSONObject().put("type", "response.output_text.delta")
+                .put("item_id", "synthetic-message").put("output_index", 0).put("content_index", 0)
+                .put("delta", "Texto desde delta"));
+        assertEquals("Texto desde delta", fixture(delta + sse(value), true, 2).complete().text);
+        String repeated = sse(new JSONObject().put("type", "response.output_text.delta")
+                .put("item_id", "synthetic-message").put("output_index", 0).put("content_index", 0)
+                .put("delta", "ha"));
+        assertEquals("haha", fixture(repeated + repeated + sse(value), true, 2).complete().text);
+        String arguments = sse(new JSONObject().put("type", "response.function_call_arguments.delta")
+                .put("item_id", "synthetic-call").put("output_index", 0).put("delta", "{}"));
+        ModelReply reply = fixture(arguments + sse(value), true, 2).complete();
+        assertTrue(reply.calls.isEmpty());
+    }
+
     @Test public void failedAfterPartialCallNeverReturnsExecutableReply() throws Exception {
         assertRejected(partialCall() + sse(new JSONObject().put("type", "response.failed")
                 .put("response", new JSONObject().put("status", "failed").put("output", new JSONArray().put(call())))), true);
@@ -193,7 +249,20 @@ public class CodexResponsesTerminalTest {
     }
     private static JSONObject call() throws Exception {
         return new JSONObject().put("type", "function_call").put("call_id", "synthetic-call")
-                .put("name", "fixture_write").put("arguments", "{\"path\":\"note.txt\"}");
+                .put("name", "fixture_write").put("arguments", "{\"path\":\"note.txt\"}")
+                .put("status", "completed");
+    }
+    private static JSONObject message(String text) throws Exception {
+        return new JSONObject().put("type", "message").put("role", "assistant").put("status", "completed")
+                .put("content", new JSONArray().put(new JSONObject().put("type", "output_text").put("text", text)));
+    }
+    private static JSONObject doneMessage(String text) throws Exception {
+        return new JSONObject().put("type", "response.output_item.done").put("output_index", 0)
+                .put("item", message(text));
+    }
+    private static JSONObject doneCall(JSONObject item) throws Exception {
+        return new JSONObject().put("type", "response.output_item.done").put("output_index", 1)
+                .put("item", item);
     }
     private static String partialCall() throws Exception {
         return sse(new JSONObject().put("type", "response.output_item.done").put("output_index", 0).put("item", call()));

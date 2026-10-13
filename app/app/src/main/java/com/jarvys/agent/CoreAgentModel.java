@@ -120,6 +120,11 @@ public final class CoreAgentModel {
     LocalDiagnostics.recoverable(context, LocalDiagnostics.Origin.PROVIDER, failure);
   }
 
+  void recordEmptyReply(ModelReply reply) {
+    if (context == null || reply == null || reply.diagnostics.codexShape == null) return;
+    LocalDiagnostics.responseShape(context, reply.diagnostics.codexShape, reply.text.length());
+  }
+
   private boolean privateCodeContext() {
     if (context == null) return false;
     try {

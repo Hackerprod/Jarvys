@@ -84,19 +84,13 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
       CancellationToken token) {
     JSONObject request =
         buildRequest(systemPrompt, userPrompt, images, tools, history, false, null);
-    return execute(request, sessionId, token, true, AttachmentModelContext.hasImages(history));
-  }
-
-  private ModelReply execute(
-      JSONObject request, String sessionId, CancellationToken token, boolean logEmptyReply) {
-    return execute(request, sessionId, token, logEmptyReply, false);
+    return execute(request, sessionId, token, AttachmentModelContext.hasImages(history));
   }
 
   private ModelReply execute(
       JSONObject request,
       String sessionId,
       CancellationToken token,
-      boolean logEmptyReply,
       boolean attachmentImages) {
     ProviderHttp.Response response =
         CodexAuthenticatedRequestExecutor.execute(
@@ -119,17 +113,7 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
           response.status, response.rawBody, settings.getModel(), null, response.retryAfterMillis);
     }
     if (attachmentImages) AttachmentModelContext.checkImageReply(response.body);
-    ModelReply parsed;
-    try {
-      parsed = parseResponse(response.body);
-    } catch (RuntimeException failure) {
-      if (logEmptyReply && !(failure instanceof CodexResponseException))
-        logEmptyReply(response.status, sessionId, settings.getModel(), response.rawBody);
-      throw failure;
-    }
-    if (logEmptyReply && parsed.text.trim().isEmpty()) {
-      logEmptyReply(response.status, sessionId, settings.getModel(), response.rawBody);
-    }
+    ModelReply parsed = parseResponse(response.body);
     return new ModelReply(
         parsed.text,
         parsed.calls,
@@ -423,35 +407,6 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
     }
   }
 
-  private static void logEmptyReply(int status, String sessionId, String model, String rawBody) {
-    final int chunkSize = 3000;
-    int chunkCount = Math.max(1, (rawBody.length() + chunkSize - 1) / chunkSize);
-    Log.e(
-        TAG,
-        "Successful response contained no visible assistant text. HTTP status="
-            + status
-            + " model="
-            + model
-            + " sessionId="
-            + sessionId
-            + " requestHeaders="
-            + safeRequestHeaders(sessionId)
-            + " rawBodyChars="
-            + rawBody.length()
-            + " rawBodyChunks="
-            + chunkCount);
-    if (rawBody.isEmpty()) {
-      Log.e(TAG, "rawResponseBody[1/1]=<empty>");
-      return;
-    }
-    for (int start = 0, index = 1; start < rawBody.length(); start += chunkSize, index++) {
-      int end = Math.min(rawBody.length(), start + chunkSize);
-      Log.e(
-          TAG,
-          "rawResponseBody[" + index + "/" + chunkCount + "]=" + rawBody.substring(start, end));
-    }
-  }
-
   private static String normalizeSseBody(String rawBody) {
     if (rawBody != null) rawBody = CodexResponseStream.stripBom(rawBody);
     if (rawBody == null || rawBody.trim().startsWith("{")) return rawBody == null ? "" : rawBody;
@@ -486,32 +441,70 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
     StringBuilder text = new StringBuilder();
     try {
       JSONObject completed = null;
+      boolean completedEvent = false;
       // A full non-SSE response can be pretty printed. Normalized SSE is one JSON per line.
       try {
         JSONObject single = CodexResponseStream.parseObject(body.trim());
         CodexResponseStream.terminal(single, true);
         JSONObject candidate = single.optJSONObject("response");
         if (candidate == null && single.optJSONArray("output") != null) candidate = single;
-        if (candidate != null && candidate.optJSONArray("output") != null
-            && (single.optString("type", "").isEmpty() || "response.completed".equals(single.optString("type")))) {
+        String eventType = single.optString("type", "");
+        if (candidate != null
+            && (candidate.optJSONArray("output") != null || "response.completed".equals(eventType))
+            && (eventType.isEmpty() || "response.completed".equals(eventType))) {
           String status = candidate.optString("status", "");
           if (!status.isEmpty() && !"completed".equals(status))
             throw new CodexResponseException(CodexResponseException.Kind.INCOMPLETE);
           completed = candidate;
+          completedEvent = "response.completed".equals(eventType);
         }
       } catch (CodexResponseException failure) {
         if (failure.kind != CodexResponseException.Kind.MALFORMED || !body.contains("\n")) throw failure;
       }
       if (completed == null) {
+        String lastEventType = "";
         for (String event : body.split("\n")) {
           if (event.trim().isEmpty()) continue;
           JSONObject value = CodexResponseStream.parseObject(event);
-          if (CodexResponseStream.terminal(value, true)) completed = value.getJSONObject("response");
+          lastEventType = value.optString("type", "");
+          if (CodexResponseStream.terminal(value, true)) {
+            JSONObject response = value.optJSONObject("response");
+            if (response != null) completed = response;
+          }
         }
+        completedEvent = "response.completed".equals(lastEventType);
       }
       if (completed == null) throw new CodexResponseException(CodexResponseException.Kind.INCOMPLETE);
       // Only authoritative final output may create tool calls; intermediate fragments are never executable.
-      consumeOutput(completed.getJSONArray("output"), calls, text, fallbackIds);
+      JSONArray output = completed.optJSONArray("output");
+      consumeOutput(output, calls, text, fallbackIds);
+      boolean hasUsefulOutput = !text.toString().trim().isEmpty() || !calls.isEmpty();
+      List<JSONObject> fallbackEvents = null;
+      if (!hasUsefulOutput && completedEvent) {
+        fallbackEvents = responseEvents(body);
+        for (JSONObject event : fallbackEvents) {
+          if (!"response.output_item.done".equals(event.optString("type"))) continue;
+          JSONObject item = event.optJSONObject("item");
+          if (item == null) continue;
+          String type = item.optString("type", "");
+          String fallbackKey = "done:" + event.optString("output_index", item.optString("id", "unknown"));
+          if ("function_call".equals(type)) {
+            // A done event is not sufficient authority for a tool call; the item itself must be complete.
+            if (!"completed".equals(item.optString("status", ""))) continue;
+            consumeItem(item, calls, text, fallbackIds, fallbackKey);
+          } else if ("message".equals(type)
+              && (!item.has("status") || "completed".equals(item.optString("status", "")))) {
+            consumeItem(item, calls, text, fallbackIds, fallbackKey);
+          }
+        }
+      }
+      if (!hasUsefulOutput && text.toString().trim().isEmpty() && completedEvent) {
+        if (fallbackEvents == null) fallbackEvents = responseEvents(body);
+        StringBuilder deltas = completedTextDeltas(fallbackEvents);
+        if (deltas.length() > 0) text.append(deltas);
+      }
+      if (output == null && text.length() == 0 && calls.isEmpty())
+        throw new CodexResponseException(CodexResponseException.Kind.INCOMPLETE);
     } catch (Exception e) {
       if (e instanceof CodexResponseException) throw (CodexResponseException) e;
       throw new CodexResponseException(CodexResponseException.Kind.MALFORMED);
@@ -523,6 +516,37 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
         null,
         "",
         contextTokensFromUsage(body));
+  }
+
+  private static List<JSONObject> responseEvents(String body) {
+    try {
+      return java.util.Collections.singletonList(CodexResponseStream.parseObject(body.trim()));
+    } catch (CodexResponseException singleObjectFailure) {
+      if (!body.contains("\n")) throw singleObjectFailure;
+    }
+    List<JSONObject> events = new ArrayList<>();
+    for (String line : body.split("\n")) {
+      if (!line.trim().isEmpty()) events.add(CodexResponseStream.parseObject(line));
+    }
+    return events;
+  }
+
+  private static StringBuilder completedTextDeltas(List<JSONObject> events) {
+    StringBuilder text = new StringBuilder();
+    String previousItem = null;
+    for (JSONObject event : events) {
+      if (!"response.output_text.delta".equals(event.optString("type", ""))) continue;
+      String delta = event.optString("delta", "");
+      if (delta.isEmpty()) continue;
+      int outputIndex = event.optInt("output_index", -1);
+      String itemId = event.optString("item_id", "");
+      String item = outputIndex >= 0 ? "index:" + outputIndex
+          : itemId.isEmpty() ? "unknown" : "id:" + itemId;
+      if (previousItem != null && !previousItem.equals(item)) text.append('\n');
+      text.append(delta);
+      previousItem = item;
+    }
+    return text;
   }
 
   private static Integer contextTokensFromUsage(String body) {

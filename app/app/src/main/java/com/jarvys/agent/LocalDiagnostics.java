@@ -47,7 +47,7 @@ import org.json.JSONObject;
 public final class LocalDiagnostics {
     public enum Origin { UNCAUGHT, PROVIDER, TOOL, FACTORY, SERVICE, ACTIVITY, RUNTIME }
 
-    /** Closed, content-free animation diagnostics. No caller text is accepted. */
+    /** Legacy closed categories retained only to validate records written by earlier versions. */
     public enum AnimationStage { INDEX, DOWNLOAD, INTEGRITY, CACHE, INIT, IMPORT, DECODE, ATTACH, SURFACE, FIRST_FRAME, TIMEOUT, CONTEXT_LOSS }
     public enum AnimationStatus { STARTED, READY, FAILED, UNAVAILABLE }
     public enum AnimationId { IDLE, SAD, THINKING, WORKING, WAITING, INTERRUPTED, TAUNT, CATALOG }
@@ -71,14 +71,6 @@ public final class LocalDiagnostics {
     private final String expectedBase;
     private final String expectedDirectory;
     private final LongSupplier clock;
-    private final boolean[][][] animationSeen = new boolean[AnimationId.values().length][AnimationStage.values().length][AnimationStatus.values().length];
-    private static final java.util.concurrent.ThreadPoolExecutor ANIMATION_WRITER =
-            new java.util.concurrent.ThreadPoolExecutor(1, 1, 0L, java.util.concurrent.TimeUnit.MILLISECONDS,
-                    new java.util.concurrent.ArrayBlockingQueue<>(16), runnable -> {
-                        Thread thread = new Thread(runnable, "jarvys-animation-diagnostics");
-                        thread.setDaemon(true);
-                        return thread;
-                    }, new java.util.concurrent.ThreadPoolExecutor.DiscardPolicy());
 
     public static LocalDiagnostics get(Context context) {
         LocalDiagnostics current = instance;
@@ -125,41 +117,70 @@ public final class LocalDiagnostics {
         } catch (Throwable ignored) { }
     }
 
-    public static void animation(Context context, AnimationStage stage, AnimationStatus status, AnimationId id) {
+    /** Animation observations are intentionally no longer retained. */
+    public static void animation(Context context, AnimationStage stage, AnimationStatus status, AnimationId id) { }
+
+    boolean animationRecord(AnimationStage stage, AnimationStatus status, AnimationId id) {
+        return false;
+    }
+
+    /** Stores only a validated structural projection for an empty Codex response. */
+    static void responseShape(Context context, ResponseDiagnostics.CodexShape shape, int textLength) {
         try {
-            if (context != null && !AgentErrorReporter.attachmentReportsSuppressed()) {
-                Context app = context.getApplicationContext();
-                if (app != null && stage != null && status != null && id != null) {
-                    // Bounded, best-effort background writes; the rendering thread never waits for disk.
-                    ANIMATION_WRITER.execute(() -> {
-                        try { get(app).animationRecord(stage, status, id); }
-                        catch (Throwable ignored) { }
-                    });
-                }
-            }
+            if (context == null || shape == null || AgentErrorReporter.attachmentReportsSuppressed()) return;
+            Context app = context.getApplicationContext();
+            if (app != null) get(app).responseShapeRecord(shape, textLength);
         } catch (Throwable ignored) { }
     }
 
-    boolean animationRecord(AnimationStage stage, AnimationStatus status, AnimationId id) {
-        if (stage == null || status == null || id == null || Boolean.TRUE.equals(CAPTURING.get())) return false;
+    boolean responseShapeRecord(ResponseDiagnostics.CodexShape shape, int textLength) {
+        if (shape == null || textLength < 0 || textLength > ResponseDiagnosticsParser.MAX_BODY_CHARACTERS
+                || Boolean.TRUE.equals(CAPTURING.get())) return false;
         try {
             if (AgentErrorReporter.attachmentReportsSuppressed()) return false;
+            JSONObject value = responseShapeJson(shape, textLength);
+            if (value == null) return false;
             CAPTURING.set(true);
             long now = clock.getAsLong();
-            JSONObject row = header(Origin.RUNTIME, status == AnimationStatus.FAILED ? "recoverable" : "info",
-                    "animation", now, null);
-            row.put("animation_stage", stage.name());
-            row.put("animation_status", status.name());
-            row.put("animation_id", id.name());
-            synchronized (animationSeen) {
-                // One persisted observation of each closed triple per process, not a live-state store.
-                if (animationSeen[id.ordinal()][stage.ordinal()][status.ordinal()]) return false;
-                if (!persist(row, now)) return false;
-                animationSeen[id.ordinal()][stage.ordinal()][status.ordinal()] = true;
-                return true;
-            }
+            JSONObject row = header(Origin.PROVIDER, "recoverable", "response_shape", now, null);
+            row.put("response_shape", value);
+            return persist(row, now);
         } catch (Throwable ignored) { return false; }
         finally { CAPTURING.remove(); }
+    }
+
+    private static JSONObject responseShapeJson(ResponseDiagnostics.CodexShape shape, int textLength)
+            throws JSONException {
+        if (shape.completedOutputCount < 0 || shape.completedOutputCount > ResponseDiagnosticsParser.MAX_ITEMS)
+            return null;
+        JSONObject events = new JSONObject();
+        for (Map.Entry<String, Integer> entry : shape.sseEventCounts.entrySet()) {
+            String type = fixedEventType(entry.getKey());
+            Integer count = entry.getValue();
+            if (type == null || count == null || count < 1 || count > ResponseDiagnosticsParser.MAX_ITEMS)
+                return null;
+            events.put(type, count);
+        }
+        JSONArray itemTypes = new JSONArray();
+        Set<String> seenTypes = new HashSet<>();
+        for (String itemType : shape.outputItemTypes) {
+            String type = fixedOutputType(itemType);
+            if (type == null || !seenTypes.add(type)) return null;
+            itemTypes.put(type);
+        }
+        String status = fixed(shape.responseStatus, "completed", "incomplete", "failed", "cancelled",
+                "in_progress", "queued", "other");
+        String reason = fixed(shape.incompleteReason, "max_output_tokens", "content_filter",
+                "tool_call_error", "safety_violation", "other");
+        if (shape.responseStatus != null && status == null || shape.incompleteReason != null && reason == null)
+            return null;
+        return new JSONObject()
+                .put("sse_event_counts", events)
+                .put("output_item_types", itemTypes)
+                .put("status", status == null ? JSONObject.NULL : status)
+                .put("incomplete_reason", reason == null ? JSONObject.NULL : reason)
+                .put("text_length", textLength)
+                .put("completed_output_count", shape.completedOutputCount);
     }
 
     /** Legacy reporting retains only a validated HTTP status; every legacy text argument is discarded. */
@@ -387,10 +408,14 @@ public final class LocalDiagnostics {
     private static JSONObject validate(JSONObject raw, long now, boolean includeFrames) {
         try {
             boolean animation = "animation".equals(raw.opt("kind"));
+            boolean responseShape = "response_shape".equals(raw.opt("kind"));
             if (animation) {
                 if (!keys(raw, "schema", "id", "time_ms", "version_code", "flavor", "sdk", "origin",
                         "severity", "kind", "http_status", "causes", "truncated",
                         "animation_stage", "animation_status", "animation_id")) return null;
+            } else if (responseShape) {
+                if (!keys(raw, "schema", "id", "time_ms", "version_code", "flavor", "sdk", "origin",
+                        "severity", "kind", "http_status", "causes", "truncated", "response_shape")) return null;
             } else if (!keys(raw, "schema", "id", "time_ms", "version_code", "flavor", "sdk", "origin",
                     "severity", "kind", "http_status", "causes", "truncated")) return null;
             if (integer(raw.opt("schema"), 1, 1, -1) != 1 || !(raw.opt("id") instanceof String)
@@ -400,8 +425,10 @@ public final class LocalDiagnostics {
             long sdk = integer(raw.opt("sdk"), 1, 1000, -1);
             if (time < 0 || expired(time, now) || future(time, now) || version < 0 || sdk < 0) return null;
             String flavor = fixed(raw.opt("flavor"), "play", "full");
-            String severity = animation ? fixed(raw.opt("severity"), "recoverable", "info") : fixed(raw.opt("severity"), "recoverable", "fatal");
-            String kind = fixed(raw.opt("kind"), "exception", "compatibility", "animation");
+            String severity = animation ? fixed(raw.opt("severity"), "recoverable", "info")
+                    : fixed(raw.opt("severity"), "recoverable", "fatal");
+            if (responseShape) severity = fixed(raw.opt("severity"), "recoverable");
+            String kind = fixed(raw.opt("kind"), "exception", "compatibility", "animation", "response_shape");
             String origin = raw.opt("origin") instanceof String ? (String) raw.opt("origin") : "";
             try { Origin.valueOf(origin); } catch (IllegalArgumentException invalid) { return null; }
             if (flavor == null || severity == null || kind == null || !(raw.opt("truncated") instanceof Boolean)) return null;
@@ -409,9 +436,14 @@ public final class LocalDiagnostics {
             if (status != JSONObject.NULL && integer(status, 100, 599, -1) < 0) return null;
             if (!(raw.opt("causes") instanceof JSONArray)) return null;
             JSONArray inputCauses = raw.getJSONArray("causes");
+            boolean invalidCompatibility = "compatibility".equals(kind)
+                    && (inputCauses.length() != 0 || !"RUNTIME".equals(origin)
+                    || !"recoverable".equals(severity));
+            boolean invalidResponseShape = "response_shape".equals(kind)
+                    && (inputCauses.length() != 0 || !"PROVIDER".equals(origin)
+                    || !"recoverable".equals(severity));
             if (inputCauses.length() > MAX_CAUSES || ("exception".equals(kind) && inputCauses.length() == 0)
-                    || ("compatibility".equals(kind) && (inputCauses.length() != 0
-                    || !"RUNTIME".equals(origin) || !"recoverable".equals(severity)))) return null;
+                    || invalidCompatibility || invalidResponseShape) return null;
             if (animation) {
                 AnimationStage.valueOf(raw.getString("animation_stage"));
                 AnimationId.valueOf(raw.getString("animation_id"));
@@ -419,6 +451,13 @@ public final class LocalDiagnostics {
                 if (!"RUNTIME".equals(origin) || status != JSONObject.NULL || inputCauses.length() != 0
                         || raw.getBoolean("truncated")
                         || !(animationStatus == AnimationStatus.FAILED ? "recoverable" : "info").equals(severity)) return null;
+            }
+            JSONObject cleanResponseShape = null;
+            if (responseShape) {
+                if (!"PROVIDER".equals(origin) || status != JSONObject.NULL || inputCauses.length() != 0
+                        || raw.getBoolean("truncated")) return null;
+                cleanResponseShape = validateResponseShape(raw.optJSONObject("response_shape"));
+                if (cleanResponseShape == null) return null;
             }
             JSONObject result = new JSONObject();
             if (animation) {
@@ -430,6 +469,7 @@ public final class LocalDiagnostics {
             result.put("version_code", version); result.put("flavor", flavor); result.put("sdk", sdk);
             result.put("origin", origin); result.put("severity", severity); result.put("kind", kind);
             result.put("http_status", status); result.put("truncated", raw.getBoolean("truncated"));
+            if (responseShape) result.put("response_shape", cleanResponseShape);
             JSONArray causes = new JSONArray(); Symbols symbols = new Symbols();
             for (int index = 0; index < inputCauses.length(); index++) {
                 Object object = inputCauses.opt(index);
@@ -477,6 +517,70 @@ public final class LocalDiagnostics {
         if (!(value instanceof String)) return null;
         for (String item : allowed) if (item.equals(value)) return item;
         return null;
+    }
+
+    private static JSONObject validateResponseShape(JSONObject input) throws JSONException {
+        if (input == null || !keys(input, "sse_event_counts", "output_item_types", "status",
+                "incomplete_reason", "text_length", "completed_output_count")) return null;
+        Object rawEvents = input.opt("sse_event_counts");
+        Object rawTypes = input.opt("output_item_types");
+        if (!(rawEvents instanceof JSONObject) || !(rawTypes instanceof JSONArray)) return null;
+        JSONObject eventCounts = (JSONObject) rawEvents;
+        if (eventCounts.length() > ResponseDiagnosticsParser.MAX_ITEMS) return null;
+        JSONObject cleanEvents = new JSONObject();
+        java.util.Iterator<String> names = eventCounts.keys();
+        while (names.hasNext()) {
+            String name = names.next();
+            if (fixedEventType(name) == null) return null;
+            long count = integer(eventCounts.opt(name), 1, ResponseDiagnosticsParser.MAX_ITEMS, -1);
+            if (count < 0) return null;
+            cleanEvents.put(name, count);
+        }
+        JSONArray types = (JSONArray) rawTypes;
+        if (types.length() > ResponseDiagnosticsParser.MAX_ITEMS) return null;
+        JSONArray cleanTypes = new JSONArray();
+        Set<String> seen = new HashSet<>();
+        for (int i = 0; i < types.length(); i++) {
+            Object value = types.opt(i);
+            if (!(value instanceof String) || fixedOutputType((String) value) == null
+                    || !seen.add((String) value)) return null;
+            cleanTypes.put(value);
+        }
+        Object rawStatus = input.opt("status"), rawReason = input.opt("incomplete_reason");
+        String responseStatus = rawStatus == JSONObject.NULL ? null
+                : fixed(rawStatus, "completed", "incomplete", "failed", "cancelled", "in_progress", "queued", "other");
+        String incompleteReason = rawReason == JSONObject.NULL ? null
+                : fixed(rawReason, "max_output_tokens", "content_filter", "tool_call_error", "safety_violation", "other");
+        if (rawStatus != JSONObject.NULL && responseStatus == null
+                || rawReason != JSONObject.NULL && incompleteReason == null) return null;
+        long textLength = integer(input.opt("text_length"), 0,
+                ResponseDiagnosticsParser.MAX_BODY_CHARACTERS, -1);
+        long outputCount = integer(input.opt("completed_output_count"), 0,
+                ResponseDiagnosticsParser.MAX_ITEMS, -1);
+        if (textLength < 0 || outputCount < 0) return null;
+        return new JSONObject().put("sse_event_counts", cleanEvents)
+                .put("output_item_types", cleanTypes)
+                .put("status", responseStatus == null ? JSONObject.NULL : responseStatus)
+                .put("incomplete_reason", incompleteReason == null ? JSONObject.NULL : incompleteReason)
+                .put("text_length", textLength)
+                .put("completed_output_count", outputCount);
+    }
+
+    private static String fixedEventType(String value) {
+        return fixed(value, "other", "error", "response.created", "response.in_progress",
+                "response.completed", "response.incomplete", "response.failed", "response.cancelled",
+                "response.output_item.added", "response.output_item.done", "response.content_part.added",
+                "response.content_part.done", "response.output_text.delta", "response.output_text.done",
+                "response.refusal.delta", "response.refusal.done", "response.function_call_arguments.delta",
+                "response.function_call_arguments.done", "response.reasoning_summary_text.delta",
+                "response.reasoning_summary_text.done", "response.reasoning_summary_part.added",
+                "response.reasoning_summary_part.done");
+    }
+
+    private static String fixedOutputType(String value) {
+        return fixed(value, "other", "message", "function_call", "reasoning", "image_generation_call",
+                "code_interpreter_call", "file_search_call", "mcp_call", "computer_call",
+                "web_search_call", "tool_search_call");
     }
     private static boolean keys(JSONObject value, String... names) {
         if (value.length() != names.length) return false;

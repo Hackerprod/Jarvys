@@ -588,7 +588,6 @@ object JarvysAnimationRepository {
         private val cache by lazy {
             JarvysAnimationCache(context.cacheDir, JarvysAnimationIsolatedHttpTransport()).also { cache ->
                 cache.diagnostics = JarvysAnimationObserver { stage, status, id, failure ->
-                    LocalDiagnostics.animation(context, stage, status, id)
                     if (failure != null) LocalDiagnostics.recoverable(context, LocalDiagnostics.Origin.RUNTIME, failure)
                 }
             }

@@ -94,6 +94,7 @@ final class ResponseDiagnosticsParser {
 
   static ResponseDiagnostics codex(String rawBody) {
     State state = new State();
+    state.codex = true;
     if (rawBody != null && rawBody.length() > MAX_BODY_CHARACTERS) {
       state.uncertain("DIAGNOSTIC_LIMIT");
       return state.build();
@@ -131,11 +132,15 @@ final class ResponseDiagnosticsParser {
           String payload = data.toString();
           if (!"[DONE]".equals(payload.trim())) {
             try {
-              consume(object(payload), eventName, state);
+              JSONObject parsed = object(payload);
+              state.sseEvent(shapeEventType(string(parsed, "type") == null
+                  ? eventName : string(parsed, "type")));
+              consume(parsed, eventName, state);
             } catch (DiagnosticLimitException ignored) {
               state.uncertain("DIAGNOSTIC_LIMIT");
               return;
             } catch (Exception ignored) {
+              state.sseEvent("other");
               state.uncertain("UNREADABLE_SSE_EVENT");
             }
           }
@@ -186,17 +191,21 @@ final class ResponseDiagnosticsParser {
     if (response != null) {
       state.responseId(response);
       String status = string(response, "status");
+      if (status != null) state.responseStatus = shapeStatus(status);
       Completion statusCompletion = responseCompletion(status, response);
       if (statusCompletion != null) {
         state.terminal(statusCompletion);
-        terminalSnapshot = statusCompletion == Completion.SUCCEEDED;
+        terminalSnapshot = statusCompletion == Completion.SUCCEEDED
+            || eventCompletion == Completion.SUCCEEDED;
       }
+      if (eventCompletion == Completion.SUCCEEDED) terminalSnapshot = true;
       if (eventCompletion != null && status != null && statusCompletion == null)
         state.uncertain("CONFLICTING_TERMINAL_STATUS");
       if (state.terminal != null && ("in_progress".equals(status) || "queued".equals(status)))
         state.uncertain("CONFLICTING_TERMINAL_STATUS");
       JSONObject details = response.optJSONObject("incomplete_details");
       String reason = string(details, "reason");
+      if (reason != null) state.incompleteReason = shapeReason(reason);
       if (reason != null && (eventCompletion == Completion.SUCCEEDED
           || statusCompletion == Completion.SUCCEEDED))
         state.uncertain("CONFLICTING_TERMINAL_STATUS");
@@ -211,6 +220,7 @@ final class ResponseDiagnosticsParser {
       JSONArray output = response.optJSONArray("output");
       if (output != null) {
         if (output.length() > MAX_ITEMS) throw new DiagnosticLimitException();
+        if (terminalSnapshot) state.completedOutputCount = output.length();
         Set<String> ids = new LinkedHashSet<>();
         for (int i = 0; i < output.length(); i++) {
           JSONObject item = output.optJSONObject(i);
@@ -218,6 +228,7 @@ final class ResponseDiagnosticsParser {
             state.ambiguous("UNSUPPORTED_OUTPUT_ITEM");
             continue;
           }
+          state.outputItemType(shapeItemType(string(item, "type")));
           String id = string(item, "id");
           if (id != null && !ids.add(id)) state.ambiguous("AMBIGUOUS_ITEM_IDENTITY");
           consumeItem(item, i, terminalSnapshot || eventCompletion == Completion.SUCCEEDED,
@@ -226,9 +237,11 @@ final class ResponseDiagnosticsParser {
       }
     }
     JSONObject item = event.optJSONObject("item");
-    if (item != null)
+    if (item != null) {
+      state.outputItemType(shapeItemType(string(item, "type")));
       consumeItem(item, index(event, "output_index"), "response.output_item.done".equals(type),
           state);
+    }
     if ("response.output_text.delta".equals(type) || "response.output_text.done".equals(type)) {
       MutableItem target = state.item(string(event, "item_id"), index(event, "output_index"));
       Integer contentIndex = index(event, "content_index");
@@ -434,6 +447,77 @@ final class ResponseDiagnosticsParser {
     return one == null ? two == null : one.equals(two);
   }
 
+  private static String shapeEventType(String type) {
+    if (type == null) return "other";
+    switch (type) {
+      case "error":
+      case "response.created":
+      case "response.in_progress":
+      case "response.completed":
+      case "response.incomplete":
+      case "response.failed":
+      case "response.cancelled":
+      case "response.output_item.added":
+      case "response.output_item.done":
+      case "response.content_part.added":
+      case "response.content_part.done":
+      case "response.output_text.delta":
+      case "response.output_text.done":
+      case "response.refusal.delta":
+      case "response.refusal.done":
+      case "response.function_call_arguments.delta":
+      case "response.function_call_arguments.done":
+      case "response.reasoning_summary_text.delta":
+      case "response.reasoning_summary_text.done":
+      case "response.reasoning_summary_part.added":
+      case "response.reasoning_summary_part.done":
+        return type;
+      default: return "other";
+    }
+  }
+
+  private static String shapeItemType(String type) {
+    if (type == null) return "other";
+    switch (type) {
+      case "message":
+      case "function_call":
+      case "reasoning":
+      case "image_generation_call":
+      case "code_interpreter_call":
+      case "file_search_call":
+      case "mcp_call":
+      case "computer_call":
+      case "web_search_call":
+      case "tool_search_call":
+        return type;
+      default: return "other";
+    }
+  }
+
+  private static String shapeStatus(String status) {
+    switch (status) {
+      case "completed":
+      case "incomplete":
+      case "failed":
+      case "cancelled":
+      case "in_progress":
+      case "queued":
+        return status;
+      default: return "other";
+    }
+  }
+
+  private static String shapeReason(String reason) {
+    switch (reason) {
+      case "max_output_tokens":
+      case "content_filter":
+      case "tool_call_error":
+      case "safety_violation":
+        return reason;
+      default: return "other";
+    }
+  }
+
   private static final class DiagnosticLimitException extends RuntimeException {
     DiagnosticLimitException() { super(null, null, false, false); }
   }
@@ -489,6 +573,7 @@ final class ResponseDiagnosticsParser {
   }
 
   private static final class State {
+    boolean codex;
     Completion terminal;
     boolean uncertain;
     boolean ambiguous;
@@ -497,13 +582,23 @@ final class ResponseDiagnosticsParser {
     String responseId;
     String reason;
     ResponseDiagnostics.Usage usage;
+    String responseStatus;
+    String incompleteReason;
+    int completedOutputCount;
     final Set<String> warnings = new LinkedHashSet<>();
+    final Map<String, Integer> sseEventCounts = new TreeMap<>();
+    final Set<String> outputItemTypes = new LinkedHashSet<>();
     final List<ResponseDiagnostics.AssistantItem> chatItems = new ArrayList<>();
     final List<MutableItem> items = new ArrayList<>();
     final Map<String, MutableItem> byId = new HashMap<>();
     final Map<Integer, MutableItem> byIndex = new HashMap<>();
 
     void warn(String warning) { warnings.add(warning); }
+    void sseEvent(String type) {
+      int count = sseEventCounts.getOrDefault(type, 0);
+      if (count < MAX_ITEMS) sseEventCounts.put(type, count + 1);
+    }
+    void outputItemType(String type) { outputItemTypes.add(type); }
     void uncertain(String warning) { uncertain = true; warn(warning); }
     void ambiguous(String warning) { ambiguous = true; warn(warning); }
 
@@ -576,8 +671,13 @@ final class ResponseDiagnosticsParser {
             && !candidate.text.trim().isEmpty()) finalKey = candidate.key;
         else if (result.size() > 1) warn("AMBIGUOUS_FINAL_ITEM");
       }
+      ResponseDiagnostics.CodexShape shape = codex
+          ? new ResponseDiagnostics.CodexShape(sseEventCounts,
+              new ArrayList<>(outputItemTypes), responseStatus, incompleteReason,
+              completedOutputCount)
+          : null;
       return new ResponseDiagnostics(completion, reason, responseId, result, finalKey, usage,
-          hasToolCalls, new ArrayList<>(warnings));
+          hasToolCalls, new ArrayList<>(warnings), shape);
     }
   }
 }

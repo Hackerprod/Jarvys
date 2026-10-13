@@ -361,18 +361,6 @@ internal class HeaderViewLifecycleObserver(dependencies: MutableList<RefCount>) 
     }
 }
 
-/** Only closed enum values enter the private diagnostic store; diagnostics cannot break playback. */
+/** Header animation observations are intentionally not persisted; playback callbacks stay inert. */
 private fun headerDiagnostic(context: Context, timeline: JarvysHeaderTimeline, stage: AnimationStage, status: AnimationStatus) {
-    headerBestEffortCleanup {
-        val id = when (timeline) {
-            JarvysHeaderTimeline.IDLE -> LocalDiagnostics.AnimationId.IDLE
-            JarvysHeaderTimeline.SAD -> LocalDiagnostics.AnimationId.SAD
-            JarvysHeaderTimeline.THINKING -> LocalDiagnostics.AnimationId.THINKING
-            JarvysHeaderTimeline.WORKING -> LocalDiagnostics.AnimationId.WORKING
-            JarvysHeaderTimeline.WAITING -> LocalDiagnostics.AnimationId.WAITING
-            JarvysHeaderTimeline.INTERRUPTED -> LocalDiagnostics.AnimationId.INTERRUPTED
-            JarvysHeaderTimeline.TAUNT -> LocalDiagnostics.AnimationId.TAUNT
-        }
-        LocalDiagnostics.animation(context, stage, status, id)
-    }
 }

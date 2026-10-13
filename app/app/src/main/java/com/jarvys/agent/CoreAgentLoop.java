@@ -124,6 +124,9 @@ public final class CoreAgentLoop {
         default Integer usageTokens(ModelReply reply) {
             return reply == null ? null : reply.contextTokensUsed;
         }
+
+        /** Best-effort hook at the exact empty-final-answer failure boundary. */
+        default void onEmptyReply(ModelReply reply) { }
     }
 
     public static final class IncomingMessage {
@@ -397,6 +400,11 @@ public final class CoreAgentLoop {
             }
 
             @Override
+            public void onEmptyReply(ModelReply reply) {
+                model.recordEmptyReply(reply);
+            }
+
+            @Override
             public int contextWindow(CancellationToken token) {
                 return model.contextWindow(token);
             }
@@ -600,7 +608,10 @@ public final class CoreAgentLoop {
                 }
                 if (reply.calls.isEmpty()) {
                     String answer = reply.text == null ? "" : reply.text.trim();
-                    if (answer.isEmpty()) throw new IllegalStateException("Provider returned neither an answer nor a tool call");
+                    if (answer.isEmpty()) {
+                        try { model.onEmptyReply(reply); } catch (Throwable ignored) { }
+                        throw new IllegalStateException("Provider returned neither an answer nor a tool call");
+                    }
                     if (turnContextProvider != null || checkpointListener != null) {
                         if (!requestInTranscript) transcript.add(new ConversationTurn("user", request.trim()));
                         if (!replyTextAlreadyRecorded) transcript.add(new ConversationTurn("assistant", answer));

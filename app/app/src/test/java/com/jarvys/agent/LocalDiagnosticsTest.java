@@ -1,6 +1,8 @@
 package com.jarvys.agent;
 
 import static org.junit.Assert.*;
+import android.content.Context;
+import androidx.test.core.app.ApplicationProvider;
 import java.io.File;
 import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
@@ -81,6 +83,80 @@ public class LocalDiagnosticsTest {
         JSONObject summary = newest(false).getJSONArray("causes").getJSONObject(0);
         assertFalse(summary.has("frames")); assertEquals(1, summary.getInt("frame_count"));
         assertEquals(BuildConfig.VERSION_NAME, store.snapshot(null, 1, false).getString("current_version_name"));
+    }
+
+    @Test public void emptyCodexReplyStillThrowsAndPersistsOnlyValidatedShapeMetadata() throws Exception {
+        String providerBody = "Authorization: Bearer CANARY_TOKEN model text CANARY_MODEL_TEXT";
+        ResponseDiagnostics diagnostics = ResponseDiagnostics.fromCodex(
+                "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[]}}\n\n");
+        ModelReply empty = new ModelReply("", java.util.Collections.emptyList(), providerBody,
+                200, "gpt-6-luna", null, diagnostics);
+        ModelProviderClient provider = new ModelProviderClient() {
+            @Override public ModelReply complete(String systemPrompt, String userPrompt,
+                    java.util.List<com.jarvys.agent.device.ScreenData> images,
+                    java.util.List<ToolSpec> tools, String sessionId, CancellationToken token) {
+                return empty;
+            }
+            @Override public ModelReply completeConversation(String systemPrompt,
+                    java.util.List<ConversationTurn> history, String userPrompt,
+                    java.util.List<com.jarvys.agent.device.ScreenData> images,
+                    java.util.List<ToolSpec> tools, String sessionId, CancellationToken token) {
+                return empty;
+            }
+        };
+        Field singleton = LocalDiagnostics.class.getDeclaredField("instance");
+        singleton.setAccessible(true);
+        Object previous = singleton.get(null);
+        singleton.set(null, store);
+        try {
+            Context context = ApplicationProvider.getApplicationContext();
+            CoreAgentLoop loop = new CoreAgentLoop(new CoreAgentModel(context, provider, "shape-test"),
+                    new CoreToolRegistry(java.util.Collections.emptyList()), "instructions", "shape-test");
+            IllegalStateException failure = assertThrows(IllegalStateException.class,
+                    () -> loop.run("CANARY_USER_TEXT", java.util.Collections.emptyList(),
+                            CancellationToken.uncancellable(), null));
+            assertEquals("Provider returned neither an answer nor a tool call", failure.getMessage());
+            JSONObject row = newest(true);
+            assertEquals("response_shape", row.getString("kind"));
+            JSONObject shape = row.getJSONObject("response_shape");
+            assertEquals(1, shape.getJSONObject("sse_event_counts").getInt("response.completed"));
+            assertEquals("completed", shape.getString("status"));
+            assertEquals(0, shape.getInt("text_length"));
+            assertEquals(0, shape.getInt("completed_output_count"));
+            assertFalse(row.toString().contains("CANARY"));
+            assertFalse(row.toString().contains("gpt-6-luna"));
+        } finally {
+            singleton.set(null, previous);
+        }
+    }
+
+    @Test public void responseShapeValidatorRejectsOutOfRangeAndPrivateFields() throws Exception {
+        ResponseDiagnostics.CodexShape shape = ResponseDiagnostics.fromCodex(
+                "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[]}}\n\n")
+                .codexShape;
+        assertTrue(store.responseShapeRecord(shape, 0));
+        String original = onDisk(slot(0)).toString();
+        JSONObject oversized = new JSONObject(original);
+        JSONObject metadata = oversized.getJSONObject("response_shape");
+        metadata.put("text_length", ResponseDiagnosticsParser.MAX_BODY_CHARACTERS + 1);
+        overwrite(slot(0), oversized.toString());
+        assertEquals(0, store.snapshot(null, 10, true).getJSONArray("records").length());
+
+        JSONObject withPrivateField = new JSONObject(original);
+        withPrivateField.getJSONObject("response_shape").put("model_text", "CANARY_PRIVATE_TEXT");
+        overwrite(slot(0), withPrivateField.toString());
+        assertEquals(0, store.snapshot(null, 10, true).getJSONArray("records").length());
+    }
+
+    @Test public void responseShapeKeepsClosedStatusAndIncompleteReason() throws Exception {
+        ResponseDiagnostics.CodexShape shape = ResponseDiagnostics.fromCodex(
+                "data: {\"type\":\"response.incomplete\",\"response\":{\"status\":\"incomplete\","
+                        + "\"incomplete_details\":{\"reason\":\"max_output_tokens\"},\"output\":[]}}\n\n")
+                .codexShape;
+        assertTrue(store.responseShapeRecord(shape, 0));
+        JSONObject metadata = newest(true).getJSONObject("response_shape");
+        assertEquals("incomplete", metadata.getString("status"));
+        assertEquals("max_output_tokens", metadata.getString("incomplete_reason"));
     }
 
     @Test public void unverifiedFrameNamesAndArbitraryTypeNamesNeverEscape() throws Exception {
