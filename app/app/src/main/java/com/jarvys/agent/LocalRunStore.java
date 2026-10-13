@@ -1806,6 +1806,8 @@ public final class LocalRunStore {
             List<String> skills, boolean memoryDisabled) {
         if (!MessageReactionTool.isOrdinaryChat(sessionId) || text == null || text.trim().isEmpty()
                 || text.length() > 32000) throw new IllegalArgumentException("Invalid replacement message");
+        if (conversationMetadata.read(sessionId).deleted)
+            throw new IllegalStateException("This conversation was deleted");
         String id = java.util.UUID.randomUUID().toString();
         try {
             JSONObject row = new JSONObject().put("type", "main_interrupt_request")
@@ -1818,6 +1820,7 @@ public final class LocalRunStore {
 
     /** Called only after the old worker has unwound. Duplicate IDs never replay a started turn. */
     synchronized JSONObject dispatchInterruptRequest(String sessionId, String requestId) {
+        if (sessionId == null || requestId == null || conversationMetadata.read(sessionId).deleted) return null;
         synchronized (SESSION_TITLE_LOCK) {
             JSONObject pending = null;
             for (JSONObject row : readConversationRows(sessionId)) {
@@ -1834,6 +1837,42 @@ public final class LocalRunStore {
                 return pending;
             } catch (Exception error) { throw new IllegalStateException("Could not dispatch replacement message", error); }
         }
+    }
+
+    /** Undispatched durable follow-ups, in ledger order, for service recovery after a worker exit. */
+    public synchronized List<JSONObject> readPendingInterruptRequests(String sessionId) {
+        if (sessionId == null || conversationMetadata.read(sessionId).deleted) return Collections.emptyList();
+        List<JSONObject> rows = readConversationRows(sessionId);
+        Set<String> dispatched = new HashSet<>();
+        for (JSONObject row : rows) {
+            String id = row.optString("interruptRequestId", "");
+            if (!id.isEmpty()) dispatched.add(id);
+        }
+        List<JSONObject> pending = new ArrayList<>();
+        for (JSONObject row : rows) {
+            if (!"main_interrupt_request".equals(row.optString("type"))) continue;
+            String id = row.optString("requestId", "");
+            if (id.isEmpty() || dispatched.contains(id)) continue;
+            try { pending.add(new JSONObject(row.toString()).put("sessionId", sessionId)); }
+            catch (Exception malformed) { throw new IllegalStateException("Could not read pending chat follow-up", malformed); }
+        }
+        return Collections.unmodifiableList(pending);
+    }
+
+    /** All undispatched follow-ups, in stable session and ledger order, for service startup recovery. */
+    public synchronized List<JSONObject> readPendingInterruptRequests() {
+        List<JSONObject> pending = new ArrayList<>();
+        for (String sessionId : listConversationSessionIds()) pending.addAll(readPendingInterruptRequests(sessionId));
+        return Collections.unmodifiableList(pending);
+    }
+
+    public synchronized JSONObject readInterruptRequest(String sessionId, String requestId) {
+        if (sessionId == null || requestId == null || conversationMetadata.read(sessionId).deleted) return null;
+        for (JSONObject row : readConversationRows(sessionId)) {
+            if ("main_interrupt_request".equals(row.optString("type"))
+                    && requestId.equals(row.optString("requestId"))) return row;
+        }
+        return null;
     }
 
     /** UI projection only: the text already exists once in the model's tool-call protocol. */
@@ -1902,6 +1941,7 @@ public final class LocalRunStore {
             if (("user".equals(role) || "assistant".equals(role)) && row.has("content")) {
                 int index = messageIndex++;
                 if (index < firstKept || ("assistant".equals(role) && hidden.contains(row.optString("messageId", "")))) continue;
+                if (isAssistantRunStatusRow(row)) continue;
                 List<ModelReply.ProviderOutputItem> assistantItems = "assistant".equals(role)
                         ? providerOutputItems.get(row.optString("userMessageId")) : null;
                 if (assistantItems != null && !assistantItems.isEmpty())
@@ -1909,10 +1949,21 @@ public final class LocalRunStore {
                 else context.add(ConversationTurn.messageWithAttachments(role, row.optString("content", ""), index,
                         attachmentsForRow(sessionId, row)));
             } else if (toolGroups.containsKey(rowIndex)) {
-                context.addAll(toolGroups.get(rowIndex));
+                for (ConversationTurn turn : toolGroups.get(rowIndex)) {
+                    if (turn.kind != ConversationTurn.Kind.MODEL_ERROR) context.add(turn);
+                }
             }
         }
         return context;
+    }
+
+    private static boolean isAssistantRunStatusRow(JSONObject row) {
+        if (!"assistant".equals(row.optString("role"))) return false;
+        String status = row.optString("status", "").trim().toUpperCase(Locale.ROOT);
+        return "STOPPED".equals(status) || "PARTIAL".equals(status) || "FAILED".equals(status)
+                || "ERROR".equals(status) || "MODEL_ERROR".equals(status)
+                || "TIMED_OUT".equals(status) || "TIMEOUT".equals(status)
+                || "INTERRUPTED".equals(status) || "ABORTED".equals(status) || "CANCELLED".equals(status);
     }
 
     public synchronized int latestUserMessageIndex(String sessionId) {

@@ -17,6 +17,7 @@ public final class StopController {
     private final AtomicLong generation = new AtomicLong(0L);
     private final Map<Long, List<Runnable>> cancelActions = new HashMap<>();
     private volatile Future<?> runFuture;
+    private volatile CancellationToken activeToken;
 
     private StopController() {}
 
@@ -32,7 +33,9 @@ public final class StopController {
         stopped.set(false);
         runFuture = null;
         cancelActions.put(runGeneration, new ArrayList<>());
-        return new CancellationToken(this, runGeneration);
+        CancellationToken token = new CancellationToken(this, runGeneration);
+        activeToken = token;
+        return token;
     }
 
     public synchronized void attachFuture(CancellationToken token, Future<?> future) {
@@ -52,6 +55,9 @@ public final class StopController {
             }
             // Invalidate every token before asking the worker thread to unwind.
             long stoppedGeneration = generation.get();
+            CancellationToken token = activeToken;
+            if (token != null && token.generation() == stoppedGeneration) token.markStoppedByUser();
+            activeToken = null;
             actions = cancelActions.remove(stoppedGeneration);
             generation.incrementAndGet();
             future = runFuture;
@@ -80,6 +86,7 @@ public final class StopController {
         cancelActions.remove(token.generation());
         generation.incrementAndGet();
         runFuture = null;
+        if (activeToken == token) activeToken = null;
         return true;
     }
 

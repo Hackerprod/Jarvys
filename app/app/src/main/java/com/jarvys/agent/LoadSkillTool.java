@@ -63,6 +63,15 @@ public final class LoadSkillTool implements CoreTool {
         return entry == null ? id : entry.getMetadata().getName();
     }
 
+    @Override public String activitySkillId(Map<String, Object> arguments) {
+        Object id = arguments == null ? null : arguments.get("skill_id");
+        return id instanceof String ? (String) id : "";
+    }
+
+    @Override public String activitySkillName(Map<String, Object> arguments) {
+        return displaySkillName(activitySkillId(arguments));
+    }
+
     @Override public ToolSpec declaration() { return declaration; }
 
     @Override public CoreToolResult execute(Map<String, Object> arguments, CancellationToken token) {

@@ -5,25 +5,41 @@ import static org.junit.Assert.*;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import com.jarvys.agent.coding.CodingProjectTools;
+import com.jarvys.agent.coding.ProjectMutationService;
+import com.jarvys.agent.coding.ProjectScope;
 import com.jarvys.agent.crew.CrewTools;
 import org.junit.Test;
+import org.junit.Rule;
+import org.junit.rules.TemporaryFolder;
 
 public class ToolArgumentValidatorTest {
-    @Test public void coercesNullOptionalFieldsToTheirDeclaredPrimitiveDefaults() {
+    @Rule public TemporaryFolder temporary = new TemporaryFolder();
+
+    @Test public void omitsNullOptionalFieldsAndKeepsOpenClawCoercionForRequiredFields() {
         Map<String, Object> schema = objectSchema(properties(
                 "label", type("string"),
                 "offset", type("integer"),
-                "enabled", type("boolean")));
-        Map<String, Object> arguments = arguments("label", null, "offset", null, "enabled", null);
+                "enabled", type("boolean"),
+                "required_label", type("string"),
+                "required_offset", type("integer")));
+        schema.put("required", Arrays.asList("required_label", "required_offset"));
+        Map<String, Object> arguments = arguments("label", null, "offset", null, "enabled", null,
+                "required_label", null, "required_offset", null);
 
         ToolArgumentValidator.Result result = ToolArgumentValidator.coerceAndValidate(arguments, schema);
 
         assertNull(result.error);
-        assertEquals("", result.arguments.get("label"));
-        assertEquals(0, ((Number) result.arguments.get("offset")).intValue());
-        assertEquals(Boolean.FALSE, result.arguments.get("enabled"));
+        assertFalse(result.arguments.containsKey("label"));
+        assertFalse(result.arguments.containsKey("offset"));
+        assertFalse(result.arguments.containsKey("enabled"));
+        assertEquals("", result.arguments.get("required_label"));
+        assertEquals(0, ((Number) result.arguments.get("required_offset")).intValue());
     }
 
     @Test public void coercesNumericAndBooleanStrings() {
@@ -113,35 +129,96 @@ public class ToolArgumentValidatorTest {
         assertTrue(result.error.contains("unexpected"));
     }
 
-    @Test public void mainToolSchemasAcceptExistingOptionalNullAndTextArgumentForms() {
-        WorkspaceStore workspace = new WorkspaceStore(new File(System.getProperty("java.io.tmpdir"), "jarvys-schema-validation"),
-                WorkspaceStore.projectIdForSession("tool-schema-validation"));
-        ToolSpec workspaceRead = WorkspaceTools.create(workspace).stream()
-                .map(CoreTool::declaration).filter(spec -> "read".equals(spec.name)).findFirst().get();
+    @Test public void realWorkspaceAndCodingSchemasOmitOptionalNullsAndKeepDefaultBehavior() throws Exception {
+        String session = "tool-schema-validation";
+        File appFiles = temporary.newFolder("app-files");
+        File workspacesRoot = new File(new File(appFiles, "jarvys"), "workspaces");
+        String projectId = WorkspaceStore.projectIdForSession(session);
+        WorkspaceStore workspace = new WorkspaceStore(workspacesRoot, projectId, null, null, null, session, true);
+        File workspaceRoot = new File(workspacesRoot, projectId);
+        assertTrue(workspaceRoot.mkdirs() || workspaceRoot.isDirectory());
+        Files.write(new File(workspaceRoot, "notes.txt").toPath(), "workspace note".getBytes(StandardCharsets.UTF_8));
+        List<CoreTool> workspaceTools = WorkspaceTools.createWithSearchForTests(workspace, null);
+        CoreTool workspaceReadTool = workspaceTools.stream()
+                .filter(tool -> "read".equals(tool.declaration().name)).findFirst().get();
+        ToolSpec workspaceRead = workspaceReadTool.declaration();
         ToolArgumentValidator.Result workspaceArguments = ToolArgumentValidator.coerceAndValidate(
-                arguments("path", "notes.txt", "offset", null, "max_chars", null), workspaceRead.jsonSchema());
+                arguments("path", "notes.txt", "offset", null, "max_chars", null, "start_line", null),
+                workspaceRead.jsonSchema());
         assertNull(workspaceArguments.error);
-        assertEquals(0, ((Number) workspaceArguments.arguments.get("offset")).intValue());
-        assertEquals(0, ((Number) workspaceArguments.arguments.get("max_chars")).intValue());
+        assertFalse(workspaceArguments.arguments.containsKey("offset"));
+        assertFalse(workspaceArguments.arguments.containsKey("max_chars"));
+        assertFalse(workspaceArguments.arguments.containsKey("start_line"));
         assertEquals(12 * 1024, WorkspaceTools.integerArgument(workspaceArguments.arguments, "max_chars", 12 * 1024));
+        assertTrue(workspaceReadTool.execute(workspaceArguments.arguments, CancellationToken.uncancellable()).success);
+
+        CoreTool searchFilesTool = workspaceTools.stream()
+                .filter(tool -> "search_files".equals(tool.declaration().name)).findFirst().get();
+        ToolArgumentValidator.Result searchFilesArguments = ToolArgumentValidator.coerceAndValidate(
+                arguments("query", "note", "zone", null, "limit", null),
+                searchFilesTool.declaration().jsonSchema());
+        assertNull(searchFilesArguments.error);
+        assertFalse(searchFilesArguments.arguments.containsKey("zone"));
+        assertFalse(searchFilesArguments.arguments.containsKey("limit"));
+        assertTrue(searchFilesTool.execute(searchFilesArguments.arguments, CancellationToken.uncancellable()).success);
+
+        ProjectScope scope = workspace.codingProjectScope();
+        Files.write(scope.resolve("sample.txt").toPath(), "coding needle".getBytes(StandardCharsets.UTF_8));
+        ToolArgumentValidator.Result routedReadArguments = ToolArgumentValidator.coerceAndValidate(
+                arguments("path", "/project/sample.txt", "start_line", null, "end_line", null,
+                        "offset", null, "cursor", null), workspaceRead.jsonSchema());
+        assertNull(routedReadArguments.error);
+        assertFalse(routedReadArguments.arguments.containsKey("start_line"));
+        assertTrue(workspaceReadTool.execute(routedReadArguments.arguments, CancellationToken.uncancellable()).success);
+
+        List<CoreTool> codingTools = CodingProjectTools.create(scope, new ProjectMutationService(), "owner", 4096);
+        CoreTool codingRead = codingTool(codingTools, "read");
+        ToolArgumentValidator.Result codingReadArguments = ToolArgumentValidator.coerceAndValidate(
+                arguments("path", "/project/sample.txt", "start_line", null, "end_line", null,
+                        "offset", null, "cursor", null), codingRead.declaration().jsonSchema());
+        assertNull(codingReadArguments.error);
+        assertFalse(codingReadArguments.arguments.containsKey("start_line"));
+        assertFalse(codingReadArguments.arguments.containsKey("end_line"));
+        assertTrue(codingRead.execute(codingReadArguments.arguments, CancellationToken.uncancellable()).success);
+
+        CoreTool codingGlob = codingTool(codingTools, "coding_glob");
+        ToolArgumentValidator.Result globArguments = ToolArgumentValidator.coerceAndValidate(
+                arguments("glob", "*.txt", "include_ignored", null, "cursor", null),
+                codingGlob.declaration().jsonSchema());
+        assertNull(globArguments.error);
+        assertFalse(globArguments.arguments.containsKey("include_ignored"));
+        assertTrue(codingGlob.execute(globArguments.arguments, CancellationToken.uncancellable()).success);
+
+        CoreTool codingGrep = codingTool(codingTools, "coding_grep");
+        ToolArgumentValidator.Result grepArguments = ToolArgumentValidator.coerceAndValidate(
+                arguments("query", "needle", "regex", null, "include_ignored", null, "cursor", null),
+                codingGrep.declaration().jsonSchema());
+        assertNull(grepArguments.error);
+        assertFalse(grepArguments.arguments.containsKey("regex"));
+        assertFalse(grepArguments.arguments.containsKey("include_ignored"));
+        assertTrue(codingGrep.execute(grepArguments.arguments, CancellationToken.uncancellable()).success);
 
         ToolSpec registryRead = new ToolRegistry().get("read_note");
         ToolArgumentValidator.Result registryArguments = ToolArgumentValidator.coerceAndValidate(
                 arguments("key", "note", "start_line", null, "end_line", "12"), registryRead.jsonSchema());
         assertNull(registryArguments.error);
-        assertEquals(0, ((Number) registryArguments.arguments.get("start_line")).intValue());
+        assertFalse(registryArguments.arguments.containsKey("start_line"));
         assertEquals(12, ((Number) registryArguments.arguments.get("end_line")).intValue());
-        assertTrue(ToolArgumentValidator.wasNumericNull(registryArguments.arguments, "start_line"));
 
         ToolSpec crewWait = CrewTools.captain(null, null).stream()
                 .map(CoreTool::declaration).filter(spec -> "crew_wait".equals(spec.name)).findFirst().get();
         ToolArgumentValidator.Result crewArguments = ToolArgumentValidator.coerceAndValidate(
-                arguments("mode", null), crewWait.jsonSchema());
+                arguments("mode", null, "ids", null), crewWait.jsonSchema());
         assertNull(crewArguments.error);
-        assertEquals("", crewArguments.arguments.get("mode"));
+        assertFalse(crewArguments.arguments.containsKey("mode"));
+        assertFalse(crewArguments.arguments.containsKey("ids"));
         ToolArgumentValidator.Result crewUnexpected = ToolArgumentValidator.coerceAndValidate(
                 arguments("unknown", true), crewWait.jsonSchema());
         assertNotNull(crewUnexpected.error);
+    }
+
+    private static CoreTool codingTool(List<CoreTool> tools, String name) {
+        return tools.stream().filter(tool -> name.equals(tool.declaration().name)).findFirst().get();
     }
 
     private static Map<String, Object> type(String name) {

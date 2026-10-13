@@ -187,6 +187,25 @@ public class ProjectImageToolTest {
         success(selected.execute(args, CancellationToken.crewChild()));
         assertFalse(selected.execute(args, CancellationToken.crewChild()).success); assertEquals(1, calls.get());
     }
+    @Test public void optionalNullProjectAndCodexImageFieldsAreTreatedAsAbsent() throws Exception {
+        ProjectImageTool projectTool = tool();
+        Map<String,Object> projectArgs = generation("optional-null.png");
+        projectArgs.put("size", null); projectArgs.put("max_bytes", null); projectArgs.put("reference_images", null);
+        ToolArgumentValidator.Result projectValidated = ToolArgumentValidator.coerceAndValidate(
+                projectArgs, projectTool.declaration().jsonSchema());
+        assertNull(projectValidated.error);
+        assertFalse(projectValidated.arguments.containsKey("size"));
+        assertFalse(projectValidated.arguments.containsKey("max_bytes"));
+        assertFalse(projectValidated.arguments.containsKey("reference_images"));
+        assertTrue(projectTool.execute(projectValidated.arguments, CancellationToken.crewChild()).success);
+
+        CodexImageGenerationTool codexTool = new CodexImageGenerationTool(context, session, settings, secrets);
+        ToolArgumentValidator.Result codexValidated = ToolArgumentValidator.coerceAndValidate(
+                args("prompt", "A blue abstract image", "size", null, "image_refs", null),
+                codexTool.declaration().jsonSchema());
+        assertNull(codexValidated.error);
+        assertEquals(Collections.singleton("prompt"), codexValidated.arguments.keySet());
+    }
     @Test public void privateReferenceImportIsExplicitMainOnlyAndPreservesOriginal() throws Exception {
         String id = UUID.randomUUID().toString(); GeneratedImageStore store = new GeneratedImageStore(context);
         String path = store.save(session,id,png); new LocalRunStore(context).appendGeneratedImageEvent(session,path,"blue","blue","8x6","image/png");

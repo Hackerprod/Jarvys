@@ -21,6 +21,8 @@ import org.json.JSONObject;
  */
 public final class OpenAICodexResponsesClient implements ModelProviderClient {
   public static final String ENDPOINT = "https://chatgpt.com/backend-api/codex/responses";
+  static final String OUTPUT_PROVIDER = ProviderSettings.Provider.OPENAI_CODEX.name();
+  static final String OUTPUT_API = "responses";
   private static final String TAG = "JarvysCodex";
   private static final String OPENAI_BETA = "responses=experimental";
   private final ProviderSettings settings;
@@ -92,6 +94,7 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
       String sessionId,
       CancellationToken token,
       boolean attachmentImages) {
+    String requestModel = request.optString("model", settings.getModel());
     ProviderHttp.Response response =
         CodexAuthenticatedRequestExecutor.execute(
             request,
@@ -122,7 +125,7 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
         settings.getModel(),
         parsed.contextTokensUsed,
         ResponseDiagnostics.fromCodex(response.rawBody),
-        parsed.providerOutputItems);
+        identifyReasoningItems(parsed.providerOutputItems, requestModel));
   }
 
   private JSONObject buildRequest(
@@ -140,7 +143,8 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
       ModelVariant variantOverride) {
     try {
       JSONObject request = new JSONObject();
-      request.put("model", settings.getModel());
+      String model = settings.getModel();
+      request.put("model", model);
       request.put("store", false);
       request.put("stream", true);
       request.put(
@@ -148,7 +152,7 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
           includeAndroidAgentInstructions
               ? AgentPrompts.CODEX_INSTRUCTIONS + "\n\n" + instructions
               : instructions);
-      request.put("input", userInput(userText, images, history));
+      request.put("input", userInput(userText, images, history, model));
       ModelVariant variant =
           variantOverride == null ? settings.getSelectedCodexVariant() : variantOverride;
       request.put(
@@ -171,6 +175,11 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
 
   static JSONArray userInput(
       String text, List<ScreenData> images, List<ConversationTurn> history) throws Exception {
+    return userInput(text, images, history, null);
+  }
+
+  static JSONArray userInput(
+      String text, List<ScreenData> images, List<ConversationTurn> history, String currentModel) throws Exception {
     JSONArray input = new JSONArray();
     if (history != null) {
       for (ConversationTurn turn : history) {
@@ -179,7 +188,7 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
             && turn.modelContent.trim().isEmpty() && turn.images.isEmpty()) continue;
         if (turn.kind == ConversationTurn.Kind.TOOL_CALLS) {
           if (!turn.providerOutputItems.isEmpty()) {
-            appendProviderOutputItems(input, turn);
+            appendProviderOutputItems(input, turn, currentModel);
             continue;
           }
           if (!turn.content.isEmpty())
@@ -199,7 +208,7 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
                   .put("call_id", turn.toolCallId)
                   .put("output", turn.content));
         } else if (!turn.providerOutputItems.isEmpty()) {
-          appendProviderOutputItems(input, turn);
+          appendProviderOutputItems(input, turn, currentModel);
         } else {
           String modelContent = turn.renderedModelContent("responses");
           Object parts = modelContent;
@@ -241,13 +250,14 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
     return input;
   }
 
-  private static void appendProviderOutputItems(JSONArray input, ConversationTurn turn) throws Exception {
+  private static void appendProviderOutputItems(JSONArray input, ConversationTurn turn, String currentModel) throws Exception {
     Map<String, ModelReply.Call> calls = new LinkedHashMap<>();
     for (ModelReply.Call call : turn.toolCalls) calls.put(call.id, call);
     boolean emittedMessage = false;
     for (ModelReply.ProviderOutputItem item : turn.providerOutputItems) {
       switch (item.kind) {
         case REASONING:
+          if (!item.belongsTo(OUTPUT_PROVIDER, OUTPUT_API, currentModel)) break;
           try {
             input.put(new JSONObject(item.value));
           } catch (Exception invalidStoredItem) {
@@ -277,6 +287,15 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
     if (!emittedMessage && turn.kind == ConversationTurn.Kind.MESSAGE && !turn.content.isEmpty()
         && turn.providerOutputItems.stream().noneMatch(item -> item.kind == ModelReply.ProviderOutputItem.Kind.MESSAGE))
       input.put(new JSONObject().put("role", "assistant").put("content", turn.modelContent));
+  }
+
+  private static List<ModelReply.ProviderOutputItem> identifyReasoningItems(
+      List<ModelReply.ProviderOutputItem> items, String model) {
+    List<ModelReply.ProviderOutputItem> identified = new ArrayList<>();
+    for (ModelReply.ProviderOutputItem item : items) {
+      identified.add(item.withIdentity(OUTPUT_PROVIDER, OUTPUT_API, model));
+    }
+    return identified;
   }
 
   private static JSONArray responseTools(List<ToolSpec> tools) throws Exception {

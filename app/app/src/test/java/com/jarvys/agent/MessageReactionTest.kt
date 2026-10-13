@@ -273,6 +273,7 @@ class MessageReactionTest {
     @Test fun realToolLoopReactsThenAnswersAndDoesNotRewriteUserContent() {
         val id = store.appendConversationMessage(session, "user", "Great news")
         val tool = MessageReactionTool(store, session)
+        assertTrue("the reaction tool declares its quiet successful activity", tool.hideFromProgress())
         val compactor = ConversationCompactor(session, null, store)
         var calls = 0
         val toolStages = mutableListOf<String>()
@@ -297,7 +298,7 @@ class MessageReactionTest {
         val result = CoreAgentLoop(model, CoreToolRegistry(listOf(tool)), MessageReactionTool.GUIDANCE,
             session, CorePromptBudget.standard(), compactor).run("Great news", emptyList(), token, listener)
         assertEquals(2, calls)
-        assertTrue("Successful reactions have no duplicate activity rows", toolStages.isEmpty())
+        assertTrue("Successful reactions stay hidden from progress and activity rows", toolStages.isEmpty())
         assertTrue(result.text.contains("Here is the answer"))
         assertEquals(1, store.conversationMessageCount(session))
     }

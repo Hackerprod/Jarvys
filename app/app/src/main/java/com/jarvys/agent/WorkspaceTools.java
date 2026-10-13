@@ -729,9 +729,6 @@ public final class WorkspaceTools {
   }
 
   public static int integerArgument(Map<String, Object> arguments, String key, int fallback) {
-    if (ToolArgumentValidator.wasNumericNull(arguments, key)) {
-      return fallback;
-    }
     Object value = arguments.get(key);
     if (value == null) {
       return fallback;

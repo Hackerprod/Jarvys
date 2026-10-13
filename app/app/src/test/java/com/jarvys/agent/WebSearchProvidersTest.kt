@@ -42,6 +42,19 @@ class WebSearchProvidersTest {
         }
     }
 
+    @Test fun toolsDeclareTheirOwnContextualActivityLabels() {
+        val provider = object : WebSearchProvider {
+            override val sourceName = "test"
+            override fun search(query: String, maxResults: Int, acceptLanguage: String) = WebSearchOutcome()
+        }
+        val tools = WebSearchTools.create(provider, WebPageFetcher(FakeTransport()))
+
+        assertEquals("web_search · latest weather forecast",
+            tools[0].activityDisplayName(mapOf("query" to "  latest   weather\nforecast ")))
+        assertEquals("fetch_url · https://example.com/page",
+            tools[1].activityDisplayName(mapOf("url" to " https://example.com/page ")))
+    }
+
     @Test fun bingParserReadsMultipleResultBlocksEntitiesAndRedirects() {
         val html = requireNotNull(javaClass.classLoader?.getResourceAsStream("websearch/bing_results.html"))
             .bufferedReader().use { it.readText() }

@@ -25,6 +25,25 @@ public interface CoreTool {
     return null;
   }
 
+  /** Hide routine activity for tools whose successful effect is already visible elsewhere. */
+  default boolean hideFromProgress() {
+    return false;
+  }
+
+  /** Optional activity label derived from this tool's arguments; null uses the registry label. */
+  default String activityDisplayName(Map<String, Object> arguments) {
+    return null;
+  }
+
+  /** Optional skill metadata used by activity presentation without tool-specific loop logic. */
+  default String activitySkillId(Map<String, Object> arguments) {
+    return "";
+  }
+
+  default String activitySkillName(Map<String, Object> arguments) {
+    return "";
+  }
+
   ToolSpec declaration();
 
   CoreToolResult execute(Map<String, Object> arguments, CancellationToken token);

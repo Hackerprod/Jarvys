@@ -21,6 +21,7 @@ import org.robolectric.annotation.Config;
 @Config(sdk = 34)
 public class CodexReasoningPersistenceTest {
     private static final String ENCRYPTED = "encrypted-reasoning-sentinel";
+    private static final String CODEX_MODEL = "gpt-codex-test";
     @Rule public TemporaryFolder temporary = new TemporaryFolder();
 
     @Test public void codexReasoningRoundTripsAndReplaysBeforeItsMessageAndCall() throws Exception {
@@ -41,11 +42,17 @@ public class CodexReasoningPersistenceTest {
         assertEquals(ModelReply.ProviderOutputItem.Kind.MESSAGE, parsed.providerOutputItems.get(1).kind);
         assertEquals(ModelReply.ProviderOutputItem.Kind.TOOL_CALL, parsed.providerOutputItems.get(2).kind);
         assertFalse(parsed.text.contains(ENCRYPTED));
+        List<ModelReply.ProviderOutputItem> identifiedItems = new java.util.ArrayList<>();
+        for (ModelReply.ProviderOutputItem item : parsed.providerOutputItems)
+            identifiedItems.add(item.withIdentity(OpenAICodexResponsesClient.OUTPUT_PROVIDER,
+                    OpenAICodexResponsesClient.OUTPUT_API, CODEX_MODEL));
+        ModelReply identifiedReply = new ModelReply(parsed.text, parsed.calls, "", null, CODEX_MODEL,
+                parsed.contextTokensUsed, parsed.diagnostics, identifiedItems);
 
         AtomicInteger toolEffects = new AtomicInteger();
         AtomicInteger requests = new AtomicInteger();
         CoreAgentLoop.Model model = (transcript, prompt, declarations, token) ->
-                requests.getAndIncrement() == 0 ? parsed : new ModelReply("Lookup complete", Collections.emptyList());
+                requests.getAndIncrement() == 0 ? identifiedReply : new ModelReply("Lookup complete", Collections.emptyList());
         CoreAgentLoop loop = new CoreAgentLoop(model, new CoreToolRegistry(Collections.singletonList(lookupTool(toolEffects))),
                 "", session);
         new MainChatTranscriptStore(files, session, store).attach(loop, prior);
@@ -58,11 +65,14 @@ public class CodexReasoningPersistenceTest {
         ConversationTurn callTurn = restored.stream()
                 .filter(turn -> turn.kind == ConversationTurn.Kind.TOOL_CALLS).findFirst().orElseThrow(AssertionError::new);
         assertEquals(3, callTurn.providerOutputItems.size());
+        assertEquals(OpenAICodexResponsesClient.OUTPUT_PROVIDER, callTurn.providerOutputItems.get(0).provider);
+        assertEquals(OpenAICodexResponsesClient.OUTPUT_API, callTurn.providerOutputItems.get(0).api);
+        assertEquals(CODEX_MODEL, callTurn.providerOutputItems.get(0).model);
         assertFalse("Opaque encrypted material is not assistant-visible text", callTurn.content.contains(ENCRYPTED));
         assertFalse("Encrypted reasoning is not part of the UI timeline",
                 store.readConversationTimeline(session).stream().anyMatch(event -> event.getText().contains(ENCRYPTED)));
 
-        JSONArray input = OpenAICodexResponsesClient.userInput("", Collections.emptyList(), restored);
+        JSONArray input = OpenAICodexResponsesClient.userInput("", Collections.emptyList(), restored, CODEX_MODEL);
         JSONObject reasoning = input.getJSONObject(1);
         JSONObject assistantMessage = input.getJSONObject(2);
         JSONObject functionCall = input.getJSONObject(3);
@@ -87,7 +97,8 @@ public class CodexReasoningPersistenceTest {
         String raw = new JSONObject().put("type", "reasoning").put("id", "rs_message")
                 .put("encrypted_content", ENCRYPTED).put("summary", new JSONArray()).toString();
         List<ModelReply.ProviderOutputItem> items = Collections.singletonList(
-                ModelReply.ProviderOutputItem.reasoning(raw));
+                ModelReply.ProviderOutputItem.reasoning(raw, OpenAICodexResponsesClient.OUTPUT_PROVIDER,
+                        OpenAICodexResponsesClient.OUTPUT_API, CODEX_MODEL));
         CoreAgentLoop loop = new CoreAgentLoop((transcript, prompt, declarations, token) ->
                 new ModelReply("The answer", Collections.emptyList(), "", null, "fake", null,
                         ResponseDiagnostics.unknown(), items), new CoreToolRegistry(Collections.emptyList()),
@@ -130,6 +141,61 @@ public class CodexReasoningPersistenceTest {
         assertTrue(serialized.contains("Ordinary assistant text"));
         assertFalse("Chat Completions must not receive Responses-only encrypted reasoning", serialized.contains(ENCRYPTED));
         assertEquals(2, messages.length());
+    }
+
+    @Test public void codexReplaysOnlyReasoningFromTheCurrentProviderApiAndModel() throws Exception {
+        String matching = new JSONObject().put("type", "reasoning").put("id", "rs_current")
+                .put("encrypted_content", "current-model-secret").toString();
+        String otherModel = new JSONObject().put("type", "reasoning").put("id", "rs_other")
+                .put("encrypted_content", "other-model-secret").toString();
+        String legacy = new JSONObject().put("type", "reasoning").put("id", "rs_legacy")
+                .put("encrypted_content", "legacy-secret").toString();
+        List<ModelReply.ProviderOutputItem> items = new java.util.ArrayList<>();
+        items.add(ModelReply.ProviderOutputItem.reasoning(matching, OpenAICodexResponsesClient.OUTPUT_PROVIDER,
+                OpenAICodexResponsesClient.OUTPUT_API, CODEX_MODEL));
+        items.add(ModelReply.ProviderOutputItem.reasoning(otherModel, OpenAICodexResponsesClient.OUTPUT_PROVIDER,
+                OpenAICodexResponsesClient.OUTPUT_API, "different-model"));
+        items.add(ModelReply.ProviderOutputItem.reasoning(legacy));
+        ConversationTurn turn = ConversationTurn.assistantReply("Visible answer", items);
+
+        JSONArray input = OpenAICodexResponsesClient.userInput("", Collections.emptyList(),
+                Collections.singletonList(turn), CODEX_MODEL);
+
+        assertEquals(2, input.length());
+        assertEquals("current-model-secret", input.getJSONObject(0).optString("encrypted_content"));
+        assertEquals("assistant", input.getJSONObject(1).optString("role"));
+        assertEquals("Visible answer", input.getJSONObject(1).optString("content"));
+        assertFalse(input.toString().contains("other-model-secret"));
+        assertFalse(input.toString().contains("legacy-secret"));
+    }
+
+    @Test public void systemStatusAssistantRowsAndModelErrorsStayVisibleButLeaveModelHistory() throws Exception {
+        File files = temporary.newFolder();
+        String session = "system-status-history";
+        LocalRunStore store = new LocalRunStore(files);
+        store.appendConversationMessage(session, "user", "Continue");
+        store.appendConversationMessage(session, "assistant", "localized stop text", null, "", "", "STOPPED");
+        store.appendConversationMessage(session, "assistant", "localized timeout text", null, "", "", "PARTIAL");
+        store.appendConversationMessage(session, "assistant", "localized provider failure", null, "", "", "FAILED");
+        store.appendConversationMessage(session, "assistant", "Task stopped", null, "", "", "COMPLETED");
+        store.appendModelTranscriptRow(session, new JSONObject().put("type", "model_error")
+                .put("errorCode", "provider_unavailable").put("messageIndex", 0));
+
+        List<ConversationTurn> history = new LocalRunStore(files).loadConversationContext(session);
+        List<String> contents = new java.util.ArrayList<>();
+        for (ConversationTurn turn : history) {
+            if (turn.kind == ConversationTurn.Kind.MESSAGE) contents.add(turn.content);
+        }
+        assertEquals(java.util.Arrays.asList("Continue", "Task stopped"), contents);
+        assertFalse(history.stream().anyMatch(turn -> turn.kind == ConversationTurn.Kind.MODEL_ERROR));
+        assertTrue("Status messages remain in the rendered conversation",
+                store.readConversationTimeline(session).stream().anyMatch(event -> "localized stop text".equals(event.getText())));
+
+        JSONArray providerMessages = OpenRouterClient.conversationMessages("system", history, "", Collections.emptyList());
+        assertFalse(providerMessages.toString().contains("localized stop text"));
+        assertFalse(providerMessages.toString().contains("localized timeout text"));
+        assertFalse(providerMessages.toString().contains("localized provider failure"));
+        assertTrue("Filtering is structural, not based on the rendered text", providerMessages.toString().contains("Task stopped"));
     }
 
     @Test public void compactionDropsReasoningForSummarizedAssistantTurns() throws Exception {

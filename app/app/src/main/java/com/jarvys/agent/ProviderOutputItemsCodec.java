@@ -18,6 +18,9 @@ final class ProviderOutputItemsCodec {
             JSONObject value = new JSONObject();
             value.put("kind", item.kind.name());
             value.put("value", item.value);
+            if (item.provider != null) value.put("provider", item.provider);
+            if (item.api != null) value.put("api", item.api);
+            if (item.model != null) value.put("model", item.model);
             encoded.put(value);
         }
         return encoded;
@@ -31,7 +34,12 @@ final class ProviderOutputItemsCodec {
                 JSONObject item = encoded.getJSONObject(i);
                 String value = item.getString("value");
                 switch (ModelReply.ProviderOutputItem.Kind.valueOf(item.getString("kind"))) {
-                    case REASONING: result.add(ModelReply.ProviderOutputItem.reasoning(value)); break;
+                    case REASONING:
+                        if (item.has("provider") && item.has("api") && item.has("model"))
+                            result.add(ModelReply.ProviderOutputItem.reasoning(value, item.getString("provider"),
+                                    item.getString("api"), item.getString("model")));
+                        else result.add(ModelReply.ProviderOutputItem.reasoning(value));
+                        break;
                     case MESSAGE: result.add(ModelReply.ProviderOutputItem.message(value)); break;
                     case TOOL_CALL: result.add(ModelReply.ProviderOutputItem.toolCall(value)); break;
                 }

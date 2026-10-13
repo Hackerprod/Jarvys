@@ -33,11 +33,13 @@ public final class AgentForegroundService extends Service {
   public static final String ACTION_REAL_AGENT = "com.jarvys.agent.REAL_AGENT";
   public static final String ACTION_COMPACT_CONVERSATION = "com.jarvys.agent.COMPACT_CONVERSATION";
   public static final String ACTION_REFLECT_MEMORY = "com.jarvys.agent.REFLECT_MEMORY";
+  public static final String ACTION_RECOVER_PENDING_INPUTS = "com.jarvys.agent.RECOVER_PENDING_INPUTS";
   public static final String ACTION_STOP = "com.jarvys.agent.STOP";
   public static final String ACTION_CREW_KEEPALIVE = "com.jarvys.agent.CREW_KEEPALIVE";
 
   private static final String CHANNEL_ID = "jarvys_agent_run";
   private static final int NOTIFICATION_ID = 31001;
+  private static final Object INTERRUPT_ADMISSION_LOCK = new Object();
   private static final int TEST_STEPS = 120;
   private static volatile String lastRunReport = "Etapa B: sin ejecuciones todavía.";
   private static volatile AgentForegroundService currentInstance;
@@ -70,6 +72,9 @@ public final class AgentForegroundService extends Service {
       new CoreAgentRuntime(context, session, skills, CorePromptBudget.standard(), memoryDisabled);
 
   private final AtomicInteger activeReflectionTasks = new AtomicInteger();
+  private volatile String activeSteeringSessionId;
+  private volatile MainChatTurnContextProvider activeSteeringProvider;
+  private volatile CancellationToken activeRunToken;
 
   @Override
   protected void attachBaseContext(Context base) {
@@ -282,16 +287,206 @@ public final class AgentForegroundService extends Service {
   public static boolean interruptAndSend(Context context, String sessionId, String text,
       ArrayList<String> skills, boolean memoryDisabled) {
     AgentForegroundService service = currentInstance;
-    if (service == null || !MessageReactionTool.isOrdinaryChat(sessionId)
-        || !sessionId.equals(AgentRunUiState.INSTANCE.getState().getValue().getSessionId())
-        || !sessionId.equals(AgentRunUiState.INSTANCE.getState().getValue().getInteractiveOwnerSessionId())
-        || !AgentRunUiState.INSTANCE.getState().getValue().getRunning()
-        || AgentRunUiState.INSTANCE.getState().getValue().getReflecting()
-        || StopController.getInstance().isStopped() || text == null || text.trim().isEmpty()) return false;
-    LocalRunStore store = new LocalRunStore(context);
-    store.appendConversationMessage(sessionId, "user", text);
-    AgentRunUiState.refreshPersistedSession(sessionId, store.readConversationTimeline(sessionId));
-    return true;
+    AgentRunUiState state = AgentRunUiState.INSTANCE.getState().getValue();
+    if (!MessageReactionTool.isOrdinaryChat(sessionId) || sessionId == null
+        || !sessionId.equals(state.getSessionId()) || state.getReflecting()
+        || state.getInteractiveOwnerSessionId() != null
+            && !sessionId.equals(state.getInteractiveOwnerSessionId())
+        || text == null || text.trim().isEmpty()) return false;
+    if (state.getRunning() && (!sessionId.equals(state.getInteractiveOwnerSessionId())
+        || StopController.getInstance().isStopped())) return false;
+
+    synchronized (INTERRUPT_ADMISSION_LOCK) {
+      LocalRunStore store = new LocalRunStore(context);
+      final String requestId;
+      try {
+        requestId = store.appendInterruptRequest(sessionId, text, skills, memoryDisabled);
+      } catch (RuntimeException failure) {
+        return false;
+      }
+      MainChatTurnContextProvider provider = service == null ? null : service.activeSteeringProvider;
+      if (state.getRunning() && service != null && sessionId.equals(service.activeSteeringSessionId)
+          && provider != null && provider.dispatchPendingRequest(requestId)) {
+        AgentRunUiState.refreshPersistedSession(sessionId, store.readConversationTimeline(sessionId));
+        return true;
+      }
+      if (service == null) {
+        try {
+          start(context, ACTION_RECOVER_PENDING_INPUTS);
+        } catch (RuntimeException startFailure) {
+          org.json.JSONObject request = store.dispatchInterruptRequest(sessionId, requestId);
+          if (request != null) store.appendConversationMessage(sessionId, "assistant",
+              AppLanguageRuntime.localizedContext(context).getString(R.string.chat_interrupt_start_failed),
+              null, "", requestId, "FAILED");
+          AgentRunUiState.refreshPersistedSession(sessionId, store.readConversationTimeline(sessionId));
+        }
+        return true;
+      }
+      if (state.getRunning() && service.activeRunToken != null && !service.worker.isShutdown()) {
+        // The active worker's finally block owns the ordered follow-up scan (or STOP failure).
+        AgentRunUiState.refreshPersistedSession(sessionId, store.readConversationTimeline(sessionId));
+        return true;
+      }
+      if (service.enqueuePendingInputRecovery(sessionId)) {
+        AgentRunUiState.refreshPersistedSession(sessionId, store.readConversationTimeline(sessionId));
+        return true;
+      }
+      service.failPendingInput(sessionId, requestId);
+      AgentRunUiState.refreshPersistedSession(sessionId, store.readConversationTimeline(sessionId));
+      return true;
+    }
+  }
+
+  void registerMainChatSteeringProvider(String sessionId, MainChatTurnContextProvider provider) {
+    activeSteeringSessionId = provider == null ? null : sessionId;
+    activeSteeringProvider = provider;
+  }
+
+  private void clearMainChatSteeringProvider(MainChatTurnContextProvider provider) {
+    if (activeSteeringProvider == provider) {
+      activeSteeringProvider = null;
+      activeSteeringSessionId = null;
+    }
+  }
+
+  private boolean enqueuePendingInputRecovery(String sessionId) {
+    if (worker.isShutdown()) return false;
+    CancellationToken ownerToken = activeRunToken;
+    try {
+      worker.execute(() -> {
+        if (ownerToken != null && ownerToken.wasStoppedByUser()) {
+          failPendingInputRecovery(sessionId);
+          return;
+        }
+        recoverPendingInputs(sessionId);
+      });
+      return true;
+    } catch (java.util.concurrent.RejectedExecutionException rejected) {
+      return false;
+    }
+  }
+
+  private void failPendingInputRecovery(String onlySessionId) {
+    LocalRunStore store = new LocalRunStore(this);
+    List<org.json.JSONObject> pending = onlySessionId == null
+        ? store.readPendingInterruptRequests() : store.readPendingInterruptRequests(onlySessionId);
+    for (org.json.JSONObject request : pending) {
+      String sessionId = request.optString("sessionId", onlySessionId == null ? "" : onlySessionId);
+      String requestId = request.optString("requestId", "");
+      if (sessionId.isEmpty() || requestId.isEmpty()) continue;
+      failPendingInput(sessionId, requestId);
+    }
+  }
+
+  private void recoverPendingInputs(String onlySessionId) {
+    if (!StopController.getInstance().isStopped()) return;
+    LocalRunStore store = new LocalRunStore(this);
+    List<org.json.JSONObject> pending = onlySessionId == null
+        ? store.readPendingInterruptRequests() : store.readPendingInterruptRequests(onlySessionId);
+    if (pending.isEmpty()) return;
+    String sessionId = pending.get(0).optString("sessionId", onlySessionId == null ? "" : onlySessionId);
+    org.json.JSONObject latest = null;
+    for (org.json.JSONObject request : pending) {
+      if (!sessionId.equals(request.optString("sessionId", sessionId))) continue;
+      org.json.JSONObject dispatched = store.dispatchInterruptRequest(sessionId, request.optString("requestId", ""));
+      if (dispatched != null) latest = dispatched;
+    }
+    if (latest == null) return;
+    ArrayList<String> skills = new ArrayList<>();
+    org.json.JSONArray savedSkills = latest.optJSONArray("skills");
+    if (savedSkills != null) for (int i = 0; i < savedSkills.length(); i++) {
+      String skill = savedSkills.optString(i, "");
+      if (!skill.isEmpty()) skills.add(skill);
+    }
+    String messageId = latest.optString("requestId", "");
+    String text = latest.optString("content", "");
+    try {
+      startRealAgentInternal(this, "", skills, sessionId, text, true,
+          latest.optBoolean("memoryDisabled", false), false, messageId);
+    } catch (RuntimeException startFailure) {
+      for (org.json.JSONObject request : pending) {
+        if (sessionId.equals(request.optString("sessionId", sessionId)))
+          failStoredMessageFollowUp(sessionId, request.optString("requestId", ""));
+      }
+    }
+  }
+
+  private void failPendingInput(String sessionId, String requestId) {
+    try {
+      LocalRunStore store = new LocalRunStore(this);
+      org.json.JSONObject request = store.dispatchInterruptRequest(sessionId, requestId);
+      if (request == null) return;
+      store.appendConversationMessage(sessionId, "assistant", getString(R.string.chat_interrupt_start_failed),
+          null, "", requestId, "FAILED");
+      AgentRunUiState.refreshPersistedSession(sessionId, store.readConversationTimeline(sessionId));
+    } catch (RuntimeException ignored) {
+      // The durable request remains available for the next service recovery attempt.
+    }
+  }
+
+  private void enqueueStoredMessageFollowUp(String sessionId, String messageId) {
+    if (messageId == null || messageId.isEmpty()) return;
+    if (worker.isShutdown()) {
+      failStoredMessageFollowUp(sessionId, messageId);
+      return;
+    }
+    CancellationToken ownerToken = activeRunToken;
+    try {
+      worker.execute(() -> {
+        if (ownerToken != null && ownerToken.wasStoppedByUser()) {
+          failStoredMessageFollowUp(sessionId, messageId);
+          return;
+        }
+        if (!StopController.getInstance().isStopped()) return;
+        LocalRunStore store = new LocalRunStore(this);
+        if (store.readConversationMetadata(sessionId).deleted) return;
+        if (!store.readPendingInterruptRequests(sessionId).isEmpty()
+            || hasUserMessageAfter(store, sessionId, messageId)) {
+          // A newer durable input owns the next turn. Recovery will dispatch it and
+          // include this already-consumed message in the conversation history.
+          return;
+        }
+        org.json.JSONObject request = store.readInterruptRequest(sessionId, messageId);
+        ArrayList<String> skills = new ArrayList<>();
+        if (request != null) {
+          org.json.JSONArray savedSkills = request.optJSONArray("skills");
+          if (savedSkills != null) for (int i = 0; i < savedSkills.length(); i++) {
+            String skill = savedSkills.optString(i, "");
+            if (!skill.isEmpty()) skills.add(skill);
+          }
+        }
+        try {
+          startRealAgentInternal(this, "", skills, sessionId,
+              store.readConversationMessage(sessionId, messageId), true,
+              request != null && request.optBoolean("memoryDisabled", false), false, messageId);
+        } catch (RuntimeException startFailure) {
+          failStoredMessageFollowUp(sessionId, messageId);
+        }
+      });
+    } catch (java.util.concurrent.RejectedExecutionException rejected) {
+      failStoredMessageFollowUp(sessionId, messageId);
+    }
+  }
+
+  private static boolean hasUserMessageAfter(LocalRunStore store, String sessionId, String messageId) {
+    boolean foundFollowUp = false;
+    for (org.json.JSONObject message : store.readConversationMessages(sessionId)) {
+      if (!"user".equals(message.optString("role"))) continue;
+      if (foundFollowUp) return true;
+      if (messageId.equals(message.optString("messageId", ""))) foundFollowUp = true;
+    }
+    return false;
+  }
+
+  private void failStoredMessageFollowUp(String sessionId, String messageId) {
+    try {
+      LocalRunStore store = new LocalRunStore(this);
+      store.appendConversationMessage(sessionId, "assistant", getString(R.string.chat_interrupt_start_failed),
+          null, "", messageId, "FAILED");
+      AgentRunUiState.refreshPersistedSession(sessionId, store.readConversationTimeline(sessionId));
+    } catch (RuntimeException ignored) {
+      // A deleted conversation has no remaining UI ledger to update.
+    }
   }
 
   public static String getLastRunReport() {
@@ -318,6 +513,15 @@ public final class AgentForegroundService extends Service {
 
   @Override
   public int onStartCommand(Intent intent, int flags, int startId) {
+    if (intent != null && ACTION_RECOVER_PENDING_INPUTS.equals(intent.getAction())) {
+      enqueuePendingInputRecovery(null);
+      return START_NOT_STICKY;
+    }
+    if (intent == null) {
+      enqueuePendingInputRecovery(null);
+      stopServiceIfIdle();
+      return START_NOT_STICKY;
+    }
     if (intent != null && ACTION_STOP.equals(intent.getAction())) {
       stopRunAndServices();
       return START_NOT_STICKY;
@@ -387,6 +591,7 @@ public final class AgentForegroundService extends Service {
         stopSelf(startId);
         return START_NOT_STICKY;
       }
+      if (realAgent) activeRunToken = token;
       java.util.concurrent.atomic.AtomicBoolean workerStarted = new java.util.concurrent.atomic.AtomicBoolean(false);
       if (realAgent) {
         com.jarvys.agent.proactive.BackgroundRunController.INSTANCE.interactiveStarted(token.generation());
@@ -394,8 +599,10 @@ public final class AgentForegroundService extends Service {
       }
       Runnable unregisterQueued = realAgent ? token.registerCancelAction(() -> {
         if (!workerStarted.get()) {
+          if (activeRunToken == token) activeRunToken = null;
           com.jarvys.agent.proactive.BackgroundRunController.INSTANCE.interactiveFinished(token.generation());
           AgentRunUiState.stopPendingGeneration(chatSessionId, token.generation());
+          failPendingInputRecovery(chatSessionId);
         }
       }) : () -> { };
       try {
@@ -435,12 +642,18 @@ public final class AgentForegroundService extends Service {
                       AgentRunUiState.stopPendingGeneration(chatSessionId, token.generation());
                     }
                     StopController.getInstance().completeRun(token);
+                    if (activeRunToken == token) activeRunToken = null;
+                    if (realAgent) {
+                      if (token.wasStoppedByUser()) failPendingInputRecovery(chatSessionId);
+                      else enqueuePendingInputRecovery(null);
+                    }
                     stopServiceIfIdle();
                   }
                 });
         StopController.getInstance().attachFuture(token, future);
       } catch (RuntimeException failure) {
         unregisterQueued.run();
+        if (activeRunToken == token) activeRunToken = null;
         try {
         if (realAgent) {
           com.jarvys.agent.proactive.BackgroundRunController.INSTANCE.interactiveFinished(token.generation());
@@ -451,6 +664,7 @@ public final class AgentForegroundService extends Service {
           store.appendConversationMessage(chatSessionId, "assistant", getString(R.string.chat_interrupt_start_failed),
               null, "", id, "FAILED");
           AgentRunUiState.rejectUnstarted(chatSessionId, store.readConversationTimeline(chatSessionId));
+          failPendingInputRecovery(chatSessionId);
         }
         } catch (RuntimeException persistenceFailure) {
           // The already-saved user input remains the retry source when storage is readable again.
@@ -603,6 +817,7 @@ public final class AgentForegroundService extends Service {
     boolean userMessageRecorded = userMessageAlreadyRecorded;
     String userMessageId = existingUserMessageId;
     AgentErrorReporter.AttachmentScope privateContentScope = null;
+    MainChatTurnContextProvider steeringProvider = null;
     try {
       token.throwIfCancelled();
       if (userMessageAlreadyRecorded
@@ -657,6 +872,8 @@ public final class AgentForegroundService extends Service {
       for (SkillEntry skill : enabledSkills) usedSkillIds.add(skill.getMetadata().getId());
       CoreAgentRuntime runtime = runtimeFactory.create(this, sessionId, enabledSkills, memoryDisabledForConversation);
       runtime.setMainChatSteeringCursor(userMessageId);
+      steeringProvider = runtime.mainChatSteeringProvider();
+      if (steeringProvider != null) registerMainChatSteeringProvider(sessionId, steeringProvider);
       skills.markUsed(usedSkillIds);
       final String reflectionUserMessageId = userMessageId == null ? "" : userMessageId;
       CoreAgentLoop.ProgressListener progress =
@@ -731,6 +948,10 @@ public final class AgentForegroundService extends Service {
           };
       CoreAgentLoop.Result result =
           mainChatRunner.run(runtime, goal.trim(), conversationHistory, attachments, token, progress);
+      boolean steeringRemainsUnconsumed = steeringProvider != null && steeringProvider.hasUnconsumedMessages();
+      if (steeringRemainsUnconsumed) {
+        steeringProvider.closeForRunExit();
+      }
       boolean timedOut = token.isTimedOut() && !token.isStoppedByUser();
       if (timedOut) chatMessage = AgentResultPresentation.timeout(this);
       else {
@@ -757,6 +978,9 @@ public final class AgentForegroundService extends Service {
             this, proactiveThreadKey, assistantMessageId);
       }
       finishCoreRun(token, chatMessage);
+      if (!token.wasStoppedByUser() && steeringProvider != null
+          && (steeringRemainsUnconsumed || !"COMPLETED".equals(result.outcome)))
+        enqueueStoredMessageFollowUp(sessionId, steeringProvider.latestSteeringMessageId());
       if (!timedOut && "COMPLETED".equals(result.outcome)) {
         enqueueAutomaticReflection(sessionId, assistantMessageId);
       }
@@ -790,16 +1014,26 @@ public final class AgentForegroundService extends Service {
         AgentRunUiState.completeGeneration(sessionId, token.generation(), "stopped-" + sessionId,
             "STOPPED", chatMessage, "", 0L);
         lastRunReport = chatMessage;
+        if (steeringProvider != null && steeringProvider.hasUnconsumedMessages())
+          failStoredMessageFollowUp(sessionId, steeringProvider.latestSteeringMessageId());
       } else if (timedOut) {
         AgentRunUiState.completeGeneration(sessionId, token.generation(), "timeout-" + sessionId,
             "PARTIAL", chatMessage, "", 0L);
         finishCoreRun(token, chatMessage);
+        if (steeringProvider != null)
+          enqueueStoredMessageFollowUp(sessionId, steeringProvider.latestSteeringMessageId());
       } else {
         AgentRunUiState.completeGeneration(sessionId, token.generation(), "failed-" + sessionId,
             "FAILED", chatMessage, "", 0L);
         finishCoreRun(token, chatMessage);
+        if (steeringProvider != null)
+          enqueueStoredMessageFollowUp(sessionId, steeringProvider.latestSteeringMessageId());
       }
     } finally {
+      if (steeringProvider != null) {
+        steeringProvider.closeForRunExit();
+        clearMainChatSteeringProvider(steeringProvider);
+      }
       if (privateContentScope != null) privateContentScope.close();
       if (token.isTimedOut()) Thread.interrupted();
       com.jarvys.agent.proactive.BackgroundRunController.INSTANCE.interactiveFinished(token.generation());

@@ -4,10 +4,8 @@ import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -23,15 +21,6 @@ final class ToolArgumentValidator {
         }
     }
 
-    private static final class CoercedArguments extends LinkedHashMap<String, Object> {
-        private final Set<String> numericNullFields;
-
-        CoercedArguments(Map<String, Object> arguments, Set<String> numericNullFields) {
-            super(arguments);
-            this.numericNullFields = java.util.Collections.unmodifiableSet(new LinkedHashSet<>(numericNullFields));
-        }
-    }
-
     private ToolArgumentValidator() { }
 
     static Result coerceAndValidate(Map<String, Object> arguments, Map<String, Object> schema) {
@@ -41,20 +30,7 @@ final class ToolArgumentValidator {
             return new Result(new LinkedHashMap<>(), "Tool arguments must be an object");
         }
         Map<String, Object> result = castMap(coerced);
-        Set<String> numericNullFields = new LinkedHashSet<>();
-        for (Map.Entry<String, Object> entry : arguments.entrySet()) {
-            if (entry.getValue() == null && result.get(entry.getKey()) instanceof Number) {
-                numericNullFields.add(entry.getKey());
-            }
-        }
-        result = new CoercedArguments(result, numericNullFields);
         return new Result(result, validateValue(result, schema, "arguments"));
-    }
-
-    /** True for numeric values converted from explicit null, whose tool helper fallback must remain effective. */
-    static boolean wasNumericNull(Map<String, Object> arguments, String key) {
-        return arguments instanceof CoercedArguments
-                && ((CoercedArguments) arguments).numericNullFields.contains(key);
     }
 
     /** Retained for callers that only need the validation outcome. */
@@ -109,10 +85,16 @@ final class ToolArgumentValidator {
             Map<String, Object> object = castMap(copied);
             Map<String, Object> properties = schema.get("properties") instanceof Map<?, ?>
                     ? castMap(schema.get("properties")) : null;
+            List<?> required = schema.get("required") instanceof List<?>
+                    ? (List<?>) schema.get("required") : java.util.Collections.emptyList();
             if (properties != null) {
                 for (Map.Entry<String, Object> property : properties.entrySet()) {
-                    if (object.containsKey(property.getKey()) && property.getValue() instanceof Map<?, ?>) {
-                        object.put(property.getKey(), coerceValue(object.get(property.getKey()), castMap(property.getValue())));
+                    String key = property.getKey();
+                    if (!object.containsKey(key)) continue;
+                    if (object.get(key) == null && !required.contains(key)) {
+                        object.remove(key);
+                    } else if (property.getValue() instanceof Map<?, ?>) {
+                        object.put(key, coerceValue(object.get(key), castMap(property.getValue())));
                     }
                 }
             }
@@ -120,7 +102,11 @@ final class ToolArgumentValidator {
                 Map<String, Object> additionalSchema = castMap(schema.get("additionalProperties"));
                 for (Map.Entry<String, Object> entry : new ArrayList<>(object.entrySet())) {
                     if ((properties == null || !properties.containsKey(entry.getKey()))) {
-                        object.put(entry.getKey(), coerceValue(entry.getValue(), additionalSchema));
+                        if (entry.getValue() == null && !required.contains(entry.getKey())) {
+                            object.remove(entry.getKey());
+                        } else {
+                            object.put(entry.getKey(), coerceValue(entry.getValue(), additionalSchema));
+                        }
                     }
                 }
             }

@@ -75,6 +75,9 @@ object WebSearchTools {
 
         override fun declaration() = spec
 
+        override fun activityDisplayName(arguments: Map<String, Any>?): String =
+            displayLabel(SEARCH, arguments ?: emptyMap())
+
         override fun execute(arguments: Map<String, Any>, token: CancellationToken): CoreToolResult {
             token.throwIfCancelled()
             val query = (arguments["query"] as? String)?.trim().orEmpty()
@@ -114,6 +117,9 @@ object WebSearchTools {
             jsonSchema("url", "string", 2048, listOf("url")))
 
         override fun declaration() = spec
+
+        override fun activityDisplayName(arguments: Map<String, Any>?): String =
+            displayLabel(FETCH, arguments ?: emptyMap())
 
         override fun execute(arguments: Map<String, Any>, token: CancellationToken): CoreToolResult {
             token.throwIfCancelled()

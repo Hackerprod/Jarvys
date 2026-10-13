@@ -397,7 +397,6 @@ public final class ToolRegistry {
     }
 
     private static int intValue(Map<String, Object> args, String key, int fallback) {
-        if (ToolArgumentValidator.wasNumericNull(args, key)) return fallback;
         Object value = args.get(key);
         if (value instanceof Number) return ((Number) value).intValue();
         if (value instanceof String) {

@@ -74,6 +74,9 @@ public class CodexResponsesTerminalTest {
         assertEquals(3, reply.providerOutputItems.size());
         assertEquals(ModelReply.ProviderOutputItem.Kind.REASONING, reply.providerOutputItems.get(0).kind);
         assertTrue(reply.providerOutputItems.get(0).value.contains("encrypted-adapter-sentinel"));
+        assertEquals(ProviderSettings.Provider.OPENAI_CODEX.name(), reply.providerOutputItems.get(0).provider);
+        assertEquals("responses", reply.providerOutputItems.get(0).api);
+        assertEquals(settings.getModel(), reply.providerOutputItems.get(0).model);
         assertEquals(ModelReply.ProviderOutputItem.Kind.MESSAGE, reply.providerOutputItems.get(1).kind);
         assertEquals("Checking the source", reply.providerOutputItems.get(1).value);
         assertEquals(ModelReply.ProviderOutputItem.Kind.TOOL_CALL, reply.providerOutputItems.get(2).kind);

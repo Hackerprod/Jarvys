@@ -24,6 +24,7 @@ class SkillActivityRuntimeTest {
     @Test fun successfulActualSkillReadIdentifiesSkillAndCompleteLoad() {
         val events=run();assertEquals(listOf("tool_call","tool_result"),events.map { it.stage })
         assertTrue(events.all { it.skill() && it.skillId=="skill.garden" && it.skillName=="Gardening" })
+        assertTrue("skill activity retains the registry's visible tool label", events.all { it.displayName=="Read Skill" })
         assertEquals(1,events.map { it.executionId }.toSet().size);assertTrue(events.last().detail.contains("gardening instructions"))
     }
     @Test fun unavailableSkillFailsWithoutLoadedClaim() { assertEquals("tool_error",run(id="missing.skill").last().stage) }

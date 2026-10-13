@@ -19,6 +19,37 @@ final class AgentErrorReporter {
 
     static boolean attachmentReportsSuppressed() { return PRIVATE_ATTACHMENT_RUNS.get() > 0; }
 
+    /** Captures the caller's privacy scope for a parallel tool worker. */
+    static ScopeSnapshot captureScope() { return new ScopeSnapshot(PRIVATE_ATTACHMENT_RUNS.get()); }
+
+    static final class ScopeSnapshot {
+        private final int privateAttachmentRuns;
+        private ScopeSnapshot(int privateAttachmentRuns) { this.privateAttachmentRuns = privateAttachmentRuns; }
+
+        Scope install() { return new Scope(privateAttachmentRuns); }
+    }
+
+    /** Installs a captured scope and restores the worker's prior value when it exits. */
+    static final class Scope implements AutoCloseable {
+        private final Thread owner = Thread.currentThread();
+        private final int previous;
+        private boolean closed;
+
+        private Scope(int value) {
+            previous = PRIVATE_ATTACHMENT_RUNS.get();
+            if (value > 0) PRIVATE_ATTACHMENT_RUNS.set(value);
+            else PRIVATE_ATTACHMENT_RUNS.remove();
+        }
+
+        @Override public void close() {
+            if (closed) return;
+            if (Thread.currentThread() != owner) throw new IllegalStateException("Attachment scope has a different owner");
+            closed = true;
+            if (previous > 0) PRIVATE_ATTACHMENT_RUNS.set(previous);
+            else PRIVATE_ATTACHMENT_RUNS.remove();
+        }
+    }
+
     static final class AttachmentScope implements AutoCloseable {
         private final Thread owner = Thread.currentThread();
         private boolean closed;

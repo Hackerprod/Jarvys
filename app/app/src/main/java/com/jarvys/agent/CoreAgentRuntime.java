@@ -83,6 +83,7 @@ public final class CoreAgentRuntime {
   private final boolean webSearchEnabledForConversation;
   private final List<CoreTool> workspaceTools;
   private volatile String mainChatSteeringCursor = "";
+  private volatile MainChatTurnContextProvider mainChatSteeringProvider;
 
   public static List<CrewMissionSnapshot> crewSnapshots() {
     List<CrewMissionSnapshot> result = new ArrayList<>();
@@ -260,6 +261,14 @@ public final class CoreAgentRuntime {
 
   void setMainChatSteeringCursor(String userMessageId) {
     mainChatSteeringCursor = userMessageId == null ? "" : userMessageId;
+    mainChatSteeringProvider = context != null && !mainChatSteeringCursor.isEmpty()
+            && MessageReactionTool.isOrdinaryChat(sessionId)
+        ? new MainChatTurnContextProvider(new LocalRunStore(context), sessionId, mainChatSteeringCursor)
+        : null;
+  }
+
+  MainChatTurnContextProvider mainChatSteeringProvider() {
+    return mainChatSteeringProvider;
   }
 
   private CoreAgentLoop.Result runInternal(
@@ -337,10 +346,8 @@ public final class CoreAgentRuntime {
       final CoreToolRegistry runToolRegistry = toolRegistry;
       final String runInstructions = instructions(runToolRegistry, mainChat) + (reactionTool == null ? "" : "\n\n" + MessageReactionTool.GUIDANCE);
       CoreAgentLoop.Model scopedModel = requestModel(model, runToolRegistry, mainChat, reactionTool);
-      CoreAgentLoop.TurnContextProvider turnContextProvider = mainChat && depth == 0 && context != null
-              && MessageReactionTool.isOrdinaryChat(sessionId) && !mainChatSteeringCursor.isEmpty()
-              ? new MainChatTurnContextProvider(new LocalRunStore(context), sessionId, mainChatSteeringCursor)
-              : null;
+      CoreAgentLoop.TurnContextProvider turnContextProvider = mainChat && depth == 0
+              ? mainChatSteeringProvider : null;
       CoreAgentLoop loop =
           new CoreAgentLoop(
               scopedModel, toolRegistry, runInstructions, sessionId, budget, compactor,

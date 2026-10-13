@@ -13,20 +13,40 @@ public final class ModelReply {
         public final Kind kind;
         /** Raw JSON for REASONING; assistant text for MESSAGE; call ID for TOOL_CALL. */
         public final String value;
+        /** Request identity is present only for newly captured provider reasoning. */
+        public final String provider;
+        public final String api;
+        public final String model;
 
-        private ProviderOutputItem(Kind kind, String value) {
+        private ProviderOutputItem(Kind kind, String value, String provider, String api, String model) {
             this.kind = kind;
             this.value = value == null ? "" : value;
+            this.provider = provider;
+            this.api = api;
+            this.model = model;
         }
 
         public static ProviderOutputItem reasoning(String rawJson) {
-            return new ProviderOutputItem(Kind.REASONING, rawJson);
+            return new ProviderOutputItem(Kind.REASONING, rawJson, null, null, null);
+        }
+        public static ProviderOutputItem reasoning(String rawJson, String provider, String api, String model) {
+            return new ProviderOutputItem(Kind.REASONING, rawJson, provider, api, model);
         }
         public static ProviderOutputItem message(String text) {
-            return new ProviderOutputItem(Kind.MESSAGE, text);
+            return new ProviderOutputItem(Kind.MESSAGE, text, null, null, null);
         }
         public static ProviderOutputItem toolCall(String callId) {
-            return new ProviderOutputItem(Kind.TOOL_CALL, callId);
+            return new ProviderOutputItem(Kind.TOOL_CALL, callId, null, null, null);
+        }
+
+        public ProviderOutputItem withIdentity(String provider, String api, String model) {
+            if (kind != Kind.REASONING) return this;
+            return reasoning(value, provider, api, model);
+        }
+
+        public boolean belongsTo(String provider, String api, String model) {
+            return kind == Kind.REASONING && this.provider != null && this.api != null && this.model != null
+                    && this.provider.equals(provider) && this.api.equals(api) && this.model.equals(model);
         }
     }
 

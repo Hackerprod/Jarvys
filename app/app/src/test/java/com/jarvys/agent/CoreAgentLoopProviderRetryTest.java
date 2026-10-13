@@ -97,6 +97,38 @@ public class CoreAgentLoopProviderRetryTest {
         assertEquals(0, waits.get());
     }
 
+    @Test public void retryBackoffUsesOpenClawJitterShapeAndThirtySecondCeiling() {
+        List<Long> waits = new java.util.ArrayList<>();
+        ProviderRetryWaiter waiter = new ProviderRetryWaiter((millis, token) -> waits.add(millis), () -> 0.5d);
+        CancellationToken token = CancellationToken.uncancellable();
+
+        for (long retryNumber : new long[] {0, 1, 2, 3, 4, 5, 12}) waiter.await(
+                new IllegalStateException("transient"), retryNumber, token);
+
+        assertEquals(java.util.Arrays.asList(1_000L, 2_000L, 4_000L, 8_000L, 16_000L, 30_000L, 30_000L), waits);
+    }
+
+    @Test public void retryAfterRemainsAProviderFloorAboveTheBackoffCeiling() {
+        AtomicReference<Long> wait = new AtomicReference<>();
+        ProviderRetryWaiter waiter = new ProviderRetryWaiter((millis, token) -> wait.set(millis), () -> 1.0d);
+
+        waiter.await(new ProviderHttpException("rate limited", 429, 90_000L, null), 20,
+                CancellationToken.uncancellable());
+
+        assertEquals(Long.valueOf(90_000L), wait.get());
+    }
+
+    @Test public void retryJitterRangesFromHalfToOneAndAHalfTimesTheBase() {
+        List<Long> waits = new java.util.ArrayList<>();
+        ProviderRetryWaiter lower = new ProviderRetryWaiter((millis, token) -> waits.add(millis), () -> 0.0d);
+        ProviderRetryWaiter upper = new ProviderRetryWaiter((millis, token) -> waits.add(millis), () -> 1.0d);
+
+        lower.await(new IllegalStateException("transient"), 0, CancellationToken.uncancellable());
+        upper.await(new IllegalStateException("transient"), 0, CancellationToken.uncancellable());
+
+        assertEquals(java.util.Arrays.asList(500L, 1_500L), waits);
+    }
+
     private interface Effect {
         CoreToolResult execute(Map<String, Object> arguments, CancellationToken token);
     }

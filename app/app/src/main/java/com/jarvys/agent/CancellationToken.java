@@ -12,6 +12,7 @@ public final class CancellationToken {
     private final boolean crewRun;
     private final Object standaloneActionLock = new Object();
     private final java.util.concurrent.atomic.AtomicBoolean standaloneCancelled = new java.util.concurrent.atomic.AtomicBoolean(false);
+    private final java.util.concurrent.atomic.AtomicBoolean stoppedByUser = new java.util.concurrent.atomic.AtomicBoolean(false);
     private final java.util.concurrent.CopyOnWriteArrayList<Runnable> standaloneCancelActions = new java.util.concurrent.CopyOnWriteArrayList<>();
     private final java.util.concurrent.atomic.AtomicBoolean timedOut = new java.util.concurrent.atomic.AtomicBoolean(false);
 
@@ -77,6 +78,15 @@ public final class CancellationToken {
         return (controller != null && !controller.isActive(generation))
                 || (standaloneCancellable && standaloneCancelled.get())
                 || (Thread.currentThread().isInterrupted() && !timedOut.get());
+    }
+
+    /** Distinguishes an explicit STOP from normal completion for work queued behind this run. */
+    boolean wasStoppedByUser() {
+        return stoppedByUser.get();
+    }
+
+    void markStoppedByUser() {
+        stoppedByUser.set(true);
     }
 
     public boolean isTimedOut() {

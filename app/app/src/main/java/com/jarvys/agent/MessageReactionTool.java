@@ -94,6 +94,8 @@ public final class MessageReactionTool implements CoreTool {
 
     @Override public boolean canDelegate() { return false; }
 
+    @Override public boolean hideFromProgress() { return true; }
+
     @Override public ToolSpec declaration() {
         Map<String, String> properties = new LinkedHashMap<>();
         properties.put("message_id", "string");

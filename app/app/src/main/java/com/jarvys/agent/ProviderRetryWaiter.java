@@ -8,6 +8,8 @@ import java.util.concurrent.TimeUnit;
 
 /** Shared cancellation-aware backoff for retryable provider model requests. */
 public class ProviderRetryWaiter implements CoreAgentLoop.RateLimitWaiter {
+    private static final long RETRY_BASE_DELAY_MS = 1_000L;
+    private static final long RETRY_MAX_DELAY_MS = 30_000L;
     public interface Clock { void sleep(long millis, CancellationToken token); }
     private final Clock clock;
     private final java.util.function.DoubleSupplier jitter;
@@ -28,7 +30,7 @@ public class ProviderRetryWaiter implements CoreAgentLoop.RateLimitWaiter {
             } finally {
                 unregister.run();
             }
-        }, () -> ThreadLocalRandom.current().nextDouble(0.5d, 1.0d));
+        }, () -> ThreadLocalRandom.current().nextDouble(0.0d, 1.0d));
     }
 
     public ProviderRetryWaiter(Clock clock, java.util.function.DoubleSupplier jitter) {
@@ -38,12 +40,17 @@ public class ProviderRetryWaiter implements CoreAgentLoop.RateLimitWaiter {
 
     @Override public void await(Throwable failure, long retryNumber, CancellationToken token) {
         token.throwIfCancelled();
-        long exponential = retryNumber >= 54 ? Long.MAX_VALUE
-                : 1000L * (1L << Math.max(0L, retryNumber));
+        // Match OpenClaw's transient retry shape: 1s exponential base, capped at 30s,
+        // then 0.5x..1.5x jitter which is itself capped at 30s. retryNumber is zero-based
+        // here, so it maps directly to OpenClaw's one-based retryNumber - 1 exponent.
+        int exponent = (int) Math.min(5L, Math.max(0L, retryNumber));
+        long exponential = Math.min(RETRY_MAX_DELAY_MS, RETRY_BASE_DELAY_MS * (1L << exponent));
         long retryAfter = retryAfter(failure);
         double factor = Math.max(0d, Math.min(1d, jitter.getAsDouble()));
-        long backoff = exponential == Long.MAX_VALUE ? Long.MAX_VALUE
-                : (long) Math.max(1d, exponential * factor);
+        long backoff = Math.min(RETRY_MAX_DELAY_MS,
+                Math.max(1L, Math.round(exponential * (0.5d + factor))));
+        // Retry-After is a provider floor and remains uncapped; cancellation and the
+        // active run timeout still interrupt the wait through the existing token gate.
         long delay = Math.max(backoff, retryAfter);
         clock.sleep(delay, token);
     }
