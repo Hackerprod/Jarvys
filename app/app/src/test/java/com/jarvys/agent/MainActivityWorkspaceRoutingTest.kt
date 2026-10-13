@@ -264,7 +264,7 @@ class MainActivityWorkspaceRoutingTest {
         val firstId = rows.first().workspaceId
         val lastId = rows.last().workspaceId
         await { compose.onAllNodesWithTag("workspace-list-row-$firstId").fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithTag("workspace-list").performScrollToNode(hasTestTag("workspace-next-page"))
+        compose.onNodeWithTag("workspace-list").performScrollToKey("workspace-pages")
         settleNativeFrame()
         tapTag("workspace-next-page")
         await { compose.onAllNodesWithTag("workspace-list-row-$lastId").fetchSemanticsNodes().isNotEmpty() }
@@ -275,10 +275,10 @@ class MainActivityWorkspaceRoutingTest {
         tapTag("workspace-previous-page")
         await { compose.onAllNodesWithTag("workspace-list-row-$lastId").fetchSemanticsNodes().isEmpty() &&
             compose.onAllNodesWithTag("workspace-list-loading").fetchSemanticsNodes().isEmpty() }
-        compose.onNodeWithTag("workspace-list").performScrollToNode(hasTestTag("workspace-list-row-$firstId"))
+        compose.onNodeWithTag("workspace-list").performScrollToKey("workspace-$firstId")
         settleNativeFrame()
         compose.onNodeWithTag("workspace-list-row-$firstId").assertIsDisplayed()
-        compose.onNodeWithTag("workspace-list").performScrollToNode(hasTestTag("workspace-next-page"))
+        compose.onNodeWithTag("workspace-list").performScrollToKey("workspace-pages")
         settleNativeFrame()
         tapTag("workspace-next-page")
         await { compose.onAllNodesWithTag("workspace-list-row-$lastId").fetchSemanticsNodes().isNotEmpty() }
@@ -286,7 +286,7 @@ class MainActivityWorkspaceRoutingTest {
         tapTag("workspace-first-page")
         await { compose.onAllNodesWithTag("workspace-list-row-$lastId").fetchSemanticsNodes().isEmpty() &&
             compose.onAllNodesWithTag("workspace-list-loading").fetchSemanticsNodes().isEmpty() }
-        compose.onNodeWithTag("workspace-list").performScrollToNode(hasTestTag("workspace-list-row-$firstId"))
+        compose.onNodeWithTag("workspace-list").performScrollToKey("workspace-$firstId")
         settleNativeFrame()
         compose.onNodeWithTag("workspace-list-row-$firstId").assertIsDisplayed()
         rows.forEach { assertNull("Catalog browsing started ${it.workspaceId}", CoreAgentRuntime.crewManagerForSession(it.executionSessionId)) }

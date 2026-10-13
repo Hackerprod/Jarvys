@@ -12,6 +12,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import com.jarvys.agent.R
 import com.jarvys.agent.RunHistoryItem
 import com.jarvys.agent.ui.chat.ConversationDrawer
+import com.jarvys.agent.ui.chat.awaitReactionDrawIdle
 import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Assert.*
 import org.junit.Rule
@@ -81,6 +82,7 @@ class WorkspaceDrawerComposeTest {
         compose.onNodeWithText("Agent").assertIsDisplayed()
         compose.onNodeWithTag("drawer-workspaces-empty").assertDoesNotExist()
         compose.runOnIdle { workspaceSelected.value = false }
+        awaitReactionDrawIdle(compose)
         compose.onNodeWithTag("drawer-open-workspaces").assertIsNotSelected()
         assertEquals(FontWeight.SemiBold, titleWeight())
     }
