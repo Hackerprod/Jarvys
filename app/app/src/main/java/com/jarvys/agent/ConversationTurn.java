@@ -207,6 +207,11 @@ public final class ConversationTurn {
     return last.kind == Kind.MESSAGE && "user".equals(last.role);
   }
 
+  static boolean endsWithToolResult(List<ConversationTurn> history) {
+    return history != null && !history.isEmpty()
+        && history.get(history.size() - 1).kind == Kind.TOOL_RESULT;
+  }
+
   public ConversationTurn withoutAttachments() {
     return (this.attachments.isEmpty()
             && this.images.isEmpty()

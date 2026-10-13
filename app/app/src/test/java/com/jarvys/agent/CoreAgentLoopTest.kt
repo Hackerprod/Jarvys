@@ -18,6 +18,7 @@ class CoreAgentLoopTest {
         }
         val secondTranscript = AtomicReference<List<ConversationTurn>>()
         val secondPrompt = AtomicReference<String>()
+        val firstPrompt = AtomicReference<String>()
         val model = object : CoreAgentLoop.Model {
             private var calls = 0
             override fun complete(
@@ -29,6 +30,7 @@ class CoreAgentLoopTest {
                 calls++
                 assertEquals(listOf("lookup"), tools.map { it.name })
                 return if (calls == 1) {
+                    firstPrompt.set(prompt)
                     ModelReply("I will look that up.", listOf(ModelReply.Call("call-1", "lookup", emptyMap())))
                 } else {
                     secondTranscript.set(transcript)
@@ -44,6 +46,7 @@ class CoreAgentLoopTest {
 
         assertEquals("The answer is 42.", result.text)
         assertEquals(2, result.turns)
+        assertEquals("What is the answer?", firstPrompt.get())
         val transcript = secondTranscript.get()
         assertTrue(transcript.any { it.content == "Remember that I asked a question" })
         assertEquals(1, transcript.count { it.kind == ConversationTurn.Kind.MESSAGE && it.content == "What is the answer?" })
@@ -53,8 +56,157 @@ class CoreAgentLoopTest {
         assertEquals("call-1", output.toolCallId)
         assertEquals("lookup", output.toolName)
         assertEquals("The answer is 42", output.content)
-        assertEquals("Continue.", secondPrompt.get())
+        assertEquals(ConversationTurn.Kind.TOOL_RESULT, transcript.last().kind)
+        assertEquals("", secondPrompt.get())
         assertFalse(transcript.any { it.content.contains("Continue the same user request") })
+    }
+
+    @Test
+    fun emptyCrewContinuationUsesRealIncomingMessagesAfterPriorToolResults() {
+        val previous = listOf(
+            ConversationTurn("user", "Original mission"),
+            ConversationTurn.toolCalls("", listOf(ModelReply.Call("lookup-call", "lookup", emptyMap()))),
+            ConversationTurn.toolResult("lookup-call", "lookup", "Observed fact"),
+        )
+        var pending = listOf(CoreAgentLoop.IncomingMessage("follow-up-1", "chief", "Check the latest source", false))
+        val provider = object : CoreAgentLoop.TurnContextProvider {
+            override fun takeUntrustedContext() = ""
+            override fun takeDurableMessages(): List<CoreAgentLoop.IncomingMessage> = pending.also { pending = emptyList() }
+        }
+        val observedTranscript = AtomicReference<List<ConversationTurn>>()
+        val observedPrompt = AtomicReference<String>()
+        val model = object : CoreAgentLoop.Model {
+            override fun complete(
+                transcript: List<ConversationTurn>,
+                prompt: String,
+                tools: List<ToolSpec>,
+                token: CancellationToken,
+            ): ModelReply {
+                observedTranscript.set(transcript)
+                observedPrompt.set(prompt)
+                return ModelReply("Updated answer", emptyList())
+            }
+        }
+        val loop = CoreAgentLoop(model, CoreToolRegistry(emptyList()), "Instructions", "crew-session",
+            CorePromptBudget.standard(), null, CoreAgentLoop.Limits.UNBOUNDED, provider, null)
+
+        val result = loop.run("", previous, CancellationToken.uncancellable(), null)
+
+        assertEquals("Updated answer", result.text)
+        assertEquals(1, result.turns)
+        assertEquals("", observedPrompt.get())
+        val transcript = observedTranscript.get()
+        assertTrue(transcript.any { it.kind == ConversationTurn.Kind.TOOL_RESULT && it.content == "Observed fact" })
+        assertTrue(transcript.any { it.content.contains("Check the latest source") })
+        assertFalse(transcript.any { it.role == "user" && it.content.isEmpty() })
+    }
+
+    @Test
+    fun emptyCrewContinuationWithoutRealMessagesEndsWithoutCallingModel() {
+        val provider = object : CoreAgentLoop.TurnContextProvider {
+            override fun takeUntrustedContext() = ""
+        }
+        var modelCalls = 0
+        val model = object : CoreAgentLoop.Model {
+            override fun complete(
+                transcript: List<ConversationTurn>,
+                prompt: String,
+                tools: List<ToolSpec>,
+                token: CancellationToken,
+            ): ModelReply {
+                modelCalls++
+                throw AssertionError("an empty continuation without incoming messages must not call the provider")
+            }
+        }
+        val loop = CoreAgentLoop(model, CoreToolRegistry(emptyList()), "Instructions", "crew-empty",
+            CorePromptBudget.standard(), null, CoreAgentLoop.Limits.UNBOUNDED, provider, null)
+
+        val result = loop.run("", listOf(ConversationTurn.toolResult("old-call", "lookup", "Old result")),
+            CancellationToken.uncancellable(), null)
+
+        assertEquals("COMPLETED", result.outcome)
+        assertEquals(0, result.turns)
+        assertEquals(0, modelCalls)
+    }
+
+    @Test
+    fun mixedFinishAndOrdinaryBatchReturnsBothResultsToModel() {
+        val finishSpec = ToolSpec("finish_one", "test", "finish", "test",
+            ToolSpec.Status.IMPLEMENTED, emptyMap(), emptyList())
+        val normalSpec = ToolSpec("ordinary", "test", "continue", "test",
+            ToolSpec.Status.IMPLEMENTED, emptyMap(), emptyList())
+        val finish = object : CoreTool {
+            override fun declaration() = finishSpec
+            override fun execute(arguments: Map<String, Any>, token: CancellationToken) = CoreToolResult.finish("finished one")
+        }
+        val ordinary = object : CoreTool {
+            override fun declaration() = normalSpec
+            override fun execute(arguments: Map<String, Any>, token: CancellationToken) = CoreToolResult.success("ordinary result")
+        }
+        val followUp = AtomicReference<List<ConversationTurn>>()
+        var modelCalls = 0
+        val model = object : CoreAgentLoop.Model {
+            override fun complete(
+                transcript: List<ConversationTurn>,
+                prompt: String,
+                tools: List<ToolSpec>,
+                token: CancellationToken,
+            ): ModelReply {
+                modelCalls++
+                if (modelCalls == 1) return ModelReply("", listOf(
+                    ModelReply.Call("finish-call", "finish_one", emptyMap()),
+                    ModelReply.Call("normal-call", "ordinary", emptyMap()),
+                ))
+                followUp.set(transcript)
+                return ModelReply("Model continued after the mixed batch", emptyList())
+            }
+        }
+        val loop = CoreAgentLoop(model, CoreToolRegistry(listOf(finish, ordinary)), "Instructions", "mixed-finish")
+
+        val result = loop.run("Run both", emptyList(), CancellationToken.uncancellable(), null)
+
+        assertEquals("Model continued after the mixed batch", result.text)
+        assertEquals(2, modelCalls)
+        assertTrue(followUp.get().any { it.toolCallId == "finish-call" && it.content == "finished one" })
+        assertTrue(followUp.get().any { it.toolCallId == "normal-call" && it.content == "ordinary result" })
+    }
+
+    @Test
+    fun batchOfOnlySuccessfulFinishToolsEndsTheTurn() {
+        val firstSpec = ToolSpec("finish_one", "test", "finish", "test",
+            ToolSpec.Status.IMPLEMENTED, emptyMap(), emptyList())
+        val secondSpec = ToolSpec("finish_two", "test", "finish", "test",
+            ToolSpec.Status.IMPLEMENTED, emptyMap(), emptyList())
+        val first = object : CoreTool {
+            override fun declaration() = firstSpec
+            override fun execute(arguments: Map<String, Any>, token: CancellationToken) = CoreToolResult.finish("first terminal")
+        }
+        val second = object : CoreTool {
+            override fun declaration() = secondSpec
+            override fun execute(arguments: Map<String, Any>, token: CancellationToken) = CoreToolResult.finish("second terminal")
+        }
+        var modelCalls = 0
+        val model = object : CoreAgentLoop.Model {
+            override fun complete(
+                transcript: List<ConversationTurn>,
+                prompt: String,
+                tools: List<ToolSpec>,
+                token: CancellationToken,
+            ): ModelReply {
+                modelCalls++
+                return ModelReply("", listOf(
+                    ModelReply.Call("first-call", "finish_one", emptyMap()),
+                    ModelReply.Call("second-call", "finish_two", emptyMap()),
+                ))
+            }
+        }
+        val loop = CoreAgentLoop(model, CoreToolRegistry(listOf(first, second)), "Instructions", "all-finish")
+
+        val result = loop.run("Finish", emptyList(), CancellationToken.uncancellable(), null)
+
+        assertEquals("COMPLETED", result.outcome)
+        assertEquals(1, modelCalls)
+        assertEquals("second terminal", result.text)
     }
 
     @Test

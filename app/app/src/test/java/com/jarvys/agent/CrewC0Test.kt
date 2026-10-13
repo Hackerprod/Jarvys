@@ -140,7 +140,7 @@ class CrewC0Test {
                         }
                         else -> {
                             secondPrompt.set(transcript.last { it.kind == ConversationTurn.Kind.TOOL_RESULT }.content)
-                            assertTrue(prompt.isNotBlank())
+                            assertEquals("", prompt)
                             ModelReply("", listOf(ModelReply.Call("finish", "report_done", mapOf("result" to "Use source A", "refs" to listOf("/board/source.md")))))
                         }
                     }
@@ -265,6 +265,7 @@ class CrewC0Test {
         val loopCreations = AtomicInteger()
         val reanimatedTranscript = AtomicReference<List<ConversationTurn>>()
         val reanimatedInbox = AtomicReference<String>()
+        val reanimatedPrompt = AtomicReference<String>()
         val reanimationEntered = CountDownLatch(1)
         val releaseReanimation = CountDownLatch(1)
         val lifecycleStarts = AtomicInteger()
@@ -275,6 +276,7 @@ class CrewC0Test {
             loop(tools, incoming, { transcript, prompt, _, _ ->
                 if (calls.incrementAndGet() == 1) ModelReply("initial review", emptyList())
                 else {
+                    reanimatedPrompt.set(prompt)
                     reanimatedTranscript.set(transcript)
                     reanimatedInbox.set(inboxEvidence(transcript))
                     ModelReply("revised review", emptyList())
@@ -306,6 +308,7 @@ class CrewC0Test {
             assertEquals(2, bot.completedCycles())
             assertEquals(2, calls.get())
             assertEquals(1, loopCreations.get())
+            assertEquals("", reanimatedPrompt.get())
             assertTrue(reanimatedInbox.get().contains("UNTRUSTED CREW DATA"))
             assertTrue(reanimatedInbox.get().contains("Check the date"))
             assertTrue(reanimatedInbox.get().contains("Use the latest source"))
@@ -314,6 +317,7 @@ class CrewC0Test {
             bot.awaitTermination()
             assertEquals(3, bot.completedCycles())
             assertEquals(3, calls.get())
+            assertEquals("", reanimatedPrompt.get())
             assertTrue(reanimatedTranscript.get().any { it.role == "user" && it.content == "Also verify the table" })
         } finally { releaseReanimation.countDown(); manager.close() }
     }

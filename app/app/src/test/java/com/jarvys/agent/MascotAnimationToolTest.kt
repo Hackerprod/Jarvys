@@ -2,11 +2,20 @@ package com.jarvys.agent
 
 import org.junit.Assert.*
 import org.junit.Test
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+import java.util.concurrent.atomic.AtomicReference
+import com.jarvys.agent.ui.mascot.JarvysHeaderOneShotKind
+import com.jarvys.agent.ui.mascot.JarvysHeaderOneShotRequest
+import com.jarvys.agent.ui.mascot.JarvysHeaderRequestedCompletionTracker
 
 class MascotAnimationToolTest {
     @Test fun animationIsRequiredAndUnknownNamesFailBeforeRequesting() {
         var requests = 0
-        val tool = MascotAnimationTool("main-chat") { _, _ -> requests++; null }
+        val tool = MascotAnimationTool("main-chat") { _, _, _ ->
+            requests++
+            HeaderMascotAnimationResult("working", "finished")
+        }
 
         val invalidArguments = listOf<Map<String, Any>>(
             emptyMap(), mapOf("animation" to "unknown"), mapOf("animation" to "working", "extra" to true),
@@ -19,16 +28,16 @@ class MascotAnimationToolTest {
         assertEquals(0, requests)
     }
 
-    @Test fun validAnimationReturnsRequestReceiptAndDeclaresExactEnumSchema() {
+    @Test fun validAnimationReturnsFinishedOutcomeAndDeclaresExactEnumSchema() {
         val requested = mutableListOf<Pair<String, String>>()
-        val tool = MascotAnimationTool("main-chat") { session, animation ->
+        val tool = MascotAnimationTool("main-chat") { session, animation, _ ->
             requested += session to animation
-            null
+            HeaderMascotAnimationResult(animation, "finished", requestId = "request-1")
         }
         val result = tool.execute(mapOf("animation" to "working"), CancellationToken.uncancellable())
 
         assertTrue(result.success)
-        assertEquals("animation requested: working", result.content)
+        assertEquals("{\"animation\":\"working\",\"outcome\":\"finished\"}", result.content)
         assertEquals(listOf("main-chat" to "working"), requested)
         assertFalse(tool.canDelegate())
         val declaration = tool.declaration()
@@ -42,12 +51,94 @@ class MascotAnimationToolTest {
         assertEquals(MascotAnimationTool.ANIMATIONS, animation["enum"])
     }
 
-    @Test fun unavailableMascotOrAssetReturnsTheUiRejectionWithoutAFalseReceipt() {
-        val tool = MascotAnimationTool("main-chat") { _, _ -> "The main chat mascot is not visible." }
+    @Test fun unavailableMascotOrAssetReturnsTheUiRejectionReasonAsJson() {
+        val tool = MascotAnimationTool("main-chat") { _, animation, _ ->
+            HeaderMascotAnimationResult(animation, "rejected", "The main chat mascot is not visible.")
+        }
         val result = tool.execute(mapOf("animation" to "sad"), CancellationToken.uncancellable())
 
-        assertFalse(result.success)
-        assertEquals("The main chat mascot is not visible.", result.content)
+        assertTrue(result.success)
+        assertEquals("{\"animation\":\"sad\",\"outcome\":\"rejected\",\"reason\":\"The main chat mascot is not visible.\"}", result.content)
+    }
+
+    @Test fun runCancellationResolvesThePublishedRequestWithoutWaitingForPlayback() {
+        val session = "mascot-cancel-test"
+        AgentRunUiState.resetSession(session)
+        AgentRunUiState.beginRun(session, "Play the working animation")
+        AgentRunUiState.bindGeneration(session, 101L)
+        AgentRunUiState.headerMascotAvailabilityChanged(HeaderMascotAvailability(
+            sessionId = session, visible = true, resumed = true, availableAnimationIds = setOf("working"),
+        ))
+        UserDecisionUiAvailability.setChatVisible(true)
+        val token = CancellationToken.cancellable()
+        val result = AtomicReference<CoreToolResult>()
+        val worker = Thread {
+            result.set(MascotAnimationTool(session).execute(mapOf("animation" to "working"), token))
+        }
+        try {
+            worker.start()
+            val request = runBlocking {
+                AgentRunUiState.state.first { it.headerMascotAnimationRequest != null }.headerMascotAnimationRequest!!
+            }
+            token.cancel()
+            worker.join()
+
+            assertEquals(
+                "{\"animation\":\"working\",\"outcome\":\"cancelled\"}",
+                result.get().content,
+            )
+            assertNull(AgentRunUiState.state.value.headerMascotAnimationRequest)
+            assertEquals("cancelled", AgentRunUiState.state.value.headerMascotAnimationResult?.outcome)
+            assertEquals(request.requestId, AgentRunUiState.state.value.headerMascotAnimationResult?.requestId)
+        } finally {
+            token.cancel()
+            worker.join()
+            UserDecisionUiAvailability.setChatVisible(false)
+            AgentRunUiState.stopPendingGeneration(session, 101L)
+            AgentRunUiState.resetSession("$session-cleanup")
+        }
+    }
+
+    @Test fun uiDismissalResolvesThePublishedAnimationRequestWithItsOutcome() {
+        val session = "mascot-dismiss-test"
+        val generation = 102L
+        AgentRunUiState.resetSession(session)
+        AgentRunUiState.beginRun(session, "Play the working animation")
+        AgentRunUiState.bindGeneration(session, generation)
+        AgentRunUiState.headerMascotAvailabilityChanged(HeaderMascotAvailability(
+            sessionId = session, visible = true, resumed = true, availableAnimationIds = setOf("working"),
+        ))
+        UserDecisionUiAvailability.setChatVisible(true)
+        val toolResult = AtomicReference<CoreToolResult>()
+        val worker = Thread {
+            toolResult.set(MascotAnimationTool(session).execute(mapOf("animation" to "working"), CancellationToken.uncancellable()))
+        }
+        try {
+            worker.start()
+            val published = runBlocking {
+                AgentRunUiState.state.first { it.headerMascotAnimationRequest != null }.headerMascotAnimationRequest!!
+            }
+            val tracker = JarvysHeaderRequestedCompletionTracker()
+            val request = JarvysHeaderOneShotRequest(
+                JarvysHeaderOneShotKind.REQUESTED, published.requestId, null, published.animationId,
+            )
+            tracker.dismiss(request) { eventId, finished, reason ->
+                AgentRunUiState.completeHeaderMascotAnimationRequest(
+                    published.sessionId, eventId, if (finished) "finished" else "rejected", reason,
+                )
+            }
+            worker.join()
+
+            assertEquals("{\"animation\":\"working\",\"outcome\":\"rejected\",\"reason\":\"The mascot header was removed before playback finished.\"}",
+                toolResult.get().content)
+            assertNull(AgentRunUiState.state.value.headerMascotAnimationRequest)
+            assertEquals("rejected", AgentRunUiState.state.value.headerMascotAnimationResult?.outcome)
+        } finally {
+            worker.join()
+            UserDecisionUiAvailability.setChatVisible(false)
+            AgentRunUiState.stopPendingGeneration(session, generation)
+            AgentRunUiState.resetSession("$session-cleanup")
+        }
     }
 
     @Test fun headerAvailabilityHonorsVisibilityResumeReducedMotionAndLoadedAssets() {
@@ -61,7 +152,7 @@ class MascotAnimationToolTest {
     }
 
     @Test fun coreRegistryListsTheToolOnceAndDelegatedCatalogExcludesIt() {
-        val tool = MascotAnimationTool("main-chat") { _, _ -> null }
+        val tool = MascotAnimationTool("main-chat") { _, animation, _ -> HeaderMascotAnimationResult(animation, "finished") }
         val registry = CoreToolRegistry(listOf(tool))
 
         assertEquals(listOf(MascotAnimationTool.NAME), registry.names())

@@ -143,7 +143,7 @@ private fun JarvysMascotAccountMenuSession(
             if (originalHeaderAnimation) {
                 val context = LocalContext.current.applicationContext
                 // Deliberately independent of the disabled legacy experiment/consent gate.
-                val motionAllowed = surfaceVisible && resumed && viewport.visible
+                val motionAllowed = eligible
                 val reducedMotion = LocalReducedMotion.current
                 val remoteEligible = motionAllowed && !reducedMotion
                 val animationAssets = if (remoteEligible) mapOf(
@@ -205,8 +205,12 @@ private fun JarvysMascotAccountMenuSession(
                     requestedAnimationEventId = requestedAnimation?.requestId,
                     requestedAnimationId = requestedAnimation?.animationId,
                     requestedAnimationAsset = requestedAnimation?.let { animationAssets[it.animationId] },
-                    onRequestedAnimationFinished = { requestId ->
-                        requestedAnimation?.let { AgentRunUiState.clearHeaderMascotAnimationRequest(it.sessionId, requestId) }
+                    onRequestedAnimationFinished = { requestId, finished, reason ->
+                        requestedAnimation?.takeIf { it.requestId == requestId }?.let { request ->
+                            AgentRunUiState.completeHeaderMascotAnimationRequest(
+                                request.sessionId, requestId, if (finished) "finished" else "rejected", reason,
+                            )
+                        }
                     },
                 )
             } else {

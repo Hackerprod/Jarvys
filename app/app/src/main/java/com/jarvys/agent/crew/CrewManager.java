@@ -122,7 +122,6 @@ public final class CrewManager implements AutoCloseable {
 
         void sleep(long millis, CancellationToken token);
     }
-    private static final String REANIMATION_PROMPT = "Continue the same mission using the retained conversation, completed work, and any new messages. Re-evaluate the latest guidance, perform any requested corrections or review, and report when this cycle is complete.";
 
     public static final class Bot {
         public final String id;
@@ -1141,7 +1140,7 @@ public final class CrewManager implements AutoCloseable {
                     bot.waitingReason = "";
                     bot.reported = false;
                 }
-                String request = bot.completedCycles == 0 ? bot.mission : REANIMATION_PROMPT;
+                String request = bot.completedCycles == 0 ? bot.mission : "";
                 CoreAgentLoop.ProgressListener progress = progressFactory == null ? null : progressFactory.create(bot);
                 CoreAgentLoop.Result result = resultPresentation.apply(loop.run(request, bot.transcript, token, progress));
                 bot.transcript = loop.transcriptSnapshot();

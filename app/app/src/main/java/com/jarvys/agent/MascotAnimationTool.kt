@@ -5,7 +5,7 @@ import com.jarvys.agent.ui.mascot.jarvysHeaderAnimationIds
 /** Main-chat-only request for one locally available header animation. */
 class MascotAnimationTool internal constructor(
     private val sessionId: String,
-    private val request: (String, String) -> String?,
+    private val request: (String, String, CancellationToken) -> HeaderMascotAnimationResult,
 ) : CoreTool {
     constructor(sessionId: String) : this(sessionId, AgentRunUiState::requestHeaderMascotAnimation)
 
@@ -43,9 +43,8 @@ class MascotAnimationTool internal constructor(
         } catch (invalid: IllegalArgumentException) {
             return CoreToolResult.failure(invalid.message ?: "Invalid mascot animation request.")
         }
-        val failure = request(sessionId, animation)
-        return if (failure == null) CoreToolResult.success("animation requested: $animation")
-        else CoreToolResult.failure(failure)
+        val result = request(sessionId, animation, token)
+        return CoreToolResult.success(result.toJson())
     }
 
     private fun parseAnimation(arguments: Map<String, Any>?): String {
@@ -63,7 +62,29 @@ class MascotAnimationTool internal constructor(
     companion object {
         const val NAME = "mascot_animation"
         val ANIMATIONS = jarvysHeaderAnimationIds
-        const val GUIDANCE = "Use mascot_animation only when the user asks to play a header animation. It plays once, then resumes the current agent state. It is available only while the main-chat mascot is visible, reduced motion is off, and the selected animation asset is available."
-        private const val DESCRIPTION = "Play one available Jarvys header animation once in the active main chat."
+        const val GUIDANCE = "mascot_animation requests one playback of an available header animation in the active main chat. Its JSON result reports the animation and whether playback finished, was rejected with the UI's reason, or was cancelled with the run. The request is available while the main-chat mascot is active, visible, and not in reduced-motion mode, with the selected asset loaded."
+        private const val DESCRIPTION = "Request one playback of an available Jarvys header animation in the active main chat and return its UI-reported outcome."
+    }
+}
+
+private fun HeaderMascotAnimationResult.toJson(): String = buildString {
+    append("{\"animation\":\"").append(jsonEscape(animationId)).append("\",\"outcome\":\"")
+        .append(jsonEscape(outcome)).append('"')
+    reason?.let { append(",\"reason\":\"").append(jsonEscape(it)).append('"') }
+    append('}')
+}
+
+private fun jsonEscape(value: String): String = buildString(value.length) {
+    value.forEach { character ->
+        when (character) {
+            '\\' -> append("\\\\")
+            '"' -> append("\\\"")
+            '\b' -> append("\\b")
+            '\u000C' -> append("\\f")
+            '\n' -> append("\\n")
+            '\r' -> append("\\r")
+            '\t' -> append("\\t")
+            else -> if (character < ' ') append("\\u%04x".format(character.code)) else append(character)
+        }
     }
 }

@@ -206,11 +206,17 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
         }
       }
     }
-    if (ConversationTurn.hasCurrentUserMessage(history)
-        && (text == null || text.isEmpty())
-        && (images == null || images.isEmpty())) return input;
+    boolean hasPrompt = text != null && !text.trim().isEmpty();
+    boolean hasImage = false;
+    if (images != null) for (ScreenData image : images) hasImage |= image != null;
+    if (!hasPrompt && !hasImage) {
+      if (input.length() == 0) throw new IllegalArgumentException("Responses input requires a prompt, image, or transcript.");
+      return input;
+    }
     JSONArray content = new JSONArray();
-    content.put(new JSONObject().put("type", "input_text").put("text", text == null ? "" : text));
+    if (hasPrompt || !hasImage) {
+      content.put(new JSONObject().put("type", "input_text").put("text", text == null ? "" : text));
+    }
     if (images != null) {
       for (ScreenData image : images) {
         if (image == null) continue;

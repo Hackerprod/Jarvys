@@ -249,6 +249,48 @@ public class MainChatToolContinuityTest {
         .anyMatch(t -> t.content.contains("Wrote index.html")));
   }
 
+  @Test public void compactedToolTranscriptWithEmptyPromptSendsSummaryWithoutEmptyUserTurn() throws Exception {
+    File files = temporary.newFolder();
+    String session = "compacted-tool-empty-prompt";
+    LocalRunStore store = new LocalRunStore(files);
+    store.appendConversationMessage(session, "user", "Inspect the project");
+    List<ConversationTurn> toolTranscript = Arrays.asList(
+        new ConversationTurn("user", "Inspect the project", 0),
+        ConversationTurn.toolCalls("", Collections.singletonList(
+            new ModelReply.Call("inspect-call", "inspect", Collections.emptyMap()))),
+        ConversationTurn.toolResult("inspect-call", "inspect", "Project contents inspected"));
+    ModelProviderClient summarizer = new ModelProviderClient() {
+      @Override public ModelReply complete(String system, String prompt, List<com.jarvys.agent.device.ScreenData> images,
+          List<ToolSpec> tools, String session, CancellationToken token) {
+        return new ModelReply("The project contents were inspected.", Collections.emptyList());
+      }
+      @Override public ModelReply completeConversation(String system, List<ConversationTurn> history, String prompt,
+          List<com.jarvys.agent.device.ScreenData> images, List<ToolSpec> tools, String session, CancellationToken token) {
+        return complete(system, prompt, images, tools, session, token);
+      }
+    };
+    ConversationCompactor compactor = new ConversationCompactor(session, new CoreAgentModel(summarizer, session), store);
+
+    ConversationCompactor.Outcome compacted = compactor.compact(toolTranscript, 32_768, "test",
+        ConversationCompactionPolicy.Mode.ALL, CancellationToken.uncancellable(), null);
+
+    assertEquals(1, compacted.context.size());
+    assertEquals(ConversationTurn.Kind.COMPACTION_SUMMARY, compacted.context.get(0).kind);
+    Method codex = OpenAICodexResponsesClient.class.getDeclaredMethod("userInput",
+        String.class, List.class, List.class);
+    codex.setAccessible(true);
+    JSONArray codexInput = (JSONArray) codex.invoke(null, "", Collections.emptyList(), compacted.context);
+    assertEquals(1, codexInput.length());
+    assertTrue(codexInput.getJSONObject(0).getString("content").contains("project contents were inspected"));
+
+    Method chat = OpenRouterClient.class.getDeclaredMethod("conversationMessages",
+        String.class, List.class, String.class, List.class);
+    chat.setAccessible(true);
+    JSONArray chatMessages = (JSONArray) chat.invoke(null, "system", compacted.context, "", Collections.emptyList());
+    assertEquals(2, chatMessages.length());
+    assertTrue(chatMessages.getJSONObject(1).getString("content").contains("project contents were inspected"));
+  }
+
   @Test public void persistenceFailureStopsBeforeAnyToolEffect() throws Exception {
     File files = temporary.newFolder(); String session = "failed-journal";
     LocalRunStore store = new LocalRunStore(files);

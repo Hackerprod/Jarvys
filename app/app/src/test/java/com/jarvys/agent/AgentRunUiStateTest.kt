@@ -4,6 +4,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+import java.util.concurrent.atomic.AtomicReference
 
 class AgentRunUiStateTest {
     @Test
@@ -15,6 +18,94 @@ class AgentRunUiStateTest {
         assertFalse(AgentRunUiState.state.value.compacting)
         assertFalse(AgentRunUiState.state.value.events.any { it.kind == "compaction" })
         AgentRunUiState.resetSession("compact-stop-cleanup")
+    }
+
+    @Test
+    fun mascotAnimationResultIsCorrelatedByRequestIdAndAvailabilityCleanupResolvesWaiter() {
+        val session = "mascot-result-test"
+        AgentRunUiState.resetSession(session)
+        AgentRunUiState.beginRun(session, "Play working")
+        AgentRunUiState.bindGeneration(session, 201L)
+        AgentRunUiState.headerMascotAvailabilityChanged(HeaderMascotAvailability(
+            sessionId = session, visible = true, resumed = true, availableAnimationIds = setOf("working"),
+        ))
+        UserDecisionUiAvailability.setChatVisible(true)
+        val firstResult = AtomicReference<HeaderMascotAnimationResult>()
+        val first = Thread {
+            firstResult.set(AgentRunUiState.requestHeaderMascotAnimation(
+                session, "working", CancellationToken.uncancellable(),
+            ))
+        }
+        try {
+            first.start()
+            val firstRequest = runBlocking {
+                AgentRunUiState.state.first { it.headerMascotAnimationRequest != null }.headerMascotAnimationRequest!!
+            }
+            AgentRunUiState.completeHeaderMascotAnimationRequest(session, firstRequest.requestId, "finished")
+            first.join()
+            assertEquals(firstRequest.requestId, firstResult.get().requestId)
+            assertEquals("finished", firstResult.get().outcome)
+            assertEquals(firstRequest.requestId, AgentRunUiState.state.value.headerMascotAnimationResult?.requestId)
+
+            val cleanupResult = AtomicReference<HeaderMascotAnimationResult>()
+            val second = Thread {
+                cleanupResult.set(AgentRunUiState.requestHeaderMascotAnimation(
+                    session, "working", CancellationToken.uncancellable(),
+                ))
+            }
+            second.start()
+            val secondRequest = runBlocking {
+                AgentRunUiState.state.first { it.headerMascotAnimationRequest != null }.headerMascotAnimationRequest!!
+            }
+            AgentRunUiState.clearHeaderMascotAvailability(session)
+            second.join()
+            assertEquals(secondRequest.requestId, cleanupResult.get().requestId)
+            assertEquals("rejected", cleanupResult.get().outcome)
+            assertTrue(cleanupResult.get().reason!!.contains("no longer available"))
+        } finally {
+            UserDecisionUiAvailability.setChatVisible(false)
+            AgentRunUiState.stopPendingGeneration(session, 201L)
+            AgentRunUiState.resetSession("$session-cleanup")
+        }
+    }
+
+    @Test
+    fun discardedMascotAnimationResolvesOnlyItsRequestAndStaleGenerationCannotResolveIt() {
+        val session = "mascot-discard-test"
+        val generation = 202L
+        AgentRunUiState.resetSession(session)
+        AgentRunUiState.beginRun(session, "Play working")
+        AgentRunUiState.bindGeneration(session, generation)
+        AgentRunUiState.headerMascotAvailabilityChanged(HeaderMascotAvailability(
+            sessionId = session, visible = true, resumed = true, availableAnimationIds = setOf("working"),
+        ))
+        UserDecisionUiAvailability.setChatVisible(true)
+        val result = AtomicReference<HeaderMascotAnimationResult>()
+        val waiter = Thread {
+            result.set(AgentRunUiState.requestHeaderMascotAnimation(
+                session, "working", CancellationToken.uncancellable(),
+            ))
+        }
+        try {
+            waiter.start()
+            val request = runBlocking {
+                AgentRunUiState.state.first { it.headerMascotAnimationRequest != null }.headerMascotAnimationRequest!!
+            }
+
+            AgentRunUiState.completeGeneration(session, generation - 1, "stale", "COMPLETED", "stale", "", 0L)
+            assertEquals(request.requestId, AgentRunUiState.state.value.headerMascotAnimationRequest?.requestId)
+            assertEquals(null, result.get())
+
+            AgentRunUiState.clearHeaderMascotAnimationRequest(session, request.requestId)
+            waiter.join()
+            assertEquals(request.requestId, result.get().requestId)
+            assertEquals("rejected", result.get().outcome)
+            assertEquals(null, AgentRunUiState.state.value.headerMascotAnimationRequest)
+        } finally {
+            UserDecisionUiAvailability.setChatVisible(false)
+            AgentRunUiState.stopPendingGeneration(session, generation)
+            AgentRunUiState.resetSession("$session-cleanup")
+        }
     }
 
     @Test

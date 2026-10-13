@@ -37,7 +37,6 @@ import com.jarvys.agent.crew.rememberMascotResumed
 import com.jarvys.agent.ui.motion.LocalReducedMotion
 import com.jarvys.agent.ui.motion.rememberMotionViewport
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.delay
 
 /** Main-header renderer reconstructed from APK95 contracts, not a claim of historical source identity. */
 @Composable
@@ -56,7 +55,7 @@ internal fun JarvysHeaderMascot(
     requestedAnimationEventId: String? = null,
     requestedAnimationId: String? = null,
     requestedAnimationAsset: JarvysVerifiedAnimation? = null,
-    onRequestedAnimationFinished: (String) -> Unit = {},
+    onRequestedAnimationFinished: (String, Boolean, String?) -> Unit = { _, _, _ -> },
     onNativePlaybackChanged: (Boolean) -> Unit = {},
 ) {
     val viewport = rememberMotionViewport()
@@ -69,11 +68,32 @@ internal fun JarvysHeaderMascot(
             JarvysHeaderPlaybackMemory.requests)
     }
     var oneShotRequest by remember { mutableStateOf<JarvysHeaderOneShotRequest?>(null) }
+    val latestOneShotRequest by rememberUpdatedState(oneShotRequest)
+    val latestRequestedAnimationEventId by rememberUpdatedState(requestedAnimationEventId)
+    val latestRequestedAnimationFinished by rememberUpdatedState(onRequestedAnimationFinished)
+    val requestCompletion = remember { JarvysHeaderRequestedCompletionTracker() }
+    fun reportRequestedAnimationFinished(eventId: String, finished: Boolean, reason: String?) {
+        requestCompletion.report(eventId, finished, reason, latestRequestedAnimationFinished)
+    }
     val oneShotInputs = JarvysHeaderOneShotInputs(eligible, failedRunId, sadAsset,
         interruptedRunId, interruptedAsset, tauntEventId, tauntAsset,
         requestedAnimationEventId, requestedAnimationId, requestedAnimationAsset)
-    LaunchedEffect(oneShotInputs) { oneShotRequest = oneShots.update(oneShotInputs) }
-    DisposableEffect(oneShots) { onDispose { oneShots.clear() } }
+    LaunchedEffect(oneShotInputs) {
+        val previous = oneShotRequest
+        val next = oneShots.update(oneShotInputs)
+        oneShotRequest = next
+        requestCompletion.reconcile(previous, next, requestedAnimationEventId, latestRequestedAnimationFinished)
+    }
+    DisposableEffect(oneShots) {
+        onDispose {
+            val activeRequest = latestOneShotRequest?.takeIf { it.kind == JarvysHeaderOneShotKind.REQUESTED }
+            requestCompletion.dismiss(activeRequest, latestRequestedAnimationFinished)
+            latestRequestedAnimationEventId?.takeIf { it != activeRequest?.eventId }?.let {
+                requestCompletion.report(it, false, "The mascot header was removed before playback finished.", latestRequestedAnimationFinished)
+            }
+            oneShots.clear()
+        }
+    }
     val activeOneShot = oneShotRequest?.takeIf(oneShotInputs::isCurrent)
     var failedActivity by remember { mutableStateOf<JarvysHeaderActivityRequest?>(null) }
     val activeActivity = jarvysHeaderActivityRequest(requestedActivity, activityKey, activityAsset)
@@ -92,11 +112,11 @@ internal fun JarvysHeaderMascot(
                 HeaderTimeline(
                     timeline = timeline,
                     remoteAsset = remoteAsset,
-                    onRemoteStopped = {
+                    onRemoteStopped = { finished, reason ->
                         if (activeOneShot != null) {
                             oneShotRequest = oneShots.finish(activeOneShot)
                             if (activeOneShot.kind == JarvysHeaderOneShotKind.REQUESTED)
-                                onRequestedAnimationFinished(activeOneShot.eventId)
+                                reportRequestedAnimationFinished(activeOneShot.eventId, finished, reason)
                         }
                         else failedActivity = activeActivity
                     },
@@ -114,7 +134,7 @@ internal fun JarvysHeaderMascot(
 private fun HeaderTimeline(
     timeline: JarvysHeaderTimeline,
     remoteAsset: JarvysVerifiedAnimation?,
-    onRemoteStopped: () -> Unit,
+    onRemoteStopped: (Boolean, String?) -> Unit,
     onNativePlaybackChanged: (Boolean) -> Unit,
 ) {
     val context = LocalContext.current
@@ -125,16 +145,30 @@ private fun HeaderTimeline(
     var drawn by remember { mutableStateOf(false) }
     val latestFinished by rememberUpdatedState(onRemoteStopped)
     val latestNative by rememberUpdatedState(onNativePlaybackChanged)
-    fun current() = ticket.active && !failed && owner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
-    fun fail() {
+    fun lifecycleResumed() = owner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+    fun current() = ticket.active && !failed && lifecycleResumed()
+    fun reportStopped(finished: Boolean, reason: String?) {
+        if (!ticket.active || ticket.terminalReported) return
+        ticket.terminalReported = true
+        if (timeline.remoteId != null || timeline.oneShot) latestFinished(finished, reason)
+    }
+    fun fail(reason: String = "The requested animation could not be played.") {
         if (!ticket.active || failed) return
         failed = true
         bytes = null
         drawn = false
         latestNative(false)
-        if (timeline.remoteId != null || timeline.oneShot) latestFinished()
+        reportStopped(false, reason)
     }
-    DisposableEffect(ticket) { onDispose { ticket.active = false; latestNative(false) } }
+    DisposableEffect(ticket) {
+        onDispose {
+            if (!ticket.terminalReported && (timeline.remoteId != null || timeline.oneShot)) {
+                reportStopped(false, "Playback was dismissed before finishing.")
+            }
+            ticket.active = false
+            latestNative(false)
+        }
+    }
     LaunchedEffect(ticket) {
         var stage = AnimationStage.INTEGRITY
         try {
@@ -143,13 +177,16 @@ private fun HeaderTimeline(
                 require(asset.animationId == timeline.remoteId)
                 JarvysHeaderAnimationAssets.remote(context, asset)
             } else JarvysHeaderAnimationAssets.idle(context)
-            if (!current()) return@LaunchedEffect
+            if (!current()) {
+                if (ticket.active && !lifecycleResumed()) fail("The main chat mascot is no longer active.")
+                return@LaunchedEffect
+            }
             headerDiagnostic(context, timeline, stage, AnimationStatus.READY)
             stage = AnimationStage.INIT
             headerDiagnostic(context, timeline, stage, AnimationStatus.STARTED)
             if (!BotMascotPlaybackSupport.initialize(context)) {
                 headerDiagnostic(context, timeline, stage, AnimationStatus.FAILED)
-                fail(); return@LaunchedEffect
+                fail("Mascot playback could not be initialized."); return@LaunchedEffect
             }
             headerDiagnostic(context, timeline, stage, AnimationStatus.READY)
             if (current()) bytes = loaded
@@ -158,25 +195,23 @@ private fun HeaderTimeline(
         catch (_: LinkageError) { headerDiagnostic(context, timeline, stage, AnimationStatus.FAILED); fail() }
         catch (_: OutOfMemoryError) { headerDiagnostic(context, timeline, stage, AnimationStatus.FAILED); fail() }
     }
-    LaunchedEffect(bytes) {
-        if (bytes == null) return@LaunchedEffect
-        delay(15_000)
-        if (current() && !drawn) {
-            headerDiagnostic(context, timeline, AnimationStage.TIMEOUT, AnimationStatus.FAILED)
-            fail()
-        }
-    }
     val loaded = bytes
     if (loaded != null && !failed) AndroidView(
         modifier = Modifier.fillMaxSize().testTag("jarvys-header-rive"),
         factory = { androidContext ->
             try {
                 HeaderRiveView(androidContext, owner, timeline,
-                    onFrame = { if (current()) {
-                        drawn = true; latestNative(true)
-                        headerDiagnostic(context, timeline, AnimationStage.FIRST_FRAME, AnimationStatus.READY)
-                    } },
-                    onFinished = { if (current()) latestFinished() },
+                    onFrame = {
+                        if (ticket.active && !lifecycleResumed()) fail("The main chat mascot is no longer active.")
+                        else if (current()) {
+                            drawn = true; latestNative(true)
+                            headerDiagnostic(context, timeline, AnimationStage.FIRST_FRAME, AnimationStatus.READY)
+                        }
+                    },
+                    onFinished = {
+                        if (ticket.active && !lifecycleResumed()) fail("The main chat mascot is no longer active.")
+                        else if (current()) reportStopped(true, null)
+                    },
                     onFailure = { fail() },
                 ).also { it.load(loaded) }
             } catch (_: Exception) { headerDiagnostic(context, timeline, AnimationStage.IMPORT, AnimationStatus.FAILED); fail(); View(androidContext) }
@@ -189,7 +224,7 @@ private fun HeaderTimeline(
     if (!drawn || failed) JarvysMascotIcon(Modifier.fillMaxSize())
 }
 
-private class HeaderPlaybackTicket(var active: Boolean = true)
+private class HeaderPlaybackTicket(var active: Boolean = true, var terminalReported: Boolean = false)
 
 /** Only original in-band images are handled. A failed callback never delegates to a CDN. */
 private class HeaderEmbeddedAssetLoader(context: Context, private val timeline: JarvysHeaderTimeline) : FileAssetLoader() {

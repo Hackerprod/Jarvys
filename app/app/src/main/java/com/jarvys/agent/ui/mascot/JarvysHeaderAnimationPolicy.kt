@@ -165,8 +165,9 @@ internal class JarvysHeaderOneShotController(
                 JarvysHeaderOneShotRequest(kind, id, asset, animationId) else null
         }
         active = when {
-            freshTap -> request(JarvysHeaderOneShotKind.TAUNT)
+            active?.kind == JarvysHeaderOneShotKind.REQUESTED -> active
             freshRequest -> request(JarvysHeaderOneShotKind.REQUESTED)
+            freshTap -> request(JarvysHeaderOneShotKind.TAUNT)
             active?.kind == JarvysHeaderOneShotKind.TAUNT -> active
             inputs.failedRunId != null && inputs.interruptedRunId != null -> null
             freshFailure -> request(JarvysHeaderOneShotKind.SAD)
@@ -180,6 +181,32 @@ internal class JarvysHeaderOneShotController(
         return active
     }
     fun clear() { active = null }
+}
+
+/** Reports every requested event that UI admission or lifetime discards exactly once. */
+internal class JarvysHeaderRequestedCompletionTracker {
+    private val reported = mutableSetOf<String>()
+
+    fun report(eventId: String, finished: Boolean, reason: String?, callback: (String, Boolean, String?) -> Unit) {
+        if (reported.add(eventId)) callback(eventId, finished, reason)
+    }
+
+    fun reconcile(
+        previous: JarvysHeaderOneShotRequest?,
+        current: JarvysHeaderOneShotRequest?,
+        publishedEventId: String?,
+        callback: (String, Boolean, String?) -> Unit,
+    ) {
+        previous?.takeIf { it.kind == JarvysHeaderOneShotKind.REQUESTED && current?.eventId != it.eventId }
+            ?.let { report(it.eventId, false, "The animation request was no longer eligible for playback.", callback) }
+        publishedEventId?.takeIf { current?.kind != JarvysHeaderOneShotKind.REQUESTED || current.eventId != it }
+            ?.let { report(it, false, "The animation request could not be admitted for playback.", callback) }
+    }
+
+    fun dismiss(request: JarvysHeaderOneShotRequest?, callback: (String, Boolean, String?) -> Unit) {
+        request?.takeIf { it.kind == JarvysHeaderOneShotKind.REQUESTED }
+            ?.let { report(it.eventId, false, "The mascot header was removed before playback finished.", callback) }
+    }
 }
 
 /** A descriptive routing table, never admission for historical terminal modes. */

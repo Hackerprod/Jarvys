@@ -173,16 +173,16 @@ class MessageReactionTest {
     }
 
     @Test fun failedInitialProviderRequestRetainsTargetAndSuccessfulContinuationCannotReExposeIt() {
-        val id = store.appendConversationMessage(session, "user", "Continue.")
+        val id = store.appendConversationMessage(session, "user", "A real user follow-up.")
         val tool = MessageReactionTool(store, session)
-        val firstAttempt = tool.prepareModelMetadata(emptyList(), "Continue.")
+        val firstAttempt = tool.prepareModelMetadata(emptyList(), "A real user follow-up.")
         assertTrue(firstAttempt.contains(id))
-        assertEquals(firstAttempt, tool.prepareModelMetadata(emptyList(), "Continue."))
+        assertEquals(firstAttempt, tool.prepareModelMetadata(emptyList(), "A real user follow-up."))
         tool.modelRequestCompleted()
-        val afterCompaction = tool.prepareModelMetadata(listOf(ConversationTurn.compactionSummary("past", 1)), "Continue.")
+        val afterCompaction = tool.prepareModelMetadata(listOf(ConversationTurn.compactionSummary("past", 1)), "A real user follow-up.")
         assertFalse(afterCompaction.contains(id))
         assertFalse(tool.execute(args(id, "👍"), token).success)
-        val restored = tool.prepareModelMetadata(listOf(ConversationTurn("user", "Continue.", 0)), "Continue.")
+        val restored = tool.prepareModelMetadata(listOf(ConversationTurn("user", "A real user follow-up.", 0)), "A real user follow-up.")
         assertTrue(restored.contains(id))
         assertFalse(restored.contains("separate from the transcript"))
     }
@@ -196,7 +196,7 @@ class MessageReactionTest {
         assertTrue(tool.execute(args(latest, "🎉"), token).success)
         store.appendCompaction(session, "past", 2, "manual", "sliding_window", 2)
         val reloaded = store.loadConversationContext(session)
-        val metadata = tool.prepareModelMetadata(reloaded, "Continue.")
+        val metadata = tool.prepareModelMetadata(reloaded, "A real user follow-up.")
         assertFalse(metadata.contains(first)); assertTrue(metadata.contains(latest))
         assertFalse(metadata.contains("separate from the transcript"))
         assertFalse(tool.execute(args(first, "👀"), token).success)

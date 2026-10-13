@@ -49,4 +49,31 @@ class JarvysHeaderAnimationPolicyTest {
         assertNull(jarvysHeaderRequestedTimeline(null))
         assertNull(jarvysHeaderRequestedTimeline("unknown"))
     }
+
+    @Test fun requestedAnimationRejectedOnAdmissionOrDismissalReportsOneOutcome() {
+        val controller = JarvysHeaderOneShotController(
+            JarvysFailurePlaybackGate(), JarvysFailurePlaybackGate(), JarvysHeaderTapPlaybackGate(),
+            JarvysHeaderTapPlaybackGate(),
+        )
+        val tracker = JarvysHeaderRequestedCompletionTracker()
+        val outcomes = mutableListOf<Pair<String, Boolean>>()
+        val callback: (String, Boolean, String?) -> Unit = { id, finished, _ -> outcomes += id to finished }
+        val requestedId = "not-admitted"
+        val hidden = JarvysHeaderOneShotInputs(
+            eligible = false, requestedAnimationEventId = requestedId, requestedAnimationId = "idle",
+        )
+
+        val firstAdmission = controller.update(hidden)
+        assertNull(firstAdmission)
+        tracker.reconcile(null, firstAdmission, requestedId, callback)
+        val laterAdmission = controller.update(hidden.copy(eligible = true))
+        assertNull(laterAdmission)
+        tracker.reconcile(null, laterAdmission, requestedId, callback)
+
+        val dismissed = JarvysHeaderOneShotRequest(JarvysHeaderOneShotKind.REQUESTED, "unmounted", null, "idle")
+        tracker.dismiss(dismissed, callback)
+        tracker.dismiss(dismissed, callback)
+
+        assertEquals(listOf("not-admitted" to false, "unmounted" to false), outcomes)
+    }
 }

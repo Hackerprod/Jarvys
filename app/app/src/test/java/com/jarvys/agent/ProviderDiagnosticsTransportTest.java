@@ -202,9 +202,9 @@ public class ProviderDiagnosticsTransportTest {
                 new ConversationTurn("user", "synthetic task"),
                 ConversationTurn.toolCalls(call.text, call.calls),
                 ConversationTurn.toolResult("codex-call-one", "fixture_read", "synthetic output")),
-                "Continue.", Collections.singletonList(toolSpec()), SESSION, CancellationToken.uncancellable());
+                "", Collections.singletonList(toolSpec()), SESSION, CancellationToken.uncancellable());
         JSONArray input = second.wire().getJSONArray("input");
-        assertEquals(4, input.length());
+        assertEquals(3, input.length());
         assertEquals("synthetic task", input.getJSONObject(0).getString("content"));
         assertEquals("function_call", input.getJSONObject(1).getString("type"));
         assertEquals("codex-call-one", input.getJSONObject(1).getString("call_id"));
@@ -212,7 +212,6 @@ public class ProviderDiagnosticsTransportTest {
         assertEquals("function_call_output", input.getJSONObject(2).getString("type"));
         assertEquals("codex-call-one", input.getJSONObject(2).getString("call_id"));
         assertEquals("synthetic output", input.getJSONObject(2).getString("output"));
-        assertEquals("Continue.", input.getJSONObject(3).getJSONArray("content").getJSONObject(0).getString("text"));
         assertEquals("finished", answer.text);
         assertTrue(answer.diagnostics.isSuccessfulFinalAnswer());
     }
@@ -353,9 +352,9 @@ public class ProviderDiagnosticsTransportTest {
             assertEquals(1, occurrences);
         }
         assertEquals(2, one.wire().getJSONArray("messages").length());
-        assertEquals(5, two.wire().getJSONArray("messages").length());
-        assertEquals(7, three.wire().getJSONArray("messages").length());
-        assertEquals("Continue.", three.wire().getJSONArray("messages").getJSONObject(6).getString("content"));
+        assertEquals(4, two.wire().getJSONArray("messages").length());
+        assertEquals(6, three.wire().getJSONArray("messages").length());
+        assertEquals("tool", three.wire().getJSONArray("messages").getJSONObject(5).getString("role"));
         List<ConversationTurn> restored = new LocalRunStore(files).loadConversationContext(SESSION);
         assertEquals(2, restored.stream().filter(t -> t.kind == ConversationTurn.Kind.TOOL_CALLS).count());
         assertEquals(2, restored.stream().filter(t -> t.kind == ConversationTurn.Kind.TOOL_RESULT).count());

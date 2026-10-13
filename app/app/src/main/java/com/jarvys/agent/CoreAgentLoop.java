@@ -454,17 +454,20 @@ public final class CoreAgentLoop {
 
     public Result run(String request, List<ConversationTurn> previousTranscript, List<ChatAttachment> attachments, CancellationToken token, ProgressListener listener) {
         List<ChatAttachment> currentAttachments = attachments == null ? Collections.emptyList() : attachments;
-        if ((request == null || request.trim().isEmpty()) && currentAttachments.isEmpty()) {
+        if ((request == null || request.trim().isEmpty()) && currentAttachments.isEmpty() && turnContextProvider == null) {
             throw new IllegalArgumentException("A user request is required");
         }
         request = request == null ? "" : request;
         String runId = UUID.randomUUID().toString();
         ToolActivity activeActivity = null;
         List<ConversationTurn> transcript = new ArrayList<>(previousTranscript == null ? Collections.emptyList() : previousTranscript);
-        boolean requestInTranscript = !currentAttachments.isEmpty() || turnContextProvider != null;
-        if (requestInTranscript) transcript.add(ConversationTurn.messageWithAttachments("user", request, compactor == null ? -1 : compactor.currentUserMessageIndex(), currentAttachments));
+        boolean hasRunRequest = !request.trim().isEmpty() || !currentAttachments.isEmpty();
+        boolean requestInTranscript = !currentAttachments.isEmpty()
+                || (turnContextProvider != null && !request.trim().isEmpty());
+        if (requestInTranscript && hasRunRequest) transcript.add(ConversationTurn.messageWithAttachments("user", request, compactor == null ? -1 : compactor.currentUserMessageIndex(), currentAttachments));
         updateTranscriptSnapshot(transcript);
         String prompt = requestInTranscript ? "" : request.trim();
+        boolean modelHasInput = hasRunRequest;
         boolean loopRecoveryUsed = false;
         int modelTurns = 0;
         long startedAtMs = System.currentTimeMillis();
@@ -480,14 +483,22 @@ public final class CoreAgentLoop {
                     if (incoming != null) for (IncomingMessage message : incoming) {
                         if (message != null && appliedIncomingIds.add(message.id)) {
                             if (message.genuineUser) {
-                                ConversationTurn userTurn = new ConversationTurn("user", message.content);
-                                transcript.add(userTurn);
-                                protectedGenuineUser = userTurn;
-                                if (compactor != null) compactor.protectGenuineUser(userTurn);
-                            } else appendIncoming(transcript, message);
-                            recordIncorporation(message.inputBinding,
-                                    message.genuineUser ? CrewInputIncorporation.TransportKind.USER : CrewInputIncorporation.TransportKind.INBOX,
-                                    transcript.get(transcript.size() - 1).content);
+                                if (!message.content.trim().isEmpty()) {
+                                    ConversationTurn userTurn = new ConversationTurn("user", message.content);
+                                    transcript.add(userTurn);
+                                    protectedGenuineUser = userTurn;
+                                    if (compactor != null) compactor.protectGenuineUser(userTurn);
+                                    requestInTranscript = true;
+                                    modelHasInput = true;
+                                    recordIncorporation(message.inputBinding, CrewInputIncorporation.TransportKind.USER, userTurn.content);
+                                }
+                            } else {
+                                appendIncoming(transcript, message);
+                                requestInTranscript = true;
+                                modelHasInput = true;
+                                recordIncorporation(message.inputBinding, CrewInputIncorporation.TransportKind.INBOX,
+                                        transcript.get(transcript.size() - 1).content);
+                            }
                         }
                     }
                     List<String> trusted = turnContextProvider.takeTrustedUserMessages();
@@ -497,14 +508,21 @@ public final class CoreAgentLoop {
                             transcript.add(userTurn);
                             protectedGenuineUser = userTurn;
                             if (compactor != null) compactor.protectGenuineUser(userTurn);
+                            requestInTranscript = true;
+                            modelHasInput = true;
                         }
                     }
                     String legacy = turnContextProvider.takeUntrustedContext();
                     if (legacy != null && !legacy.isEmpty()) {
                         appendIncoming(transcript, new IncomingMessage(UUID.randomUUID().toString(), "legacy", legacy, false));
+                        requestInTranscript = true;
+                        modelHasInput = true;
                     }
                 }
                 updateTranscriptSnapshot(transcript);
+                if (!modelHasInput) {
+                    return new Result(runId, "", modelTurns, "COMPLETED", Math.max(0L, System.currentTimeMillis() - startedAtMs));
+                }
                 boolean safetyBounded = false;
                 if (compactor != null) {
                     try {
@@ -583,7 +601,7 @@ public final class CoreAgentLoop {
                 boolean replyTextAlreadyRecorded = false;
                 if (compactor != null) {
                     List<ConversationTurn> postTurn = new ArrayList<>(transcript);
-                    if (!requestInTranscript) {
+                    if (!requestInTranscript && !request.trim().isEmpty()) {
                         postTurn.add(new ConversationTurn("user", request.trim(), compactor.currentUserMessageIndex()));
                     }
                     if (reply.calls.isEmpty()) postTurn.add(new ConversationTurn("assistant", reply.text)); else postTurn.add(ConversationTurn.toolCalls(reply.text, reply.calls));
@@ -613,14 +631,14 @@ public final class CoreAgentLoop {
                         throw new IllegalStateException("Provider returned neither an answer nor a tool call");
                     }
                     if (turnContextProvider != null || checkpointListener != null) {
-                        if (!requestInTranscript) transcript.add(new ConversationTurn("user", request.trim()));
+                        if (!requestInTranscript && !request.trim().isEmpty()) transcript.add(new ConversationTurn("user", request.trim()));
                         if (!replyTextAlreadyRecorded) transcript.add(new ConversationTurn("assistant", answer));
                         updateTranscriptSnapshot(transcript);
                     }
                     emit(listener, "answer", answer);
                     return new Result(runId, answer, modelTurns, "COMPLETED", Math.max(0L, System.currentTimeMillis() - startedAtMs));
                 }
-                if (!requestInTranscript) {
+                if (!requestInTranscript && !request.trim().isEmpty()) {
                     transcript.add(new ConversationTurn("user", request.trim(), compactor == null ? -1 : compactor.currentUserMessageIndex()));
                     requestInTranscript = true;
                 }
@@ -633,6 +651,7 @@ public final class CoreAgentLoop {
                 int remainingResultChars = limits.isUnbounded() ? Integer.MAX_VALUE : budget.toolResultsPerTurnChars;
                 int callCount = limits.maxToolCallsPerTurn == 0 ? reply.calls.size() : Math.min(reply.calls.size(), limits.maxToolCallsPerTurn);
                 String terminalText = null;
+                boolean allExecutedCallsTerminal = callCount > 0;
                 boolean blockedRepeatedCall = false;
                 boolean madeProgress = false;
                 for (int index = 0; index < callCount; index++) {
@@ -663,6 +682,7 @@ public final class CoreAgentLoop {
                     }
                     if (blockMessage != null) {
                         blockedRepeatedCall = true;
+                        allExecutedCallsTerminal = false;
                         toolLifecycle.put(call.id, "NEVER_LAUNCHED");
                         String content = "Tool error: " + blockMessage;
                         transcript.add(ConversationTurn.toolResult(call.id, call.name, content));
@@ -679,6 +699,7 @@ public final class CoreAgentLoop {
                             listener.onToolActivity(activity.event("tool_progress",message,null));
                         }
                     });
+                    allExecutedCallsTerminal &= result.success && result.finishRun;
                     String rawContent = result.content;
                     if (!quietReaction) activeActivity = activity.event("tool_progress",rawContent,result.previewId);
                     madeProgress |= loopDetector.record(call.name, argumentsKey, result.success, rawContent);
@@ -733,8 +754,9 @@ public final class CoreAgentLoop {
                     ModelReply.Call call = reply.calls.get(index);
                     transcript.add(ConversationTurn.toolResult(call.id, call.name, "Tool error: too many tool calls in one model turn"));
                 }
+                if (callCount < reply.calls.size()) allExecutedCallsTerminal = false;
                 updateTranscriptSnapshot(transcript);
-                if (terminalText != null) {
+                if (allExecutedCallsTerminal && terminalText != null) {
                     emit(listener, "answer", terminalText);
                     return new Result(runId, terminalText, modelTurns, "COMPLETED", Math.max(0L, System.currentTimeMillis() - startedAtMs));
                 }
@@ -744,7 +766,7 @@ public final class CoreAgentLoop {
                 } else if (madeProgress) {
                     loopRecoveryUsed = false;
                 }
-                prompt = "Continue.";
+                prompt = "";
             }
         } catch (RuntimeException failure) {
             if (activeActivity != null && listener != null) {

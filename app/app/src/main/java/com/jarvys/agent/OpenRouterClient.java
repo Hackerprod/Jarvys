@@ -228,15 +228,20 @@ public final class OpenRouterClient implements ModelProviderClient {
         }
       }
     }
-    if (ConversationTurn.hasCurrentUserMessage(history)
-        && (userPrompt == null || userPrompt.isEmpty())
-        && (images == null || images.isEmpty())) return messages;
+    boolean hasPrompt = userPrompt != null && !userPrompt.trim().isEmpty();
+    boolean hasImage = false;
+    if (images != null) for (ScreenData image : images) hasImage |= image != null;
+    if (!hasPrompt && !hasImage) {
+      if (history == null || history.isEmpty())
+        throw new IllegalArgumentException("Chat Completions input requires a prompt, image, or transcript.");
+      return messages;
+    }
     JSONObject user = new JSONObject().put("role", "user");
-    if (images == null || images.isEmpty()) {
+    if (!hasImage) {
       user.put("content", userPrompt);
     } else {
-      JSONArray content =
-          new JSONArray().put(new JSONObject().put("type", "text").put("text", userPrompt));
+      JSONArray content = new JSONArray();
+      if (hasPrompt) content.put(new JSONObject().put("type", "text").put("text", userPrompt));
       for (ScreenData image : images) {
         if (image == null) continue;
         JSONObject imageUrl =
@@ -257,13 +262,17 @@ public final class OpenRouterClient implements ModelProviderClient {
     system.put("content", systemPrompt);
     messages.put(system);
 
+    boolean hasPrompt = userPrompt != null && !userPrompt.trim().isEmpty();
+    boolean hasImage = false;
+    if (images != null) for (ScreenData image : images) hasImage |= image != null;
+    if (!hasPrompt && !hasImage) throw new IllegalArgumentException("Chat Completions input requires a prompt or image.");
     JSONObject user = new JSONObject();
     user.put("role", "user");
-    if (images == null || images.isEmpty()) {
+    if (!hasImage) {
       user.put("content", userPrompt);
     } else {
       JSONArray content = new JSONArray();
-      content.put(new JSONObject().put("type", "text").put("text", userPrompt));
+      if (hasPrompt) content.put(new JSONObject().put("type", "text").put("text", userPrompt));
       for (ScreenData image : images) {
         JSONObject imageUrl =
             new JSONObject().put("url", "data:image/jpeg;base64," + image.screenshotBase64);
