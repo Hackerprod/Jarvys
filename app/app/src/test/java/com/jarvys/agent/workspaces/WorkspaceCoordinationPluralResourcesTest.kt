@@ -48,6 +48,18 @@ class WorkspaceCoordinationPluralResourcesTest {
         ))
     }
 
+    @Test @Config(qualifiers = "es-rES")
+    fun spanishMillionCountersUseManyPluralForms() {
+        val resources = RuntimeEnvironment.getApplication().resources
+        val count = 1_000_000
+        assertEquals("1000000 preguntas o bloqueos pueden recibir una respuesta dirigida.",
+            resources.getQuantityString(R.plurals.workspace_coordination_live, count, count))
+        assertEquals("1000000 intentos de respuesta tienen resultado incierto. No reenviar automáticamente.",
+            resources.getQuantityString(R.plurals.workspace_coordination_uncertain, count, count))
+        assertEquals("1000000 solicitudes históricas o sustituidas. Reabrir no reanuda el trabajo.",
+            resources.getQuantityString(R.plurals.workspace_coordination_historical, count, count))
+    }
+
     private fun assertQuantities(resource: Int, expected: List<String>) {
         val resources = RuntimeEnvironment.getApplication().resources
         expected.forEachIndexed { count, text ->

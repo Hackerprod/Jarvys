@@ -1437,15 +1437,18 @@ Se desconoce cómo terminaron. No se repiten automáticamente. Revisa los cambio
 
     <plurals name="workspace_coordination_live">
         <item quantity="one">%1$d pregunta o bloqueo puede recibir una respuesta dirigida.</item>
+        <item quantity="many">%1$d preguntas o bloqueos pueden recibir una respuesta dirigida.</item>
         <item quantity="other">%1$d preguntas o bloqueos pueden recibir una respuesta dirigida.</item>
     </plurals>
     <plurals name="workspace_coordination_uncertain">
         <item quantity="one">%1$d intento de respuesta tiene resultado incierto. No reenviar automáticamente.</item>
+        <item quantity="many">%1$d intentos de respuesta tienen resultado incierto. No reenviar automáticamente.</item>
         <item quantity="other">%1$d intentos de respuesta tienen resultado incierto. No reenviar automáticamente.</item>
     </plurals>
     <string name="workspace_coordination_review">El acceso o la respuesta requiere revisar el permiso en primer plano.</string>
     <plurals name="workspace_coordination_historical">
         <item quantity="one">%1$d solicitud histórica o sustituida. Reabrir no reanuda el trabajo.</item>
+        <item quantity="many">%1$d solicitudes históricas o sustituidas. Reabrir no reanuda el trabajo.</item>
         <item quantity="other">%1$d solicitudes históricas o sustituidas. Reabrir no reanuda el trabajo.</item>
     </plurals>
     <string name="workspace_coordination_page_scope">Solo primera página de coordinación. Puede haber más registros en la bandeja central.</string>

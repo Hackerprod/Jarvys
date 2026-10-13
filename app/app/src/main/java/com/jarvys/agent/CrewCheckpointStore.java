@@ -382,6 +382,7 @@ public final class CrewCheckpointStore {
         }
     }
 
+    @androidx.annotation.RequiresApi(26)
     private static final class Nio {
 
         private Nio() {
