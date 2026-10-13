@@ -78,7 +78,7 @@ public class CoreAgentLoopToolAdmissionTest {
         CoreAgentLoop loop = new CoreAgentLoop((transcript, prompt, declarations, token) -> {
             if (modelCalls.incrementAndGet() == 1) return new ModelReply("", Arrays.asList(
                     new ModelReply.Call("missing", "write", Collections.emptyMap()),
-                    new ModelReply.Call("wrong-type", "write", Collections.singletonMap("path", 5)),
+                    new ModelReply.Call("wrong-type", "write", Collections.singletonMap("path", Collections.singletonMap("nested", 5))),
                     new ModelReply.Call("extra", "write", map("path", "note.txt", "extra", true)),
                     new ModelReply.Call("valid", "write", Collections.singletonMap("path", "note.txt"))));
             return new ModelReply("All validation failures were isolated.", Collections.emptyList());

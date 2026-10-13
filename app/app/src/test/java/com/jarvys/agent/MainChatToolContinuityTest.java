@@ -223,6 +223,7 @@ public class MainChatToolContinuityTest {
     new MainChatTranscriptStore(files, session, store).attach(loop, Collections.emptyList());
     CoreAgentLoop.Result result = loop.run("Write it", Collections.emptyList(), CancellationToken.uncancellable(), null);
     store.appendConversationMessage(session, "assistant", result.text, result.durationMs, result.runId, user, result.outcome);
+    store.appendConversationMessage(session, "user", "next");
     ModelProviderClient summarizer = new ModelProviderClient() {
       @Override public ModelReply complete(String system, String prompt, List<com.jarvys.agent.device.ScreenData> images,
           List<ToolSpec> tools, String session, CancellationToken token) {
@@ -241,7 +242,6 @@ public class MainChatToolContinuityTest {
     List<ConversationTurn> reloaded = new LocalRunStore(files).loadConversationContext(session);
     assertTrue(reloaded.stream().anyMatch(t -> t.content.contains("Wrote index.html")));
     assertFalse(reloaded.stream().anyMatch(t -> t.kind == ConversationTurn.Kind.TOOL_CALLS));
-    store.appendConversationMessage(session, "user", "next");
     store.appendConversationMessage(session, "assistant", "next answer");
     compactor.compact(store.loadConversationContext(session), 32_768, "manual", ConversationCompactionPolicy.Mode.ALL,
         CancellationToken.uncancellable(), null);
@@ -274,21 +274,24 @@ public class MainChatToolContinuityTest {
     ConversationCompactor.Outcome compacted = compactor.compact(toolTranscript, 32_768, "test",
         ConversationCompactionPolicy.Mode.ALL, CancellationToken.uncancellable(), null);
 
-    assertEquals(1, compacted.context.size());
+    assertEquals(2, compacted.context.size());
     assertEquals(ConversationTurn.Kind.COMPACTION_SUMMARY, compacted.context.get(0).kind);
+    assertEquals("Inspect the project", compacted.context.get(1).content);
     Method codex = OpenAICodexResponsesClient.class.getDeclaredMethod("userInput",
         String.class, List.class, List.class);
     codex.setAccessible(true);
     JSONArray codexInput = (JSONArray) codex.invoke(null, "", Collections.emptyList(), compacted.context);
-    assertEquals(1, codexInput.length());
+    assertEquals(2, codexInput.length());
     assertTrue(codexInput.getJSONObject(0).getString("content").contains("project contents were inspected"));
+    assertEquals("Inspect the project", codexInput.getJSONObject(1).getString("content"));
 
     Method chat = OpenRouterClient.class.getDeclaredMethod("conversationMessages",
         String.class, List.class, String.class, List.class);
     chat.setAccessible(true);
     JSONArray chatMessages = (JSONArray) chat.invoke(null, "system", compacted.context, "", Collections.emptyList());
-    assertEquals(2, chatMessages.length());
+    assertEquals(3, chatMessages.length());
     assertTrue(chatMessages.getJSONObject(1).getString("content").contains("project contents were inspected"));
+    assertEquals("Inspect the project", chatMessages.getJSONObject(2).getString("content"));
   }
 
   @Test public void persistenceFailureStopsBeforeAnyToolEffect() throws Exception {
@@ -341,9 +344,11 @@ public class MainChatToolContinuityTest {
     assertTrue(recovered.content.contains("Fresh source after model context compaction"));
   }
 
-  @Test public void pendingIntentCompactedBeforeExecutionRetainsLaterEffectOnReload() throws Exception {
+  @Test public void preRequestPlanAllCompactionRetainsLaterToolEffectOnReload() throws Exception {
     File files = temporary.newFolder(); String session = "pending-compaction";
     LocalRunStore store = new LocalRunStore(files);
+    String earlierUser = store.appendConversationMessage(session, "user", "Earlier request");
+    store.appendConversationMessage(session, "assistant", "Earlier answer", null, "", earlierUser);
     String user = store.appendConversationMessage(session, "user", "Write a page");
     ModelProviderClient summaryProvider = new ModelProviderClient() {
       @Override public ModelReply complete(String system, String prompt, List<com.jarvys.agent.device.ScreenData> images,
@@ -356,11 +361,15 @@ public class MainChatToolContinuityTest {
       }
     };
     ConversationCompactor compactor = new ConversationCompactor(session, new CoreAgentModel(summaryProvider, session), store);
+    ConversationCompactor.Outcome compacted = compactor.compact(store.loadConversationContext(session), 32_768,
+        "before_tool_request", ConversationCompactionPolicy.Mode.ALL, CancellationToken.uncancellable(), null);
+    assertNotNull(compacted);
+    assertTrue(compacted.context.stream().anyMatch(t -> t.kind == ConversationTurn.Kind.COMPACTION_SUMMARY));
     AtomicInteger turns = new AtomicInteger(), effects = new AtomicInteger();
     CoreAgentLoop.Model provider = new CoreAgentLoop.Model() {
       @Override public ModelReply complete(List<ConversationTurn> history, String prompt, List<ToolSpec> tools, CancellationToken token) {
         return turns.getAndIncrement() == 0
-            ? new ModelReply("", Collections.singletonList(new ModelReply.Call("write-after-summary", "write", arguments("path", "index.html"))), "", null, "test", 40_000)
+            ? new ModelReply("", Collections.singletonList(new ModelReply.Call("write-after-summary", "write", arguments("path", "index.html"))))
             : new ModelReply("done", Collections.emptyList());
       }
       @Override public int contextWindow(CancellationToken token) { return 32_768; }
@@ -368,8 +377,8 @@ public class MainChatToolContinuityTest {
     CoreAgentLoop loop = new CoreAgentLoop(provider, new CoreToolRegistry(Collections.singletonList(testTool("write", (args, token) -> {
       effects.incrementAndGet(); return CoreToolResult.success("Wrote index.html after compaction");
     }))), "system", session, CorePromptBudget.standard(), compactor);
-    new MainChatTranscriptStore(files, session, store).attach(loop, Collections.emptyList());
-    CoreAgentLoop.Result result = loop.run("Write a page", Collections.emptyList(), CancellationToken.uncancellable(), null);
+    new MainChatTranscriptStore(files, session, store).attach(loop, compacted.context);
+    CoreAgentLoop.Result result = loop.run("", compacted.context, CancellationToken.uncancellable(), null);
     store.appendConversationMessage(session, "assistant", result.text, result.durationMs, result.runId, user, result.outcome);
     store.appendConversationMessage(session, "user", "Did it work?");
     List<ConversationTurn> restored = new LocalRunStore(files).loadConversationContext(session);

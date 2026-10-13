@@ -85,7 +85,7 @@ public class LocalDiagnosticsTest {
         assertEquals(BuildConfig.VERSION_NAME, store.snapshot(null, 1, false).getString("current_version_name"));
     }
 
-    @Test public void emptyCodexReplyStillThrowsAndPersistsOnlyValidatedShapeMetadata() throws Exception {
+    @Test public void emptyCodexReplyCompletesAndPersistsOnlyValidatedShapeMetadata() throws Exception {
         String providerBody = "Authorization: Bearer CANARY_TOKEN model text CANARY_MODEL_TEXT";
         ResponseDiagnostics diagnostics = ResponseDiagnostics.fromCodex(
                 "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[]}}\n\n");

@@ -177,7 +177,7 @@ class CoreAgentLoopTest {
     }
 
     @Test
-    fun emptyProviderReplySurvivesPostTurnPlanAllCompaction() {
+    fun emptyProviderReplySurvivesPreRequestPlanAllCompaction() {
         val files = temporaryFolder.newFolder("empty-reply-compaction")
         val store = LocalRunStore(files)
         val session = "empty-reply-compaction"
@@ -193,17 +193,23 @@ class CoreAgentLoopTest {
                                               token: CancellationToken) = ModelReply("Summary", emptyList())
         }
         val compactor = ConversationCompactor(session, CoreAgentModel(summaryProvider, session), store)
+        val earlierHistory = listOf(
+            ConversationTurn("user", "Earlier request"),
+            ConversationTurn("assistant", "Earlier answer"),
+        )
+        val compacted = requireNotNull(compactor.compact(earlierHistory, 32_768, "before_next_request",
+            ConversationCompactionPolicy.Mode.ALL, CancellationToken.uncancellable(), null))
         val model = object : CoreAgentLoop.Model {
             override fun complete(transcript: List<ConversationTurn>, prompt: String,
                                   tools: List<ToolSpec>, token: CancellationToken) =
-                ModelReply("", emptyList(), "", null, "fixture", 30_000)
+                ModelReply("", emptyList())
 
             override fun contextWindow(token: CancellationToken) = 32_768
         }
         val loop = CoreAgentLoop(model, CoreToolRegistry(emptyList()), "Instructions", session,
             CorePromptBudget.standard(), compactor)
 
-        val result = loop.run("Request", emptyList(), CancellationToken.uncancellable(), null)
+        val result = loop.run("Request", compacted.context, CancellationToken.uncancellable(), null)
 
         assertEquals("COMPLETED", result.outcome)
         assertEquals("", result.text)
@@ -211,6 +217,8 @@ class CoreAgentLoopTest {
         assertEquals(1, transcript.count { it.kind == ConversationTurn.Kind.MESSAGE
             && it.role == "assistant" && it.content.isEmpty() })
         assertTrue(transcript.any { it.kind == ConversationTurn.Kind.COMPACTION_SUMMARY })
+        assertTrue(transcript.any { it.kind == ConversationTurn.Kind.MESSAGE && it.role == "user"
+            && it.content == "Request" })
     }
 
     @Test

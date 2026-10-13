@@ -25,12 +25,12 @@ public class CodexReasoningPersistenceTest {
         store.appendConversationMessage(session, "user", "Look up the current value");
         List<ConversationTurn> prior = store.loadConversationContext(session);
         ModelReply parsed = OpenAICodexResponsesClient.parseResponse(
-                "{\"response\":{\"status\":\"completed\",\"output\":["
+                "{\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":["
                         + "{\"type\":\"reasoning\",\"id\":\"rs_17\",\"encrypted_content\":\"" + ENCRYPTED
                         + "\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"private summary\"}]},"
                         + "{\"type\":\"message\",\"id\":\"msg_18\",\"content\":[{\"type\":\"output_text\",\"text\":\"Looking up\"}]},"
                         + "{\"type\":\"function_call\",\"id\":\"fc_19\",\"call_id\":\"lookup-19\","
-                        + "\"name\":\"lookup\",\"arguments\":\"{}\"}]}}");
+                        + "\"name\":\"lookup\",\"arguments\":\"{}\",\"status\":\"completed\"}]}}");
         assertEquals(3, parsed.providerOutputItems.size());
         assertEquals(ModelReply.ProviderOutputItem.Kind.REASONING, parsed.providerOutputItems.get(0).kind);
         assertEquals(ModelReply.ProviderOutputItem.Kind.MESSAGE, parsed.providerOutputItems.get(1).kind);
