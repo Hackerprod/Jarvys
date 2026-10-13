@@ -94,7 +94,7 @@ public class MainChatToolContinuityTest {
       token.cancelForTimeout();
       token.throwIfCancelled();
       return CoreToolResult.success("unreachable");
-    });
+    }, CoreTool.ExecutionMode.SEQUENTIAL);
     CoreAgentLoop loop = new CoreAgentLoop((history, prompt, tools, token) -> new ModelReply("",
         Arrays.asList(new ModelReply.Call("started-write", "write", arguments("path", "index.html")),
             new ModelReply.Call("pending-write", "write", arguments("path", "second.html")))),
@@ -417,9 +417,13 @@ public class MainChatToolContinuityTest {
 
   interface Execution { CoreToolResult run(Map<String, Object> args, CancellationToken token); }
   static CoreTool testTool(String name, Execution execute) {
+    return testTool(name, execute, CoreTool.ExecutionMode.PARALLEL);
+  }
+  static CoreTool testTool(String name, Execution execute, CoreTool.ExecutionMode executionMode) {
     return new CoreTool() {
       @Override public ToolSpec declaration() { return new ToolSpec(name, "test", "test", "test",
           ToolSpec.Status.IMPLEMENTED, Collections.emptyMap(), Collections.emptyList()); }
+      @Override public ExecutionMode executionMode() { return executionMode; }
       @Override public CoreToolResult execute(Map<String, Object> args, CancellationToken token) {
         return execute.run(args, token);
       }

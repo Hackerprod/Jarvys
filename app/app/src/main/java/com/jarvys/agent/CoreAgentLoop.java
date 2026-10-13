@@ -240,9 +240,12 @@ public final class CoreAgentLoop {
         final boolean quietReaction;
         final String preflightError;
         final AtomicBoolean executionStarted = new AtomicBoolean(false);
+        volatile CoreToolResult returnedResult;
+        volatile Thread executionThread;
+        volatile boolean cancelAfterResult;
         CoreToolResult result;
         String skippedReason;
-        Future<CoreToolResult> future;
+        volatile Future<CoreToolResult> future;
         int repeatedFailures;
         boolean loopRecorded;
         boolean finalized;
@@ -783,6 +786,12 @@ public final class CoreAgentLoop {
                 } catch (RuntimeException failure) {
                     throw failure;
                 }
+                try {
+                    appendExecutedResult(item, transcript, token, listener, loopDetector, outcome);
+                } finally {
+                    activeActivities.remove(item.call.id);
+                }
+                token.throwIfCancelled();
                 outcome.executedCalls++;
                 item.repeatedFailures = loopDetector.recordOutcome(item.call.name, item.argumentsKey,
                         item.result.success, item.result.content);
@@ -796,13 +805,15 @@ public final class CoreAgentLoop {
                 }
             }
             } catch (RuntimeException failure) {
+                if (failure instanceof CheckpointFailure) throw failure;
                 try { markInterruptedBatch(prepared, transcript); }
                 catch (RuntimeException checkpointFailure) { failure.addSuppressed(checkpointFailure); }
                 throw failure;
             }
         } else {
-            java.util.List<Future<CoreToolResult>> launched = new java.util.concurrent.CopyOnWriteArrayList<>();
-            Runnable cancelLaunched = () -> { for (Future<?> future : launched) future.cancel(true); };
+            Runnable cancelLaunched = () -> {
+                for (PreparedToolCall item : prepared) cancelPreparedTool(item);
+            };
             Runnable unregisterCancellation = token.registerCancelAction(cancelLaunched);
             try {
                 for (int index = 0; index < prepared.size(); index++) {
@@ -822,11 +833,18 @@ public final class CoreAgentLoop {
                     startPreparedTool(item, registry, transcript, token, listener, activeActivities);
                     try {
                         item.future = PARALLEL_TOOL_EXECUTOR.submit(() -> {
+                            item.executionThread = Thread.currentThread();
                             item.executionStarted.set(true);
-                            return invokePreparedTool(item, registry, token, listener);
+                            try {
+                                CoreToolResult result = invokePreparedTool(item, registry, token, listener);
+                                item.returnedResult = result;
+                                if (item.cancelAfterResult && item.future != null) item.future.cancel(true);
+                                return result;
+                            } finally {
+                                item.executionThread = null;
+                            }
                         });
-                        launched.add(item.future);
-                        if (token.isCancellationRequested()) item.future.cancel(true);
+                        if (token.isCancellationRequested()) cancelPreparedTool(item);
                     } catch (RuntimeException submissionFailure) {
                         toolLifecycle.put(item.call.id, "NEVER_LAUNCHED");
                         activeActivities.remove(item.call.id);
@@ -837,6 +855,9 @@ public final class CoreAgentLoop {
                     if (item.future == null) continue;
                     try {
                         item.result = item.future.get();
+                    } catch (CancellationException cancelled) {
+                        if (item.returnedResult == null) throw cancelled;
+                        item.result = item.returnedResult;
                     } catch (InterruptedException interrupted) {
                         Thread.currentThread().interrupt();
                         token.throwIfCancelled();
@@ -850,6 +871,11 @@ public final class CoreAgentLoop {
                 token.throwIfCancelled();
             } catch (RuntimeException failure) {
                 cancelLaunched.run();
+                RuntimeException resultCommitFailure = appendReturnedResults(prepared, transcript, token,
+                        listener, loopDetector, outcome, activeActivities);
+                if (resultCommitFailure instanceof CheckpointFailure) throw resultCommitFailure;
+                if (resultCommitFailure != null) failure.addSuppressed(resultCommitFailure);
+                if (failure instanceof CheckpointFailure) throw failure;
                 try { markInterruptedBatch(prepared, transcript); }
                 catch (RuntimeException checkpointFailure) { failure.addSuppressed(checkpointFailure); }
                 throw failure;
@@ -875,6 +901,7 @@ public final class CoreAgentLoop {
 
         try {
         for (PreparedToolCall item : prepared) {
+            if (item.finalized) continue;
             if (item.skippedReason != null) {
                 toolLifecycle.put(item.call.id, "NEVER_LAUNCHED");
                 transcript.add(ConversationTurn.toolResult(item.call.id, item.call.name, item.skippedReason));
@@ -901,6 +928,12 @@ public final class CoreAgentLoop {
         }
         if (!token.isCancellationRequested() && collectTurnContext()) outcome.steeringReceived = true;
         } catch (RuntimeException failure) {
+            if (failure instanceof CheckpointFailure) throw failure;
+            RuntimeException resultCommitFailure = appendReturnedResults(prepared, transcript, token,
+                    listener, loopDetector, outcome, activeActivities);
+            if (resultCommitFailure instanceof CheckpointFailure) throw resultCommitFailure;
+            if (resultCommitFailure != null && resultCommitFailure != failure)
+                failure.addSuppressed(resultCommitFailure);
             try { markInterruptedBatch(prepared, transcript); }
             catch (RuntimeException checkpointFailure) { failure.addSuppressed(checkpointFailure); }
             throw failure;
@@ -928,11 +961,55 @@ public final class CoreAgentLoop {
         });
     }
 
+    private static void cancelPreparedTool(PreparedToolCall item) {
+        // A self-cancelling tool may call this before submit() has published its Future.
+        // Let its runner publish the returned result before cancelling that FutureTask.
+        if (item.cancelAfterResult) return;
+        Future<CoreToolResult> future = item.future;
+        if (future == null) {
+            if (item.executionThread == Thread.currentThread()) {
+                item.cancelAfterResult = true;
+                Thread.currentThread().interrupt();
+            }
+            return;
+        }
+        if (item.executionThread == Thread.currentThread() && item.returnedResult == null) {
+            // FutureTask.cancel(true) from its own tool would discard that tool's return value.
+            item.cancelAfterResult = true;
+            Thread.currentThread().interrupt();
+            return;
+        }
+        future.cancel(true);
+    }
+
+    private RuntimeException appendReturnedResults(List<PreparedToolCall> calls,
+            List<ConversationTurn> transcript, CancellationToken token, ProgressListener listener,
+            ToolLoopDetector loopDetector, ToolBatchOutcome outcome,
+            Map<String, ToolActivity> activeActivities) {
+        RuntimeException firstFailure = null;
+        for (PreparedToolCall item : calls) {
+            if (item.result == null && item.returnedResult != null) item.result = item.returnedResult;
+            if (item.finalized || item.result == null || !item.executionStarted.get()) continue;
+            try {
+                appendExecutedResult(item, transcript, token, listener, loopDetector, outcome);
+            } catch (RuntimeException failure) {
+                if (firstFailure == null) firstFailure = failure;
+                else if (failure != firstFailure) firstFailure.addSuppressed(failure);
+                if (failure instanceof CheckpointFailure || !item.finalized) break;
+            } finally {
+                activeActivities.remove(item.call.id);
+            }
+        }
+        return firstFailure;
+    }
+
     private void appendExecutedResult(PreparedToolCall item, List<ConversationTurn> transcript,
             CancellationToken token, ProgressListener listener, ToolLoopDetector loopDetector,
             ToolBatchOutcome outcome) {
         CoreToolResult result = item.result;
         String rawContent = result.content;
+        RuntimeException invalidCompletedIds = null;
+        List<String> completedIds = Collections.emptyList();
         if (result.success && result.incomingBatch != null) {
             if (!result.incomingBatch.matches(item.call.name, rawContent))
                 throw new IllegalStateException("Tool result does not match its exact incoming batch");
@@ -941,24 +1018,45 @@ public final class CoreAgentLoop {
                         CrewInputIncorporation.TransportKind.ASK_CHIEF, rawContent);
             }
         } else if (turnContextProvider != null && result.success) {
-            List<String> completedIds = turnContextProvider.completedToolIncomingIds(item.call.name);
-            if (completedIds != null) for (String id : completedIds) {
-                if (id == null || id.isEmpty()) throw new IllegalStateException("Invalid completed tool inbox ID");
-                appliedIncomingIds.add(id);
+            List<String> reportedIds = turnContextProvider.completedToolIncomingIds(item.call.name);
+            if (reportedIds != null) {
+                completedIds = reportedIds;
+                for (String id : completedIds) {
+                    if (id == null || id.isEmpty()) {
+                        invalidCompletedIds = new IllegalStateException("Invalid completed tool inbox ID");
+                        completedIds = Collections.emptyList();
+                        break;
+                    }
+                }
             }
         }
-        token.throwIfCancelled();
+        for (String id : completedIds) appliedIncomingIds.add(id);
         String content = rawContent;
         boolean crewCompaction = compactor != null && compactor.isCrew();
-        boolean completeTooLargeForCrew = crewCompaction && result.completeContentRequired
-                && !CrewConversationCompaction.completeOutputFits(rawContent, model.contextWindow(token));
-        if (crewCompaction && !result.completeContentRequired)
-            content = compactor.retainToolOutput(rawContent, model.contextWindow(token), token);
-        if (result.completeContentRequired
+        boolean preserveReturnedResult = token.isCancelled();
+        boolean completeTooLargeForCrew = false;
+        if (crewCompaction && !preserveReturnedResult) {
+            try {
+                int contextWindow = model.contextWindow(token);
+                completeTooLargeForCrew = result.completeContentRequired
+                        && !CrewConversationCompaction.completeOutputFits(rawContent, contextWindow);
+                if (!result.completeContentRequired)
+                    content = compactor.retainToolOutput(rawContent, contextWindow, token);
+            } catch (RuntimeException cancellationDuringCompaction) {
+                if (!token.isCancelled()) throw cancellationDuringCompaction;
+                preserveReturnedResult = true;
+                content = rawContent;
+            }
+        }
+        if (token.isCancelled()) {
+            preserveReturnedResult = true;
+            content = rawContent;
+        }
+        if (!preserveReturnedResult && result.completeContentRequired
                 && (content.length() > outcome.remainingResultChars || completeTooLargeForCrew)) {
             result = CoreToolResult.failure("Complete tool output exceeds the remaining per-turn context budget or model whole-output budget; request this large result by itself. No partial output was added.");
             content = result.content;
-        } else if (!crewCompaction && content.length() > outcome.remainingResultChars) {
+        } else if (!preserveReturnedResult && !crewCompaction && content.length() > outcome.remainingResultChars) {
             content = outcome.remainingResultChars > 0
                     ? content.substring(0, outcome.remainingResultChars) + "…[truncated by per-turn budget]"
                     : "Tool output omitted because the per-turn result budget is exhausted";
@@ -970,6 +1068,7 @@ public final class CoreAgentLoop {
         updateTranscriptSnapshot(transcript);
         if (listener != null && (!item.quietReaction || !result.success))
             listener.onToolActivity(item.activity.event(result.success ? "tool_result" : "tool_error", content, result.previewId));
+        if (invalidCompletedIds != null) throw invalidCompletedIds;
     }
 
     private void skipUnlaunched(List<PreparedToolCall> calls, int start, String reason) {

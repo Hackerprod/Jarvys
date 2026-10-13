@@ -107,10 +107,17 @@ class MainAgentInteractionTest {
             assertTrue(LocalRunStore(context).readConversationMessages(session).any {
                 it.optString("role") == "user" && it.optString("content") == "new request"
             })
+            val generationField = StopController.getInstance().javaClass.getDeclaredField("generation")
+                .apply { isAccessible = true }
+            val retainedGeneration = (generationField.get(StopController.getInstance()) as java.util.concurrent.atomic.AtomicLong).get()
             StopController.getInstance().stopRun()
-            assertFalse(AgentRunUiState.state.value.running)
+            assertTrue(AgentRunUiState.state.value.running)
             release.countDown()
             worker(service).submit {}.get(5, TimeUnit.SECONDS)
+            // withHeldWorker is synthetic; model the service's terminal UI callback after its worker barrier.
+            AgentRunUiState.completeGeneration(session, retainedGeneration, "stopped-$session",
+                "STOPPED", "Run stopped", "", 0)
+            assertFalse(AgentRunUiState.state.value.running)
             assertFalse(LocalRunStore(context).readConversationTimeline(session).any { it.stage == "QUEUED" })
         }
     }

@@ -55,7 +55,7 @@ public class CoreAgentLoopFailureRecoveryTest {
         CoreTool tool = tool((arguments, token) -> {
             effects.incrementAndGet();
             return CoreToolResult.failure("permission denied");
-        });
+        }, CoreTool.ExecutionMode.SEQUENTIAL);
         ModelReply.Call[] calls = new ModelReply.Call[5];
         for (int i = 0; i < calls.length; i++) calls[i] = call("batch-" + (i + 1), "/project");
         CoreAgentLoop loop = loop(tool, (transcript, prompt, declarations, token) -> {
@@ -88,7 +88,7 @@ public class CoreAgentLoopFailureRecoveryTest {
             effects.incrementAndGet();
             current.cancel();
             throw new CancellationException("Result was not recorded");
-        });
+        }, CoreTool.ExecutionMode.SEQUENTIAL);
         CoreAgentLoop loop = loop(tool, (transcript, prompt, declarations, current) ->
                 new ModelReply("", Arrays.asList(call("uncertain", "/project"), call("later", "/project"))));
         assertThrows(CancellationException.class, () -> loop.run("Perform work", Collections.emptyList(), token, null));
@@ -219,11 +219,16 @@ public class CoreAgentLoopFailureRecoveryTest {
     }
 
     private static CoreTool tool(Effect effect) {
+        return tool(effect, CoreTool.ExecutionMode.PARALLEL);
+    }
+
+    private static CoreTool tool(Effect effect, CoreTool.ExecutionMode executionMode) {
         return new CoreTool() {
             @Override public ToolSpec declaration() {
                 return new ToolSpec("ls", "test", "test tool", "test", ToolSpec.Status.IMPLEMENTED,
                         Collections.singletonMap("path", "string"), Collections.singletonList("path"));
             }
+            @Override public ExecutionMode executionMode() { return executionMode; }
             @Override public CoreToolResult execute(Map<String, Object> arguments, CancellationToken token) {
                 return effect.execute(arguments, token);
             }
