@@ -35,7 +35,7 @@ class JarvysAnimationPrefetchTest {
             }
         }
     }
-    private fun catalog(t: Transport) = """{"schema":1,"packages":{"default":{"animations":{${t.assets.entries.joinToString(",") { (id, data) -> "\"$id\":{\"url\":\"https://jarvys-agent.com/animations/$id.riv\",\"bytes\":${data.size},\"sha256\":\"${sha(data)}\"}" }}}}}"""
+    private fun catalog(t: Transport) = """{"schema":1,"packages":{"default":{"animations":{${t.assets.entries.joinToString(",") { (id, data) -> "\"$id\":{\"url\":\"https://jarvys-agent.com/animations/$id.riv\",\"bytes\":${data.size},\"sha256\":\"${sha(data)}\"}" }}}}}}"""
     private fun setup(): Pair<JarvysAnimationCache, Transport> {
         val transport = Transport()
         JarvysAnimationCatalog.remoteIds.forEachIndexed { index, id -> transport.assets[id] = byteArrayOf(index.toByte(), 7, 9) }

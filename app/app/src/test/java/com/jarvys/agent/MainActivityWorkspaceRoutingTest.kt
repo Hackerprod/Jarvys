@@ -357,10 +357,13 @@ class MainActivityWorkspaceRoutingTest {
         val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
         do {
             compose.mainClock.advanceTimeBy(48)
-            compose.waitForIdle()
+            // IO-backed catalog updates can arrive after the last explicit native frame.
+            // Flush View layout/draw before inspecting lazy-list semantics with a paused clock.
+            awaitReactionDrawIdle(compose, activity)
             if (condition()) return
             Thread.sleep(10)
         } while (System.nanoTime() < end)
-        assertTrue("Workspace routing did not settle: selected=${selected()}; state=${AgentRunUiState.state.value}", condition())
+        assertTrue("Workspace routing did not settle: selected=${selected()}; state=${AgentRunUiState.state.value}" +
+            "\nCatalog semantics:\n${compose.onRoot(useUnmergedTree = true).printToString()}", condition())
     }
 }

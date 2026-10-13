@@ -3,6 +3,9 @@ package com.jarvys.agent.workspaces
 import androidx.activity.ComponentActivity
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -59,16 +62,27 @@ class WorkspaceDrawerComposeTest {
     }
 
     @Test fun workspaceDestinationHasOneSelectedEntryAndNoSelectedIndependentChat() {
+        val workspaceSelected = mutableStateOf(true)
+        fun titleWeight(): FontWeight? {
+            val layouts = mutableListOf<TextLayoutResult>()
+            compose.onNodeWithText("Independent conversation", useUnmergedTree = true)
+                .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+            return layouts.single().layoutInput.style.fontWeight
+        }
         compose.setContent { MaterialTheme {
             ConversationDrawer(listOf(legacy), legacy.sessionId, legacy.title, legacy.goal, true,
-                null, false, {}, {}, {}, {}, onOpenCentral = {}, onOpenWorkspaces = {}, workspacesSelected = true)
+                null, !workspaceSelected.value, {}, {}, {}, {}, onOpenCentral = {}, onOpenWorkspaces = {}, workspacesSelected = workspaceSelected.value)
         } }
         compose.onAllNodesWithTag("drawer-open-workspaces").assertCountEquals(1)
         compose.onNodeWithTag("drawer-open-workspaces").assertIsSelected()
         compose.onNodeWithTag("drawer-open-central").assertIsNotSelected()
-        compose.onNodeWithText("Independent conversation").assertIsNotSelected()
+        // Session rows express selection visually, not through Selected semantics.
+        assertEquals(FontWeight.Medium, titleWeight())
         compose.onNodeWithText("Agent").assertIsDisplayed()
         compose.onNodeWithTag("drawer-workspaces-empty").assertDoesNotExist()
+        compose.runOnIdle { workspaceSelected.value = false }
+        compose.onNodeWithTag("drawer-open-workspaces").assertIsNotSelected()
+        assertEquals(FontWeight.SemiBold, titleWeight())
     }
 
     @Test @Config(qualifiers = "es-rES-w360dp-h900dp-port-mdpi")

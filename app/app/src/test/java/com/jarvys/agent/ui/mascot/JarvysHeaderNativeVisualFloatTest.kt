@@ -42,7 +42,8 @@ class JarvysHeaderNativeVisualFloatTest {
         compose.setContent {
             CompositionLocalProvider(LocalReducedMotion provides reduced.value) {
                 Box(Modifier.size(96.dp).testTag("fixed-hit-target")) {
-                    Box(Modifier.size(84.dp).testTag("floating-visual").jarvysHeaderFloat(allowed.value)) {
+                    // Measure inside the graphics layer; its outer layout coordinator does not move.
+                    Box(Modifier.size(84.dp).jarvysHeaderFloat(allowed.value).testTag("floating-visual")) {
                         if (nativeRendered.value) AndroidView(
                             modifier = Modifier.fillMaxSize().testTag("native-idle-view"),
                             factory = { context -> View(context).apply { setBackgroundColor(android.graphics.Color.BLUE) } },
@@ -52,7 +53,8 @@ class JarvysHeaderNativeVisualFloatTest {
             }
         }
         awaitReactionDrawIdle(compose)
-        fun visualTop() = compose.onNodeWithTag("floating-visual").fetchSemanticsNode().boundsInRoot.top
+        // Position retains negative translation at the root edge; boundsInRoot clips it.
+        fun visualTop() = compose.onNodeWithTag("floating-visual").fetchSemanticsNode().positionInRoot.y
         fun hitTop() = compose.onNodeWithTag("fixed-hit-target").fetchSemanticsNode().boundsInRoot.top
         // The fixed parent gives the exact untransformed origin even after draw-sync advances frames.
         val origin = hitTop()

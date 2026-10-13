@@ -10,6 +10,7 @@ import com.jarvys.agent.AgentRunUiSnapshot
 import com.jarvys.agent.AppRouteAction
 import com.jarvys.agent.AppRouteMeta
 import com.jarvys.agent.R
+import com.jarvys.agent.ui.chat.awaitReactionDrawIdle
 import com.jarvys.agent.ui.mascot.JarvysMascotProcessConsent
 import com.jarvys.agent.ui.motion.LocalReducedMotion
 import com.jarvys.agent.ui.shell.JarvysRouteTopBar
@@ -22,8 +23,10 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 
 /** Host checks use the existing static fallback and never opt into native rendering. */
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "en-rUS-w360dp-h900dp-port-mdpi")
 class WorkspaceCentralTopBarComposeTest {
@@ -49,7 +52,8 @@ class WorkspaceCentralTopBarComposeTest {
         assertEquals(toolbar.center.x, mascot.center.x, 1f)
         compose.onAllNodesWithTag("jarvys-account-menu").assertCountEquals(1)
         compose.onNodeWithTag("jarvys-mascot-native").assertDoesNotExist()
-        compose.onNodeWithTag("jarvys-account-menu").performClick()
+        compose.onNodeWithTag("jarvys-account-menu").performTouchInput { longClick() }
+        awaitReactionDrawIdle(compose)
         compose.onNodeWithTag("jarvys-mascot-toggle").assertDoesNotExist()
         compose.onNodeWithText(compose.activity.getString(R.string.drawer_settings)).performClick()
         assertEquals(1, settings)
