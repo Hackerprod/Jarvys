@@ -12,8 +12,13 @@ import org.json.JSONObject;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
+import org.junit.runner.RunWith;
+import org.robolectric.RobolectricTestRunner;
+import org.robolectric.annotation.Config;
 
 /** Provider-private Responses items survive the Codex transcript boundary without UI projection. */
+@RunWith(RobolectricTestRunner.class)
+@Config(sdk = 34)
 public class CodexReasoningPersistenceTest {
     private static final String ENCRYPTED = "encrypted-reasoning-sentinel";
     @Rule public TemporaryFolder temporary = new TemporaryFolder();
