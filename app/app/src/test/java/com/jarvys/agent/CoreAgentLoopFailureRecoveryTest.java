@@ -6,6 +6,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Map;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.Test;
@@ -96,6 +97,59 @@ public class CoreAgentLoopFailureRecoveryTest {
         CoreAgentLoop.Checkpoint checkpoint = loop.checkpointSnapshot().reconciled();
         assertEquals("INTERRUPTED_UNCERTAIN", checkpoint.toolLifecycle.get("uncertain"));
         assertEquals("NEVER_LAUNCHED", checkpoint.toolLifecycle.get("later"));
+    }
+
+    @Test public void parallelCancellationRecordsLaunchedAndUnlaunchedCallsInOriginalOrder() {
+        AtomicInteger effects = new AtomicInteger();
+        CountDownLatch firstStarted = new CountDownLatch(1);
+        CancellationToken token = CancellationToken.cancellable();
+        CoreTool parallel = tool((arguments, current) -> {
+            effects.incrementAndGet();
+            firstStarted.countDown();
+            try {
+                new CountDownLatch(1).await();
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new CancellationException("Interrupted while the effect was in progress");
+            }
+            return CoreToolResult.success("unexpected completion");
+        }, CoreTool.ExecutionMode.PARALLEL);
+        CoreAgentLoop loop = loop(parallel, (transcript, prompt, declarations, current) ->
+                new ModelReply("", Arrays.asList(call("started", "/project"), call("pending", "/project"))));
+        CoreAgentLoop.ProgressListener listener = new CoreAgentLoop.ProgressListener() {
+            @Override public void onProgress(String stage, String message) { }
+            @Override public void onToolActivity(ToolActivity activity) {
+                if (!"tool_call".equals(activity.stage) || !"pending".equals(activity.callId)) return;
+                try {
+                    firstStarted.await();
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new AssertionError(interrupted);
+                }
+                assertTrue(token.cancel());
+            }
+        };
+
+        assertThrows(CancellationException.class,
+                () -> loop.run("Perform parallel work", Collections.emptyList(), token, listener));
+
+        assertEquals(1, effects.get());
+        CoreAgentLoop.Checkpoint checkpoint = loop.checkpointSnapshot().reconciled();
+        assertEquals("INTERRUPTED_UNCERTAIN", checkpoint.toolLifecycle.get("started"));
+        assertEquals("NEVER_LAUNCHED", checkpoint.toolLifecycle.get("pending"));
+        java.util.List<ConversationTurn> results = new java.util.ArrayList<>();
+        for (ConversationTurn turn : checkpoint.transcript)
+            if (turn.kind == ConversationTurn.Kind.TOOL_RESULT) results.add(turn);
+        assertEquals(2, results.size());
+        assertEquals(Arrays.asList("started", "pending"), Arrays.asList(
+                results.get(0).toolCallId, results.get(1).toolCallId));
+        assertTrue(results.get(0).content.contains("INTERRUPTED_UNCERTAIN"));
+        assertTrue(results.get(1).content.contains("NEVER_LAUNCHED"));
+        CoreAgentLoop resumed = loop(parallel, (transcript, prompt, declarations, current) ->
+                new ModelReply("Continued safely.", Collections.emptyList()));
+        resumed.restoreCheckpoint(checkpoint);
+        assertEquals(2, resumed.transcriptSnapshot().stream()
+                .filter(turn -> turn.kind == ConversationTurn.Kind.TOOL_RESULT).count());
     }
 
     @Test public void repeatedUnknownToolTerminatesAsNoProgressAfterThreeModelTurns() {

@@ -780,6 +780,7 @@ public final class CoreAgentLoop {
                 }
                 token.throwIfCancelled();
                 startPreparedTool(item, registry, transcript, token, listener, activeActivities);
+                token.throwIfCancelled();
                 item.executionStarted.set(true);
                 try {
                     item.result = invokePreparedTool(item, registry, token, listener);
@@ -806,8 +807,12 @@ public final class CoreAgentLoop {
             }
             } catch (RuntimeException failure) {
                 if (failure instanceof CheckpointFailure) throw failure;
-                try { markInterruptedBatch(prepared, transcript); }
-                catch (RuntimeException checkpointFailure) { failure.addSuppressed(checkpointFailure); }
+                try { finalizeInterruptedBatch(prepared, transcript, token, listener, loopDetector,
+                        outcome, activeActivities); }
+                catch (RuntimeException recoveryFailure) {
+                    if (recoveryFailure instanceof CheckpointFailure) throw recoveryFailure;
+                    failure.addSuppressed(recoveryFailure);
+                }
                 throw failure;
             }
         } else {
@@ -831,6 +836,7 @@ public final class CoreAgentLoop {
                     }
                     token.throwIfCancelled();
                     startPreparedTool(item, registry, transcript, token, listener, activeActivities);
+                    token.throwIfCancelled();
                     try {
                         item.future = PARALLEL_TOOL_EXECUTOR.submit(() -> {
                             item.executionThread = Thread.currentThread();
@@ -871,13 +877,13 @@ public final class CoreAgentLoop {
                 token.throwIfCancelled();
             } catch (RuntimeException failure) {
                 cancelLaunched.run();
-                RuntimeException resultCommitFailure = appendReturnedResults(prepared, transcript, token,
-                        listener, loopDetector, outcome, activeActivities);
-                if (resultCommitFailure instanceof CheckpointFailure) throw resultCommitFailure;
-                if (resultCommitFailure != null) failure.addSuppressed(resultCommitFailure);
                 if (failure instanceof CheckpointFailure) throw failure;
-                try { markInterruptedBatch(prepared, transcript); }
-                catch (RuntimeException checkpointFailure) { failure.addSuppressed(checkpointFailure); }
+                try { finalizeInterruptedBatch(prepared, transcript, token, listener, loopDetector,
+                        outcome, activeActivities); }
+                catch (RuntimeException recoveryFailure) {
+                    if (recoveryFailure instanceof CheckpointFailure) throw recoveryFailure;
+                    failure.addSuppressed(recoveryFailure);
+                }
                 throw failure;
             } finally {
                 unregisterCancellation.run();
@@ -929,13 +935,12 @@ public final class CoreAgentLoop {
         if (!token.isCancellationRequested() && collectTurnContext()) outcome.steeringReceived = true;
         } catch (RuntimeException failure) {
             if (failure instanceof CheckpointFailure) throw failure;
-            RuntimeException resultCommitFailure = appendReturnedResults(prepared, transcript, token,
-                    listener, loopDetector, outcome, activeActivities);
-            if (resultCommitFailure instanceof CheckpointFailure) throw resultCommitFailure;
-            if (resultCommitFailure != null && resultCommitFailure != failure)
-                failure.addSuppressed(resultCommitFailure);
-            try { markInterruptedBatch(prepared, transcript); }
-            catch (RuntimeException checkpointFailure) { failure.addSuppressed(checkpointFailure); }
+            try { finalizeInterruptedBatch(prepared, transcript, token, listener, loopDetector,
+                    outcome, activeActivities); }
+            catch (RuntimeException recoveryFailure) {
+                if (recoveryFailure instanceof CheckpointFailure) throw recoveryFailure;
+                failure.addSuppressed(recoveryFailure);
+            }
             throw failure;
         }
         return outcome;
@@ -980,27 +985,6 @@ public final class CoreAgentLoop {
             return;
         }
         future.cancel(true);
-    }
-
-    private RuntimeException appendReturnedResults(List<PreparedToolCall> calls,
-            List<ConversationTurn> transcript, CancellationToken token, ProgressListener listener,
-            ToolLoopDetector loopDetector, ToolBatchOutcome outcome,
-            Map<String, ToolActivity> activeActivities) {
-        RuntimeException firstFailure = null;
-        for (PreparedToolCall item : calls) {
-            if (item.result == null && item.returnedResult != null) item.result = item.returnedResult;
-            if (item.finalized || item.result == null || !item.executionStarted.get()) continue;
-            try {
-                appendExecutedResult(item, transcript, token, listener, loopDetector, outcome);
-            } catch (RuntimeException failure) {
-                if (firstFailure == null) firstFailure = failure;
-                else if (failure != firstFailure) firstFailure.addSuppressed(failure);
-                if (failure instanceof CheckpointFailure || !item.finalized) break;
-            } finally {
-                activeActivities.remove(item.call.id);
-            }
-        }
-        return firstFailure;
     }
 
     private void appendExecutedResult(PreparedToolCall item, List<ConversationTurn> transcript,
@@ -1080,24 +1064,51 @@ public final class CoreAgentLoop {
         }
     }
 
-    private void markInterruptedBatch(List<PreparedToolCall> calls, List<ConversationTurn> transcript) {
+    private void finalizeInterruptedBatch(List<PreparedToolCall> calls, List<ConversationTurn> transcript,
+            CancellationToken token, ProgressListener listener, ToolLoopDetector loopDetector,
+            ToolBatchOutcome outcome, Map<String, ToolActivity> activeActivities) {
         String uncertain = "INTERRUPTED_UNCERTAIN: Tool execution was interrupted before its result was durably recorded; effects may have occurred.";
+        RuntimeException firstFailure = null;
         for (PreparedToolCall item : calls) {
             if (item.finalized) continue;
+            if (item.result == null && item.returnedResult != null) item.result = item.returnedResult;
+            if (item.result != null && item.executionStarted.get()) {
+                try {
+                    appendExecutedResult(item, transcript, token, listener, loopDetector, outcome);
+                } catch (RuntimeException failure) {
+                    if (failure instanceof CheckpointFailure) throw failure;
+                    if (firstFailure == null) firstFailure = failure;
+                    else if (failure != firstFailure) firstFailure.addSuppressed(failure);
+                } finally {
+                    activeActivities.remove(item.call.id);
+                }
+                if (item.finalized) continue;
+            }
             if (item.preflightError != null) {
                 toolLifecycle.put(item.call.id, "NEVER_LAUNCHED");
+                activeActivities.remove(item.call.id);
                 transcript.add(ConversationTurn.toolResult(item.call.id, item.call.name,
-                        "Tool error: " + item.preflightError));
+                        "NEVER_LAUNCHED: Tool error: " + item.preflightError));
             } else if (item.skippedReason != null || !item.executionStarted.get()) {
                 toolLifecycle.put(item.call.id, "NEVER_LAUNCHED");
+                activeActivities.remove(item.call.id);
                 String skipped = item.skippedReason == null ? "Tool call was not launched before cancellation." : item.skippedReason;
+                if (!skipped.startsWith("NEVER_LAUNCHED:")) skipped = "NEVER_LAUNCHED: " + skipped;
                 transcript.add(ConversationTurn.toolResult(item.call.id, item.call.name, skipped));
             } else {
                 toolLifecycle.put(item.call.id, "INTERRUPTED_UNCERTAIN");
                 transcript.add(ConversationTurn.toolResult(item.call.id, item.call.name, uncertain));
             }
+            item.finalized = true;
+            try {
+                updateTranscriptSnapshot(transcript);
+            } catch (RuntimeException failure) {
+                if (failure instanceof CheckpointFailure) throw failure;
+                if (firstFailure == null) firstFailure = failure;
+                else if (failure != firstFailure) firstFailure.addSuppressed(failure);
+            }
         }
-        updateTranscriptSnapshot(transcript);
+        if (firstFailure != null) throw firstFailure;
     }
 
     private static boolean recoverableProviderFailure(Throwable failure) {
