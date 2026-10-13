@@ -175,6 +175,8 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
     if (history != null) {
       for (ConversationTurn turn : history) {
         if (turn.kind == ConversationTurn.Kind.MODEL_ERROR) continue;
+        if (turn.kind == ConversationTurn.Kind.MESSAGE && "assistant".equals(turn.role)
+            && turn.modelContent.trim().isEmpty() && turn.images.isEmpty()) continue;
         if (turn.kind == ConversationTurn.Kind.TOOL_CALLS) {
           if (!turn.providerOutputItems.isEmpty()) {
             appendProviderOutputItems(input, turn);
@@ -660,16 +662,19 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
         if (previousId != null && !previousId.equals(id)) calls.remove(previousId);
       }
       String name = item.optString("name", "");
-      if (!(item.opt("arguments") instanceof String) || name.isEmpty())
-        throw new CodexResponseException(CodexResponseException.Kind.MALFORMED);
-      String argsRaw = item.getString("arguments");
+      if (name.isEmpty()) throw new CodexResponseException(CodexResponseException.Kind.MALFORMED);
       Map<String, Object> parsedArguments = java.util.Collections.emptyMap();
       String invalidArgumentsReason = null;
-      try {
-        if (argsRaw.trim().isEmpty()) throw new IllegalArgumentException("Empty arguments");
-        parsedArguments = toMap(CodexResponseStream.parseObject(argsRaw));
-      } catch (Exception malformedArguments) {
-        invalidArgumentsReason = "Malformed tool arguments JSON object";
+      Object rawArguments = item.opt("arguments");
+      String argsRaw = rawArguments instanceof String ? (String) rawArguments : "{}";
+      if (rawArguments != null && !(rawArguments instanceof String)) {
+        invalidArgumentsReason = "Tool arguments must be a JSON string";
+      } else if (!argsRaw.trim().isEmpty()) {
+        try {
+          parsedArguments = toMap(CodexResponseStream.parseObject(argsRaw));
+        } catch (Exception malformedArguments) {
+          invalidArgumentsReason = "Malformed tool arguments JSON object";
+        }
       }
       calls.put(id, new ModelReply.Call(id, name, parsedArguments, invalidArgumentsReason));
       providerOutputItems.add(ModelReply.ProviderOutputItem.toolCall(id));

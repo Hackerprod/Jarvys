@@ -227,7 +227,7 @@ public class CodexResponsesTerminalTest {
     }
 
     @Test public void malformedFinalToolArgumentsStayPerCallWithoutRejectingTheResponse() throws Exception {
-        for (String arguments : new String[] {"", "{unquoted:1}", "{\"x\":"}) {
+        for (String arguments : new String[] {"{unquoted:1}", "{\"x\":"}) {
             JSONObject value = completed("");
             value.getJSONObject("response").put("output", new JSONArray().put(call().put("arguments", arguments)));
             ModelReply reply = fixture(sse(value), true, 1).complete();
@@ -238,12 +238,44 @@ public class CodexResponsesTerminalTest {
         }
     }
 
-    @Test public void nonStringFinalToolArgumentsStillRejectMalformedResponseShape() throws Exception {
-        for (Object arguments : new Object[] {new JSONObject(), JSONObject.NULL}) {
+    @Test public void emptyFinalToolArgumentsAreParsedAsAnEmptyObject() throws Exception {
+        for (String arguments : new String[] {"", "   \t\r\n"}) {
             JSONObject value = completed("");
             value.getJSONObject("response").put("output", new JSONArray().put(call().put("arguments", arguments)));
-            assertRejected(sse(value), true);
+
+            ModelReply reply = fixture(sse(value), true, 1).complete();
+
+            assertEquals(1, reply.calls.size());
+            assertEquals(Collections.emptyMap(), reply.calls.get(0).arguments);
+            assertNull(reply.calls.get(0).invalidArgumentsReason);
         }
+    }
+
+    @Test public void nonStringFinalToolArgumentsStayPerCallWithoutRejectingResponse() throws Exception {
+        JSONObject value = completed("");
+        value.getJSONObject("response").put("output", new JSONArray()
+                .put(call().put("arguments", new JSONObject().put("path", "note.txt")))
+                .put(call().put("call_id", "null-arguments").put("arguments", JSONObject.NULL)));
+
+        ModelReply reply = fixture(sse(value), true, 1).complete();
+
+        assertEquals(2, reply.calls.size());
+        assertTrue(reply.calls.get(0).arguments.isEmpty());
+        assertNotNull(reply.calls.get(0).invalidArgumentsReason);
+        assertEquals("null-arguments", reply.calls.get(1).id);
+        assertTrue(reply.calls.get(1).arguments.isEmpty());
+        assertNotNull(reply.calls.get(1).invalidArgumentsReason);
+    }
+
+    @Test public void emptyAssistantTurnIsOmittedFromResponsesRequest() throws Exception {
+        ConversationTurn emptyAssistant = ConversationTurn.assistantReply("", Collections.emptyList());
+
+        JSONArray input = OpenAICodexResponsesClient.userInput("next user message", Collections.emptyList(),
+                Collections.singletonList(emptyAssistant));
+
+        assertEquals(1, input.length());
+        assertEquals("user", input.getJSONObject(0).getString("role"));
+        assertEquals("input_text", input.getJSONObject(0).getJSONArray("content").getJSONObject(0).getString("type"));
     }
 
     @Test public void prettyPrintedNonSseJsonPreservesText() throws Exception {

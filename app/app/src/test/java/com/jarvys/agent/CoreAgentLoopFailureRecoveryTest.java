@@ -7,6 +7,7 @@ import java.util.Collections;
 import java.util.Map;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.Test;
 
 public class CoreAgentLoopFailureRecoveryTest {
@@ -28,7 +29,7 @@ public class CoreAgentLoopFailureRecoveryTest {
         assertEquals(CoreAgentLoop.InterruptionReason.NO_PROGRESS, result.interruptionReason);
         assertEquals(3, effects.get());
         assertEquals(3, modelCalls.get());
-        assertEquals(1, result.turns);
+        assertEquals(3, result.turns);
     }
 
     @Test public void differentFailureResultsDoNotAccumulateAsOneRepeatedError() {
@@ -72,6 +73,7 @@ public class CoreAgentLoopFailureRecoveryTest {
         assertEquals("PARTIAL", result.outcome);
         assertEquals(3, effects.get());
         assertEquals(1, modelCalls.get());
+        assertEquals(1, result.turns);
         CoreAgentLoop.Checkpoint checkpoint = loop.checkpointSnapshot().reconciled();
         assertEquals("NEVER_LAUNCHED", checkpoint.toolLifecycle.get("batch-4"));
         assertEquals("NEVER_LAUNCHED", checkpoint.toolLifecycle.get("batch-5"));
@@ -94,6 +96,122 @@ public class CoreAgentLoopFailureRecoveryTest {
         CoreAgentLoop.Checkpoint checkpoint = loop.checkpointSnapshot().reconciled();
         assertEquals("INTERRUPTED_UNCERTAIN", checkpoint.toolLifecycle.get("uncertain"));
         assertEquals("NEVER_LAUNCHED", checkpoint.toolLifecycle.get("later"));
+    }
+
+    @Test public void repeatedUnknownToolTerminatesAsNoProgressAfterThreeModelTurns() {
+        AtomicInteger modelCalls = new AtomicInteger();
+        AtomicInteger effects = new AtomicInteger();
+        CoreAgentLoop loop = loop(tool((arguments, token) -> {
+            effects.incrementAndGet();
+            return CoreToolResult.success("unexpected invocation");
+        }), (transcript, prompt, declarations, token) -> {
+            int turn = modelCalls.incrementAndGet();
+            return reply(new ModelReply.Call("unknown-call-" + turn, "future_tool", Collections.emptyMap()));
+        });
+
+        CoreAgentLoop.Result result = loop.run("Do the requested work", Collections.emptyList(), CancellationToken.uncancellable(), null);
+
+        assertEquals("PARTIAL", result.outcome);
+        assertEquals(CoreAgentLoop.InterruptionReason.NO_PROGRESS, result.interruptionReason);
+        assertEquals(3, result.turns);
+        assertEquals(3, modelCalls.get());
+        assertEquals(0, effects.get());
+    }
+
+    @Test public void invocationReceivesArgumentsCoercedByTheDeclaredSchema() {
+        AtomicReference<Object> invokedPath = new AtomicReference<>();
+        AtomicInteger modelCalls = new AtomicInteger();
+        CoreTool tool = tool((arguments, token) -> {
+            invokedPath.set(arguments.get("path"));
+            return CoreToolResult.success("listed");
+        });
+        CoreAgentLoop loop = loop(tool, (transcript, prompt, declarations, token) ->
+                modelCalls.incrementAndGet() == 1
+                        ? reply(new ModelReply.Call("coerced-call", "ls", Collections.singletonMap("path", 42)))
+                        : new ModelReply("Done", Collections.emptyList()));
+
+        CoreAgentLoop.Result result = loop.run("List files", Collections.emptyList(), CancellationToken.uncancellable(), null);
+
+        assertEquals("COMPLETED", result.outcome);
+        assertEquals("42", invokedPath.get());
+    }
+
+    @Test public void noParameterToolExecutesWithEmptyArguments() {
+        AtomicInteger effects = new AtomicInteger();
+        AtomicInteger modelCalls = new AtomicInteger();
+        CoreTool noArguments = new CoreTool() {
+            @Override public ToolSpec declaration() {
+                return new ToolSpec("no_args", "test", "test tool", "test", ToolSpec.Status.IMPLEMENTED,
+                        Collections.emptyMap(), Collections.emptyList());
+            }
+            @Override public CoreToolResult execute(Map<String, Object> arguments, CancellationToken token) {
+                assertTrue(arguments.isEmpty());
+                effects.incrementAndGet();
+                return CoreToolResult.success("executed");
+            }
+        };
+        CoreAgentLoop loop = new CoreAgentLoop((transcript, prompt, declarations, token) ->
+                modelCalls.incrementAndGet() == 1
+                        ? reply(new ModelReply.Call("empty-arguments-call", "no_args", Collections.emptyMap()))
+                        : new ModelReply("Done", Collections.emptyList()),
+                new CoreToolRegistry(Collections.singletonList(noArguments)), "", "no-args-session");
+
+        CoreAgentLoop.Result result = loop.run("Run the tool", Collections.emptyList(), CancellationToken.uncancellable(), null);
+
+        assertEquals("COMPLETED", result.outcome);
+        assertEquals(1, effects.get());
+    }
+
+    @Test public void invalidCallRestoredFromCheckpointIsNotExecutedAgain() {
+        AtomicInteger effects = new AtomicInteger();
+        AtomicInteger firstModelCalls = new AtomicInteger();
+        CoreTool tool = tool((arguments, token) -> {
+            effects.incrementAndGet();
+            return CoreToolResult.success("unexpected invocation");
+        });
+        CoreAgentLoop first = loop(tool, (transcript, prompt, declarations, token) ->
+                firstModelCalls.incrementAndGet() == 1
+                        ? reply(new ModelReply.Call("invalid-call", "ls",
+                                Collections.singletonMap("path", Collections.singletonList(7))))
+                        : new ModelReply("The invalid call was reported.", Collections.emptyList()));
+
+        CoreAgentLoop.Result firstResult = first.run("List project files", Collections.emptyList(), CancellationToken.uncancellable(), null);
+        CoreAgentLoop.Checkpoint checkpoint = first.checkpointSnapshot().reconciled();
+        assertEquals("COMPLETED", firstResult.outcome);
+        assertEquals("NEVER_LAUNCHED", checkpoint.toolLifecycle.get("invalid-call"));
+
+        AtomicInteger resumedModelCalls = new AtomicInteger();
+        CoreAgentLoop resumed = loop(tool, (transcript, prompt, declarations, token) -> {
+            resumedModelCalls.incrementAndGet();
+            assertTrue(transcript.stream().anyMatch(turn -> turn.kind == ConversationTurn.Kind.TOOL_RESULT
+                    && "invalid-call".equals(turn.toolCallId)));
+            return new ModelReply("Continued safely.", Collections.emptyList());
+        });
+        resumed.restoreCheckpoint(checkpoint);
+
+        CoreAgentLoop.Result resumedResult = resumed.run("", checkpoint.transcript, CancellationToken.uncancellable(), null);
+
+        assertEquals("COMPLETED", resumedResult.outcome);
+        assertEquals(1, resumedModelCalls.get());
+        assertEquals(0, effects.get());
+    }
+
+    @Test public void crewWithEmptyTranscriptAndNoRealMessagesDoesNotCallTheModel() {
+        AtomicInteger modelCalls = new AtomicInteger();
+        CoreAgentLoop.TurnContextProvider noMessages = new CoreAgentLoop.TurnContextProvider() {
+            @Override public String takeUntrustedContext() { return ""; }
+        };
+        CoreAgentLoop loop = new CoreAgentLoop((transcript, prompt, declarations, token) -> {
+            modelCalls.incrementAndGet();
+            return new ModelReply("unexpected", Collections.emptyList());
+        }, new CoreToolRegistry(Collections.emptyList()), "", "crew-empty", CorePromptBudget.standard(), null,
+                CoreAgentLoop.ToolResultBudget.UNBOUNDED, noMessages, null);
+
+        CoreAgentLoop.Result result = loop.run("", Collections.emptyList(), CancellationToken.uncancellable(), null);
+
+        assertEquals("COMPLETED", result.outcome);
+        assertEquals(0, result.turns);
+        assertEquals(0, modelCalls.get());
     }
 
     private interface Effect {

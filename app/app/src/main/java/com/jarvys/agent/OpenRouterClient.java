@@ -188,6 +188,8 @@ public final class OpenRouterClient implements ModelProviderClient {
     if (history != null) {
       for (ConversationTurn turn : history) {
         if (turn.kind == ConversationTurn.Kind.MODEL_ERROR) continue;
+        if (turn.kind == ConversationTurn.Kind.MESSAGE && "assistant".equals(turn.role)
+            && turn.modelContent.trim().isEmpty() && turn.images.isEmpty()) continue;
         if (turn.kind == ConversationTurn.Kind.TOOL_CALLS) {
           JSONObject assistant = new JSONObject().put("role", "assistant");
           if (!turn.content.isEmpty()) assistant.put("content", turn.content);
@@ -330,10 +332,16 @@ public final class OpenRouterClient implements ModelProviderClient {
           if (callId.isEmpty()) callId = "jarvys-call-" + java.util.UUID.randomUUID();
           Map<String, Object> arguments = Collections.emptyMap();
           String invalidArgumentsReason = null;
-          try {
-            arguments = toMap(new JSONObject(function.optString("arguments", "{}")));
-          } catch (Exception malformedArguments) {
-            invalidArgumentsReason = "Malformed tool arguments JSON object";
+          Object argumentValue = function.opt("arguments");
+          String rawArguments = argumentValue instanceof String ? (String) argumentValue : "{}";
+          if (argumentValue != null && !(argumentValue instanceof String)) {
+            invalidArgumentsReason = "Tool arguments must be a JSON string";
+          } else if (!rawArguments.trim().isEmpty()) {
+            try {
+              arguments = toMap(new JSONObject(rawArguments));
+            } catch (Exception malformedArguments) {
+              invalidArgumentsReason = "Malformed tool arguments JSON object";
+            }
           }
           calls.add(new ModelReply.Call(callId, name, arguments, invalidArgumentsReason));
         }

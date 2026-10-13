@@ -649,10 +649,14 @@ public final class CoreAgentLoop {
                             ? (String) call.arguments.get("skill_id") : "";
                     ToolActivity activity = toolActivity(runId, modelTurns, index, call, tools, skillId);
                     String preflightError = call.invalidArgumentsReason;
+                    Map<String, Object> invokeArguments = call.arguments;
                     if (preflightError == null && tool == null) {
                         preflightError = "Tool is not available in this agent scope: " + call.name;
                     } else if (preflightError == null) {
-                        preflightError = ToolArgumentValidator.validate(call.arguments, tool.declaration().jsonSchema());
+                        ToolArgumentValidator.Result validation = ToolArgumentValidator.coerceAndValidate(
+                                call.arguments, tool.declaration().jsonSchema());
+                        invokeArguments = validation.arguments;
+                        preflightError = validation.error;
                     }
                     if (preflightError != null) {
                         allExecutedCallsTerminal = false;
@@ -674,7 +678,7 @@ public final class CoreAgentLoop {
                     if (listener != null && !quietReaction) listener.onToolActivity(activity);
                     toolLifecycle.put(call.id, "STARTED");
                     updateTranscriptSnapshot(transcript);
-                    CoreToolResult result = tools.invoke(call.name, call.arguments, token, (message)->{
+                    CoreToolResult result = tools.invoke(call.name, invokeArguments, token, (message)->{
                         if (listener != null && !quietReaction && message != null && !message.isEmpty()) {
                             listener.onToolActivity(activity.event("tool_progress",message,null));
                         }
