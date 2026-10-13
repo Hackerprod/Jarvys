@@ -55,7 +55,7 @@ public class CodexReasoningPersistenceTest {
         assertEquals(3, callTurn.providerOutputItems.size());
         assertFalse("Opaque encrypted material is not assistant-visible text", callTurn.content.contains(ENCRYPTED));
         assertFalse("Encrypted reasoning is not part of the UI timeline",
-                store.readConversationTimeline(session).stream().anyMatch(event -> event.text.contains(ENCRYPTED)));
+                store.readConversationTimeline(session).stream().anyMatch(event -> event.getText().contains(ENCRYPTED)));
 
         JSONArray input = OpenAICodexResponsesClient.userInput("", Collections.emptyList(), restored);
         JSONObject reasoning = input.getJSONObject(1);
@@ -99,7 +99,7 @@ public class CodexReasoningPersistenceTest {
         assertEquals(1, assistant.providerOutputItems.size());
         assertEquals(raw, assistant.providerOutputItems.get(0).value);
         assertFalse(assistant.content.contains(ENCRYPTED));
-        assertFalse(store.readConversationTimeline(session).stream().anyMatch(event -> event.text.contains(ENCRYPTED)));
+        assertFalse(store.readConversationTimeline(session).stream().anyMatch(event -> event.getText().contains(ENCRYPTED)));
 
         String legacy = "old-codex-transcript";
         LocalRunStore legacyStore = new LocalRunStore(files);
