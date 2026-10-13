@@ -15,6 +15,7 @@ import com.jarvys.agent.workspaces.WorkspaceIdentity;
 import com.jarvys.agent.workspaces.WorkspaceResultReference;
 import com.jarvys.agent.workspaces.WorkspaceCoordinationReference;
 import com.jarvys.agent.workspaces.WorkspaceCoordinationReply;
+import com.jarvys.agent.workspaces.WorkspaceInputIncorporation;
 import com.jarvys.agent.crew.CrewProcessIdentity;
 import com.jarvys.agent.proactive.ProactiveReplyClaim;
 import com.jarvys.agent.proactive.ProactiveSuggestedReply;
@@ -507,6 +508,23 @@ public final class LocalRunStore {
         return reply;
     }
 
+    /** Exact bounded identity lookup; at most two strict scans, with no retained reply bodies or new index. */
+    public synchronized WorkspaceCoordinationReply readWorkspaceCoordinationReplyById(String centralSessionId, String replyId) {
+        requireResultCentral(centralSessionId);
+        if (replyId == null || !replyId.matches("workspace-coordination-reply-[0-9a-f]{64}"))
+            throw new IllegalArgumentException("Invalid coordination reply id");
+        synchronized (SESSION_TITLE_LOCK) {
+            final String[] referenceId = {null};
+            scanCoordinationLedgerLocked(centralSessionId, true, (evidence, reference, notice, reply, transition) -> {
+                if (reply != null && replyId.equals(reply.replyId)) {
+                    if (referenceId[0] != null && !referenceId[0].equals(reply.reference.referenceId)) coordinationConflict();
+                    referenceId[0] = reply.reference.referenceId;
+                }
+            });
+            return referenceId[0] == null ? null : readWorkspaceCoordinationReply(centralSessionId, referenceId[0]);
+        }
+    }
+
     public synchronized void requireWorkspaceCoordinationDisclosureLive(
             WorkspaceCoordinationReference reference, boolean noticeRequired) {
         requireCoordinationReference(reference, () -> { });
@@ -516,6 +534,106 @@ public final class LocalRunStore {
             if (noticeRequired && !central.isFile()) throw new IllegalStateException("Central coordination receipt is unavailable");
         }
     }
+
+    /**
+     * Append historical checkpoint incorporation without changing reply/control dispatch state.
+     * The caller must first validate the confirmed checkpoint and authoritative source (including
+     * SQL for native CORRECT) outside Crew/store locks. finalAdmission obeys the same lightweight
+     * STOP/policy-only callback contract as the existing result journal. Neither ledger is created.
+     */
+    public synchronized WorkspaceInputIncorporation appendWorkspaceInputIncorporationIfAbsent(
+            WorkspaceInputIncorporation proposed, Runnable finalAdmission) {
+        if (proposed == null || finalAdmission == null)
+            throw new IllegalArgumentException("Incorporation and admission are required");
+        WorkspaceInputIncorporation.fromJsonStrict(proposed.toJson());
+        synchronized (SESSION_TITLE_LOCK) {
+            requireIncorporationCentralLocked(proposed.ownerCentralSessionId);
+            requireIncorporationSourceLocked(proposed);
+            WorkspaceInputIncorporation existing = findInputIncorporationLocked(
+                    proposed.ownerCentralSessionId, proposed.receiptId);
+            if (existing != null) {
+                if (!existing.sameBinding(proposed)) incorporationConflict();
+                return existing;
+            }
+            // A mailbox identity cannot be repurposed under another source claim.
+            scanInputIncorporationLedgerLocked(proposed.ownerCentralSessionId, value -> {
+                if (value.mailboxMessageId.equals(proposed.mailboxMessageId)) incorporationConflict();
+            });
+            appendResultRowLocked(proposed.ownerCentralSessionId, proposed.toJson(), true, () -> {
+                finalAdmission.run();
+                requireIncorporationCentralLocked(proposed.ownerCentralSessionId);
+            });
+            return proposed;
+        }
+    }
+
+    /** Exact metadata only; current registry ownership and READ policy remain the caller's responsibility. */
+    public synchronized WorkspaceInputIncorporation readWorkspaceInputIncorporation(String centralSessionId,
+            WorkspaceInputIncorporation.SourceKind sourceKind, String sourceId) {
+        requireResultCentral(centralSessionId);
+        String receiptId = WorkspaceInputIncorporation.receiptId(sourceKind, sourceId);
+        synchronized (SESSION_TITLE_LOCK) {
+            WorkspaceInputIncorporation found = findInputIncorporationLocked(centralSessionId, receiptId);
+            if (found != null) requireIncorporationSourceLocked(found);
+            return found;
+        }
+    }
+
+    /** Bounded lexical pages, never raw source bodies or an unbounded receipt collection. */
+    public synchronized List<WorkspaceInputIncorporation> listWorkspaceInputIncorporations(
+            String centralSessionId, int limit, String afterReceiptId) {
+        requireResultCentral(centralSessionId); resultPage(limit);
+        if (afterReceiptId != null) WorkspaceInputIncorporation.requireReceiptId(afterReceiptId);
+        synchronized (SESSION_TITLE_LOCK) {
+            java.util.TreeMap<String, WorkspaceInputIncorporation> found = new java.util.TreeMap<>();
+            scanInputIncorporationLedgerLocked(centralSessionId, value -> {
+                if (afterReceiptId == null || value.receiptId.compareTo(afterReceiptId) > 0) {
+                    found.put(value.receiptId, value);
+                    if (found.size() > limit) found.pollLastEntry();
+                }
+            });
+            for (WorkspaceInputIncorporation value : found.values()) requireIncorporationSourceLocked(value);
+            return Collections.unmodifiableList(new ArrayList<>(found.values()));
+        }
+    }
+
+    /** Final local tombstone/source boundary; callers still enforce current READ/owner admission. */
+    public synchronized void requireWorkspaceInputIncorporationDisclosureLive(WorkspaceInputIncorporation value) {
+        if (value == null) throw new IllegalArgumentException("Incorporation is required");
+        WorkspaceInputIncorporation.fromJsonStrict(value.toJson());
+        synchronized (SESSION_TITLE_LOCK) {
+            requireIncorporationCentralLocked(value.ownerCentralSessionId);
+            WorkspaceInputIncorporation durable = findInputIncorporationLocked(value.ownerCentralSessionId, value.receiptId);
+            if (durable == null || !durable.samePayload(value)) incorporationConflict();
+            requireIncorporationSourceLocked(durable);
+        }
+    }
+
+    private WorkspaceInputIncorporation findInputIncorporationLocked(String central, String receiptId) {
+        final WorkspaceInputIncorporation[] found = {null};
+        scanInputIncorporationLedgerLocked(central, value -> {
+            if (receiptId.equals(value.receiptId)) found[0] = value;
+        });
+        return found[0];
+    }
+    private void requireIncorporationCentralLocked(String central) {
+        if (!requireResultLedgerLocked(central, true).isFile())
+            throw new IllegalStateException("Central input incorporation ledger is unavailable");
+    }
+    private void requireIncorporationSourceLocked(WorkspaceInputIncorporation value) {
+        // Native sources live in SQL, not a fabricated conversation row. Still reject a missing,
+        // deleted or corrupt execution ledger, and keep exact reply evidence authoritative.
+        scanResultLedgerLocked(value.executionSessionId, false, (evidence, reference, notice) -> { });
+        if (value.sourceKind == WorkspaceInputIncorporation.SourceKind.REPLY) {
+            WorkspaceCoordinationReply reply = readWorkspaceCoordinationReply(value.ownerCentralSessionId, value.sourceReferenceId);
+            if (!value.matchesReply(reply)) throw new IllegalStateException("Incorporation has no exact admitted reply source");
+            requireExactCoordinationReplySource(reply.reference);
+        }
+    }
+    private static void incorporationConflict() {
+        throw new IllegalStateException("Input source already has a different immutable incorporation claim");
+    }
+    private interface InputIncorporationRowVisitor { void accept(WorkspaceInputIncorporation value); }
 
     private WorkspaceCoordinationReply requireExistingCoordinationReply(WorkspaceCoordinationReply proposed) {
         WorkspaceCoordinationReply durable = readWorkspaceCoordinationReply(
@@ -572,19 +690,31 @@ public final class LocalRunStore {
     }
     /** Metadata only during whole-tail scans; no accumulation of immutable reply bodies. */
     private static final class CoordinationReplyIdentity {
-        final String replyId, payloadSha256, referenceId, executionSessionId;
+        final String replyId, payloadSha256, referenceId, executionSessionId, mailboxMessageId;
+        final WorkspaceCoordinationReference reference;
         final long preparedAtMillis;
         WorkspaceCoordinationReply.State state;
         long stateAtMillis;
         CoordinationReplyIdentity(WorkspaceCoordinationReply reply) {
             replyId = reply.replyId; payloadSha256 = reply.payloadSha256; referenceId = reply.reference.referenceId;
             executionSessionId = reply.reference.executionSessionId; preparedAtMillis = reply.preparedAtMillis;
+            mailboxMessageId = reply.mailboxMessageId; reference = reply.reference;
             state = reply.state; stateAtMillis = reply.stateAtMillis;
         }
         boolean matches(WorkspaceCoordinationReply reply) {
             return replyId.equals(reply.replyId) && payloadSha256.equals(reply.payloadSha256)
                     && referenceId.equals(reply.reference.referenceId) && executionSessionId.equals(reply.reference.executionSessionId)
                     && preparedAtMillis == reply.preparedAtMillis;
+        }
+        boolean matches(WorkspaceInputIncorporation value) {
+            return state != WorkspaceCoordinationReply.State.PREPARED
+                    && replyId.equals(value.sourceId) && payloadSha256.equals(value.sourcePayloadSha256)
+                    && referenceId.equals(value.sourceReferenceId) && mailboxMessageId.equals(value.mailboxMessageId)
+                    && executionSessionId.equals(value.executionSessionId)
+                    && reference.ownerCentralSessionId.equals(value.ownerCentralSessionId)
+                    && reference.workspaceId.equals(value.workspaceId) && reference.assignmentId.equals(value.assignmentId)
+                    && reference.requestId.equals(value.requestId) && reference.missionId.equals(value.missionId)
+                    && reference.botId.equals(value.botId) && reference.cycleId.equals(value.admissionCycleId);
         }
         void advance(WorkspaceCoordinationReply.Transition next) throws IOException {
             if (!replyId.equals(next.replyId) || !payloadSha256.equals(next.payloadSha256)
@@ -631,8 +761,16 @@ public final class LocalRunStore {
     private void scanCoordinationLedgerLocked(String session, boolean allowMissingCentral, CoordinationRowVisitor visitor) {
         scanWorkspaceLedgerLocked(session, allowMissingCentral, (evidence, reference, notice) -> { }, visitor);
     }
+    private void scanInputIncorporationLedgerLocked(String central, InputIncorporationRowVisitor visitor) {
+        scanWorkspaceLedgerLocked(central, true, (evidence, reference, notice) -> { },
+                (evidence, reference, notice, reply, transition) -> { }, visitor);
+    }
     private void scanWorkspaceLedgerLocked(String session, boolean allowMissingCentral,
             ResultRowVisitor visitor, CoordinationRowVisitor coordinationVisitor) {
+        scanWorkspaceLedgerLocked(session, allowMissingCentral, visitor, coordinationVisitor, value -> { });
+    }
+    private void scanWorkspaceLedgerLocked(String session, boolean allowMissingCentral,
+            ResultRowVisitor visitor, CoordinationRowVisitor coordinationVisitor, InputIncorporationRowVisitor incorporationVisitor) {
         File ledger = requireResultLedgerLocked(session, allowMissingCentral);
         if (!ledger.exists()) return;
         Map<String, ResultEvidenceIdentity> evidenceKeys = new LinkedHashMap<>();
@@ -641,6 +779,8 @@ public final class LocalRunStore {
         Map<String, WorkspaceCoordinationReference> coordinationReferenceKeys = new LinkedHashMap<>();
         Map<String, CoordinationReplyIdentity> coordinationReplyKeys = new LinkedHashMap<>();
         Map<String, String> coordinationReplyEvidenceClaims = new LinkedHashMap<>();
+        Map<String, WorkspaceInputIncorporation> incorporationKeys = new LinkedHashMap<>();
+        Map<String, String> incorporationMailboxClaims = new LinkedHashMap<>();
         try (java.io.InputStreamReader decoded = new java.io.InputStreamReader(new java.io.FileInputStream(ledger),
                 StandardCharsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
                         .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT));
@@ -717,9 +857,31 @@ public final class LocalRunStore {
                     if (previous == null) throw new IOException("Coordination reply state has no preceding intent");
                     previous.advance(transition);
                     coordinationVisitor.accept(null, null, false, null, transition);
+                } else if (WorkspaceInputIncorporation.ROW_TYPE.equals(type)) {
+                    requireResultCentral(session);
+                    WorkspaceInputIncorporation value = WorkspaceInputIncorporation.fromJsonStrict(row);
+                    if (!session.equals(value.ownerCentralSessionId)) throw new IOException("Wrong incorporation ledger owner");
+                    if (value.sourceKind == WorkspaceInputIncorporation.SourceKind.REPLY) {
+                        CoordinationReplyIdentity reply = coordinationReplyKeys.get(value.sourceReferenceId);
+                        if (reply == null || !reply.matches(value))
+                            throw new IOException("Incorporation has no preceding exact admitted reply");
+                    }
+                    String priorClaim = incorporationMailboxClaims.put(value.mailboxMessageId, value.receiptId);
+                    if (priorClaim != null && !priorClaim.equals(value.receiptId))
+                        throw new IOException("Multiple incorporation sources claim the same mailbox message");
+                    WorkspaceInputIncorporation previous = incorporationKeys.get(value.receiptId);
+                    if (previous != null && !previous.sameBinding(value))
+                        throw new IOException("Conflicting input incorporation identity");
+                    // Later checkpoints can support the same proof; never overwrite the first observation.
+                    if (previous == null) {
+                        incorporationKeys.put(value.receiptId, value);
+                        incorporationVisitor.accept(value);
+                    }
                 } else if (type.startsWith("crew_coordination_") || type.startsWith("workspace_coordination_")
                         || row.has("crewCoordinationSchemaVersion") || row.has("workspaceCoordinationSchemaVersion")
                         || row.has("workspaceCoordinationReplySchemaVersion") || row.has("replyId")
+                        || type.startsWith("workspace_input_") || row.has("workspaceInputIncorporationSchemaVersion")
+                        || row.has("receiptId")
                         || type.startsWith("crew_result_") || type.startsWith("workspace_result_")
                         || row.has("crewResultSchemaVersion") || row.has("workspaceResultSchemaVersion")
                         || row.has("evidenceId") || row.has("referenceId")) {
@@ -1784,6 +1946,8 @@ public final class LocalRunStore {
         return type.startsWith("crew_coordination_") || type.startsWith("workspace_coordination_")
                 || row.has("crewCoordinationSchemaVersion") || row.has("workspaceCoordinationSchemaVersion")
                 || row.has("workspaceCoordinationReplySchemaVersion") || row.has("replyId")
+                || type.startsWith("workspace_input_") || row.has("workspaceInputIncorporationSchemaVersion")
+                || row.has("receiptId")
                 || type.startsWith("crew_result_") || type.startsWith("workspace_result_")
                 || row.has("crewResultSchemaVersion") || row.has("workspaceResultSchemaVersion")
                 || row.has("evidenceId") || row.has("referenceId");

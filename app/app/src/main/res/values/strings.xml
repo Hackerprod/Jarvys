@@ -1435,11 +1435,22 @@ Their exit results are unknown. Do not repeat them automatically. Review project
     <string name="native_permission_workspace_deliver">Deliver workspace files to central</string>
     <string name="workspace_policy_disclosure">Applies to this exact workspace action. Worker capabilities and Android or provider permissions remain independent.</string>
 
-    <string name="workspace_coordination_live">%1$d questions or blockers can receive an exact reply.</string>
-    <string name="workspace_coordination_uncertain">%1$d reply attempts have an uncertain outcome. Do not resend automatically.</string>
+    <plurals name="workspace_coordination_live">
+        <item quantity="one">%1$d question or blocker can receive an exact reply.</item>
+        <item quantity="other">%1$d questions or blockers can receive an exact reply.</item>
+    </plurals>
+    <plurals name="workspace_coordination_uncertain">
+        <item quantity="one">%1$d reply attempt has an uncertain outcome. Do not resend automatically.</item>
+        <item quantity="other">%1$d reply attempts have an uncertain outcome. Do not resend automatically.</item>
+    </plurals>
     <string name="workspace_coordination_review">Coordination access or reply needs foreground permission review.</string>
-    <string name="workspace_coordination_historical">%1$d historical or superseded requests. Reopening does not resume work.</string>
+    <plurals name="workspace_coordination_historical">
+        <item quantity="one">%1$d historical or superseded request. Reopening does not resume work.</item>
+        <item quantity="other">%1$d historical or superseded requests. Reopening does not resume work.</item>
+    </plurals>
     <string name="workspace_coordination_page_scope">First coordination page only. More records may require the central inbox.</string>
     <string name="workspace_coordination_unavailable">Coordination evidence is unavailable. No work was repeated.</string>
     <string name="crew_type_blocker">Blocker</string>
+    <string name="workspace_correction_checkpoint_incorporated">The exact correction was incorporated into a saved checkpoint. This does not verify understanding, execution or completion.</string>
+    <string name="workspace_correction_checkpoint_unverified">Correction dispatch is recorded. Incorporation into a saved checkpoint is not verified; do not resend automatically.</string>
 </resources>

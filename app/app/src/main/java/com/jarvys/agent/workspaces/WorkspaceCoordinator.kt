@@ -282,10 +282,19 @@ class WorkspaceCoordinator internal constructor(context: Context,
                                 keepalive()
                             }
                             WorkspaceControlType.CORRECT -> {
+                                // Legacy checkpoints may lack a cycle identity; preserve their control path
+                                // without inventing an exact incorporation proof.
+                                val input = bot.cycleId().takeIf { it.isNotEmpty() }?.let { cycle ->
+                                    WorkspaceInputSources.correction(scope,
+                                        requireNotNull(store.getAssignment(control.workspaceId, control.assignmentId)),
+                                        requireNotNull(started), cycle)
+                                }
                                 if (bot.requiresExplicitResume()) {
                                     check(bot.canResume() && bot.isQuiescent) { "Worker is not ready for checkpoint recovery" }
-                                    manager.resumeExact(bot.id, expectedToken, control.userText)
-                                } else manager.sendUserMessageExact(bot.id, expectedToken, control.userText)
+                                    if (input == null) manager.resumeExact(bot.id, expectedToken, control.userText)
+                                    else manager.resumeExact(bot.id, expectedToken, control.userText, input)
+                                } else if (input == null) manager.sendUserMessageExact(bot.id, expectedToken, control.userText)
+                                else manager.sendUserMessageExact(bot.id, expectedToken, control.userText, input)
                                 keepalive()
                             }
                         }

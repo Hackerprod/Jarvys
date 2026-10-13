@@ -96,6 +96,7 @@ class WorkspaceCoordinationDelivery internal constructor(
             val evidence = source(reference)
             ledger.requireWorkspaceCoordinationDisclosureLive(reference, false)
             val row = metadata(reference).put("reply_state", replyState(reference, evidence))
+                .put("incorporation", incorporation(reference, admission))
             // CentralWorkspaceTool escapes non-ASCII code units losslessly on the wire.
             val cost = row.toString().sumOf { if (it.code > 0x7e) 6 else 1 } + 1
             if (rows.isNotEmpty() && wireSize + cost > INBOX_WIRE_BUDGET) break
@@ -119,6 +120,10 @@ class WorkspaceCoordinationDelivery internal constructor(
         val reference = requireNotNull(ledger.readWorkspaceCoordinationReference(scope.executionSessionId, messageId))
         check(reference.workspaceId == workspaceId && reference.contentSha256 == expectedSha256)
         val evidence = source(reference)
+        val exactReply = ledger.readWorkspaceCoordinationReply(reference.ownerCentralSessionId, reference.referenceId)
+        if (exactReply != null && exactReply.state != WorkspaceCoordinationReply.State.PREPARED)
+            WorkspaceInputIncorporationDelivery(app, ledger, policy).reconcile(workspaceId, token, admission,
+                WorkspaceInputSources.reply(exactReply))
         val content = coordinationContent(evidence.text, evidence.refs)
         require(offset <= content.length)
         val end = offset + minOf(TEXT_PAGE, content.length - offset)
@@ -135,6 +140,7 @@ class WorkspaceCoordinationDelivery internal constructor(
             .put("total_chars", content.length).put("current_assignment_revision", current.revision)
             .put("expected_assignment_revision", reference.observedAssignmentRevision)
             .put("reply_state", replyState(reference, evidence))
+            .put("incorporation", incorporation(reference, admission))
             .put("revision_semantics", "Registration revision does not prove a correction was consumed.")
     }
 
@@ -157,7 +163,7 @@ class WorkspaceCoordinationDelivery internal constructor(
                 // prepare validates identical key/payload/provenance, then returns the original state.
                 val existing = active(token) { ledger.prepareWorkspaceCoordinationReply(proposed, admission) }
                 admission.run()
-                return@synchronized replyReceipt(existing)
+                return@synchronized replyReceipt(existing, admission)
             }
             val evidence = source(reference)
             val manager = requireNotNull(existingManager(scope.executionSessionId)) {
@@ -182,14 +188,14 @@ class WorkspaceCoordinationDelivery internal constructor(
             val dispatchAdmission = Runnable { token.throwIfCancelled(); admission.run() }
             val prepared = active(token) { ledger.prepareWorkspaceCoordinationReply(proposed, dispatchAdmission) }
             if (prepared.state != WorkspaceCoordinationReply.State.PREPARED)
-                return@synchronized replyReceipt(prepared)
+                return@synchronized replyReceipt(prepared, admission)
             var accepted: WorkspaceCoordinationReply? = null
             if (!token.runIfActive {
                     validate.run()
                     val started = ledger.markWorkspaceCoordinationReplyStarted(prepared, dispatchAdmission)
                     check(started.state == WorkspaceCoordinationReply.State.STARTED)
                     // Any failure after STARTED remains uncertain and must never cause a resend.
-                    manager.replyToCoordinationExact(evidence, started.mailboxMessageId, text) {
+                    manager.replyToCoordinationExact(evidence, started.mailboxMessageId, text, WorkspaceInputSources.reply(started)) {
                         validate.run(); true
                     }
                     accepted = ledger.markWorkspaceCoordinationReplyAccepted(started, Runnable {
@@ -199,7 +205,7 @@ class WorkspaceCoordinationDelivery internal constructor(
                 }) token.throwIfCancelled()
             WorkspaceChanges.changed()
             admission.run()
-            replyReceipt(requireNotNull(accepted))
+            replyReceipt(requireNotNull(accepted), admission)
         } } finally { WorkspaceChanges.changed() }
     }
 
@@ -266,11 +272,28 @@ class WorkspaceCoordinationDelivery internal constructor(
         }
     }
 
-    private fun replyReceipt(reply: WorkspaceCoordinationReply) = JSONObject()
+    private fun incorporation(reference: WorkspaceCoordinationReference, admission: Runnable): JSONObject {
+        val reply = ledger.readWorkspaceCoordinationReply(reference.ownerCentralSessionId, reference.referenceId)
+        val receipt = if (reply == null || reply.state == WorkspaceCoordinationReply.State.PREPARED) null
+            else WorkspaceInputIncorporationDelivery(app, ledger, policy).read(WorkspaceInputSources.reply(reply), admission)
+        return JSONObject().put("state", if (receipt == null) "UNVERIFIED" else "CHECKPOINT_INCORPORATED")
+            .put("first_incorporation_cycle_id", receipt?.firstIncorporationCycleId ?: JSONObject.NULL)
+            .put("checkpoint_payload_sha256", receipt?.checkpointPayloadSha256 ?: JSONObject.NULL)
+            .put("checkpoint_saved_at_millis", receipt?.checkpointSavedAtMillis ?: JSONObject.NULL)
+            .put("semantics", "Historical exact input incorporation into a durability-confirmed checkpoint; not proof of understanding, current context, obedience or completion.")
+            .also {
+                source(reference)
+                admission.run()
+                ledger.requireWorkspaceCoordinationDisclosureLive(reference, false)
+            }
+    }
+
+    private fun replyReceipt(reply: WorkspaceCoordinationReply, admission: Runnable) = JSONObject()
         .put("reply_id", reply.replyId).put("message_id", reply.reference.referenceId)
         .put("mailbox_message_id", reply.mailboxMessageId)
         .put("state", if (reply.state == WorkspaceCoordinationReply.State.STARTED) "UNCERTAIN_NO_REPLAY" else reply.state.name)
         .put("dispatch_accepted_locally", reply.state == WorkspaceCoordinationReply.State.ACCEPTED_LOCAL)
+        .put("incorporation", incorporation(reply.reference, admission))
         .put("user_or_model_consumption_verified", false).put("question_resolved", false)
         .put("automatic_work_replay", false)
 
@@ -324,6 +347,7 @@ class WorkspaceCoordinationDelivery internal constructor(
         internal fun reconcileScheduled(context: Context, workspaceId: String, token: CancellationToken) {
             try {
                 WorkspaceCoordinationDelivery(context).reconcile(workspaceId, token)
+                WorkspaceInputIncorporationDelivery(context).reconcile(workspaceId, token)
                 errors.remove(workspaceId)
             } catch (cancelled: java.util.concurrent.CancellationException) { throw cancelled }
             catch (_: Exception) {

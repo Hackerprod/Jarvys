@@ -23,6 +23,15 @@ public final class ProjectScopeStore {
   }
 
   public ProjectScope open(String conversationId) throws IOException {
+    return open(conversationId, true);
+  }
+
+  /** Read-only scope admission: missing roots or identity are never recreated. */
+  public ProjectScope openExisting(String conversationId) throws IOException {
+    return open(conversationId, false);
+  }
+
+  private ProjectScope open(String conversationId, boolean create) throws IOException {
     if (conversationId == null || conversationId.trim().isEmpty()) {
       throw new IOException("Conversation id is required");
     }
@@ -41,6 +50,7 @@ public final class ProjectScopeStore {
         for (ProjectScope.Anchor known : anchors) known.validate();
         path = new File(path, part);
         if (!ProjectFileIO.exists(path)) {
+          if (!create) throw new IOException("Existing project directory is missing");
           if (ProjectFileIO.exists(ProjectScopeIdentity.manifestPath(anchor, id))) {
             throw new IOException("Saved project directory is missing; reopen requires review");
           }
@@ -49,7 +59,7 @@ public final class ProjectScopeStore {
         }
         anchors.add(new ProjectScope.Anchor(path));
       }
-      ProjectScopeIdentity identity = ProjectScopeIdentity.open(anchor, id, anchors);
+      ProjectScopeIdentity identity = ProjectScopeIdentity.open(anchor, id, anchors, create);
       ProjectScope scope =
           new ProjectScope(
               id,

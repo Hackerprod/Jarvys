@@ -97,9 +97,7 @@ public final class CrewTools {
             @Override CoreToolResult run(Map<String,Object> a, CancellationToken token) {
                 token.throwIfCancelled();
                 List<CrewMessage> answer = manager.askChief(bot, originalString(a,"question"), token);
-                if (answer.isEmpty()) return CoreToolResult.success(
-                        "The user sent new guidance; it will be delivered as a trusted user turn on the next model turn.");
-                return CoreToolResult.success(CrewManager.formatMessages(answer));
+                return CoreToolResult.crewAnswers(answer);
             }
         });
         if (bot.role.tools.contains("report_done")) tools.add(new BotTool("report_done", "Submit this work cycle's verified, partial, or blocked result to the captain, with exact source/artifact refs, executed checks, unrun checks and limitations. A tool exit code alone does not establish test coverage or final-source validity. A later follow-up retains the mission restriction.",

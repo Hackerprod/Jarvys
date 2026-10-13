@@ -1,5 +1,10 @@
 package com.jarvys.agent;
 
+import com.jarvys.agent.crew.CrewInputBinding;
+import com.jarvys.agent.crew.CrewInputIncorporation;
+import com.jarvys.agent.crew.CrewMessage;
+import com.jarvys.agent.crew.CrewManager;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -126,13 +131,27 @@ public final class CoreAgentLoop {
         public final String source;
         public final String content;
         public final boolean genuineUser;
+        public final CrewInputBinding inputBinding;
 
         public IncomingMessage(String id, String source, String content, boolean genuineUser) {
+            this(id, source, content, genuineUser, null);
+        }
+
+        private IncomingMessage(String id, String source, String content, boolean genuineUser, CrewInputBinding inputBinding) {
+            this.inputBinding = inputBinding;
             if (id == null || id.isEmpty()) throw new IllegalArgumentException("Incoming message id is required");
             this.id = id;
             this.source = source == null ? "unknown" : source;
             this.content = content == null ? "" : content;
             this.genuineUser = genuineUser;
+        }
+
+        public static IncomingMessage fromCrewMessage(CrewMessage message) {
+            boolean user = "user".equals(message.from) && message.type == CrewMessage.Type.USER;
+            CrewInputBinding binding = message.inputBinding != null && message.inputBinding.matchesDelivery(message)
+                    ? message.inputBinding : null;
+            return new IncomingMessage(message.id, message.from,
+                    user ? message.text : CrewManager.formatMessages(Collections.singletonList(message)), user, binding);
         }
     }
 
@@ -200,6 +219,8 @@ public final class CoreAgentLoop {
     private volatile List<ConversationTurn> transcriptSnapshot = Collections.emptyList();
     private final Set<String> appliedIncomingIds = new LinkedHashSet<>();
     private final Map<String, String> toolLifecycle = new LinkedHashMap<>();
+    private final Map<String, CrewInputIncorporation> incorporations = new LinkedHashMap<>();
+    private volatile String checkpointCycleId = "";
     private ConversationTurn protectedGenuineUser;
     private volatile Checkpoint checkpoint = Checkpoint.empty();
     private volatile CheckpointListener checkpointListener;
@@ -219,8 +240,22 @@ public final class CoreAgentLoop {
         public final Set<String> appliedIncomingIds;
         public final Map<String, String> toolLifecycle;
         public final int genuineUserIndex;
+        public final Map<String, CrewInputIncorporation> incorporations;
 
         public Checkpoint(List<ConversationTurn> transcript, Set<String> appliedIncomingIds, Map<String, String> toolLifecycle, int genuineUserIndex) {
+            this(transcript, appliedIncomingIds, toolLifecycle, genuineUserIndex, Collections.emptyMap());
+        }
+
+        public Checkpoint(List<ConversationTurn> transcript, Set<String> appliedIncomingIds, Map<String, String> toolLifecycle,
+                int genuineUserIndex, Map<String, CrewInputIncorporation> incorporations) {
+            Map<String, CrewInputIncorporation> copy = new LinkedHashMap<>();
+            for (Map.Entry<String, CrewInputIncorporation> entry : incorporations.entrySet()) {
+                if (entry.getValue() == null || !entry.getValue().binding.mailboxMessageId.equals(entry.getKey())
+                        || !appliedIncomingIds.contains(entry.getKey()))
+                    throw new IllegalArgumentException("Input incorporation is not an applied mailbox message");
+                copy.put(entry.getKey(), entry.getValue());
+            }
+            this.incorporations = Collections.unmodifiableMap(copy);
             this.transcript = Collections.unmodifiableList(new ArrayList<>(transcript));
             this.appliedIncomingIds = Collections.unmodifiableSet(new LinkedHashSet<>(appliedIncomingIds));
             this.toolLifecycle = Collections.unmodifiableMap(new LinkedHashMap<>(toolLifecycle));
@@ -276,8 +311,15 @@ public final class CoreAgentLoop {
                     restored.add(ConversationTurn.toolResult(call.id, call.name, recovery + ": " + ("NEVER_LAUNCHED".equals(recovery) ? "The recorded tool intent was never launched." : "Tool execution was interrupted before its result was durably recorded; effects may have occurred.") + " It was not automatically replayed. Inspect current evidence before any explicit continuation."));
                 }
             }
-            return new Checkpoint(restored, appliedIncomingIds, states, genuine == null ? -1 : restored.indexOf(genuine));
+            return new Checkpoint(restored, appliedIncomingIds, states, genuine == null ? -1 : restored.indexOf(genuine), incorporations);
         }
+    }
+
+    /** Reinstalled for every Crew run invocation, including reused loops. Empty is generic/no proof. */
+    public void setCheckpointScope(String cycleId) {
+        if (cycleId == null || (!cycleId.isEmpty() && !UUID.fromString(cycleId).toString().equals(cycleId)))
+            throw new IllegalArgumentException("Invalid checkpoint cycle identity");
+        checkpointCycleId = cycleId;
     }
 
     public void setCheckpointListener(CheckpointListener listener) {
@@ -295,6 +337,8 @@ public final class CoreAgentLoop {
         appliedIncomingIds.addAll(safe.appliedIncomingIds);
         toolLifecycle.clear();
         toolLifecycle.putAll(safe.toolLifecycle);
+        incorporations.clear();
+        incorporations.putAll(safe.incorporations);
         protectedGenuineUser = safe.genuineUserIndex < 0 ? null : safe.transcript.get(safe.genuineUserIndex);
         if (compactor != null) {
             if (protectedGenuineUser != null) compactor.protectGenuineUser(protectedGenuineUser);
@@ -323,7 +367,7 @@ public final class CoreAgentLoop {
             }
         }
         transcriptSnapshot = Collections.unmodifiableList(new ArrayList<>(transcript));
-        checkpoint = new Checkpoint(transcriptSnapshot, appliedIncomingIds, toolLifecycle, protectedGenuineUser == null ? -1 : transcript.indexOf(protectedGenuineUser));
+        checkpoint = new Checkpoint(transcriptSnapshot, appliedIncomingIds, toolLifecycle, protectedGenuineUser == null ? -1 : transcript.indexOf(protectedGenuineUser), incorporations);
         CheckpointListener listener = checkpointListener;
         if (listener != null) {
             try {
@@ -433,6 +477,9 @@ public final class CoreAgentLoop {
                                 protectedGenuineUser = userTurn;
                                 if (compactor != null) compactor.protectGenuineUser(userTurn);
                             } else appendIncoming(transcript, message);
+                            recordIncorporation(message.inputBinding,
+                                    message.genuineUser ? CrewInputIncorporation.TransportKind.USER : CrewInputIncorporation.TransportKind.INBOX,
+                                    transcript.get(transcript.size() - 1).content);
                         }
                     }
                     List<String> trusted = turnContextProvider.takeTrustedUserMessages();
@@ -625,7 +672,14 @@ public final class CoreAgentLoop {
                     if (!quietReaction) activeActivity = activity.event("tool_progress",rawContent,result.previewId);
                     madeProgress |= loopDetector.record(call.name, argumentsKey, result.success, rawContent);
                     transcript.add(ConversationTurn.toolResult(call.id, call.name, result.success ? rawContent : "Tool error: " + rawContent));
-                    if (turnContextProvider != null && result.success) {
+                    if (result.success && result.incomingBatch != null) {
+                        if (!result.incomingBatch.matches(call.name, rawContent))
+                            throw new IllegalStateException("Tool result does not match its exact incoming batch");
+                        for (String id : result.incomingBatch.messageIds) {
+                            if (appliedIncomingIds.add(id)) recordIncorporation(result.incomingBatch.bindings.get(id),
+                                    CrewInputIncorporation.TransportKind.ASK_CHIEF, rawContent);
+                        }
+                    } else if (turnContextProvider != null && result.success) {
                         try {
                             List<String> completedIds = turnContextProvider.completedToolIncomingIds(call.name);
                             if (completedIds != null) for (String id : completedIds) {
@@ -710,6 +764,13 @@ public final class CoreAgentLoop {
             }
         }
         return false;
+    }
+
+    private void recordIncorporation(CrewInputBinding binding, CrewInputIncorporation.TransportKind kind, String content) {
+        String cycleId = checkpointCycleId;
+        if (binding == null || cycleId.isEmpty() || incorporations.containsKey(binding.mailboxMessageId)) return;
+        incorporations.put(binding.mailboxMessageId, new CrewInputIncorporation(binding, cycleId, kind,
+                CrewInputIncorporation.transportSha256(content)));
     }
 
     private static void appendIncoming(List<ConversationTurn> transcript, IncomingMessage message) {

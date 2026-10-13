@@ -80,6 +80,8 @@ object WorkspaceProjection {
             com.jarvys.agent.WorkspaceCoordinationDelivery.issue(scope.workspaceId),
             if (assignment.needsReconciliation) context.getString(R.string.workspace_admission_uncertain) else null,
             if (unsettled != null) context.getString(R.string.workspace_control_uncertain) else null,
+            runCatching { com.jarvys.agent.WorkspaceInputIncorporationDelivery(context)
+                .correctionNote(scope.workspaceId, assignment.assignmentId) }.getOrNull(),
             if (recorded == null) context.getString(R.string.workspace_evidence_unavailable) else recorded.recoveryNote.takeIf { it.isNotBlank() },
             if (live?.requiresExplicitResume() == true && !live.canResume()) context.getString(R.string.workspace_checkpoint_unavailable) else null)
             .joinToString("\n").takeIf { it.isNotBlank() }

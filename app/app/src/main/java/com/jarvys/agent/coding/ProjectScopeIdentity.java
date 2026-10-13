@@ -33,6 +33,11 @@ final class ProjectScopeIdentity {
 
   static ProjectScopeIdentity open(File anchor, String id, List<ProjectScope.Anchor> roots)
       throws IOException {
+    return open(anchor, id, roots, true);
+  }
+
+  static ProjectScopeIdentity open(File anchor, String id, List<ProjectScope.Anchor> roots, boolean create)
+      throws IOException {
     JSONObject record;
     int i;
     List<ProjectScope.Anchor> privateAnchors = new ArrayList<>();
@@ -44,6 +49,7 @@ final class ProjectScopeIdentity {
       validate(privateAnchors);
       directory = new File(directory, part);
       if (!ProjectFileIO.exists(directory)) {
+        if (!create) throw new IOException("Existing project identity directory is missing");
         ProjectFileIO.mkdir(directory);
         ProjectJournalIO.syncDirectory(directory.getParentFile());
       }
@@ -66,6 +72,7 @@ final class ProjectScopeIdentity {
         privateAnchors.add(journalAnchor);
         i = 1;
       } else {
+        if (!create) throw new IOException("Existing project identity is missing");
         if (!ProjectFileIO.exists(journal)) {
           ProjectFileIO.mkdir(journal);
           ProjectJournalIO.syncDirectory(directory);

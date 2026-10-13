@@ -230,6 +230,10 @@ final class CrewCheckpointCoordinator implements CrewManager.CheckpointSupport {
             if (message.coordination != null && (!botId.equals(message.coordination.botId)
                     || !missionId.equals(message.coordination.missionId)))
                 throw new IllegalStateException("Checkpoint causal source belongs to another mission");
+            if (message.inputBinding != null && (!botId.equals(message.inputBinding.botId)
+                    || !missionId.equals(message.inputBinding.missionId)
+                    || !conversation.equals(message.inputBinding.executionSessionId)))
+                throw new IllegalStateException("Checkpoint input source belongs to another mission");
             if (pending && message.activity != null) throw new IllegalStateException("Local activity cannot be mailbox work");
             result.add(message);
         }

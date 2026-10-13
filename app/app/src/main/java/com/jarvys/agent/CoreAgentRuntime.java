@@ -537,6 +537,10 @@ public final class CoreAgentRuntime {
               }
             });
     manager.configureCheckpoints(checkpoints);
+    if (WorkspaceCoordinationDelivery.isCanonicalWorkspace(this.context, this.sessionId)) {
+      manager.setCheckpointCommittedListener(() ->
+          WorkspaceCoordinationDelivery.schedule(CoreAgentRuntime.this.context, CoreAgentRuntime.this.sessionId));
+    }
     CrewProfileRepository profileRepository = new CrewProfileRepository(this.context);
     manager.configureProfileSubscription(profileRepository.addChangeListener(manager::definitionChanged));
     checkpoints.restore(manager, crewStore.readCrewMissionSnapshots(this.sessionId));

@@ -217,6 +217,19 @@ class WorkspaceRegistry(context: Context) : Closeable {
         }
     }
 
+    /** Latest explicit correction only; historical dispatch and incorporation remain independent. */
+    fun getLatestCorrection(workspaceId: String, assignmentId: String): WorkspaceUserControl? {
+        workspaceId(workspaceId); uuid(assignmentId, "assignmentId")
+        return transaction { db ->
+            requireAssignment(db, workspaceId, assignmentId)
+            db.query("user_control", null, "workspace_id=? AND assignment_id=? AND type=?",
+                arrayOf(workspaceId, assignmentId, WorkspaceControlType.CORRECT.name),
+                null, null, "created_at DESC, request_id DESC", "1").use {
+                if (it.moveToFirst()) userControl(it) else null
+            }
+        }
+    }
+
     /** Latest unresolved native control; reading it never acknowledges, retries or resumes work. */
     fun getUnsettledControl(workspaceId: String, assignmentId: String): WorkspaceUserControl? {
         workspaceId(workspaceId); uuid(assignmentId, "assignmentId")

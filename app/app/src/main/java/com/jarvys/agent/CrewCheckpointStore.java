@@ -4,6 +4,7 @@ import android.os.Build;
 import android.system.ErrnoException;
 import android.system.Os;
 import android.system.OsConstants;
+import com.jarvys.agent.crew.CrewInputIncorporation;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileDescriptor;
@@ -11,6 +12,8 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.FilenameFilter;
 import java.io.IOException;
+import java.io.InputStream;
+import java.nio.channels.Channels;
 import java.nio.channels.ClosedByInterruptException;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
@@ -19,6 +22,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -35,6 +39,12 @@ public final class CrewCheckpointStore {
     public static final int SCHEMA_VERSION = 1;
     private final ConversationMetadataStore conversationMetadata;
     private final File filesDirectory;
+    private final DirectorySyncFaultInjector directorySyncFaultInjector;
+
+    /** Package-private failure seam; production always performs the real directory fsync. */
+    interface DirectorySyncFaultInjector {
+        void beforeSync(File directory) throws IOException;
+    }
 
     public static final class Snapshot {
         public final JSONObject artifactOwnership;
@@ -53,14 +63,80 @@ public final class CrewCheckpointStore {
             this.loop = CrewCheckpointStore.decodeLoop(payload.getJSONObject("loop"));
             this.artifactOwnership = payload.getJSONObject("artifactOwnership");
             this.savedAtMs = payload.getLong("savedAtMs");
+            for (CrewInputIncorporation proof : loop.incorporations.values()) {
+                if (!conversationId.equals(proof.binding.executionSessionId)
+                        || !botId.equals(proof.binding.botId)
+                        || !required(metadata, "missionId").equals(proof.binding.missionId)) {
+                    throw new IOException("Checkpoint incorporation belongs to a different execution scope");
+                }
+            }
+        }
+    }
+
+    /**
+     * Immutable evidence for this observed, durability-confirmed checkpoint. This does not
+     * assert that its original save returned successfully, or that worker effects completed.
+     */
+    public static final class ConfirmedSnapshot {
+        public final String conversationId;
+        public final String botId;
+        public final String scopeIdentity;
+        public final long savedAtMs;
+        public final String payloadSha256;
+        public final CoreAgentLoop.Checkpoint loop;
+        private final String serializedMetadata;
+        private final String serializedArtifactOwnership;
+
+        private ConfirmedSnapshot(ObservedCheckpoint observed) {
+            Snapshot snapshot = observed.snapshot;
+            conversationId = snapshot.conversationId;
+            botId = snapshot.botId;
+            scopeIdentity = snapshot.scopeIdentity;
+            savedAtMs = snapshot.savedAtMs;
+            payloadSha256 = observed.payloadSha256;
+            loop = snapshot.loop;
+            serializedMetadata = snapshot.metadata.toString();
+            serializedArtifactOwnership = snapshot.artifactOwnership.toString();
+        }
+
+        public JSONObject metadataJson() {
+            return defensiveJson(serializedMetadata);
+        }
+
+        public JSONObject artifactOwnershipJson() {
+            return defensiveJson(serializedArtifactOwnership);
+        }
+
+        private static JSONObject defensiveJson(String serialized) {
+            try {
+                return new JSONObject(serialized);
+            } catch (Exception impossible) {
+                throw new IllegalStateException("Validated checkpoint JSON could not be copied", impossible);
+            }
+        }
+    }
+
+    private static final class ObservedCheckpoint {
+        final Snapshot snapshot;
+        final String payloadSha256;
+
+        ObservedCheckpoint(Snapshot snapshot, String payloadSha256) {
+            this.snapshot = snapshot;
+            this.payloadSha256 = payloadSha256;
         }
     }
 
     public CrewCheckpointStore(File filesDirectory) {
+        this(filesDirectory, directory -> { });
+    }
+
+    CrewCheckpointStore(File filesDirectory, DirectorySyncFaultInjector directorySyncFaultInjector) {
+        if (directorySyncFaultInjector == null) throw new IllegalArgumentException("Directory sync hook is required");
         try {
             this.filesDirectory = filesDirectory.getCanonicalFile();
             verify(this.filesDirectory);
             this.conversationMetadata = new ConversationMetadataStore(this.filesDirectory);
+            this.directorySyncFaultInjector = directorySyncFaultInjector;
         } catch (IOException failure) {
             throw new IllegalStateException("Unsafe Crew checkpoint directory", failure);
         }
@@ -77,6 +153,9 @@ public final class CrewCheckpointStore {
                 long estimated = estimatedSize(metadata, budget) + estimatedSize(artifactOwnership, budget) + estimatedSize(loop.appliedIncomingIds, budget) + estimatedSize(loop.toolLifecycle, budget);
                 if (estimated > budget) {
                     throw new IOException("Checkpoint exceeds current materialization headroom; evidence preserved");
+                }
+                for (CrewInputIncorporation incorporation : loop.incorporations.values()) {
+                    estimated += estimatedSize(incorporation.toJson(), budget - estimated);
                 }
                 for (ConversationTurn turn : loop.transcript) {
                     estimated += estimatedSize(turn.content, budget - estimated);
@@ -124,11 +203,7 @@ public final class CrewCheckpointStore {
                 verify(target);
                 verify(pending);
                 if (!pending.renameTo(target)) throw new IOException("Could not atomically commit Crew checkpoint");
-                for (File parent = directory; parent != null; parent = parent.getParentFile()) {
-                    verify(parent);
-                    syncDirectory(parent);
-                    if (parent.equals(this.filesDirectory)) break;
-                }
+                syncDirectoryChain(directory);
             } catch (StackOverflowError invalidDepth) {
                 throw new IllegalStateException("Checkpoint structure is too deeply nested; evidence preserved", invalidDepth);
             } catch (Exception failure) {
@@ -151,6 +226,34 @@ public final class CrewCheckpointStore {
                 throw new IllegalStateException("Crew checkpoint is unavailable; original evidence is preserved", failure);
             } catch (StackOverflowError invalidDepth) {
                 throw new IllegalStateException("Checkpoint structure is too deeply nested; evidence preserved", invalidDepth);
+            }
+        }
+    }
+
+    /**
+     * Reconcile only persisted evidence. A readable envelope alone is insufficient: a prior
+     * save may have renamed it before failing directory sync. No file or receipt is created.
+     */
+    public ConfirmedSnapshot confirmDurable(String conversationId, String botId, String expectedScopeIdentity) {
+        synchronized (ConversationMetadataStore.LOCK) {
+            requireActive(conversationId);
+            try {
+                if (expectedScopeIdentity == null || expectedScopeIdentity.isEmpty()) {
+                    throw new IllegalArgumentException("Expected checkpoint scope is required");
+                }
+                File target = file(conversationId, botId);
+                if (!target.exists()) {
+                    rejectIncompleteOnly(target.getParentFile());
+                    return null;
+                }
+                ObservedCheckpoint observed = readAndSync(target, conversationId, botId, expectedScopeIdentity);
+                syncDirectoryChain(target.getParentFile());
+                requireActive(conversationId);
+                return new ConfirmedSnapshot(observed);
+            } catch (StackOverflowError invalidDepth) {
+                throw new IllegalStateException("Checkpoint structure is too deeply nested; evidence preserved", invalidDepth);
+            } catch (Exception failure) {
+                throw new IllegalStateException("Crew checkpoint durability is unconfirmed; original evidence is preserved", failure);
             }
         }
     }
@@ -243,7 +346,19 @@ public final class CrewCheckpointStore {
         }
     }
 
-    private static void syncDirectory(File directory) throws IOException {
+    private void syncDirectoryChain(File directory) throws IOException {
+        for (File parent = directory; parent != null; parent = parent.getParentFile()) {
+            verify(parent);
+            syncDirectory(parent);
+            if (parent.equals(this.filesDirectory)) return;
+        }
+        throw new IOException("Checkpoint directory is outside its private storage root");
+    }
+
+    private void syncDirectory(File directory) throws IOException {
+        verify(directory);
+        if (!directory.isDirectory()) throw new IOException("Checkpoint sync target is not a directory");
+        directorySyncFaultInjector.beforeSync(directory);
         if (Build.VERSION.SDK_INT >= 26) {
             Nio.syncDirectory(directory);
             return;
@@ -288,6 +403,71 @@ public final class CrewCheckpointStore {
                 if (interrupted) Thread.currentThread().interrupt();
             }
         }
+
+        static ObservedCheckpoint readAndSync(File file, String conversationId, String botId,
+                String scopeIdentity) throws Exception {
+            boolean interrupted = Thread.interrupted();
+            try {
+                while (true) {
+                    verify(file);
+                    if (!java.nio.file.Files.isRegularFile(file.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                        throw new IOException("Invalid checkpoint file");
+                    }
+                    try (FileChannel channel = FileChannel.open(file.toPath(), java.nio.file.StandardOpenOption.READ,
+                            java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                        if (channel.size() > materializationBudget()) throw new IOException("Invalid checkpoint file");
+                        ObservedCheckpoint observed = decodeEnvelope(read(Channels.newInputStream(channel)));
+                        validateObserved(observed, conversationId, botId, scopeIdentity);
+                        verify(file);
+                        // Force the same descriptor whose exact envelope was read and verified.
+                        channel.force(true);
+                        return observed;
+                    } catch (ClosedByInterruptException cancelledDuringSync) {
+                        interrupted = true;
+                        Thread.interrupted();
+                    }
+                }
+            } finally {
+                if (interrupted) Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    private static ObservedCheckpoint readAndSync(File file, String conversationId, String botId,
+            String scopeIdentity) throws Exception {
+        verify(file);
+        if (!file.isFile() || file.length() > materializationBudget()) throw new IOException("Invalid checkpoint file");
+        if (Build.VERSION.SDK_INT >= 26) return Nio.readAndSync(file, conversationId, botId, scopeIdentity);
+        FileDescriptor descriptor = Os.open(file.getPath(), OsConstants.O_RDONLY | OsConstants.O_NOFOLLOW, 0);
+        try {
+            if (!OsConstants.S_ISREG(Os.fstat(descriptor).st_mode)) throw new IOException("Invalid checkpoint file");
+            try (FileInputStream input = new FileInputStream(descriptor)) {
+                // The stream now owns the descriptor, including on validation/sync failure.
+                descriptor = null;
+                ObservedCheckpoint observed = decodeEnvelope(read(input));
+                validateObserved(observed, conversationId, botId, scopeIdentity);
+                verify(file);
+                Os.fsync(input.getFD());
+                return observed;
+            }
+        } finally {
+            if (descriptor != null) {
+                try {
+                    Os.close(descriptor);
+                } catch (ErrnoException ignored) {
+                }
+            }
+        }
+    }
+
+    private static void validateObserved(ObservedCheckpoint observed, String conversationId, String botId,
+            String scopeIdentity) throws IOException {
+        Snapshot snapshot = observed.snapshot;
+        if (!conversationId.equals(snapshot.conversationId) || !botId.equals(snapshot.botId)) {
+            throw new IOException("Crew checkpoint belongs to a different conversation or bot");
+        }
+        if (!scopeIdentity.equals(snapshot.scopeIdentity)) throw new IOException("Crew checkpoint scope has changed");
+        if (snapshot.savedAtMs <= 0L) throw new IOException("Invalid checkpoint saved timestamp");
     }
 
     private Snapshot readLocked(String conversationId, String botId, File file) throws Exception {
@@ -303,17 +483,27 @@ public final class CrewCheckpointStore {
         if (!file.isFile() || file.length() > materializationBudget()) {
             throw new IOException("Invalid checkpoint file");
         }
-        JSONObject envelope = new JSONObject(read(file));
+        return decodeEnvelope(read(file)).snapshot;
+    }
+
+    private static ObservedCheckpoint decodeEnvelope(String serializedEnvelope) throws Exception {
+        JSONObject envelope = new JSONObject(serializedEnvelope);
         if (!(envelope.get("schemaVersion") instanceof Number) || ((Number)envelope.get("schemaVersion")).doubleValue() != 1.0) {
             throw new IOException("Unsupported Crew checkpoint schema version");
         }
         String payload = required(envelope, "payload");
-        if (!digest(payload.getBytes(StandardCharsets.UTF_8)).equals(required(envelope, "sha256"))) {
+        String payloadSha256 = digest(payload.getBytes(StandardCharsets.UTF_8));
+        if (!payloadSha256.equals(required(envelope, "sha256"))) {
             throw new IOException("Crew checkpoint digest does not match");
         }
-        Snapshot result = new Snapshot(new JSONObject(payload));
+        JSONObject decoded = new JSONObject(payload);
+        Object savedAt = decoded.get("savedAtMs");
+        if (!(savedAt instanceof Integer) && !(savedAt instanceof Long)) {
+            throw new IOException("Invalid checkpoint saved timestamp");
+        }
+        Snapshot result = new Snapshot(decoded);
         result.loop.reconciled();
-        return result;
+        return new ObservedCheckpoint(result, payloadSha256);
     }
 
     private File file(String conversationId, String botId) throws IOException {
@@ -377,43 +567,25 @@ public final class CrewCheckpointStore {
     }
 
     private static String read(File file) throws IOException {
-        long budget = materializationBudget();
-        if (file.length() > budget) {
+        if (file.length() > materializationBudget()) {
             throw new IOException("Checkpoint cannot be safely materialized with current memory; evidence preserved");
         }
-        FileInputStream input = new FileInputStream(file);
-        try {
-            ByteArrayOutputStream output = new ByteArrayOutputStream();
-            try {
-                byte[] buffer = new byte[8192];
-                while (true) {
-                    int count = input.read(buffer);
-                    if (count < 0) {
-                        String str = new String(output.toByteArray(), StandardCharsets.UTF_8);
-                        output.close();
-                        input.close();
-                        return str;
-                    }
-                    if (((long)output.size()) + ((long)count) > budget) {
-                        throw new IOException("Checkpoint grew beyond its storage limit");
-                    }
-                    output.write(buffer, 0, count);
+        try (FileInputStream input = new FileInputStream(file)) {
+            return read(input);
+        }
+    }
+
+    private static String read(InputStream input) throws IOException {
+        long budget = materializationBudget();
+        try (ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[8192];
+            for (int count; (count = input.read(buffer)) >= 0; ) {
+                if (((long) output.size()) + count > budget) {
+                    throw new IOException("Checkpoint grew beyond its storage limit");
                 }
-            } catch (Throwable th) {
-                try {
-                    output.close();
-                } catch (Throwable th2) {
-                    th.addSuppressed(th2);
-                }
-                throw th;
+                output.write(buffer, 0, count);
             }
-        } catch (Throwable th3) {
-            try {
-                input.close();
-            } catch (Throwable th4) {
-                th3.addSuppressed(th4);
-            }
-            throw th3;
+            return new String(output.toByteArray(), StandardCharsets.UTF_8);
         }
     }
 
@@ -459,6 +631,16 @@ public final class CrewCheckpointStore {
         jSONObject.put("appliedIncomingIds", new JSONArray((Collection)checkpoint.appliedIncomingIds));
         jSONObject.put("toolLifecycle", new JSONObject(checkpoint.toolLifecycle));
         jSONObject.put("genuineUserIndex", checkpoint.genuineUserIndex);
+        JSONArray incorporations = new JSONArray();
+        for (Map.Entry<String, CrewInputIncorporation> entry : checkpoint.incorporations.entrySet()) {
+            CrewInputIncorporation incorporation = entry.getValue();
+            if (incorporation == null || !entry.getKey().equals(incorporation.binding.mailboxMessageId)
+                    || !checkpoint.appliedIncomingIds.contains(entry.getKey())) {
+                throw new IOException("Invalid checkpoint incorporation identity");
+            }
+            incorporations.put(incorporation.toJson());
+        }
+        jSONObject.put("incorporations", incorporations);
         return jSONObject;
     }
 
@@ -504,7 +686,18 @@ public final class CrewCheckpointStore {
             }
             states.put(id2, state);
         }
-        return new CoreAgentLoop.Checkpoint(transcript, incoming, states, value.getInt("genuineUserIndex"));
+        Map<String, CrewInputIncorporation> incorporations = new LinkedHashMap<>();
+        if (value.has("incorporations")) {
+            JSONArray proofs = value.getJSONArray("incorporations");
+            for (int index = 0; index < proofs.length(); index++) {
+                CrewInputIncorporation proof = CrewInputIncorporation.fromJsonStrict(proofs.getJSONObject(index));
+                String mailboxMessageId = proof.binding.mailboxMessageId;
+                if (!incoming.contains(mailboxMessageId) || incorporations.put(mailboxMessageId, proof) != null) {
+                    throw new IOException("Invalid or repeated checkpoint incorporation proof");
+                }
+            }
+        }
+        return new CoreAgentLoop.Checkpoint(transcript, incoming, states, value.getInt("genuineUserIndex"), incorporations);
     }
 
     private static Map<String, Object> decodeMap(JSONObject object) throws Exception {
@@ -514,7 +707,7 @@ public final class CrewCheckpointStore {
             String key = keys.next();
             result.put(key, decodeValue(object.get(key)));
         }
-        return result;
+        return Collections.unmodifiableMap(result);
     }
 
     private static Object decodeValue(Object value) throws Exception {
@@ -530,7 +723,7 @@ public final class CrewCheckpointStore {
             for (int index = 0; index < array.length(); index++) {
                 result.add(decodeValue(array.get(index)));
             }
-            return result;
+            return Collections.unmodifiableList(result);
         }
         return value;
     }

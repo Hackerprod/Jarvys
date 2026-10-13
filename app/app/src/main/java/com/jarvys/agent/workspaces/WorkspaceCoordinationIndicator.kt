@@ -7,6 +7,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import com.jarvys.agent.R
 
@@ -26,13 +27,13 @@ fun WorkspaceCoordinationIndicator(summary: WorkspaceCoordinationSummary, showHi
     if (summary.live == 0 && summary.uncertain == 0 && !summary.reviewRequired && !summary.pageLimited &&
         !summary.unavailable && (!showHistory || summary.historical == 0)) return
     Column(Modifier.testTag("workspace-coordination-indicator")) {
-        if (summary.live > 0) Text(stringResource(R.string.workspace_coordination_live, summary.live),
+        if (summary.live > 0) Text(pluralStringResource(R.plurals.workspace_coordination_live, summary.live, summary.live),
             style = MaterialTheme.typography.bodySmall)
-        if (summary.uncertain > 0) Text(stringResource(R.string.workspace_coordination_uncertain, summary.uncertain),
+        if (summary.uncertain > 0) Text(pluralStringResource(R.plurals.workspace_coordination_uncertain, summary.uncertain, summary.uncertain),
             style = MaterialTheme.typography.bodySmall)
         if (summary.reviewRequired) Text(stringResource(R.string.workspace_coordination_review),
             style = MaterialTheme.typography.bodySmall)
-        if (showHistory && summary.historical > 0) Text(stringResource(R.string.workspace_coordination_historical, summary.historical),
+        if (showHistory && summary.historical > 0) Text(pluralStringResource(R.plurals.workspace_coordination_historical, summary.historical, summary.historical),
             style = MaterialTheme.typography.bodySmall)
         if (summary.pageLimited) Text(stringResource(R.string.workspace_coordination_page_scope),
             style = MaterialTheme.typography.bodySmall)
