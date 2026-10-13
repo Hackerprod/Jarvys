@@ -61,8 +61,10 @@ class WorkspaceCentralTopBarComposeTest {
         compose.onNodeWithTag("jarvys-topbar-more-options")
             .assertWidthIsEqualTo(48.dp).assertHeightIsEqualTo(48.dp)
         compose.onNodeWithContentDescription(compose.activity.getString(R.string.topbar_more_options)).performClick()
-        compose.onNodeWithText(compose.activity.getString(R.string.drawer_new_chat)).performClick()
-        assertEquals(1, newChat)
+        compose.onNodeWithText(compose.activity.getString(R.string.drawer_new_chat)).assertDoesNotExist()
+        compose.onNodeWithText(compose.activity.getString(R.string.drawer_settings)).performClick()
+        assertEquals(0, newChat)
+        assertEquals(2, settings)
         assertFalse(JarvysMascotProcessConsent.session.optedIn)
         compose.runOnIdle { central.value = false }
         compose.onNodeWithTag("jarvys-central-topbar").assertDoesNotExist()

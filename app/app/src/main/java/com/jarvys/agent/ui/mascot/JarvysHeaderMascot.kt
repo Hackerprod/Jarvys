@@ -53,6 +53,10 @@ internal fun JarvysHeaderMascot(
     interruptedAsset: JarvysVerifiedAnimation? = null,
     tauntEventId: String? = null,
     tauntAsset: JarvysVerifiedAnimation? = null,
+    requestedAnimationEventId: String? = null,
+    requestedAnimationId: String? = null,
+    requestedAnimationAsset: JarvysVerifiedAnimation? = null,
+    onRequestedAnimationFinished: (String) -> Unit = {},
     onNativePlaybackChanged: (Boolean) -> Unit = {},
 ) {
     val viewport = rememberMotionViewport()
@@ -61,11 +65,13 @@ internal fun JarvysHeaderMascot(
     val eligible = jarvysHeaderMayAnimate(motionAllowed, resumed, viewport.visible, reduced)
     val oneShots = remember {
         JarvysHeaderOneShotController(JarvysHeaderPlaybackMemory.failures,
-            JarvysHeaderPlaybackMemory.interruptions, JarvysHeaderTapPlaybackGate(tauntEventId))
+            JarvysHeaderPlaybackMemory.interruptions, JarvysHeaderTapPlaybackGate(tauntEventId),
+            JarvysHeaderPlaybackMemory.requests)
     }
     var oneShotRequest by remember { mutableStateOf<JarvysHeaderOneShotRequest?>(null) }
     val oneShotInputs = JarvysHeaderOneShotInputs(eligible, failedRunId, sadAsset,
-        interruptedRunId, interruptedAsset, tauntEventId, tauntAsset)
+        interruptedRunId, interruptedAsset, tauntEventId, tauntAsset,
+        requestedAnimationEventId, requestedAnimationId, requestedAnimationAsset)
     LaunchedEffect(oneShotInputs) { oneShotRequest = oneShots.update(oneShotInputs) }
     DisposableEffect(oneShots) { onDispose { oneShots.clear() } }
     val activeOneShot = oneShotRequest?.takeIf(oneShotInputs::isCurrent)
@@ -87,7 +93,11 @@ internal fun JarvysHeaderMascot(
                     timeline = timeline,
                     remoteAsset = remoteAsset,
                     onRemoteStopped = {
-                        if (activeOneShot != null) oneShotRequest = oneShots.finish(activeOneShot)
+                        if (activeOneShot != null) {
+                            oneShotRequest = oneShots.finish(activeOneShot)
+                            if (activeOneShot.kind == JarvysHeaderOneShotKind.REQUESTED)
+                                onRequestedAnimationFinished(activeOneShot.eventId)
+                        }
                         else failedActivity = activeActivity
                     },
                     onNativePlaybackChanged = { latestNative(it) },
@@ -122,7 +132,7 @@ private fun HeaderTimeline(
         bytes = null
         drawn = false
         latestNative(false)
-        if (timeline.remoteId != null) latestFinished()
+        if (timeline.remoteId != null || timeline.oneShot) latestFinished()
     }
     DisposableEffect(ticket) { onDispose { ticket.active = false; latestNative(false) } }
     LaunchedEffect(ticket) {

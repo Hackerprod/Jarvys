@@ -10,10 +10,12 @@ class JarvysHeaderActivityPolicyTest {
     private fun controller(initialTap: String? = null) = JarvysHeaderOneShotController(
         JarvysFailurePlaybackGate(), JarvysFailurePlaybackGate(), JarvysHeaderTapPlaybackGate(initialTap))
     private fun inputs(kind: JarvysHeaderOneShotKind, id: String = "event", eligible: Boolean = true,
-        handle: JarvysVerifiedAnimation? = asset(kind.animationId)): JarvysHeaderOneShotInputs = when (kind) {
+        handle: JarvysVerifiedAnimation? = asset(if (kind == JarvysHeaderOneShotKind.REQUESTED) "working" else kind.animationId)): JarvysHeaderOneShotInputs = when (kind) {
         JarvysHeaderOneShotKind.SAD -> JarvysHeaderOneShotInputs(eligible, failedRunId = id, sadAsset = handle)
         JarvysHeaderOneShotKind.INTERRUPTED -> JarvysHeaderOneShotInputs(eligible, interruptedRunId = id, interruptedAsset = handle)
         JarvysHeaderOneShotKind.TAUNT -> JarvysHeaderOneShotInputs(eligible, tauntEventId = id, tauntAsset = handle)
+        JarvysHeaderOneShotKind.REQUESTED -> JarvysHeaderOneShotInputs(eligible,
+            requestedAnimationEventId = id, requestedAnimationId = "working", requestedAnimationAsset = handle)
     }
     @Test fun liveActivityRequiresNonblankCurrentKeyAndMatchingAssetId() {
         for ((activity, id) in listOf(JarvysHeaderActivity.WORKING to "working", JarvysHeaderActivity.THINKING to "thinking", JarvysHeaderActivity.WAITING to "waiting")) {
@@ -41,7 +43,7 @@ class JarvysHeaderActivityPolicyTest {
     }
     @Test fun allOneShotsRetirePermanentlyAcrossNullNewIdentityAndRestoration() {
         for (kind in JarvysHeaderOneShotKind.entries) {
-            val a = asset(kind.animationId)
+            val a = asset(if (kind == JarvysHeaderOneShotKind.REQUESTED) "working" else kind.animationId)
             for (b in listOf(null, a.copy(packageId = "new"), a.copy(animationId = "thinking"), a.copy(bytes = 601), a.copy(sha256 = "b".repeat(64)))) {
                 val control = controller()
                 val current = checkNotNull(control.update(inputs(kind, handle = a)))
@@ -121,6 +123,22 @@ class JarvysHeaderActivityPolicyTest {
         assertEquals(JarvysHeaderTimeline.TAUNT, jarvysHeaderSelectedTimeline(shot, current))
         assertEquals(JarvysHeaderTimeline.WAITING, jarvysHeaderSelectedTimeline(control.finish(shot), current))
         assertEquals(JarvysHeaderTimeline.IDLE, jarvysHeaderSelectedTimeline(null, null))
+    }
+    @Test fun requestedAnimationOverridesCurrentActivityOnceAndThenResumesIt() {
+        val control = controller()
+        val requested = checkNotNull(control.update(inputs(JarvysHeaderOneShotKind.REQUESTED, "request-working")))
+        val current = jarvysHeaderActivityRequest(JarvysHeaderActivity.THINKING, "current", asset("thinking"))
+        assertEquals(JarvysHeaderOneShotKind.REQUESTED, requested.kind)
+        assertEquals(JarvysHeaderTimeline.WORKING.copy(oneShot = true), requested.timeline)
+        assertEquals(requested.timeline, jarvysHeaderSelectedTimeline(requested, current))
+        assertEquals(current?.timeline, jarvysHeaderSelectedTimeline(control.finish(requested), current))
+        assertNull(control.update(inputs(JarvysHeaderOneShotKind.REQUESTED, "request-working")))
+
+        val idle = JarvysHeaderOneShotInputs(true, requestedAnimationEventId = "request-idle",
+            requestedAnimationId = "idle")
+        val idleRequest = checkNotNull(controller().update(idle))
+        assertEquals(JarvysHeaderTimeline.IDLE.copy(oneShot = true), idleRequest.timeline)
+        assertNull(controller().update(idle.copy(requestedAnimationId = "unknown")))
     }
     @Test fun futureNamesAreInspectedAndNeverInvented() {
         for ((timeline, oneShot) in listOf(JarvysHeaderTimeline.WAITING to false, JarvysHeaderTimeline.INTERRUPTED to true, JarvysHeaderTimeline.TAUNT to true)) {

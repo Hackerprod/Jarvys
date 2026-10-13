@@ -7,6 +7,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.semantics.Role
 import com.jarvys.agent.JarvysAnimationRepository
+import com.jarvys.agent.AgentRunUiState
+import com.jarvys.agent.HeaderMascotAnimationRequest
+import com.jarvys.agent.HeaderMascotAvailability
 import com.jarvys.agent.ui.motion.LocalReducedMotion
 import java.util.UUID
 import androidx.compose.foundation.layout.fillMaxSize
@@ -61,6 +64,7 @@ internal fun JarvysMascotAccountMenu(
     interruptedRunId: String? = null,
     liveActivity: JarvysHeaderActivity? = null,
     liveActivityKey: String? = null,
+    headerAnimationRequest: HeaderMascotAnimationRequest? = null,
     levitate: Boolean = false,
     controlledMenuOpen: Boolean? = null,
     onMenuOpenChange: ((Boolean) -> Unit)? = null,
@@ -69,7 +73,7 @@ internal fun JarvysMascotAccountMenu(
     // These keys close local menus/dialogs and dispose renderers; process consent is separate.
     key(visibleSessionId, liveConversationVisible, surfaceVisible) {
         JarvysMascotAccountMenuSession(mode, visibleSessionId, liveConversationVisible, surfaceVisible, mascotSize,
-            originalHeaderAnimation, failedRunId, interruptedRunId, liveActivity, liveActivityKey, levitate,
+            originalHeaderAnimation, failedRunId, interruptedRunId, liveActivity, liveActivityKey, headerAnimationRequest, levitate,
             controlledMenuOpen, onMenuOpenChange, content)
     }
 }
@@ -86,6 +90,7 @@ private fun JarvysMascotAccountMenuSession(
     interruptedRunId: String?,
     liveActivity: JarvysHeaderActivity?,
     liveActivityKey: String?,
+    headerAnimationRequest: HeaderMascotAnimationRequest?,
     levitate: Boolean,
     controlledMenuOpen: Boolean?,
     onMenuOpenChange: ((Boolean) -> Unit)?,
@@ -138,18 +143,38 @@ private fun JarvysMascotAccountMenuSession(
             if (originalHeaderAnimation) {
                 val context = LocalContext.current.applicationContext
                 // Deliberately independent of the disabled legacy experiment/consent gate.
-                val motionAllowed = surfaceVisible && resumed && viewport.visible && !menuOpen
-                val remoteEligible = motionAllowed && !LocalReducedMotion.current
-                val sadAsset = if (remoteEligible) {
-                    remember(context) { JarvysAnimationRepository.sad(context) }.collectAsState().value
-                } else null
-                val interruptedAsset = if (remoteEligible) {
-                    remember(context) { JarvysAnimationRepository.animation(context, "interrupted") }.collectAsState().value
-                } else null
-                val tauntAsset = if (remoteEligible) {
-                    remember(context) { JarvysAnimationRepository.animation(context, "taunt") }.collectAsState().value
-                } else null
+                val motionAllowed = surfaceVisible && resumed && viewport.visible
+                val reducedMotion = LocalReducedMotion.current
+                val remoteEligible = motionAllowed && !reducedMotion
+                val animationAssets = if (remoteEligible) mapOf(
+                    "sad" to remember(context, "sad") { JarvysAnimationRepository.animation(context, "sad") }.collectAsState().value,
+                    "thinking" to remember(context, "thinking") { JarvysAnimationRepository.animation(context, "thinking") }.collectAsState().value,
+                    "working" to remember(context, "working") { JarvysAnimationRepository.animation(context, "working") }.collectAsState().value,
+                    "waiting" to remember(context, "waiting") { JarvysAnimationRepository.animation(context, "waiting") }.collectAsState().value,
+                    "interrupted" to remember(context, "interrupted") { JarvysAnimationRepository.animation(context, "interrupted") }.collectAsState().value,
+                    "taunt" to remember(context, "taunt") { JarvysAnimationRepository.animation(context, "taunt") }.collectAsState().value,
+                ) else emptyMap()
+                val sadAsset = animationAssets["sad"]
+                val interruptedAsset = animationAssets["interrupted"]
+                val tauntAsset = animationAssets["taunt"]
                 LaunchedEffect(remoteEligible) { if (!remoteEligible) tauntEventId = null }
+                val visibleForRequest = liveConversationVisible && !visibleSessionId.isNullOrBlank()
+                    && surfaceVisible && viewport.visible
+                val availability = HeaderMascotAvailability(
+                    sessionId = visibleSessionId,
+                    visible = visibleForRequest,
+                    resumed = resumed,
+                    reducedMotion = reducedMotion,
+                    availableAnimationIds = buildSet {
+                        add("idle")
+                        animationAssets.forEach { (id, asset) -> if (asset != null) add(id) }
+                    },
+                )
+                val requestedAnimation = headerAnimationRequest?.takeIf { it.sessionId == visibleSessionId }
+                SideEffect { AgentRunUiState.headerMascotAvailabilityChanged(availability) }
+                DisposableEffect(visibleSessionId) {
+                    onDispose { visibleSessionId?.let(AgentRunUiState::clearHeaderMascotAvailability) }
+                }
                 val activityAnimationId = when (liveActivity) {
                     JarvysHeaderActivity.WAITING -> "waiting"
                     JarvysHeaderActivity.WORKING -> "working"
@@ -177,19 +202,35 @@ private fun JarvysMascotAccountMenuSession(
                     interruptedAsset = interruptedAsset,
                     tauntEventId = tauntEventId,
                     tauntAsset = tauntAsset,
-                )
-            } else key(session.generation) {
-                JarvysMascotIcon(Modifier.size(mascotSize).testTag("jarvys-topbar-mascot"),
-                    mode = mode,
-                    animationOptedIn = isCurrent(),
-                    isAnimationCurrent = { isCurrent() },
-                    onAnimationStopped = { failed ->
-                        if (failed && isCurrent()) {
-                            playbackFailed = true
-                            revoke()
-                        }
+                    requestedAnimationEventId = requestedAnimation?.requestId,
+                    requestedAnimationId = requestedAnimation?.animationId,
+                    requestedAnimationAsset = requestedAnimation?.let { animationAssets[it.animationId] },
+                    onRequestedAnimationFinished = { requestId ->
+                        requestedAnimation?.let { AgentRunUiState.clearHeaderMascotAnimationRequest(it.sessionId, requestId) }
                     },
                 )
+            } else {
+                SideEffect {
+                    visibleSessionId?.let { sessionId ->
+                        AgentRunUiState.clearHeaderMascotAvailability(sessionId)
+                        headerAnimationRequest?.takeIf { it.sessionId == sessionId }?.let { request ->
+                            AgentRunUiState.clearHeaderMascotAnimationRequest(sessionId, request.requestId)
+                        }
+                    }
+                }
+                key(session.generation) {
+                    JarvysMascotIcon(Modifier.size(mascotSize).testTag("jarvys-topbar-mascot"),
+                        mode = mode,
+                        animationOptedIn = isCurrent(),
+                        isAnimationCurrent = { isCurrent() },
+                        onAnimationStopped = { failed ->
+                            if (failed && isCurrent()) {
+                                playbackFailed = true
+                                revoke()
+                            }
+                        },
+                    )
+                }
             }
         }
         DropdownMenu(expanded = menuOpen, onDismissRequest = { setMenuOpen(false) }) {

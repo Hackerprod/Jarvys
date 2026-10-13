@@ -40,6 +40,34 @@ class AppDiagnosticsScopeTest {
         assertTrue(runtime.instructions().contains(AppDiagnosticsTool.GUIDANCE))
     }
 
+    @Test fun mascotAnimationIsDeclaredOnlyForMainChatAndNeverDelegates() {
+        val main = runtime()
+        val tools = main.createTools()
+        assertEquals(1, tools.names().count { it == MascotAnimationTool.NAME })
+        assertEquals(1, tools.declarations().count { it.name == MascotAnimationTool.NAME })
+        val animationSchema = tools.declarations().single { it.name == MascotAnimationTool.NAME }.jsonSchema()
+        assertEquals(listOf("animation"), animationSchema["required"])
+        val properties = animationSchema["properties"] as Map<*, *>
+        assertEquals(MascotAnimationTool.ANIMATIONS, (properties["animation"] as Map<*, *>)["enum"])
+        assertFalse(tools.get(MascotAnimationTool.NAME).canDelegate())
+        assertTrue(main.instructions().contains(MascotAnimationTool.GUIDANCE))
+        assertFalse(tools.forDelegatedAgent().names().contains(MascotAnimationTool.NAME))
+        assertFalse(CoreAgentRuntime.crewBotCapabilityScope(tools).names().contains(MascotAnimationTool.NAME))
+        for (includeDelegate in listOf(false, true)) {
+            assertFalse(main.createToolsNames(tools.handlers(), includeDelegate).contains(MascotAnimationTool.NAME))
+        }
+        for (session in listOf(null, "", ProactiveConversation.SESSION_ID, ScheduledTaskConversation.SESSION_ID)) {
+            assertFalse(diagnosticScopeRuntime(context, session, allowed = listOf("*")).createTools().names()
+                .contains(MascotAnimationTool.NAME))
+        }
+        for (depth in listOf(1, 2)) {
+            assertFalse(runtime(depth = depth, allowed = listOf("*")).createTools().names()
+                .contains(MascotAnimationTool.NAME))
+        }
+        assertFalse(diagnosticScopeRuntime(null, "main", allowed = listOf("*")).createTools().names()
+            .contains(MascotAnimationTool.NAME))
+    }
+
     @Test fun noContextHasNeitherDiagnosticsDeclarationNorGuidance() {
         val noContext = CoreAgentRuntime(emptyList(), emptyList(), emptyList(), emptyList())
         assertExcluded(noContext)

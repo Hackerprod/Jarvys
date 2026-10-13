@@ -209,6 +209,30 @@ data class LiveMascotTool(
     val eligibleToAnimate: Boolean,
 )
 
+/** Activity-owned eligibility evidence for the mounted main-chat header renderer. */
+data class HeaderMascotAvailability(
+    val sessionId: String? = null,
+    val visible: Boolean = false,
+    val resumed: Boolean = false,
+    val reducedMotion: Boolean = false,
+    val availableAnimationIds: Set<String> = emptySet(),
+) {
+    fun failure(animationId: String): String? = when {
+        sessionId.isNullOrBlank() || !visible -> "The main chat mascot is not visible."
+        !resumed -> "The main chat mascot is not active."
+        reducedMotion -> "Mascot animation is unavailable while reduced motion is enabled."
+        animationId !in availableAnimationIds -> "The $animationId mascot animation is unavailable in the current animation package."
+        else -> null
+    }
+}
+
+/** Monotonic identity lets Compose consume a service-thread request exactly once. */
+data class HeaderMascotAnimationRequest(
+    val requestId: String,
+    val sessionId: String,
+    val animationId: String,
+)
+
 data class AgentRunUiSnapshot(
     val runId: String? = null,
     val sessionId: String? = null,
@@ -228,6 +252,8 @@ data class AgentRunUiSnapshot(
     val liveModelWaitId: Long? = null,
     val liveUserWaitId: String? = null,
     val liveRunIdentity: String? = null,
+    val headerMascotAvailability: HeaderMascotAvailability = HeaderMascotAvailability(),
+    val headerMascotAnimationRequest: HeaderMascotAnimationRequest? = null,
 )
 
 
@@ -288,6 +314,7 @@ object AgentRunUiState {
             liveModelWaitId = null,
             liveUserWaitId = null,
             liveRunIdentity = null,
+            headerMascotAnimationRequest = null,
             events = events,
             compacting = false,
             compactionStatus = null,
@@ -333,6 +360,7 @@ object AgentRunUiState {
             liveModelWaitId = null,
             liveUserWaitId = null,
             liveRunIdentity = null,
+            headerMascotAnimationRequest = null,
             compacting = false,
             compactionStatus = null,
         )
@@ -601,6 +629,48 @@ object AgentRunUiState {
     @JvmStatic
     fun withSession(sessionId: String, update: Runnable) = synchronized(lock) {
         if (_state.value.sessionId == sessionId) update.run()
+    }
+
+    /** UI publishes only transient eligibility and locally available identities; no asset bytes cross this state. */
+    @JvmStatic
+    fun headerMascotAvailabilityChanged(availability: HeaderMascotAvailability) = synchronized(lock) {
+        val current = _state.value
+        if (current.sessionId != availability.sessionId) return@synchronized
+        val updated = current.copy(headerMascotAvailability = availability)
+        _state.value = updated
+        if (ownedRunActive && ownedSessionId == availability.sessionId) ownedLiveSnapshot = updated
+    }
+
+    @JvmStatic
+    fun clearHeaderMascotAvailability(sessionId: String) = synchronized(lock) {
+        val current = _state.value
+        if (current.sessionId != sessionId || current.headerMascotAvailability.sessionId != sessionId) return@synchronized
+        val updated = current.copy(headerMascotAvailability = HeaderMascotAvailability())
+        _state.value = updated
+        if (ownedRunActive && ownedSessionId == sessionId) ownedLiveSnapshot = updated
+    }
+
+    /** Returns a legible rejection reason, or null after publishing the one-shot request. */
+    @JvmStatic
+    fun requestHeaderMascotAnimation(sessionId: String, animationId: String): String? = synchronized(lock) {
+        val current = _state.value
+        if (!UserDecisionUiAvailability.isChatVisible() || current.sessionId != sessionId || !current.running
+            || current.interactiveOwnerSessionId != sessionId) return@synchronized "The active main chat is not available."
+        current.headerMascotAvailability.failure(animationId)?.let { return@synchronized it }
+        val updated = current.copy(headerMascotAnimationRequest = HeaderMascotAnimationRequest(
+            java.util.UUID.randomUUID().toString(), sessionId, animationId))
+        _state.value = updated
+        if (ownedRunActive && ownedSessionId == sessionId) ownedLiveSnapshot = updated
+        null
+    }
+
+    @JvmStatic
+    fun clearHeaderMascotAnimationRequest(sessionId: String, requestId: String) = synchronized(lock) {
+        val current = _state.value
+        if (current.sessionId != sessionId || current.headerMascotAnimationRequest?.requestId != requestId) return@synchronized
+        val updated = current.copy(headerMascotAnimationRequest = null)
+        _state.value = updated
+        if (ownedRunActive && ownedSessionId == sessionId) ownedLiveSnapshot = updated
     }
 
     @JvmStatic

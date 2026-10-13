@@ -4,14 +4,33 @@ import com.jarvys.agent.JarvysVerifiedAnimation
 import java.util.Locale
 
 /** Known original names; null export names require unambiguous native-file introspection. */
-internal enum class JarvysHeaderTimeline(val artboard: String?, val animation: String?, val oneShot: Boolean, val remoteId: String? = null) {
-    IDLE("IdleMascot", "Idle", false),
-    SAD("SadMascot", "Sadness", true, "sad"),
-    THINKING("Thinking", "thinking", false, "thinking"),
-    WORKING("WorkingMascot", "Working", false, "working"),
-    WAITING(null, null, false, "waiting"),
-    INTERRUPTED(null, null, true, "interrupted"),
-    TAUNT(null, null, true, "taunt"),
+internal data class JarvysHeaderTimeline(val artboard: String?, val animation: String?, val oneShot: Boolean, val remoteId: String? = null) {
+    companion object {
+        val IDLE = JarvysHeaderTimeline("IdleMascot", "Idle", false)
+        val SAD = JarvysHeaderTimeline("SadMascot", "Sadness", true, "sad")
+        val THINKING = JarvysHeaderTimeline("Thinking", "thinking", false, "thinking")
+        val WORKING = JarvysHeaderTimeline("WorkingMascot", "Working", false, "working")
+        val WAITING = JarvysHeaderTimeline(null, null, false, "waiting")
+        val INTERRUPTED = JarvysHeaderTimeline(null, null, true, "interrupted")
+        val TAUNT = JarvysHeaderTimeline(null, null, true, "taunt")
+    }
+}
+
+internal val jarvysHeaderAnimationIds = listOf("idle", "sad", "thinking", "working", "waiting", "interrupted", "taunt")
+
+/** One requested playback always runs once, even when its normal activity timeline loops. */
+internal fun jarvysHeaderRequestedTimeline(animationId: String?): JarvysHeaderTimeline? {
+    val timeline = when (animationId) {
+        "idle" -> JarvysHeaderTimeline.IDLE
+        "sad" -> JarvysHeaderTimeline.SAD
+        "thinking" -> JarvysHeaderTimeline.THINKING
+        "working" -> JarvysHeaderTimeline.WORKING
+        "waiting" -> JarvysHeaderTimeline.WAITING
+        "interrupted" -> JarvysHeaderTimeline.INTERRUPTED
+        "taunt" -> JarvysHeaderTimeline.TAUNT
+        else -> return null
+    }
+    return timeline.copy(oneShot = true)
 }
 
 internal fun jarvysHeaderMayAnimate(allowed: Boolean, resumed: Boolean, visible: Boolean, reduced: Boolean): Boolean =
@@ -30,6 +49,7 @@ internal class JarvysFailurePlaybackGate(private val maximum: Int = 256) {
 internal object JarvysHeaderPlaybackMemory {
     val failures = JarvysFailurePlaybackGate()
     val interruptions = JarvysFailurePlaybackGate()
+    val requests = JarvysHeaderTapPlaybackGate()
 }
 
 internal enum class JarvysHeaderActivity { WORKING, THINKING, WAITING }
@@ -60,11 +80,12 @@ internal fun jarvysHeaderClaimSad(runId: String?, eligible: Boolean, asset: Jarv
     return asset?.takeIf { fresh && eligible && it.animationId == "sad" }
 }
 
-internal enum class JarvysHeaderOneShotKind(val animationId: String) { SAD("sad"), INTERRUPTED("interrupted"), TAUNT("taunt") }
+internal enum class JarvysHeaderOneShotKind(val animationId: String) { SAD("sad"), INTERRUPTED("interrupted"), TAUNT("taunt"), REQUESTED("requested") }
 internal fun jarvysHeaderOneShotTimeline(kind: JarvysHeaderOneShotKind): JarvysHeaderTimeline = when (kind) {
     JarvysHeaderOneShotKind.SAD -> JarvysHeaderTimeline.SAD
     JarvysHeaderOneShotKind.INTERRUPTED -> JarvysHeaderTimeline.INTERRUPTED
     JarvysHeaderOneShotKind.TAUNT -> JarvysHeaderTimeline.TAUNT
+    JarvysHeaderOneShotKind.REQUESTED -> JarvysHeaderTimeline.IDLE
 }
 
 /** Monotonic caller tokens per mounted header; initial token is consumed to prevent remount replay. */
@@ -77,25 +98,45 @@ internal class JarvysHeaderTapPlaybackGate(initialEventId: String? = null) {
     }
 }
 
-internal data class JarvysHeaderOneShotRequest(val kind: JarvysHeaderOneShotKind, val eventId: String, val asset: JarvysVerifiedAnimation)
+internal data class JarvysHeaderOneShotRequest(
+    val kind: JarvysHeaderOneShotKind,
+    val eventId: String,
+    val asset: JarvysVerifiedAnimation?,
+    val animationId: String = kind.animationId,
+) {
+    val timeline: JarvysHeaderTimeline get() = if (kind == JarvysHeaderOneShotKind.REQUESTED)
+        checkNotNull(jarvysHeaderRequestedTimeline(animationId)) else jarvysHeaderOneShotTimeline(kind)
+}
 internal data class JarvysHeaderOneShotInputs(
     val eligible: Boolean,
     val failedRunId: String? = null, val sadAsset: JarvysVerifiedAnimation? = null,
     val interruptedRunId: String? = null, val interruptedAsset: JarvysVerifiedAnimation? = null,
     val tauntEventId: String? = null, val tauntAsset: JarvysVerifiedAnimation? = null,
+    val requestedAnimationEventId: String? = null, val requestedAnimationId: String? = null,
+    val requestedAnimationAsset: JarvysVerifiedAnimation? = null,
 ) {
     fun eventId(kind: JarvysHeaderOneShotKind): String? = when (kind) {
         JarvysHeaderOneShotKind.SAD -> failedRunId
         JarvysHeaderOneShotKind.INTERRUPTED -> interruptedRunId
         JarvysHeaderOneShotKind.TAUNT -> tauntEventId
+        JarvysHeaderOneShotKind.REQUESTED -> requestedAnimationEventId
     }
     fun asset(kind: JarvysHeaderOneShotKind): JarvysVerifiedAnimation? = when (kind) {
         JarvysHeaderOneShotKind.SAD -> sadAsset
         JarvysHeaderOneShotKind.INTERRUPTED -> interruptedAsset
         JarvysHeaderOneShotKind.TAUNT -> tauntAsset
+        JarvysHeaderOneShotKind.REQUESTED -> requestedAnimationAsset
     }
-    fun isCurrent(request: JarvysHeaderOneShotRequest): Boolean = eligible && request.eventId == eventId(request.kind) &&
-        jarvysHeaderSameAnimation(request.asset, asset(request.kind))
+    fun animationId(kind: JarvysHeaderOneShotKind): String? = when (kind) {
+        JarvysHeaderOneShotKind.REQUESTED -> requestedAnimationId
+        else -> kind.animationId
+    }
+    fun isCurrent(request: JarvysHeaderOneShotRequest): Boolean {
+        val currentAsset = asset(request.kind)
+        val sameAsset = if (request.asset == null || currentAsset == null) request.asset == null && currentAsset == null
+            else jarvysHeaderSameAnimation(request.asset, currentAsset)
+        return eligible && request.eventId == eventId(request.kind) && request.animationId == animationId(request.kind) && sameAsset
+    }
 }
 
 /** Every event is consumed immediately; there is one current request and no deferred queue. */
@@ -103,20 +144,29 @@ internal class JarvysHeaderOneShotController(
     private val failures: JarvysFailurePlaybackGate,
     private val interruptions: JarvysFailurePlaybackGate,
     private val taps: JarvysHeaderTapPlaybackGate,
+    private val requests: JarvysHeaderTapPlaybackGate = JarvysHeaderTapPlaybackGate(),
 ) {
     private var active: JarvysHeaderOneShotRequest? = null
     fun update(inputs: JarvysHeaderOneShotInputs): JarvysHeaderOneShotRequest? {
         val freshFailure = failures.consume(inputs.failedRunId)
         val freshInterruption = interruptions.consume(inputs.interruptedRunId)
         val freshTap = taps.consume(inputs.tauntEventId)
+        val freshRequest = requests.consume(inputs.requestedAnimationEventId)
         active = active?.takeIf(inputs::isCurrent)
         fun request(kind: JarvysHeaderOneShotKind): JarvysHeaderOneShotRequest? {
             val id = inputs.eventId(kind) ?: return null
-            val asset = inputs.asset(kind) ?: return null
-            return if (inputs.eligible && asset.animationId == kind.animationId) JarvysHeaderOneShotRequest(kind, id, asset) else null
+            val animationId = inputs.animationId(kind) ?: return null
+            val asset = inputs.asset(kind)
+            if (kind != JarvysHeaderOneShotKind.REQUESTED || animationId != "idle") {
+                if (asset == null || asset.animationId != animationId) return null
+            } else if (asset != null) return null
+            return if (inputs.eligible
+                && (kind != JarvysHeaderOneShotKind.REQUESTED || jarvysHeaderRequestedTimeline(animationId) != null))
+                JarvysHeaderOneShotRequest(kind, id, asset, animationId) else null
         }
         active = when {
             freshTap -> request(JarvysHeaderOneShotKind.TAUNT)
+            freshRequest -> request(JarvysHeaderOneShotKind.REQUESTED)
             active?.kind == JarvysHeaderOneShotKind.TAUNT -> active
             inputs.failedRunId != null && inputs.interruptedRunId != null -> null
             freshFailure -> request(JarvysHeaderOneShotKind.SAD)
@@ -144,7 +194,7 @@ internal fun jarvysHeaderAnimationIdForMode(mode: Int): String? = when (mode) {
     else -> null
 }
 internal fun jarvysHeaderSelectedTimeline(oneShot: JarvysHeaderOneShotRequest?, activity: JarvysHeaderActivityRequest?): JarvysHeaderTimeline =
-    oneShot?.let { jarvysHeaderOneShotTimeline(it.kind) } ?: activity?.timeline ?: JarvysHeaderTimeline.IDLE
+    oneShot?.timeline ?: activity?.timeline ?: JarvysHeaderTimeline.IDLE
 
 internal data class JarvysHeaderArtboardMetadata(val name: String, val animations: List<String>)
 internal data class JarvysHeaderNativeBinding(val artboard: String, val animation: String)

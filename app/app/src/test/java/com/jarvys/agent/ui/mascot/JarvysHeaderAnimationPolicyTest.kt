@@ -39,4 +39,14 @@ class JarvysHeaderAnimationPolicyTest {
             (0..9).map(::jarvysHeaderAnimationIdForMode))
         for (unknown in listOf(-1, 10, Int.MIN_VALUE, Int.MAX_VALUE)) assertNull(jarvysHeaderAnimationIdForMode(unknown))
     }
+
+    @Test fun explicitAnimationRequestsPlayEveryHeaderIdentityOnce() {
+        for (id in jarvysHeaderAnimationIds) {
+            val requested = checkNotNull(jarvysHeaderRequestedTimeline(id))
+            assertEquals(id, requested.remoteId ?: if (id == "idle") "idle" else null)
+            assertTrue(requested.oneShot)
+        }
+        assertNull(jarvysHeaderRequestedTimeline(null))
+        assertNull(jarvysHeaderRequestedTimeline("unknown"))
+    }
 }

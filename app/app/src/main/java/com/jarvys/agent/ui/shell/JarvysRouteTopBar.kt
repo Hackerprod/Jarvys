@@ -104,13 +104,11 @@ fun JarvysRouteTopBar(
             interruptedRunId = interruptedRunId,
             liveActivity = liveActivity,
             liveActivityKey = liveActivityKey,
+            headerAnimationRequest = agentSnapshot.headerMascotAnimationRequest,
             levitate = centeredMascot,
             controlledMenuOpen = accountMenuOpen,
             onMenuOpenChange = { accountMenuOpen = it },
         ) { closeMenu ->
-            DropdownMenuItem(text = { Text(stringResource(R.string.drawer_new_chat)) },
-                leadingIcon = { Icon(LucideIcons.MessageCirclePlus, contentDescription = null) },
-                onClick = { closeMenu(); onNewChat() })
             DropdownMenuItem(text = { Text(stringResource(R.string.drawer_settings)) },
                 leadingIcon = { Icon(LucideIcons.Settings, contentDescription = null) },
                 onClick = { closeMenu(); onOpenSettings() })
