@@ -426,7 +426,7 @@ public class CodingMissionAccessRuntimeTest {
         CrewManager manager = new CrewManager(session, EMPTY,
                 (bot, crew) -> runtime.createCrewBotTools(context, session, EMPTY, bot, crew),
                 (bot, tools, incoming) -> new CoreAgentLoop(model, tools, CoreAgentRuntime.crewBotInstructions(bot),
-                        session, CorePromptBudget.standard(), null, CoreAgentLoop.Limits.UNBOUNDED, incoming, null), null);
+                        session, CorePromptBudget.standard(), null, CoreAgentLoop.ToolResultBudget.UNBOUNDED, incoming, null), null);
         List<String> ceiling = CoreAgentRuntime.profileCapabilities(context, session);
         manager.configureProfiles(id -> runtime.resolveCrewProfile(ceiling, id), ceiling);
         return manager;

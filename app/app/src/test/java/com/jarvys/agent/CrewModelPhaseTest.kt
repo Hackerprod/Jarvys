@@ -32,7 +32,7 @@ class CrewModelPhaseTest {
                 token.throwIfCancelled()
                 ModelReply("Done", emptyList())
             }, registry, "", "phase-session", CorePromptBudget.standard(), null,
-                CoreAgentLoop.Limits.UNBOUNDED, incoming, null)
+                CoreAgentLoop.ToolResultBudget.UNBOUNDED, incoming, null)
         }
         val manager = CrewManager("phase-session", tools, { _, _ -> tools }, factory, null)
         val leaked = AtomicInteger()
@@ -99,7 +99,7 @@ class CrewModelPhaseTest {
                 catch (_: InterruptedException) { token.throwIfCancelled() }
                 ModelReply("Done", emptyList())
             }, registry, "", "phase-reanimation", CorePromptBudget.standard(), null,
-                CoreAgentLoop.Limits.UNBOUNDED, incoming, null)
+                CoreAgentLoop.ToolResultBudget.UNBOUNDED, incoming, null)
         }
         val manager = CrewManager("phase-reanimation", tools, { _, _ -> tools }, factory, null)
         manager.configure(tools, { _, _ -> tools }, factory, null,

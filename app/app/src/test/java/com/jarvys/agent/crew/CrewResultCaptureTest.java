@@ -293,7 +293,7 @@ public class CrewResultCaptureTest {
     }
     private static CoreAgentLoop loop(CoreAgentLoop.Model model, CoreToolRegistry tools, CoreAgentLoop.TurnContextProvider inbox) {
         return new CoreAgentLoop(model, tools, "", "result-chat", CorePromptBudget.standard(), null,
-                CoreAgentLoop.Limits.UNBOUNDED, inbox, null);
+                CoreAgentLoop.ToolResultBudget.UNBOUNDED, inbox, null);
     }
     private static void configure(CrewManager manager, CoreAgentLoop.Model model, CrewManager.WorkerLifecycle lifecycle) {
         manager.configure(EMPTY, (bot, owner) -> EMPTY, (bot, tools, inbox) -> loop(model, tools, inbox), lifecycle);

@@ -30,7 +30,7 @@ class CompleteSkillCrewDeliveryTest {
         val artifacts = CrewContextArtifacts(temporary.newFolder(), "test-bot")
         val compactor = ConversationCompactor.forCrew("test-bot", { _, _, _ -> error("Unexpected summary") }, artifacts)
         val loop = CoreAgentLoop(model, CoreToolRegistry(listOf(tool)), "", "test", CorePromptBudget.standard(), compactor,
-            if (unbounded) CoreAgentLoop.Limits.UNBOUNDED else CoreAgentLoop.Limits(3, 12), null, null)
+            if (unbounded) CoreAgentLoop.ToolResultBudget.UNBOUNDED else CoreAgentLoop.ToolResultBudget.BOUNDED, null, null)
         val events = mutableListOf<ToolActivity>()
         val result = loop.run("Read", emptyList(), CancellationToken.uncancellable(), object : CoreAgentLoop.ProgressListener {
             override fun onProgress(stage: String, message: String) {}

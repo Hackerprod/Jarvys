@@ -108,7 +108,7 @@ class CrewC2Test {
                         }
                     }
                 }, tools, "test", bot.id, CorePromptBudget.standard(), null,
-                    CoreAgentLoop.Limits.UNBOUNDED, incoming, null)
+                    CoreAgentLoop.ToolResultBudget.UNBOUNDED, incoming, null)
             }, null)
         try {
             val waitingBot = manager.spawn("custom", "wait", listOf("ask_chief"), "Waiting")

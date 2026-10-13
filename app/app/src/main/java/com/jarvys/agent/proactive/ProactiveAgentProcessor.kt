@@ -215,7 +215,6 @@ class ProactiveAgentProcessor(
             return if (token.isCancelled) ProactiveProcessingResult.Stopped else throw cancelled
         } catch (failure: RuntimeException) {
             if (token.isCancelled) return ProactiveProcessingResult.Stopped
-            if (failure is ProactiveDecisionRequiredException) return retry("sin proactive_respond")
             val reason = failureReason(failure)
             return if (isTransient(failure)) retry(reason) else {
                 reviewRecorder.recordFailure(reason)
@@ -252,14 +251,7 @@ class ProactiveAgentProcessor(
         val tools = readOnlyTools(localized, sink)
         val sessionId = "proactive-$decisionId"
         val loop = loopFactory.createLoop(localized, sessionId, tools, ProactivePrompt.system(localized))
-        val result = try {
-            loop.run(ProactivePrompt.eventPayload(safeEvents, auditStore.recentNotificationTitles()), emptyList(), token, null)
-        } catch (failure: IllegalStateException) {
-            if (failure.message == "Provider returned neither an answer nor a tool call") {
-                throw ProactiveDecisionRequiredException()
-            }
-            throw failure
-        }
+        val result = loop.run(ProactivePrompt.eventPayload(safeEvents, auditStore.recentNotificationTitles()), emptyList(), token, null)
         token.throwIfCancelled()
         // This allowlisted read-only review already has a typed transient retry policy.
         result.throwIfProviderUnavailable()
@@ -351,5 +343,4 @@ class ProactiveAgentProcessor(
         return false
     }
 
-    private class ProactiveDecisionRequiredException : IllegalStateException("proactive_respond is required")
 }

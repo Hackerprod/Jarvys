@@ -99,7 +99,7 @@ public class ForegroundFailureDiagnosticsTest {
         assertEquals(generic, AgentResultPresentation.failure(context, a));
     }
 
-    @Test public void successfulDiagnosticReadsThenBlankModelResponseKeepEvidenceAndCaptureTerminalStructure() throws Exception {
+    @Test public void successfulDiagnosticReadsThenBlankModelResponseCompletesWithoutFailureRecord() throws Exception {
         java.util.concurrent.atomic.AtomicInteger turns = new java.util.concurrent.atomic.AtomicInteger();
         java.util.concurrent.atomic.AtomicInteger reads = new java.util.concurrent.atomic.AtomicInteger();
         CoreTool diagnostics = new CoreTool() {
@@ -121,17 +121,12 @@ public class ForegroundFailureDiagnosticsTest {
             return new ModelReply("", java.util.Collections.singletonList(
                 new ModelReply.Call("diagnostic-" + turn, "app_diagnostics", arguments)));
         }, new CoreToolRegistry(java.util.Collections.singletonList(diagnostics)), "", "synthetic-main-chat");
-        IllegalStateException failure = assertThrows(IllegalStateException.class,
-            () -> loop.run("Explain the prior failure", java.util.Collections.emptyList(), CancellationToken.uncancellable(), null));
-        assertEquals("Provider returned neither an answer nor a tool call", failure.getMessage());
+        CoreAgentLoop.Result result = loop.run("Explain the prior failure", java.util.Collections.emptyList(), CancellationToken.uncancellable(), null);
+        assertEquals("COMPLETED", result.outcome);
+        assertEquals("", result.text);
         assertEquals(2, reads.get()); assertEquals(3, turns.get());
         assertEquals(2, loop.transcriptSnapshot().stream()
             .filter(turn -> turn.kind == ConversationTurn.Kind.TOOL_RESULT).count());
-        LocalDiagnostics.recoverable(context, LocalDiagnostics.Origin.SERVICE, failure);
-        JSONObject row = store.snapshot(null, 1, true).getJSONArray("records").getJSONObject(0);
-        assertEquals("SERVICE", row.getString("origin"));
-        assertEquals("java.lang.IllegalStateException", row.getJSONArray("causes").getJSONObject(0).getString("type"));
-        assertTrue(row.toString().contains("CoreAgentLoop"));
-        assertFalse(row.toString().contains("neither an answer"));
+        assertEquals(0, store.snapshot(null, 1, true).getJSONArray("records").length());
     }
 }

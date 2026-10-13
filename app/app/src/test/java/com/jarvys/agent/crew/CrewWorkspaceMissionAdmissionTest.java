@@ -217,7 +217,7 @@ public class CrewWorkspaceMissionAdmissionTest {
         };
         return new CrewManager("workspace-test", EMPTY, (bot, manager) -> EMPTY,
                 (bot, tools, inbox) -> new CoreAgentLoop(model, tools, "", "workspace-test", CorePromptBudget.standard(),
-                        null, CoreAgentLoop.Limits.UNBOUNDED, inbox, null), null);
+                        null, CoreAgentLoop.ToolResultBudget.UNBOUNDED, inbox, null), null);
     }
 
     private static void await(CrewManager.Bot bot) throws Exception {

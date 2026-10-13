@@ -325,10 +325,16 @@ public final class OpenRouterClient implements ModelProviderClient {
           JSONObject function = tool.optJSONObject("function");
           if (function == null) continue;
           String name = function.optString("name", "");
-          JSONObject arguments = new JSONObject(function.optString("arguments", "{}"));
           String callId = tool.optString("id", "");
           if (callId.isEmpty()) callId = "jarvys-call-" + java.util.UUID.randomUUID();
-          calls.add(new ModelReply.Call(callId, name, toMap(arguments)));
+          Map<String, Object> arguments = Collections.emptyMap();
+          String invalidArgumentsReason = null;
+          try {
+            arguments = toMap(new JSONObject(function.optString("arguments", "{}")));
+          } catch (Exception malformedArguments) {
+            invalidArgumentsReason = "Malformed tool arguments JSON object";
+          }
+          calls.add(new ModelReply.Call(callId, name, arguments, invalidArgumentsReason));
         }
       }
       JSONObject usage = root.optJSONObject("usage");

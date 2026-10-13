@@ -200,7 +200,7 @@ public class CrewInputCheckpointManagerTest {
     }
     private static CoreAgentLoop loop(CoreAgentLoop.Model model, CoreToolRegistry tools, CoreAgentLoop.TurnContextProvider inbox) {
         return new CoreAgentLoop(model, tools, "", "input-chat", CorePromptBudget.standard(), null,
-                CoreAgentLoop.Limits.UNBOUNDED, inbox, null);
+                CoreAgentLoop.ToolResultBudget.UNBOUNDED, inbox, null);
     }
     private static CrewManager.Bot spawn(CrewManager manager) {
         return manager.spawnForMission("input-mission", "Original instructions", "custom", "Task",

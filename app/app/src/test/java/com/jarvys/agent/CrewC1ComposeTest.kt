@@ -210,7 +210,7 @@ class CrewC1ComposeTest {
                         return ModelReply("acknowledged", emptyList())
                     }
                 }, tools, "bot instructions", "trusted-input-bot", CorePromptBudget.standard(), null,
-                    CoreAgentLoop.Limits.UNBOUNDED, incoming, null)
+                    CoreAgentLoop.ToolResultBudget.UNBOUNDED, incoming, null)
             }, null)
         try {
             val bot = manager.spawn("custom", "Wait for user guidance", emptyList(), "Writer")

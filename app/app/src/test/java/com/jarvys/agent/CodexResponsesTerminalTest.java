@@ -203,8 +203,20 @@ public class CodexResponsesTerminalTest {
         assertTrue(reply.calls.isEmpty());
     }
 
-    @Test public void malformedFinalToolArgumentsNeverBecomeAnExecutableCall() throws Exception {
-        for (Object arguments : new Object[] {"", "{unquoted:1}", "{\"x\":", new JSONObject(), JSONObject.NULL}) {
+    @Test public void malformedFinalToolArgumentsStayPerCallWithoutRejectingTheResponse() throws Exception {
+        for (String arguments : new String[] {"", "{unquoted:1}", "{\"x\":"}) {
+            JSONObject value = completed("");
+            value.getJSONObject("response").put("output", new JSONArray().put(call().put("arguments", arguments)));
+            ModelReply reply = fixture(sse(value), true, 1).complete();
+            assertEquals(1, reply.calls.size());
+            assertEquals("synthetic-call", reply.calls.get(0).id);
+            assertNotNull(reply.calls.get(0).invalidArgumentsReason);
+            assertTrue(reply.calls.get(0).arguments.isEmpty());
+        }
+    }
+
+    @Test public void nonStringFinalToolArgumentsStillRejectMalformedResponseShape() throws Exception {
+        for (Object arguments : new Object[] {new JSONObject(), JSONObject.NULL}) {
             JSONObject value = completed("");
             value.getJSONObject("response").put("output", new JSONArray().put(call().put("arguments", arguments)));
             assertRejected(sse(value), true);

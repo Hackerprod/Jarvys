@@ -13,7 +13,7 @@ class SkillActivityRuntimeTest {
             override fun complete(transcript:List<ConversationTurn>,prompt:String,declarations:List<ToolSpec>,token:CancellationToken)=
                 if(turn++==0) ModelReply("",(1..calls).map { ModelReply.Call("skill-call-$it","read_skill",mapOf("skill_id" to id)) }) else ModelReply("Done",emptyList())
         }
-        val loop=CoreAgentLoop(model,tools,"","skill-chat",CorePromptBudget.standard(),null,3)
+        val loop=CoreAgentLoop(model,tools,"","skill-chat",CorePromptBudget.standard(),null)
         val events=mutableListOf<ToolActivity>();val token=CancellationToken.cancellable()
         try { loop.run("Read the selected skill",emptyList(),token,object:CoreAgentLoop.ProgressListener {
             override fun onProgress(stage:String,message:String)=Unit

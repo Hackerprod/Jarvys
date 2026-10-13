@@ -187,7 +187,7 @@ public class CrewMissionTitleManagerTest {
     private static CrewManager manager(CoreAgentLoop.Model model, List<CrewMissionSnapshot> published) {
         CrewManager.ToolFactory tools = (bot, manager) -> EMPTY;
         CrewManager.LoopFactory loops = (bot, registry, inbox) -> new CoreAgentLoop(model, registry, "Worker system",
-                "title-chat", CorePromptBudget.standard(), null, CoreAgentLoop.Limits.UNBOUNDED, inbox, null);
+                "title-chat", CorePromptBudget.standard(), null, CoreAgentLoop.ToolResultBudget.UNBOUNDED, inbox, null);
         CrewManager manager = new CrewManager("title-chat", EMPTY, tools, loops, null);
         if (published != null) manager.configure(EMPTY, tools, loops, null, null, published::add);
         return manager;
@@ -201,7 +201,7 @@ public class CrewMissionTitleManagerTest {
         List<CrewMissionSnapshot> delivered = new CopyOnWriteArrayList<>();
         CrewManager.ToolFactory tools = (bot, manager) -> EMPTY;
         CrewManager.LoopFactory loops = (bot, registry, inbox) -> new CoreAgentLoop((h, p, s, t) -> done(),
-                registry, "", "ordered-title", CorePromptBudget.standard(), null, CoreAgentLoop.Limits.UNBOUNDED, inbox, null);
+                registry, "", "ordered-title", CorePromptBudget.standard(), null, CoreAgentLoop.ToolResultBudget.UNBOUNDED, inbox, null);
         try (CrewManager manager = new CrewManager("ordered-title", EMPTY, tools, loops, null)) {
             manager.configure(EMPTY, tools, loops, null, null, snapshot -> {
                 if (snapshot.title.isEmpty() && blockOnce.compareAndSet(true, false)) {

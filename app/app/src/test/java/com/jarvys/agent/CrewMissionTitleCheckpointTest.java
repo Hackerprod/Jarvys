@@ -196,7 +196,7 @@ public class CrewMissionTitleCheckpointTest {
                 (bot, tools, incoming) -> new CoreAgentLoop((history, prompt, specs, token) -> {
                     calls.incrementAndGet(); return new ModelReply("Reviewed", Collections.emptyList());
                 }, tools, "", session, CorePromptBudget.standard(), null,
-                        CoreAgentLoop.Limits.UNBOUNDED, incoming, null), null);
+                        CoreAgentLoop.ToolResultBudget.UNBOUNDED, incoming, null), null);
     }
 
     private static void await(CrewManager.Bot bot) throws Exception {

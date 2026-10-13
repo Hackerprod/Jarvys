@@ -609,7 +609,7 @@ class WorkspaceCoordinatorIntegrationTest {
 
     private fun manager(session: String, model: CoreAgentLoop.Model, lifecycle: CrewManager.WorkerLifecycle? = null): CrewManager {
         val factory = CrewManager.LoopFactory { _, registry, inbox -> CoreAgentLoop(model, registry, "", session,
-            CorePromptBudget.standard(), null, CoreAgentLoop.Limits.UNBOUNDED, inbox, null) }
+            CorePromptBudget.standard(), null, CoreAgentLoop.ToolResultBudget.UNBOUNDED, inbox, null) }
         return CrewManager(session, tools, { _, _ -> tools }, factory, null).also {
             if (lifecycle != null) it.configure(tools, { _, _ -> tools }, factory, lifecycle)
         }

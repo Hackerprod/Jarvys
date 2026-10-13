@@ -459,7 +459,7 @@ class WorkspaceCoordinationDeliveryTest {
                     catch (interrupted: InterruptedException) { Thread.currentThread().interrupt(); token.throwIfCancelled(); throw interrupted }
                     token.throwIfCancelled(); ModelReply("Synthetic worker completed", emptyList())
                 }, tools, "", scope.executionSessionId, CorePromptBudget.standard(), null,
-                    CoreAgentLoop.Limits.UNBOUNDED, inbox, null)
+                    CoreAgentLoop.ToolResultBudget.UNBOUNDED, inbox, null)
             }, null)
             manager.configureCoordinationEvidenceListener { source ->
                 ledger.appendCrewCoordinationEvidence(source, noAdmission)

@@ -336,7 +336,7 @@ public class CrewCoordinationCaptureTest {
     private static CrewManager manager(CoreAgentLoop.Model model) {
         return new CrewManager("coordination-chat",EMPTY,(bot,owner)->EMPTY,
                 (bot,tools,inbox)->new CoreAgentLoop(model,tools,"","coordination-chat",CorePromptBudget.standard(),null,
-                        CoreAgentLoop.Limits.UNBOUNDED,inbox,null),null);
+                        CoreAgentLoop.ToolResultBudget.UNBOUNDED,inbox,null),null);
     }
     private static CrewManager.Bot spawn(CrewManager manager) {
         return manager.spawnForMission("coordination-mission","Original instructions","custom","Task",

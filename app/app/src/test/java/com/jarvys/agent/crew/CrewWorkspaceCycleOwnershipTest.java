@@ -119,7 +119,7 @@ public class CrewWorkspaceCycleOwnershipTest {
         try (CrewManager manager = manager(model)) {
             manager.configure(EMPTY, (bot, owner) -> EMPTY,
                     (bot, tools, inbox) -> new CoreAgentLoop(model, tools, "", "workspace-test", CorePromptBudget.standard(),
-                            null, CoreAgentLoop.Limits.UNBOUNDED, inbox, null), new CrewManager.WorkerLifecycle() {
+                            null, CoreAgentLoop.ToolResultBudget.UNBOUNDED, inbox, null), new CrewManager.WorkerLifecycle() {
                         @Override public void start(CrewManager.Bot bot) { }
                         @Override public void end(CrewManager.Bot bot) {
                             if (ended.incrementAndGet() == 1) {
@@ -174,7 +174,7 @@ public class CrewWorkspaceCycleOwnershipTest {
     private static CrewManager manager(CoreAgentLoop.Model model) {
         return new CrewManager("workspace-test", EMPTY, (bot, manager) -> EMPTY,
                 (bot, tools, inbox) -> new CoreAgentLoop(model, tools, "", "workspace-test", CorePromptBudget.standard(),
-                        null, CoreAgentLoop.Limits.UNBOUNDED, inbox, null), null);
+                        null, CoreAgentLoop.ToolResultBudget.UNBOUNDED, inbox, null), null);
     }
     private static void await(CrewManager.Bot bot) throws Exception {
         CountDownLatch ended = new CountDownLatch(1);

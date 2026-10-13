@@ -122,7 +122,7 @@ public class CoreAgentLoopCheckpointRecoveryTest {
             return turns.incrementAndGet() == 1 ? call() : new ModelReply("done", Collections.emptyList());
         };
         CoreAgentLoop loop = new CoreAgentLoop(model, new CoreToolRegistry(Collections.singletonList(tool(token -> CoreToolResult.success("ok")))),
-                "", "chat-one", CorePromptBudget.standard(), null, CoreAgentLoop.Limits.UNBOUNDED, inbox, null);
+                "", "chat-one", CorePromptBudget.standard(), null, CoreAgentLoop.ToolResultBudget.UNBOUNDED, inbox, null);
         loop.run("Mission", Collections.emptyList(), CancellationToken.uncancellable(), null);
         assertEquals(2, loop.checkpointSnapshot().appliedIncomingIds.size());
         int userIndex = loop.checkpointSnapshot().genuineUserIndex;
@@ -136,7 +136,7 @@ public class CoreAgentLoopCheckpointRecoveryTest {
         };
         CoreAgentLoop loop = new CoreAgentLoop((CoreAgentLoop.Model) (transcript, prompt, tools, token) -> call(),
                 new CoreToolRegistry(Collections.singletonList(tool(token -> CoreToolResult.success("tool evidence")))),
-                "", "chat-one", CorePromptBudget.standard(), null, CoreAgentLoop.Limits.UNBOUNDED, inbox, null);
+                "", "chat-one", CorePromptBudget.standard(), null, CoreAgentLoop.ToolResultBudget.UNBOUNDED, inbox, null);
         assertThrows(IllegalStateException.class, () -> loop.run("Mission", Collections.emptyList(), CancellationToken.uncancellable(), null));
         assertEquals("RESULT", loop.checkpointSnapshot().toolLifecycle.get("call-one"));
         assertTrue(loop.checkpointSnapshot().transcript.stream().anyMatch(turn -> "tool evidence".equals(turn.content)));

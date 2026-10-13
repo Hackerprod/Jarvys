@@ -164,7 +164,7 @@ public class BotCatalogCoreRuntimeTest {
                     if (started != null) started.countDown();
                     if (release != null) try { release.await(); } catch (InterruptedException interrupted) { token.throwIfCancelled(); }
                     return new ModelReply("done", Collections.emptyList());
-                }, tools, "", session, CorePromptBudget.standard(), null, CoreAgentLoop.Limits.UNBOUNDED, incoming, null), null);
+                }, tools, "", session, CorePromptBudget.standard(), null, CoreAgentLoop.ToolResultBudget.UNBOUNDED, incoming, null), null);
     }
     private static CrewManager.Bot historical(CrewManager manager, CrewRole role) {
         CrewBotSnapshot bot = new CrewBotSnapshot("bot-historical", role.id, role.name, role.name, role.colorKey, "Saved mission", "INTERRUPTED", "", "", "", role.tools, 1, 0);

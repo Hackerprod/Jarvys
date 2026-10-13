@@ -610,11 +610,15 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
       if (!(item.opt("arguments") instanceof String) || name.isEmpty())
         throw new CodexResponseException(CodexResponseException.Kind.MALFORMED);
       String argsRaw = item.getString("arguments");
-      if (argsRaw.trim().isEmpty()) throw new CodexResponseException(CodexResponseException.Kind.MALFORMED);
-      JSONObject args = CodexResponseStream.parseObject(argsRaw);
-      if (!name.isEmpty())
-        calls.put(
-            id, new ModelReply.Call(id, name, toMap(args)));
+      Map<String, Object> parsedArguments = java.util.Collections.emptyMap();
+      String invalidArgumentsReason = null;
+      try {
+        if (argsRaw.trim().isEmpty()) throw new IllegalArgumentException("Empty arguments");
+        parsedArguments = toMap(CodexResponseStream.parseObject(argsRaw));
+      } catch (Exception malformedArguments) {
+        invalidArgumentsReason = "Malformed tool arguments JSON object";
+      }
+      calls.put(id, new ModelReply.Call(id, name, parsedArguments, invalidArgumentsReason));
     } else if ("message".equals(type)) {
       JSONArray content = item.optJSONArray("content");
       if (content != null) {

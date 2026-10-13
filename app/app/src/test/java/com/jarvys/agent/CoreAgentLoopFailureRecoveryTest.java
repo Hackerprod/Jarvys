@@ -10,63 +10,73 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.Test;
 
 public class CoreAgentLoopFailureRecoveryTest {
-    @Test public void volatileJournalFailuresStopAfterThreeEffectsAndOneCorrectionTurn() {
+    @Test public void thirdIdenticalFailureTerminatesWithoutAnotherModelCall() {
         AtomicInteger effects = new AtomicInteger();
-        AtomicInteger turns = new AtomicInteger();
-        CoreTool tool = tool((arguments, token) -> CoreToolResult.failure(
-                "identity.json -> .journal-" + effects.incrementAndGet() + ".tmp"));
-        CoreAgentLoop loop = loop(tool, (transcript, prompt, declarations, token) -> {
-            int turn = turns.incrementAndGet();
-            assertTrue("Repeated failures must not exhaust the model-turn limit", turn <= 5);
-            return reply(call("call-" + turn, "/project"));
+        AtomicInteger modelCalls = new AtomicInteger();
+        CoreTool tool = tool((arguments, token) -> {
+            effects.incrementAndGet();
+            return CoreToolResult.failure("permission denied");
         });
+        CoreAgentLoop loop = loop(tool, (transcript, prompt, declarations, token) -> {
+            int call = modelCalls.incrementAndGet();
+            return reply(call("call-" + call, "/project"));
+        });
+
         CoreAgentLoop.Result result = loop.run("List project files", Collections.emptyList(), CancellationToken.uncancellable(), null);
+
+        assertEquals("PARTIAL", result.outcome);
+        assertEquals(CoreAgentLoop.InterruptionReason.NO_PROGRESS, result.interruptionReason);
+        assertEquals(3, effects.get());
+        assertEquals(3, modelCalls.get());
+        assertEquals(1, result.turns);
+    }
+
+    @Test public void differentFailureResultsDoNotAccumulateAsOneRepeatedError() {
+        AtomicInteger effects = new AtomicInteger();
+        AtomicInteger modelCalls = new AtomicInteger();
+        CoreTool tool = tool((arguments, token) -> CoreToolResult.failure("failure " + effects.incrementAndGet()));
+        CoreAgentLoop loop = loop(tool, (transcript, prompt, declarations, token) -> {
+            int call = modelCalls.incrementAndGet();
+            return call <= 3 ? reply(call("call-" + call, "/project"))
+                    : new ModelReply("The observed failures differed.", Collections.emptyList());
+        });
+
+        CoreAgentLoop.Result result = loop.run("List project files", Collections.emptyList(), CancellationToken.uncancellable(), null);
+
+        assertEquals("COMPLETED", result.outcome);
+        assertEquals(3, effects.get());
+        assertEquals(4, modelCalls.get());
+    }
+
+    @Test public void thirdIdenticalErrorInBatchBlocksTheRemainingCallsAndEmitsNotStartedEvents() {
+        AtomicInteger effects = new AtomicInteger();
+        AtomicInteger modelCalls = new AtomicInteger();
+        CoreTool tool = tool((arguments, token) -> {
+            effects.incrementAndGet();
+            return CoreToolResult.failure("permission denied");
+        });
+        ModelReply.Call[] calls = new ModelReply.Call[5];
+        for (int i = 0; i < calls.length; i++) calls[i] = call("batch-" + (i + 1), "/project");
+        CoreAgentLoop loop = loop(tool, (transcript, prompt, declarations, token) -> {
+            modelCalls.incrementAndGet();
+            return new ModelReply("", Arrays.asList(calls));
+        });
+        java.util.List<ToolActivity> events = new java.util.ArrayList<>();
+        CoreAgentLoop.ProgressListener listener = new CoreAgentLoop.ProgressListener() {
+            @Override public void onProgress(String stage, String message) { }
+            @Override public void onToolActivity(ToolActivity activity) { events.add(activity); }
+        };
+
+        CoreAgentLoop.Result result = loop.run("List project files", Collections.emptyList(), CancellationToken.uncancellable(), listener);
+
         assertEquals("PARTIAL", result.outcome);
         assertEquals(3, effects.get());
-        assertEquals(5, result.turns);
+        assertEquals(1, modelCalls.get());
         CoreAgentLoop.Checkpoint checkpoint = loop.checkpointSnapshot().reconciled();
-        assertEquals("NEVER_LAUNCHED", checkpoint.toolLifecycle.get("call-4"));
-        assertEquals("NEVER_LAUNCHED", checkpoint.toolLifecycle.get("call-5"));
-        assertEquals(5, checkpoint.transcript.stream().filter(t -> t.kind == ConversationTurn.Kind.TOOL_RESULT).count());
-        assertTrue(checkpoint.transcript.stream().anyMatch(t -> t.content.contains("This attempt was not executed")));
-    }
-
-    @Test public void duplicateFailuresWithinOneBatchCannotBypassTheGuard() {
-        AtomicInteger effects = new AtomicInteger();
-        AtomicInteger turns = new AtomicInteger();
-        CoreTool tool = tool((arguments, token) -> CoreToolResult.failure("failure " + effects.incrementAndGet()));
-        CoreAgentLoop loop = loop(tool, (transcript, prompt, declarations, token) -> turns.incrementAndGet() == 1
-                ? new ModelReply("", Arrays.asList(call("a", "/project"), call("b", "/project"),
-                        call("c", "/project"), call("d", "/project")))
-                : new ModelReply("The project remains blocked.", Collections.emptyList()));
-        loop.run("List project files", Collections.emptyList(), CancellationToken.uncancellable(), null);
-        assertEquals(3, effects.get());
-        assertEquals("NEVER_LAUNCHED", loop.checkpointSnapshot().reconciled().toolLifecycle.get("d"));
-    }
-
-    @Test public void aBlockedCallDoesNotSuppressChangedArgumentsInTheSameReply() {
-        AtomicInteger failures = new AtomicInteger();
-        AtomicInteger recoveries = new AtomicInteger();
-        AtomicInteger turns = new AtomicInteger();
-        CoreTool tool = tool((arguments, token) -> {
-            if ("/project".equals(arguments.get("path"))) return CoreToolResult.failure("failure " + failures.incrementAndGet());
-            recoveries.incrementAndGet();
-            return CoreToolResult.success("Files are available in the corrected location.");
-        });
-        CoreAgentLoop loop = loop(tool, (transcript, prompt, declarations, token) -> {
-            int turn = turns.incrementAndGet();
-            if (turn <= 3) return reply(call("failed-" + turn, "/project"));
-            if (turn == 4) return new ModelReply("", Arrays.asList(call("blocked", "/project"), call("corrected", "/memory")));
-            assertTrue(transcript.stream().anyMatch(t -> t.content.equals("Files are available in the corrected location.")));
-            return new ModelReply("Listed the corrected location.", Collections.emptyList());
-        });
-        CoreAgentLoop.Result result = loop.run("List files", Collections.emptyList(), CancellationToken.uncancellable(), null);
-        assertEquals("COMPLETED", result.outcome);
-        assertEquals(3, failures.get());
-        assertEquals(1, recoveries.get());
-        CoreAgentLoop.Checkpoint checkpoint = loop.checkpointSnapshot().reconciled();
-        assertEquals("NEVER_LAUNCHED", checkpoint.toolLifecycle.get("blocked"));
-        assertEquals("RESULT", checkpoint.toolLifecycle.get("corrected"));
+        assertEquals("NEVER_LAUNCHED", checkpoint.toolLifecycle.get("batch-4"));
+        assertEquals("NEVER_LAUNCHED", checkpoint.toolLifecycle.get("batch-5"));
+        assertEquals(5, checkpoint.transcript.stream().filter(turn -> turn.kind == ConversationTurn.Kind.TOOL_RESULT).count());
+        assertEquals(2, events.stream().filter(event -> event.stage.equals("tool_not_started")).count());
     }
 
     @Test public void cancellationAfterAnUncertainEffectNeverExecutesTheNextCall() {
@@ -84,52 +94,6 @@ public class CoreAgentLoopFailureRecoveryTest {
         CoreAgentLoop.Checkpoint checkpoint = loop.checkpointSnapshot().reconciled();
         assertEquals("INTERRUPTED_UNCERTAIN", checkpoint.toolLifecycle.get("uncertain"));
         assertEquals("NEVER_LAUNCHED", checkpoint.toolLifecycle.get("later"));
-    }
-
-    @Test public void freshCorrectiveSuccessAllowsTheOriginalArgumentsAgain() {
-        AtomicInteger failures = new AtomicInteger();
-        AtomicInteger effects = new AtomicInteger();
-        AtomicInteger turns = new AtomicInteger();
-        java.util.concurrent.atomic.AtomicBoolean repaired = new java.util.concurrent.atomic.AtomicBoolean();
-        CoreTool tool = tool((arguments, token) -> {
-            if ("repair".equals(arguments.get("path"))) {
-                repaired.set(true);
-                return CoreToolResult.success("Repaired project access");
-            }
-            if (!repaired.get()) return CoreToolResult.failure("failure " + failures.incrementAndGet());
-            effects.incrementAndGet();
-            return CoreToolResult.success("Project is readable now");
-        });
-        CoreAgentLoop loop = loop(tool, (transcript, prompt, declarations, token) -> {
-            int turn = turns.incrementAndGet();
-            if (turn <= 3) return reply(call("failure-" + turn, "/project"));
-            if (turn == 4) return new ModelReply("", Arrays.asList(call("blocked", "/project"), call("repair", "repair")));
-            if (turn == 5) return reply(call("retry-after-repair", "/project"));
-            assertEquals(6, turn);
-            return new ModelReply("Recovered", Collections.emptyList());
-        });
-        assertEquals("COMPLETED", loop.run("Read project", Collections.emptyList(), CancellationToken.uncancellable(), null).outcome);
-        assertEquals(3, failures.get());
-        assertEquals(1, effects.get());
-        assertEquals("RESULT", loop.checkpointSnapshot().toolLifecycle.get("retry-after-repair"));
-    }
-
-    @Test public void alternatingUnchangedSuccessCannotHideAnUnboundedFailureLoop() {
-        AtomicInteger failures = new AtomicInteger();
-        AtomicInteger turns = new AtomicInteger();
-        CoreTool tool = tool((arguments, token) -> "stable".equals(arguments.get("path"))
-                ? CoreToolResult.success("unchanged") : CoreToolResult.failure("failure " + failures.incrementAndGet()));
-        CoreAgentLoop.Model model = (transcript, prompt, declarations, token) -> {
-            int turn = turns.incrementAndGet();
-            assertTrue("An unbounded Crew run must still stop a no-progress failure loop", turn <= 6);
-            return new ModelReply("", Arrays.asList(call("failed-" + turn, "/project"), call("stable-" + turn, "stable")));
-        };
-        CoreAgentLoop loop = new CoreAgentLoop(model, new CoreToolRegistry(Collections.singletonList(tool)), "", "test",
-                CorePromptBudget.standard(), null, CoreAgentLoop.Limits.UNBOUNDED, null, null);
-        assertEquals("PARTIAL", loop.run("Read project", Collections.emptyList(), CancellationToken.uncancellable(), null).outcome);
-        assertEquals(4, failures.get());
-        assertEquals(6, turns.get());
-        loop.checkpointSnapshot().reconciled();
     }
 
     private interface Effect {

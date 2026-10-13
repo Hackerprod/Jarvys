@@ -11,11 +11,19 @@ public final class ModelReply {
         public final String id;
         public final String name;
         public final Map<String, Object> arguments;
+        /** Non-null when the provider returned arguments that could not be parsed as an object. */
+        public final String invalidArgumentsReason;
 
         public Call(String id, String name, Map<String, Object> arguments) {
+            this(id, name, arguments, null);
+        }
+
+        public Call(String id, String name, Map<String, Object> arguments, String invalidArgumentsReason) {
             this.id = id;
             this.name = name;
-            this.arguments = Collections.unmodifiableMap(new LinkedHashMap<>(arguments));
+            this.arguments = Collections.unmodifiableMap(new LinkedHashMap<>(arguments == null ? Collections.emptyMap() : arguments));
+            this.invalidArgumentsReason = invalidArgumentsReason == null || invalidArgumentsReason.trim().isEmpty()
+                    ? null : invalidArgumentsReason.trim();
         }
     }
 

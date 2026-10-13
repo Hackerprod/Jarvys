@@ -19,7 +19,7 @@ import org.robolectric.annotation.Config;
 public class AgentModelTurnLimitTest {
     @Rule public TemporaryFolder temporary = new TemporaryFolder();
     @After public void reset() { ArtifactOsShadow.reset(); }
-    @Test public void ordinaryRunStillStopsAfterExactly128RepliesWithoutRetryOrNoProgressConflation() {
+    @Test public void ordinaryRunCompletesAfterMoreThan128ToolRounds() {
         AtomicInteger requests = new AtomicInteger(), effects = new AtomicInteger();
         CoreTool tool = new CoreTool() {
             @Override public ToolSpec declaration() {
@@ -32,17 +32,15 @@ public class AgentModelTurnLimitTest {
         };
         CoreAgentLoop loop = new CoreAgentLoop((history, prompt, declarations, token) -> {
             int request = requests.incrementAndGet();
+            if (request > 130) return new ModelReply("finished", Collections.emptyList());
             return new ModelReply("", Collections.singletonList(
                 new ModelReply.Call("step-" + request, "step", Collections.singletonMap("index", request))));
         }, new CoreToolRegistry(Collections.singletonList(tool)), "", "synthetic-main-chat");
-        CancellationToken token = CancellationToken.cancellable();
-        AgentModelTurnLimitException failure = assertThrows(AgentModelTurnLimitException.class,
-            () -> loop.run("Run synthetic steps", Collections.emptyList(), token, null));
-        assertTrue(failure instanceof IllegalStateException);
-        assertEquals("Agent reached its configured model-turn limit", failure.getMessage());
-        assertEquals(128, requests.get()); assertEquals(128, effects.get());
-        assertFalse(token.isCancellationRequested());
-        assertEquals(128, loop.transcriptSnapshot().stream()
+        CoreAgentLoop.Result result = loop.run("Run synthetic steps", Collections.emptyList(), CancellationToken.uncancellable(), null);
+        assertEquals("COMPLETED", result.outcome);
+        assertEquals("finished", result.text);
+        assertEquals(131, requests.get()); assertEquals(130, effects.get());
+        assertEquals(130, loop.transcriptSnapshot().stream()
             .filter(turn -> turn.kind == ConversationTurn.Kind.TOOL_RESULT).count());
     }
     @Test public void reflectionRetainsTwelveTurnCapFailureWrappingAndNoAutomaticRetry() throws Exception {

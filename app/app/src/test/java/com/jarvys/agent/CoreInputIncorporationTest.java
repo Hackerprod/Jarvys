@@ -96,7 +96,7 @@ public class CoreInputIncorporationTest {
             return turn < 3 ? new ModelReply("", Collections.singletonList(new ModelReply.Call("ask-" + turn,
                     "ask_chief", Collections.emptyMap()))) : new ModelReply("done", Collections.emptyList());
         }, new CoreToolRegistry(Collections.singletonList(tool)), "", "chat", CorePromptBudget.standard(), null,
-                CoreAgentLoop.Limits.UNBOUNDED, new CoreAgentLoop.TurnContextProvider() {
+                CoreAgentLoop.ToolResultBudget.UNBOUNDED, new CoreAgentLoop.TurnContextProvider() {
                     @Override public String takeUntrustedContext() { return ""; }
                     @Override public List<String> completedToolIncomingIds(String name) { return Collections.singletonList("unrelated-global-id"); }
                 }, null);
@@ -163,7 +163,7 @@ public class CoreInputIncorporationTest {
     private static CoreAgentLoop incoming(List<CrewMessage> messages) {
         return new CoreAgentLoop((CoreAgentLoop.Model) (transcript, prompt, tools, token) -> new ModelReply("done", Collections.emptyList()),
                 new CoreToolRegistry(Collections.emptyList()), "", "chat", CorePromptBudget.standard(), null,
-                CoreAgentLoop.Limits.UNBOUNDED, new CoreAgentLoop.TurnContextProvider() {
+                CoreAgentLoop.ToolResultBudget.UNBOUNDED, new CoreAgentLoop.TurnContextProvider() {
                     @Override public String takeUntrustedContext() { return ""; }
                     @Override public List<CoreAgentLoop.IncomingMessage> takeDurableMessages() {
                         java.util.ArrayList<CoreAgentLoop.IncomingMessage> rows = new java.util.ArrayList<>();

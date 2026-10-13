@@ -103,7 +103,7 @@ class ContinuousMissionServiceTest {
                     return ModelReply("verified worker result", emptyList())
                 }
             }, tools, "English test instructions", session, CorePromptBudget.standard(), null,
-                CoreAgentLoop.Limits.UNBOUNDED, incoming, null)
+                CoreAgentLoop.ToolResultBudget.UNBOUNDED, incoming, null)
         }, null)
         service.runtimeFactory = AgentForegroundService.RuntimeFactory { _, _, _, _ ->
             CoreAgentRuntime(emptyList(), emptyList(), emptyList(), emptyList())

@@ -112,10 +112,10 @@ public class LocalDiagnosticsTest {
             Context context = ApplicationProvider.getApplicationContext();
             CoreAgentLoop loop = new CoreAgentLoop(new CoreAgentModel(context, provider, "shape-test"),
                     new CoreToolRegistry(java.util.Collections.emptyList()), "instructions", "shape-test");
-            IllegalStateException failure = assertThrows(IllegalStateException.class,
-                    () -> loop.run("CANARY_USER_TEXT", java.util.Collections.emptyList(),
-                            CancellationToken.uncancellable(), null));
-            assertEquals("Provider returned neither an answer nor a tool call", failure.getMessage());
+            CoreAgentLoop.Result result = loop.run("CANARY_USER_TEXT", java.util.Collections.emptyList(),
+                    CancellationToken.uncancellable(), null);
+            assertEquals("COMPLETED", result.outcome);
+            assertEquals("", result.text);
             JSONObject row = newest(true);
             assertEquals("response_shape", row.getString("kind"));
             JSONObject shape = row.getJSONObject("response_shape");

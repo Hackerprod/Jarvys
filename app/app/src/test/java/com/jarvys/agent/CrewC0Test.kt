@@ -36,7 +36,7 @@ class CrewC0Test {
                                   declarations: List<ToolSpec>, token: CancellationToken) =
                 complete(transcript, prompt, declarations, token)
         }, tools, "Crew common instructions", "bot-session", CorePromptBudget.standard(), null,
-        CoreAgentLoop.Limits.UNBOUNDED, incoming, waiter,
+        CoreAgentLoop.ToolResultBudget.UNBOUNDED, incoming, waiter,
     )
 
     private fun customMission(name: String, tools: List<String> = emptyList()) =
@@ -424,7 +424,7 @@ class CrewC0Test {
                 return ModelReply("after retry", emptyList())
             }
         }, emptyTools, "instructions", "rate", CorePromptBudget.standard(), null,
-            CoreAgentLoop.Limits.UNBOUNDED, turnContext, waiter)
+            CoreAgentLoop.ToolResultBudget.UNBOUNDED, turnContext, waiter)
         assertEquals("after retry", loop.run("mission", emptyList(), CancellationToken.uncancellable(), null).text)
         assertEquals(listOf(4000L, 1500L, 3000L), sleeps)
         assertEquals(listOf(true, false, true, false, true, false), waiting)
@@ -439,7 +439,7 @@ class CrewC0Test {
                                   tools: List<ToolSpec>, token: CancellationToken): ModelReply =
                 throw ProviderRateLimitException("429", 0)
         }, emptyTools, "instructions", "rate-cancel", CorePromptBudget.standard(), null,
-            CoreAgentLoop.Limits.UNBOUNDED, null, cancellingWaiter)
+            CoreAgentLoop.ToolResultBudget.UNBOUNDED, null, cancellingWaiter)
         try {
             cancelled.run("mission", emptyList(), CancellationToken.cancellable(), null)
             fail("cancellation must end unbounded 429 retries")
@@ -525,9 +525,7 @@ class CrewC0Test {
     }
 
     @Test
-    fun sixCaptainSpawnCallsRunWithoutCrewLimitsWhileOrdinaryLoopKeepsItsFourCallBehavior() {
-        assertEquals(128, CoreAgentLoop.Limits.ORDINARY.maxModelTurns)
-        assertEquals(4, CoreAgentLoop.Limits.ORDINARY.maxToolCallsPerTurn)
+    fun sixCaptainAndOrdinaryToolCallsRunInFullBatches() {
         val manager = CrewManager("six-spawn", emptyTools, { _, _ -> emptyTools },
             { _, tools, incoming -> loop(tools, incoming, { _, _, _, _ -> ModelReply("worker done", emptyList()) }) }, null)
         val captainTools = CoreToolRegistry(CrewTools.captain(manager, emptyTools))
@@ -547,7 +545,7 @@ class CrewC0Test {
                     ModelReply("Synthesis", emptyList())
                 }
             }
-        }, captainTools, "captain", "six", CorePromptBudget.standard(), null, CoreAgentLoop.Limits.UNBOUNDED, null, null)
+        }, captainTools, "captain", "six", CorePromptBudget.standard(), null, CoreAgentLoop.ToolResultBudget.UNBOUNDED, null, null)
         try {
             assertEquals("Synthesis", captainLoop.run("delegate", emptyList(), CancellationToken.uncancellable(), null).text)
             val transcript = transcriptAfterSpawn.get()
@@ -576,10 +574,10 @@ class CrewC0Test {
                 }
             })), "normal", "ordinary", CorePromptBudget.standard())
             ordinary.run("normal", emptyList(), CancellationToken.uncancellable(), null)
-            assertEquals(4, ordinaryToolCalls)
+            assertEquals(6, ordinaryToolCalls)
             assertEquals(6, ordinaryResults.get().count { it.kind == ConversationTurn.Kind.TOOL_RESULT && it.toolName == "ordinary" })
             assertTrue(ordinaryResults.get().filter { it.kind == ConversationTurn.Kind.TOOL_RESULT }
-                .count { it.content.contains("too many tool calls") } == 2)
+                .all { it.content == "ok" })
         } finally { manager.close() }
     }
 
@@ -599,7 +597,7 @@ class CrewC0Test {
                                   tools: List<ToolSpec>, token: CancellationToken): ModelReply =
                 if (turn++ == 0) ModelReply("", listOf(ModelReply.Call("large", "large_output", emptyMap())))
                 else { unboundedObserved.set(transcript.last { it.kind == ConversationTurn.Kind.TOOL_RESULT }.content); ModelReply("done", emptyList()) }
-        }, scoped, "crew", "crew-output", CorePromptBudget.standard(), null, CoreAgentLoop.Limits.UNBOUNDED, null, null)
+        }, scoped, "crew", "crew-output", CorePromptBudget.standard(), null, CoreAgentLoop.ToolResultBudget.UNBOUNDED, null, null)
         unbounded.run("mission", emptyList(), CancellationToken.uncancellable(), null)
         assertEquals(payload.length, unboundedObserved.get().length)
 
@@ -678,7 +676,7 @@ class CrewC0Test {
                 }
             }
         }, CoreToolRegistry(CrewTools.captain(manager, emptyTools)), "Captain", "captain-session",
-            CorePromptBudget.standard(), null, CoreAgentLoop.Limits.UNBOUNDED, null, null)
+            CorePromptBudget.standard(), null, CoreAgentLoop.ToolResultBudget.UNBOUNDED, null, null)
 
         try {
             val result = captain.run("Research and verify", emptyList(), CancellationToken.uncancellable(), null)

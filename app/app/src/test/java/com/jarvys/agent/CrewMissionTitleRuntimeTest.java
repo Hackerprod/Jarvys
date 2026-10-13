@@ -129,6 +129,6 @@ public class CrewMissionTitleRuntimeTest {
                     assertFalse(prompt.contains(bot.missionTitle().title));
                     return new ModelReply("Worker result", Collections.emptyList());
                 }, tools, "Worker-only instructions", session, CorePromptBudget.standard(), null,
-                        CoreAgentLoop.Limits.UNBOUNDED, incoming, null), null);
+                        CoreAgentLoop.ToolResultBudget.UNBOUNDED, incoming, null), null);
     }
 }

@@ -125,7 +125,7 @@ public final class CoreAgentLoop {
             return reply == null ? null : reply.contextTokensUsed;
         }
 
-        /** Best-effort hook at the exact empty-final-answer failure boundary. */
+        /** Best-effort diagnostic hook when a completed model turn has no final text or tool calls. */
         default void onEmptyReply(ModelReply reply) { }
     }
 
@@ -186,37 +186,30 @@ public final class CoreAgentLoop {
         void await(ProviderHttpException failure, long retryNumber, CancellationToken token);
     }
 
-    /**
-     * Zero means unlimited. Existing constructors preserve the current ordinary-run limits.
-     */
-    public static final class Limits {
-        public static final Limits ORDINARY = new Limits(128, MAX_TOOL_CALLS_PER_TURN);
-        public static final Limits UNBOUNDED = new Limits(0, 0);
-        public final int maxModelTurns;
-        public final int maxToolCallsPerTurn;
+    /** Result-budget mode retained for Crew's complete tool outputs. The ReAct loop is unbounded. */
+    public static final class ToolResultBudget {
+        public static final ToolResultBudget BOUNDED = new ToolResultBudget(false);
+        public static final ToolResultBudget UNBOUNDED = new ToolResultBudget(true);
+        private final boolean completeToolResults;
 
-        public Limits(int maxModelTurns, int maxToolCallsPerTurn) {
-            if (maxModelTurns < 0 || maxToolCallsPerTurn < 0) throw new IllegalArgumentException("Limits must be zero or positive");
-            this.maxModelTurns = maxModelTurns;
-            this.maxToolCallsPerTurn = maxToolCallsPerTurn;
+        private ToolResultBudget(boolean completeToolResults) {
+            this.completeToolResults = completeToolResults;
         }
 
-        public boolean isUnbounded() {
-            return maxModelTurns == 0 && maxToolCallsPerTurn == 0;
+        public boolean allowsCompleteToolResults() {
+            return completeToolResults;
         }
     }
     static final String TIMEOUT_MESSAGE = "The requested deadline was reached. Progress may be partial; inspect existing results before continuing.";
     static final String LOOP_MESSAGE = "Jarvys paused after repeated calls without progress. Inspect existing results before continuing.";
     static final String PROVIDER_MESSAGE = "The provider request ended without a complete response. Progress is retained. Inspect existing results before continuing; the request was not repeated automatically.";
-    private static final int MAX_TOOL_CALLS_PER_TURN = 4;
     private static final int MAX_TRANSCRIPT_MESSAGES = 40;
     private final Model model;
     private final CoreToolRegistry tools;
     private final CorePromptBudget budget;
     private final String instructions;
     private final ConversationCompactor compactor;
-    private final int maxModelTurns;
-    private final Limits limits;
+    private final ToolResultBudget toolResultBudget;
     private final TurnContextProvider turnContextProvider;
     private final RateLimitWaiter rateLimitWaiter;
     private volatile List<ConversationTurn> transcriptSnapshot = Collections.emptyList();
@@ -420,30 +413,23 @@ public final class CoreAgentLoop {
     }
 
     public CoreAgentLoop(Model model, CoreToolRegistry tools, String instructions, String sessionId, CorePromptBudget budget, ConversationCompactor compactor) {
-        this(model, tools, instructions, sessionId, budget, compactor, 128);
-    }
-
-    public CoreAgentLoop(Model model, CoreToolRegistry tools, String instructions, String sessionId, CorePromptBudget budget, ConversationCompactor compactor, int maxModelTurns) {
-        if (maxModelTurns < 1) throw new IllegalArgumentException("Model turn limit must be positive");
         this.model = model;
         this.tools = tools;
         this.budget = budget;
         this.instructions = instructions == null ? "" : instructions;
         this.compactor = compactor;
-        this.maxModelTurns = maxModelTurns;
-        this.limits = new Limits(maxModelTurns, MAX_TOOL_CALLS_PER_TURN);
+        this.toolResultBudget = ToolResultBudget.BOUNDED;
         this.turnContextProvider = null;
         this.rateLimitWaiter = null;
     }
 
-    public CoreAgentLoop(Model model, CoreToolRegistry tools, String instructions, String sessionId, CorePromptBudget budget, ConversationCompactor compactor, Limits limits, TurnContextProvider turnContextProvider, RateLimitWaiter rateLimitWaiter) {
+    public CoreAgentLoop(Model model, CoreToolRegistry tools, String instructions, String sessionId, CorePromptBudget budget, ConversationCompactor compactor, ToolResultBudget toolResultBudget, TurnContextProvider turnContextProvider, RateLimitWaiter rateLimitWaiter) {
         this.model = model;
         this.tools = tools;
         this.budget = budget;
         this.instructions = instructions == null ? "" : instructions;
         this.compactor = compactor;
-        this.limits = limits == null ? Limits.ORDINARY : limits;
-        this.maxModelTurns = this.limits.maxModelTurns;
+        this.toolResultBudget = toolResultBudget == null ? ToolResultBudget.BOUNDED : toolResultBudget;
         this.turnContextProvider = turnContextProvider;
         this.rateLimitWaiter = rateLimitWaiter;
     }
@@ -454,7 +440,10 @@ public final class CoreAgentLoop {
 
     public Result run(String request, List<ConversationTurn> previousTranscript, List<ChatAttachment> attachments, CancellationToken token, ProgressListener listener) {
         List<ChatAttachment> currentAttachments = attachments == null ? Collections.emptyList() : attachments;
-        if ((request == null || request.trim().isEmpty()) && currentAttachments.isEmpty() && turnContextProvider == null) {
+        boolean transcriptHasPendingInput = ConversationTurn.hasCurrentUserMessage(previousTranscript)
+                || ConversationTurn.endsWithToolResult(previousTranscript);
+        if ((request == null || request.trim().isEmpty()) && currentAttachments.isEmpty()
+                && turnContextProvider == null && !transcriptHasPendingInput) {
             throw new IllegalArgumentException("A user request is required");
         }
         request = request == null ? "" : request;
@@ -467,8 +456,8 @@ public final class CoreAgentLoop {
         if (requestInTranscript && hasRunRequest) transcript.add(ConversationTurn.messageWithAttachments("user", request, compactor == null ? -1 : compactor.currentUserMessageIndex(), currentAttachments));
         updateTranscriptSnapshot(transcript);
         String prompt = requestInTranscript ? "" : request.trim();
-        boolean modelHasInput = hasRunRequest;
-        boolean loopRecoveryUsed = false;
+        boolean modelHasInput = hasRunRequest || ConversationTurn.hasCurrentUserMessage(transcript)
+                || ConversationTurn.endsWithToolResult(transcript);
         int modelTurns = 0;
         long startedAtMs = System.currentTimeMillis();
         int overflowCompactions = 0;
@@ -476,7 +465,6 @@ public final class CoreAgentLoop {
         try {
             while (true) {
                 token.throwIfCancelled();
-                if (limits.maxModelTurns > 0 && modelTurns >= limits.maxModelTurns) throw new AgentModelTurnLimitException();
                 List<ToolSpec> declarations = tools.declarations();
                 if (turnContextProvider != null) {
                     List<IncomingMessage> incoming = turnContextProvider.takeDurableMessages();
@@ -599,12 +587,18 @@ public final class CoreAgentLoop {
                 if (reply == null) throw new IllegalStateException("Provider returned no response");
                 boolean replyToolCallAlreadyRecorded = false;
                 boolean replyTextAlreadyRecorded = false;
+                ConversationTurn emptyAssistantReplyTurn = null;
                 if (compactor != null) {
                     List<ConversationTurn> postTurn = new ArrayList<>(transcript);
                     if (!requestInTranscript && !request.trim().isEmpty()) {
                         postTurn.add(new ConversationTurn("user", request.trim(), compactor.currentUserMessageIndex()));
                     }
-                    if (reply.calls.isEmpty()) postTurn.add(new ConversationTurn("assistant", reply.text)); else postTurn.add(ConversationTurn.toolCalls(reply.text, reply.calls));
+                    if (reply.calls.isEmpty()) {
+                        String assistantText = reply.text == null ? "" : reply.text.trim();
+                        ConversationTurn assistantTurn = new ConversationTurn("assistant", assistantText);
+                        postTurn.add(assistantTurn);
+                        if (assistantText.isEmpty()) emptyAssistantReplyTurn = assistantTurn;
+                    } else postTurn.add(ConversationTurn.toolCalls(reply.text, reply.calls));
                     Integer usageTokens = model.usageTokens(reply);
                     int contextTokens = usageTokens == null ? estimateContext(postTurn, "", declarations) : usageTokens;
                     int window = model.contextWindow(token);
@@ -628,7 +622,14 @@ public final class CoreAgentLoop {
                     String answer = reply.text == null ? "" : reply.text.trim();
                     if (answer.isEmpty()) {
                         try { model.onEmptyReply(reply); } catch (Throwable ignored) { }
-                        throw new IllegalStateException("Provider returned neither an answer nor a tool call");
+                        if (!requestInTranscript && !request.trim().isEmpty()) {
+                            transcript.add(new ConversationTurn("user", request.trim(), compactor == null ? -1 : compactor.currentUserMessageIndex()));
+                        }
+                        boolean emptyAssistantRetained = emptyAssistantReplyTurn != null
+                                && transcript.contains(emptyAssistantReplyTurn);
+                        if (!emptyAssistantRetained) transcript.add(new ConversationTurn("assistant", ""));
+                        updateTranscriptSnapshot(transcript);
+                        return new Result(runId, "", modelTurns, "COMPLETED", Math.max(0L, System.currentTimeMillis() - startedAtMs));
                     }
                     if (turnContextProvider != null || checkpointListener != null) {
                         if (!requestInTranscript && !request.trim().isEmpty()) transcript.add(new ConversationTurn("user", request.trim()));
@@ -648,46 +649,41 @@ public final class CoreAgentLoop {
                     token.throwIfCancelled();
                     listener.onAssistantProgress(reply.calls.get(0).id, reply.text.trim());
                 }
-                int remainingResultChars = limits.isUnbounded() ? Integer.MAX_VALUE : budget.toolResultsPerTurnChars;
-                int callCount = limits.maxToolCallsPerTurn == 0 ? reply.calls.size() : Math.min(reply.calls.size(), limits.maxToolCallsPerTurn);
+                int remainingResultChars = toolResultBudget.allowsCompleteToolResults()
+                        ? Integer.MAX_VALUE : budget.toolResultsPerTurnChars;
                 String terminalText = null;
-                boolean allExecutedCallsTerminal = callCount > 0;
-                boolean blockedRepeatedCall = false;
-                boolean madeProgress = false;
-                for (int index = 0; index < callCount; index++) {
+                boolean allExecutedCallsTerminal = !reply.calls.isEmpty();
+                for (int index = 0; index < reply.calls.size(); index++) {
                     token.throwIfCancelled();
                     ModelReply.Call call = reply.calls.get(index);
+                    CoreTool tool = tools.get(call.name);
                     // A persisted reaction badge is its success UI; keep failures and the model transcript.
                     boolean quietReaction = MessageReactionTool.NAME.equals(call.name)
-                            && tools.get(call.name) instanceof MessageReactionTool;
-                    String displayName = WebSearchTools.displayLabel(call.name, call.arguments);
-                    if (displayName.equals(call.name)) displayName = tools.displayName(call.name);
+                            && tool instanceof MessageReactionTool;
                     String argumentsKey = loopDetector.argumentsKey(call);
-                    int recentCalls = loopDetector.recentCallCount(call.name, argumentsKey);
-                    String reflectionSource = tools.reflectionSource(call.name);
-                    String auditDetail = tools.auditDetail(call.name, call.arguments);
-                    String skillId = tools.get(call.name) instanceof LoadSkillTool && call.arguments.get("skill_id") instanceof String
+                    String skillId = tool instanceof LoadSkillTool && call.arguments.get("skill_id") instanceof String
                             ? (String) call.arguments.get("skill_id") : "";
-                    String skillName = tools.get(call.name) instanceof LoadSkillTool
-                            ? ((LoadSkillTool)tools.get(call.name)).displaySkillName(skillId) : skillId;
-                    ToolActivity activity = new ToolActivity(UUID.randomUUID().toString(),runId+":"+modelTurns+":"+index,
-                            call.id,call.name,displayName,skillId,skillName,"tool_call","",null,auditDetail,reflectionSource,System.currentTimeMillis());
-                    int failedCalls = loopDetector.consecutiveFailureCount(call.name, argumentsKey);
-                    String blockMessage = null;
-                    if (failedCalls >= ToolLoopDetector.FAILURE_THRESHOLD) {
-                        blockMessage = "Repeated " + call.name + " calls failed " + failedCalls
-                                + " times with identical arguments. This attempt was not executed. Inspect the failure and change the approach or report the blocker; do not repeat the same failing call.";
-                    } else if (loopDetector.noProgressStreak(call.name, argumentsKey) >= ToolLoopDetector.CRITICAL_THRESHOLD) {
-                        blockMessage = "Repeated " + call.name + " calls with identical arguments and unchanged results were blocked to prevent a no-progress loop. This attempt was not executed.";
+                    ToolActivity activity = toolActivity(runId, modelTurns, index, call, tools, skillId);
+                    String preflightError = call.invalidArgumentsReason;
+                    if (preflightError == null && tool == null) {
+                        preflightError = "Tool is not available in this agent scope: " + call.name;
+                    } else if (preflightError == null) {
+                        preflightError = ToolArgumentValidator.validate(call.arguments, tool.declaration().jsonSchema());
                     }
-                    if (blockMessage != null) {
-                        blockedRepeatedCall = true;
+                    if (preflightError != null) {
                         allExecutedCallsTerminal = false;
                         toolLifecycle.put(call.id, "NEVER_LAUNCHED");
-                        String content = "Tool error: " + blockMessage;
+                        String content = "Tool error: " + preflightError;
                         transcript.add(ConversationTurn.toolResult(call.id, call.name, content));
                         updateTranscriptSnapshot(transcript);
                         if (listener != null) listener.onToolActivity(activity.event("tool_not_started",content,null));
+                        int repeatedFailures = loopDetector.recordOutcome(call.name, argumentsKey, false, preflightError);
+                        if (repeatedFailures >= ToolLoopDetector.FAILURE_THRESHOLD) {
+                            markRemainingCallsNotLaunched(reply.calls, index + 1, runId, modelTurns, tools, transcript, listener,
+                                    "Tool error: Not executed; the run stopped after repeated identical tool errors.");
+                            return new Result(runId, LOOP_MESSAGE, modelTurns, "PARTIAL",
+                                    Math.max(0L, System.currentTimeMillis() - startedAtMs), InterruptionReason.NO_PROGRESS);
+                        }
                         continue;
                     }
                     activeActivity = quietReaction ? null : activity;
@@ -702,7 +698,7 @@ public final class CoreAgentLoop {
                     allExecutedCallsTerminal &= result.success && result.finishRun;
                     String rawContent = result.content;
                     if (!quietReaction) activeActivity = activity.event("tool_progress",rawContent,result.previewId);
-                    madeProgress |= loopDetector.record(call.name, argumentsKey, result.success, rawContent);
+                    int repeatedFailures = loopDetector.recordOutcome(call.name, argumentsKey, result.success, rawContent);
                     transcript.add(ConversationTurn.toolResult(call.id, call.name, result.success ? rawContent : "Tool error: " + rawContent));
                     if (result.success && result.incomingBatch != null) {
                         if (!result.incomingBatch.matches(call.name, rawContent))
@@ -739,9 +735,6 @@ public final class CoreAgentLoop {
                     } else if (!crewCompaction && content.length() > remainingResultChars) {
                         content = remainingResultChars > 0 ? content.substring(0, remainingResultChars) + "…[truncated by per-turn budget]" : "Tool output omitted because the per-turn result budget is exhausted";
                     }
-                    if (recentCalls >= ToolLoopDetector.WARNING_THRESHOLD) {
-                        content += "\n\nLoop warning: this tool has been called " + recentCalls + " times with identical arguments. If this is not making progress, stop retrying and report the task status.";
-                    }
                     remainingResultChars = Math.max(0, remainingResultChars - content.length());
                     if (!result.success) content = "Tool error: " + content;
                     transcript.add(ConversationTurn.toolResult(call.id, call.name, content));
@@ -749,22 +742,17 @@ public final class CoreAgentLoop {
                     if (result.finishRun && result.success) terminalText = rawContent;
                     if (listener != null && (!quietReaction || !result.success)) listener.onToolActivity(activity.event(result.success ? "tool_result" : "tool_error",content,result.previewId));
                     activeActivity = null;
+                    if (repeatedFailures >= ToolLoopDetector.FAILURE_THRESHOLD) {
+                        markRemainingCallsNotLaunched(reply.calls, index + 1, runId, modelTurns, tools, transcript, listener,
+                                "Tool error: Not executed; the run stopped after repeated identical tool errors.");
+                        return new Result(runId, LOOP_MESSAGE, modelTurns, "PARTIAL",
+                                Math.max(0L, System.currentTimeMillis() - startedAtMs), InterruptionReason.NO_PROGRESS);
+                    }
                 }
-                for (int index = callCount; index < reply.calls.size(); index++) {
-                    ModelReply.Call call = reply.calls.get(index);
-                    transcript.add(ConversationTurn.toolResult(call.id, call.name, "Tool error: too many tool calls in one model turn"));
-                }
-                if (callCount < reply.calls.size()) allExecutedCallsTerminal = false;
                 updateTranscriptSnapshot(transcript);
                 if (allExecutedCallsTerminal && terminalText != null) {
                     emit(listener, "answer", terminalText);
                     return new Result(runId, terminalText, modelTurns, "COMPLETED", Math.max(0L, System.currentTimeMillis() - startedAtMs));
-                }
-                if (blockedRepeatedCall && !madeProgress) {
-                    if (loopRecoveryUsed) return new Result(runId, LOOP_MESSAGE, modelTurns, "PARTIAL", Math.max(0L, System.currentTimeMillis() - startedAtMs), InterruptionReason.NO_PROGRESS);
-                    loopRecoveryUsed = true;
-                } else if (madeProgress) {
-                    loopRecoveryUsed = false;
                 }
                 prompt = "";
             }
@@ -797,6 +785,33 @@ public final class CoreAgentLoop {
             }
         }
         return false;
+    }
+
+    private static ToolActivity toolActivity(String runId, int modelTurns, int index, ModelReply.Call call,
+                                             CoreToolRegistry tools, String skillId) {
+        CoreTool tool = tools.get(call.name);
+        String displayName = WebSearchTools.displayLabel(call.name, call.arguments);
+        if (displayName.equals(call.name)) displayName = tools.displayName(call.name);
+        String skillName = tool instanceof LoadSkillTool
+                ? ((LoadSkillTool) tool).displaySkillName(skillId) : skillId;
+        return new ToolActivity(UUID.randomUUID().toString(), runId + ":" + modelTurns + ":" + index,
+                call.id, call.name, displayName, skillId, skillName, "tool_call", "", null,
+                tools.auditDetail(call.name, call.arguments), tools.reflectionSource(call.name), System.currentTimeMillis());
+    }
+
+    private void markRemainingCallsNotLaunched(List<ModelReply.Call> calls, int start, String runId, int modelTurns,
+                                                CoreToolRegistry tools, List<ConversationTurn> transcript,
+                                                ProgressListener listener, String content) {
+        for (int index = start; index < calls.size(); index++) {
+            ModelReply.Call call = calls.get(index);
+            String skillId = tools.get(call.name) instanceof LoadSkillTool && call.arguments.get("skill_id") instanceof String
+                    ? (String) call.arguments.get("skill_id") : "";
+            ToolActivity activity = toolActivity(runId, modelTurns, index, call, tools, skillId);
+            toolLifecycle.put(call.id, "NEVER_LAUNCHED");
+            transcript.add(ConversationTurn.toolResult(call.id, call.name, content));
+            updateTranscriptSnapshot(transcript);
+            if (listener != null) listener.onToolActivity(activity.event("tool_not_started", content, null));
+        }
     }
 
     private void recordIncorporation(CrewInputBinding binding, CrewInputIncorporation.TransportKind kind, String content) {

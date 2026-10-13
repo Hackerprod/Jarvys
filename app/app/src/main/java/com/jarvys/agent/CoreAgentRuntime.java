@@ -1104,7 +1104,7 @@ public final class CoreAgentRuntime {
         scopeId,
         this.budget,
         compactor,
-        CoreAgentLoop.Limits.UNBOUNDED,
+        CoreAgentLoop.ToolResultBudget.UNBOUNDED,
         incoming,
         rateLimitWaiter);
   }

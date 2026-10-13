@@ -133,7 +133,7 @@ public class BotCatalogRuntimeTest {
         CoreToolRegistry empty = new CoreToolRegistry(Collections.emptyList());
         return new CrewManager("catalog-test", empty, (bot, crew) -> empty,
                 (bot, tools, incoming) -> new CoreAgentLoop(model, tools, "", "catalog-test", CorePromptBudget.standard(), null,
-                        CoreAgentLoop.Limits.UNBOUNDED, incoming, null), null);
+                        CoreAgentLoop.ToolResultBudget.UNBOUNDED, incoming, null), null);
     }
     private static void await(CrewManager.Bot bot) throws Exception {
         CountDownLatch complete = new CountDownLatch(1);

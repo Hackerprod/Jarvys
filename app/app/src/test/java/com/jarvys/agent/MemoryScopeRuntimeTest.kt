@@ -228,7 +228,7 @@ class MemoryScopeRuntimeTest {
                         workerModel.complete(instructions, transcript, prompt, declarations, token)
                     override fun contextWindow(token: CancellationToken): Int = workerModel.contextWindow(token)
                 }, tools, instructions, "chat-B-worker", CorePromptBudget.standard(), null,
-                    CoreAgentLoop.Limits.UNBOUNDED, incoming, null)
+                    CoreAgentLoop.ToolResultBudget.UNBOUNDED, incoming, null)
             }, null)
         try {
             val tools = CoreToolRegistry(com.jarvys.agent.crew.CrewTools.captain(manager, empty))

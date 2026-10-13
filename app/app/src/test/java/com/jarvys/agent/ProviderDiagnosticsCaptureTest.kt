@@ -236,7 +236,7 @@ class ProviderDiagnosticsCaptureTest {
                 model.complete("Synthetic instructions", transcript, prompt, tools, token)
         }
         val loop = CoreAgentLoop(adapter, CoreToolRegistry(emptyList()), "Synthetic instructions", session,
-            CorePromptBudget.standard(), null, CoreAgentLoop.Limits.ORDINARY, null,
+            CorePromptBudget.standard(), null, CoreAgentLoop.ToolResultBudget.BOUNDED, null,
             CoreAgentLoop.RateLimitWaiter { error, retryNumber, _ ->
                 assertSame(failure, error)
                 assertEquals(0L, retryNumber)

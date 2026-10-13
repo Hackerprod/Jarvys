@@ -2,90 +2,50 @@ package com.jarvys.agent;
 
 import org.json.JSONObject;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 
-/** Rolling per-run detector for repeated tool calls with identical, unchanged outcomes. */
+/** Detects only consecutive identical tool errors within the current run. */
 final class ToolLoopDetector {
-    static final int WARNING_THRESHOLD = 10;
-    static final int CRITICAL_THRESHOLD = 20;
     static final int FAILURE_THRESHOLD = 3;
-    private static final int HISTORY_SIZE = 30;
 
-    private static final class Outcome {
-        final String toolName;
-        final String arguments;
-        final String result;
-        final boolean success;
-        final boolean progress;
-
-        Outcome(String toolName, String arguments, boolean success, boolean progress, String result) {
-            this.toolName = toolName;
-            this.arguments = arguments;
-            this.result = result;
-            this.success = success;
-            this.progress = progress;
-        }
-    }
-
-    private final List<Outcome> history = new ArrayList<>();
+    private String lastFailureSignature;
+    private int repeatedFailureCount;
 
     String argumentsKey(ModelReply.Call call) {
         return canonical(call.arguments);
     }
 
-    int recentCallCount(String toolName, String arguments) {
-        int count = 1;
-        for (int index = history.size() - 1; index >= 0; index--) {
-            Outcome outcome = history.get(index);
-            if (outcome.toolName.equals(toolName) && outcome.arguments.equals(arguments)) count++;
+    int recordOutcome(String toolName, String arguments, boolean success, String result) {
+        if (success) {
+            lastFailureSignature = null;
+            repeatedFailureCount = 0;
+            return 0;
         }
-        return count;
+        String signature = toolName + "\n" + arguments + "\n" + sha256(result == null ? "" : result);
+        if (signature.equals(lastFailureSignature)) repeatedFailureCount++;
+        else {
+            lastFailureSignature = signature;
+            repeatedFailureCount = 1;
+        }
+        return repeatedFailureCount;
     }
 
-    int noProgressStreak(String toolName, String arguments) {
-        String latestResult = null;
-        int count = 0;
-        for (int index = history.size() - 1; index >= 0; index--) {
-            Outcome outcome = history.get(index);
-            if (!outcome.toolName.equals(toolName) || !outcome.arguments.equals(arguments)) continue;
-            if (latestResult == null) latestResult = outcome.result;
-            else if (!latestResult.equals(outcome.result)) break;
-            count++;
+    private static String sha256(String value) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8));
+            StringBuilder encoded = new StringBuilder(digest.length * 2);
+            for (byte item : digest) encoded.append(String.format(java.util.Locale.ROOT, "%02x", item & 0xff));
+            return encoded.toString();
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256 is unavailable", impossible);
         }
-        return count;
-    }
-
-    /** Error messages can contain changing temporary paths, request IDs, or timestamps. */
-    int consecutiveFailureCount(String toolName, String arguments) {
-        int count = 0;
-        for (int index = history.size() - 1; index >= 0; index--) {
-            Outcome outcome = history.get(index);
-            // A changed successful observation may have repaired a failing precondition.
-            // Repeating an unrelated unchanged success must not keep a failure loop alive.
-            if (outcome.progress) break;
-            if (!outcome.toolName.equals(toolName) || !outcome.arguments.equals(arguments)) continue;
-            if (outcome.success) break;
-            count++;
-        }
-        return count;
-    }
-
-    boolean record(String toolName, String arguments, boolean success, String result) {
-        String outcomeKey = (success ? "success\n" : "failure\n") + result;
-        boolean progress = success;
-        if (success) for (int index = history.size() - 1; index >= 0; index--) {
-            Outcome previous = history.get(index);
-            if (!previous.toolName.equals(toolName) || !previous.arguments.equals(arguments)) continue;
-            progress = !outcomeKey.equals(previous.result);
-            break;
-        }
-        history.add(new Outcome(toolName, arguments, success, progress, outcomeKey));
-        if (history.size() > HISTORY_SIZE) history.remove(0);
-        return progress;
     }
 
     private static String canonical(Object value) {

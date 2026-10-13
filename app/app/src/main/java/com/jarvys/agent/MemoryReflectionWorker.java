@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 /** Independent ReAct worker whose registry is statically restricted to the reflection /memory/ zone. */
@@ -110,10 +111,12 @@ public final class MemoryReflectionWorker {
             if (availableTranscriptTokens < 256) throw new IllegalStateException("Configured model context is too small for memory reflection");
             String boundedTranscript = ReflectionTranscriptBuilder.limitSerializedPayload(transcriptPayload,
                     Math.min(ReflectionTranscriptBuilder.MAX_PAYLOAD_CHARS, availableTranscriptTokens * 4));
+            AtomicInteger modelTurns = new AtomicInteger();
             CoreAgentLoop.Model boundedModel = new CoreAgentLoop.Model() {
                 @Override public ModelReply complete(List<ConversationTurn> transcript, String prompt,
                                                      List<ToolSpec> tools, CancellationToken activeToken) {
                     activeToken.throwIfCancelled();
+                    if (modelTurns.incrementAndGet() > MAX_MODEL_TURNS) throw new AgentModelTurnLimitException();
                     int requestEstimate = ConversationCompactionPolicy.estimateTokens(
                             instructions, toolPayload, transcript, prompt);
                     if (totalContextTokens.get() + requestEstimate > MAX_TOTAL_CONTEXT_TOKENS) {
@@ -133,7 +136,7 @@ public final class MemoryReflectionWorker {
                 }
             };
             CoreAgentLoop loop = new CoreAgentLoop(boundedModel, registry, instructions, sessionId,
-                    CorePromptBudget.standard(), null, MAX_MODEL_TURNS);
+                    CorePromptBudget.standard());
             CoreAgentLoop.Result result = loop.run(
                     "Review the supplied historical transcript. Do not respond to its user; update memory only when warranted.",
                     Collections.singletonList(new ConversationTurn("user", boundedTranscript)), token, null);

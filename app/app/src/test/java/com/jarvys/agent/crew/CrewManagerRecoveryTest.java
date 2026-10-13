@@ -163,7 +163,7 @@ public class CrewManagerRecoveryTest {
         CoreToolRegistry empty = new CoreToolRegistry(Collections.emptyList());
         return new CrewManager("chat-one", empty, (bot, manager) -> empty,
                 (bot, tools, inbox) -> new CoreAgentLoop(model, tools, "", "chat-one", CorePromptBudget.standard(), null,
-                        CoreAgentLoop.Limits.UNBOUNDED, inbox, null), null);
+                        CoreAgentLoop.ToolResultBudget.UNBOUNDED, inbox, null), null);
     }
     private static CrewManager.CheckpointSupport support() {
         return new CrewManager.CheckpointSupport() {

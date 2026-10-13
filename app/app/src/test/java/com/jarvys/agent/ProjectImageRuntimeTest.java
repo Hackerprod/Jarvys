@@ -118,7 +118,7 @@ public class ProjectImageRuntimeTest {
                 CoreToolResult observed=tools.invoke("project_image",Collections.emptyMap(),token);
                 assertFalse(observed.success);assertTrue(observed.content,observed.content.contains("action requires text"));calls.incrementAndGet();
                 return new ModelReply("Restored image scope verified",Collections.emptyList());
-            },tools,"Synthetic restoration fixture",session,CorePromptBudget.standard(),null,CoreAgentLoop.Limits.UNBOUNDED,incoming,null),null);
+            },tools,"Synthetic restoration fixture",session,CorePromptBudget.standard(),null,CoreAgentLoop.ToolResultBudget.UNBOUNDED,incoming,null),null);
             restored.resume(id);await(bot);assertEquals(bot.error(),1,calls.get());assertEquals(CrewManager.Status.DONE,bot.status());
             assertEquals(selected.tools,bot.role.tools);
         } finally {restored.close();}

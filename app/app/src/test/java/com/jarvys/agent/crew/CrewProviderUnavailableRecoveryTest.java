@@ -578,7 +578,7 @@ public class CrewProviderUnavailableRecoveryTest {
         CrewManager.LoopFactory factory = (bot, registry, incoming) -> {
             loops.incrementAndGet();
             return new CoreAgentLoop(model, registry, "", CHAT, CorePromptBudget.standard(), null,
-                    CoreAgentLoop.Limits.UNBOUNDED, incoming, null);
+                    CoreAgentLoop.ToolResultBudget.UNBOUNDED, incoming, null);
         };
         CrewManager manager = new CrewManager(CHAT, empty, tools, factory, null);
         manager.configure(empty, tools, factory, null, null, listener);

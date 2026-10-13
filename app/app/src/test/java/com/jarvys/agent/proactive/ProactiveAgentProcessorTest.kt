@@ -586,6 +586,16 @@ class ProactiveAgentProcessorTest {
             listOf(ProactiveEventBatch("bank\u001fAva", listOf(noDecisionEvent))), CancellationToken.cancellable(),
         ))
         assertEquals(ProactiveEvent.PENDING, ProactiveEventStore(context).readAll().single().state)
+
+        resetP3Data()
+        val emptyReplyEvent = event("Payment", "Empty model reply", receivedAt = 55)
+        ProactiveEventStore(context).append(emptyReplyEvent)
+        val emptyReply = FakeLoopFactory(reply = { _, _ -> ModelReply("", emptyList()) })
+        assertEquals(ProactiveProcessingResult.Retryable("sin proactive_respond"),
+            processor(emptyReply, fakeConnectedRegistry()).review(
+                listOf(ProactiveEventBatch("bank\u001fAva", listOf(emptyReplyEvent))), CancellationToken.cancellable(),
+            ))
+        assertEquals(ProactiveEvent.PENDING, ProactiveEventStore(context).readAll().single().state)
     }
 
     @Test fun cancellationLeavesCandidatePendingAndStatusToolReturnsReviewState() {

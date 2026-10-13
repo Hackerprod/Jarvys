@@ -3,10 +3,14 @@ package com.jarvys.agent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import java.util.concurrent.atomic.AtomicReference
 
 class CoreAgentLoopTest {
+    @get:Rule val temporaryFolder = TemporaryFolder()
+
     @Test
     fun toolResultReturnsIntoTranscriptBeforeTheModelWritesItsFinalAnswer() {
         val declaration = ToolSpec("lookup", "test", "lookup a fact", "test",
@@ -88,7 +92,7 @@ class CoreAgentLoopTest {
             }
         }
         val loop = CoreAgentLoop(model, CoreToolRegistry(emptyList()), "Instructions", "crew-session",
-            CorePromptBudget.standard(), null, CoreAgentLoop.Limits.UNBOUNDED, provider, null)
+            CorePromptBudget.standard(), null, CoreAgentLoop.ToolResultBudget.UNBOUNDED, provider, null)
 
         val result = loop.run("", previous, CancellationToken.uncancellable(), null)
 
@@ -119,14 +123,94 @@ class CoreAgentLoopTest {
             }
         }
         val loop = CoreAgentLoop(model, CoreToolRegistry(emptyList()), "Instructions", "crew-empty",
-            CorePromptBudget.standard(), null, CoreAgentLoop.Limits.UNBOUNDED, provider, null)
+            CorePromptBudget.standard(), null, CoreAgentLoop.ToolResultBudget.UNBOUNDED, provider, null)
 
-        val result = loop.run("", listOf(ConversationTurn.toolResult("old-call", "lookup", "Old result")),
+        val result = loop.run("", emptyList(),
             CancellationToken.uncancellable(), null)
 
         assertEquals("COMPLETED", result.outcome)
         assertEquals(0, result.turns)
         assertEquals(0, modelCalls)
+    }
+
+    @Test
+    fun emptyPromptContinuesWhenTranscriptEndsWithToolResult() {
+        val previous = listOf(
+            ConversationTurn("user", "Original request"),
+            ConversationTurn.toolCalls("", listOf(ModelReply.Call("old-call", "lookup", emptyMap()))),
+            ConversationTurn.toolResult("old-call", "lookup", "Earlier observation"),
+        )
+        val model = object : CoreAgentLoop.Model {
+            override fun complete(transcript: List<ConversationTurn>, prompt: String,
+                                  tools: List<ToolSpec>, token: CancellationToken): ModelReply {
+                assertEquals("", prompt)
+                assertEquals("Earlier observation", transcript.last().content)
+                return ModelReply("Continued from the tool result.", emptyList())
+            }
+        }
+        val loop = CoreAgentLoop(model, CoreToolRegistry(emptyList()), "Instructions", "continue")
+
+        val result = loop.run("", previous, CancellationToken.uncancellable(), null)
+
+        assertEquals("COMPLETED", result.outcome)
+        assertEquals("Continued from the tool result.", result.text)
+        assertEquals(1, result.turns)
+    }
+
+    @Test
+    fun emptyProviderReplyCompletesAndRetainsEmptyReplyDiagnostic() {
+        var emptyReplyObserved = 0
+        val model = object : CoreAgentLoop.Model {
+            override fun complete(transcript: List<ConversationTurn>, prompt: String,
+                                  tools: List<ToolSpec>, token: CancellationToken) = ModelReply("", emptyList())
+            override fun onEmptyReply(reply: ModelReply) { emptyReplyObserved++ }
+        }
+        val loop = CoreAgentLoop(model, CoreToolRegistry(emptyList()), "Instructions", "empty-reply")
+
+        val result = loop.run("Request", emptyList(), CancellationToken.uncancellable(), null)
+
+        assertEquals("COMPLETED", result.outcome)
+        assertEquals("", result.text)
+        assertEquals(1, emptyReplyObserved)
+        assertEquals("assistant", loop.transcriptSnapshot().last().role)
+        assertEquals("", loop.transcriptSnapshot().last().content)
+    }
+
+    @Test
+    fun emptyProviderReplySurvivesPostTurnPlanAllCompaction() {
+        val files = temporaryFolder.newFolder("empty-reply-compaction")
+        val store = LocalRunStore(files)
+        val session = "empty-reply-compaction"
+        val summaryProvider = object : ModelProviderClient {
+            override fun complete(systemPrompt: String, userPrompt: String,
+                                  images: List<com.jarvys.agent.device.ScreenData>, tools: List<ToolSpec>,
+                                  sessionId: String, token: CancellationToken) = ModelReply("Summary", emptyList())
+
+            override fun completeConversation(systemPrompt: String, history: List<ConversationTurn>,
+                                              userPrompt: String,
+                                              images: List<com.jarvys.agent.device.ScreenData>,
+                                              tools: List<ToolSpec>, sessionId: String,
+                                              token: CancellationToken) = ModelReply("Summary", emptyList())
+        }
+        val compactor = ConversationCompactor(session, CoreAgentModel(summaryProvider, session), store)
+        val model = object : CoreAgentLoop.Model {
+            override fun complete(transcript: List<ConversationTurn>, prompt: String,
+                                  tools: List<ToolSpec>, token: CancellationToken) =
+                ModelReply("", emptyList(), "", null, "fixture", 30_000)
+
+            override fun contextWindow(token: CancellationToken) = 32_768
+        }
+        val loop = CoreAgentLoop(model, CoreToolRegistry(emptyList()), "Instructions", session,
+            CorePromptBudget.standard(), compactor)
+
+        val result = loop.run("Request", emptyList(), CancellationToken.uncancellable(), null)
+
+        assertEquals("COMPLETED", result.outcome)
+        assertEquals("", result.text)
+        val transcript = loop.transcriptSnapshot()
+        assertEquals(1, transcript.count { it.kind == ConversationTurn.Kind.MESSAGE
+            && it.role == "assistant" && it.content.isEmpty() })
+        assertTrue(transcript.any { it.kind == ConversationTurn.Kind.COMPACTION_SUMMARY })
     }
 
     @Test
@@ -210,7 +294,7 @@ class CoreAgentLoopTest {
     }
 
     @Test
-    fun continuesPastTwelveModelTurnsUntilTheModelReturnsFinalText() {
+    fun continuesPast128ModelTurnsUntilTheModelReturnsFinalText() {
         val declaration = ToolSpec("step", "test", "perform a step", "test",
             ToolSpec.Status.IMPLEMENTED, emptyMap(), emptyList())
         var executed = 0
@@ -232,7 +316,7 @@ class CoreAgentLoopTest {
             ): ModelReply {
                 calls++
                 prompts += prompt
-                if (calls <= 15) {
+                if (calls <= 130) {
                     assertEquals(listOf("step"), tools.map { it.name })
                     return ModelReply("", listOf(ModelReply.Call("step-$calls", "step", emptyMap())))
                 }
@@ -241,16 +325,16 @@ class CoreAgentLoopTest {
         }
         val loop = CoreAgentLoop(model, CoreToolRegistry(listOf(stepTool)), "Instructions", "session")
 
-        val result = loop.run("Perform fifteen steps", emptyList(), CancellationToken.uncancellable(), null)
+        val result = loop.run("Perform 130 steps", emptyList(), CancellationToken.uncancellable(), null)
 
-        assertEquals(15, executed)
-        assertEquals(16, result.turns)
+        assertEquals(130, executed)
+        assertEquals(131, result.turns)
         assertEquals("All requested steps are finished.", result.text)
         assertTrue(prompts.none { it.contains("turns remain") || it.contains("last work turn") })
     }
 
     @Test
-    fun repeatedNoProgressCallsWarnThenGetOneRecoveryBeforeReturningPartial() {
+    fun identicalSuccessfulCallsDoNotTriggerContinuousLoopDetection() {
         val declaration = ToolSpec("step", "test", "perform a step", "test",
             ToolSpec.Status.IMPLEMENTED, emptyMap(), emptyList())
         var executed = 0
@@ -272,22 +356,18 @@ class CoreAgentLoopTest {
             ): ModelReply {
                 calls++
                 transcripts += transcript
-                if (calls == 1) return ModelReply("", listOf(ModelReply.Call("call-$calls", "step", emptyMap())))
-                if (calls <= 20) return ModelReply("", listOf(ModelReply.Call("call-$calls", "step", emptyMap())))
-                if (calls == 21 || calls == 22) {
-                    return ModelReply("", listOf(ModelReply.Call("call-$calls", "step", emptyMap())))
-                }
-                throw AssertionError("loop should terminate after the second critical block")
+                if (calls <= 40) return ModelReply("", listOf(ModelReply.Call("call-$calls", "step", emptyMap())))
+                return ModelReply("Finished after repeated reads.", emptyList())
             }
         }
         val loop = CoreAgentLoop(model, CoreToolRegistry(listOf(stepTool)), "Instructions", "session")
 
         val result = loop.run("Do work", emptyList(), CancellationToken.uncancellable(), null)
 
-        assertEquals("PARTIAL", result.outcome)
-        assertEquals(CoreAgentLoop.InterruptionReason.NO_PROGRESS, result.interruptionReason)
-        assertEquals(20, executed)
-        assertTrue(transcripts.any { turns -> turns.any { it.content.contains("Loop warning:") } })
+        assertEquals("COMPLETED", result.outcome)
+        assertEquals(40, executed)
+        assertEquals("Finished after repeated reads.", result.text)
+        assertTrue(transcripts.none { turns -> turns.any { it.content.contains("Loop warning:") } })
     }
 
     @Test

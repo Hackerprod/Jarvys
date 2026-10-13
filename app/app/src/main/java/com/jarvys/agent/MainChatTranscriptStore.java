@@ -76,7 +76,6 @@ final class MainChatTranscriptStore {
                         batch = batches.get(turn);
                         if (batch == null) {
                             batch = UUID.randomUUID().toString();
-                            if (turn.toolCalls.size() > 128) throw new IllegalStateException("Provider returned too many tool calls to retain safely");
                             JSONArray calls = new JSONArray();
                             for (ModelReply.Call call : turn.toolCalls) {
                                 if (call.id == null || call.id.isEmpty() || call.id.length() > 512

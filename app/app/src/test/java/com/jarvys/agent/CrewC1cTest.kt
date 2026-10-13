@@ -25,7 +25,7 @@ class CrewC1cTest {
                                   declarations: List<ToolSpec>, token: CancellationToken) =
                 complete(transcript, prompt, token)
         }, tools, "Deterministic Crew test", "crew-c1c-bot", CorePromptBudget.standard(), null,
-            CoreAgentLoop.Limits.UNBOUNDED, incoming, null)
+            CoreAgentLoop.ToolResultBudget.UNBOUNDED, incoming, null)
 
     private fun call(id: String, name: String, vararg values: Pair<String, Any>) =
         ModelReply.Call(id, name, linkedMapOf(*values))
@@ -117,7 +117,7 @@ class CrewC1cTest {
                 }
             }
         }, captainTools, "Captain", "c1c-captain", CorePromptBudget.standard(), null,
-            CoreAgentLoop.Limits.UNBOUNDED, null, null)
+            CoreAgentLoop.ToolResultBudget.UNBOUNDED, null, null)
         try {
             val result = captain.run("Diseñar y revisar un borrador", emptyList(), CancellationToken.uncancellable(), null)
             assertTrue(result.text.contains("Revisor aprobó la fuente B"))
