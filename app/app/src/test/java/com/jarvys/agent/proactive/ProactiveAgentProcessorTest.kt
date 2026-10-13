@@ -586,6 +586,9 @@ class ProactiveAgentProcessorTest {
             listOf(ProactiveEventBatch("bank\u001fAva", listOf(noDecisionEvent))), CancellationToken.cancellable(),
         ))
         assertEquals(ProactiveEvent.PENDING, ProactiveEventStore(context).readAll().single().state)
+        assertEquals("A missing proactive_respond should retry the real batch on a later run, without a synthetic prompt.",
+            1, noDecision.promptCalls)
+        assertTrue(noDecision.prompts.single().contains("No decision"))
 
         resetP3Data()
         val emptyReplyEvent = event("Payment", "Empty model reply", receivedAt = 55)
@@ -596,6 +599,8 @@ class ProactiveAgentProcessorTest {
                 listOf(ProactiveEventBatch("bank\u001fAva", listOf(emptyReplyEvent))), CancellationToken.cancellable(),
             ))
         assertEquals(ProactiveEvent.PENDING, ProactiveEventStore(context).readAll().single().state)
+        assertEquals("An empty final reply should not trigger a synthetic second prompt.", 1, emptyReply.promptCalls)
+        assertTrue(emptyReply.prompts.single().contains("Empty model reply"))
     }
 
     @Test fun cancellationLeavesCandidatePendingAndStatusToolReturnsReviewState() {

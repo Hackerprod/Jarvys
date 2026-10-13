@@ -7,6 +7,29 @@ import java.util.List;
 import java.util.Map;
 
 public final class ModelReply {
+    /** An item from a provider's assistant output, kept opaque unless its adapter understands it. */
+    public static final class ProviderOutputItem {
+        public enum Kind { REASONING, MESSAGE, TOOL_CALL }
+        public final Kind kind;
+        /** Raw JSON for REASONING; assistant text for MESSAGE; call ID for TOOL_CALL. */
+        public final String value;
+
+        private ProviderOutputItem(Kind kind, String value) {
+            this.kind = kind;
+            this.value = value == null ? "" : value;
+        }
+
+        public static ProviderOutputItem reasoning(String rawJson) {
+            return new ProviderOutputItem(Kind.REASONING, rawJson);
+        }
+        public static ProviderOutputItem message(String text) {
+            return new ProviderOutputItem(Kind.MESSAGE, text);
+        }
+        public static ProviderOutputItem toolCall(String callId) {
+            return new ProviderOutputItem(Kind.TOOL_CALL, callId);
+        }
+    }
+
     public static final class Call {
         public final String id;
         public final String name;
@@ -35,6 +58,8 @@ public final class ModelReply {
     public final Integer contextTokensUsed;
     /** Additive evidence only. Phase 0 does not use this to change loop or history behavior. */
     public final ResponseDiagnostics diagnostics;
+    /** Provider-specific ordered output items. Only the matching provider adapter may replay them. */
+    public final List<ProviderOutputItem> providerOutputItems;
 
     public ModelReply(String text, List<Call> calls) {
         this(text, calls, "", null, "");
@@ -52,6 +77,13 @@ public final class ModelReply {
 
     public ModelReply(String text, List<Call> calls, String rawResponseBody, Integer httpStatus,
                       String model, Integer contextTokensUsed, ResponseDiagnostics diagnostics) {
+        this(text, calls, rawResponseBody, httpStatus, model, contextTokensUsed, diagnostics,
+                Collections.emptyList());
+    }
+
+    public ModelReply(String text, List<Call> calls, String rawResponseBody, Integer httpStatus,
+                      String model, Integer contextTokensUsed, ResponseDiagnostics diagnostics,
+                      List<ProviderOutputItem> providerOutputItems) {
         this.text = text == null ? "" : text;
         this.calls = Collections.unmodifiableList(new ArrayList<>(calls));
         this.rawResponseBody = rawResponseBody == null ? "" : rawResponseBody;
@@ -59,5 +91,7 @@ public final class ModelReply {
         this.model = model == null ? "" : model;
         this.contextTokensUsed = contextTokensUsed != null && contextTokensUsed > 0 ? contextTokensUsed : null;
         this.diagnostics = diagnostics == null ? ResponseDiagnostics.unknown() : diagnostics;
+        this.providerOutputItems = Collections.unmodifiableList(new ArrayList<>(
+                providerOutputItems == null ? Collections.emptyList() : providerOutputItems));
     }
 }

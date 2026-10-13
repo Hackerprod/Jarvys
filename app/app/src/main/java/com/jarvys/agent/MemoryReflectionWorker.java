@@ -116,7 +116,7 @@ public final class MemoryReflectionWorker {
                 @Override public ModelReply complete(List<ConversationTurn> transcript, String prompt,
                                                      List<ToolSpec> tools, CancellationToken activeToken) {
                     activeToken.throwIfCancelled();
-                    if (modelTurns.incrementAndGet() > MAX_MODEL_TURNS) throw new AgentModelTurnLimitException();
+                    if (modelTurns.get() >= MAX_MODEL_TURNS) throw new AgentModelTurnLimitException();
                     int requestEstimate = ConversationCompactionPolicy.estimateTokens(
                             instructions, toolPayload, transcript, prompt);
                     if (totalContextTokens.get() + requestEstimate > MAX_TOTAL_CONTEXT_TOKENS) {
@@ -125,6 +125,7 @@ public final class MemoryReflectionWorker {
                     if (authority != null) authority.admit();
                     ModelReply reply = model.complete(instructions, transcript, prompt, tools, activeToken);
                     activeToken.throwIfCancelled();
+                    modelTurns.incrementAndGet();
                     int used = reply.contextTokensUsed == null
                             ? requestEstimate + ConversationCompactionPolicy.estimateTokens(reply.text)
                             : Math.max(requestEstimate, reply.contextTokensUsed);
@@ -136,7 +137,7 @@ public final class MemoryReflectionWorker {
                 }
             };
             CoreAgentLoop loop = new CoreAgentLoop(boundedModel, registry, instructions, sessionId,
-                    CorePromptBudget.standard());
+                    CorePromptBudget.standard(), null, new ProviderRetryWaiter());
             CoreAgentLoop.Result result = loop.run(
                     "Review the supplied historical transcript. Do not respond to its user; update memory only when warranted.",
                     Collections.singletonList(new ConversationTurn("user", boundedTranscript)), token, null);

@@ -334,7 +334,8 @@ public final class CoreAgentRuntime {
       CoreAgentLoop.Model scopedModel = requestModel(model, runToolRegistry, mainChat, reactionTool);
       CoreAgentLoop loop =
           new CoreAgentLoop(
-              scopedModel, toolRegistry, runInstructions, sessionId, budget, compactor);
+              scopedModel, toolRegistry, runInstructions, sessionId, budget, compactor,
+              new ProviderRetryWaiter());
       if (transcriptStore != null) transcriptStore.attach(loop, history);
       CoreAgentLoop.Result result = AgentResultPresentation.localize(context, loop.run(request, history, attachments, token, listener));
       if (crewManager != null) {
@@ -1703,7 +1704,8 @@ public final class CoreAgentRuntime {
         this.context == null
             ? null
             : new ConversationCompactor(childId, sharedModel, new LocalRunStore(this.context), false);
-    return new CoreAgentLoop(model, childTools3, childInstructions, childId, this.budget, compactor)
+    return new CoreAgentLoop(model, childTools3, childInstructions, childId, this.budget, compactor,
+        new ProviderRetryWaiter())
         .run(objective, Collections.emptyList(), token, null);
   }
 

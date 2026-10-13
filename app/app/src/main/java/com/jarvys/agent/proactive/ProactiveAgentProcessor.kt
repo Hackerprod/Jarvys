@@ -13,6 +13,7 @@ import com.jarvys.agent.ModelReply
 import com.jarvys.agent.ProviderSettings
 import com.jarvys.agent.ProviderHttpException
 import com.jarvys.agent.ProviderTransportException
+import com.jarvys.agent.ProviderRetryWaiter
 import com.jarvys.agent.SecretStore
 import com.jarvys.agent.ToolSpec
 import com.jarvys.agent.providers.ProviderClientRegistry
@@ -79,7 +80,8 @@ class ConfiguredProactiveCoreLoopFactory : ProactiveCoreLoopFactory {
         sessionId: String,
         tools: CoreToolRegistry,
         systemPrompt: String,
-    ): CoreAgentLoop = CoreAgentLoop(CoreAgentModel(context, sessionId), tools, systemPrompt, sessionId)
+    ): CoreAgentLoop = CoreAgentLoop(CoreAgentModel(context, sessionId), tools, systemPrompt, sessionId,
+        com.jarvys.agent.CorePromptBudget.standard(), null, ProviderRetryWaiter())
 }
 
 /** Explicit capability allowlist; operation.write is also checked as a defense against catalog drift. */
@@ -166,6 +168,8 @@ class ProactiveAgentProcessor(
                 val existing = auditStore.find(decisionId)
                 val modelDecision = existing?.let(::decisionFromAudit)
                     ?: runDecision(safeEvents, decisionId, token)
+                    // Requeue the same real event batch when its required action was omitted.
+                    // This does not append a synthetic user turn or prompt to the model transcript.
                     ?: return retry("sin proactive_respond")
                 token.throwIfCancelled()
 

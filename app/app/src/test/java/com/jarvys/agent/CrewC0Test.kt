@@ -323,6 +323,42 @@ class CrewC0Test {
     }
 
     @Test
+    fun zeroWorkReanimationDoesNotPublishAnEmptyResultOrAdvanceCycleCount() {
+        val modelCalls = AtomicInteger()
+        val presentedResults = AtomicInteger()
+        val manager = CrewManager("reanimate-zero-work", emptyTools, { _, _ -> emptyTools },
+            { _, tools, incoming -> loop(tools, incoming, { _, _, _, _ ->
+                if (modelCalls.incrementAndGet() == 1) ModelReply("Initial result", emptyList())
+                else ModelReply("A response whose presented result is empty", emptyList())
+            }) }, null)
+        manager.configureResultPresentation { result ->
+            if (presentedResults.incrementAndGet() == 2)
+                CoreAgentLoop.Result(result.runId, "", 0, "COMPLETED", result.durationMs)
+            else result
+        }
+        try {
+            val bot = manager.spawn("custom", "Review the proposal", emptyList(), "Reviewer")
+            bot.awaitTermination()
+            assertEquals("Initial result", bot.result())
+            manager.finishMission(bot.missionId, "Initial synthesis", "COMPLETED")
+
+            manager.sendUserMessage(bot.id, "Please check the latest source")
+            bot.awaitTermination()
+
+            assertEquals(2, modelCalls.get())
+            assertEquals(2, presentedResults.get())
+            assertEquals("No work was completed by the presented empty cycle", 1L, bot.completedCycles())
+            assertEquals("The previous useful result must survive a zero-work cycle", "Initial result", bot.result())
+            val results = manager.messageBus().snapshot().filter {
+                it.from == bot.id && it.to == "chief" && it.type == CrewMessage.Type.RESULT
+            }
+            assertEquals(1, results.size)
+            assertEquals("Initial result", results.single().text)
+            assertTrue(results.none { it.text.isBlank() })
+        } finally { manager.close() }
+    }
+
+    @Test
     fun anotherRunningBotCanReanimateACompletedBot() {
         val senderEntered = CountDownLatch(1)
         val releaseSender = CountDownLatch(1)

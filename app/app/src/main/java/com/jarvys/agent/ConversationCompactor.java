@@ -113,14 +113,22 @@ public final class ConversationCompactor {
             int firstKept = store.conversationMessageCount(sessionId);
             int currentUserIndex = currentUserMessageIndex();
             boolean currentUserRepresented = false;
+            ConversationTurn currentUserTurn = null;
             for (ConversationTurn turn : plan.keep) {
                 if (turn.originalMessageIndex >= 0) {
-                    if (turn.originalMessageIndex == currentUserIndex) currentUserRepresented = true;
+                    if (turn.originalMessageIndex == currentUserIndex) {
+                        currentUserRepresented = true;
+                        currentUserTurn = turn;
+                    }
                     firstKept = Math.min(firstKept, turn.originalMessageIndex);
                 }
             }
             for (ConversationTurn turn : plan.summarize) {
-                if (turn.originalMessageIndex == currentUserIndex) currentUserRepresented = true;
+                if (turn.originalMessageIndex == currentUserIndex) {
+                    currentUserRepresented = true;
+                    currentUserTurn = turn;
+                    firstKept = Math.min(firstKept, currentUserIndex);
+                }
             }
             if (currentUserIndex >= 0 && !currentUserRepresented) firstKept = Math.min(firstKept, currentUserIndex);
             int summarizedCount = firstKept;
@@ -128,6 +136,8 @@ public final class ConversationCompactor {
             store.appendCompaction(sessionId, summary, firstKept, trigger, plan.mode.name().toLowerCase(java.util.Locale.ROOT), summarizedCount);
             List<ConversationTurn> updated = new ArrayList<>();
             updated.add(ConversationTurn.compactionSummary(summary, summarizedCount));
+            if (currentUserIndex >= 0 && currentUserTurn != null && !plan.keep.contains(currentUserTurn))
+                updated.add(currentUserTurn);
             updated.addAll(plan.keep);
             Outcome outcome = new Outcome(updated, summary, summarizedCount, plan.mode);
             if (listener != null) listener.onCompleted(summary, summarizedCount, plan.mode.name().toLowerCase(java.util.Locale.ROOT));

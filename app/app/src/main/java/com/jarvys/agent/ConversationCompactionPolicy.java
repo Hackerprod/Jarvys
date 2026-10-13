@@ -58,8 +58,11 @@ public final class ConversationCompactionPolicy {
     public static int estimateTokens(String system, String tools, List<ConversationTurn> transcript, String prompt) {
         long bytes = utf8(system) + utf8(tools) + utf8(prompt);
         if (transcript != null) for (ConversationTurn turn : transcript) {
+            if (turn.kind == ConversationTurn.Kind.MODEL_ERROR) continue;
             bytes += utf8(turn.content) + utf8(turn.thinking) + (long) turn.imageCount * 4_800L + 24;
             for (ModelReply.Call call : turn.toolCalls) bytes += utf8(call.name) + utf8(call.arguments.toString()) + 48;
+            for (ModelReply.ProviderOutputItem item : turn.providerOutputItems)
+                if (item.kind == ModelReply.ProviderOutputItem.Kind.REASONING) bytes += utf8(item.value);
             bytes += utf8(turn.toolCallId) + utf8(turn.toolName);
         }
         return (int) Math.min(Integer.MAX_VALUE, (bytes + 3) / 4);
@@ -114,8 +117,11 @@ public final class ConversationCompactionPolicy {
     public static int estimateTurnsTokens(List<ConversationTurn> turns) {
         long bytes = 0;
         if (turns != null) for (ConversationTurn turn : turns) {
+            if (turn.kind == ConversationTurn.Kind.MODEL_ERROR) continue;
             bytes += utf8(turn.content) + utf8(turn.thinking) + (long) turn.imageCount * 4_800L + 24;
             for (ModelReply.Call call : turn.toolCalls) bytes += utf8(call.name) + utf8(call.arguments.toString()) + 48;
+            for (ModelReply.ProviderOutputItem item : turn.providerOutputItems)
+                if (item.kind == ModelReply.ProviderOutputItem.Kind.REASONING) bytes += utf8(item.value);
             bytes += utf8(turn.toolCallId) + utf8(turn.toolName);
         }
         return (int) Math.min(Integer.MAX_VALUE, (bytes + 3) / 4);
@@ -124,6 +130,7 @@ public final class ConversationCompactionPolicy {
     public static String formatTranscript(List<ConversationTurn> turns, int toolResultLimit) {
         StringBuilder out = new StringBuilder(" \n");
         if (turns != null) for (ConversationTurn turn : turns) {
+            if (turn.kind == ConversationTurn.Kind.MODEL_ERROR) continue;
             String role = turn.kind == ConversationTurn.Kind.TOOL_RESULT ? "tool" : turn.role;
             String text = turn.content == null ? "" : turn.content;
             if (!turn.thinking.isEmpty()) text += (text.isEmpty() ? "" : "\n\n") + "[thinking] " + turn.thinking;

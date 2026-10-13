@@ -1892,6 +1892,9 @@ public final class LocalRunStore {
         }
         Map<Integer, List<ConversationTurn>> toolGroups = MainChatTranscriptStore.restore(
                 rows, firstKept, latestCompaction == null ? -1 : latestCompactionRow);
+        Map<String, List<ModelReply.ProviderOutputItem>> providerOutputItems =
+                MainChatTranscriptStore.restoreProviderOutputItems(rows, firstKept,
+                        latestCompaction == null ? -1 : latestCompactionRow);
         int messageIndex = 0;
         for (int rowIndex = 0; rowIndex < rows.size(); rowIndex++) {
             JSONObject row = rows.get(rowIndex);
@@ -1899,7 +1902,12 @@ public final class LocalRunStore {
             if (("user".equals(role) || "assistant".equals(role)) && row.has("content")) {
                 int index = messageIndex++;
                 if (index < firstKept || ("assistant".equals(role) && hidden.contains(row.optString("messageId", "")))) continue;
-                context.add(ConversationTurn.messageWithAttachments(role, row.optString("content", ""), index, attachmentsForRow(sessionId, row)));
+                List<ModelReply.ProviderOutputItem> assistantItems = "assistant".equals(role)
+                        ? providerOutputItems.get(row.optString("userMessageId")) : null;
+                if (assistantItems != null && !assistantItems.isEmpty())
+                    context.add(ConversationTurn.assistantReply(row.optString("content", ""), index, assistantItems));
+                else context.add(ConversationTurn.messageWithAttachments(role, row.optString("content", ""), index,
+                        attachmentsForRow(sessionId, row)));
             } else if (toolGroups.containsKey(rowIndex)) {
                 context.addAll(toolGroups.get(rowIndex));
             }
@@ -1936,7 +1944,8 @@ public final class LocalRunStore {
     synchronized void appendModelTranscriptRow(String sessionId, JSONObject row) {
         String type = row.optString("type");
         if (!("model_tool_calls".equals(type) || "model_tool_started".equals(type)
-                || "model_tool_result".equals(type) || "model_artifact".equals(type)) || row.has("role"))
+                || "model_tool_result".equals(type) || "model_artifact".equals(type)
+                || "model_error".equals(type) || "model_provider_output_items".equals(type)) || row.has("role"))
             throw new IllegalArgumentException("Invalid model transcript record");
         synchronized (SESSION_TITLE_LOCK) { appendSessionRowLocked(conversationFile(sessionId), row); }
     }

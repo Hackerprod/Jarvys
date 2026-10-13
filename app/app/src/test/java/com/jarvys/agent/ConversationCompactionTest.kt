@@ -134,7 +134,7 @@ class ConversationCompactionTest {
         store.appendConversationMessage(session, "user", "five")
         store.appendConversationMessage(session, "assistant", "six")
         store.appendCompaction(session, "summary two includes summary one", 4,
-            "auto_post_turn", "all", 4)
+            "auto_preflight", "all", 4)
         val afterSecond = store.loadConversationContext(session)
         assertTrue(afterSecond.first().content.contains("summary two includes summary one"))
         assertEquals(listOf(4, 5), afterSecond.drop(1).map { it.originalMessageIndex })
@@ -220,8 +220,8 @@ class ConversationCompactionTest {
     }
 
     @Test
-    fun automaticPreflightPostTurnOverflowAndManualTriggersUseConfiguredFakeModels() {
-        val scenarios = listOf("auto_preflight", "auto_post_turn", "overflow", "manual")
+    fun automaticPreflightOverflowAndManualTriggersUseConfiguredFakeModels() {
+        val scenarios = listOf("auto_preflight", "overflow", "manual")
         scenarios.forEach { scenario ->
             val files = temporaryFolder.newFolder("trigger-$scenario")
             val store = LocalRunStore(files)
@@ -240,8 +240,7 @@ class ConversationCompactionTest {
                                       tools: List<ToolSpec>, token: CancellationToken): ModelReply {
                     requests++
                     if (scenario == "overflow" && requests == 1) throw IllegalStateException("context window exceeded")
-                    return if (scenario == "auto_post_turn") ModelReply("answer", emptyList(), "", null, "fake", 30_000)
-                    else ModelReply("answer", emptyList())
+                    return ModelReply("answer", emptyList())
                 }
                 override fun contextWindow(token: CancellationToken) = window
             }

@@ -61,6 +61,29 @@ public class CodexResponsesTerminalTest {
         fixture.assertClosedOnce();
     }
 
+    @Test public void completedCodexReplyRetainsOrderedReasoningItemsThroughTheAdapter() throws Exception {
+        JSONObject reasoning = new JSONObject().put("type", "reasoning").put("id", "rs_adapter")
+                .put("encrypted_content", "encrypted-adapter-sentinel").put("summary", new JSONArray());
+        JSONObject message = message("Checking the source").put("id", "msg_adapter");
+        JSONObject response = completed("").getJSONObject("response");
+        response.put("output", new JSONArray().put(reasoning).put(message).put(call()));
+        Fixture fixture = fixture(sse(new JSONObject().put("type", "response.completed").put("response", response)), true, 5);
+
+        ModelReply reply = fixture.complete();
+
+        assertEquals(3, reply.providerOutputItems.size());
+        assertEquals(ModelReply.ProviderOutputItem.Kind.REASONING, reply.providerOutputItems.get(0).kind);
+        assertTrue(reply.providerOutputItems.get(0).value.contains("encrypted-adapter-sentinel"));
+        assertEquals(ModelReply.ProviderOutputItem.Kind.MESSAGE, reply.providerOutputItems.get(1).kind);
+        assertEquals("Checking the source", reply.providerOutputItems.get(1).value);
+        assertEquals(ModelReply.ProviderOutputItem.Kind.TOOL_CALL, reply.providerOutputItems.get(2).kind);
+        assertEquals("synthetic-call", reply.providerOutputItems.get(2).value);
+        assertTrue(reply.diagnostics.assistantItems.stream().noneMatch(item ->
+                String.valueOf(item.text).contains("encrypted-adapter-sentinel")
+                        || String.valueOf(item.providerId).contains("encrypted-adapter-sentinel")));
+        fixture.assertClosedOnce();
+    }
+
     @Test public void emptyCompletedOutputRecoversMessageFromOutputItemDone() throws Exception {
         JSONObject value = completed("");
         value.getJSONObject("response").put("output", new JSONArray());

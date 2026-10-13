@@ -612,6 +612,10 @@ public final class CrewCheckpointStore {
             jSONObject2.put("content", sanitizeText(turn.content));
             jSONObject2.put("originalMessageIndex", turn.originalMessageIndex);
             jSONObject2.put("summarizedMessageCount", turn.summarizedMessageCount);
+            if (!turn.providerOutputItems.isEmpty())
+                jSONObject2.put("providerOutputItems", ProviderOutputItemsCodec.encode(turn.providerOutputItems));
+            if (turn.kind == ConversationTurn.Kind.MODEL_ERROR)
+                jSONObject2.put("modelErrorCode", turn.modelErrorCode);
             if (turn.kind == ConversationTurn.Kind.TOOL_CALLS) {
                 JSONArray calls = new JSONArray();
                 for (ModelReply.Call call : turn.toolCalls) {
@@ -653,11 +657,18 @@ public final class CrewCheckpointStore {
             ConversationTurn.Kind kind = ConversationTurn.Kind.valueOf(required(row, "kind"));
             String content = row.getString("content");
             if (kind == ConversationTurn.Kind.MESSAGE) {
-                transcript.add(new ConversationTurn(required(row, "role"), content, row.getInt("originalMessageIndex")));
+                String role = required(row, "role");
+                if ("assistant".equals(role) && row.has("providerOutputItems"))
+                    transcript.add(ConversationTurn.assistantReply(content,
+                            row.getInt("originalMessageIndex"),
+                            ProviderOutputItemsCodec.decode(row.optJSONArray("providerOutputItems"))));
+                else transcript.add(new ConversationTurn(role, content, row.getInt("originalMessageIndex")));
             } else if (kind == ConversationTurn.Kind.COMPACTION_SUMMARY) {
                 transcript.add(ConversationTurn.restoredCompactionSummary(content, row.getInt("summarizedMessageCount")));
             } else if (kind == ConversationTurn.Kind.TOOL_RESULT) {
                 transcript.add(ConversationTurn.toolResult(required(row, "toolCallId"), required(row, "toolName"), content));
+            } else if (kind == ConversationTurn.Kind.MODEL_ERROR) {
+                transcript.add(ConversationTurn.modelError(required(row, "modelErrorCode")));
             } else {
                 List<ModelReply.Call> calls = new ArrayList<>();
                 JSONArray items = row.getJSONArray("calls");
@@ -665,7 +676,8 @@ public final class CrewCheckpointStore {
                     JSONObject item = items.getJSONObject(callIndex);
                     calls.add(new ModelReply.Call(required(item, "id"), required(item, "name"), decodeMap(item.getJSONObject("arguments"))));
                 }
-                transcript.add(ConversationTurn.toolCalls(content, calls));
+                transcript.add(ConversationTurn.toolCalls(content, calls,
+                        ProviderOutputItemsCodec.decode(row.optJSONArray("providerOutputItems"))));
             }
         }
         Set<String> incoming = new LinkedHashSet<>();

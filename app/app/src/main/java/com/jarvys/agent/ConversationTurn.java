@@ -18,12 +18,17 @@ public final class ConversationTurn {
   public final String toolCallId;
   public final List<ModelReply.Call> toolCalls;
   public final String toolName;
+  /** Opaque Codex Responses output items, retained only on the assistant turn that produced them. */
+  public final List<ModelReply.ProviderOutputItem> providerOutputItems;
+  /** Safe structural code for a model request that failed before producing a reply. */
+  public final String modelErrorCode;
 
   public enum Kind {
     MESSAGE,
     COMPACTION_SUMMARY,
     TOOL_CALLS,
-    TOOL_RESULT
+    TOOL_RESULT,
+    MODEL_ERROR
   }
 
   public static final class Image {
@@ -70,6 +75,8 @@ public final class ConversationTurn {
     this.content = content == null ? "" : content;
     this.kind = Kind.MESSAGE;
     this.toolCalls = Collections.emptyList();
+    this.providerOutputItems = Collections.emptyList();
+    this.modelErrorCode = "";
     this.toolCallId = "";
     this.toolName = "";
     this.originalMessageIndex = originalMessageIndex;
@@ -99,10 +106,27 @@ public final class ConversationTurn {
       String toolName,
       int originalMessageIndex,
       int summarizedMessageCount) {
+    this(kind, role, content, calls, toolCallId, toolName, originalMessageIndex,
+        summarizedMessageCount, Collections.emptyList(), "");
+  }
+
+  private ConversationTurn(
+      Kind kind,
+      String role,
+      String content,
+      List<ModelReply.Call> calls,
+      String toolCallId,
+      String toolName,
+      int originalMessageIndex,
+      int summarizedMessageCount,
+      List<ModelReply.ProviderOutputItem> providerOutputItems,
+      String modelErrorCode) {
     this.kind = kind;
     this.role = role;
     this.content = content == null ? "" : content;
     this.toolCalls = immutable(calls);
+    this.providerOutputItems = immutable(providerOutputItems);
+    this.modelErrorCode = modelErrorCode == null ? "" : modelErrorCode;
     this.toolCallId = toolCallId == null ? "" : toolCallId;
     this.toolName = toolName == null ? "" : toolName;
     this.originalMessageIndex = originalMessageIndex;
@@ -119,6 +143,8 @@ public final class ConversationTurn {
     this.role = raw.role;
     this.content = raw.content;
     this.toolCalls = raw.toolCalls;
+    this.providerOutputItems = raw.providerOutputItems;
+    this.modelErrorCode = raw.modelErrorCode;
     this.toolCallId = raw.toolCallId;
     this.toolName = raw.toolName;
     this.originalMessageIndex = raw.originalMessageIndex;
@@ -138,10 +164,33 @@ public final class ConversationTurn {
   }
 
   public static ConversationTurn toolCalls(String assistantText, List<ModelReply.Call> calls) {
+    return toolCalls(assistantText, calls, Collections.emptyList());
+  }
+
+  public static ConversationTurn toolCalls(
+      String assistantText, List<ModelReply.Call> calls,
+      List<ModelReply.ProviderOutputItem> providerOutputItems) {
     if (calls == null || calls.isEmpty()) {
       throw new IllegalArgumentException("Tool-call turn must contain calls");
     }
-    return new ConversationTurn(Kind.TOOL_CALLS, "assistant", assistantText, calls, "", "", -1, 0);
+    return new ConversationTurn(Kind.TOOL_CALLS, "assistant", assistantText, calls, "", "", -1, 0,
+        providerOutputItems, "");
+  }
+
+  public static ConversationTurn modelError(String errorCode) {
+    return new ConversationTurn(Kind.MODEL_ERROR, "assistant", "", Collections.emptyList(), "", "",
+        -1, 0, Collections.emptyList(), errorCode);
+  }
+
+  public static ConversationTurn assistantReply(
+      String text, List<ModelReply.ProviderOutputItem> providerOutputItems) {
+    return assistantReply(text, -1, providerOutputItems);
+  }
+
+  public static ConversationTurn assistantReply(
+      String text, int originalMessageIndex, List<ModelReply.ProviderOutputItem> providerOutputItems) {
+    return new ConversationTurn(Kind.MESSAGE, "assistant", text, Collections.emptyList(), "", "",
+        originalMessageIndex, 0, providerOutputItems, "");
   }
 
   public static ConversationTurn toolResult(String callId, String name, String output) {
@@ -166,7 +215,7 @@ public final class ConversationTurn {
         "",
         "",
         -1,
-        Math.max(0, summarizedMessageCount));
+        Math.max(0, summarizedMessageCount), Collections.emptyList(), "");
   }
 
   static ConversationTurn restoredCompactionSummary(String wrapped, int summarizedMessageCount) {
@@ -178,7 +227,7 @@ public final class ConversationTurn {
         "",
         "",
         -1,
-        Math.max(0, summarizedMessageCount));
+        Math.max(0, summarizedMessageCount), Collections.emptyList(), "");
   }
 
   public static ConversationTurn messageWithRichParts(

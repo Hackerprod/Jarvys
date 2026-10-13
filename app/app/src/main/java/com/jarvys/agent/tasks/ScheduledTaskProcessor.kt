@@ -88,14 +88,8 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
                 }
             }
             val userPrompt = userRequest(task, scheduledFor)
-            var result = runLoop(sessionId, scope.registry, systemPrompt, userPrompt, emptyList(), token)
+            val result = runLoop(sessionId, scope.registry, systemPrompt, userPrompt, emptyList(), token)
             val respondent = scope.respondent
-            if (respondent.result() == null && isInterimAcknowledgement(result.text)) {
-                val retryPrompt = userPrompt + "\n\n" + localized.getString(
-                    com.jarvys.agent.R.string.scheduled_task_ack_reprompt)
-                result = runLoop(sessionId, scope.registry, systemPrompt, retryPrompt,
-                    listOf(com.jarvys.agent.ConversationTurn("assistant", result.text)), token)
-            }
             token.throwIfCancelled()
             val failedConnectorCall = toolCalls.firstOrNull { it.name in scope.connectorNames && it.outcome == "ERROR" }
             if (failedConnectorCall != null) return permanentFailure(task, scheduledFor,
@@ -279,8 +273,6 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
         else -> error.javaClass.simpleName.ifBlank { "task_error" }
     }
 
-    private fun isInterimAcknowledgement(text: String): Boolean = ACK_ONLY.matches(text.trim())
-
     private class TaskTrackedTool(
         private val delegate: CoreTool,
         private val isWrite: Boolean,
@@ -314,9 +306,7 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
         }
     }
 
-    companion object {
-        private val ACK_ONLY = Regex("(?is)^\\s*(?:(?:i(?:'|’)ll|i will|i(?:'|’)m|i am)(?:\\s+[\\p{L}\\p{N}'’_-]+){0,8}|on it|let me (?:check|look|handle|take a look)|voy a(?:\\s+[\\p{L}\\p{N}'’_-]+){0,8}|lo revisaré|ahora lo reviso|déjame (?:revisarlo|comprobarlo))[.!…\\s]*$")
-    }
+
 }
 
 /** Worker-facing façade kept separate from the interactive CoreAgentRuntime. */

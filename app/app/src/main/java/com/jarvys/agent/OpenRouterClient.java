@@ -177,7 +177,7 @@ public final class OpenRouterClient implements ModelProviderClient {
         ResponseDiagnostics.fromChatCompletions(response.body));
   }
 
-  private static JSONArray conversationMessages(
+  static JSONArray conversationMessages(
       String systemPrompt,
       List<ConversationTurn> history,
       String userPrompt,
@@ -187,6 +187,7 @@ public final class OpenRouterClient implements ModelProviderClient {
     messages.put(new JSONObject().put("role", "system").put("content", systemPrompt));
     if (history != null) {
       for (ConversationTurn turn : history) {
+        if (turn.kind == ConversationTurn.Kind.MODEL_ERROR) continue;
         if (turn.kind == ConversationTurn.Kind.TOOL_CALLS) {
           JSONObject assistant = new JSONObject().put("role", "assistant");
           if (!turn.content.isEmpty()) assistant.put("content", turn.content);

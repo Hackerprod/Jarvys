@@ -183,7 +183,7 @@ public final class CoreAgentLoop {
 
     public interface RateLimitWaiter {
 
-        void await(ProviderHttpException failure, long retryNumber, CancellationToken token);
+        void await(Throwable failure, long retryNumber, CancellationToken token);
     }
 
     /** Result-budget mode retained for Crew's complete tool outputs. The ReAct loop is unbounded. */
@@ -202,8 +202,7 @@ public final class CoreAgentLoop {
     }
     static final String TIMEOUT_MESSAGE = "The requested deadline was reached. Progress may be partial; inspect existing results before continuing.";
     static final String LOOP_MESSAGE = "Jarvys paused after repeated calls without progress. Inspect existing results before continuing.";
-    static final String PROVIDER_MESSAGE = "The provider request ended without a complete response. Progress is retained. Inspect existing results before continuing; the request was not repeated automatically.";
-    private static final int MAX_TRANSCRIPT_MESSAGES = 40;
+    static final String PROVIDER_MESSAGE = "The provider request ended without a complete response. Progress is retained. Inspect existing results before continuing.";
     private final Model model;
     private final CoreToolRegistry tools;
     private final CorePromptBudget budget;
@@ -385,6 +384,12 @@ public final class CoreAgentLoop {
     }
 
     public CoreAgentLoop(CoreAgentModel model, CoreToolRegistry tools, String instructions, String sessionId, CorePromptBudget budget, ConversationCompactor compactor) {
+        this(model, tools, instructions, sessionId, budget, compactor, null);
+    }
+
+    public CoreAgentLoop(CoreAgentModel model, CoreToolRegistry tools, String instructions, String sessionId,
+                         CorePromptBudget budget, ConversationCompactor compactor,
+                         RateLimitWaiter rateLimitWaiter) {
         this(new Model(){
 
             @Override
@@ -401,7 +406,8 @@ public final class CoreAgentLoop {
             public int contextWindow(CancellationToken token) {
                 return model.contextWindow(token);
             }
-        }, tools, instructions, sessionId, budget, compactor);
+        }, tools, instructions, sessionId, budget, compactor, ToolResultBudget.BOUNDED, null,
+                rateLimitWaiter);
     }
 
     public CoreAgentLoop(Model model, CoreToolRegistry tools, String instructions, String sessionId) {
@@ -421,6 +427,13 @@ public final class CoreAgentLoop {
         this.toolResultBudget = ToolResultBudget.BOUNDED;
         this.turnContextProvider = null;
         this.rateLimitWaiter = null;
+    }
+
+    public CoreAgentLoop(Model model, CoreToolRegistry tools, String instructions, String sessionId,
+                         CorePromptBudget budget, ConversationCompactor compactor,
+                         RateLimitWaiter rateLimitWaiter) {
+        this(model, tools, instructions, sessionId, budget, compactor, ToolResultBudget.BOUNDED,
+                null, rateLimitWaiter);
     }
 
     public CoreAgentLoop(Model model, CoreToolRegistry tools, String instructions, String sessionId, CorePromptBudget budget, ConversationCompactor compactor, ToolResultBudget toolResultBudget, TurnContextProvider turnContextProvider, RateLimitWaiter rateLimitWaiter) {
@@ -461,6 +474,7 @@ public final class CoreAgentLoop {
         int modelTurns = 0;
         long startedAtMs = System.currentTimeMillis();
         int overflowCompactions = 0;
+        boolean truncateToolResultsForProvider = false;
         ToolLoopDetector loopDetector = new ToolLoopDetector();
         try {
             while (true) {
@@ -511,8 +525,7 @@ public final class CoreAgentLoop {
                 if (!modelHasInput) {
                     return new Result(runId, "", modelTurns, "COMPLETED", Math.max(0L, System.currentTimeMillis() - startedAtMs));
                 }
-                boolean safetyBounded = false;
-                if (compactor != null) {
+                if (compactor != null && !truncateToolResultsForProvider) {
                     try {
                         int window = model.contextWindow(token);
                         int estimate = estimateContext(transcript, prompt, declarations);
@@ -520,17 +533,19 @@ public final class CoreAgentLoop {
                             ConversationCompactor.Outcome outcome = compact(transcript, window, "auto_preflight", ConversationCompactionPolicy.Mode.SLIDING_WINDOW, prompt, token, listener);
                             if (outcome != null) {
                                 transcript = new ArrayList<>(outcome.context);
+                                truncateToolResultsForProvider = false;
                                 updateTranscriptSnapshot(transcript);
                             }
                         }
                     } catch (RuntimeException failure) {
-                        if (failure instanceof CheckpointFailure || token.isCancelled() || recoverableProviderFailure(failure)) throw failure;
+                        if (failure instanceof CheckpointFailure || token.isCancelled()) throw failure;
                         if (compactor.isCrew()) throw new IllegalStateException("Crew context could not be compacted; its retained transcript has not been discarded", failure);
-                        safetyBounded = true;
-                        compactionFailed(listener, "No se pudo compactar el contexto; se usará un recorte de seguridad para continuar.");
+                        truncateToolResultsForProvider = true;
+                        compactionFailed(listener, "No se pudo compactar; se reducirán los resultados de herramientas según el presupuesto existente.");
                     }
                 }
-                List<ConversationTurn> requestTranscript = safetyBounded ? bounded(transcript, budget.transcriptChars) : transcript;
+                List<ConversationTurn> requestTranscript = truncateToolResultsForProvider
+                        ? truncateToolResultsOnly(transcript, budget, toolResultBudget) : transcript;
                 String turnPrompt = prompt;
                 ModelReply reply;
                 try {
@@ -541,16 +556,21 @@ public final class CoreAgentLoop {
                             reply = model.complete(requestTranscript, turnPrompt, declarations, token);
                             emit(listener, "model_response", "Respuesta del modelo recibida");
                             break;
-                        } catch (ProviderHttpException limited) {
-                            if (!limited.isRateLimit()) throw limited;
-                            if (rateLimitWaiter == null) throw limited;
-                            if (turnContextProvider != null) turnContextProvider.onRateLimit(true);
+                        } catch (RuntimeException failure) {
+                            if (failure instanceof CheckpointFailure) throw failure;
+                            token.throwIfCancelled();
+                            if (!retryableProviderFailure(failure)) throw failure;
+                            transcript.add(ConversationTurn.modelError(providerErrorCode(failure)));
+                            updateTranscriptSnapshot(transcript);
+                            if (rateLimitWaiter == null) throw failure;
+                            boolean rateLimited = hasRateLimitCause(failure);
+                            if (rateLimited && turnContextProvider != null) turnContextProvider.onRateLimit(true);
                             long currentRetry = retryNumber;
                             if (retryNumber < Long.MAX_VALUE) retryNumber++;
                             try {
-                                rateLimitWaiter.await(limited, currentRetry, token);
+                                rateLimitWaiter.await(failure, currentRetry, token);
                             } finally {
-                                if (turnContextProvider != null) turnContextProvider.onRateLimit(false);
+                                if (rateLimited && turnContextProvider != null) turnContextProvider.onRateLimit(false);
                             }
                         }
                     }
@@ -572,11 +592,10 @@ public final class CoreAgentLoop {
                         transcript = new ArrayList<>(outcome.context);
                         updateTranscriptSnapshot(transcript);
                     } catch (RuntimeException compactionFailure) {
-                        if (compactionFailure instanceof CheckpointFailure || token.isCancelled() || recoverableProviderFailure(compactionFailure)) throw compactionFailure;
+                        if (compactionFailure instanceof CheckpointFailure || token.isCancelled()) throw compactionFailure;
                         if (compactor.isCrew()) throw new IllegalStateException("Crew context overflow could not be compacted; its retained transcript has not been discarded", compactionFailure);
-                        compactionFailed(listener, "No se pudo resumir el historial tras el límite del proveedor; reintentaré con un recorte de seguridad.");
-                        transcript = bounded(transcript, budget.transcriptChars);
-                        updateTranscriptSnapshot(transcript);
+                        compactionFailed(listener, "No se pudo resumir el historial; se reducirán los resultados de herramientas según el presupuesto existente.");
+                        truncateToolResultsForProvider = true;
                     }
                     overflowCompactions++;
                     continue;
@@ -585,39 +604,6 @@ public final class CoreAgentLoop {
                 overflowCompactions = 0;
                 token.throwIfCancelled();
                 if (reply == null) throw new IllegalStateException("Provider returned no response");
-                boolean replyToolCallAlreadyRecorded = false;
-                boolean replyTextAlreadyRecorded = false;
-                ConversationTurn emptyAssistantReplyTurn = null;
-                if (compactor != null) {
-                    List<ConversationTurn> postTurn = new ArrayList<>(transcript);
-                    if (!requestInTranscript && !request.trim().isEmpty()) {
-                        postTurn.add(new ConversationTurn("user", request.trim(), compactor.currentUserMessageIndex()));
-                    }
-                    if (reply.calls.isEmpty()) {
-                        String assistantText = reply.text == null ? "" : reply.text.trim();
-                        ConversationTurn assistantTurn = new ConversationTurn("assistant", assistantText);
-                        postTurn.add(assistantTurn);
-                        if (assistantText.isEmpty()) emptyAssistantReplyTurn = assistantTurn;
-                    } else postTurn.add(ConversationTurn.toolCalls(reply.text, reply.calls));
-                    Integer usageTokens = model.usageTokens(reply);
-                    int contextTokens = usageTokens == null ? estimateContext(postTurn, "", declarations) : usageTokens;
-                    int window = model.contextWindow(token);
-                    if (ConversationCompactionPolicy.shouldCompact(contextTokens, window)) {
-                        try {
-                            ConversationCompactor.Outcome outcome = compact(postTurn, window, "auto_post_turn", ConversationCompactionPolicy.Mode.SLIDING_WINDOW, "", token, listener);
-                            if (outcome != null) {
-                                transcript = new ArrayList<>(outcome.context);
-                                updateTranscriptSnapshot(transcript);
-                                requestInTranscript = true;
-                                replyToolCallAlreadyRecorded = !reply.calls.isEmpty();
-                                replyTextAlreadyRecorded = reply.calls.isEmpty();
-                            }
-                        } catch (RuntimeException failure) {
-                            if (failure instanceof CheckpointFailure || token.isCancelled() || recoverableProviderFailure(failure)) throw failure;
-                            compactionFailed(listener, "No se pudo resumir este turno; continuaré con el historial disponible.");
-                        }
-                    }
-                }
                 if (reply.calls.isEmpty()) {
                     String answer = reply.text == null ? "" : reply.text.trim();
                     if (answer.isEmpty()) {
@@ -625,15 +611,13 @@ public final class CoreAgentLoop {
                         if (!requestInTranscript && !request.trim().isEmpty()) {
                             transcript.add(new ConversationTurn("user", request.trim(), compactor == null ? -1 : compactor.currentUserMessageIndex()));
                         }
-                        boolean emptyAssistantRetained = emptyAssistantReplyTurn != null
-                                && transcript.contains(emptyAssistantReplyTurn);
-                        if (!emptyAssistantRetained) transcript.add(new ConversationTurn("assistant", ""));
+                        transcript.add(ConversationTurn.assistantReply("", reply.providerOutputItems));
                         updateTranscriptSnapshot(transcript);
                         return new Result(runId, "", modelTurns, "COMPLETED", Math.max(0L, System.currentTimeMillis() - startedAtMs));
                     }
                     if (turnContextProvider != null || checkpointListener != null) {
                         if (!requestInTranscript && !request.trim().isEmpty()) transcript.add(new ConversationTurn("user", request.trim()));
-                        if (!replyTextAlreadyRecorded) transcript.add(new ConversationTurn("assistant", answer));
+                        transcript.add(ConversationTurn.assistantReply(answer, reply.providerOutputItems));
                         updateTranscriptSnapshot(transcript);
                     }
                     emit(listener, "answer", answer);
@@ -643,7 +627,7 @@ public final class CoreAgentLoop {
                     transcript.add(new ConversationTurn("user", request.trim(), compactor == null ? -1 : compactor.currentUserMessageIndex()));
                     requestInTranscript = true;
                 }
-                if (!replyToolCallAlreadyRecorded) transcript.add(ConversationTurn.toolCalls(reply.text, reply.calls));
+                transcript.add(ConversationTurn.toolCalls(reply.text, reply.calls, reply.providerOutputItems));
                 updateTranscriptSnapshot(transcript);
                 if (listener != null && reply.text != null && !reply.text.trim().isEmpty()) {
                     token.throwIfCancelled();
@@ -778,10 +762,11 @@ public final class CoreAgentLoop {
     private static boolean recoverableProviderFailure(Throwable failure) {
         Set<Throwable> seen = Collections.newSetFromMap(new java.util.IdentityHashMap<>());
         for (Throwable cause = failure; cause != null && seen.add(cause); cause = cause.getCause()) {
-            if (cause instanceof ProviderTransportException || cause instanceof CodexResponseException) return true;
+            if (cause instanceof ProviderTransportException || cause instanceof java.io.IOException
+                    || cause instanceof CodexResponseException) return true;
             if (cause instanceof ProviderHttpException) {
                 int status = ((ProviderHttpException) cause).httpStatus;
-                return status == 408 || status == 429 || status >= 500;
+                return status == 408 || status == 429 || status >= 500 && status <= 599;
             }
         }
         return false;
@@ -858,37 +843,66 @@ public final class CoreAgentLoop {
         if (listener != null) listener.onCompactionFailed(message);
     }
 
-    private static List<ConversationTurn> bounded(List<ConversationTurn> source, int maxChars) {
+    private static List<ConversationTurn> truncateToolResultsOnly(
+            List<ConversationTurn> source, CorePromptBudget budget, ToolResultBudget resultBudget) {
         if (source == null || source.isEmpty()) return Collections.emptyList();
-        for (int start = 0; start <= source.size(); start++) {
-            int count = source.size() - start;
-            if (count > MAX_TRANSCRIPT_MESSAGES || !safeToolPairBoundary(source, start)) continue;
-            int chars = 0;
-            for (int index = start; index < source.size(); index++) {
-                ConversationTurn turn = source.get(index);
-                chars += turn.content.length() + turn.thinking.length() + turn.imageCount * 24 + turn.toolCallId.length() + turn.toolName.length();
-                for (ModelReply.Call call : turn.toolCalls) chars += call.name.length() + call.arguments.toString().length();
+        long nonResultChars = 0;
+        for (ConversationTurn turn : source) {
+            if (turn.kind == ConversationTurn.Kind.MODEL_ERROR) continue;
+            if (turn.kind != ConversationTurn.Kind.TOOL_RESULT) {
+                nonResultChars += turn.content.length() + turn.thinking.length()
+                        + turn.toolCallId.length() + turn.toolName.length();
+                for (ModelReply.Call call : turn.toolCalls)
+                    nonResultChars += call.name.length() + call.arguments.toString().length();
+                for (ModelReply.ProviderOutputItem item : turn.providerOutputItems)
+                    if (item.kind == ModelReply.ProviderOutputItem.Kind.REASONING) nonResultChars += item.value.length();
             }
-            if (chars <= maxChars) return new ArrayList<>(source.subList(start, source.size()));
         }
-        return Collections.emptyList();
+        int configuredResultBudget = resultBudget.allowsCompleteToolResults()
+                ? budget.transcriptChars : Math.min(budget.transcriptChars, budget.toolResultsPerTurnChars);
+        int remaining = Math.max(0, Math.min(configuredResultBudget,
+                (int) Math.max(0L, (long) budget.transcriptChars - nonResultChars)));
+        List<ConversationTurn> result = new ArrayList<>(source.size());
+        for (ConversationTurn turn : source) {
+            if (turn.kind != ConversationTurn.Kind.TOOL_RESULT || turn.content.length() <= remaining) {
+                result.add(turn);
+                if (turn.kind == ConversationTurn.Kind.TOOL_RESULT) remaining -= turn.content.length();
+            } else {
+                String value = turn.content.substring(0, Math.min(remaining, turn.content.length()));
+                result.add(ConversationTurn.toolResult(turn.toolCallId, turn.toolName, value));
+                remaining = 0;
+            }
+        }
+        return result;
     }
 
-    private static boolean safeToolPairBoundary(List<ConversationTurn> source, int start) {
-        for (int index = start; index < source.size(); index++) {
-            ConversationTurn turn = source.get(index);
-            if (turn.kind != ConversationTurn.Kind.TOOL_RESULT) continue;
-            boolean hasPriorCall = false;
-            for (int callIndex = 0; callIndex < index; callIndex++) {
-                ConversationTurn candidate = source.get(callIndex);
-                if (candidate.kind == ConversationTurn.Kind.TOOL_CALLS && candidate.toolCalls.stream().anyMatch((call)->call.id.equals(turn.toolCallId))) {
-                    hasPriorCall = true;
-                    if (callIndex < start) return false;
-                }
+    private static boolean retryableProviderFailure(Throwable failure) {
+        Set<Throwable> seen = Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        for (Throwable cause = failure; cause != null && seen.add(cause); cause = cause.getCause()) {
+            if (cause instanceof ProviderTransportException || cause instanceof java.io.IOException) return true;
+            if (cause instanceof CodexResponseException)
+                return ((CodexResponseException) cause).kind == CodexResponseException.Kind.INCOMPLETE;
+            if (cause instanceof ProviderHttpException) {
+                int status = ((ProviderHttpException) cause).httpStatus;
+                return status == 408 || status == 429 || status >= 500 && status <= 599;
             }
-            if (hasPriorCall) continue;
         }
-        return true;
+        return false;
+    }
+
+    private static boolean hasRateLimitCause(Throwable failure) {
+        for (Throwable cause = failure; cause != null; cause = cause.getCause())
+            if (cause instanceof ProviderHttpException && ((ProviderHttpException) cause).isRateLimit()) return true;
+        return false;
+    }
+
+    private static String providerErrorCode(Throwable failure) {
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            if (cause instanceof ProviderHttpException) return "http_" + ((ProviderHttpException) cause).httpStatus;
+            if (cause instanceof CodexResponseException) return "incomplete_response";
+            if (cause instanceof ProviderTransportException || cause instanceof java.io.IOException) return "transport";
+        }
+        return "provider_retry";
     }
 
     private static void emit(ProgressListener listener, String stage, String message) {

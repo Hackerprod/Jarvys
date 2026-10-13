@@ -121,7 +121,8 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
         response.status,
         settings.getModel(),
         parsed.contextTokensUsed,
-        ResponseDiagnostics.fromCodex(response.rawBody));
+        ResponseDiagnostics.fromCodex(response.rawBody),
+        parsed.providerOutputItems);
   }
 
   private JSONObject buildRequest(
@@ -168,12 +169,17 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
     }
   }
 
-  private static JSONArray userInput(
+  static JSONArray userInput(
       String text, List<ScreenData> images, List<ConversationTurn> history) throws Exception {
     JSONArray input = new JSONArray();
     if (history != null) {
       for (ConversationTurn turn : history) {
+        if (turn.kind == ConversationTurn.Kind.MODEL_ERROR) continue;
         if (turn.kind == ConversationTurn.Kind.TOOL_CALLS) {
+          if (!turn.providerOutputItems.isEmpty()) {
+            appendProviderOutputItems(input, turn);
+            continue;
+          }
           if (!turn.content.isEmpty())
             input.put(new JSONObject().put("role", "assistant").put("content", turn.content));
           for (ModelReply.Call call : turn.toolCalls) {
@@ -190,6 +196,8 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
                   .put("type", "function_call_output")
                   .put("call_id", turn.toolCallId)
                   .put("output", turn.content));
+        } else if (!turn.providerOutputItems.isEmpty()) {
+          appendProviderOutputItems(input, turn);
         } else {
           Object parts = turn.modelContent;
           if (!turn.images.isEmpty()) {
@@ -228,6 +236,44 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
     }
     input.put(new JSONObject().put("role", "user").put("content", content));
     return input;
+  }
+
+  private static void appendProviderOutputItems(JSONArray input, ConversationTurn turn) throws Exception {
+    Map<String, ModelReply.Call> calls = new LinkedHashMap<>();
+    for (ModelReply.Call call : turn.toolCalls) calls.put(call.id, call);
+    boolean emittedMessage = false;
+    for (ModelReply.ProviderOutputItem item : turn.providerOutputItems) {
+      switch (item.kind) {
+        case REASONING:
+          try {
+            input.put(new JSONObject(item.value));
+          } catch (Exception invalidStoredItem) {
+            throw new IllegalArgumentException("Stored Codex reasoning item is invalid");
+          }
+          break;
+        case MESSAGE:
+          if (!item.value.isEmpty()) {
+            input.put(new JSONObject().put("role", "assistant").put("content", item.value));
+            emittedMessage = true;
+          }
+          break;
+        case TOOL_CALL:
+          ModelReply.Call call = calls.get(item.value);
+          if (call == null) throw new IllegalArgumentException("Stored Codex tool output item is invalid");
+          input.put(new JSONObject().put("type", "function_call").put("call_id", call.id)
+              .put("name", call.name).put("arguments", new JSONObject(call.arguments).toString()));
+          break;
+      }
+    }
+    if (turn.kind == ConversationTurn.Kind.TOOL_CALLS && turn.providerOutputItems.stream()
+        .noneMatch(item -> item.kind == ModelReply.ProviderOutputItem.Kind.TOOL_CALL)) {
+      for (ModelReply.Call call : turn.toolCalls)
+        input.put(new JSONObject().put("type", "function_call").put("call_id", call.id)
+            .put("name", call.name).put("arguments", new JSONObject(call.arguments).toString()));
+    }
+    if (!emittedMessage && turn.kind == ConversationTurn.Kind.MESSAGE && !turn.content.isEmpty()
+        && turn.providerOutputItems.stream().noneMatch(item -> item.kind == ModelReply.ProviderOutputItem.Kind.MESSAGE))
+      input.put(new JSONObject().put("role", "assistant").put("content", turn.modelContent));
   }
 
   private static JSONArray responseTools(List<ToolSpec> tools) throws Exception {
@@ -439,12 +485,13 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
     if (!"[DONE]".equals(payload)) normalized.append(CodexResponseStream.parseObject(payload).toString()).append('\n');
   }
 
-  private static ModelReply parseResponse(String body) {
+  static ModelReply parseResponse(String body) {
     if (body == null || body.trim().isEmpty())
       throw new CodexResponseException(CodexResponseException.Kind.INCOMPLETE);
     LinkedHashMap<String, ModelReply.Call> calls = new LinkedHashMap<>();
     Map<String, String> fallbackIds = new LinkedHashMap<>();
     StringBuilder text = new StringBuilder();
+    List<ModelReply.ProviderOutputItem> providerOutputItems = new ArrayList<>();
     try {
       JSONObject completed = null;
       boolean completedEvent = false;
@@ -483,7 +530,7 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
       if (completed == null) throw new CodexResponseException(CodexResponseException.Kind.INCOMPLETE);
       // Only authoritative final output may create tool calls; intermediate fragments are never executable.
       JSONArray output = completed.optJSONArray("output");
-      consumeOutput(output, calls, text, fallbackIds);
+      consumeOutput(output, calls, text, fallbackIds, providerOutputItems);
       boolean hasUsefulOutput = !text.toString().trim().isEmpty() || !calls.isEmpty();
       List<JSONObject> fallbackEvents = null;
       if (!hasUsefulOutput && completedEvent) {
@@ -497,10 +544,10 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
           if ("function_call".equals(type)) {
             // A done event is not sufficient authority for a tool call; the item itself must be complete.
             if (!"completed".equals(item.optString("status", ""))) continue;
-            consumeItem(item, calls, text, fallbackIds, fallbackKey);
+            consumeItem(item, calls, text, fallbackIds, fallbackKey, providerOutputItems);
           } else if ("message".equals(type)
               && (!item.has("status") || "completed".equals(item.optString("status", "")))) {
-            consumeItem(item, calls, text, fallbackIds, fallbackKey);
+            consumeItem(item, calls, text, fallbackIds, fallbackKey, providerOutputItems);
           }
         }
       }
@@ -521,7 +568,9 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
         "",
         null,
         "",
-        contextTokensFromUsage(body));
+        contextTokensFromUsage(body),
+        ResponseDiagnostics.unknown(),
+        providerOutputItems);
   }
 
   private static List<JSONObject> responseEvents(String body) {
@@ -581,20 +630,24 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
   }
 
   private static void consumeOutput(
-      JSONArray output, Map<String, ModelReply.Call> calls, StringBuilder text, Map<String, String> fallbackIds) throws Exception {
+      JSONArray output, Map<String, ModelReply.Call> calls, StringBuilder text,
+      Map<String, String> fallbackIds, List<ModelReply.ProviderOutputItem> providerOutputItems) throws Exception {
     if (output == null) return;
     for (int i = 0; i < output.length(); i++) {
       if (output.optJSONObject(i) == null) throw new CodexResponseException(CodexResponseException.Kind.MALFORMED);
-      consumeItem(output.getJSONObject(i), calls, text, fallbackIds, "output:" + i);
+      consumeItem(output.getJSONObject(i), calls, text, fallbackIds, "output:" + i, providerOutputItems);
     }
   }
 
   private static void consumeItem(
       JSONObject item, Map<String, ModelReply.Call> calls, StringBuilder text,
-      Map<String, String> fallbackIds, String fallbackKey) throws Exception {
+      Map<String, String> fallbackIds, String fallbackKey,
+      List<ModelReply.ProviderOutputItem> providerOutputItems) throws Exception {
     if (item == null) return;
     String type = item.optString("type", "");
-    if ("function_call".equals(type)) {
+    if ("reasoning".equals(type)) {
+      providerOutputItems.add(ModelReply.ProviderOutputItem.reasoning(item.toString()));
+    } else if ("function_call".equals(type)) {
       String status = item.optString("status", "");
       if (!status.isEmpty() && !"completed".equals(status))
         throw new CodexResponseException(CodexResponseException.Kind.INCOMPLETE);
@@ -619,6 +672,7 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
         invalidArgumentsReason = "Malformed tool arguments JSON object";
       }
       calls.put(id, new ModelReply.Call(id, name, parsedArguments, invalidArgumentsReason));
+      providerOutputItems.add(ModelReply.ProviderOutputItem.toolCall(id));
     } else if ("message".equals(type)) {
       JSONArray content = item.optJSONArray("content");
       if (content != null) {
@@ -626,9 +680,10 @@ public final class OpenAICodexResponsesClient implements ModelProviderClient {
           JSONObject part = content.optJSONObject(j);
           if (part != null && "output_text".equals(part.optString("type"))) {
             String outputText = part.optString("text", "");
-            if (!outputText.isEmpty() && !text.toString().contains(outputText)) {
+            if (!outputText.isEmpty()) {
               if (text.length() > 0) text.append('\n');
               text.append(outputText);
+              providerOutputItems.add(ModelReply.ProviderOutputItem.message(outputText));
             }
           }
         }

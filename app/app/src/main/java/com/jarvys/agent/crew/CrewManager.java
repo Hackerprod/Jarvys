@@ -1144,20 +1144,23 @@ public final class CrewManager implements AutoCloseable {
                 CoreAgentLoop.ProgressListener progress = progressFactory == null ? null : progressFactory.create(bot);
                 CoreAgentLoop.Result result = resultPresentation.apply(loop.run(request, bot.transcript, token, progress));
                 bot.transcript = loop.transcriptSnapshot();
-                bot.completedCycles++;
+                boolean didWork = result.turns != 0;
+                if (didWork) bot.completedCycles++;
                 synchronized (bot.cycleLock) {
-                    if (!bot.reported) bot.cycleResult = result.text == null ? "" : result.text;
+                    if (didWork && !bot.reported) bot.cycleResult = result.text == null ? "" : result.text;
                 }
                 if (!"COMPLETED".equals(result.outcome)) {
-                    // A bounded provider failure or partial loop result is not task completion.
+                    // A provider failure or partial loop result is not task completion.
                     // Already-started jobs keep ownership and finish normally; explicit STOP
                     // still cancels them. Never launch another inference or replay an effect here.
                     awaitOwnedWorkTerminal(bot, token);
                     token.throwIfCancelled();
                     synchronized (bot.cycleLock) {
-                        bot.result = result.text;
-                        bot.cycleResult = result.text == null ? "" : result.text;
-                        bot.reported = true;
+                        if (result.turns != 0) {
+                            bot.result = result.text;
+                            bot.cycleResult = result.text == null ? "" : result.text;
+                            bot.reported = true;
+                        }
                         invalidateCoordinationLocked(bot);
                         bot.status = "STOPPED".equals(result.outcome) ? Status.STOPPED
                                 : "FAILED".equals(result.outcome) ? Status.FAILED : Status.PARTIAL;
@@ -1166,7 +1169,9 @@ public final class CrewManager implements AutoCloseable {
                         if (checkpointSupport != null && bot.role.profileVersion > 0) bot.requiresExplicitResume = true;
                         terminalReport = new TerminalReport(bot.status, bot.cycleResult, bot.finishedAtMillis);
                     }
-                    bus.send(bot.id, "chief", CrewMessage.Type.RESULT, bot.result, Collections.emptyList());
+                    if (result.turns != 0) {
+                        bus.send(bot.id, "chief", CrewMessage.Type.RESULT, bot.result, Collections.emptyList());
+                    }
                     bus.signalWaiters();
                     publishMission(bot.missionId);
                     return;
@@ -1177,7 +1182,7 @@ public final class CrewManager implements AutoCloseable {
                 synchronized (bot.cycleLock) {
                     complete = bot.incomingDispatches.get() == 0 && !bus.hasMessages(bot.id) && !hasPendingOwnedWork(bot);
                     if (complete) {
-                        if (!bot.reported) {
+                        if (didWork && !bot.reported) {
                             bot.result = result.text;
                             bus.send(bot.id, "chief", CrewMessage.Type.RESULT, result.text, Collections.emptyList());
                         }
@@ -1253,7 +1258,6 @@ public final class CrewManager implements AutoCloseable {
                     bot.status = Status.RUNNING;
                     bot.waitingReason = "";
                     bot.error = "";
-                    bot.result = "";
                     bot.reported = false;
                     bot.terminated = new java.util.concurrent.CountDownLatch(1);
                     restart = true;
@@ -1498,7 +1502,6 @@ public final class CrewManager implements AutoCloseable {
                         recipient.stopping = false;
                         recipient.waitingReason = "";
                         recipient.error = "";
-                        recipient.result = "";
                         recipient.reported = false;
                         recipient.finishedAtMillis = 0;
                         recipient.terminated = new java.util.concurrent.CountDownLatch(1);

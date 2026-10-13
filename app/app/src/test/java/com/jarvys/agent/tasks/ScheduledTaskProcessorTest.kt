@@ -116,18 +116,15 @@ class ScheduledTaskProcessorTest {
         assertEquals(1, notifications.resultCalls.get())
     }
 
-    @Test fun acknowledgementGetsOneRepairTurnAndNoTaskRespondBecomesRetryable() {
+    @Test fun acknowledgementDoesNotAddASyntheticRepairTurnAndNoTaskRespondBecomesRetryable() {
         val registry = emptyRegistry()
-        val repairFactory = FakeLoopFactory { turn, _, _, _ ->
-            if (turn == 1) ModelReply("Voy a hacerlo.", emptyList())
-            else respond(notify = true, title = "Done", body = "The task result.")
-        }
-        val processor = processor(repairFactory, registry, notifications = FakeNotifications())
+        val acknowledgementFactory = FakeLoopFactory { _, _, _, _ -> ModelReply("Voy a hacerlo.", emptyList()) }
+        val processor = processor(acknowledgementFactory, registry, notifications = FakeNotifications())
         val result = processor.execute(task(), 1_735_776_000_000L, 1_735_776_000_100L,
             "run-ack", CancellationToken.cancellable())
-        assertEquals("OK", result.status)
-        assertEquals(2, repairFactory.turns.get())
-        assertTrue(repairFactory.userPrompts[1].contains("ONLY_IF_NOTABLE"))
+        assertEquals("RETRYABLE", result.status)
+        assertEquals("sin_task_respond", result.errorCause)
+        assertEquals(1, acknowledgementFactory.turns.get())
 
         val noResponseFactory = FakeLoopFactory { _, _, _, _ -> ModelReply("A substantive text answer without the terminal tool.", emptyList()) }
         val noResponse = processor(noResponseFactory, registry, notifications = FakeNotifications())

@@ -61,6 +61,8 @@ final class MainChatTranscriptStore {
         if (priorHistory != null) historical.addAll(priorHistory);
         Map<ConversationTurn, String> batches = new IdentityHashMap<>();
         Set<String> started = new HashSet<>(), results = new HashSet<>();
+        Set<ConversationTurn> providerOutputRecorded = Collections.newSetFromMap(new IdentityHashMap<>());
+        Set<ConversationTurn> modelErrorsRecorded = Collections.newSetFromMap(new IdentityHashMap<>());
         Set<String> callIds = new HashSet<>();
         if (priorHistory != null) for (ConversationTurn turn : priorHistory)
             for (ModelReply.Call call : turn.toolCalls) callIds.add(call.id);
@@ -70,7 +72,19 @@ final class MainChatTranscriptStore {
             try {
                 String batch = null;
                 for (ConversationTurn turn : checkpoint.transcript) {
-                    if (turn.kind == ConversationTurn.Kind.TOOL_CALLS) {
+                    if (turn.kind == ConversationTurn.Kind.MODEL_ERROR) {
+                        if (!historical.contains(turn) && modelErrorsRecorded.add(turn)) append(new JSONObject().put("type", "model_error")
+                                .put("errorCode", turn.modelErrorCode).put("userMessageId", userMessageId)
+                                .put("messageIndex", messageIndex));
+                        batch = null;
+                    } else if (turn.kind == ConversationTurn.Kind.MESSAGE && "assistant".equals(turn.role)
+                            && !turn.providerOutputItems.isEmpty()) {
+                        if (!historical.contains(turn) && providerOutputRecorded.add(turn))
+                            append(new JSONObject().put("type", "model_provider_output_items")
+                                    .put("userMessageId", userMessageId).put("messageIndex", messageIndex)
+                                    .put("items", ProviderOutputItemsCodec.encode(turn.providerOutputItems)));
+                        batch = null;
+                    } else if (turn.kind == ConversationTurn.Kind.TOOL_CALLS) {
                         batch = null;
                         if (historical.contains(turn)) continue;
                         batch = batches.get(turn);
@@ -86,7 +100,8 @@ final class MainChatTranscriptStore {
                             }
                             append(new JSONObject().put("type", "model_tool_calls").put("batchId", batch)
                                     .put("userMessageId", userMessageId).put("messageIndex", messageIndex)
-                                    .put("assistantText", retain(turn.content)).put("assistantProgress", true).put("calls", calls));
+                                    .put("assistantText", retain(turn.content)).put("assistantProgress", true).put("calls", calls)
+                                    .put("providerOutputItems", ProviderOutputItemsCodec.encode(turn.providerOutputItems)));
                             batches.put(turn, batch);
                         }
                         for (ModelReply.Call call : turn.toolCalls) {
@@ -235,6 +250,12 @@ final class MainChatTranscriptStore {
             }
         }
         Map<Integer, List<ConversationTurn>> restored = new LinkedHashMap<>();
+        for (int i = 0; i < rows.size(); i++) {
+            JSONObject row = rows.get(i);
+            if ("model_error".equals(row.optString("type")) && i >= compactionRow
+                    && row.optInt("messageIndex", -1) >= firstKept)
+                restored.put(i, Collections.singletonList(ConversationTurn.modelError(row.optString("errorCode"))));
+        }
         for (String batch : calls.keySet()) {
             JSONObject row = calls.get(batch);
             int position = positions.get(batch);
@@ -251,7 +272,8 @@ final class MainChatTranscriptStore {
                     decoded.add(new ModelReply.Call(call.getString("id"), call.getString("name"), decodeMap(call.getJSONObject("arguments"))));
                 }
                 List<ConversationTurn> group = new ArrayList<>();
-                group.add(ConversationTurn.toolCalls(row.optString("assistantText"), decoded));
+                group.add(ConversationTurn.toolCalls(row.optString("assistantText"), decoded,
+                        ProviderOutputItemsCodec.decode(row.optJSONArray("providerOutputItems"))));
                 for (ModelReply.Call call : decoded) {
                     JSONObject output = outputs.get(batch).get(call.id);
                     if (output != null && call.name.equals(output.optString("toolName")))
@@ -279,6 +301,20 @@ final class MainChatTranscriptStore {
                     "Legacy recorded tool event: " + row.optString("toolName", "tool") + "; call_id=" + row.optString("callId")
                             + "; recorded stage=" + row.optString("stage")
                             + ". Original arguments and result body are unavailable. This event alone does not establish the exact target or current state; inspect the source if needed.", 0)));
+        }
+        return restored;
+    }
+
+    static Map<String, List<ModelReply.ProviderOutputItem>> restoreProviderOutputItems(
+            List<JSONObject> rows, int firstKept, int compactionRow) {
+        Map<String, List<ModelReply.ProviderOutputItem>> restored = new LinkedHashMap<>();
+        for (int i = 0; i < rows.size(); i++) {
+            JSONObject row = rows.get(i);
+            if (!"model_provider_output_items".equals(row.optString("type"))
+                    || i < compactionRow || row.optInt("messageIndex", -1) < firstKept) continue;
+            String userMessageId = row.optString("userMessageId");
+            if (!userMessageId.isEmpty()) restored.put(userMessageId,
+                    ProviderOutputItemsCodec.decode(row.optJSONArray("items")));
         }
         return restored;
     }
