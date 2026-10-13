@@ -64,6 +64,9 @@ fun JarvysRouteTopBar(
     val reducedMotion = LocalReducedMotion.current
     if (!route.showTopBar) return
     val centeredMascot = centralMascotCentered && route.action == AppRouteAction.CHAT
+    var accountMenuOpen by remember(route.action, mascotVisibleSessionId, mascotLiveConversationVisible, mascotSurfaceVisible) {
+        mutableStateOf(false)
+    }
     // Fresh terminal events require this mounted header to have observed the same generation running.
     val terminalTracker = remember(mascotVisibleSessionId) { JarvysHeaderFailureTracker() }
     var failedRunId by remember(mascotVisibleSessionId) { mutableStateOf<String?>(null) }
@@ -102,7 +105,12 @@ fun JarvysRouteTopBar(
             liveActivity = liveActivity,
             liveActivityKey = liveActivityKey,
             levitate = centeredMascot,
+            controlledMenuOpen = accountMenuOpen,
+            onMenuOpenChange = { accountMenuOpen = it },
         ) { closeMenu ->
+            DropdownMenuItem(text = { Text(stringResource(R.string.drawer_new_chat)) },
+                leadingIcon = { Icon(LucideIcons.MessageCirclePlus, contentDescription = null) },
+                onClick = { closeMenu(); onNewChat() })
             DropdownMenuItem(text = { Text(stringResource(R.string.drawer_settings)) },
                 leadingIcon = { Icon(LucideIcons.Settings, contentDescription = null) },
                 onClick = { closeMenu(); onOpenSettings() })
@@ -135,8 +143,9 @@ fun JarvysRouteTopBar(
             title = { Box(Modifier.testTag("jarvys-topbar-title")) { accountMenu() } },
             navigationIcon = navigationIcon,
             actions = {
-                IconButton(onClick = onNewChat, modifier = Modifier.size(48.dp)) {
-                    Icon(LucideIcons.MessageCirclePlus, contentDescription = stringResource(R.string.drawer_new_chat),
+                IconButton(onClick = { accountMenuOpen = true }, modifier = Modifier.size(48.dp)
+                    .testTag("jarvys-topbar-more-options")) {
+                    Icon(LucideIcons.EllipsisVertical, contentDescription = stringResource(R.string.topbar_more_options),
                         modifier = Modifier.size(21.dp))
                 }
             },
@@ -161,8 +170,9 @@ fun JarvysRouteTopBar(
             when (route.action) {
                 AppRouteAction.CHAT -> {
                     accountMenu()
-                    IconButton(onClick = onNewChat, modifier = Modifier.size(48.dp)) {
-                        Icon(LucideIcons.MessageCirclePlus, contentDescription = stringResource(R.string.drawer_new_chat),
+                    IconButton(onClick = { accountMenuOpen = true }, modifier = Modifier.size(48.dp)
+                        .testTag("jarvys-topbar-more-options")) {
+                        Icon(LucideIcons.EllipsisVertical, contentDescription = stringResource(R.string.topbar_more_options),
                             modifier = Modifier.size(21.dp))
                     }
                 }

@@ -141,6 +141,7 @@
     <string name="drawer_close">Cerrar menú lateral</string>
     <string name="drawer_back">Volver</string>
     <string name="drawer_new_chat">Nuevo chat</string>
+    <string name="topbar_more_options">Más opciones</string>
     <string name="remote_services_heading">Servicios</string>
     <string name="connectors_title">Conectores</string>
     <string name="connectors_device_section">En este dispositivo</string>

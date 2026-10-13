@@ -7,6 +7,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.performClick
 import androidx.test.core.app.ApplicationProvider
@@ -51,5 +52,30 @@ class AssistantMessageActionSheetTest {
         compose.waitForIdle()
         compose.onNodeWithText(context.getString(R.string.chat_footer_select_copy)).assertIsDisplayed()
         compose.onAllNodesWithText(text).assertCountEquals(2)
+    }
+
+    @Test fun completedReplyKeepsActionsWhileTheNextReplyIsBeingGenerated() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val connectors = ConnectorRegistry.createForTests(object : ConnectorConnectionPreferences {
+            override fun isConnected(id: String) = false
+            override fun setConnected(id: String, connected: Boolean) = Unit
+        }, { true })
+        compose.setContent {
+            JarvysOwnTheme(JarvysThemeMode.LIGHT) {
+                ConversationTimeline(
+                    conversationKey = "completed-reply-actions-during-run",
+                    events = listOf(
+                        AgentRunUiEvent.messageEvent(1L, "assistant", "Earlier answer", 1L),
+                        AgentRunUiEvent.messageEvent(2L, "user", "Next question", 2L),
+                        AgentRunUiEvent.messageEvent(3L, "assistant", "Current answer", 3L),
+                    ),
+                    isRunning = true, connectorRegistry = connectors,
+                    onOpenPreview = {}, onOpenSkillFile = {}, chatWithoutMemory = false,
+                )
+            }
+        }
+        val copyDescription = context.getString(R.string.chat_footer_copy_description)
+        compose.onNodeWithContentDescription(copyDescription).assertIsDisplayed()
+        compose.onAllNodesWithContentDescription(copyDescription).assertCountEquals(1)
     }
 }

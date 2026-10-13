@@ -146,6 +146,7 @@ fun ConversationTimeline(
 ) {
     val visibleEvents = ConversationVisibility.project(events)
     val latestAnswerId = visibleEvents.lastOrNull { it.kind == "assistant" && it.stage == null }?.messageId
+    val latestUserEventId = visibleEvents.lastOrNull { it.kind == "user" }?.id
     val entryKeys = visibleEvents.map(ChatMessageArrivalPolicy::key)
     val snapshotAllowsArrival = runSnapshot?.let { it.running || it.outcome != null } ?: isRunning
     val canAnimateArrival = allowMessageEntrance && snapshotAllowsArrival
@@ -187,6 +188,7 @@ fun ConversationTimeline(
                     isLastAssistant = event.messageId.isNotEmpty() && event.messageId == latestAnswerId
                             && !isRunning && allowRegeneration,
                     streamActive = isRunning,
+                    isGeneratingAnswer = assistantReplyIsGenerating(event, isRunning, latestUserEventId),
                     onOpenCrewMission = onOpenCrewMission,
                     onSaveGeneratedImage = onSaveGeneratedImage,
                     onShareGeneratedImage = onShareGeneratedImage,
@@ -217,6 +219,13 @@ fun ConversationTimeline(
         )
     }
 }
+
+internal fun assistantReplyIsGenerating(
+    event: AgentRunUiEvent,
+    isRunning: Boolean,
+    latestUserEventId: Long?,
+): Boolean = isRunning && latestUserEventId != null && event.kind == "assistant"
+    && event.stage == null && event.id > latestUserEventId
 
 @Composable
 private fun AssistantWorkingMarker(snapshot: AgentRunUiSnapshot) {
@@ -261,6 +270,7 @@ private fun JarvysConversationEvent(
     onShareGeneratedImage: (AgentRunUiEvent) -> Unit = {},
     onProactiveSuggestedReply: (String, Int) -> Unit = { _, _ -> },
     animateEntry: Boolean = false,
+    isGeneratingAnswer: Boolean = false,
 ) {
     when (event.kind) {
         "user" -> TimelineArrival(animateEntry) { IntentMessage(event, generatedImageSessionId) }
@@ -268,7 +278,7 @@ private fun JarvysConversationEvent(
             AssistantReplyView(event, onOpenSkillFile, event.stage == "FAILED",
                 onTranslateAssistant, onRegenerateAssistant, onSpeakAssistant, speakingMessageId, isLastAssistant,
                 onCancelTranslation, onDeleteAssistant, activeTranslationMessageId, translationErrorMessageId,
-                translationError, streamActive, onProactiveSuggestedReply)
+                translationError, streamActive, onProactiveSuggestedReply, isGeneratingAnswer)
         }
         "assistant_translation" -> TranslationNote(event, onOpenSkillFile, onHideTranslation)
         "progress" -> RunProgressLine(event)
@@ -379,6 +389,7 @@ internal fun AssistantReplyView(
     translationError: String? = null,
     streamActive: Boolean = false,
     onProactiveSuggestedReply: (String, Int) -> Unit = { _, _ -> },
+    isGeneratingAnswer: Boolean = false,
 ) {
     val context = LocalContext.current
     val reducedMotion = LocalReducedMotion.current
@@ -403,7 +414,7 @@ internal fun AssistantReplyView(
         }
         if (event.proactiveReplies.isNotEmpty()) SuggestedReplyActions(event, onProactiveSuggestedReply, !streamActive)
         AnimatedVisibility(
-            visible = !isError && event.stage == null && !streamActive,
+            visible = !isError && event.stage == null && !isGeneratingAnswer,
             enter = if (reducedMotion) EnterTransition.None else
                 expandVertically(JarvysMotion.expand()) + fadeIn(JarvysMotion.feedback()),
             exit = if (reducedMotion) ExitTransition.None else

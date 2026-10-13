@@ -129,6 +129,7 @@
     <string name="drawer_close">Close drawer</string>
     <string name="drawer_back">Back</string>
     <string name="drawer_new_chat">New chat</string>
+    <string name="topbar_more_options">More options</string>
     <string name="remote_services_heading">Services</string>
     <string name="connectors_title">Connectors</string>
     <string name="connectors_device_section">On this device</string>

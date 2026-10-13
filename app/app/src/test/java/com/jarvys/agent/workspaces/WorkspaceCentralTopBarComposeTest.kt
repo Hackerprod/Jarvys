@@ -6,6 +6,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.unit.dp
 import com.jarvys.agent.AgentRunUiSnapshot
 import com.jarvys.agent.AppRouteAction
 import com.jarvys.agent.AppRouteMeta
@@ -57,12 +58,18 @@ class WorkspaceCentralTopBarComposeTest {
         compose.onNodeWithTag("jarvys-mascot-toggle").assertDoesNotExist()
         compose.onNodeWithText(compose.activity.getString(R.string.drawer_settings)).performClick()
         assertEquals(1, settings)
-        compose.onNodeWithContentDescription(compose.activity.getString(R.string.drawer_new_chat)).performClick()
+        compose.onNodeWithTag("jarvys-topbar-more-options")
+            .assertWidthIsEqualTo(48.dp).assertHeightIsEqualTo(48.dp)
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.topbar_more_options)).performClick()
+        compose.onNodeWithText(compose.activity.getString(R.string.drawer_new_chat)).performClick()
         assertEquals(1, newChat)
         assertFalse(JarvysMascotProcessConsent.session.optedIn)
         compose.runOnIdle { central.value = false }
         compose.onNodeWithTag("jarvys-central-topbar").assertDoesNotExist()
         compose.onNodeWithText("Independent title").assertIsDisplayed()
+        compose.onNodeWithTag("jarvys-topbar-more-options")
+            .assertWidthIsEqualTo(48.dp).assertHeightIsEqualTo(48.dp)
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.topbar_more_options)).assertExists()
         compose.onAllNodesWithTag("jarvys-account-menu").assertCountEquals(1)
         compose.onNodeWithTag("jarvys-mascot-native").assertDoesNotExist()
     }

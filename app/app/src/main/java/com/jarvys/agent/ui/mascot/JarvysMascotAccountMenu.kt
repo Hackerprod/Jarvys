@@ -62,12 +62,15 @@ internal fun JarvysMascotAccountMenu(
     liveActivity: JarvysHeaderActivity? = null,
     liveActivityKey: String? = null,
     levitate: Boolean = false,
+    controlledMenuOpen: Boolean? = null,
+    onMenuOpenChange: ((Boolean) -> Unit)? = null,
     content: @Composable (closeMenu: () -> Unit) -> Unit,
 ) {
     // These keys close local menus/dialogs and dispose renderers; process consent is separate.
     key(visibleSessionId, liveConversationVisible, surfaceVisible) {
         JarvysMascotAccountMenuSession(mode, visibleSessionId, liveConversationVisible, surfaceVisible, mascotSize,
-            originalHeaderAnimation, failedRunId, interruptedRunId, liveActivity, liveActivityKey, levitate, content)
+            originalHeaderAnimation, failedRunId, interruptedRunId, liveActivity, liveActivityKey, levitate,
+            controlledMenuOpen, onMenuOpenChange, content)
     }
 }
 
@@ -84,9 +87,16 @@ private fun JarvysMascotAccountMenuSession(
     liveActivity: JarvysHeaderActivity?,
     liveActivityKey: String?,
     levitate: Boolean,
+    controlledMenuOpen: Boolean?,
+    onMenuOpenChange: ((Boolean) -> Unit)?,
     content: @Composable (closeMenu: () -> Unit) -> Unit,
 ) {
-    var menuOpen by remember { mutableStateOf(false) }
+    var internalMenuOpen by remember { mutableStateOf(false) }
+    val menuOpen = controlledMenuOpen ?: internalMenuOpen
+    fun setMenuOpen(open: Boolean) {
+        if (controlledMenuOpen == null) internalMenuOpen = open
+        onMenuOpenChange?.invoke(open)
+    }
     var tauntEventId by remember { mutableStateOf<String?>(null) }
     var warningOpen by remember { mutableStateOf(false) }
     var pilotOpen by remember { mutableStateOf(false) }
@@ -118,7 +128,7 @@ private fun JarvysMascotAccountMenuSession(
         JarvysMascotHeaderButton(
             originalHeaderAnimation = originalHeaderAnimation,
             onTap = { tauntEventId = UUID.randomUUID().toString() },
-            onMenu = { menuOpen = true },
+            onMenu = { setMenuOpen(true) },
             accountDescription = accountDescription,
             modifier = Modifier.size(maxOf(48.dp, mascotSize)).then(viewport.modifier)
                 .testTag("jarvys-account-menu").semantics {
@@ -182,8 +192,8 @@ private fun JarvysMascotAccountMenuSession(
                 )
             }
         }
-        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-            content { menuOpen = false }
+        DropdownMenu(expanded = menuOpen, onDismissRequest = { setMenuOpen(false) }) {
+            content { setMenuOpen(false) }
             if (jarvysMascotAnimationAvailable()) {
                 DropdownMenuItem(
                     text = { Text(stringResource(if (session.optedIn) R.string.jarvys_mascot_disable else R.string.jarvys_mascot_enable)) },
@@ -191,7 +201,7 @@ private fun JarvysMascotAccountMenuSession(
                     enabled = canEnable || session.optedIn,
                     modifier = Modifier.testTag("jarvys-mascot-toggle"),
                     onClick = {
-                        menuOpen = false
+                        setMenuOpen(false)
                         if (session.optedIn) revoke() else warningOpen = true
                     },
                 )
@@ -199,7 +209,7 @@ private fun JarvysMascotAccountMenuSession(
                     text = { Text(stringResource(R.string.jarvys_mascot_visual_test)) },
                     enabled = resumed && surfaceVisible,
                     modifier = Modifier.testTag("jarvys-mascot-visual-test"),
-                    onClick = { menuOpen = false; pilotOpen = true },
+                    onClick = { setMenuOpen(false); pilotOpen = true },
                 )
             }
             if (playbackFailed) DropdownMenuItem(

@@ -439,18 +439,6 @@ public final class AgentForegroundService extends Service {
     if (sessionId == null || !sessionId.matches("[A-Za-z0-9_.-]{1,100}"))
       sessionId = java.util.UUID.randomUUID().toString();
     final String chatSessionId = sessionId;
-    if (realAgent
-        && chatMessageRecorded
-        && (agentGoal == null || agentGoal.trim().isEmpty())
-        && chatUserMessageId != null
-        && !chatUserMessageId.isEmpty()) {
-      String storedMessage =
-          new LocalRunStore(this).readConversationMessage(chatSessionId, chatUserMessageId);
-      if (storedMessage != null) {
-        agentGoal = storedMessage;
-        displayGoal = storedMessage;
-      }
-    }
     final String chatAgentGoal = agentGoal == null ? "" : agentGoal;
     final String chatDisplayGoal = displayGoal == null ? "" : displayGoal;
     final boolean userMessageAlreadyRecorded = chatMessageRecorded;
@@ -696,6 +684,16 @@ public final class AgentForegroundService extends Service {
     AgentErrorReporter.AttachmentScope privateContentScope = null;
     try {
       token.throwIfCancelled();
+      if (userMessageAlreadyRecorded
+          && (goal == null || goal.trim().isEmpty())
+          && userMessageId != null
+          && !userMessageId.isEmpty()) {
+        String storedMessage = conversationStore.readConversationMessage(sessionId, userMessageId);
+        if (storedMessage != null) {
+          goal = storedMessage;
+          displayGoal = storedMessage;
+        }
+      }
       if (userMessageAlreadyRecorded && (userMessageId == null || userMessageId.isEmpty())) {
         userMessageId = conversationStore.latestUserMessageId(sessionId);
       }
