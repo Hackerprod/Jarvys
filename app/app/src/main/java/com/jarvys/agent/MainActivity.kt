@@ -2087,7 +2087,8 @@ private fun JarvysApp(
                                 if (task.status == "cancelled") {
                                     navController.navigate(Routes.TASKS) { launchSingleTop = true }
                                 } else {
-                                    openTaskDetailFromIntent(navController, task.taskId)
+                                    navController.navigate(Routes.TASKS) { launchSingleTop = true }
+                                    navController.navigate(Routes.taskDetail(task.taskId)) { launchSingleTop = true }
                                 }
                             },
                             runSnapshot = agentState,

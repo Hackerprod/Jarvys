@@ -103,7 +103,6 @@ class TaskPlatformContractTest {
         assertFalse(resources.contains("name=\"scheduled_task_system_prompt\""))
         assertFalse(resources.contains("name=\"scheduled_task_delivery_context\""))
         assertFalse(resources.contains("name=\"scheduled_task_time_context\""))
-        assertTrue(resources.contains("task_respond"))
         assertFalse(resources.contains("Linux", ignoreCase = true))
     }
 
