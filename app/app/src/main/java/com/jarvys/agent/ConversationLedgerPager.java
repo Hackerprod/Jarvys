@@ -140,22 +140,26 @@ public final class ConversationLedgerPager {
             lineOffsets.add(value.start);
         }
         long olderCursor = hasMore ? pageStart : NO_CURSOR;
-        boolean needsAbsoluteLegacyIndex = false;
+        boolean pageHasLegacyRows = false;
         for (String value : lines) {
             if (isLegacyTimelineMessageRow(value)) {
-                needsAbsoluteLegacyIndex = true;
+                pageHasLegacyRows = true;
                 break;
             }
         }
-        int messageIndexBeforeStart = needsAbsoluteLegacyIndex
-                ? countMessageRowsBefore(channel, pageStart, snapshot) : 0;
+        PrefixCounts prefix = countRowsBefore(channel, pageStart, snapshot);
+        // Modern IDs do not depend on an absolute timeline index. We still index the
+        // prefix so legacy rows before this page cannot be missed, but expose the count
+        // only when a legacy row in the prefix or this page can consume it.
+        int messageIndexBeforeStart = prefix.legacyRows > 0 || pageHasLegacyRows
+                ? prefix.messageRows : 0;
         return new Page(lines, lineOffsets, pageStart, messageIndexBeforeStart, olderCursor, hasMore);
     }
 
-    /** Counts only timeline rows, resuming from a sparse cached checkpoint when possible. */
-    private static int countMessageRowsBefore(FileChannel channel, long endOffset, FileSnapshot snapshot)
+    /** Counts timeline and legacy rows, resuming from sparse cached checkpoints when possible. */
+    private static PrefixCounts countRowsBefore(FileChannel channel, long endOffset, FileSnapshot snapshot)
             throws IOException {
-        if (endOffset <= 0L) return 0;
+        if (endOffset <= 0L) return PrefixCounts.EMPTY;
         PrefixIndex index;
         synchronized (PREFIX_INDEXES) {
             index = PREFIX_INDEXES.get(snapshot.path);
@@ -166,35 +170,33 @@ public final class ConversationLedgerPager {
         }
         synchronized (index) {
             index.adoptAppend(snapshot);
-            Integer exact = index.checkpoints.get(endOffset);
-            if (exact != null) return exact;
-            Map.Entry<Long, Integer> checkpoint = index.checkpoints.floorEntry(endOffset);
-            long start = checkpoint == null ? 0L : checkpoint.getKey();
-            int count = checkpoint == null ? 0 : checkpoint.getValue();
-            if (start < index.scannedThrough && endOffset > index.scannedThrough) {
-                start = index.scannedThrough;
-                count = index.scannedCount;
-            }
-            if (start < endOffset) {
+            if (endOffset > index.scannedThrough) {
                 synchronized (ConversationLedgerPager.class) { prefixScanCount++; }
-                PrefixCountResult result = scanPrefix(channel, start, endOffset, count, index);
-                count = result.count;
-                if (endOffset >= index.scannedThrough) {
-                    index.scannedThrough = endOffset;
-                    index.scannedCount = count;
-                }
-                index.checkpoints.put(endOffset, count);
+                PrefixCounts result = scanPrefix(channel, index.scannedThrough, endOffset,
+                        index.scannedCounts, index);
+                index.scannedThrough = endOffset;
+                index.scannedCounts = result;
+                return result;
             }
-            return count;
+            if (endOffset == index.scannedThrough) return index.scannedCounts;
+            PrefixCounts exact = index.checkpoints.get(endOffset);
+            if (exact != null) return exact;
+            Map.Entry<Long, PrefixCounts> checkpoint = index.checkpoints.floorEntry(endOffset);
+            long start = checkpoint == null ? 0L : checkpoint.getKey();
+            PrefixCounts counts = checkpoint == null ? PrefixCounts.EMPTY : checkpoint.getValue();
+            if (start == endOffset) return counts;
+            synchronized (ConversationLedgerPager.class) { prefixScanCount++; }
+            return scanPrefix(channel, start, endOffset, counts, null);
         }
     }
 
-    private static PrefixCountResult scanPrefix(FileChannel channel, long start, long end, int initialCount,
+    private static PrefixCounts scanPrefix(FileChannel channel, long start, long end, PrefixCounts initialCounts,
                                                 PrefixIndex index) throws IOException {
         ByteBuffer block = ByteBuffer.allocate(FORWARD_BLOCK_SIZE);
         byte[] line = new byte[256];
         int lineLength = 0;
-        int count = initialCount;
+        int messageRows = initialCounts.messageRows;
+        int legacyRows = initialCounts.legacyRows;
         long position = start;
         long nextCheckpoint = ((start / PREFIX_CHECKPOINT_BYTES) + 1L) * PREFIX_CHECKPOINT_BYTES;
         while (position < end) {
@@ -214,12 +216,14 @@ public final class ConversationLedgerPager {
                     lineLength += segmentLength;
                 }
                 if (lineLength > 0) {
-                    if (isTimelineMessageRow(line, lineLength)) count++;
+                    int classification = classifyTimelineRow(line, lineLength);
+                    if (classification != 0) messageRows++;
+                    if (classification == 2) legacyRows++;
                     lineLength = 0;
                 }
                 long lineEnd = position - read + cursor + 1L;
-                if (lineEnd >= nextCheckpoint) {
-                    index.checkpoints.put(lineEnd, count);
+                if (index != null && lineEnd >= nextCheckpoint) {
+                    index.checkpoints.put(lineEnd, new PrefixCounts(messageRows, legacyRows));
                     nextCheckpoint = ((lineEnd / PREFIX_CHECKPOINT_BYTES) + 1L) * PREFIX_CHECKPOINT_BYTES;
                 }
                 segmentStart = cursor + 1;
@@ -230,8 +234,12 @@ public final class ConversationLedgerPager {
                 lineLength += trailingLength;
             }
         }
-        if (lineLength > 0 && end == position && isTimelineMessageRow(line, lineLength)) count++;
-        return new PrefixCountResult(count);
+        if (lineLength > 0 && end == position) {
+            int classification = classifyTimelineRow(line, lineLength);
+            if (classification != 0) messageRows++;
+            if (classification == 2) legacyRows++;
+        }
+        return new PrefixCounts(messageRows, legacyRows);
     }
 
     private static byte[] append(byte[] target, int targetLength, ByteBuffer source, int offset, int length) {
@@ -248,37 +256,41 @@ public final class ConversationLedgerPager {
         return target;
     }
 
-    private static boolean isTimelineMessageRow(byte[] line, int length) {
-        if (!hasFastMessageCandidate(line, length) && !hasUnicodeEscape(line, length)) return false;
-        return new JsonByteScanner(line, length).isTimelineMessageRow();
-    }
-
     private static boolean isLegacyTimelineMessageRow(String line) {
         if (line == null) return false;
         byte[] bytes = line.getBytes(StandardCharsets.UTF_8);
-        if (!hasFastMessageCandidate(bytes, bytes.length) && !hasUnicodeEscape(bytes, bytes.length)) return false;
-        return new JsonByteScanner(bytes, bytes.length).isLegacyTimelineMessageRow();
+        return classifyTimelineRow(bytes, bytes.length) == 2;
     }
 
-    private static boolean hasFastMessageCandidate(byte[] bytes, int length) {
-        return indexOf(bytes, length, ROLE_TOKEN) >= 0 && indexOf(bytes, length, CONTENT_TOKEN) >= 0
-                && (indexOf(bytes, length, USER_TOKEN) >= 0 || indexOf(bytes, length, ASSISTANT_TOKEN) >= 0);
+    /** Returns 1 for a timeline row with a stable ID, 2 for a legacy row, and 0 otherwise. */
+    private static int classifyTimelineRow(byte[] bytes, int length) {
+        if (!mightBeTimelineMessageRow(bytes, length)) return 0;
+        return new JsonByteScanner(bytes, length).timelineClassification();
     }
 
-    private static int indexOf(byte[] bytes, int length, byte[] target) {
-        int limit = length - target.length;
-        for (int index = 0; index <= limit; index++) {
-            int character = 0;
-            while (character < target.length && bytes[index + character] == target[character]) character++;
-            if (character == target.length) return index;
+    /** One-pass byte prefilter; escaped names or values are sent to the strict scanner too. */
+    private static boolean mightBeTimelineMessageRow(byte[] bytes, int length) {
+        boolean role = false;
+        boolean content = false;
+        boolean user = false;
+        boolean assistant = false;
+        for (int index = 0; index < length; index++) {
+            if (bytes[index] == '\\' && index + 1 < length && bytes[index + 1] == 'u') return true;
+            if (bytes[index] != '"') continue;
+            role |= matchesAt(bytes, length, index, ROLE_TOKEN);
+            content |= matchesAt(bytes, length, index, CONTENT_TOKEN);
+            user |= matchesAt(bytes, length, index, USER_TOKEN);
+            assistant |= matchesAt(bytes, length, index, ASSISTANT_TOKEN);
+            if (role && content && (user || assistant)) return true;
         }
-        return -1;
+        return false;
     }
 
-    private static boolean hasUnicodeEscape(byte[] bytes, int length) {
-        for (int index = 0; index + 1 < length; index++)
-            if (bytes[index] == '\\' && bytes[index + 1] == 'u') return true;
-        return false;
+    private static boolean matchesAt(byte[] bytes, int length, int offset, byte[] target) {
+        if (offset + target.length > length) return false;
+        for (int index = 0; index < target.length; index++)
+            if (bytes[offset + index] != target[index]) return false;
+        return true;
     }
 
     private static FileSnapshot fileSnapshot(File ledger) throws IOException {
@@ -373,18 +385,18 @@ public final class ConversationLedgerPager {
     private static final class PrefixIndex {
         final String path;
         final Object fileKey;
-        final TreeMap<Long, Integer> checkpoints = new TreeMap<>();
+        final TreeMap<Long, PrefixCounts> checkpoints = new TreeMap<>();
         java.nio.file.attribute.FileTime modified;
         long indexedFileLength;
         long scannedThrough;
-        int scannedCount;
+        PrefixCounts scannedCounts = PrefixCounts.EMPTY;
 
         PrefixIndex(FileSnapshot snapshot) {
             path = snapshot.path;
             fileKey = snapshot.fileKey;
             modified = snapshot.modified;
             indexedFileLength = snapshot.length;
-            checkpoints.put(0L, 0);
+            checkpoints.put(0L, PrefixCounts.EMPTY);
         }
 
         boolean matches(FileSnapshot snapshot) {
@@ -401,9 +413,15 @@ public final class ConversationLedgerPager {
         }
     }
 
-    private static final class PrefixCountResult {
-        final int count;
-        PrefixCountResult(int count) { this.count = count; }
+    private static final class PrefixCounts {
+        static final PrefixCounts EMPTY = new PrefixCounts(0, 0);
+        final int messageRows;
+        final int legacyRows;
+
+        PrefixCounts(int messageRows, int legacyRows) {
+            this.messageRows = messageRows;
+            this.legacyRows = legacyRows;
+        }
     }
 
     /** Strict structural scanner that validates candidate rows directly in their UTF-8 bytes. */
@@ -425,13 +443,9 @@ public final class ConversationLedgerPager {
             this.length = length > 0 && json[length - 1] == '\r' ? length - 1 : length;
         }
 
-        boolean isTimelineMessageRow() {
-            return parseObject() && (userRole || assistantRole) && content && !resultOnly && !resultOnlyType;
-        }
-
-        boolean isLegacyTimelineMessageRow() {
-            return parseObject() && (userRole || assistantRole) && content && !stableMessageId
-                    && !resultOnly && !resultOnlyType;
+        int timelineClassification() {
+            if (!parseObject() || !(userRole || assistantRole) || !content || resultOnly || resultOnlyType) return 0;
+            return stableMessageId ? 1 : 2;
         }
 
         private boolean parseObject() {
@@ -469,6 +483,8 @@ public final class ConversationLedgerPager {
                         if (!readString()) return false;
                         stableMessageId = stringEnd > stringStart;
                     } else {
+                        // JSONObject.optString() converts present non-string values to text;
+                        // only a missing or empty-string ID needs an index-derived legacy ID.
                         stableMessageId = true;
                         if (!skipValue()) return false;
                     }
@@ -489,32 +505,83 @@ public final class ConversationLedgerPager {
             if (index >= length) return false;
             byte first = json[index];
             if (first == '"') return readString();
-            if (first == '{' || first == '[') {
-                int depth = 0;
-                boolean inString = false;
-                boolean escaped = false;
-                while (index < length) {
-                    byte value = json[index++];
-                    if (inString) {
-                        if (escaped) escaped = false;
-                        else if (value == '\\') escaped = true;
-                        else if (value == '"') inString = false;
-                    } else if (value == '"') inString = true;
-                    else if (value == '{' || value == '[') depth++;
-                    else if (value == '}' || value == ']') {
-                        depth--;
-                        if (depth == 0) return true;
-                    }
+            if (first == '{') return skipObjectValue();
+            if (first == '[') return skipArrayValue();
+            return skipPrimitiveValue();
+        }
+
+        private boolean skipObjectValue() {
+            index++; // opening brace
+            skipWhitespace();
+            if (take('}')) return true;
+            while (true) {
+                if (!readString()) return false;
+                skipWhitespace();
+                if (!take(':')) return false;
+                skipWhitespace();
+                if (!skipValue()) return false;
+                skipWhitespace();
+                if (take(',')) {
+                    skipWhitespace();
+                    continue;
                 }
-                return false;
+                return take('}');
             }
+        }
+
+        private boolean skipArrayValue() {
+            index++; // opening bracket
+            skipWhitespace();
+            if (take(']')) return true;
+            while (true) {
+                if (!skipValue()) return false;
+                skipWhitespace();
+                if (take(',')) {
+                    skipWhitespace();
+                    continue;
+                }
+                return take(']');
+            }
+        }
+
+        private boolean skipPrimitiveValue() {
             int start = index;
-            while (index < length) {
-                byte value = json[index];
-                if (value == ',' || value == '}' || isWhitespace(value)) break;
+            if (json[index] == 't') return takeLiteral("true");
+            if (json[index] == 'f') return takeLiteral("false");
+            if (json[index] == 'n') return takeLiteral("null");
+
+            if (take('-') && index >= length) return false;
+            if (take('0')) {
+                if (index < length && isDigit(json[index])) return false;
+            } else {
+                if (index >= length || json[index] < '1' || json[index] > '9') return false;
+                while (index < length && isDigit(json[index])) index++;
+            }
+            if (take('.')) {
+                int fractionStart = index;
+                while (index < length && isDigit(json[index])) index++;
+                if (index == fractionStart) return false;
+            }
+            if (index < length && (json[index] == 'e' || json[index] == 'E')) {
                 index++;
+                if (index < length && (json[index] == '+' || json[index] == '-')) index++;
+                int exponentStart = index;
+                while (index < length && isDigit(json[index])) index++;
+                if (index == exponentStart) return false;
             }
             return index > start;
+        }
+
+        private boolean takeLiteral(String value) {
+            if (index + value.length() > length) return false;
+            for (int offset = 0; offset < value.length(); offset++)
+                if (json[index + offset] != value.charAt(offset)) return false;
+            index += value.length();
+            return true;
+        }
+
+        private static boolean isDigit(byte value) {
+            return value >= '0' && value <= '9';
         }
 
         private boolean readString() {
@@ -707,7 +774,7 @@ public final class ConversationLedgerPager {
         public final List<Long> lineOffsets;
         /** Byte offset of the first line in this page, suitable for stable slot identity. */
         public final long startOffset;
-        /** Absolute row index before this page when a legacy row needs it; modern pages use zero. */
+        /** Timeline message-row count before this page; large pages without legacy rows may use zero. */
         public final int messageIndexBeforeStart;
         /** Start offset of this page when an older page exists; otherwise {@link #NO_CURSOR}. */
         public final long olderCursor;
