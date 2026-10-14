@@ -217,7 +217,7 @@ class MainAgentInteractionTest {
             assertTrue("Steering admission returns", senderFinished.await(5, TimeUnit.SECONDS))
             assertNull(senderFailure.get())
             assertEquals(true, accepted.get())
-            assertTrue("The admitted message runs as one follow-up", followUpEntered.await(10, TimeUnit.SECONDS))
+            assertTrue("The admitted message runs as one follow-up", awaitServiceCallback(followUpEntered, 10))
             assertTrue("The follow-up leaves its session lane", awaitRunFinished(service, context))
 
             val messages = store.readConversationMessages(session)
