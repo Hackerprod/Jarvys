@@ -120,21 +120,19 @@ final class MainChatTranscriptStore {
                             }
                         }
                     } else if (turn.kind == ConversationTurn.Kind.TOOL_RESULT && batch != null) {
-                        // Uncertain and never-launched transcript placeholders preserve protocol
-                        // shape, but they are not durable tool results. The started-call ledger
-                        // reconstructs those honestly after restart.
-                        if ("RESULT".equals(checkpoint.toolLifecycle.get(turn.toolCallId))) {
-                            String key = batch + ":" + turn.toolCallId;
-                            // Keep the first durable result, rather than replacing it with a later
-                            // omitted-output marker.
-                            if (!results.contains(key)) {
-                                String completeOutput = checkpoint.completedToolResults.get(turn.toolCallId);
-                                String output = completeOutput == null ? turn.content : completeOutput;
-                                append(new JSONObject().put("type", "model_tool_result").put("batchId", batch)
-                                        .put("callId", turn.toolCallId).put("toolName", turn.toolName)
-                                        .put("output", retain(output)));
-                                results.add(key);
-                            }
+                        String key = batch + ":" + turn.toolCallId;
+                        // Persist every result delivered to the model, including preflight errors
+                        // and interruption placeholders. Lifecycle remains separate evidence for UI.
+                        if (!results.contains(key)) {
+                            String completeOutput = checkpoint.completedToolResults.get(turn.toolCallId);
+                            String output = completeOutput == null ? turn.content : completeOutput;
+                            String lifecycle = checkpoint.toolLifecycle.get(turn.toolCallId);
+                            if (lifecycle == null) lifecycle = "RESULT";
+                            append(new JSONObject().put("type", "model_tool_result").put("batchId", batch)
+                                    .put("callId", turn.toolCallId).put("toolName", turn.toolName)
+                                    .put("lifecycle", lifecycle)
+                                    .put("output", retain(output)));
+                            results.add(key);
                         }
                     } else {
                         batch = null;

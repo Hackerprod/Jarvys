@@ -31,7 +31,8 @@ internal fun DeveloperWorkspace(registryOverride: ConnectorRegistry? = null) {
     val context = LocalContext.current
     val registry = registryOverride ?: remember(context.applicationContext) { ConnectorRegistry.get(context) }
     val definitions by registry.definitions.collectAsState()
-    Column(verticalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.testTag("developer-settings")) {
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp),
+        modifier = Modifier.fillMaxWidth().testTag("developer-settings")) {
         ConnectorAutonomyPolicies(definitions, registry)
         val repository = remember(context.applicationContext) { McpServerRepository.get(context) }
         val connections = remember(context.applicationContext) { McpConnectionManager.get(context.applicationContext) }
@@ -48,7 +49,7 @@ private fun ConnectorAutonomyPolicies(definitions: List<ConnectorDefinition>, re
             val displayName = if (definition.displayNameResourceId != 0)
                 stringResource(definition.displayNameResourceId) else definition.name
             JarvysGroup(modifier = Modifier.fillMaxWidth().testTag("developer-connector-${definition.id}")) {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(displayName, fontWeight = FontWeight.SemiBold)
                     definition.operations.forEach { operation -> AutonomyPolicyRow(registry, definition, operation) }
                 }

@@ -2668,7 +2668,11 @@ public final class LocalRunStore {
             for(JSONObject candidate:rows) if("model_tool_result".equals(candidate.optString("type"))
                     && source.equals(toolRowKey(candidate,modelBatches))) {
                 String output=candidate.optString("output");
-                String stage=output.startsWith("Tool error:")?"tool_error":projected.skill()?"tool_interrupted":"tool_result";
+                String lifecycle=candidate.optString("lifecycle", "RESULT");
+                String stage;
+                if ("INTERRUPTED_UNCERTAIN".equals(lifecycle)) stage="tool_interrupted";
+                else if ("NEVER_LAUNCHED".equals(lifecycle)) stage="tool_not_started";
+                else stage=output.startsWith("Tool error:")?"tool_error":projected.skill()?"tool_interrupted":"tool_result";
                 group.getValue().add(new ToolActivity(projected.executionId+"/durable-result",projected.executionId,projected.callId,
                     projected.toolName,projected.displayName,projected.skillId,projected.skillName,stage,output,
                     modelPreviewToken(projected.toolName,output),projected.auditDetail,projected.reflectionSource,projected.timestampMillis));
@@ -2794,8 +2798,15 @@ public final class LocalRunStore {
                 if (userMessageId.isEmpty() || rowIndex < latestInvalidatedToolTurnRow.getOrDefault(userMessageId, -1)) continue;
                 if (typedCalls.contains(callKey) || "reflection_tool".equals(type) && typedReflectionCalls.contains(userMessageId+"/"+callId)) continue;
                 String detail = presentation ? row.optString("detail", "") : modelResult ? row.optString("output", "") : "";
-                String stage = modelResult ? (detail.startsWith("Tool error:") ? "tool_error" : "tool_result") : row.optString("stage", "tool_result");
-                if (!"tool_result".equals(stage) && !"tool_error".equals(stage)) continue;
+                String stage;
+                if (modelResult) {
+                    String lifecycle = row.optString("lifecycle", "RESULT");
+                    if ("INTERRUPTED_UNCERTAIN".equals(lifecycle)) stage = "tool_interrupted";
+                    else if ("NEVER_LAUNCHED".equals(lifecycle)) stage = "tool_not_started";
+                    else stage = detail.startsWith("Tool error:") ? "tool_error" : "tool_result";
+                } else stage = row.optString("stage", "tool_result");
+                if (!"tool_result".equals(stage) && !"tool_error".equals(stage)
+                        && !"tool_interrupted".equals(stage) && !"tool_not_started".equals(stage)) continue;
                 String toolName = row.optString("toolName", "tool");
                 if (modelResult) toolName = reflectionTools.containsKey(callKey)
                         ? reflectionTools.get(callKey).optString("toolName", toolName) : CoreToolRegistry.humanizeToolName(toolName);

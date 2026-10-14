@@ -126,6 +126,43 @@ class ConnectedConnectorPermissionScreensTest {
 
     @Test fun connectedCalendarPoliciesInDeveloperConfigureReadAndWriteOnceWithoutExecuting() = calendar(1f, false)
 
+    @Test fun largeTextPolicyLayoutDoesNotDependOnConnectorOrOperationIdentity() {
+        val registry = ConnectorRegistry.createForTestsWithAutonomy(PermissionConnectionPreferences(), { true }, gate,
+            store, NoopAutonomyActionNotifier)
+        val firstOperation = ConnectorOperation("operation_one", "", JSONObject(), displayLabel = "Readable action label")
+        val secondOperation = ConnectorOperation("operation_two", "", JSONObject(), displayLabel = "Readable action label")
+        val firstDefinition = ConnectorDefinition("connector_one", "Connector One", "1", "test",
+            operations = listOf(firstOperation))
+        val secondDefinition = ConnectorDefinition("connector_two", "Connector Two", "1", "test",
+            operations = listOf(secondOperation))
+        registry.register(firstDefinition)
+        registry.register(secondDefinition)
+
+        show(fontScale = 2f) {
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                AutonomyPolicyRow(registry, firstDefinition, firstOperation)
+                AutonomyPolicyRow(registry, secondDefinition, secondOperation)
+            }
+        }
+
+        val first = "connector-policy-${firstOperation.name}"
+        val second = "connector-policy-${secondOperation.name}"
+        geometry(first)
+        geometry(second)
+        val firstRow = compose.onNodeWithTag("${first}-row", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        val secondRow = compose.onNodeWithTag("${second}-row", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        val firstLabel = compose.onNodeWithTag("${first}-label", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        val secondLabel = compose.onNodeWithTag("${second}-label", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        val firstControl = compose.onNodeWithTag("${first}-control").fetchSemanticsNode().boundsInRoot
+        val secondControl = compose.onNodeWithTag("${second}-control").fetchSemanticsNode().boundsInRoot
+        assertEquals(firstRow.width, firstLabel.width, 1f)
+        assertEquals(secondRow.width, secondLabel.width, 1f)
+        assertEquals(firstLabel.width, secondLabel.width, 1f)
+        assertEquals(firstControl.width, secondControl.width, 1f)
+        assertTrue(firstControl.top >= firstLabel.bottom - 1f)
+        assertTrue(secondControl.top >= secondLabel.bottom - 1f)
+    }
+
     @Test @Config(qualifiers = "es-rES-w320dp-h800dp-port-mdpi")
     fun connectedCalendarSpanishLargeTextKeepsDeveloperPoliciesAtRightCenter() = calendar(2f, true)
 

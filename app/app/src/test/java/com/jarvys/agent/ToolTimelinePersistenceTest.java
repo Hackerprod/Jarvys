@@ -100,6 +100,14 @@ public class ToolTimelinePersistenceTest {
         assertEquals("tool_not_started", pending.getStage());
         assertEquals(Integer.valueOf(R.string.connector_tool_not_started), pending.getToolStatusResourceId());
         assertNull(started.getPreviewId()); assertNull(pending.getPreviewId());
+        assertTrue(store.readModelTranscriptRows(session).stream().anyMatch(row -> "model_tool_result".equals(row.optString("type"))
+                && "started".equals(row.optString("callId"))
+                && "INTERRUPTED_UNCERTAIN".equals(row.optString("lifecycle"))
+                && row.optString("output").contains("effects may have occurred")));
+        assertTrue(store.readModelTranscriptRows(session).stream().anyMatch(row -> "model_tool_result".equals(row.optString("type"))
+                && "pending".equals(row.optString("callId"))
+                && "NEVER_LAUNCHED".equals(row.optString("lifecycle"))
+                && row.optString("output").contains("NEVER_LAUNCHED")));
         assertEquals(1, effects.get());
     }
 

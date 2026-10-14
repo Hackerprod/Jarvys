@@ -83,6 +83,78 @@ public class MainChatToolContinuityTest {
     assertEquals(1, effects.get());
   }
 
+  @Test public void unavailableToolErrorSurvivesReloadAsExactModelResult() throws Exception {
+    File files = temporary.newFolder();
+    String session = "unavailable-tool-error";
+    LocalRunStore store = new LocalRunStore(files);
+    String user = store.appendConversationMessage(session, "user", "Use the missing tool");
+    String expected = "Tool error: Tool is not available in this agent scope: missing_tool";
+    AtomicInteger turns = new AtomicInteger();
+    CoreAgentLoop loop = new CoreAgentLoop((history, prompt, tools, token) -> turns.getAndIncrement() == 0
+        ? new ModelReply("", Collections.singletonList(new ModelReply.Call("missing-tool-call", "missing_tool", Collections.emptyMap())))
+        : new ModelReply("The error was reported.", Collections.emptyList()),
+        new CoreToolRegistry(Collections.emptyList()), "system", session);
+    new MainChatTranscriptStore(files, session, store).attach(loop, Collections.emptyList());
+    CoreAgentLoop.Result result = loop.run("Use the missing tool", Collections.emptyList(), CancellationToken.uncancellable(), null);
+    store.appendConversationMessage(session, "assistant", result.text, result.durationMs, result.runId, user, result.outcome);
+    store.appendConversationMessage(session, "user", "Continue");
+
+    List<ConversationTurn> reloaded = new LocalRunStore(files).loadConversationContext(session);
+    List<ConversationTurn> results = new ArrayList<>();
+    for (ConversationTurn turn : reloaded) if (turn.kind == ConversationTurn.Kind.TOOL_RESULT
+        && "missing-tool-call".equals(turn.toolCallId)) results.add(turn);
+    assertEquals(1, results.size());
+    assertEquals(expected, results.get(0).content);
+    assertFalse(results.get(0).content.contains("recorded tool intent was not launched"));
+  }
+
+  @Test public void completedPreflightErrorBatchIsNotReinjectedAfterCompaction() throws Exception {
+    File files = temporary.newFolder();
+    String session = "compacted-preflight-error";
+    LocalRunStore store = new LocalRunStore(files);
+    String user = store.appendConversationMessage(session, "user", "Use the missing tool");
+    AtomicInteger turns = new AtomicInteger();
+    CoreAgentLoop loop = new CoreAgentLoop((history, prompt, tools, token) -> turns.getAndIncrement() == 0
+        ? new ModelReply("", Collections.singletonList(new ModelReply.Call("compacted-missing-tool", "missing_tool", Collections.emptyMap())))
+        : new ModelReply("The tool error was received.", Collections.emptyList()),
+        new CoreToolRegistry(Collections.emptyList()), "system", session);
+    new MainChatTranscriptStore(files, session, store).attach(loop, Collections.emptyList());
+    CoreAgentLoop.Result result = loop.run("Use the missing tool", Collections.emptyList(), CancellationToken.uncancellable(), null);
+    store.appendConversationMessage(session, "assistant", result.text, result.durationMs, result.runId, user, result.outcome);
+    store.appendConversationMessage(session, "user", "Continue");
+    assertTrue(store.readModelTranscriptRows(session).stream().anyMatch(row -> "model_tool_result".equals(row.optString("type"))
+        && "compacted-missing-tool".equals(row.optString("callId"))
+        && "NEVER_LAUNCHED".equals(row.optString("lifecycle"))
+        && row.optString("output").equals("Tool error: Tool is not available in this agent scope: missing_tool")));
+    ModelProviderClient summarizer = new ModelProviderClient() {
+      @Override public ModelReply complete(String system, String prompt, List<com.jarvys.agent.device.ScreenData> images,
+          List<ToolSpec> tools, String session, CancellationToken token) {
+        return new ModelReply("The missing tool returned an error.", Collections.emptyList());
+      }
+      @Override public ModelReply completeConversation(String system, List<ConversationTurn> history, String prompt,
+          List<com.jarvys.agent.device.ScreenData> images, List<ToolSpec> tools, String session, CancellationToken token) {
+        return complete(system, prompt, images, tools, session, token);
+      }
+    };
+    ConversationCompactor compactor = new ConversationCompactor(session, new CoreAgentModel(summarizer, session), store);
+    compactor.compact(store.loadConversationContext(session), 32_768, "manual",
+        ConversationCompactionPolicy.Mode.ALL, CancellationToken.uncancellable(), null);
+
+    List<ConversationTurn> restored = new LocalRunStore(files).loadConversationContext(session);
+    int summaryIndex = -1;
+    for (int index = 0; index < restored.size(); index++)
+      if (restored.get(index).kind == ConversationTurn.Kind.COMPACTION_SUMMARY) summaryIndex = index;
+    assertTrue("Compaction summary should be restored", summaryIndex >= 0);
+    for (int index = summaryIndex + 1; index < restored.size(); index++) {
+      ConversationTurn turn = restored.get(index);
+      assertFalse("Completed call must not be reinserted after the summary",
+          turn.kind == ConversationTurn.Kind.TOOL_CALLS && turn.toolCalls.stream()
+              .anyMatch(call -> "compacted-missing-tool".equals(call.id)));
+      assertFalse("Completed result must not be reinserted after the summary",
+          turn.kind == ConversationTurn.Kind.TOOL_RESULT && "compacted-missing-tool".equals(turn.toolCallId));
+    }
+  }
+
   @Test public void interruptedToolRemainsUncertainRatherThanSuccessOrAutomaticReplay() throws Exception {
     File files = temporary.newFolder();
     String session = "interrupted-write";
