@@ -73,6 +73,7 @@ public final class LoadSkillTool implements CoreTool {
     }
 
     @Override public ToolSpec declaration() { return declaration; }
+    @Override public UnattendedAccess unattendedAccess() { return UnattendedAccess.READ; }
 
     // Complete skill bodies draw from one remaining per-turn result budget.
     @Override public ExecutionMode executionMode() { return ExecutionMode.SEQUENTIAL; }

@@ -7,6 +7,7 @@ import java.util.Map;
  */
 public interface CoreTool {
   enum ExecutionMode { PARALLEL, SEQUENTIAL }
+  enum UnattendedAccess { EXCLUDED, READ, WRITE }
 
   interface ProgressListener {
     void onProgress(String message);
@@ -14,6 +15,26 @@ public interface CoreTool {
 
   default boolean canDelegate() {
     return true;
+  }
+
+  /** Tools opt in explicitly before a silent scheduled run can call them. */
+  default UnattendedAccess unattendedAccess() {
+    return UnattendedAccess.EXCLUDED;
+  }
+
+  /** Identifies native connector handlers through task-scoped wrappers without name heuristics. */
+  default boolean isConnectorTool() {
+    return false;
+  }
+
+  /** True for MCP backed calls whose returned data is untrusted external content. */
+  default boolean isMcpTool() {
+    return false;
+  }
+
+  /** Task file tools use a memory-only view and require the creator's saved memory capability. */
+  default boolean requiresMemoryScopeForScheduledTask() {
+    return false;
   }
 
   /**

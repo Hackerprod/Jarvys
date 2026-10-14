@@ -12,6 +12,11 @@ import android.util.AtomicFile
 import com.jarvys.agent.BuildConfig
 import com.jarvys.agent.CancellationToken
 import com.jarvys.agent.MemoryUiAutomationGuard
+import com.jarvys.agent.CoreAgentRuntime
+import com.jarvys.agent.tasks.TaskPendingActionHandler
+import com.jarvys.agent.tasks.TaskPendingActionHandlerProvider
+import com.jarvys.agent.tasks.TaskPendingActionExecutor
+import com.jarvys.agent.tasks.TaskPendingActionWork
 import com.jarvys.agent.coding.ProjectScope
 import org.json.JSONArray
 import org.json.JSONObject
@@ -392,7 +397,16 @@ internal class FactoryInstallCoordinator(
 }
 
 /** Restores family-local outcome and resource journals at application startup. */
-class FactoryInstallApplication : Application() {
+class FactoryInstallApplication : Application(), TaskPendingActionHandlerProvider {
+    override fun taskPendingActionHandler(): TaskPendingActionHandler =
+        TaskPendingActionHandler { context, action -> TaskPendingActionWork.enqueue(context, action) }
+
+    override fun taskPendingActionExecutor(): TaskPendingActionExecutor =
+        TaskPendingActionExecutor { context, task, action ->
+            CoreAgentRuntime.executeScheduledTaskAction(context, task, action.toolName,
+                JSONObject(action.argumentsJson), CancellationToken.uncancellable())
+        }
+
     override fun onCreate() {
         super.onCreate()
         clearRetiredOperationPolicyState()

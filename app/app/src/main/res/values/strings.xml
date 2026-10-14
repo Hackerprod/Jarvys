@@ -1008,6 +1008,24 @@ description: Explicit preferences about language, tone, style, and how to help t
     <string name="scheduled_tasks_attention_body">%1$s. Open Jarvys to inspect this task.</string>
     <string name="scheduled_tasks_recovered_title">Task recovered: %1$s</string>
     <string name="scheduled_tasks_recovered_body">This scheduled task is running successfully again.</string>
+    <string name="task_pending_action_notification_title">Approval needed: %1$s</string>
+    <string name="task_pending_action_notification_body">Review the requested action from %1$s: %2$s</string>
+    <string name="task_pending_action_approve">Approve</string>
+    <string name="task_pending_action_reject">Reject</string>
+    <string name="task_pending_actions">Pending actions</string>
+    <string name="task_pending_action_arguments">Arguments: %1$s</string>
+    <string name="task_pending_action_waiting">This action has not been executed. Approval is required.</string>
+    <string name="task_pending_action_processing">Approval is being processed.</string>
+    <string name="task_pending_action_approval_failed">Could not queue this approval. Please try again.</string>
+    <string name="task_pending_action_expired">This approval expired because the task revision or action arguments changed. Review and run the task again.</string>
+    <string name="task_pending_action_uncertain">The action may have run before the process stopped. Check its outcome before creating another action.</string>
+    <string name="task_pending_action_rejected">Action rejected.</string>
+    <string name="task_pending_action_notification_public_title">A scheduled task needs your review</string>
+    <string name="task_pending_action_notification_public_body">Open Jarvys to review the pending action.</string>
+    <string name="task_pending_action_expired_notification_title">Approval expired</string>
+    <string name="task_pending_action_expired_notification_body">%1$s changed, so %2$s was not executed. Review the current task.</string>
+    <string name="task_pending_action_expired_notification_public_title">Scheduled action expired</string>
+    <string name="task_pending_action_expired_notification_public_body">A scheduled action needs review.</string>
     <string name="scheduled_task_chat_schedule">Schedule: %1$s</string>
     <string name="scheduled_task_chat_next_run">Next run: %1$s</string>
     <string name="scheduled_task_chat_no_next_run">Not scheduled</string>
@@ -1182,6 +1200,7 @@ After:
     <string name="task_cause_execution_failed">The task could not be executed</string>
     <string name="task_cause_effect_occurred">The run stopped after an effect</string>
     <string name="task_cause_task_changed">The task changed or was removed before the manual run</string>
+    <string name="task_cause_awaiting_user">A pending action needs your approval.</string>
     <string name="task_cause_unknown">Unknown cause</string>
 
     <string name="task_detail_error_detail">Failure detail: %1$s</string>

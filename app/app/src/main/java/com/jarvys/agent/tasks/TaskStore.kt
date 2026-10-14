@@ -69,6 +69,29 @@ class TaskStore(private val ledger: File) {
         updated
     }
 
+    /** Persists scheduler bookkeeping without changing the revision of the user-approved task. */
+    internal fun updateRuntimeSnapshot(task: ScheduledTask, expectedRevision: Long,
+                                       expectedTask: ScheduledTask): ScheduledTask = withLock {
+        val current = readLatestLocked().rows[task.id]
+            ?: throw StaleTaskRevisionException("Task ${task.id} no longer exists")
+        if (current.deleted || current.task.revision != expectedRevision || current.task != expectedTask) {
+            throw StaleTaskRevisionException("Task ${task.id} changed before runtime bookkeeping")
+        }
+        require(task.revision == expectedRevision) { "Runtime bookkeeping cannot change the task revision" }
+        val runtimeOnly = current.task.copy(
+            state = task.state,
+            nextRunAt = task.nextRunAt,
+            lastRun = task.lastRun,
+            openIncidentCause = task.openIncidentCause,
+            lastIncidentRecoveredAt = task.lastIncidentRecoveredAt,
+            updatedAt = task.updatedAt,
+        )
+        require(runtimeOnly == task) { "Runtime bookkeeping changed user-owned task fields" }
+        ScheduledTaskValidation.validate(task)
+        appendLocked(encode(task, deleted = false))
+        task
+    }
+
     fun delete(id: String, expectedRevision: Long, deletedAt: Long, beforeWrite: () -> Unit = {},
                expectedTask: ScheduledTask? = null): ScheduledTask = withLock {
         val current = readLatestLocked().rows[id]
@@ -128,7 +151,9 @@ class TaskStore(private val ledger: File) {
             .put("mode", task.toolScope.mode)
             .put("tools", JSONArray(task.toolScope.tools))
             .put("web", task.toolScope.web)
-            .put("writes", task.toolScope.writes))
+            .put("writes", task.toolScope.writes)
+            .put("memory", task.toolScope.memory)
+            .put("skillIds", JSONArray(task.toolScope.skillIds)))
         .put("delivery", task.delivery.name)
         .put("createdBy", task.createdBy)
         .put("creatorToolNames", JSONArray(task.creatorToolNames))
@@ -202,7 +227,8 @@ class TaskStore(private val ledger: File) {
             validUntil = row.optNullableLong("validUntil"), deleteAfterRun = row.optBoolean("deleteAfterRun", false),
             nextRunAt = row.optNullableLong("nextRunAt"), lastRun = lastRun,
             toolScope = TaskToolScope(scope.optString("mode", "READ_ONLY"), scope.optJSONArray("tools").toStringList(),
-                scope.optBoolean("web", false), scope.optString("writes", "DEFER")),
+                scope.optBoolean("web", false), scope.optString("writes", "DEFER"),
+                scope.optBoolean("memory", false), scope.optJSONArray("skillIds").toStringList()),
             delivery = TaskDelivery.valueOf(row.optString("delivery", "ALWAYS")),
             createdBy = row.optString("createdBy", "USER_UI"),
             creatorToolNames = row.optJSONArray("creatorToolNames").toStringList(),

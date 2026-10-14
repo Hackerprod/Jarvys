@@ -63,6 +63,7 @@ class TaskManualRunWorker @JvmOverloads constructor(
     private val tasks: TaskStore = TaskStore(appContext.applicationContext),
     private val runs: TaskRunLedger = TaskRunLedger(appContext.applicationContext),
     private val clock: Clock = Clock.systemUTC(),
+    private val pendingActions: TaskPendingActionStore = TaskPendingActionStore(appContext.applicationContext),
 ) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result {
         val taskId = inputData.getString(KEY_TASK_ID) ?: return Result.failure()
@@ -87,6 +88,11 @@ class TaskManualRunWorker @JvmOverloads constructor(
                 TaskScheduler.rearm(applicationContext)
                 return Result.failure()
             }
+        }
+        if (pendingActions.stateForTask(task.id, task.revision, task.state) == TaskState.AwaitingUser) {
+            saveRejectedRun(taskId, runId, occurrenceId, scheduledFor, TaskRunCause.AWAITING_USER)
+            TaskScheduler.rearm(applicationContext)
+            return Result.success()
         }
         val queued = TaskRunRecord(task.id, runId, scheduledFor, scheduledFor, status = "QUEUED",
             deliveryStatus = "NOT_APPLICABLE", manualOccurrenceId = occurrenceId)
@@ -119,16 +125,30 @@ class TaskManualRunWorker @JvmOverloads constructor(
                 else -> current.state
             }
             val autoDeleteAfterRun = task.deleteAfterRun && result.status in setOf("OK", "SILENT", "NO_RESULT")
-            if (autoDeleteAfterRun) {
+            val pendingApproval = pendingActions.stateForTask(current.id, current.revision, current.state) ==
+                TaskState.AwaitingUser
+            val updated = current.copy(
+                state = if (autoDeleteAfterRun) TaskState.Done else nextState,
+                nextRunAt = when {
+                    autoDeleteAfterRun -> null
+                    nextState == TaskState.Active && current.state is TaskState.NeedsAttention ->
+                        ScheduleCalculator(clock).nextRunAfter(current, clock.millis())
+                    else -> current.nextRunAt
+                },
+                lastRun = TaskLastRun(runId, scheduledFor, started, clock.millis(), result.status,
+                    result.deliveryStatus, result.causeCode),
+                updatedAt = clock.millis(),
+            )
+            if (pendingApproval) {
+                // Preserve the reviewed revision until its queued action is resolved. The resolver
+                // performs deleteAfterRun cleanup after the final approval or rejection.
+                runCatching {
+                    tasks.updateRuntimeSnapshot(updated, current.revision, current)
+                }
+            } else if (autoDeleteAfterRun) {
                 runCatching { tasks.delete(task.id, current.revision, clock.millis(), expectedTask = current) }
             } else if (nextState != current.state) {
-                runCatching {
-                    tasks.update(current.copy(state = nextState,
-                        nextRunAt = if (nextState == TaskState.Active && current.state is TaskState.NeedsAttention)
-                            ScheduleCalculator(clock).nextRunAfter(current, clock.millis()) else current.nextRunAt,
-                        lastRun = TaskLastRun(runId, scheduledFor, started, clock.millis(), result.status,
-                            result.deliveryStatus, result.causeCode)), current.revision)
-                }
+                runCatching { tasks.update(updated, current.revision) }
             }
         }
         TaskScheduler.rearm(applicationContext)

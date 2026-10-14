@@ -27,6 +27,7 @@ interface ScheduledTaskNotifications {
                suggestedReplies: List<ProactiveSuggestedReply>): Boolean
     fun attention(context: Context, task: ScheduledTask, cause: TaskRunCause): Boolean
     fun recovered(context: Context, task: ScheduledTask): Boolean
+    fun pendingAction(context: Context, task: ScheduledTask, action: TaskPendingAction): Boolean = false
 }
 
 /** Own task-result channel. Conversation persistence is performed before this best-effort delivery. */
@@ -57,6 +58,92 @@ object TaskNotifier : ScheduledTaskNotifications {
         context.getString(R.string.scheduled_tasks_recovered_title, ProactiveTextSanitizer.sanitize(task.name)),
         context.getString(R.string.scheduled_tasks_recovered_body), "normal", emptyList(), openTask = true,
     )
+
+    override fun pendingAction(context: Context, task: ScheduledTask, action: TaskPendingAction): Boolean {
+        val app = context.applicationContext
+        if (!notificationPermissionGranted(app) || !NotificationManagerCompat.from(app).areNotificationsEnabled()) return false
+        return runCatching {
+            ensureChannel(app)
+            val taskIntent = Intent(app, MainActivity::class.java)
+                .putExtra(MainActivity.EXTRA_OPEN_TASK, task.id)
+                .setData(Uri.parse("jarvys://task/detail/${Uri.encode(task.id)}"))
+                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            val openPending = PendingIntent.getActivity(app, task.id.hashCode(), taskIntent, pendingIntentFlags())
+            val builder = NotificationCompat.Builder(app, CHANNEL_ID)
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentTitle(app.getString(R.string.task_pending_action_notification_title,
+                    ProactiveTextSanitizer.sanitize(task.name)))
+                .setContentText(app.getString(R.string.task_pending_action_notification_body,
+                    ProactiveTextSanitizer.sanitize(task.name), ProactiveTextSanitizer.sanitize(action.toolName)))
+                .setContentIntent(openPending)
+                .setCategory(NotificationCompat.CATEGORY_REMINDER)
+                .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+                .setAutoCancel(true)
+                .setOnlyAlertOnce(true)
+                .setPublicVersion(NotificationCompat.Builder(app, CHANNEL_ID)
+                    .setSmallIcon(android.R.drawable.ic_dialog_info)
+                    .setContentTitle(app.getString(R.string.task_pending_action_notification_public_title))
+                    .setContentText(app.getString(R.string.task_pending_action_notification_public_body))
+                    .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                    .build())
+            builder.addAction(android.R.drawable.ic_menu_close_clear_cancel,
+                app.getString(R.string.task_pending_action_reject),
+                pendingActionIntent(app, action, TaskPendingActionReceiver.ACTION_REJECT))
+            builder.addAction(android.R.drawable.ic_menu_save,
+                app.getString(R.string.task_pending_action_approve),
+                pendingActionIntent(app, action, TaskPendingActionReceiver.ACTION_APPROVE))
+            NotificationManagerCompat.from(app).notify(
+                "$PENDING_ACTION_TAG:${action.id}", action.id.hashCode(), builder.build())
+            true
+        }.getOrDefault(false)
+    }
+
+    fun pendingActionExpired(context: Context, task: ScheduledTask, action: TaskPendingAction): Boolean {
+        val app = context.applicationContext
+        if (!notificationPermissionGranted(app) || !NotificationManagerCompat.from(app).areNotificationsEnabled()) return false
+        return runCatching {
+            ensureChannel(app)
+            val taskIntent = Intent(app, MainActivity::class.java)
+                .putExtra(MainActivity.EXTRA_OPEN_TASK, task.id)
+                .setData(Uri.parse("jarvys://task/detail/${Uri.encode(task.id)}"))
+                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            val openPending = PendingIntent.getActivity(app, task.id.hashCode(), taskIntent, pendingIntentFlags())
+            val notification = NotificationCompat.Builder(app, CHANNEL_ID)
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentTitle(app.getString(R.string.task_pending_action_expired_notification_title))
+                .setContentText(app.getString(R.string.task_pending_action_expired_notification_body,
+                    ProactiveTextSanitizer.sanitize(task.name), ProactiveTextSanitizer.sanitize(action.toolName)))
+                .setContentIntent(openPending)
+                .setCategory(NotificationCompat.CATEGORY_REMINDER)
+                .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+                .setAutoCancel(true)
+                .setOnlyAlertOnce(true)
+                .setPublicVersion(NotificationCompat.Builder(app, CHANNEL_ID)
+                    .setSmallIcon(android.R.drawable.ic_dialog_info)
+                    .setContentTitle(app.getString(R.string.task_pending_action_expired_notification_public_title))
+                    .setContentText(app.getString(R.string.task_pending_action_expired_notification_public_body))
+                    .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                    .build())
+                .build()
+            NotificationManagerCompat.from(app).notify(
+                "$PENDING_ACTION_TAG:${action.id}", action.id.hashCode(), notification)
+            true
+        }.getOrDefault(false)
+    }
+
+    fun dismissPendingAction(context: Context, actionId: String) {
+        NotificationManagerCompat.from(context.applicationContext)
+            .cancel("$PENDING_ACTION_TAG:$actionId", actionId.hashCode())
+    }
+
+    private fun pendingActionIntent(context: Context, action: TaskPendingAction, actionName: String): PendingIntent {
+        val intent = Intent(context, TaskPendingActionReceiver::class.java)
+            .setAction(actionName)
+            .putExtra(TaskPendingActionReceiver.EXTRA_ACTION_ID, action.id)
+            .putExtra(TaskPendingActionReceiver.EXTRA_TASK_ID, action.taskId)
+            .setData(Uri.parse("jarvys://task/pending/${Uri.encode(action.id)}/${Uri.encode(actionName)}"))
+        return PendingIntent.getBroadcast(context, action.id.hashCode(), intent, pendingIntentFlags())
+    }
 
     fun post(
         context: Context,
@@ -160,6 +247,7 @@ object TaskNotifier : ScheduledTaskNotifications {
 
     private const val MAX_NOTIFICATION_REPLY_ACTIONS = 3
     private const val VIEW_TASK_REQUEST_SUFFIX = 0x51A7
+    private const val PENDING_ACTION_TAG = "jarvys_task_pending"
 }
 
 class TaskActionReceiver : android.content.BroadcastReceiver() {
@@ -179,5 +267,52 @@ class TaskActionReceiver : android.content.BroadcastReceiver() {
         const val ACTION_SUGGESTED_REPLY = "com.jarvys.agent.tasks.SUGGESTED_REPLY"
         const val EXTRA_TASK_ID = "scheduled_task_id"
         const val EXTRA_REPLY_TEXT = "scheduled_task_reply_text"
+    }
+}
+
+fun interface TaskPendingActionHandler {
+    /** Queue execution of this exact approved action without starting the chat UI or a model run. */
+    fun approve(context: Context, action: TaskPendingAction): Boolean
+}
+
+fun interface TaskPendingActionExecutor {
+    /** Invoke the already-approved registered tool directly; this must not start a model run. */
+    fun execute(context: Context, task: ScheduledTask, action: TaskPendingAction): com.jarvys.agent.CoreToolResult
+}
+
+/** Implemented by the process Application so notification broadcasts work after a cold start. */
+interface TaskPendingActionHandlerProvider {
+    fun taskPendingActionHandler(): TaskPendingActionHandler
+    fun taskPendingActionExecutor(): TaskPendingActionExecutor
+}
+
+class TaskPendingActionReceiver : android.content.BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        val actionId = intent.getStringExtra(EXTRA_ACTION_ID)?.takeIf(String::isNotBlank) ?: return
+        val taskId = intent.getStringExtra(EXTRA_TASK_ID)?.takeIf(String::isNotBlank) ?: return
+        val app = context.applicationContext
+        val store = TaskPendingActionStore(app)
+        val pending = store.get(actionId)?.takeIf { it.taskId == taskId } ?: return
+        when (intent.action) {
+            ACTION_REJECT -> {
+                store.reject(actionId, pending.actionBinding)
+                TaskNotifier.dismissPendingAction(app, actionId)
+                TaskScheduler.pendingActionResolved(app, taskId)
+            }
+            ACTION_APPROVE -> {
+                if (pending.status != TaskPendingActionStatus.PENDING) return
+                val handler = (app as? TaskPendingActionHandlerProvider)?.taskPendingActionHandler()
+                    ?: return
+                if (handler.approve(app, pending)) TaskNotifier.dismissPendingAction(app, actionId)
+            }
+        }
+    }
+
+    companion object {
+        const val ACTION_APPROVE = "com.jarvys.agent.tasks.APPROVE_PENDING_ACTION"
+        const val ACTION_REJECT = "com.jarvys.agent.tasks.REJECT_PENDING_ACTION"
+        const val EXTRA_ACTION_ID = "pending_action_id"
+        const val EXTRA_TASK_ID = "scheduled_task_id"
+
     }
 }

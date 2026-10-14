@@ -97,6 +97,10 @@ public final class CoreToolRegistry {
     return Collections.unmodifiableList(new ArrayList<>(this.tools.keySet()));
   }
 
+  public CoreTool tool(String name) {
+    return this.tools.get(name);
+  }
+
   CoreToolRegistry withoutAttachments() {
     return new CoreToolRegistry(
         WorkspaceTools.withoutAttachments(new ArrayList<>(this.tools.values())),
@@ -106,7 +110,7 @@ public final class CoreToolRegistry {
   public List<String> connectorToolNames() {
     List<String> names = new ArrayList<>();
     for (Map.Entry<String, CoreTool> entry : this.tools.entrySet()) {
-      if (entry.getValue() instanceof CoreConnectorTool) {
+      if (entry.getValue().isConnectorTool()) {
         names.add(entry.getKey());
       }
     }

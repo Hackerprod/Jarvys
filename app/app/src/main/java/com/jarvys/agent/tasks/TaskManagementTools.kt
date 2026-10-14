@@ -31,6 +31,10 @@ class TaskManagementTools @JvmOverloads constructor(
             TaskManualRunScheduler.enqueue(app, taskId, occurrenceId, expectedTask)
         },
     private val manualRunIsActive: (Context, String) -> Boolean = TaskManualRunScheduler::isActive,
+    private val taskCapabilityNames: List<String> = creatorToolNames,
+    private val pendingActions: TaskPendingActionStore = TaskPendingActionStore(context.applicationContext),
+    private val creatorMemoryAllowed: Boolean = false,
+    private val creatorSkillIds: List<String> = emptyList(),
 ) {
     private val app = context.applicationContext
     private val creatorMessageId: String = runCatching {
@@ -38,21 +42,9 @@ class TaskManagementTools @JvmOverloads constructor(
     }.getOrDefault("")
     private val calculator = ScheduleCalculator(clock, zoneProvider)
     private val schedulePresentation = TaskSchedulePresentation(app, zoneProvider)
-    private val safeConnectorNames: Set<String> by lazy {
-        connectorRegistry.refreshStates()
-        ProactiveReadOnlyToolFactory.readOnlyConnectorTools(connectorRegistry)
-            .map { it.declaration().name }.toSet()
-    }
-    private val safeReadOnlyCatalogNames: Set<String> by lazy {
-        val allowed = ProactiveReadOnlyToolFactory.connectorAllowlist
-        connectorRegistry.definitions.value.flatMap { definition ->
-            definition.operations.filter { !it.write && it.name in allowed[definition.id].orEmpty() }
-                .map { com.jarvys.agent.CoreConnectorTool.toolName(definition.id, it.name) }
-        }.toSet()
-    }
     private val safeCreatorTools: List<String> by lazy {
-        val safe = safeConnectorNames + WEB_TOOL_NAMES
-        creatorToolNames.distinct().filter { it in safe }.sorted()
+        val creatorCeiling = creatorToolNames.toSet()
+        taskCapabilityNames.distinct().filter { it in creatorCeiling }.sorted()
     }
 
     fun tools(): List<CoreTool> = listOf(
@@ -78,7 +70,7 @@ class TaskManagementTools @JvmOverloads constructor(
 
     private fun scheduleTask(arguments: Map<String, Any>, token: CancellationToken): CoreToolResult {
         token.throwIfCancelled()
-        rejectUnknown(arguments, setOf("name", "instruction", "schedule", "delivery", "web", "valid_until", "delete_after_run"))
+        rejectUnknown(arguments, setOf("name", "instruction", "schedule", "delivery", "web", "writes", "valid_until", "delete_after_run"))
         val name = text(arguments, "name")
         val instruction = text(arguments, "instruction", trim = false)
         val scheduleInput = objectValue(arguments["schedule"], "schedule")
@@ -86,6 +78,7 @@ class TaskManagementTools @JvmOverloads constructor(
         val schedule = parseSchedule(scheduleInput, zone)
         val delivery = parseDelivery(arguments["delivery"] as? String)
         val wantsWeb = boolean(arguments, "web", false)
+        val writes = parseWriteScope(arguments["writes"] as? String ?: TaskToolScope.LEGACY_WRITE_SCOPE)
         val allowedCreatorTools = safeCreatorTools
         if (wantsWeb && allowedCreatorTools.none { it in WEB_TOOL_NAMES }) {
             throw IllegalArgumentException("Web search tools are not available in this chat scope")
@@ -96,8 +89,10 @@ class TaskManagementTools @JvmOverloads constructor(
         val candidate = ScheduledTask(name = name.trim(), instruction = instruction.trim(), schedule = schedule,
             timePrecision = TaskTimePrecision.APPROXIMATE, validUntil = validUntil,
             deleteAfterRun = deleteAfterRun,
-            toolScope = TaskToolScope("LISTED", taskTools, wantsWeb, "DEFER"), delivery = delivery,
-            createdBy = createdBy(), creatorToolNames = creatorToolNames.distinct(),
+            toolScope = TaskToolScope("LISTED", taskTools, wantsWeb, writes, creatorMemoryAllowed,
+                if ("read_skill" in allowedCreatorTools) creatorSkillIds.distinct().sorted() else emptyList()),
+            delivery = delivery,
+            createdBy = createdBy(), creatorToolNames = allowedCreatorTools,
             createdAt = clock.millis())
         ScheduledTaskValidation.validate(candidate)
         val now = clock.millis()
@@ -185,6 +180,9 @@ class TaskManagementTools @JvmOverloads constructor(
         val task = repository.get(id) ?: throw IllegalArgumentException("Task $id was not found")
         if (expectedRevision != task.revision) throw StaleTaskRevisionException(
             "Task $id revision changed: expected $expectedRevision, found ${task.revision}")
+        require(pendingActions.stateForTask(task.id, task.revision, task.state) != TaskState.AwaitingUser) {
+            "Task $id is awaiting approval for a pending action"
+        }
         if (manualRunIsActive(app, id)) throw IllegalStateException("Task $id already has a manual run in progress")
         val runId = java.util.UUID.randomUUID().toString()
         val occurrenceId = "manual:$id:$runId"
@@ -227,7 +225,7 @@ class TaskManagementTools @JvmOverloads constructor(
     }
 
     private fun applyPatch(task: ScheduledTask, patch: Map<String, Any>): ScheduledTask {
-        val allowed = setOf("revision", "name", "instruction", "schedule", "delivery", "web", "tools", "valid_until", "state", "delete_after_run")
+        val allowed = setOf("revision", "name", "instruction", "schedule", "delivery", "web", "tools", "writes", "valid_until", "state", "delete_after_run")
         val unknown = patch.keys - allowed
         require(unknown.isEmpty()) { "Unexpected patch field(s): ${unknown.sorted().joinToString()}" }
         var schedule = task.schedule
@@ -239,9 +237,9 @@ class TaskManagementTools @JvmOverloads constructor(
         val web = if (patch.containsKey("web")) boolean(patch, "web", task.toolScope.web) else task.toolScope.web
         val tools = if (web) requestedTools else requestedTools.filterNot { it in WEB_TOOL_NAMES }
         val allowedCreator = task.creatorToolNames.toSet()
-        val unsafeTools = tools.filter { it !in safeReadOnlyCatalogNames && it !in WEB_TOOL_NAMES }
-        require(unsafeTools.isEmpty()) { "Task tools are not in the read-only allowlist: ${unsafeTools.joinToString()}" }
         require(tools.all { it in allowedCreator }) { "Task scope cannot exceed creatorToolNames" }
+        val writes = if (patch.containsKey("writes")) parseWriteScope(patch["writes"] as? String)
+            else task.toolScope.writes
         require(!web || tools.any { it in WEB_TOOL_NAMES }) { "Web scope requires a creator-approved web tool" }
         val delivery = parseDelivery(patch["delivery"] as? String ?: task.delivery.name.lowercase(Locale.ROOT))
         val validUntil = if (patch.containsKey("valid_until")) {
@@ -261,7 +259,7 @@ class TaskManagementTools @JvmOverloads constructor(
             instruction = if (patch.containsKey("instruction")) text(patch, "instruction", false).trim() else task.instruction,
             schedule = schedule, validUntil = validUntil,
             deleteAfterRun = boolean(patch, "delete_after_run", task.deleteAfterRun),
-            toolScope = task.toolScope.copy(tools = tools, web = web), delivery = delivery, state = state,
+            toolScope = task.toolScope.copy(tools = tools, web = web, writes = writes), delivery = delivery, state = state,
         )
     }
 
@@ -332,6 +330,14 @@ class TaskManagementTools @JvmOverloads constructor(
         null, "always" -> TaskDelivery.ALWAYS
         "only_if_notable" -> TaskDelivery.ONLY_IF_NOTABLE
         else -> throw IllegalArgumentException("delivery must be always or only_if_notable")
+    }
+
+    private fun parseWriteScope(value: String?): String {
+        val normalized = value?.uppercase(Locale.ROOT) ?: TaskToolScope.LEGACY_WRITE_SCOPE
+        require(normalized in TaskWriteScope.values().map { it.name }) {
+            "writes must be ALLOW, DEFER, or DENY"
+        }
+        return normalized
     }
 
     private fun scheduleHuman(schedule: TaskSchedule): String = schedulePresentation.scheduleHuman(schedule)
@@ -440,7 +446,9 @@ class TaskManagementTools @JvmOverloads constructor(
         return objectSchema(linkedMapOf(
             "name" to stringProperty(), "instruction" to stringProperty(), "schedule" to schedule,
             "delivery" to mapOf("type" to "string", "enum" to listOf("always", "only_if_notable")),
-            "web" to booleanProperty(), "valid_until" to stringProperty(), "delete_after_run" to booleanProperty(),
+            "web" to booleanProperty(),
+            "writes" to mapOf("type" to "string", "enum" to TaskWriteScope.values().map { it.name }),
+            "valid_until" to stringProperty(), "delete_after_run" to booleanProperty(),
         ), listOf("name", "instruction", "schedule"))
     }
 
@@ -454,6 +462,7 @@ class TaskManagementTools @JvmOverloads constructor(
             },
             "delivery" to mapOf("type" to "string", "enum" to listOf("always", "only_if_notable")),
             "web" to booleanProperty(), "tools" to mapOf("type" to "array", "items" to stringProperty()),
+            "writes" to mapOf("type" to "string", "enum" to TaskWriteScope.values().map { it.name }),
             "valid_until" to stringProperty(),
             "delete_after_run" to booleanProperty(),
             "state" to mapOf("type" to "string", "enum" to listOf("active", "paused")),
@@ -478,6 +487,33 @@ class TaskManagementTools @JvmOverloads constructor(
         private val WEB_TOOL_NAMES = setOf(com.jarvys.agent.WebSearchTools.SEARCH, com.jarvys.agent.WebSearchTools.FETCH)
 
         @JvmStatic fun create(context: Context, sessionId: String, creatorToolNames: List<String>): List<CoreTool> =
-            TaskManagementTools(context, sessionId, creatorToolNames).tools()
+            create(context, sessionId, creatorToolNames, legacyTaskCapabilities(context, creatorToolNames))
+
+        @JvmStatic fun create(context: Context, sessionId: String, creatorToolNames: List<String>,
+                              taskCapabilityNames: List<String>): List<CoreTool> =
+            TaskManagementTools(context, sessionId, creatorToolNames,
+                taskCapabilityNames = taskCapabilityNames.toList()).tools()
+
+        @JvmStatic fun create(context: Context, sessionId: String, creatorToolNames: List<String>,
+                              taskCapabilityNames: List<String>, creatorMemoryAllowed: Boolean): List<CoreTool> =
+            TaskManagementTools(context, sessionId, creatorToolNames,
+                taskCapabilityNames = taskCapabilityNames.toList(),
+                creatorMemoryAllowed = creatorMemoryAllowed).tools()
+
+        @JvmStatic fun create(context: Context, sessionId: String, creatorToolNames: List<String>,
+                              taskCapabilityNames: List<String>, creatorMemoryAllowed: Boolean,
+                              creatorSkillIds: List<String>): List<CoreTool> =
+            TaskManagementTools(context, sessionId, creatorToolNames,
+                taskCapabilityNames = taskCapabilityNames.toList(),
+                creatorMemoryAllowed = creatorMemoryAllowed,
+                creatorSkillIds = creatorSkillIds.toList()).tools()
+
+        private fun legacyTaskCapabilities(context: Context, creatorToolNames: List<String>): List<String> {
+            val registry = ConnectorRegistry.get(context.applicationContext)
+            registry.refreshStates()
+            val safeConnectors = ProactiveReadOnlyToolFactory.readOnlyConnectorTools(registry)
+                .map { it.declaration().name }.toSet()
+            return creatorToolNames.distinct().filter { it in safeConnectors || it in WEB_TOOL_NAMES }
+        }
     }
 }

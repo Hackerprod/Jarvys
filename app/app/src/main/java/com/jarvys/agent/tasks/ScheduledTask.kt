@@ -47,7 +47,22 @@ data class TaskToolScope(
     val tools: List<String> = emptyList(),
     val web: Boolean = false,
     val writes: String = "DEFER",
-)
+    /** Creator had memory enabled; task file tools are then restricted to /memory/ only. */
+    val memory: Boolean = false,
+    /** Skill ids visible to the creator when the task was created. */
+    val skillIds: List<String> = emptyList(),
+) {
+    /** Only this explicit grant authorizes direct writes; old DEFER and unknown JSONL values deny. */
+    val writesAllowed: Boolean get() = writes == TaskWriteScope.ALLOW.name
+    /** An explicit task-level DENY removes write tools; legacy DEFER routes them to approval. */
+    val writesDenied: Boolean get() = writes == TaskWriteScope.DENY.name
+
+    companion object {
+        const val LEGACY_WRITE_SCOPE = "DEFER"
+    }
+}
+
+enum class TaskWriteScope { ALLOW, DEFER, DENY }
 
 data class TaskLastRun(
     val runId: String,

@@ -172,6 +172,11 @@
             android:enabled="true"
             android:exported="false" />
 
+        <receiver
+            android:name="com.jarvys.agent.tasks.TaskPendingActionReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
         <service
             android:name="com.jarvys.agent.StopOverlayService"
             android:enabled="false"

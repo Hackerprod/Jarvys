@@ -4,24 +4,24 @@ import android.content.Context
 import com.jarvys.agent.AppLanguageRuntime
 import com.jarvys.agent.CancellationToken
 import com.jarvys.agent.CodexResponseException
-import com.jarvys.agent.CoreAgentLoop
+import com.jarvys.agent.CoreAgentRuntime
 import com.jarvys.agent.CoreConnectorTool
+import com.jarvys.agent.CoreAgentLoop
 import com.jarvys.agent.CoreTool
 import com.jarvys.agent.CoreToolRegistry
 import com.jarvys.agent.CoreToolResult
 import com.jarvys.agent.ProviderHttpException
 import com.jarvys.agent.ProviderSettings
 import com.jarvys.agent.ProviderTransportException
-import com.jarvys.agent.SecretStore
 import com.jarvys.agent.ToolSpec
 import com.jarvys.agent.WebSearchTools
 import com.jarvys.agent.connectors.ConnectorRegistry
+import com.jarvys.agent.connectors.AutonomyPolicy
 import com.jarvys.agent.proactive.BackgroundRunController
 import com.jarvys.agent.proactive.BackgroundRunKind
 import com.jarvys.agent.proactive.ConfiguredProactiveCoreLoopFactory
 import com.jarvys.agent.proactive.ProactiveCoreLoopFactory
 import com.jarvys.agent.proactive.ProactiveRedactor
-import com.jarvys.agent.proactive.ProactiveReadOnlyToolFactory
 import com.jarvys.agent.proactive.ProactiveSuggestedReply
 import com.jarvys.agent.proactive.ProactiveTextSanitizer
 import java.io.IOException
@@ -33,8 +33,12 @@ import java.util.Collections
 import java.util.IdentityHashMap
 import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicReference
+import org.json.JSONObject
 
-/** Single silent-run execution boundary. No chat CoreAgentRuntime, history, UI state, approvals, or Crew. */
+/**
+ * Silent-run boundary: reuses CoreAgentRuntime's tool registry under the task ceiling and a task-owned
+ * session, without chat history, UI state, interactive approvals, or Crew.
+ */
 class ScheduledTaskProcessor @JvmOverloads constructor(
     context: Context,
     private val loopFactory: ProactiveCoreLoopFactory = ConfiguredProactiveCoreLoopFactory(),
@@ -43,6 +47,7 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
     private val clock: Clock = Clock.systemUTC(),
     private val notifications: ScheduledTaskNotifications = TaskNotifier,
     private val tasks: TaskStore = TaskStore(context.applicationContext),
+    private val pendingActions: TaskPendingActionStore = TaskPendingActionStore(context.applicationContext),
 ) : TaskExecutor {
     private val app = context.applicationContext
     private val localized = AppLanguageRuntime.localizedContext(app)
@@ -77,7 +82,7 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
         val registered = AtomicReference<List<ConnectorRegistry>>(emptyList())
         try {
             token.throwIfCancelled()
-            val scope = buildTools(task, toolCalls)
+            val scope = buildTools(task, runId, toolCalls)
             if (scope.error != null) return permanentFailure(task, scheduledFor,
                 if (scope.error.startsWith("connector_unavailable:")) TaskRunCause.CONNECTOR_UNAVAILABLE
                 else TaskRunCause.TOOL_SCOPE_UNAVAILABLE,
@@ -139,13 +144,13 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
             }, toolsCalled = toolCalls.toList(), notified = notified || recoveredNotice,
                 model = currentModel(), deliveredResult = committedBody, conversationMessageId = messageId)
         } catch (cancelled: CancellationException) {
-            val partial = toolCalls.any { it.write }
+            val partial = toolCalls.any { it.write && it.outcome != "PENDING" }
             return TaskExecutionResult(if (partial) "PARTIAL" else "INTERRUPTED", "NOT_APPLICABLE",
                 toolsCalled = toolCalls.toList(), causeCode = if (partial) TaskRunCause.EFFECT_OCCURRED
                 else TaskRunCause.INTERRUPTED, model = currentModel())
         } catch (failure: RuntimeException) {
             if (token.isCancelled) {
-                val partial = toolCalls.any { it.write }
+                val partial = toolCalls.any { it.write && it.outcome != "PENDING" }
                 return TaskExecutionResult(if (partial) "PARTIAL" else "INTERRUPTED", "NOT_APPLICABLE",
                     toolsCalled = toolCalls.toList(), causeCode = if (partial) TaskRunCause.EFFECT_OCCURRED
                     else TaskRunCause.INTERRUPTED, model = currentModel())
@@ -170,43 +175,53 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
         val error: String? = null,
     )
 
-    private fun buildTools(task: ScheduledTask, calls: MutableList<TaskToolCallRecord>): Scope {
+    private fun buildTools(task: ScheduledTask, runId: String,
+                           calls: MutableList<TaskToolCallRecord>): Scope {
         if (task.toolScope.mode !in setOf("READ_ONLY", "LISTED")) return failedScope("invalid_tool_scope")
-        val allowlist = ProactiveReadOnlyToolFactory.connectorAllowlist
-        val connectorCatalog = connectorRegistry.definitions.value.flatMap { definition ->
-            definition.operations.filter { !it.write && it.name in allowlist[definition.id].orEmpty() }
-                .map { CoreConnectorTool.toolName(definition.id, it.name) }
-        }.toSet()
-        val webNames = setOf(WebSearchTools.SEARCH, WebSearchTools.FETCH)
-        val knownSafe = connectorCatalog + webNames + TaskRespondTool.NAME
-        val requested = task.toolScope.tools.toSet()
-        val unsafe = requested - knownSafe
-        if (unsafe.isNotEmpty()) return failedScope("tool_scope_not_read_only:${unsafe.sorted().joinToString()}")
-        val creatorCaps = task.creatorToolNames.toSet()
-        var selected = if (creatorCaps.isEmpty()) requested else requested intersect creatorCaps
-        if (!task.toolScope.web) selected = selected - webNames
-
         connectorRegistry.refreshStates()
-        val availableReadOnly = ProactiveReadOnlyToolFactory.readOnlyConnectorTools(connectorRegistry)
-        val availableConnectorNames = availableReadOnly.map { it.declaration().name }.toSet()
-        val unavailable = selected intersect connectorCatalog - availableConnectorNames
+        val taskCapabilityCeiling = task.creatorToolNames.toSet()
+        val requested = task.toolScope.tools.toSet() intersect taskCapabilityCeiling
+        val connectorCatalog = connectorRegistry.definitions.value.flatMap { definition ->
+            definition.operations.map { operation ->
+                CoreConnectorTool.toolName(definition.id, operation.name) to
+                    connectorRegistry.configuredAutonomyPolicy(definition, operation)
+            }
+        }.filter { it.second != AutonomyPolicy.DENY }.map { it.first }.toSet()
+        val availableConnectorNames = connectorRegistry.connectedDefinitions().flatMap { definition ->
+            definition.operations.filter { operation ->
+                definition.operationAccessGranted?.invoke(operation.name) != false &&
+                    connectorRegistry.configuredAutonomyPolicy(definition, operation) != AutonomyPolicy.DENY
+            }.map { operation -> CoreConnectorTool.toolName(definition.id, operation.name) }
+        }.toSet()
+        val unavailable = requested intersect connectorCatalog - availableConnectorNames
         if (unavailable.isNotEmpty()) return failedScope("connector_unavailable:${unavailable.sorted().joinToString()}")
-
+        val taskTools = CoreAgentRuntime.createScheduledTaskTools(
+            app, task, "task-${task.id}-$runId", connectorRegistry,
+            ScheduledTaskWriteDeferrer { toolName, arguments, token ->
+                token.throwIfCancelled()
+                val canonicalArguments = TaskPendingActionStore.canonicalizeArguments(arguments)
+                val pending = pendingActions.enqueue(task, runId, toolName, canonicalArguments)
+                notifications.pendingAction(app, task, pending)
+                CoreToolResult.success(JSONObject()
+                    .put("status", "pending_user_approval")
+                    .put("executed", false)
+                    .put("pending_action_id", pending.id)
+                    .toString())
+            })
         val tracked = mutableListOf<CoreTool>()
-        val selectedConnectors = availableReadOnly.filter { it.declaration().name in selected }
-        selectedConnectors.forEach { tracked += TaskTrackedTool(it, false, calls, redactOutput = true) }
-        val selectedWeb = selected intersect webNames
-        if (selectedWeb.isNotEmpty()) {
-            val exaKey = SecretStore.get(app).getConnectorSecret("web_search", "exa_api_key")
-            val language = com.jarvys.agent.WebSearchRequestPolicy.resolveAcceptLanguage("auto", locale)
-            WebSearchTools.create(exaKey, language).filter { it.declaration().name in selectedWeb }
-                .forEach { tracked += TaskTrackedTool(it, false, calls, redactOutput = true) }
+        val connectorNames = taskTools.connectorToolNames().toSet()
+        taskTools.names().forEach { name ->
+            val tool = taskTools.tool(name) ?: return@forEach
+            val isWebRead = name == WebSearchTools.SEARCH || name == WebSearchTools.FETCH
+            tracked += TaskTrackedTool(tool,
+                tool.unattendedAccess() == CoreTool.UnattendedAccess.WRITE,
+                calls,
+                redactOutput = tool.isConnectorTool() || tool.isMcpTool() || isWebRead)
         }
         val respondent = TaskRespondTool()
         tracked += TaskTrackedTool(respondent, false, calls, redactOutput = false)
         return Scope(CoreToolRegistry(tracked), respondent,
-            if (selectedConnectors.isEmpty()) emptyList() else listOf(connectorRegistry),
-            selectedConnectors.map { it.declaration().name }.toSet())
+            if (connectorNames.isEmpty()) emptyList() else listOf(connectorRegistry), connectorNames)
     }
 
     private fun failedScope(reason: String) = Scope(CoreToolRegistry(emptyList()), TaskRespondTool(),
@@ -216,7 +231,7 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
                         history: List<com.jarvys.agent.ConversationTurn>, token: CancellationToken): CoreAgentLoop.Result {
         val result = loopFactory.createLoop(localized, sessionId, tools, system).run(request, history, token, null)
         token.throwIfCancelled()
-        // Scheduled capabilities are read-only; preserve their existing transient classification.
+        // Preserve existing provider and transport transient classification for task capabilities.
         result.throwIfProviderUnavailable()
         return result
     }
@@ -346,7 +361,13 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
             val name = delegate.declaration().name
             try {
                 val result = delegate.execute(arguments, token)
-                synchronized(calls) { calls += TaskToolCallRecord(name, isWrite, if (result.success) "OK" else "ERROR") }
+                val outcome = when {
+                    !result.success -> "ERROR"
+                    runCatching { JSONObject(result.content).optString("status") == "pending_user_approval" }
+                        .getOrDefault(false) -> "PENDING"
+                    else -> "OK"
+                }
+                synchronized(calls) { calls += TaskToolCallRecord(name, isWrite, outcome) }
                 val body = if (redactOutput)
                     com.jarvys.agent.proactive.ProactiveToolOutputRedactor.redactJsonTextFields(result.content)
                 else result.content

@@ -73,6 +73,30 @@ class McpWriteApprovalCoordinator(
         return result
     }
 
+    /** Task calls use the same persisted policy but never request chat approval UI. */
+    internal fun executeForScheduledTask(
+        tool: McpToolDefinition,
+        arguments: JSONObject,
+        token: CancellationToken,
+        approvedPendingAction: Boolean,
+        deferAskWrite: java.util.function.Supplier<JSONObject>?,
+        action: (McpActionAdmission) -> JSONObject,
+    ): JSONObject {
+        token.throwIfCancelled()
+        val decision = snapshot(tool)
+        if (decision.policy == AutonomyPolicy.DENY) throw McpWriteDeniedException("Remote action is denied by its saved policy")
+        if (decision.policy == AutonomyPolicy.ASK && !approvedPendingAction) {
+            return requireNotNull(deferAskWrite) {
+                "A pending-action queue is required for ASK operations in a scheduled task"
+            }.get()
+        }
+        val admission = McpActionAdmission(autonomyStore, decision, token,
+            approvedAsk = decision.policy == AutonomyPolicy.ASK)
+        val result = action(admission)
+        if (decision.policy == AutonomyPolicy.ALLOW && tool.access == McpToolAccess.WRITE) auditAndNotify(tool, result)
+        return result
+    }
+
     private fun requestApproval(tool: McpToolDefinition, arguments: JSONObject, token: CancellationToken,
                                 requester: String?, requesterColorKey: String?) {
         val title = tool.annotations?.title?.takeIf(String::isNotBlank) ?: tool.wireName

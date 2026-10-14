@@ -39,6 +39,8 @@ class TaskManagementToolsTest {
         tools.forEach { assertFalse((it.declaration().jsonSchema()["properties"] as Map<*, *>).containsKey("action")) }
         val create = tools.single { it.declaration().name == TaskManagementTools.SCHEDULE_TASK }
         val properties = create.declaration().jsonSchema()["properties"] as Map<*, *>
+        assertEquals(listOf("ALLOW", "DEFER", "DENY"),
+            ((properties["writes"] as Map<*, *>)["enum"] as List<*>))
         assertEquals(listOf("name", "instruction", "schedule"), create.declaration().required)
         val schedule = properties["schedule"] as Map<*, *>
         val scheduleProperties = schedule["properties"] as Map<*, *>
@@ -55,6 +57,56 @@ class TaskManagementToolsTest {
         assertEquals("existing", second.getString("status"))
         assertEquals(first.getString("task_id"), second.getString("task_id"))
         assertEquals(1, f.repository.list().size)
+    }
+
+    @Test fun taskScopeIsCappedByCreatorCapabilitiesAndLegacyWritesDoNotGrant() {
+        val creatorNames = listOf("mail_read", "mail_send", "read_skill", "delegate_subtask")
+        val taskCapabilities = listOf("mail_read", "mail_send", "read_skill", "not_in_creator_turn")
+        val f = fixture(creatorNames = creatorNames, taskCapabilityNames = taskCapabilities)
+        val defaultCreated = payload(f.tools.tool(TaskManagementTools.SCHEDULE_TASK).execute(
+            scheduleArgs("Read email"), CancellationToken.uncancellable()))
+        val defaultTask = requireNotNull(f.repository.get(defaultCreated.getString("task_id")))
+        assertEquals(listOf("mail_read", "mail_send", "read_skill"), defaultTask.toolScope.tools)
+        assertEquals(defaultTask.toolScope.tools, defaultTask.creatorToolNames)
+        assertEquals("DEFER", defaultTask.toolScope.writes)
+        assertFalse(defaultTask.toolScope.writesAllowed)
+
+        val explicitCreated = payload(f.tools.tool(TaskManagementTools.SCHEDULE_TASK).execute(
+            scheduleArgs("Write a draft").plus("writes" to "ALLOW"), CancellationToken.uncancellable()))
+        val explicitTask = requireNotNull(f.repository.get(explicitCreated.getString("task_id")))
+        assertEquals(TaskWriteScope.ALLOW.name, explicitTask.toolScope.writes)
+        assertTrue(explicitTask.toolScope.writesAllowed)
+    }
+
+    @Test fun memoryFileCapabilitiesAreSavedOnlyWhenTheCreatorHadMemoryEnabled() {
+        val capabilities = listOf("read", "write", "search_files")
+        val withoutMemory = fixture(creatorNames = capabilities, taskCapabilityNames = listOf("search_files"))
+        val noMemoryRow = payload(withoutMemory.tools.tool(TaskManagementTools.SCHEDULE_TASK).execute(
+            scheduleArgs("Search available files"), CancellationToken.uncancellable()))
+        val noMemoryTask = withoutMemory.repository.get(noMemoryRow.getString("task_id"))!!
+        assertFalse(noMemoryTask.toolScope.memory)
+        assertEquals(listOf("search_files"), noMemoryTask.toolScope.tools)
+        assertFalse(noMemoryTask.creatorToolNames.contains("read"))
+        assertFalse(noMemoryTask.creatorToolNames.contains("write"))
+
+        val withMemory = fixture(creatorNames = capabilities, taskCapabilityNames = capabilities,
+            creatorMemoryAllowed = true)
+        val memoryRow = payload(withMemory.tools.tool(TaskManagementTools.SCHEDULE_TASK).execute(
+            scheduleArgs("Review saved notes"), CancellationToken.uncancellable()))
+        val memoryTask = withMemory.repository.get(memoryRow.getString("task_id"))!!
+        assertTrue(memoryTask.toolScope.memory)
+        assertEquals(capabilities.sorted(), memoryTask.toolScope.tools.sorted())
+        assertTrue(memoryTask.creatorToolNames.containsAll(listOf("read", "write")))
+    }
+
+    @Test fun taskSkillScopeStoresOnlyTheCreatorVisibleSkillIds() {
+        val f = fixture(creatorNames = listOf("read_skill"), taskCapabilityNames = listOf("read_skill"),
+            creatorSkillIds = listOf("skill-a", "skill-b"))
+        val row = payload(f.tools.tool(TaskManagementTools.SCHEDULE_TASK).execute(
+            scheduleArgs("Use the available skill"), CancellationToken.uncancellable()))
+        val task = f.repository.get(row.getString("task_id"))!!
+        assertEquals(listOf("skill-a", "skill-b"), task.toolScope.skillIds)
+        assertEquals(listOf("read_skill"), task.toolScope.tools)
     }
 
     @Test fun runTaskEnqueuesOneRevisionBoundRunAndTaskRunsCanReadItsQueuedStatus() {
@@ -87,6 +139,18 @@ class TaskManagementToolsTest {
             CancellationToken.uncancellable()) }.exceptionOrNull() is StaleTaskRevisionException)
         assertTrue(runCatching { tool.execute(mapOf("task_id" to "missing", "revision" to 1),
             CancellationToken.uncancellable()) }.isFailure)
+        assertTrue(f.enqueued.isEmpty())
+    }
+
+    @Test fun runTaskCannotBypassAnUnresolvedPendingAction() {
+        val f = fixture()
+        val task = f.createTask()
+        f.pendingActions.enqueue(task, "background-run", "mail_send", "{}")
+        val result = runCatching { f.tools.tool(TaskManagementTools.RUN_TASK).execute(
+            mapOf("task_id" to task.id, "revision" to task.revision), CancellationToken.uncancellable()) }
+            .exceptionOrNull()
+        assertNotNull(result)
+        assertTrue(result!!.message.orEmpty().contains("awaiting approval"))
         assertTrue(f.enqueued.isEmpty())
     }
 
@@ -232,6 +296,7 @@ class TaskManagementToolsTest {
         val sessionId: String,
         val creatorNames: List<String>,
         val enqueued: MutableList<Pair<String, ScheduledTask?>>,
+        val pendingActions: TaskPendingActionStore,
     ) {
         fun createTask(instruction: String = "Read the current status"): ScheduledTask = repository.create(
             "Diagnostic task", instruction,
@@ -244,6 +309,9 @@ class TaskManagementToolsTest {
 
     private fun fixture(
         creatorNames: List<String> = emptyList(),
+        taskCapabilityNames: List<String> = creatorNames,
+        creatorMemoryAllowed: Boolean = false,
+        creatorSkillIds: List<String> = emptyList(),
         clock: Clock = this.clock,
         zone: ZoneId = this.zone,
     ): Fixture {
@@ -259,9 +327,11 @@ class TaskManagementToolsTest {
             override fun setConnected(id: String, connected: Boolean) = Unit
         }, permissionGranted = { true }, approvalGate = ApprovalGate.INSTANCE)
         val enqueued = mutableListOf<Pair<String, ScheduledTask?>>()
+        val pendingActions = TaskPendingActionStore(File(root, "pending.jsonl"))
         return Fixture(TaskManagementTools(context, sessionId, names, repository, ledger, clock, zoneProvider, registry,
-            { _, id, _, expected -> enqueued += id to expected }, { _, _ -> false }),
-            repository, ledger, sessionId, names, enqueued)
+            { _, id, _, expected -> enqueued += id to expected }, { _, _ -> false }, taskCapabilityNames,
+            pendingActions, creatorMemoryAllowed, creatorSkillIds),
+            repository, ledger, sessionId, names, enqueued, pendingActions)
     }
 
     private fun scheduleArgs(instruction: String, cadence: String = "daily", interval: Int = 30,

@@ -131,6 +131,64 @@ class MemorySearchToolTest {
         } finally { coordinator.disposeForTests() }
     }
 
+    @Test
+    fun scheduledTaskFilesStayInMemoryAndSkillsAndCannotReachConversationWorkspace() {
+        val (workspace, memory, coordinator, _, skillsRoot, projectRoot) = fixture("task-file-scope")
+        try {
+            val creatorTools = WorkspaceTools.createWithSearchForTests(workspace, coordinator)
+            assertTrue(creatorTools.single { it.declaration().name == "read" }
+                .requiresMemoryScopeForScheduledTask())
+            assertFalse(creatorTools.single { it.declaration().name == "search_files" }
+                .requiresMemoryScopeForScheduledTask())
+            workspace.write("private-project.md", "project-only marker")
+            memory.write("notes.md", note("Notes", "scheduled task memory"),
+                MemoryStore.Actor.USER, "task-file-scope")
+            File(skillsRoot, "acme.docs/guide.md").apply {
+                parentFile!!.mkdirs()
+                writeText("scheduled task skill reference")
+            }
+            File(skillsRoot, "other.private/guide.md").apply {
+                parentFile!!.mkdirs()
+                writeText("unapproved private marker")
+            }
+            val memoryOnly = WorkspaceStore(File(temporaryFolder.root, "task-only-workspace"),
+                WorkspaceStore.projectIdForSession("task-file-scope"), skillsRoot, null, memory,
+                "task-file-scope", true, MemoryStore.Actor.AGENT, null, true)
+            val registry = CoreToolRegistry(WorkspaceTools.createScheduledTask(
+                memoryOnly, coordinator, listOf("acme.docs")))
+
+            assertTrue(registry.names().containsAll(listOf("ls", "read", "write", "edit", "delete", "search_files")))
+            assertFalse(registry.names().contains("preview_workspace"))
+            assertFalse(registry.invoke("read", mapOf("path" to "private-project.md"),
+                CancellationToken.uncancellable()).success)
+            assertTrue(registry.invoke("read", mapOf("path" to "/memory/notes.md"),
+                CancellationToken.uncancellable()).success)
+            val search = registry.invoke("search_files", mapOf("query" to "scheduled task"),
+                CancellationToken.uncancellable())
+            assertTrue(search.content.contains("/memory/notes.md"))
+            assertTrue(search.content.contains("/skills/acme.docs/guide.md"))
+            assertFalse(search.content.contains("private-project.md"))
+            val unapprovedSkillSearch = registry.invoke("search_files",
+                mapOf("query" to "unapproved private marker", "zone" to "skills"),
+                CancellationToken.uncancellable())
+            assertEquals("No files matched the query.", unapprovedSkillSearch.content)
+            assertFalse(registry.invoke("search_files", mapOf("query" to "project", "zone" to "workspace"),
+                CancellationToken.uncancellable()).success)
+            assertTrue(File(projectRoot, "private-project.md").isFile)
+
+            val creatorWithoutMemory = WorkspaceStore(File(temporaryFolder.root, "task-no-memory"),
+                WorkspaceStore.projectIdForSession("task-file-scope"), skillsRoot, null, memory,
+                "task-file-scope", false, MemoryStore.Actor.AGENT, null, true)
+            val restricted = CoreToolRegistry(WorkspaceTools.createScheduledTask(
+                creatorWithoutMemory, coordinator, listOf("acme.docs")))
+            assertEquals(setOf("search_files"), restricted.names().toSet())
+            assertFalse(restricted.invoke("search_files", mapOf("query" to "scheduled task", "zone" to "memory"),
+                CancellationToken.uncancellable()).success)
+            assertTrue(restricted.invoke("search_files", mapOf("query" to "scheduled task", "zone" to "skills"),
+                CancellationToken.uncancellable()).success)
+        } finally { coordinator.disposeForTests() }
+    }
+
     private fun fixture(name: String): Fixture {
         val projectRoot = File(temporaryFolder.root, "$name-project")
         val skillsRoot = File(temporaryFolder.root, "$name-skills").apply { mkdirs() }

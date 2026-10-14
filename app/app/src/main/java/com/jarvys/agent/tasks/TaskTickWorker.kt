@@ -26,6 +26,7 @@ class TaskTickWorker(
     private val calculator: ScheduleCalculator = ScheduleCalculator(clock),
     private val rearm: () -> Unit = { TaskScheduler.rearm(appContext) },
     private val isGloballyPaused: () -> Boolean = { TaskGlobalPauseStore(appContext).isPaused() },
+    private val pendingActions: TaskPendingActionStore = TaskPendingActionStore(appContext),
 ) : CoroutineWorker(appContext, params) {
     constructor(appContext: Context, params: WorkerParameters) : this(appContext, params, ScheduledTaskExecutor(appContext))
 
@@ -38,7 +39,7 @@ class TaskTickWorker(
                 try {
                     TaskTickEngine(tasks, runs, calculator, executor, clock, rearm, {
                         !isStopped && SystemClock.elapsedRealtime() < deadline
-                    }, token, isGloballyPaused).tick()
+                    }, token, isGloballyPaused, pendingActions).tick()
                 } finally { cancellationRegistration.dispose() }
             }
             if (result.retryWork) Result.retry() else Result.success()

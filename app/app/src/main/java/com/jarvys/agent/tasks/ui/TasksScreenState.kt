@@ -9,6 +9,7 @@ import com.jarvys.agent.tasks.ScheduledTask
 import com.jarvys.agent.tasks.TaskGlobalPauseStore
 import com.jarvys.agent.tasks.TaskManualRunWorker
 import com.jarvys.agent.tasks.TaskNotifier
+import com.jarvys.agent.tasks.TaskPendingActionStore
 import com.jarvys.agent.tasks.TaskRepository
 import com.jarvys.agent.tasks.TaskRunLedger
 import com.jarvys.agent.tasks.TaskRunRecord
@@ -35,9 +36,14 @@ internal sealed interface TasksScreenLoad {
 }
 
 internal suspend fun loadTasksScreen(context: Context, repository: TaskRepository,
-                                     ledger: TaskRunLedger): TasksScreenLoad = withContext(Dispatchers.IO) {
+                                     ledger: TaskRunLedger,
+                                     pendingActions: TaskPendingActionStore): TasksScreenLoad = withContext(Dispatchers.IO) {
     try {
-        val tasks = repository.list()
+        val tasks = repository.list().map { saved ->
+            pendingActions.stateForTask(saved.id, saved.revision, saved.state)?.let { state ->
+                saved.copy(state = state)
+            } ?: saved
+        }
         val runs = ledger.read()
         val app = context.applicationContext
         val power = app.getSystemService(PowerManager::class.java)

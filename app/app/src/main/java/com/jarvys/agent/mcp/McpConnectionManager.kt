@@ -184,6 +184,69 @@ class McpConnectionManager internal constructor(
         }
     }
 
+    /** The task path preserves MCP admission while routing ASK writes to its durable action queue. */
+    fun callToolForScheduledTask(
+        serverId: String,
+        wireName: String,
+        arguments: JSONObject,
+        token: CancellationToken,
+        approvedPendingAction: Boolean,
+        deferAskWrite: java.util.function.Supplier<JSONObject>?,
+    ): JSONObject {
+        val session = sessions[serverId] ?: throw IllegalStateException("MCP server is not connected")
+        val config = repository.get(serverId) ?: throw IllegalStateException("MCP server was removed")
+        val tool = repository.exposedTools().firstOrNull { it.serverId == serverId && it.wireName == wireName }
+            ?: throw IllegalArgumentException("MCP tool is disabled or unavailable")
+        token.throwIfCancelled()
+        val prepared = if (config.catalogServiceId == "github") GitHubOperationPolicy.prepare(config, tool, arguments)
+            else JSONObject(arguments.toString())
+        val expectedEpoch = authorizationEpoch(config)
+        val expectedGeneration = generation(serverId).get()
+        val expectedRevision = repository.authorityRevision(serverId)
+        if (expectedEpoch != null && sessionEpochs[serverId] != expectedEpoch) {
+            throw McpReauthRequiredException("MCP account or grant changed; reconnect before running this operation")
+        }
+        if (config.catalogServiceId == "github" && tool.access == McpToolAccess.WRITE &&
+            githubJournal.isUncertain(GitHubOperationPolicy.intentHash(config, tool.wireName, prepared))) {
+            throw IllegalStateException("GitHub write outcome is unresolved; verify the existing action before requesting another approval")
+        }
+        return try {
+            writeApproval.executeForScheduledTask(tool, prepared, token, approvedPendingAction, deferAskWrite) { admission ->
+                if (config.catalogServiceId == "github") executeGitHub(config, session, tool, prepared,
+                    expectedEpoch!!, expectedGeneration, expectedRevision, token, admission)
+                else callToolWithSingleRefresh(config, session, tool.wireName, prepared, token,
+                    beforeDispatch = { dispatchSession, _ ->
+                        admission.admit { requireMcpLease(config, tool, expectedEpoch, expectedGeneration,
+                            expectedRevision, token, dispatchSession) }
+                    },
+                    beforeRequest = {
+                        admission.checkCurrent()
+                        requireMcpLease(config, tool, expectedEpoch, expectedGeneration, expectedRevision, token)
+                    })
+            }
+        } catch (cancelled: CancellationException) {
+            sessions.remove(serverId, session)
+            publishIfCurrent(serverId, expectedGeneration,
+                McpConnectionSnapshot(McpConnectionStatus.DISCONNECTED, "STOP closed the active MCP request"))
+            executor.execute { runCatching { session.close() } }
+            throw cancelled
+        } catch (unauthorized: McpTransportClient.McpAuthorizationException) {
+            sessions.remove(serverId, session)
+            publishIfCurrent(serverId, expectedGeneration, McpConnectionSnapshot(McpConnectionStatus.AUTH_REQUIRED,
+                "The saved MCP token was rejected; update the token and reconnect"))
+            executor.execute { runCatching { session.close() } }
+            throw unauthorized
+        } catch (permission: McpPermissionRequiredException) {
+            publishIfCurrent(serverId, expectedGeneration, McpConnectionSnapshot(McpConnectionStatus.PERMISSION_REQUIRED,
+                safeMessage(permission), requiredScopes = permission.requiredScopes))
+            throw permission
+        } catch (reauth: McpReauthRequiredException) {
+            publishIfCurrent(serverId, expectedGeneration,
+                McpConnectionSnapshot(McpConnectionStatus.REAUTH_REQUIRED, safeMessage(reauth)))
+            throw reauth
+        }
+    }
+
     private fun connectWithSingleRefresh(config: McpServerConfig, canPublish: () -> Boolean = { true }): McpProtocolSession {
         return McpOAuthRequestRetry.execute(
             oauthEnabled = config.authMode == McpAuthMode.OAUTH,

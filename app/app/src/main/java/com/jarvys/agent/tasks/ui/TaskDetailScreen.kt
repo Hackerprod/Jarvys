@@ -50,6 +50,11 @@ import com.jarvys.agent.tasks.TaskRepository
 import com.jarvys.agent.tasks.TaskRunLedger
 import com.jarvys.agent.tasks.TaskRunRecord
 import com.jarvys.agent.tasks.TaskRunCause
+import com.jarvys.agent.tasks.TaskPendingAction
+import com.jarvys.agent.tasks.TaskPendingActionStatus
+import com.jarvys.agent.tasks.TaskPendingActionStore
+import com.jarvys.agent.tasks.TaskNotifier
+import com.jarvys.agent.tasks.TaskScheduler
 import com.jarvys.agent.tasks.TaskSchedulePresentation
 import com.jarvys.agent.tasks.TaskState
 import kotlinx.coroutines.Dispatchers
@@ -60,6 +65,7 @@ import kotlinx.coroutines.withContext
 private data class TaskDetailData(
     val task: ScheduledTask?,
     val runs: List<TaskRunRecord>,
+    val pendingActions: List<TaskPendingAction>,
     val ignoredRows: Int,
 )
 
@@ -74,6 +80,8 @@ fun TaskDetailScreen(
     onMessage: (String) -> Unit,
     onMissingTask: () -> Unit,
     backgroundWorkBusyForAll: Boolean? = null,
+    pendingActionStore: TaskPendingActionStore = TaskPendingActionStore(context.applicationContext),
+    onApprovePendingAction: ((TaskPendingAction) -> Unit)? = null,
 ) {
     val revision by TaskDataChanges.revision.collectAsState()
     var detail by remember(taskId) { mutableStateOf<TaskDetailData?>(null) }
@@ -83,9 +91,15 @@ fun TaskDetailScreen(
         failed = false
         detail = withContext(Dispatchers.IO) {
             runCatching {
-                val task = repository.get(taskId)
+                val storedTask = repository.get(taskId)
+                val task = storedTask?.let { saved ->
+                    pendingActionStore.stateForTask(saved.id, saved.revision, saved.state)?.let { state -> saved.copy(state = state) }
+                        ?: saved
+                }
                 TaskDetailData(task, ledger.forTask(taskId).sortedWith(
                     compareByDescending<TaskRunRecord> { it.startedAt }.thenByDescending { it.finishedAt ?: Long.MIN_VALUE }),
+                    pendingActionStore.listForTask(taskId).filter { it.status !in setOf(
+                        TaskPendingActionStatus.EXECUTED, TaskPendingActionStatus.REJECTED) },
                     repository.readDiagnostics() + ledger.read().ignoredCorruptRows)
             }.onFailure { failed = true }.getOrNull()
         }
@@ -180,7 +194,8 @@ fun TaskDetailScreen(
                             else runCatching { TaskManualRunScheduler.enqueue(app, task.id) }
                                 .onSuccess { onMessage(app.getString(R.string.tasks_manual_queued)) }
                                 .onFailure { onMessage(app.getString(R.string.tasks_manual_failed)) }
-                        }, enabled = !busy, modifier = Modifier.testTag("task-detail-run-now")) {
+                        }, enabled = !busy && task.state != TaskState.AwaitingUser,
+                            modifier = Modifier.testTag("task-detail-run-now")) {
                             Text(stringResource(R.string.task_detail_manual_run))
                         }
                         OutlinedButton(onClick = { onRequestChange(task) }, modifier = Modifier.testTag("task-detail-change")) {
@@ -189,6 +204,50 @@ fun TaskDetailScreen(
                         if (loaded.runs.isNotEmpty()) OutlinedButton(
                             onClick = { confirmClear = true }, modifier = Modifier.testTag("task-clear-history")) {
                             Text(stringResource(R.string.task_detail_clear_history))
+                        }
+                    }
+                }
+            }
+        }
+        if (loaded.pendingActions.isNotEmpty()) item(key = "pending-actions-header") {
+            JarvysSectionLabel(stringResource(R.string.task_pending_actions))
+        }
+        items(loaded.pendingActions, key = { "pending-${it.id}" }) { action ->
+            val expired = action.status == TaskPendingActionStatus.STALE || !action.isCurrentFor(task)
+            JarvysGroup(Modifier.testTag("task-pending-action-${action.id}")) {
+                Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(action.toolName, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                    Text(stringResource(R.string.task_pending_action_arguments, action.argumentsJson),
+                        style = MaterialTheme.typography.bodySmall)
+                    val statusText = when {
+                        expired -> stringResource(R.string.task_pending_action_expired)
+                        action.status == TaskPendingActionStatus.INTERRUPTED_UNCERTAIN ->
+                            stringResource(R.string.task_pending_action_uncertain)
+                        action.status == TaskPendingActionStatus.CLAIMED ->
+                            stringResource(R.string.task_pending_action_processing)
+                        else -> stringResource(R.string.task_pending_action_waiting)
+                    }
+                    Text(statusText, color = if (expired || action.status == TaskPendingActionStatus.INTERRUPTED_UNCERTAIN)
+                        MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.tertiary,
+                        style = MaterialTheme.typography.bodySmall)
+                    if (action.status == TaskPendingActionStatus.PENDING ||
+                        action.status == TaskPendingActionStatus.STALE ||
+                        action.status == TaskPendingActionStatus.INTERRUPTED_UNCERTAIN) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (action.status == TaskPendingActionStatus.PENDING && !expired) onApprovePendingAction?.let { approve ->
+                                Button(onClick = { approve(action) },
+                                    modifier = Modifier.testTag("task-pending-approve-${action.id}")) {
+                                    Text(stringResource(R.string.task_pending_action_approve))
+                                }
+                            }
+                            OutlinedButton(onClick = {
+                                pendingActionStore.reject(action.id, action.actionBinding)
+                                TaskNotifier.dismissPendingAction(context, action.id)
+                                TaskScheduler.pendingActionResolved(context, task.id)
+                                onMessage(context.getString(R.string.task_pending_action_rejected))
+                            }, modifier = Modifier.testTag("task-pending-reject-${action.id}")) {
+                                Text(stringResource(R.string.task_pending_action_reject))
+                            }
                         }
                     }
                 }

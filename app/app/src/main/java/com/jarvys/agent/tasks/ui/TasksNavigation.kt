@@ -10,6 +10,8 @@ import com.jarvys.agent.AppNavigationBackPolicy
 import com.jarvys.agent.tasks.ScheduledTask
 import com.jarvys.agent.tasks.TaskRepository
 import com.jarvys.agent.tasks.TaskRunLedger
+import com.jarvys.agent.tasks.TaskPendingActionHandlerProvider
+import com.jarvys.agent.tasks.TaskNotifier
 
 object TasksNavigationRoutes {
     const val LIST = AppNavigationBackPolicy.TASKS
@@ -69,6 +71,14 @@ fun NavGraphBuilder.tasksDestinations(
             onMessage = onMessage,
             onMissingTask = onReturnToSettings,
             backgroundWorkBusyForAll = backgroundWorkBusyForAll,
+            onApprovePendingAction = { action ->
+                val handler = (app as? TaskPendingActionHandlerProvider)?.taskPendingActionHandler()
+                val accepted = runCatching { handler?.approve(app, action) == true }.getOrDefault(false)
+                if (accepted) {
+                    TaskNotifier.dismissPendingAction(app, action.id)
+                    onMessage(app.getString(com.jarvys.agent.R.string.task_pending_action_processing))
+                } else onMessage(app.getString(com.jarvys.agent.R.string.task_pending_action_approval_failed))
+            },
         )
     }
 }

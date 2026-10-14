@@ -65,6 +65,7 @@ import com.jarvys.agent.tasks.TaskRepository
 import com.jarvys.agent.tasks.TaskRunLedger
 import com.jarvys.agent.tasks.TaskRunCause
 import com.jarvys.agent.tasks.TaskRunRecord
+import com.jarvys.agent.tasks.TaskPendingActionStore
 import com.jarvys.agent.tasks.TaskSchedule
 import com.jarvys.agent.tasks.TaskSchedulePresentation
 import com.jarvys.agent.tasks.TaskScheduler
@@ -80,6 +81,7 @@ fun TasksListScreen(
     context: Context,
     repository: TaskRepository = remember(context) { TaskRepository(context.applicationContext) },
     ledger: TaskRunLedger = remember(context) { TaskRunLedger(context.applicationContext) },
+    pendingActionStore: TaskPendingActionStore = remember(context) { TaskPendingActionStore(context.applicationContext) },
     onOpenTask: (String) -> Unit,
     onRequestChange: (ScheduledTask) -> Unit,
     onConfigureProvider: () -> Unit,
@@ -92,7 +94,9 @@ fun TasksListScreen(
     val revision by TaskDataChanges.revision.collectAsState()
     var load by remember { mutableStateOf<TasksScreenLoad>(TasksScreenLoad.Loading) }
     val app = context.applicationContext
-    LaunchedEffect(revision, repository, ledger) { load = loadTasksScreen(app, repository, ledger) }
+    LaunchedEffect(revision, repository, ledger, pendingActionStore) {
+        load = loadTasksScreen(app, repository, ledger, pendingActionStore)
+    }
     val workState = if (backgroundWorkBusyForAll != null) {
         TaskWorkObservation(backgroundWorkBusyForAll, backgroundWorkBusyForAll, emptySet())
     } else rememberTaskWorkObservation(app)
@@ -343,7 +347,7 @@ private fun TaskListItem(
                 }) { Icon(LucideIcons.Ellipsis, contentDescription = null) }
                 DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                     DropdownMenuItem(text = { Text(stringResource(R.string.tasks_run_now)) },
-                        enabled = !backgroundBusy,
+                        enabled = !backgroundBusy && task.state != TaskState.AwaitingUser,
                         onClick = { expanded = false; onRunNow() })
                     DropdownMenuItem(text = { Text(stringResource(R.string.tasks_request_change)) },
                         onClick = { expanded = false; onRequestChange() })
@@ -366,7 +370,7 @@ private fun TaskListItem(
                     color = MaterialTheme.colorScheme.tertiary, style = MaterialTheme.typography.labelSmall)
                 Switch(
                     checked = switchActive,
-                    enabled = task.state != TaskState.Done,
+                    enabled = task.state != TaskState.Done && task.state != TaskState.AwaitingUser,
                     onCheckedChange = onToggle,
                     modifier = Modifier.testTag("task-toggle-${task.id}").semantics {
                         contentDescription = context.getString(R.string.tasks_toggle_state)

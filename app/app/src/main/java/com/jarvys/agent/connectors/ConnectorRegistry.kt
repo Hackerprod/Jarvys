@@ -334,7 +334,37 @@ class ConnectorRegistry private constructor(
 
     fun invoke(definition: ConnectorDefinition, operation: ConnectorOperation,
                arguments: JSONObject, token: CancellationToken, requester: String?,
-               requesterColorKey: String?): JSONObject {
+               requesterColorKey: String?): JSONObject = invokeInternal(
+        definition, operation, arguments, token, requester, requesterColorKey,
+        unattended = false, approvedPendingAction = false, deferAskWrite = null,
+    )
+
+    /** Background-task invocation never enters ApprovalGate: ASK writes are handed to the durable queue. */
+    fun invokeForScheduledTask(
+        definition: ConnectorDefinition,
+        operation: ConnectorOperation,
+        arguments: JSONObject,
+        token: CancellationToken,
+        requester: String?,
+        requesterColorKey: String?,
+        approvedPendingAction: Boolean,
+        deferAskWrite: java.util.function.Supplier<JSONObject>?,
+    ): JSONObject = invokeInternal(
+        definition, operation, arguments, token, requester, requesterColorKey,
+        unattended = true, approvedPendingAction = approvedPendingAction, deferAskWrite = deferAskWrite,
+    )
+
+    private fun invokeInternal(
+        definition: ConnectorDefinition,
+        operation: ConnectorOperation,
+        arguments: JSONObject,
+        token: CancellationToken,
+        requester: String?,
+        requesterColorKey: String?,
+        unattended: Boolean,
+        approvedPendingAction: Boolean,
+        deferAskWrite: java.util.function.Supplier<JSONObject>?,
+    ): JSONObject {
         val current = get(definition.id) ?: error("El conector ${definition.name} ya no está disponible")
         val selectedOperation = current.operations.firstOrNull { it.name == operation.name }
             ?: error("Connector operation is no longer available")
@@ -356,14 +386,20 @@ class ConnectorRegistry private constructor(
         val schema = selectedOperation.inputSchema.toString()
         var snapshot = autonomyStore.snapshot(current.id, selectedOperation.name)
         check(snapshot.policy != AutonomyPolicy.DENY) { "This action is denied by its saved policy" }
+        var approvedAsk = false
+        if (snapshot.policy == AutonomyPolicy.ASK && unattended) {
+            if (!approvedPendingAction) return requireNotNull(deferAskWrite) {
+                "A pending-action queue is required for ASK operations in a scheduled task"
+            }.get()
+            approvedAsk = true
+        }
         val preparation = if (selectedOperation.write) runtime.prepareWrite(selectedOperation.name, executionArguments, token)
             else runtime.prepareRead(selectedOperation.name, executionArguments, token)
         val preparedArguments = preparation.executionArguments.toString()
-        var approvedAsk = false
         var alwaysDecision: ActionPolicySnapshot? = null
         var permissionDeniedFallback = false
         val autonomous = snapshot.policy == AutonomyPolicy.ALLOW
-        if (snapshot.policy == AutonomyPolicy.ASK) {
+        if (snapshot.policy == AutonomyPolicy.ASK && !unattended) {
             val decision = approvalGate.request(preparation.approval.copy(
                 permission = permissions.firstOrNull { !permissionGranted(it) },
                 allowAlwaysAvailable = true,

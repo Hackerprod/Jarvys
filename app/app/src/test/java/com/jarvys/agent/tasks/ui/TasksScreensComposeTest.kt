@@ -9,6 +9,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertDoesNotExist
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -32,6 +34,7 @@ import com.jarvys.agent.tasks.TaskGlobalPauseStore
 import com.jarvys.agent.tasks.TaskRepository
 import com.jarvys.agent.tasks.TaskRunLedger
 import com.jarvys.agent.tasks.TaskRunRecord
+import com.jarvys.agent.tasks.TaskPendingActionStore
 import com.jarvys.agent.tasks.TaskSchedule
 import com.jarvys.agent.tasks.TaskSchedulePresentation
 import com.jarvys.agent.tasks.TaskState
@@ -242,6 +245,54 @@ class TasksScreensComposeTest {
         compose.waitForIdle()
         compose.onNodeWithTag("task-detail-history-list").performScrollToIndex(2)
         compose.onNodeWithText(context.getString(R.string.task_detail_no_history)).assertIsDisplayed()
+    }
+
+    @Test fun taskDetailShowsPendingActionAndClearExpiryAfterTaskRevisionChanges() {
+        val task = fixture.addTask("Approval task", TaskState.Active, nextRun = fixture.clock.millis() + 60_000L)
+        val pendingStore = TaskPendingActionStore(File(Files.createTempDirectory("pending-detail").toFile(),
+            "pending-actions.jsonl"))
+        val action = pendingStore.enqueue(task, "run-approval", "gmail_send_message",
+            """{"to":"person@example.test"}""")
+
+        compose.setContent {
+            MaterialTheme {
+                TaskDetailScreen(context, task.id, fixture.repository, fixture.ledger,
+                    onRequestChange = {}, onConfigureProvider = {}, onMessage = {}, onMissingTask = {},
+                    backgroundWorkBusyForAll = false, pendingActionStore = pendingStore)
+            }
+        }
+        compose.waitForIdle()
+        compose.onNodeWithText(context.getString(R.string.tasks_state_awaiting)).assertIsDisplayed()
+        compose.onNodeWithTag("task-pending-action-${action.id}").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.task_pending_action_arguments, action.argumentsJson))
+            .assertIsDisplayed()
+
+        fixture.repository.update(task.copy(instruction = "Updated after review"), task.revision)
+        compose.waitForIdle()
+        compose.onNodeWithTag("task-pending-action-${action.id}").performScrollTo()
+        compose.onNodeWithText(context.getString(R.string.task_pending_action_expired)).assertIsDisplayed()
+        compose.onNodeWithTag("task-pending-approve-${action.id}").assertDoesNotExist()
+    }
+
+    @Test fun taskListShowsAwaitingUserWhileAnApprovalIsPending() {
+        val task = fixture.addTask("Awaiting task", TaskState.Active, nextRun = fixture.clock.millis() + 60_000L)
+        val pendingStore = TaskPendingActionStore(File(Files.createTempDirectory("pending-list").toFile(),
+            "pending-actions.jsonl"))
+        pendingStore.enqueue(task, "run-approval", "gmail_send_message", """{"to":"person@example.test"}""")
+
+        compose.setContent {
+            MaterialTheme {
+                TasksListScreen(context, fixture.repository, fixture.ledger,
+                    onOpenTask = {}, onRequestChange = {}, onConfigureProvider = {}, onMessage = {},
+                    healthIssuesOverride = { emptyList() }, backgroundWorkBusyForAll = false,
+                    pendingActionStore = pendingStore)
+            }
+        }
+        awaitNode("tasks-list")
+        compose.onNodeWithTag("tasks-list").performScrollToIndex(1)
+        compose.onNodeWithTag("task-row-${task.id}").assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.tasks_state_awaiting)).assertIsDisplayed()
+        compose.onNodeWithTag("task-toggle-${task.id}").assertIsDisplayed().assertIsNotEnabled()
     }
 
     @Test fun healthPolicyAndCardCoverSettingsActionsAndHideWhenHealthy() {

@@ -1021,6 +1021,24 @@ description: Preferencias explícitas sobre idioma, tono, estilo y forma de ayud
     <string name="scheduled_tasks_attention_body">%1$s. Abre Jarvys para revisar esta tarea.</string>
     <string name="scheduled_tasks_recovered_title">Tarea recuperada: %1$s</string>
     <string name="scheduled_tasks_recovered_body">Esta tarea programada vuelve a ejecutarse correctamente.</string>
+    <string name="task_pending_action_notification_title">Se necesita aprobación: %1$s</string>
+    <string name="task_pending_action_notification_body">Revisa la acción solicitada por %1$s: %2$s</string>
+    <string name="task_pending_action_approve">Aprobar</string>
+    <string name="task_pending_action_reject">Rechazar</string>
+    <string name="task_pending_actions">Acciones pendientes</string>
+    <string name="task_pending_action_arguments">Argumentos: %1$s</string>
+    <string name="task_pending_action_waiting">Esta acción no se ejecutó. Requiere aprobación.</string>
+    <string name="task_pending_action_processing">Se está procesando la aprobación.</string>
+    <string name="task_pending_action_approval_failed">No se pudo poner en cola esta aprobación. Vuelve a intentarlo.</string>
+    <string name="task_pending_action_expired">Esta aprobación venció porque cambió la revisión de la tarea o los argumentos. Revisa y vuelve a ejecutar la tarea.</string>
+    <string name="task_pending_action_uncertain">La acción podría haberse ejecutado antes de detenerse el proceso. Comprueba el resultado antes de crear otra acción.</string>
+    <string name="task_pending_action_rejected">Acción rechazada.</string>
+    <string name="task_pending_action_notification_public_title">Una tarea programada requiere revisión</string>
+    <string name="task_pending_action_notification_public_body">Abre Jarvys para revisar la acción pendiente.</string>
+    <string name="task_pending_action_expired_notification_title">La aprobación caducó</string>
+    <string name="task_pending_action_expired_notification_body">«%1$s» cambió, así que no se ejecutó %2$s. Revisa la tarea actual.</string>
+    <string name="task_pending_action_expired_notification_public_title">Caducó una acción programada</string>
+    <string name="task_pending_action_expired_notification_public_body">Una acción programada requiere revisión.</string>
     <string name="scheduled_task_chat_schedule">Horario: %1$s</string>
     <string name="scheduled_task_chat_next_run">Próxima ejecución: %1$s</string>
     <string name="scheduled_task_chat_no_next_run">Sin próxima ejecución</string>
@@ -1182,6 +1200,7 @@ Después:
     <string name="task_cause_execution_failed">No se pudo ejecutar la tarea</string>
     <string name="task_cause_effect_occurred">La ejecuci&#243;n se detuvo despu&#233;s de un efecto</string>
     <string name="task_cause_task_changed">La tarea cambi&#243; o se elimin&#243; antes de la ejecuci&#243;n manual</string>
+    <string name="task_cause_awaiting_user">Una acci&#243;n pendiente necesita tu aprobaci&#243;n.</string>
     <string name="task_cause_unknown">Causa desconocida</string>
 
     <string name="task_detail_error_detail">Detalle del fallo: %1$s</string>

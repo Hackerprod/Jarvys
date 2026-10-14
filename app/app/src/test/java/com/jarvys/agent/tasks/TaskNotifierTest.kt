@@ -8,6 +8,8 @@ import androidx.test.core.app.ApplicationProvider
 import com.jarvys.agent.proactive.ProactiveSuggestedReply
 import com.jarvys.agent.proactive.ProactiveThreadMessage
 import java.util.UUID
+import java.io.File
+import java.nio.file.Files
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -75,6 +77,53 @@ class TaskNotifierTest {
         assertTrue(TaskNotifier.recovered(context, task))
         assertEquals(1, shadowOf(manager).allNotifications.size)
         assertEquals(TaskNotifier.CHANNEL_ID, manager.notificationChannels.single().id)
+    }
+
+    @Test fun pendingActionNotificationHasApproveAndRejectBroadcastActions() {
+        shadowOf(context).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        val manager = context.getSystemService(NotificationManager::class.java)
+        manager.cancelAll()
+        val task = task()
+        val pending = TaskPendingActionStore(File(Files.createTempDirectory("pending-action-notification").toFile(),
+            "pending-actions.jsonl"))
+            .enqueue(task, "run-approval", "gmail_send_message", """{"to":"person@example.test"}""")
+
+        assertTrue(TaskNotifier.pendingAction(context, task, pending))
+        val notification = shadowOf(manager).allNotifications.single()
+        assertEquals(2, notification.actions.size)
+        assertEquals(context.getString(com.jarvys.agent.R.string.task_pending_action_reject),
+            notification.actions[0].title.toString())
+        assertEquals(context.getString(com.jarvys.agent.R.string.task_pending_action_approve),
+            notification.actions[1].title.toString())
+        notification.actions.forEach { action ->
+            assertTrue(shadowOf(action.actionIntent).isImmutable)
+            val intent = shadowOf(action.actionIntent).savedIntent
+            assertEquals(TaskPendingActionReceiver::class.java.name, intent.component?.className)
+            assertEquals(pending.id, intent.getStringExtra(TaskPendingActionReceiver.EXTRA_ACTION_ID))
+            assertEquals(task.id, intent.getStringExtra(TaskPendingActionReceiver.EXTRA_TASK_ID))
+        }
+        assertEquals(TaskPendingActionReceiver.ACTION_REJECT,
+            shadowOf(notification.actions[0].actionIntent).savedIntent.action)
+        assertEquals(TaskPendingActionReceiver.ACTION_APPROVE,
+            shadowOf(notification.actions[1].actionIntent).savedIntent.action)
+    }
+
+    @Test fun expiredApprovalPostsALocalizedNoticeWithoutActionButtons() {
+        shadowOf(context).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        val manager = context.getSystemService(NotificationManager::class.java)
+        manager.cancelAll()
+        val task = task()
+        val pending = TaskPendingActionStore(File(Files.createTempDirectory("pending-action-expired").toFile(),
+            "pending-actions.jsonl")).enqueue(task, "run-approval", "gmail_send_message", """{"to":"person@example.test"}""")
+
+        assertTrue(TaskNotifier.pendingActionExpired(context, task.copy(revision = task.revision + 1L), pending))
+        val notification = shadowOf(manager).allNotifications.single()
+        assertEquals(context.getString(com.jarvys.agent.R.string.task_pending_action_expired_notification_title),
+            notification.extras.getCharSequence(android.app.Notification.EXTRA_TITLE).toString())
+        assertTrue(notification.extras.getCharSequence(android.app.Notification.EXTRA_TEXT).toString()
+            .contains("was not executed"))
+        assertTrue(notification.actions.isEmpty())
+        assertTrue(shadowOf(notification.contentIntent).isImmutable)
     }
 
     @Test fun taskFailureCausesUseEnglishAndSpanishResources() {

@@ -50,6 +50,7 @@ class TaskTickEngine(
     private val canStartAnother: () -> Boolean = { true },
     private val token: CancellationToken = CancellationToken.uncancellable(),
     private val isGloballyPaused: () -> Boolean = { false },
+    private val pendingActions: TaskPendingActionStore? = null,
 ) {
     fun tick(): TaskTickResult {
         var started = 0
@@ -60,6 +61,7 @@ class TaskTickEngine(
             val now = clock.millis()
             val due = tasks.read().tasks.asSequence()
                 .filter { it.state == TaskState.Active }
+                .filter { pendingActions?.stateForTask(it.id, it.revision, it.state) != TaskState.AwaitingUser }
                 .filter { (it.validUntil != null && now >= it.validUntil)
                     || (it.nextRunAt != null && it.nextRunAt <= now) }
                 .sortedWith(compareBy<ScheduledTask> { it.nextRunAt }.thenBy { it.id })
@@ -71,6 +73,7 @@ class TaskTickEngine(
                 }
                 val task = tasks.get(snapshot.id) ?: continue
                 if (task.state != TaskState.Active) continue
+                if (pendingActions?.stateForTask(task.id, task.revision, task.state) == TaskState.AwaitingUser) continue
                 if (task.validUntil != null && now >= task.validUntil) {
                     updateTask(task, task.copy(state = TaskState.Done, nextRunAt = null))
                     continue
@@ -142,14 +145,15 @@ class TaskTickEngine(
                     is TickOccurrence.Existing -> {
                         if (outcome.record.status == "STARTED") {
                             val next = calculator.nextRunAfter(task, now)
-                            updateTask(task, task.copy(state = TaskState.NeedsAttention(
+                            val updated = task.copy(state = TaskState.NeedsAttention(
                                 TaskRunCause.PREVIOUS_OCCURRENCE_INTERRUPTED.code),
-                                nextRunAt = next, lastRun = outcome.record.toLastRun()))
-                        } else updateTask(task, stateAfter(task, outcome.record, now))
+                                nextRunAt = next, lastRun = outcome.record.toLastRun())
+                            updateAfterRun(task, updated)
+                        } else updateAfterRun(task, stateAfter(task, outcome.record, now))
                     }
                     is TickOccurrence.Retry -> {
                         retryWork = true
-                        updateTask(task, task.copy(state = TaskState.Active, nextRunAt = scheduledFor,
+                        updateAfterRun(task, task.copy(state = TaskState.Active, nextRunAt = scheduledFor,
                             lastRun = outcome.record.toLastRun()))
                     }
                     is TickOccurrence.Completed -> {
@@ -157,9 +161,11 @@ class TaskTickEngine(
                         val latest = tasks.get(task.id)?.takeIf { it.revision == task.revision } ?: task
                         val next = stateAfter(latest, outcome.record, outcome.record.finishedAt ?: now)
                         val autoDeleteAfterRun = task.deleteAfterRun && outcome.record.status in SUCCESS_STATES
-                        if (autoDeleteAfterRun) {
+                        val pending = pendingActions?.stateForTask(latest.id, latest.revision, latest.state) ==
+                            TaskState.AwaitingUser
+                        if (autoDeleteAfterRun && !pending) {
                             runCatching { tasks.delete(task.id, latest.revision, clock.millis(), expectedTask = latest) }
-                        } else updateTask(latest, next)
+                        } else updateAfterRun(latest, next)
                     }
                 }
             }
@@ -190,6 +196,17 @@ class TaskTickEngine(
     private fun updateTask(original: ScheduledTask, updated: ScheduledTask) {
         try { tasks.update(updated.copy(updatedAt = maxOf(updated.updatedAt, clock.millis())), original.revision) }
         catch (_: StaleTaskRevisionException) { /* A concurrent user change wins; do not overwrite it. */ }
+    }
+
+    private fun updateAfterRun(original: ScheduledTask, updated: ScheduledTask) {
+        val pending = pendingActions?.stateForTask(original.id, original.revision, original.state) ==
+            TaskState.AwaitingUser
+        if (pending) {
+            try {
+                tasks.updateRuntimeSnapshot(updated.copy(updatedAt = maxOf(updated.updatedAt, clock.millis()),
+                    revision = original.revision), original.revision, original)
+            } catch (_: StaleTaskRevisionException) { /* A concurrent user change wins; do not overwrite it. */ }
+        } else updateTask(original, updated)
     }
 
     private fun TaskRunRecord.toLastRun() = TaskLastRun(runId, scheduledFor, startedAt, finishedAt, status,

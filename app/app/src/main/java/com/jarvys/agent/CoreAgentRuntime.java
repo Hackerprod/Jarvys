@@ -40,6 +40,8 @@ import com.jarvys.agent.skills.SkillRepository;
 import com.jarvys.agent.skills.SkillScopePolicy;
 import com.jarvys.agent.tasks.ScheduledTaskConversation;
 import com.jarvys.agent.tasks.TaskManagementTools;
+import com.jarvys.agent.tasks.ScheduledTask;
+import com.jarvys.agent.tasks.ScheduledTaskWriteDeferrer;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -58,6 +60,7 @@ import java.util.function.Predicate;
 import java.util.function.ToIntFunction;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+import org.json.JSONObject;
 
 public final class CoreAgentRuntime {
   private static final String BASE_INSTRUCTIONS =
@@ -1448,13 +1451,208 @@ public final class CoreAgentRuntime {
       while (it.hasNext()) {
         creatorToolNames.add(it.next().declaration().name);
       }
+      List<String> taskCapabilityNames = new ArrayList<>();
+      boolean taskMemoryAllowed = WorkspaceTools.hasEnabledMemory(this.workspaceTools);
+      for (CoreTool tool : tools) {
+        String name = tool.declaration().name;
+        if (unattendedCapabilityAllowed(tool)
+            && (taskMemoryAllowed || !tool.requiresMemoryScopeForScheduledTask())) {
+          taskCapabilityNames.add(name);
+        }
+      }
       tools.add(new UserDecisionTool(this.context, this.sessionId));
-      tools.addAll(TaskManagementTools.create(this.context, this.sessionId, creatorToolNames));
+      tools.addAll(TaskManagementTools.create(this.context, this.sessionId, creatorToolNames,
+          taskCapabilityNames, taskMemoryAllowed,
+          this.skills.stream().map(skill -> skill.getMetadata().getId()).collect(Collectors.toList())));
     }
     if (this.depth == 0 && this.context != null) {
       tools.add(new ProactiveStatusCoreTool(this.context));
     }
     return new CoreToolRegistry(tools);
+  }
+
+  /** Creates the exact current chat tool implementations under the persisted task ceiling. */
+  public CoreToolRegistry createScheduledTaskToolRegistry(
+      ScheduledTask task, boolean approvedPendingAction, ScheduledTaskWriteDeferrer deferrer) {
+    if (!"LISTED".equals(task.getToolScope().getMode()) && !"READ_ONLY".equals(task.getToolScope().getMode()))
+      return new CoreToolRegistry(Collections.emptyList());
+    LinkedHashSet<String> scope = new LinkedHashSet<>(task.getToolScope().getTools());
+    Collection<String> creatorCeiling = task.getCreatorToolNames();
+    scope.retainAll(new LinkedHashSet<>(creatorCeiling));
+    if (!task.getToolScope().getWeb()) {
+      scope.remove(WebSearchTools.SEARCH);
+      scope.remove(WebSearchTools.FETCH);
+    }
+
+    CoreToolRegistry chatTools = createTools();
+    List<CoreTool> selected = new ArrayList<>();
+    for (String name : scope) {
+      CoreTool tool = chatTools.tool(name);
+      if (tool == null || !unattendedCapabilityAllowed(tool)) continue;
+      if (task.getToolScope().getWritesDenied()
+          && tool.unattendedAccess() == CoreTool.UnattendedAccess.WRITE) continue;
+      selected.add(new ScheduledTaskBoundTool(tool, task.getToolScope().getWritesAllowed(),
+          approvedPendingAction, deferrer));
+    }
+    return new CoreToolRegistry(selected);
+  }
+
+  /** Builds a task runtime without opening chat UI state, and uses a task-owned connector session. */
+  public static CoreToolRegistry createScheduledTaskTools(
+      Context context, ScheduledTask task, String sessionId,
+      ConnectorRegistry connectorRegistry, ScheduledTaskWriteDeferrer deferrer) {
+    return createScheduledTaskTools(context, task, sessionId, connectorRegistry, deferrer, false);
+  }
+
+  private static CoreToolRegistry createScheduledTaskTools(
+      Context context, ScheduledTask task, String sessionId,
+      ConnectorRegistry connectorRegistry, ScheduledTaskWriteDeferrer deferrer,
+      boolean approvedPendingAction) {
+    Context appContext = context.getApplicationContext();
+    String creatorSession = creatorSessionId(task.getCreatedBy());
+    String workspaceSession = creatorSession == null ? sessionId : creatorSession;
+    LinkedHashSet<String> savedSkillCeiling = new LinkedHashSet<>(task.getToolScope().getSkillIds());
+    List<SkillEntry> skills = new ArrayList<>();
+    for (SkillEntry skill : SkillRepository.Companion.get(appContext).enabledForRun()) {
+      if (savedSkillCeiling.contains(skill.getMetadata().getId())) skills.add(skill);
+    }
+    CoreAgentRuntime runtime = new CoreAgentRuntime(
+        appContext, sessionId, skills, null,
+        discoverMcpTools(appContext), discoverConnectorTools(appContext, sessionId, connectorRegistry),
+        WorkspaceTools.createScheduledTask(appContext, workspaceSession,
+            task.getToolScope().getMemory(), task.getToolScope().getSkillIds()), connectorRegistry, 0,
+        CorePromptBudget.standard(), false, true);
+    return runtime.createScheduledTaskToolRegistry(task, approvedPendingAction, deferrer);
+  }
+
+  /** Approves one queued tool call directly, without a model turn or chat approval state. */
+  public static CoreToolResult executeScheduledTaskAction(
+      Context context, ScheduledTask currentTask, String toolName,
+      Map<String, Object> arguments, CancellationToken token) {
+    Context appContext = context.getApplicationContext();
+    ScheduledTask latestTask = new com.jarvys.agent.tasks.TaskStore(appContext).get(currentTask.getId());
+    if (latestTask == null || latestTask.getRevision() != currentTask.getRevision()) {
+      return CoreToolResult.failure("Scheduled task changed after this action was approved");
+    }
+    currentTask = latestTask;
+    if (!currentTask.getToolScope().getTools().contains(toolName)
+        || !currentTask.getCreatorToolNames().contains(toolName)) {
+      return CoreToolResult.failure("Scheduled task capability is no longer in its reviewed scope");
+    }
+    CoreToolRegistry registry = createScheduledTaskTools(context, currentTask,
+        "scheduled-task:" + currentTask.getId(), ConnectorRegistry.Companion.get(context), null,
+        true);
+    if (!registry.names().contains(toolName)) {
+      return CoreToolResult.failure("Scheduled task capability is unavailable under current policy");
+    }
+    ScheduledTask beforeDispatch = new com.jarvys.agent.tasks.TaskStore(appContext).get(currentTask.getId());
+    if (beforeDispatch == null || beforeDispatch.getRevision() != currentTask.getRevision()
+        || !beforeDispatch.getToolScope().equals(currentTask.getToolScope())
+        || !beforeDispatch.getCreatorToolNames().equals(currentTask.getCreatorToolNames())) {
+      return CoreToolResult.failure("Scheduled task changed after this action was approved");
+    }
+    return registry.invoke(toolName, arguments, token);
+  }
+
+  public static CoreToolResult executeScheduledTaskAction(
+      Context context, ScheduledTask currentTask, String toolName,
+      JSONObject arguments, CancellationToken token) {
+    return executeScheduledTaskAction(context, currentTask, toolName, jsonMap(arguments), token);
+  }
+
+  private static boolean unattendedCapabilityAllowed(CoreTool tool) {
+    if (tool == null || tool.unattendedAccess() == CoreTool.UnattendedAccess.EXCLUDED) return false;
+    if (tool instanceof CoreConnectorTool)
+      return ((CoreConnectorTool) tool).autonomyPolicy() != AutonomyPolicy.DENY;
+    if (tool instanceof CoreMcpTool)
+      return ((CoreMcpTool) tool).autonomyPolicy() != AutonomyPolicy.DENY;
+    return true;
+  }
+
+  private static String creatorSessionId(String createdBy) {
+    if (createdBy == null || !createdBy.startsWith("AGENT_CHAT:")) return null;
+    String value = createdBy.substring("AGENT_CHAT:".length());
+    int messageSeparator = value.lastIndexOf(':');
+    if (messageSeparator > 0) value = value.substring(0, messageSeparator);
+    return value.isBlank() ? null : value;
+  }
+
+  private static Map<String, Object> jsonMap(JSONObject object) {
+    Map<String, Object> result = new java.util.LinkedHashMap<>();
+    if (object == null) return result;
+    Iterator<String> keys = object.keys();
+    while (keys.hasNext()) {
+      String key = keys.next();
+      Object value = object.opt(key);
+      if (value instanceof JSONObject) value = jsonMap((JSONObject) value);
+      else if (value instanceof org.json.JSONArray) value = jsonList((org.json.JSONArray) value);
+      else if (value == JSONObject.NULL) value = null;
+      result.put(key, value);
+    }
+    return result;
+  }
+
+  private static List<Object> jsonList(org.json.JSONArray array) {
+    List<Object> result = new ArrayList<>();
+    for (int i = 0; i < array.length(); i++) {
+      Object value = array.opt(i);
+      if (value instanceof JSONObject) value = jsonMap((JSONObject) value);
+      else if (value instanceof org.json.JSONArray) value = jsonList((org.json.JSONArray) value);
+      else if (value == JSONObject.NULL) value = null;
+      result.add(value);
+    }
+    return result;
+  }
+
+  private static final class ScheduledTaskBoundTool implements CoreTool {
+    private final CoreTool delegate;
+    private final boolean writesAllowed;
+    private final boolean approvedPendingAction;
+    private final ScheduledTaskWriteDeferrer deferrer;
+
+    ScheduledTaskBoundTool(CoreTool delegate, boolean writesAllowed, boolean approvedPendingAction,
+                           ScheduledTaskWriteDeferrer deferrer) {
+      this.delegate = delegate;
+      this.writesAllowed = writesAllowed;
+      this.approvedPendingAction = approvedPendingAction;
+      this.deferrer = deferrer;
+    }
+
+    @Override public ToolSpec declaration() { return delegate.declaration(); }
+    @Override public ExecutionMode executionMode() { return delegate.executionMode(); }
+    @Override public UnattendedAccess unattendedAccess() { return delegate.unattendedAccess(); }
+    @Override public boolean isConnectorTool() { return delegate.isConnectorTool(); }
+    @Override public boolean isMcpTool() { return delegate.isMcpTool(); }
+
+    @Override public CoreToolResult execute(Map<String, Object> arguments, CancellationToken token) {
+      if (delegate.unattendedAccess() == UnattendedAccess.WRITE && !approvedPendingAction) {
+        if ((delegate instanceof CoreConnectorTool
+                && ((CoreConnectorTool) delegate).autonomyPolicy() == AutonomyPolicy.DENY)
+            || (delegate instanceof CoreMcpTool
+                && ((CoreMcpTool) delegate).autonomyPolicy() == AutonomyPolicy.DENY)) {
+          return CoreToolResult.failure("Operation is unavailable under current policy");
+        }
+        if (!writesAllowed) return defer(arguments, token);
+      }
+      if (delegate instanceof CoreConnectorTool)
+        return ((CoreConnectorTool) delegate).executeScheduledTask(arguments, token,
+            approvedPendingAction, () -> deferredJson(arguments, token));
+      if (delegate instanceof CoreMcpTool)
+        return ((CoreMcpTool) delegate).executeScheduledTask(arguments, token,
+            approvedPendingAction, () -> deferredJson(arguments, token));
+      return delegate.execute(arguments, token);
+    }
+
+    private CoreToolResult defer(Map<String, Object> arguments, CancellationToken token) {
+      if (deferrer == null) return CoreToolResult.failure("Pending action queue is unavailable");
+      return deferrer.defer(declaration().name, arguments == null ? Collections.emptyMap() : arguments, token);
+    }
+
+    private JSONObject deferredJson(Map<String, Object> arguments, CancellationToken token) {
+      CoreToolResult queued = defer(arguments, token);
+      if (!queued.isSuccess()) throw new IllegalStateException("Could not queue pending action");
+      return new JSONObject(queued.getContent());
+    }
   }
 
   List<String> createToolsNames(List<CoreTool> includedMcpTools, boolean includeDelegate) {
@@ -2056,7 +2254,11 @@ public final class CoreAgentRuntime {
   }
 
   private static List<CoreTool> discoverConnectorTools(Context context, String sessionId) {
-    ConnectorRegistry registry = ConnectorRegistry.Companion.get(context);
+    return discoverConnectorTools(context, sessionId, ConnectorRegistry.Companion.get(context));
+  }
+
+  private static List<CoreTool> discoverConnectorTools(
+      Context context, String sessionId, ConnectorRegistry registry) {
     registry.refreshStates();
     List<CoreTool> result = new ArrayList<>();
     for (ConnectorDefinition definition : registry.connectedDefinitions()) {

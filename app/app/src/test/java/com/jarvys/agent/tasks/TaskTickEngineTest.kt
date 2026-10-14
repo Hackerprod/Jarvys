@@ -93,6 +93,35 @@ class TaskTickEngineTest {
         assertEquals(anchor + interval, store.get(task.id)?.nextRunAt)
     }
 
+    @Test fun pendingActionKeepsReviewedRevisionAndBlocksAnotherScheduledRun() {
+        val root = Files.createTempDirectory("task-pending-action-tick").toFile()
+        val store = TaskStore(File(root, "tasks.jsonl"))
+        val ledger = TaskRunLedger(File(root, "runs.jsonl"))
+        val pending = TaskPendingActionStore(File(root, "pending-actions.jsonl"))
+        val anchor = 1_000_000L
+        val interval = 900_000L
+        val now = anchor + 300_000L
+        val task = store.create(task("approval", TaskSchedule.Every(interval, anchor), nextRunAt = anchor))
+        var executions = 0
+        val executor = TaskExecutor { current, _, _, runId, _ ->
+            executions++
+            pending.enqueue(current, runId, "gmail_send_message", """{"to":"person@example.test"}""")
+            TaskExecutionResult(toolsCalled = listOf(TaskToolCallRecord("gmail_send_message", true, "PENDING")))
+        }
+        val engine = TaskTickEngine(store, ledger, calculator(now), executor, fixedClock(now),
+            pendingActions = pending)
+
+        assertEquals(1, engine.tick().started)
+        val afterRun = requireNotNull(store.get(task.id))
+        assertEquals(task.revision, afterRun.revision)
+        assertEquals(anchor + interval, afterRun.nextRunAt)
+        assertEquals(TaskState.AwaitingUser, pending.stateForTask(task.id, afterRun.revision, afterRun.state))
+
+        assertEquals(0, engine.tick().started)
+        assertEquals(1, executions)
+        assertEquals(task.revision, store.get(task.id)?.revision)
+    }
+
     @Test fun permanentFailureOpensCauseIncidentAndNeedsAttention() {
         val root = Files.createTempDirectory("task-permanent-failure").toFile()
         val store = TaskStore(File(root, "tasks.jsonl"))

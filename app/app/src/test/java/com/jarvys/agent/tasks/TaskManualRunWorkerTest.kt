@@ -76,6 +76,58 @@ class TaskManualRunWorkerTest {
         assertTrue(delivered.single().text.contains("Manual result"))
     }
 
+    @Test fun manualWorkWaitsForPendingApprovalWithoutDeletingTheReviewedTask() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val root = Files.createTempDirectory("manual-pending-approval").toFile()
+        val tasks = TaskStore(File(root, "tasks.jsonl"))
+        val ledger = TaskRunLedger(File(root, "runs.jsonl"))
+        val pendingActions = TaskPendingActionStore(File(root, "pending-actions.jsonl"))
+        val clock = Clock.fixed(Instant.parse("2025-03-08T08:00:00Z"), ZoneOffset.UTC)
+        val scheduledFor = clock.millis()
+        val task = tasks.create(ScheduledTask(name = "Delete after approval", instruction = "Send once",
+            schedule = TaskSchedule.Every(ScheduledTaskValidation.MIN_INTERVAL_MILLIS, scheduledFor),
+            state = TaskState.Done, deleteAfterRun = true, createdAt = scheduledFor - 1L,
+            toolScope = TaskToolScope("LISTED", listOf("gmail_send_message"), writes = "ALLOW"),
+            creatorToolNames = listOf("gmail_send_message")))
+        val pending = pendingActions.enqueue(task, "prior-run", "gmail_send_message",
+            """{"to":"person@example.test"}""")
+        val loop = FakeLoopFactory()
+        val notifications = FakeNotifications()
+        val registry = com.jarvys.agent.connectors.ConnectorRegistry.createForTests(object :
+            com.jarvys.agent.connectors.ConnectorConnectionPreferences {
+            override fun isConnected(id: String) = false
+            override fun setConnected(id: String, connected: Boolean) = Unit
+        }, permissionGranted = { true }, approvalGate = com.jarvys.agent.connectors.ApprovalGate.INSTANCE)
+        val processor = ScheduledTaskProcessor(context, loop, registry,
+            com.jarvys.agent.LocalRunStore(context), clock, notifications)
+        val factory = object : WorkerFactory() {
+            override fun createWorker(appContext: Context, workerClassName: String,
+                                      workerParameters: androidx.work.WorkerParameters): ListenableWorker? =
+                if (workerClassName == TaskManualRunWorker::class.java.name)
+                    TaskManualRunWorker(appContext, workerParameters, processor, tasks, ledger, clock, pendingActions)
+                else null
+        }
+        val occurrenceId = "manual:${task.id}:pending-approval"
+        val input = androidx.work.Data.Builder().putString(TaskManualRunWorker.KEY_TASK_ID, task.id)
+            .putString(TaskManualRunWorker.KEY_OCCURRENCE_ID, occurrenceId)
+            .putLong(TaskManualRunWorker.KEY_SCHEDULED_FOR, scheduledFor).build()
+
+        val result = runBlocking {
+            TestListenableWorkerBuilder.from(context, TaskManualRunWorker::class.java)
+                .setInputData(input).setWorkerFactory(factory).build().doWork()
+        }
+
+        assertTrue(result is ListenableWorker.Result.Success)
+        assertEquals(0, loop.calls)
+        assertEquals(task, tasks.get(task.id))
+        assertEquals(TaskState.AwaitingUser,
+            pendingActions.stateForTask(task.id, task.revision, task.state))
+        val rejected = ledger.forTask(task.id).single()
+        assertEquals("REJECTED", rejected.status)
+        assertEquals(TaskRunCause.AWAITING_USER, rejected.causeCode)
+        assertEquals(TaskPendingActionStatus.PENDING, pendingActions.get(pending.id)?.status)
+    }
+
     @Test fun boundManualWorkRejectsChangedRevisionPayloadOrIncompleteBindingBeforeProcessor() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val clock = Clock.fixed(Instant.parse("2025-03-08T08:00:00Z"), ZoneOffset.UTC)

@@ -22,6 +22,7 @@ import com.jarvys.agent.connectors.ConnectorOperation
 import com.jarvys.agent.connectors.ConnectorRegistry
 import com.jarvys.agent.connectors.ConnectorRuntime
 import com.jarvys.agent.connectors.ConnectorWritePreparation
+import com.jarvys.agent.connectors.AutonomyPolicy
 import com.jarvys.agent.proactive.BackgroundRunController
 import com.jarvys.agent.proactive.BackgroundRunKind
 import com.jarvys.agent.proactive.ProactiveCoreLoopFactory
@@ -50,7 +51,6 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
-import org.robolectric.Shadows.shadowOf
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -71,7 +71,7 @@ class ScheduledTaskProcessorTest {
     }
 
     @Test fun silentRunGetsExactReadOnlyScopeRedactsToolDataAndDeliversOnceToTaskConversation() {
-        val registry = registryWithCalendar(connected = true)
+        val (registry, calendarReads) = registryWithCalendar(connected = true)
         val calendarName = com.jarvys.agent.CoreConnectorTool.toolName(CalendarConnector.ID, CalendarConnector.SEARCH)
         val transcriptAtSecondTurn = AtomicReference<List<com.jarvys.agent.ConversationTurn>>()
         val factory = FakeLoopFactory { turn, transcript, declarations, _ ->
@@ -90,6 +90,7 @@ class ScheduledTaskProcessorTest {
         val processor = processor(factory, registry, store, notifications)
         val task = task(toolScope = TaskToolScope("LISTED", listOf(calendarName)),
             schedule = TaskSchedule.At("2025-01-02T13:00:00", TaskZone.Iana("Europe/Madrid")))
+            .copy(creatorToolNames = listOf(calendarName))
         val before = AgentRunUiState.state.value
 
         val scheduledFor = Instant.parse("2025-01-02T12:00:00Z").toEpochMilli()
@@ -117,6 +118,133 @@ class ScheduledTaskProcessorTest {
         assertEquals("There is one event.", result.deliveredResult)
         assertEquals(taskMessages.single().messageId, result.conversationMessageId)
         assertEquals(1, notifications.resultCalls.get())
+        assertEquals(1, calendarReads.get())
+    }
+
+    @Test fun askWriteIsQueuedWithExactArgumentsAndNeverExecutesInTheUnattendedRun() {
+        val (registry, executed) = registryWithWrite(AutonomyPolicy.ASK)
+        val toolName = com.jarvys.agent.CoreConnectorTool.toolName("mail", "send")
+        val task = task(toolScope = TaskToolScope("LISTED", listOf(toolName), writes = "ALLOW"))
+            .copy(creatorToolNames = listOf(toolName))
+        val pendingStore = TaskPendingActionStore(
+            Files.createTempDirectory("task-pending-write").resolve("pending.jsonl").toFile())
+        val notifications = FakeNotifications()
+        val arguments = mapOf("to" to "owner@example.test", "subject" to "Daily report")
+        val factory = FakeLoopFactory { turn, transcript, declarations, _ ->
+            assertEquals(setOf(toolName, TaskRespondTool.NAME), declarations.map { it.name }.toSet())
+            if (turn == 1) ModelReply("", listOf(ModelReply.Call("mail-send", toolName, arguments)))
+            else {
+                assertTrue(transcript.joinToString("\n") { it.content }.contains("pending_user_approval"))
+                ModelReply("The message is awaiting approval.", emptyList())
+            }
+        }
+
+        val result = processor(factory, registry, notifications = notifications, pendingActions = pendingStore)
+            .execute(task, 200L, 201L, "run-pending-write", CancellationToken.cancellable())
+
+        assertEquals("OK", result.status)
+        assertEquals("PENDING", result.toolsCalled.single().outcome)
+        assertEquals(0, executed.get())
+        val action = pendingStore.listForTask(task.id).single()
+        assertEquals(TaskPendingActionStatus.PENDING, action.status)
+        assertEquals(toolName, action.toolName)
+        assertEquals(JSONObject(arguments).toString(), JSONObject(action.argumentsJson).toString())
+        assertEquals(TaskState.AwaitingUser,
+            pendingStore.stateForTask(task.id, task.revision, task.state))
+        assertEquals(1, notifications.pendingActionCalls.get())
+    }
+
+    @Test fun askReadIsQueuedInsteadOfRunningInTheBackground() {
+        val (registry, reads) = registryWithCalendar(connected = true, policy = AutonomyPolicy.ASK)
+        val toolName = com.jarvys.agent.CoreConnectorTool.toolName(CalendarConnector.ID, CalendarConnector.SEARCH)
+        val task = task(toolScope = TaskToolScope("LISTED", listOf(toolName)))
+            .copy(creatorToolNames = listOf(toolName))
+        val pendingStore = TaskPendingActionStore(
+            Files.createTempDirectory("task-pending-read").resolve("pending.jsonl").toFile())
+        val factory = FakeLoopFactory { turn, transcript, declarations, _ ->
+            assertEquals(setOf(toolName, TaskRespondTool.NAME), declarations.map { it.name }.toSet())
+            if (turn == 1) ModelReply("", listOf(ModelReply.Call("calendar-search", toolName, mapOf("query" to "today"))))
+            else {
+                assertTrue(transcript.joinToString("\n") { it.content }.contains("pending_user_approval"))
+                ModelReply("The calendar query is waiting for approval.", emptyList())
+            }
+        }
+
+        val result = processor(factory, registry, notifications = FakeNotifications(), pendingActions = pendingStore)
+            .execute(task, 225L, 226L, "run-pending-read", CancellationToken.cancellable())
+
+        assertEquals("PENDING", result.toolsCalled.single().outcome)
+        assertEquals(0, reads.get())
+        assertEquals("calendar_search", pendingStore.listForTask(task.id).single().toolName)
+    }
+
+    @Test fun allowedWriteExecutesOnlyWhenTheTaskHasAnExplicitWriteGrant() {
+        val (registry, executed) = registryWithWrite(AutonomyPolicy.ALLOW)
+        val toolName = com.jarvys.agent.CoreConnectorTool.toolName("mail", "send")
+        val task = task(toolScope = TaskToolScope("LISTED", listOf(toolName), writes = "ALLOW"))
+            .copy(creatorToolNames = listOf(toolName))
+        val factory = FakeLoopFactory { turn, _, declarations, _ ->
+            assertEquals(setOf(toolName, TaskRespondTool.NAME), declarations.map { it.name }.toSet())
+            if (turn == 1) ModelReply("", listOf(ModelReply.Call("mail-send", toolName,
+                mapOf("to" to "owner@example.test"))))
+            else ModelReply("The message was sent.", emptyList())
+        }
+
+        val result = processor(factory, registry, notifications = FakeNotifications())
+            .execute(task, 250L, 251L, "run-allowed-write", CancellationToken.cancellable())
+
+        assertEquals("OK", result.status)
+        assertEquals("OK", result.toolsCalled.single().outcome)
+        assertEquals(1, executed.get())
+    }
+
+    @Test fun aWriteWithoutTaskGrantIsQueuedAndDenyOrCreatorCeilingRemovesIt() {
+        val toolName = com.jarvys.agent.CoreConnectorTool.toolName("mail", "send")
+        val (allowRegistry, allowExecutions) = registryWithWrite(AutonomyPolicy.ALLOW)
+        val noWriteGrant = task(toolScope = TaskToolScope("LISTED", listOf(toolName)))
+            .copy(creatorToolNames = listOf(toolName))
+        val pendingStore = TaskPendingActionStore(
+            Files.createTempDirectory("task-no-write-grant").resolve("pending.jsonl").toFile())
+        val factory = FakeLoopFactory { turn, _, declarations, _ ->
+            assertEquals(setOf(toolName, TaskRespondTool.NAME), declarations.map { it.name }.toSet())
+            if (turn == 1) ModelReply("", listOf(ModelReply.Call("mail-send", toolName,
+                mapOf("to" to "owner@example.test"))))
+            else ModelReply("The action is awaiting approval.", emptyList())
+        }
+        val result = processor(factory, allowRegistry, notifications = FakeNotifications(), pendingActions = pendingStore)
+            .execute(noWriteGrant, 300L, 301L, "run-no-write-grant", CancellationToken.cancellable())
+        assertEquals("PENDING", result.toolsCalled.single().outcome)
+        assertEquals(0, allowExecutions.get())
+        assertEquals(1, pendingStore.listForTask(noWriteGrant.id).size)
+
+        val (deniedRegistry, _) = registryWithWrite(AutonomyPolicy.DENY)
+        val deniedFactory = FakeLoopFactory { _, _, declarations, _ ->
+            assertEquals(listOf(TaskRespondTool.NAME), declarations.map { it.name })
+            ModelReply("The denied action is unavailable.", emptyList())
+        }
+        val deniedTask = noWriteGrant.copy(toolScope = TaskToolScope("LISTED", listOf(toolName), writes = "ALLOW"))
+        processor(deniedFactory, deniedRegistry, notifications = FakeNotifications())
+            .execute(deniedTask, 400L, 401L, "run-denied", CancellationToken.cancellable())
+        assertEquals(listOf(TaskRespondTool.NAME), deniedFactory.toolNames.single())
+
+        val outsideCeilingFactory = FakeLoopFactory { _, _, declarations, _ ->
+            assertEquals(listOf(TaskRespondTool.NAME), declarations.map { it.name })
+            ModelReply("The creator did not grant the action.", emptyList())
+        }
+        val outsideCreatorCeiling = deniedTask.copy(creatorToolNames = listOf("another_capability"))
+        processor(outsideCeilingFactory, allowRegistry, notifications = FakeNotifications())
+            .execute(outsideCreatorCeiling, 500L, 501L, "run-outside-ceiling", CancellationToken.cancellable())
+        assertEquals(listOf(TaskRespondTool.NAME), outsideCeilingFactory.toolNames.single())
+
+        val explicitTaskDeny = noWriteGrant.copy(
+            toolScope = TaskToolScope("LISTED", listOf(toolName), writes = "DENY"))
+        val taskDeniedFactory = FakeLoopFactory { _, _, declarations, _ ->
+            assertEquals(listOf(TaskRespondTool.NAME), declarations.map { it.name })
+            ModelReply("The task does not grant writes.", emptyList())
+        }
+        processor(taskDeniedFactory, allowRegistry, notifications = FakeNotifications())
+            .execute(explicitTaskDeny, 510L, 511L, "run-task-write-denied", CancellationToken.cancellable())
+        assertEquals(listOf(TaskRespondTool.NAME), taskDeniedFactory.toolNames.single())
     }
 
     @Test fun finalTextIsDeliveredWithoutTaskRespondAndOnlyIfNotableNoReplyIsSilent() {
@@ -231,11 +359,12 @@ class ScheduledTaskProcessorTest {
 
     @Test fun permanentConnectorLossNeedsAttentionAndTransientProviderFailureRetriesSameClassOfOccurrence() {
         val calendarName = com.jarvys.agent.CoreConnectorTool.toolName(CalendarConnector.ID, CalendarConnector.SEARCH)
-        val disconnected = registryWithCalendar(connected = false)
+        val (disconnected, _) = registryWithCalendar(connected = false)
         val notifications = FakeNotifications()
         val factory = FakeLoopFactory { _, _, _, _ -> error("disconnected connector must fail before the model") }
         val processor = processor(factory, disconnected, notifications = notifications)
-        val failure = processor.execute(task(toolScope = TaskToolScope("LISTED", listOf(calendarName))),
+        val failure = processor.execute(task(toolScope = TaskToolScope("LISTED", listOf(calendarName)))
+            .copy(creatorToolNames = listOf(calendarName)),
             100L, 101L, "run-disconnected", CancellationToken.cancellable())
         assertEquals("ERROR", failure.status)
         assertEquals(0, factory.turns.get())
@@ -435,7 +564,9 @@ class ScheduledTaskProcessorTest {
         registry: ConnectorRegistry,
         store: com.jarvys.agent.LocalRunStore = com.jarvys.agent.LocalRunStore(context),
         notifications: FakeNotifications,
-    ) = ScheduledTaskProcessor(context, factory, registry, store, fixedClock(), notifications)
+        pendingActions: TaskPendingActionStore = TaskPendingActionStore(context),
+    ) = ScheduledTaskProcessor(context, factory, registry, store, fixedClock(), notifications,
+        TaskStore(context), pendingActions)
 
     private fun task(toolScope: TaskToolScope = TaskToolScope("READ_ONLY", emptyList()),
                      delivery: TaskDelivery = TaskDelivery.ONLY_IF_NOTABLE,
@@ -451,7 +582,11 @@ class ScheduledTaskProcessorTest {
     private fun respond(notify: Boolean, title: String = "", body: String = ""): ModelReply =
         ModelReply(if (notify) body else "", emptyList())
 
-    private fun registryWithCalendar(connected: Boolean): ConnectorRegistry {
+    private fun registryWithCalendar(
+        connected: Boolean,
+        policy: AutonomyPolicy = AutonomyPolicy.ALLOW,
+    ): Pair<ConnectorRegistry, AtomicInteger> {
+        val reads = AtomicInteger()
         val runtime = object : ConnectorRuntime {
             override fun connect(configuration: Map<String, String>, secrets: Map<String, String>) = Unit
             override fun disconnect() = Unit
@@ -459,23 +594,57 @@ class ScheduledTaskProcessorTest {
                 ConnectorWritePreparation(ApprovalSummary("Write", emptyList()), arguments)
             override fun invokePrepared(operation: String, arguments: JSONObject,
                                          preparation: ConnectorWritePreparation, token: CancellationToken) = JSONObject()
-            override fun invoke(operation: String, arguments: JSONObject, token: CancellationToken) =
-                JSONObject().put("items", org.json.JSONArray().put(JSONObject().put("text",
+            override fun invoke(operation: String, arguments: JSONObject, token: CancellationToken): JSONObject {
+                reads.incrementAndGet()
+                return JSONObject().put("items", org.json.JSONArray().put(JSONObject().put("text",
                     "OTP code 482913 and card 4532015112830366")))
+            }
         }
         val definition = ConnectorDefinition(id = CalendarConnector.ID, name = "Calendar", version = "1",
             description = "Calendar read tool",
             operations = listOf(ConnectorOperation(name = CalendarConnector.SEARCH, description = "Search calendar",
                 inputSchema = JSONObject(), write = false, displayLabel = "Search calendar")),
             runtime = runtime, usageNoteProvider = { "calendar tool" })
-        return ConnectorRegistry.createForTests(object : ConnectorConnectionPreferences {
+        val registry = ConnectorRegistry.createForTests(object : ConnectorConnectionPreferences {
             private var connectedValue = false
             override fun isConnected(id: String) = connectedValue
             override fun setConnected(id: String, connected: Boolean) { connectedValue = connected }
         }, permissionGranted = { true }, approvalGate = ApprovalGate.INSTANCE).apply {
             register(definition)
+            setAutonomyPolicy(definition, definition.operations.single(), policy)
             if (connected) connect(definition.id)
         }
+        return registry to reads
+    }
+
+    private fun registryWithWrite(policy: AutonomyPolicy): Pair<ConnectorRegistry, AtomicInteger> {
+        val executed = AtomicInteger()
+        val operation = ConnectorOperation(name = "send", description = "Send an email",
+            inputSchema = JSONObject(), write = true, displayLabel = "Send email")
+        val runtime = object : ConnectorRuntime {
+            override fun connect(configuration: Map<String, String>, secrets: Map<String, String>) = Unit
+            override fun disconnect() = Unit
+            override fun prepareWrite(operation: String, arguments: JSONObject, token: CancellationToken) =
+                ConnectorWritePreparation(ApprovalSummary("Send email", emptyList()), JSONObject(arguments.toString()))
+            override fun invokePrepared(operation: String, arguments: JSONObject,
+                                         preparation: ConnectorWritePreparation, token: CancellationToken): JSONObject {
+                executed.incrementAndGet()
+                return JSONObject().put("sent", true)
+            }
+            override fun invoke(operation: String, arguments: JSONObject, token: CancellationToken) = JSONObject()
+        }
+        val definition = ConnectorDefinition(id = "mail", name = "Mail", version = "1",
+            description = "Mail connector", operations = listOf(operation), runtime = runtime)
+        val registry = ConnectorRegistry.createForTests(object : ConnectorConnectionPreferences {
+            private var connected = false
+            override fun isConnected(id: String) = connected
+            override fun setConnected(id: String, connected: Boolean) { this.connected = connected }
+        }, permissionGranted = { true }, approvalGate = ApprovalGate.INSTANCE).apply {
+            register(definition)
+            connect(definition.id)
+            setAutonomyPolicy(definition, operation, policy)
+        }
+        return registry to executed
     }
 
     private fun emptyRegistry() = ConnectorRegistry.createForTests(object : ConnectorConnectionPreferences {
@@ -510,6 +679,7 @@ class ScheduledTaskProcessorTest {
         val resultCalls = AtomicInteger()
         val attentionCalls = AtomicInteger()
         val recoveryCalls = AtomicInteger()
+        val pendingActionCalls = AtomicInteger()
         var postResult = true
         override fun result(context: Context, store: com.jarvys.agent.LocalRunStore, task: ScheduledTask,
                             messageId: String, title: String, body: String, urgency: String,
@@ -523,6 +693,10 @@ class ScheduledTaskProcessorTest {
         }
         override fun recovered(context: Context, task: ScheduledTask): Boolean {
             recoveryCalls.incrementAndGet()
+            return true
+        }
+        override fun pendingAction(context: Context, task: ScheduledTask, action: TaskPendingAction): Boolean {
+            pendingActionCalls.incrementAndGet()
             return true
         }
     }

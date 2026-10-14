@@ -3,6 +3,7 @@ package com.jarvys.agent;
 import com.jarvys.agent.connectors.ConnectorDefinition;
 import com.jarvys.agent.connectors.ConnectorOperation;
 import com.jarvys.agent.connectors.ConnectorRegistry;
+import com.jarvys.agent.connectors.AutonomyPolicy;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -45,7 +46,14 @@ public final class CoreConnectorTool implements CoreTool {
     @Override public ToolSpec declaration() { return declaration; }
     // Connector calls may request permission, mutate a device, or publish an artifact.
     @Override public ExecutionMode executionMode() { return ExecutionMode.SEQUENTIAL; }
+    @Override public UnattendedAccess unattendedAccess() {
+        return operation.getWrite() ? UnattendedAccess.WRITE : UnattendedAccess.READ;
+    }
+    @Override public boolean isConnectorTool() { return true; }
     String groupName() { return "connector:" + definition.getId(); }
+    String operationName() { return operation.getName(); }
+    boolean isWriteOperation() { return operation.getWrite(); }
+    AutonomyPolicy autonomyPolicy() { return registry.configuredAutonomyPolicy(definition, operation); }
     String displayName() { return operation.getDisplayLabel(); }
     String usageNote() { return definition.usageNote(); }
     String connectorId() { return definition.getId(); }
@@ -72,6 +80,15 @@ public final class CoreConnectorTool implements CoreTool {
         // Preserve the complete structured page, or let the loop ask for a smaller/isolated result.
         return result.has("next_page_token") ? CoreToolResult.complete(result.toString())
                 : CoreToolResult.success(result.toString());
+    }
+
+    CoreToolResult executeScheduledTask(Map<String, Object> arguments, CancellationToken token,
+                                        boolean approvedPendingAction,
+                                        java.util.function.Supplier<JSONObject> deferAskWrite) {
+        JSONObject result = registry.invokeForScheduledTask(definition, operation,
+                new JSONObject(arguments == null ? Collections.emptyMap() : arguments), token,
+                requester, requesterColorKey, approvedPendingAction, deferAskWrite);
+        return CoreToolResult.success(result.toString());
     }
 
     public static String toolName(String connectorId, String operationName) {

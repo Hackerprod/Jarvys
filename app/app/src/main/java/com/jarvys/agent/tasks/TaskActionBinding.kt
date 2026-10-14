@@ -6,6 +6,10 @@ import org.json.JSONObject
 
 /** Immutable semantic requests, not grants to the scheduler, providers or a task's tools. */
 internal object TaskActionBinding {
+    /** A pending action is bound to the reviewed task revision, not its transient queue state. */
+    fun pendingAction(task: ScheduledTask, runId: String, toolName: String, argumentsJson: String): String =
+        ExactActionBinding.digest("pending-action", task.id, task.revision.toString(), runId, toolName, argumentsJson)
+
     fun task(session: String, operation: String, task: ScheduledTask, effect: String = ""): String =
         ExactActionBinding.digest(session, operation, payload(task), effect)
 
@@ -34,7 +38,8 @@ internal object TaskActionBinding {
         task.deleteAfterRun, task.nextRunAt ?: JSONObject.NULL,
         task.lastRun?.let { JSONArray(listOf(it.runId, it.scheduledFor, it.startedAt,
             it.finishedAt ?: JSONObject.NULL, it.status, it.deliveryStatus)) } ?: JSONObject.NULL,
-        JSONArray(listOf(task.toolScope.mode, JSONArray(task.toolScope.tools), task.toolScope.web, task.toolScope.writes)),
+        JSONArray(listOf(task.toolScope.mode, JSONArray(task.toolScope.tools), task.toolScope.web,
+            task.toolScope.writes, task.toolScope.memory, JSONArray(task.toolScope.skillIds))),
         task.delivery.name, task.createdBy, JSONArray(task.creatorToolNames), task.createdAt, task.updatedAt,
     )).toString()
 

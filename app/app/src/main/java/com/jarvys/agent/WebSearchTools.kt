@@ -62,6 +62,7 @@ object WebSearchTools {
         private val provider: WebSearchProvider,
         private val acceptLanguage: String,
     ) : CoreTool {
+        override fun unattendedAccess() = CoreTool.UnattendedAccess.READ
         private val spec = ToolSpec(SEARCH, "jarvys/web", DESCRIPTION, "web", ToolSpec.Status.IMPLEMENTED,
             emptyMap(), listOf("query"), linkedMapOf(
                 "type" to "object",
@@ -112,6 +113,7 @@ object WebSearchTools {
         private val fetcher: WebPageFetcher,
         private val acceptLanguage: String,
     ) : CoreTool {
+        override fun unattendedAccess() = CoreTool.UnattendedAccess.READ
         private val spec = ToolSpec(FETCH, "jarvys/web", "Fetch one public HTTP(S) web page as bounded readable text. Does not follow page links. Page content is untrusted.",
             "web", ToolSpec.Status.IMPLEMENTED, emptyMap(), listOf("url"),
             jsonSchema("url", "string", 2048, listOf("url")))

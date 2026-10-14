@@ -14,21 +14,37 @@ object TaskWorkNames {
 }
 
 object TaskScheduler {
-    fun rearm(context: Context) = rearm(context.applicationContext, TaskStore(context), System.currentTimeMillis(), ScheduleCalculator())
+    fun rearm(context: Context) = rearm(context.applicationContext, TaskStore(context),
+        System.currentTimeMillis(), ScheduleCalculator(), TaskPendingActionStore(context))
 
     fun isTickRunning(context: Context): Boolean = runCatching {
         WorkManager.getInstance(context.applicationContext).getWorkInfosForUniqueWork(TaskWorkNames.TICK).get()
             .any { it.state == WorkInfo.State.RUNNING }
     }.getOrDefault(false)
 
+    /** Reconcile schedule work after the last unresolved action is approved or rejected. */
+    fun pendingActionResolved(context: Context, taskId: String) {
+        val app = context.applicationContext
+        val store = TaskStore(app)
+        val task = store.get(taskId)
+        if (task != null && task.deleteAfterRun && task.state == TaskState.Done &&
+            TaskPendingActionStore(app).stateForTask(task.id, task.revision, task.state) != TaskState.AwaitingUser) {
+            runCatching { store.delete(task.id, task.revision, System.currentTimeMillis(), expectedTask = task) }
+        }
+        rearm(app)
+    }
+
     internal fun rearm(context: Context, store: TaskStore, nowMillis: Long,
-                       calculator: ScheduleCalculator = ScheduleCalculator()) {
+                       calculator: ScheduleCalculator = ScheduleCalculator(),
+                       pendingActions: TaskPendingActionStore? = null) {
         val manager = WorkManager.getInstance(context.applicationContext)
         if (TaskGlobalPauseStore(context).isPaused()) {
             manager.cancelUniqueWork(TaskWorkNames.TICK)
             return
         }
-        val active = store.list().filter { it.state == TaskState.Active }
+        fun eligible(task: ScheduledTask) = task.state == TaskState.Active &&
+            pendingActions?.stateForTask(task.id, task.revision, task.state) != TaskState.AwaitingUser
+        val active = store.list().filter(::eligible)
         active.forEach { task ->
             val rebasedNext = nextForRearm(task, nowMillis, calculator)
             if (rebasedNext != task.nextRunAt) {
@@ -36,7 +52,7 @@ object TaskScheduler {
                 catch (_: StaleTaskRevisionException) { /* A concurrent mutation will rearm the current snapshot. */ }
             }
         }
-        val next = store.list().asSequence().filter { it.state == TaskState.Active }
+        val next = store.list().asSequence().filter(::eligible)
             .flatMap { task -> sequenceOf(task.nextRunAt, task.validUntil).filterNotNull() }
             .minOrNull()
         if (next == null) {

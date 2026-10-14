@@ -44,6 +44,9 @@ class TaskPlatformContractTest {
         val actionReceiver = (0 until receivers.length).map { receivers.item(it) }
             .single { it.attributes.getNamedItem("android:name")?.nodeValue == "com.jarvys.agent.tasks.TaskActionReceiver" }
         assertEquals("false", actionReceiver.attributes.getNamedItem("android:exported")?.nodeValue)
+        val pendingActionReceiver = (0 until receivers.length).map { receivers.item(it) }
+            .single { it.attributes.getNamedItem("android:name")?.nodeValue == "com.jarvys.agent.tasks.TaskPendingActionReceiver" }
+        assertEquals("false", pendingActionReceiver.attributes.getNamedItem("android:exported")?.nodeValue)
         val permissions = document.getElementsByTagName("uses-permission")
         val names = (0 until permissions.length).mapNotNull {
             val permission = permissions.item(it)
@@ -95,6 +98,10 @@ class TaskPlatformContractTest {
             .filter { it.startsWith("scheduled_task") || it.startsWith("scheduled_tasks") }.toSet()
         assertTrue(english.isNotEmpty())
         assertEquals(english, spanish)
+        val englishPendingActions = keys(File(base, "values/strings.xml")).filter { it.startsWith("task_pending_action") }.toSet()
+        val spanishPendingActions = keys(File(base, "values-es/strings.xml")).filter { it.startsWith("task_pending_action") }.toSet()
+        assertTrue(englishPendingActions.isNotEmpty())
+        assertEquals(englishPendingActions, spanishPendingActions)
         val englishCauses = keys(File(base, "values/strings.xml")).filter { it.startsWith("task_cause_") }.toSet()
         val spanishCauses = keys(File(base, "values-es/strings.xml")).filter { it.startsWith("task_cause_") }.toSet()
         assertTrue(englishCauses.isNotEmpty())
