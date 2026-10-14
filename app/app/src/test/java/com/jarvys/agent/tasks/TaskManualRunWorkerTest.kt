@@ -137,8 +137,7 @@ class TaskManualRunWorkerTest {
             override fun complete(transcript: List<com.jarvys.agent.ConversationTurn>, prompt: String,
                                   declarations: List<ToolSpec>, token: CancellationToken): ModelReply {
                 calls++
-                return ModelReply("", listOf(ModelReply.Call("manual-response", TaskRespondTool.NAME,
-                    mapOf("notify" to true, "title" to "Manual", "body" to "Manual result", "urgency" to "normal"))))
+                return ModelReply("Manual result", emptyList())
             }
         }, tools, systemPrompt, sessionId)
     }
@@ -148,7 +147,7 @@ class TaskManualRunWorkerTest {
         override fun result(context: Context, store: com.jarvys.agent.LocalRunStore, task: ScheduledTask,
                             messageId: String, title: String, body: String, urgency: String,
                             suggestedReplies: List<ProactiveSuggestedReply>): Boolean { results++; return true }
-        override fun attention(context: Context, task: ScheduledTask, reason: String): Boolean = true
+        override fun attention(context: Context, task: ScheduledTask, cause: TaskRunCause): Boolean = true
         override fun recovered(context: Context, task: ScheduledTask): Boolean = true
     }
 }

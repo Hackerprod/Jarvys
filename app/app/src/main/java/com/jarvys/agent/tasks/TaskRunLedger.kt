@@ -29,6 +29,8 @@ data class TaskRunRecord(
     val model: String? = null,
     val usageTokens: Int? = null,
     val manualOccurrenceId: String? = null,
+    val causeCode: TaskRunCause? = null,
+    val causeDetail: String? = null,
 ) {
     val occurrenceId: String get() = manualOccurrenceId ?: "$taskId:$scheduledFor"
     val idempotencyKey: String get() = occurrenceId
@@ -60,7 +62,8 @@ class TaskRunLedger(private val ledger: File) {
                 || previous.toolsCalled.any { it.write })) {
             return@withLock false
         }
-        appendLocked(encode(record.copy(status = "STARTED", finishedAt = null)))
+        appendLocked(encode(record.copy(status = "STARTED", finishedAt = null, reason = null,
+            skipReason = null, errorCause = null, causeCode = null, causeDetail = null)))
         true
     }
 
@@ -76,7 +79,8 @@ class TaskRunLedger(private val ledger: File) {
         val record = readLatestLocked().runs[key] ?: return@withLock false
         if (record.status == "RETRYABLE") return@withLock true
         if (record.status != "ERROR" && record.status != "INTERRUPTED") return@withLock false
-        appendLocked(encode(record.copy(status = "RETRYABLE", reason = null, errorCause = null)))
+        appendLocked(encode(record.copy(status = "RETRYABLE", reason = null, errorCause = null,
+            causeCode = null, causeDetail = null)))
         true
     }
 
@@ -151,11 +155,23 @@ class TaskRunLedger(private val ledger: File) {
                 .put("write", tool.write).put("outcome", tool.outcome)) }
         })
         .putNullableString("errorCause", record.errorCause)
+        .putNullableString("causeCode", record.causeCode?.code)
+        .putNullableString("causeDetail", record.causeDetail)
         .putNullableString("model", record.model)
         .put("usageTokens", record.usageTokens ?: JSONObject.NULL)
         .toString()
 
     private fun decode(row: JSONObject): TaskRunRecord {
+        val legacyCause = row.optNullableString("errorCause")
+            ?: row.optNullableString("skipReason")
+            ?: row.optNullableString("reason")
+        val storedCause = row.optNullableString("causeCode")
+        val causeCode = TaskRunCause.fromCode(storedCause)
+            ?: if (storedCause != null) TaskRunCause.UNKNOWN else TaskRunCause.fromLegacy(legacyCause)
+        val unknownStoredCause = storedCause?.takeIf { TaskRunCause.fromCode(it) == null }
+        val causeDetail = row.optNullableString("causeDetail")
+            ?: TaskRunCause.legacyDetail(legacyCause, causeCode)
+            ?: unknownStoredCause
         val calls = row.optJSONArray("toolsCalled")
         val tools = if (calls == null) emptyList() else (0 until calls.length()).mapNotNull { index ->
             calls.optJSONObject(index)?.let { item -> TaskToolCallRecord(item.getString("name"),
@@ -171,6 +187,8 @@ class TaskRunLedger(private val ledger: File) {
             model = row.optNullableString("model"), usageTokens = if (row.isNull("usageTokens")) null else row.optInt("usageTokens"),
             manualOccurrenceId = row.optString("occurrenceId", "").takeIf {
                 it.isNotEmpty() && it != "${row.getString("taskId")}:${row.getLong("scheduledFor")}" },
+            causeCode = causeCode,
+            causeDetail = causeDetail,
         )
         return record
     }

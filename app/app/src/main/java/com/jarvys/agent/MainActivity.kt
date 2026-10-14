@@ -170,7 +170,6 @@ import com.jarvys.agent.memory.memoryDestinations
 import com.jarvys.agent.tasks.TaskStore
 import com.jarvys.agent.tasks.TaskDataChanges
 import com.jarvys.agent.tasks.ui.TaskDeepLink
-import com.jarvys.agent.tasks.ui.TaskUiProjection
 import com.jarvys.agent.tasks.ui.TasksNavigationRoutes
 import com.jarvys.agent.tasks.ui.tasksDestinations
 import com.jarvys.agent.providers.providersDestinations
@@ -214,7 +213,6 @@ import com.jarvys.agent.ui.chat.ConversationTimeline
 import com.jarvys.agent.ui.chat.ChatComposer
 import com.jarvys.agent.ui.chat.ConversationDrawer
 import com.jarvys.agent.ui.chat.ArchivedChatsScreen
-import com.jarvys.agent.ui.chat.ScheduledTasksPlaceholderScreen
 import com.jarvys.agent.ui.shell.JarvysRouteTopBar
 import com.jarvys.agent.ui.shell.JarvysShellFrame
 import com.jarvys.agent.ui.shell.ModelSelectorSheet
@@ -242,7 +240,6 @@ private object Routes {
     const val SETTINGS_PREFERENCES = AppNavigationBackPolicy.SETTINGS_PREFERENCES
     const val SETTINGS_DEVELOPER = AppNavigationBackPolicy.SETTINGS_DEVELOPER
     const val ARCHIVED_CHATS = AppNavigationBackPolicy.ARCHIVED_CHATS
-    const val SCHEDULED_TASKS = AppNavigationBackPolicy.SCHEDULED_TASKS
     const val PROVIDERS = AppNavigationBackPolicy.PROVIDERS
     const val PROVIDERS_OPENAI = AppNavigationBackPolicy.PROVIDERS_OPENAI
     const val PROVIDERS_OPENROUTER = AppNavigationBackPolicy.PROVIDERS_OPENROUTER
@@ -471,10 +468,6 @@ class MainActivity : ComponentActivity() {
             val fileActionSession = conversationSessionId
             val attachmentSending by attachmentDrafts.sending.collectAsState()
             val agentState by AgentRunUiState.state.collectAsState()
-            val taskDataRevision by TaskDataChanges.revision.collectAsState()
-            val scheduledTasksAvailable = remember(taskDataRevision) {
-                runCatching { TaskUiProjection.showSettingsEntry(TaskStore(applicationContext).list().size) }.getOrDefault(false)
-            }
             LaunchedEffect(conversationSessionId, agentState.reflecting, agentState.reflectionStatus,
                 agentState.reflectionSessionId) {
                 if (::reflectionPreferences.isInitialized) refreshReflectionUiState(conversationSessionId)
@@ -510,7 +503,6 @@ class MainActivity : ComponentActivity() {
                     selectedHistoryRunId = selectedHistoryRunId,
                     proactiveTargetMessageId = proactiveTargetMessageId,
                     conversationSessionId = conversationSessionId,
-                    scheduledTasksAvailable = scheduledTasksAvailable,
                     crewMode = crewModeChoice,
                     onCrewModeChange = ::persistCrewMode,
                     conversationTitle = conversationTitle,
@@ -1538,7 +1530,6 @@ private fun JarvysApp(
     selectedHistoryRunId: String?,
     proactiveTargetMessageId: String?,
     conversationSessionId: String,
-    scheduledTasksAvailable: Boolean,
     crewMode: CrewMode,
     onCrewModeChange: (CrewMode) -> Unit,
     conversationTitle: String?,
@@ -1872,7 +1863,7 @@ private fun JarvysApp(
                     navController.navigate(Routes.CHAT) { launchSingleTop = true }
                 } },
                 onOpenScheduledTasks = { navigateFromDrawer {
-                    navController.navigate(Routes.SCHEDULED_TASKS) { launchSingleTop = true }
+                    navController.navigate(Routes.TASKS) { launchSingleTop = true }
                 } },
                 onOpenBots = { navigateFromDrawer {
                     navController.navigate(Routes.BOTS) { launchSingleTop = true }
@@ -1975,7 +1966,6 @@ private fun JarvysApp(
                     onMemory = { navController.navigate(Routes.MEMORY) { launchSingleTop = true } },
                     archivedChatsAvailable = runHistory.any { it.archived },
                     onArchivedChats = { navController.navigate(Routes.ARCHIVED_CHATS) { launchSingleTop = true } },
-                    scheduledTasksAvailable = scheduledTasksAvailable,
                     onScheduledTasks = { navController.navigate(Routes.TASKS) { launchSingleTop = true } },
                     onAccessibilitySettings = onAccessibilitySettings,
                     onNavigate = { destination ->
@@ -2111,7 +2101,6 @@ private fun JarvysApp(
                         onConversationAction = onConversationAction,
                     )
                 }
-                composable(Routes.SCHEDULED_TASKS) { ScheduledTasksPlaceholderScreen() }
                 composable(Routes.SETTINGS) { settingsPageContent(JarvysSettingsPage.HOME) }
                 composable(Routes.SETTINGS_PREFERENCES) { settingsPageContent(JarvysSettingsPage.PREFERENCES) }
                 composable(Routes.SETTINGS_DEVELOPER) { settingsPageContent(JarvysSettingsPage.DEVELOPER) }

@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import com.jarvys.agent.JarvysGroup
+import com.jarvys.agent.JarvysEmptyState
 import com.jarvys.agent.JarvysListRow
 import com.jarvys.agent.JarvysSectionLabel
 import com.jarvys.agent.JarvysTag
@@ -62,6 +63,7 @@ import com.jarvys.agent.tasks.TaskDelivery
 import com.jarvys.agent.tasks.TaskManualRunScheduler
 import com.jarvys.agent.tasks.TaskRepository
 import com.jarvys.agent.tasks.TaskRunLedger
+import com.jarvys.agent.tasks.TaskRunCause
 import com.jarvys.agent.tasks.TaskRunRecord
 import com.jarvys.agent.tasks.TaskSchedule
 import com.jarvys.agent.tasks.TaskSchedulePresentation
@@ -82,7 +84,6 @@ fun TasksListScreen(
     onRequestChange: (ScheduledTask) -> Unit,
     onConfigureProvider: () -> Unit,
     onMessage: (String) -> Unit,
-    onReturnToSettings: () -> Unit,
     pauseAll: (Boolean) -> Unit = { TaskScheduler.setAllPaused(context.applicationContext, it) },
     enqueueManualRun: (String) -> Unit = { TaskManualRunScheduler.enqueue(context.applicationContext, it) },
     healthIssuesOverride: ((List<ScheduledTask>) -> List<TaskHealthIssue>)? = null,
@@ -110,10 +111,12 @@ fun TasksListScreen(
         is TasksScreenLoad.Ready -> {
             val snapshot = current.snapshot
             if (snapshot.tasks.isEmpty()) {
-                LaunchedEffect(revision) {
-                    onMessage(app.getString(R.string.tasks_empty_returned))
-                    onReturnToSettings()
-                }
+                JarvysEmptyState(
+                    icon = LucideIcons.Calendar,
+                    title = stringResource(R.string.tasks_empty_title),
+                    body = stringResource(R.string.tasks_empty_body),
+                    modifier = Modifier.fillMaxSize().padding(24.dp).testTag("tasks-empty-state"),
+                )
                 return
             }
             val now = System.currentTimeMillis()
@@ -273,10 +276,10 @@ internal fun TaskHealthCard(
                             } }
                         }
                         TaskHealthKind.ATTENTION -> {
-                            val reason = issue.reason.orEmpty()
-                            val providerMissing = reason.contains("provider", ignoreCase = true)
+                            val cause = issue.causeCode ?: TaskRunCause.UNKNOWN
+                            val providerMissing = cause == TaskRunCause.NO_PROVIDER
                             Text(stringResource(R.string.tasks_health_attention, issue.taskName.orEmpty(),
-                                if (providerMissing) stringResource(R.string.tasks_attention_provider) else reason),
+                                cause.localized(context)),
                                 style = MaterialTheme.typography.bodyMedium)
                             if (providerMissing) OutlinedButton(onClick = onConfigureProvider) {
                                 Text(stringResource(R.string.tasks_health_configure_provider))
@@ -311,7 +314,8 @@ private fun TaskListItem(
     val stateLabel = taskStateLabel(context, task.state)
     val next = task.nextRunAt?.let { stringResource(R.string.tasks_next_run, presentation.localTime(it, presentation.zoneFor(task.schedule))) }
         ?: stringResource(R.string.tasks_no_next_run)
-    val last = lastRun?.let { stringResource(R.string.tasks_last_run, runStatusLabel(context, it.status, it.skipReason)) }
+    val last = lastRun?.let { stringResource(R.string.tasks_last_run,
+        runStatusLabel(context, it.status, it.causeCode, it.deliveryStatus)) }
         ?: stringResource(R.string.tasks_status_never)
     val switchActive = task.state == TaskState.Active
     JarvysGroup(Modifier.testTag("task-row-${task.id}")) {
@@ -407,9 +411,10 @@ private fun taskStateLabel(context: Context, state: TaskState): String = when (s
     TaskState.AwaitingUser -> context.getString(R.string.tasks_state_awaiting)
 }
 
-internal fun runStatusLabel(context: Context, status: String, skipReason: String? = null): String = when {
-    skipReason == "no_provider" || status == "SKIPPED" && skipReason?.contains("provider", true) == true ->
-        context.getString(R.string.tasks_status_no_provider)
+internal fun runStatusLabel(context: Context, status: String, causeCode: TaskRunCause? = null,
+                            deliveryStatus: String? = null): String = when {
+    causeCode != null -> causeCode.localized(context)
+    status == "NO_RESULT" || deliveryStatus == "NO_RESULT" -> context.getString(R.string.tasks_delivery_no_result)
     status == "OK" -> context.getString(R.string.tasks_status_ok)
     status == "SILENT" -> context.getString(R.string.tasks_status_silent)
     status == "ERROR" -> context.getString(R.string.tasks_status_error)

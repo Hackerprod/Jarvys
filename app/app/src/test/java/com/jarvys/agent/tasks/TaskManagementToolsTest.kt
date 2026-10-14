@@ -73,24 +73,23 @@ class TaskManagementToolsTest {
         assertTrue(f.repository.list().isEmpty())
     }
 
-    @Test fun listProvidesLocalClockAndTaskRunsAreUntrustedAndPaginated() {
+    @Test fun listProvidesLocalClockAndTaskRunsAreStructuredAndPaginated() {
         val f = fixture()
         val task = f.createTask()
         repeat(4) { index -> f.addRun(task.id, startedAt = index + 1L) }
 
         val listed = payload(f.tools.tool(TaskManagementTools.LIST_TASKS).execute(emptyMap(), CancellationToken.uncancellable()))
-        val data = listed.getJSONObject("content")
+        val data = listed
         assertEquals("UTC", data.getString("zone"))
         assertTrue(data.getString("now_local").contains("2025-03-07T23:30"))
         assertEquals(1, data.getJSONArray("tasks").length())
 
         val runsTool = f.tools.tool(TaskManagementTools.TASK_RUNS)
         val all = runsTool.execute(mapOf("task_id" to task.id), CancellationToken.uncancellable())
-        assertTrue(all.content.startsWith(TaskManagementTools.UNTRUSTED_DATA_PREFIX))
-        assertTrue(payload(all).getBoolean("untrusted_data"))
-        assertEquals(4, payload(all).getJSONObject("content").getJSONArray("runs").length())
+        assertFalse(all.content.contains("UNTRUSTED TASK DATA"))
+        assertEquals(4, payload(all).getJSONArray("runs").length())
         val limited = runsTool.execute(mapOf("task_id" to task.id, "limit" to 2), CancellationToken.uncancellable())
-        assertEquals(2, payload(limited).getJSONObject("content").getJSONArray("runs").length())
+        assertEquals(2, payload(limited).getJSONArray("runs").length())
     }
 
     @Test fun updateUsesExactRevisionAndPreservesTaskScopeLimits() {
@@ -220,5 +219,5 @@ class TaskManagementToolsTest {
 
     private val TaskManagementTools.allTools: Map<String, CoreTool> get() = tools().associateBy { it.declaration().name }
     private fun TaskManagementTools.tool(name: String): CoreTool = allTools[name] ?: error("Tool $name is missing")
-    private fun payload(result: CoreToolResult): JSONObject = JSONObject(result.content.substringAfter('\n'))
+    private fun payload(result: CoreToolResult): JSONObject = JSONObject(result.content)
 }

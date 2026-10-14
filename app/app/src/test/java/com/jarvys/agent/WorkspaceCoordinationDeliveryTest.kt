@@ -340,7 +340,7 @@ class WorkspaceCoordinationDeliveryTest {
         reply(r, token = token, admission = Runnable {
             if (Thread.holdsLock(ledger)) {
                 assertTrue("Reply must own control before ledger", Thread.holdsLock(WorkspaceCoordinator.controlDispatchLock(target.assignmentId)))
-                assertTrue("Reply must own STOP before ledger", Thread.holdsLock(stop)); replyChecks.incrementAndGet()
+                assertTrue("Reply must hold a STOP-admitted dispatch before ledger", stop.hasActiveDispatch()); replyChecks.incrementAndGet()
             }
         })
         assertEquals(3, replyChecks.get()) // PREPARED, STARTED, ACCEPTED_LOCAL, all before a durable append.

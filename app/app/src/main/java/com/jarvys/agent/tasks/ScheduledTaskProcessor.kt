@@ -62,52 +62,51 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
                                       runId: String, workerToken: CancellationToken,
                                       occurrenceId: String, sessionId: String): TaskExecutionResult {
         val missingProvider = loopFactory.providerUnavailableReason(localized)
-        if (missingProvider != null) return TaskExecutionResult(status = "SKIPPED",
-            deliveryStatus = "NOT_APPLICABLE", reason = "no_provider", skipReason = "no_provider",
-            errorCause = null, model = currentModel())
+        if (missingProvider != null) return permanentFailure(task, scheduledFor, TaskRunCause.NO_PROVIDER,
+            missingProvider, emptyList(), currentModel(), occurrenceId)
 
         val token = BackgroundRunController.tryStart(BackgroundRunKind.TASK)
-            ?: return TaskExecutionResult("RETRYABLE", "NOT_APPLICABLE", "background_run_active",
-                errorCause = "background_run_active", model = currentModel())
+            ?: return TaskExecutionResult("RETRYABLE", "NOT_APPLICABLE",
+                causeCode = TaskRunCause.BACKGROUND_RUN_ACTIVE, model = currentModel())
         val cancelWorkerRun = workerToken.registerCancelAction { token.cancel() }
         val toolCalls = mutableListOf<TaskToolCallRecord>()
         val registered = AtomicReference<List<ConnectorRegistry>>(emptyList())
         try {
             token.throwIfCancelled()
             val scope = buildTools(task, toolCalls)
-            if (scope.error != null) return permanentFailure(task, scheduledFor, scope.error,
-                toolCalls, currentModel(), occurrenceId)
+            if (scope.error != null) return permanentFailure(task, scheduledFor,
+                if (scope.error.startsWith("connector_unavailable:")) TaskRunCause.CONNECTOR_UNAVAILABLE
+                else TaskRunCause.TOOL_SCOPE_UNAVAILABLE,
+                scope.error, toolCalls, currentModel(), occurrenceId)
 
             val registryList = scope.connectors
             registered.set(registryList)
             registryList.forEach { it.beginAgentRun(token.generation(), task.instruction, emptyList()) }
-            val systemPrompt = buildString {
-                append(localized.getString(com.jarvys.agent.R.string.scheduled_task_system_prompt))
-                if (task.toolScope.web && task.toolScope.tools.any { it in setOf(WebSearchTools.SEARCH, WebSearchTools.FETCH) }) {
-                    append("\n\n").append(WebSearchTools.citationPrompt())
-                }
-            }
-            val userPrompt = userRequest(task, scheduledFor)
+            val systemPrompt = if (task.toolScope.web && task.toolScope.tools.any {
+                    it in setOf(WebSearchTools.SEARCH, WebSearchTools.FETCH)
+                }) WebSearchTools.citationPrompt() else ""
+            val userPrompt = userRequest(task)
             val result = runLoop(sessionId, scope.registry, systemPrompt, userPrompt, emptyList(), token)
-            val respondent = scope.respondent
             token.throwIfCancelled()
             val failedConnectorCall = toolCalls.firstOrNull { it.name in scope.connectorNames && it.outcome == "ERROR" }
             if (failedConnectorCall != null) return permanentFailure(task, scheduledFor,
-                "connector_unavailable_or_revoked", toolCalls, currentModel(), occurrenceId)
-            val response = respondent.result() ?: return TaskExecutionResult("RETRYABLE",
-                "NOT_APPLICABLE", "sin_task_respond", toolsCalled = toolCalls.toList(),
-                errorCause = "sin_task_respond", model = currentModel())
+                TaskRunCause.CONNECTOR_UNAVAILABLE, failedConnectorCall.name, toolCalls, currentModel(), occurrenceId)
+            if (!result.outcome.equals("COMPLETED", ignoreCase = true)) return permanentFailure(task, scheduledFor,
+                TaskRunCause.EXECUTION_FAILED, result.outcome, toolCalls, currentModel(), occurrenceId)
+            val response = scope.respondent.result()
+            val finalText = displayText(result.text.orEmpty())
+            val noVisibleResult = finalText.isBlank() || finalText == NO_REPLY
 
             val recovering = task.lastRun?.status == "ERROR" || task.state is TaskState.NeedsAttention
-            if (!response.notify) {
-                val recoveredNotice = if (recovering) notifications.recovered(app, task) else false
-                return TaskExecutionResult("SILENT", if (recoveredNotice) "DELIVERED" else "SILENT",
-                    notified = recoveredNotice, toolsCalled = toolCalls.toList(), model = currentModel())
+            if (noVisibleResult && task.delivery == TaskDelivery.ONLY_IF_NOTABLE) {
+                return TaskExecutionResult("SILENT", "SILENT", toolsCalled = toolCalls.toList(),
+                    model = currentModel())
             }
-            val title = displayText(response.title)
-            val body = displayText(response.body)
-            if (title.isBlank() || body.isBlank()) return permanentFailure(task, scheduledFor,
-                "empty_deliverable", toolCalls, currentModel(), occurrenceId)
+            if (noVisibleResult) return TaskExecutionResult("OK", "NO_RESULT", toolsCalled = toolCalls.toList(),
+                model = currentModel())
+            val title = response?.title?.let(::displayText)?.takeIf(String::isNotBlank)
+                ?: displayText(task.name).ifBlank { task.name }
+            val body = finalText
 
             val session = ScheduledTaskConversation.SESSION_ID
             val threadKey = ScheduledTaskConversation.threadKey(task.id)
@@ -122,7 +121,7 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
             val committedTitle = if (separator >= 0) committedText.substring(0, separator) else title
             val committedBody = if (separator >= 0) committedText.substring(separator + 2) else committedText
             val notified = notifications.result(app, conversationStore, task, messageId, committedTitle, committedBody,
-                response.urgency, response.suggestedReplies)
+                response?.urgency ?: "normal", response?.suggestedReplies.orEmpty())
             val recoveredNotice = if (recovering) notifications.recovered(app, task) else false
             return TaskExecutionResult("OK", when {
                 notified || recoveredNotice -> "DELIVERED"
@@ -132,17 +131,20 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
         } catch (cancelled: CancellationException) {
             val partial = toolCalls.any { it.write }
             return TaskExecutionResult(if (partial) "PARTIAL" else "INTERRUPTED", "NOT_APPLICABLE",
-                "interrupted", toolsCalled = toolCalls.toList(), errorCause = "interrupted", model = currentModel())
+                toolsCalled = toolCalls.toList(), causeCode = if (partial) TaskRunCause.EFFECT_OCCURRED
+                else TaskRunCause.INTERRUPTED, model = currentModel())
         } catch (failure: RuntimeException) {
             if (token.isCancelled) {
                 val partial = toolCalls.any { it.write }
                 return TaskExecutionResult(if (partial) "PARTIAL" else "INTERRUPTED", "NOT_APPLICABLE",
-                    "interrupted", toolsCalled = toolCalls.toList(), errorCause = "interrupted", model = currentModel())
+                    toolsCalled = toolCalls.toList(), causeCode = if (partial) TaskRunCause.EFFECT_OCCURRED
+                    else TaskRunCause.INTERRUPTED, model = currentModel())
             }
             if (isTransient(failure)) return TaskExecutionResult("RETRYABLE", "NOT_APPLICABLE",
-                transientCause(failure), toolsCalled = toolCalls.toList(), errorCause = transientCause(failure),
-                model = currentModel())
-            return permanentFailure(task, scheduledFor, normalizedCause(failure), toolCalls, currentModel(), occurrenceId)
+                toolsCalled = toolCalls.toList(), causeCode = transientCause(failure),
+                causeDetail = failure.message?.takeIf(String::isNotBlank), model = currentModel())
+            val (cause, detail) = normalizedCause(failure)
+            return permanentFailure(task, scheduledFor, cause, detail, toolCalls, currentModel(), occurrenceId)
         } finally {
             registered.get().forEach { it.endAgentRun(token.generation()) }
             cancelWorkerRun.run()
@@ -190,7 +192,7 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
             WebSearchTools.create(exaKey, language).filter { it.declaration().name in selectedWeb }
                 .forEach { tracked += TaskTrackedTool(it, false, calls, redactOutput = true) }
         }
-        val respondent = TaskRespondTool(task.delivery == TaskDelivery.ONLY_IF_NOTABLE)
+        val respondent = TaskRespondTool()
         tracked += TaskTrackedTool(respondent, false, calls, redactOutput = false)
         return Scope(CoreToolRegistry(tracked), respondent,
             if (selectedConnectors.isEmpty()) emptyList() else listOf(connectorRegistry),
@@ -209,7 +211,7 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
         return result
     }
 
-    private fun userRequest(task: ScheduledTask, scheduledFor: Long): String {
+    private fun userRequest(task: ScheduledTask): String {
         val zone = when (val schedule = task.schedule) {
             is TaskSchedule.At -> schedule.zone.toZoneId()
             is TaskSchedule.Calendar -> schedule.zone.toZoneId()
@@ -217,15 +219,13 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
         }
         val formatter = DateTimeFormatter.ofPattern("EEEE, d MMMM yyyy HH:mm z", locale)
         val nowLocal = Instant.ofEpochMilli(clock.millis()).atZone(zone).format(formatter)
-        val scheduledLocal = Instant.ofEpochMilli(scheduledFor).atZone(zone).format(formatter)
-        val timeContext = localized.getString(com.jarvys.agent.R.string.scheduled_task_time_context,
-            nowLocal, zone.id, scheduledLocal, zone.id)
-        val deliveryContext = localized.getString(com.jarvys.agent.R.string.scheduled_task_delivery_context,
-            task.delivery.name)
-        return "Task name: ${task.name}\n$timeContext\n$deliveryContext\n\nTask instruction:\n${task.instruction}"
+        val timeData = localized.getString(com.jarvys.agent.R.string.scheduled_task_current_local_time,
+            nowLocal, zone.id)
+        return "Task name: ${task.name}\n$timeData\n\nTask instruction:\n${task.instruction}"
     }
 
-    private fun permanentFailure(task: ScheduledTask, scheduledFor: Long, reason: String,
+    private fun permanentFailure(task: ScheduledTask, scheduledFor: Long, cause: TaskRunCause,
+                                 detail: String? = null,
                                  calls: List<TaskToolCallRecord>, model: String,
                                  occurrenceId: String = "task:${task.id}:$scheduledFor"): TaskExecutionResult {
         val messageId = "$occurrenceId:attention"
@@ -234,14 +234,17 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
             conversationStore.appendConversationTitleIfAbsent(session, ScheduledTaskConversation.title(localized))
             conversationStore.appendProactiveAssistantMessageIfAbsent(session, messageId,
                 localized.getString(com.jarvys.agent.R.string.scheduled_tasks_attention_body,
-                    ProactiveTextSanitizer.sanitize(reason)), emptyList(), ScheduledTaskConversation.threadKey(task.id))
+                    ProactiveTextSanitizer.sanitize(cause.localized(localized))), emptyList(), ScheduledTaskConversation.threadKey(task.id))
         }
-        val notified = notifications.attention(app, task, reason)
-        return TaskExecutionResult("ERROR", if (notified) "DELIVERED" else "CHAT_ONLY", reason,
-            notified = notified, toolsCalled = calls.toList(), errorCause = reason, model = model)
+        val notified = notifications.attention(app, task, cause)
+        return TaskExecutionResult("ERROR", if (notified) "DELIVERED" else "CHAT_ONLY",
+            notified = notified, toolsCalled = calls.toList(), model = model,
+            causeCode = cause, causeDetail = detail)
     }
 
     private fun currentModel(): String = runCatching { ProviderSettings(app).model }.getOrDefault("")
+
+    companion object { const val NO_REPLY = "NO_REPLY" }
 
     private fun displayText(value: String): String =
         ProactiveTextSanitizer.sanitize(ProactiveRedactor.redactForModel(value))
@@ -257,20 +260,21 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
         return false
     }
 
-    private fun transientCause(error: RuntimeException): String = when (error) {
-        is ProviderHttpException -> if (error.httpStatus == 429) "429" else "5xx"
-        is ProviderTransportException -> "network"
-        else -> "network"
+    private fun transientCause(error: RuntimeException): TaskRunCause = when (error) {
+        is ProviderHttpException -> if (error.httpStatus == 429) TaskRunCause.PROVIDER_RATE_LIMITED else TaskRunCause.PROVIDER_UNAVAILABLE
+        is ProviderTransportException -> TaskRunCause.NETWORK
+        else -> TaskRunCause.NETWORK
     }
 
-    private fun normalizedCause(error: RuntimeException): String = when (error) {
+    private fun normalizedCause(error: RuntimeException): Pair<TaskRunCause, String?> = when (error) {
         is ProviderHttpException -> when {
-            error.httpStatus == 429 -> "429"
-            error.httpStatus >= 500 -> "5xx"
-            else -> "provider_http_${error.httpStatus}"
+            error.httpStatus == 429 -> TaskRunCause.PROVIDER_RATE_LIMITED to error.message
+            error.httpStatus >= 500 -> TaskRunCause.PROVIDER_UNAVAILABLE to error.message
+            else -> TaskRunCause.PROVIDER_ERROR to error.message
         }
-        is ProviderTransportException -> "network"
-        else -> error.javaClass.simpleName.ifBlank { "task_error" }
+        is ProviderTransportException -> TaskRunCause.NETWORK to error.message
+        else -> TaskRunCause.EXECUTION_FAILED to (error.message?.takeIf(String::isNotBlank)
+            ?: error.javaClass.simpleName.takeIf(String::isNotBlank))
     }
 
     private class TaskTrackedTool(

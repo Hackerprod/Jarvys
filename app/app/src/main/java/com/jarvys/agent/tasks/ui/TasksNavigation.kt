@@ -45,7 +45,6 @@ fun NavGraphBuilder.tasksDestinations(
             },
             onConfigureProvider = onConfigureProvider,
             onMessage = onMessage,
-            onReturnToSettings = onReturnToSettings,
             backgroundWorkBusyForAll = backgroundWorkBusyForAll,
         )
     }

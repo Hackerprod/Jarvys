@@ -1,6 +1,7 @@
 package com.jarvys.agent.tasks.ui
 
 import com.jarvys.agent.tasks.ScheduledTask
+import com.jarvys.agent.tasks.TaskRunCause
 import com.jarvys.agent.tasks.TaskState
 
 enum class TaskHealthKind { NOTIFICATIONS, BATTERY, DELAYED, ATTENTION }
@@ -9,7 +10,7 @@ data class TaskHealthIssue(
     val kind: TaskHealthKind,
     val taskId: String? = null,
     val taskName: String? = null,
-    val reason: String? = null,
+    val causeCode: TaskRunCause? = null,
     val scheduledFor: Long? = null,
 )
 
@@ -29,15 +30,14 @@ object TaskHealthPolicy {
             add(TaskHealthIssue(TaskHealthKind.DELAYED, task.id, task.name, scheduledFor = task.nextRunAt))
         }
         input.attentionTasks.forEach { task ->
-            val reason = (task.state as? TaskState.NeedsAttention)?.reason
-            add(TaskHealthIssue(TaskHealthKind.ATTENTION, task.id, task.name, reason))
+            val storedCause = (task.state as? TaskState.NeedsAttention)?.reason
+            add(TaskHealthIssue(TaskHealthKind.ATTENTION, task.id, task.name,
+                TaskRunCause.fromCode(storedCause) ?: TaskRunCause.fromLegacy(storedCause)))
         }
     }
 }
 
 object TaskUiProjection {
-    fun showSettingsEntry(taskCount: Int): Boolean = taskCount > 0
-
     fun isDelayed(task: ScheduledTask, nowMillis: Long, runInProgress: Boolean): Boolean =
         task.state == TaskState.Active && task.nextRunAt?.let { it < nowMillis } == true && !runInProgress
 }

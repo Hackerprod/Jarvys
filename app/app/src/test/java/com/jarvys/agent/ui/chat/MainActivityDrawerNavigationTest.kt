@@ -123,10 +123,10 @@ class MainActivityDrawerNavigationTest {
         compose.onNode(hasSetTextAction()).performTextInput(draft)
         openDrawer()
         tapTag("drawer-open-scheduled-tasks")
-        awaitTag("scheduled-tasks-placeholder")
+        awaitTag("tasks-empty-state")
         // Nested pages have a Back arrow. Exercise the drawer's real horizontal edge gesture.
         settleNativeFrame()
-        compose.onNode(isRoot() and hasAnyDescendant(hasTestTag("scheduled-tasks-placeholder"))).performTouchInput {
+        compose.onNode(isRoot() and hasAnyDescendant(hasTestTag("tasks-empty-state"))).performTouchInput {
             swipe(Offset(1f, centerY), Offset(width * 0.85f, centerY), durationMillis = 400)
         }
         compose.waitForIdle()
@@ -138,7 +138,7 @@ class MainActivityDrawerNavigationTest {
         systemBack()
         compose.onNodeWithTag("drawer-search").assertDoesNotExist()
         compose.onNodeWithTag("drawer-header").assertIsDisplayed()
-        compose.runOnIdle { assertEquals(AppNavigationBackPolicy.SCHEDULED_TASKS, navigation().currentDestination?.route) }
+        compose.runOnIdle { assertEquals(AppNavigationBackPolicy.TASKS, navigation().currentDestination?.route) }
         compose.onNodeWithTag("conversation-drawer-scroll").performScrollToNode(hasText(currentTitle))
         compose.onNodeWithText(currentTitle).assertIsDisplayed()
         tapTag("drawer-search-toggle")
@@ -147,15 +147,15 @@ class MainActivityDrawerNavigationTest {
         compose.onNodeWithTag("drawer-header").assertIsDisplayed()
         systemBack()
         compose.onNodeWithTag("drawer-header").assertIsNotDisplayed()
-        compose.onNodeWithTag("scheduled-tasks-placeholder").assertIsDisplayed()
-        compose.runOnIdle { assertEquals(AppNavigationBackPolicy.SCHEDULED_TASKS, navigation().currentDestination?.route) }
+        compose.onNodeWithTag("tasks-empty-state").assertIsDisplayed()
+        compose.runOnIdle { assertEquals(AppNavigationBackPolicy.TASKS, navigation().currentDestination?.route) }
         tapTag("jarvys-back")
         awaitCurrentChat()
         compose.onNode(hasSetTextAction()).assertTextEquals(draft)
         assertEquals(currentSession, selectedSession())
     }
 
-    @Test fun scheduledDestinationAndBackKeepDraftTranscriptScrollAndOneRouteAfterRapidTaps() {
+    @Test fun taskListDestinationAndBackKeepDraftTranscriptScrollAndOneRouteAfterRapidTaps() {
         awaitCurrentChat()
         val persisted = transcript(currentSession)
         val transfers = ViewModelProvider(activity)[ChatFileTransfers::class.java]
@@ -201,16 +201,16 @@ class MainActivityDrawerNavigationTest {
             advanceEventTime(16)
             click()
         }
-        awaitTag("scheduled-tasks-placeholder")
+        awaitTag("tasks-empty-state")
         awaitDrawerClosed()
-        compose.onNodeWithText(context.getString(R.string.scheduled_tasks_placeholder_body)).assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.tasks_empty_body)).assertIsDisplayed()
         compose.runOnIdle {
-            assertEquals(AppNavigationBackPolicy.SCHEDULED_TASKS, navigation().currentDestination?.route)
+            assertEquals(AppNavigationBackPolicy.TASKS, navigation().currentDestination?.route)
             assertEquals("Rapid taps must not append another destination", 1,
-                navigation().currentBackStack.value.count { it.destination.route == AppNavigationBackPolicy.SCHEDULED_TASKS })
-            assertTrue("The placeholder must not create scheduled work", TaskStore(context).list().isEmpty())
+                navigation().currentBackStack.value.count { it.destination.route == AppNavigationBackPolicy.TASKS })
+            assertTrue("Opening the list must not create scheduled work", TaskStore(context).list().isEmpty())
         }
-        capture("scheduled-tasks-placeholder")
+        capture("scheduled-tasks-empty-list")
 
         tapTag("jarvys-back")
         awaitCurrentChat()
@@ -229,7 +229,7 @@ class MainActivityDrawerNavigationTest {
         // A fresh open/close cycle also has a single Back step and does not consume the draft.
         openDrawer()
         tapTag("drawer-open-scheduled-tasks")
-        awaitTag("scheduled-tasks-placeholder")
+        awaitTag("tasks-empty-state")
         tapTag("jarvys-back")
         awaitCurrentChat()
         awaitVisibleAssistantTypography()

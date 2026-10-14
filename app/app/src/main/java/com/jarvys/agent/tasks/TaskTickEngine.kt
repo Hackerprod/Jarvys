@@ -14,6 +14,8 @@ data class TaskExecutionResult(
     val errorCause: String? = null,
     val model: String? = null,
     val usageTokens: Int? = null,
+    val causeCode: TaskRunCause? = null,
+    val causeDetail: String? = null,
 )
 
 fun interface TaskExecutor {
@@ -85,29 +87,36 @@ class TaskTickEngine(
                         if (existing != null && existing.status !in RETRYABLE_STATES) {
                             if (existing.status == "STARTED") {
                                 val interrupted = existing.copy(finishedAt = now, status = "INTERRUPTED",
-                                    deliveryStatus = "UNKNOWN", reason = "recovered_interrupted_run")
+                                    deliveryStatus = "UNKNOWN", reason = null, skipReason = null, errorCause = null,
+                                    causeCode = TaskRunCause.PREVIOUS_OCCURRENCE_INTERRUPTED)
                                 runs.saveSnapshot(interrupted)
                                 TickOccurrence.Existing(interrupted)
                             } else TickOccurrence.Existing(existing)
                         } else {
                             val runId = UUID.randomUUID().toString()
                             started++
-                            val result = if (skip) TaskExecutionResult("SKIPPED", "NOT_APPLICABLE", "missed_occurrence")
+                            val result = if (skip) TaskExecutionResult("SKIPPED", "NOT_APPLICABLE",
+                                causeCode = TaskRunCause.MISSED_OCCURRENCE)
                                 else try { executor.execute(task, scheduledFor, startedAt, runId, token) }
                                 catch (_: java.util.concurrent.CancellationException) {
-                                    TaskExecutionResult("INTERRUPTED", "NOT_APPLICABLE", "interrupted")
+                                    TaskExecutionResult("INTERRUPTED", "NOT_APPLICABLE",
+                                        causeCode = TaskRunCause.INTERRUPTED)
                                 }
                                 catch (failure: Exception) { TaskExecutionResult("ERROR", "NOT_APPLICABLE",
-                                    failure.message?.takeIf(String::isNotBlank) ?: failure.javaClass.simpleName) }
+                                    causeCode = TaskRunCause.EXECUTION_FAILED,
+                                    causeDetail = failure.message?.takeIf(String::isNotBlank) ?: failure.javaClass.simpleName) }
                             val finishedAt = clock.millis()
                             val writeMayHaveRun = result.toolsCalled.any { it.write }
                             val status = if (result.status in RETRYABLE_STATES && writeMayHaveRun) "PARTIAL" else result.status
                             val record = TaskRunRecord(task.id, runId, scheduledFor, startedAt, finishedAt, status,
-                                result.deliveryStatus, result.reason,
-                                skipReason = result.skipReason ?: result.reason.takeIf { status == "SKIPPED" },
+                                result.deliveryStatus, null,
                                 notified = result.notified, toolsCalled = result.toolsCalled,
-                                errorCause = result.errorCause ?: result.reason, model = result.model,
-                                usageTokens = result.usageTokens)
+                                model = result.model, usageTokens = result.usageTokens,
+                                causeCode = result.causeCode ?: TaskRunCause.fromLegacy(
+                                    result.errorCause ?: result.skipReason ?: result.reason),
+                                causeDetail = result.causeDetail ?: TaskRunCause.legacyDetail(
+                                    result.errorCause ?: result.skipReason ?: result.reason,
+                                    result.causeCode ?: TaskRunCause.fromLegacy(result.errorCause ?: result.skipReason ?: result.reason)))
                             if (status in RETRYABLE_STATES && !writeMayHaveRun) TickOccurrence.Retry(record)
                             else {
                                 val saved = if (existing == null) {
@@ -129,7 +138,8 @@ class TaskTickEngine(
                     is TickOccurrence.Existing -> {
                         if (outcome.record.status == "STARTED") {
                             val next = calculator.nextRunAfter(task, now)
-                            updateTask(task, task.copy(state = TaskState.NeedsAttention("Previous occurrence was interrupted"),
+                            updateTask(task, task.copy(state = TaskState.NeedsAttention(
+                                TaskRunCause.PREVIOUS_OCCURRENCE_INTERRUPTED.code),
                                 nextRunAt = next, lastRun = outcome.record.toLastRun()))
                         } else updateTask(task, stateAfter(task, outcome.record, now))
                     }
@@ -155,8 +165,8 @@ class TaskTickEngine(
         val expired = task.validUntil != null && now >= task.validUntil
         val oneShot = task.schedule is TaskSchedule.At
         val state = when {
-            record.status == "ERROR" -> TaskState.NeedsAttention(record.reason ?: "Task execution failed")
-            record.status == "PARTIAL" -> TaskState.NeedsAttention(record.reason ?: "Task run stopped after an effect")
+            record.status == "ERROR" -> TaskState.NeedsAttention((record.causeCode ?: TaskRunCause.EXECUTION_FAILED).code)
+            record.status == "PARTIAL" -> TaskState.NeedsAttention((record.causeCode ?: TaskRunCause.EFFECT_OCCURRED).code)
             expired || oneShot || task.deleteAfterRun -> TaskState.Done
             else -> TaskState.Active
         }
@@ -171,7 +181,8 @@ class TaskTickEngine(
         catch (_: StaleTaskRevisionException) { /* A concurrent user change wins; do not overwrite it. */ }
     }
 
-    private fun TaskRunRecord.toLastRun() = TaskLastRun(runId, scheduledFor, startedAt, finishedAt, status, deliveryStatus)
+    private fun TaskRunRecord.toLastRun() = TaskLastRun(runId, scheduledFor, startedAt, finishedAt, status,
+        deliveryStatus, causeCode)
 
     private sealed interface TickOccurrence {
         val record: TaskRunRecord

@@ -119,6 +119,26 @@ class TaskStoreTest {
         assertEquals(1, ledger.read().runs.size)
     }
 
+    @Test fun legacyLedgerCausesMapToStableCodesAndUnknownDetailsSurvive() {
+        val file = File(Files.createTempDirectory("task-legacy-causes").toFile(), "runs.jsonl")
+        file.writeText(listOf(
+            """{"taskId":"provider","runId":"provider-run","scheduledFor":1,"startedAt":2,"status":"ERROR","deliveryStatus":"CHAT_ONLY","errorCause":"provider_http_503"}""",
+            """{"taskId":"unknown","runId":"unknown-run","scheduledFor":3,"startedAt":4,"status":"ERROR","deliveryStatus":"CHAT_ONLY","reason":"Vendor failure detail"}""",
+            """{"taskId":"interrupted","runId":"interrupted-run","scheduledFor":5,"startedAt":6,"status":"INTERRUPTED","deliveryStatus":"UNKNOWN","reason":"Previous occurrence was interrupted"}""",
+        ).joinToString("\n", postfix = "\n"), StandardCharsets.UTF_8)
+
+        val result = TaskRunLedger(file).read()
+        assertEquals(0, result.ignoredCorruptRows)
+        val provider = result.runs.single { it.taskId == "provider" }
+        assertEquals(TaskRunCause.PROVIDER_UNAVAILABLE, provider.causeCode)
+        assertEquals("provider_http_503", provider.causeDetail)
+        val unknown = result.runs.single { it.taskId == "unknown" }
+        assertEquals(TaskRunCause.UNKNOWN, unknown.causeCode)
+        assertEquals("Vendor failure detail", unknown.causeDetail)
+        assertEquals(TaskRunCause.PREVIOUS_OCCURRENCE_INTERRUPTED,
+            result.runs.single { it.taskId == "interrupted" }.causeCode)
+    }
+
     @Test fun concurrentLedgerClaimsForOneOccurrenceGrantExactlyOneExecutor() {
         val file = File(Files.createTempDirectory("st0-ledger-race").toFile(), "runs.jsonl")
         val first = TaskRunLedger(file)

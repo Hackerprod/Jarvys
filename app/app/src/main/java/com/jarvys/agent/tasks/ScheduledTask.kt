@@ -56,6 +56,7 @@ data class TaskLastRun(
     val finishedAt: Long?,
     val status: String,
     val deliveryStatus: String,
+    val causeCode: TaskRunCause? = null,
 )
 
 data class ScheduledTask(

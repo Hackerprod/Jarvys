@@ -17,6 +17,7 @@ internal object TaskActionBinding {
             run.taskId, run.runId, run.scheduledFor, run.startedAt, run.finishedAt ?: JSONObject.NULL,
             run.status, run.deliveryStatus, run.reason ?: JSONObject.NULL, run.skipReason ?: JSONObject.NULL,
             run.notified, JSONArray(run.toolsCalled.map { JSONArray(listOf(it.name, it.write, it.outcome)) }),
+            run.causeCode?.code ?: JSONObject.NULL, run.causeDetail ?: JSONObject.NULL,
             run.errorCause ?: JSONObject.NULL, run.model ?: JSONObject.NULL, run.usageTokens ?: JSONObject.NULL,
             run.manualOccurrenceId ?: JSONObject.NULL,
         )).toString() }.toTypedArray())

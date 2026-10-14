@@ -7,6 +7,7 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import com.jarvys.agent.AgentRunUiEvent
 import com.jarvys.agent.AgentRunUiSnapshot
+import com.jarvys.agent.R
 import com.jarvys.agent.connectors.ConnectorConnectionPreferences
 import com.jarvys.agent.connectors.ConnectorRegistry
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -48,7 +49,7 @@ class WorkspaceDetailComposeTest {
         compose.onNodeWithTag("workspace-chat-timeline").assertIsDisplayed()
         compose.onNodeWithTag("chat-message-list").assertIsDisplayed()
         compose.onNodeWithText("Worker question").assertIsDisplayed()
-        compose.onNodeWithText("Workspace answer").assertIsDisplayed()
+        compose.onNodeWithText("Workspace answer", useUnmergedTree = true).assertIsDisplayed()
         compose.onNodeWithTag("tool-group-2").assertIsDisplayed()
         compose.onNodeWithText("Mission").assertDoesNotExist()
         compose.onNodeWithText("Recovery").assertDoesNotExist()
@@ -73,7 +74,12 @@ class WorkspaceDetailComposeTest {
         compose.onNodeWithTag("workspace-chat-empty").assertDoesNotExist()
         compose.runOnIdle { state.value = WorkspaceChatUiState(workspaceId, sessionId, "Workspace title",
             WorkspaceUiStatus.UNKNOWN, error = "Stored conversation is unavailable") }
-        compose.onNodeWithTag("workspace-chat-error").assertIsDisplayed()
+        val errorTitle = compose.activity.getString(R.string.workspace_chat_load_error)
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithText(errorTitle, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithTag("workspace-chat-error", useUnmergedTree = true).assertExists()
+        compose.onNodeWithText(errorTitle, useUnmergedTree = true).assertIsDisplayed()
         compose.onNodeWithTag("workspace-chat-retry").performClick()
         assertEquals(1, retries)
         compose.runOnIdle { state.value = WorkspaceChatUiState(workspaceId, sessionId, "Workspace title",

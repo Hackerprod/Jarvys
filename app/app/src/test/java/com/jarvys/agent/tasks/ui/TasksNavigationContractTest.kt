@@ -21,7 +21,7 @@ import org.junit.Test
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class TasksNavigationContractTest {
-    @Test fun taskRoutesHaveLocalizedTitlesBackAndSettingsEntryVisibilityTracksNonDeletedRows() {
+    @Test fun taskRoutesHaveLocalizedTitlesAndSettingsEntryIsAlwaysAvailable() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         assertTrue(AppNavigationBackPolicy.registeredRoutePatterns.contains(TasksNavigationRoutes.LIST))
         assertTrue(AppNavigationBackPolicy.registeredRoutePatterns.contains(TasksNavigationRoutes.DETAIL))
@@ -31,8 +31,7 @@ class TasksNavigationContractTest {
             context, TasksNavigationRoutes.LIST, "Chat", null, null).title)
         assertEquals("A task", AppNavigationBackPolicy.metadata(
             context, TasksNavigationRoutes.DETAIL, "Chat", null, "A task").title)
-        assertFalse(TaskUiProjection.showSettingsEntry(0))
-        assertTrue(TaskUiProjection.showSettingsEntry(1))
+        assertTrue(AppNavigationBackPolicy.registeredRoutePatterns.contains(AppNavigationBackPolicy.TASKS))
         val due = ScheduledTask(name = "Due", instruction = "Read", schedule = TaskSchedule.Every(900_000L, 1L),
             state = TaskState.Active, nextRunAt = 9L, createdAt = 1L)
         assertTrue(TaskUiProjection.isDelayed(due, nowMillis = 10L, runInProgress = false))
@@ -68,7 +67,7 @@ class TasksNavigationContractTest {
         val manifest = File(appRoot, "src/main/AndroidManifest.xml").readText()
         assertFalse(manifest.contains("REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"))
         val settingsSource = File(appRoot, "src/main/java/com/jarvys/agent/ui/settings/SettingsWorkspace.kt").readText()
-        assertTrue(settingsSource.contains("if (scheduledTasksAvailable)"))
+        assertFalse(settingsSource.contains("if (scheduledTasksAvailable)"))
         assertTrue(settingsSource.contains("TaskSettingsEntry(onScheduledTasks)"))
     }
 

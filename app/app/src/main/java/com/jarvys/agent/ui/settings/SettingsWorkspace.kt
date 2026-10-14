@@ -65,7 +65,6 @@ fun SettingsWorkspace(
     onSkills: () -> Unit,
     onConnectors: () -> Unit,
     onMemory: () -> Unit,
-    scheduledTasksAvailable: Boolean,
     onScheduledTasks: () -> Unit,
     onAccessibilitySettings: () -> Unit,
     onNavigate: (SettingsWorkspacePage) -> Unit,
@@ -85,7 +84,6 @@ fun SettingsWorkspace(
                 languageChoice = languageChoice,
                 memoryEnabled = memoryEnabled,
                 memoryUsedCharacters = memoryUsedCharacters,
-                scheduledTasksAvailable = scheduledTasksAvailable,
                 onScheduledTasks = onScheduledTasks,
                 archivedChatsAvailable = archivedChatsAvailable,
                 onArchivedChats = onArchivedChats,
@@ -140,7 +138,6 @@ private fun SettingsIndex(
     languageChoice: AppLanguageChoice,
     memoryEnabled: Boolean,
     memoryUsedCharacters: Int,
-    scheduledTasksAvailable: Boolean,
     onScheduledTasks: () -> Unit,
     archivedChatsAvailable: Boolean,
     onArchivedChats: () -> Unit,
@@ -160,10 +157,8 @@ private fun SettingsIndex(
             R.string.memory_settings_summary_on, memoryUsedCharacters.coerceAtLeast(0), MemoryConstants.MAX_CORE_MEMORY_CHARACTERS,
         ) else stringResource(R.string.memory_settings_summary_off)
         SettingsIndexRow(LucideIcons.Brain, stringResource(R.string.memory_title), memorySubtitle, onMemory)
-        if (scheduledTasksAvailable) {
-            SettingsRule()
-            TaskSettingsEntry(onScheduledTasks)
-        }
+        SettingsRule()
+        TaskSettingsEntry(onScheduledTasks)
         if (archivedChatsAvailable) {
             SettingsRule()
             SettingsIndexRow(LucideIcons.History, stringResource(R.string.drawer_archived_chats),

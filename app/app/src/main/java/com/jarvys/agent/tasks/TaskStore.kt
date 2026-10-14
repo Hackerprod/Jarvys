@@ -156,6 +156,7 @@ class TaskStore(private val ledger: File) {
     else JSONObject().put("runId", run.runId).put("scheduledFor", run.scheduledFor)
         .put("startedAt", run.startedAt).putNullableLong("finishedAt", run.finishedAt)
         .put("status", run.status).put("deliveryStatus", run.deliveryStatus)
+        .putNullableString("causeCode", run.causeCode?.code)
 
     private fun decode(row: JSONObject): Snapshot {
         val scheduleRow = row.getJSONObject("schedule")
@@ -174,14 +175,20 @@ class TaskStore(private val ledger: File) {
             "ACTIVE" -> TaskState.Active
             "PAUSED" -> TaskState.Paused
             "DONE" -> TaskState.Done
-            "NEEDS_ATTENTION" -> TaskState.NeedsAttention(stateRow.getString("reason"))
+            "NEEDS_ATTENTION" -> {
+                val reason = stateRow.getString("reason")
+                TaskState.NeedsAttention(TaskRunCause.fromCode(reason)?.code
+                    ?: TaskRunCause.fromLegacy(reason)?.code ?: TaskRunCause.UNKNOWN.code)
+            }
             "AWAITING_USER" -> TaskState.AwaitingUser
             else -> throw IllegalArgumentException("Unknown task state")
         }
         val lastRunRow = row.optJSONObject("lastRun")
         val lastRun = lastRunRow?.let { item ->
             TaskLastRun(item.getString("runId"), item.getLong("scheduledFor"), item.getLong("startedAt"),
-                item.optNullableLong("finishedAt"), item.getString("status"), item.getString("deliveryStatus"))
+                item.optNullableLong("finishedAt"), item.getString("status"), item.getString("deliveryStatus"),
+                TaskRunCause.fromCode(item.optNullableString("causeCode"))
+                    ?: TaskRunCause.fromLegacy(item.optString("causeCode", "").takeIf(String::isNotBlank)))
         }
         val scope = row.optJSONObject("toolScope") ?: JSONObject()
         val task = ScheduledTask(

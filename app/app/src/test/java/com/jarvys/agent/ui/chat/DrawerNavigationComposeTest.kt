@@ -112,23 +112,15 @@ class DrawerNavigationComposeTest {
         compose.onNodeWithContentDescription(compose.activity.getString(R.string.drawer_history)).assertDoesNotExist()
     }
 
-    @Test fun placeholderIsHonestAndHasNoScheduleCreationControls() {
-        compose.setContent { MaterialTheme { ScheduledTasksPlaceholderScreen() } }
-        compose.onNodeWithTag("scheduled-tasks-placeholder").assertIsDisplayed()
-        compose.onNodeWithText(compose.activity.getString(R.string.scheduled_tasks_placeholder_title)).assertIsDisplayed()
-        compose.onNodeWithText(compose.activity.getString(R.string.scheduled_tasks_placeholder_body)).assertIsDisplayed()
-        compose.onAllNodes(hasClickAction()).assertCountEquals(0)
-    }
-
-    @Test fun archiveAndPlaceholderRoutesHaveLocalizedBackMetadata() {
+    @Test fun archiveAndTaskRoutesHaveLocalizedBackMetadata() {
         listOf(AppNavigationBackPolicy.ARCHIVED_CHATS to R.string.drawer_archived_chats,
-            AppNavigationBackPolicy.SCHEDULED_TASKS to R.string.drawer_scheduled_tasks).forEach { (route, title) ->
+            AppNavigationBackPolicy.TASKS to R.string.tasks_title).forEach { (route, title) ->
             val meta = AppNavigationBackPolicy.metadata(compose.activity, route, "Chat title", null, null)
             assertEquals(compose.activity.getString(title), meta.title)
             assertFalse(meta.isRoot)
             assertEquals(AppRouteAction.NONE, meta.action)
         }
-        assertNotEquals(AppNavigationBackPolicy.TASKS, AppNavigationBackPolicy.SCHEDULED_TASKS)
+        assertFalse(AppNavigationBackPolicy.registeredRoutePatterns.contains("scheduled-tasks"))
     }
 
     @androidx.compose.runtime.Composable

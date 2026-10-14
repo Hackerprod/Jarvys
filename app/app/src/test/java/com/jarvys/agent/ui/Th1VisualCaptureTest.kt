@@ -276,7 +276,7 @@ class Th1VisualCaptureTest {
             }
         }
         TasksListScreen(context, repository, ledger, onOpenTask = {}, onRequestChange = {},
-            onConfigureProvider = {}, onMessage = {}, onReturnToSettings = {}, healthIssuesOverride = { emptyList() },
+            onConfigureProvider = {}, onMessage = {}, healthIssuesOverride = { emptyList() },
             backgroundWorkBusyForAll = false)
     }
 

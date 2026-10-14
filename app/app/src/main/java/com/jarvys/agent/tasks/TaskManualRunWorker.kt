@@ -83,7 +83,7 @@ class TaskManualRunWorker @JvmOverloads constructor(
         runs.appendIfAbsent(TaskRunRecord(task.id, UUID.randomUUID().toString(), scheduledFor, started,
             clock.millis(), result.status, result.deliveryStatus, result.reason, result.skipReason,
             result.notified, result.toolsCalled, result.errorCause, result.model, result.usageTokens,
-            manualOccurrenceId = occurrenceId))
+            manualOccurrenceId = occurrenceId, causeCode = result.causeCode, causeDetail = result.causeDetail))
         return Result.success()
     }
 

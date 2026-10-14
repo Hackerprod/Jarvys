@@ -2,6 +2,8 @@ package com.jarvys.agent.tasks
 
 import android.Manifest
 import android.app.NotificationManager
+import android.content.res.Configuration
+import android.os.LocaleList
 import androidx.test.core.app.ApplicationProvider
 import com.jarvys.agent.proactive.ProactiveSuggestedReply
 import com.jarvys.agent.proactive.ProactiveThreadMessage
@@ -65,7 +67,7 @@ class TaskNotifierTest {
         val manager = context.getSystemService(NotificationManager::class.java)
         manager.cancelAll()
         val task = task()
-        assertTrue(TaskNotifier.attention(context, task, "connector_unavailable"))
+        assertTrue(TaskNotifier.attention(context, task, TaskRunCause.CONNECTOR_UNAVAILABLE))
         val incident = shadowOf(manager).allNotifications.single()
         val incidentIntent = shadowOf(incident.contentIntent).savedIntent
         assertEquals(task.id, incidentIntent.getStringExtra(com.jarvys.agent.MainActivity.EXTRA_OPEN_TASK))
@@ -73,6 +75,18 @@ class TaskNotifierTest {
         assertTrue(TaskNotifier.recovered(context, task))
         assertEquals(1, shadowOf(manager).allNotifications.size)
         assertEquals(TaskNotifier.CHANNEL_ID, manager.notificationChannels.single().id)
+    }
+
+    @Test fun taskFailureCausesUseEnglishAndSpanishResources() {
+        val english = context.createConfigurationContext(Configuration(context.resources.configuration).apply {
+            setLocales(LocaleList.forLanguageTags("en"))
+        })
+        val spanish = context.createConfigurationContext(Configuration(context.resources.configuration).apply {
+            setLocales(LocaleList.forLanguageTags("es"))
+        })
+
+        assertEquals("The provider is unavailable", TaskRunCause.PROVIDER_UNAVAILABLE.localized(english))
+        assertEquals("El proveedor no está disponible", TaskRunCause.PROVIDER_UNAVAILABLE.localized(spanish))
     }
 
     private fun task() = ScheduledTask(

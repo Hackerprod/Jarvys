@@ -86,13 +86,12 @@ class TasksScreensComposeTest {
         val attention = fixture.addTask("Attention", TaskState.NeedsAttention("no_provider"), nextRun = null)
         val queued = AtomicInteger()
         val drafts = mutableListOf<String>()
-        val returned = AtomicInteger()
         compose.setContent {
             MaterialTheme {
                 TasksListScreen(
                     context, fixture.repository, fixture.ledger,
                     onOpenTask = {}, onRequestChange = { drafts += it.name }, onConfigureProvider = {},
-                    onMessage = {}, onReturnToSettings = { returned.incrementAndGet() },
+                    onMessage = {},
                     pauseAll = { pausedAll -> TaskGlobalPauseStore(context).setPaused(pausedAll, now) },
                     enqueueManualRun = { queued.incrementAndGet() },
                     healthIssuesOverride = { emptyList() },
@@ -126,7 +125,6 @@ class TasksScreensComposeTest {
         awaitText(context.getString(R.string.tasks_request_change))
         compose.onNodeWithText(context.getString(R.string.tasks_request_change)).performClick()
         assertEquals(listOf(active.name), drafts)
-        assertEquals(0, returned.get())
 
         val historyTask = fixture.addTask("Keep history", TaskState.Active, nextRun = now + 180_000L)
         fixture.ledger.appendIfAbsent(TaskRunRecord(historyTask.id, "history-run", 10L, 20L, 30L, "OK", "DELIVERED"))
@@ -149,18 +147,25 @@ class TasksScreensComposeTest {
         assertEquals(1, fixture.ledger.forTask(historyTask.id).size)
     }
 
-    @Test fun emptyTaskListReturnsToSettingsInsteadOfRenderingAnEmptyPage() {
-        val returned = AtomicInteger()
+    @Test fun emptyTaskListShowsCreationGuidanceWithoutLeavingOrShowingAToast() {
         val messages = mutableListOf<String>()
         compose.setContent {
             MaterialTheme {
                 TasksListScreen(context, fixture.repository, fixture.ledger, {}, {}, {}, { messages += it },
-                    { returned.incrementAndGet() }, healthIssuesOverride = { emptyList() },
+                    healthIssuesOverride = { emptyList() },
                     backgroundWorkBusyForAll = false)
             }
         }
-        compose.waitUntil(5_000) { returned.get() == 1 }
-        assertEquals(context.getString(R.string.tasks_empty_returned), messages.single())
+        awaitNode("tasks-empty-state")
+        compose.onNodeWithTag("tasks-empty-state").assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.tasks_empty_title)).assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.tasks_empty_body)).assertIsDisplayed()
+        assertTrue(messages.isEmpty())
+    }
+
+    @Test fun taskListLabelsAnAlwaysRunWithoutVisibleResult() {
+        assertEquals(context.getString(R.string.tasks_delivery_no_result),
+            runStatusLabel(context, "OK", deliveryStatus = "NO_RESULT"))
     }
 
     @Test fun globalPauseBannerAndManualRunRemainAvailableWhileResumeDropsMissedOccurrences() {
@@ -172,7 +177,7 @@ class TasksScreensComposeTest {
         compose.setContent {
             MaterialTheme {
                 TasksListScreen(
-                    context, fixture.repository, fixture.ledger, {}, {}, {}, {}, {},
+                    context, fixture.repository, fixture.ledger, {}, {}, {}, {},
                     pauseAll = { pausedAll ->
                         if (pausedAll) TaskGlobalPauseStore(context).setPaused(true, now)
                         else {
@@ -237,12 +242,12 @@ class TasksScreensComposeTest {
 
     @Test fun healthPolicyAndCardCoverSettingsActionsAndHideWhenHealthy() {
         val task = fixture.addTask("Late", TaskState.Active, nextRun = fixture.clock.millis() - 1L)
-        val attention = fixture.addTask("Needs provider", TaskState.NeedsAttention("no_provider"), nextRun = null)
-        val connectorAttention = fixture.addTask("Needs connector", TaskState.NeedsAttention("connector_unavailable_or_revoked"), nextRun = null)
+        val attention = fixture.addTask("Needs provider", TaskState.NeedsAttention(TaskRunCause.NO_PROVIDER.code), nextRun = null)
+        val connectorAttention = fixture.addTask("Needs connector", TaskState.NeedsAttention(TaskRunCause.CONNECTOR_UNAVAILABLE.code), nextRun = null)
         val issues = TaskHealthPolicy.evaluate(TaskHealthInput(false, false, listOf(task), listOf(attention, connectorAttention)))
         assertEquals(5, issues.size)
-        assertEquals(listOf("no_provider", "connector_unavailable_or_revoked"),
-            issues.filter { it.kind == TaskHealthKind.ATTENTION }.map { it.reason })
+        assertEquals(listOf(TaskRunCause.NO_PROVIDER, TaskRunCause.CONNECTOR_UNAVAILABLE),
+            issues.filter { it.kind == TaskHealthKind.ATTENTION }.map { it.causeCode })
         assertTrue(TaskHealthPolicy.evaluate(TaskHealthInput(true, true)).isEmpty())
         assertEquals(Settings.ACTION_APP_NOTIFICATION_SETTINGS, TaskUiIntents.notificationSettings(context).action)
         assertEquals(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS,

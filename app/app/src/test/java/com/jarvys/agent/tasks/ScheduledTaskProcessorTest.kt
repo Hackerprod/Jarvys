@@ -116,22 +116,68 @@ class ScheduledTaskProcessorTest {
         assertEquals(1, notifications.resultCalls.get())
     }
 
-    @Test fun acknowledgementDoesNotAddASyntheticRepairTurnAndNoTaskRespondBecomesRetryable() {
+    @Test fun finalTextIsDeliveredWithoutTaskRespondAndOnlyIfNotableNoReplyIsSilent() {
         val registry = emptyRegistry()
         val acknowledgementFactory = FakeLoopFactory { _, _, _, _ -> ModelReply("Voy a hacerlo.", emptyList()) }
         val processor = processor(acknowledgementFactory, registry, notifications = FakeNotifications())
         val result = processor.execute(task(), 1_735_776_000_000L, 1_735_776_000_100L,
             "run-ack", CancellationToken.cancellable())
-        assertEquals("RETRYABLE", result.status)
-        assertEquals("sin_task_respond", result.errorCause)
+        assertEquals("OK", result.status)
+        assertEquals("DELIVERED", result.deliveryStatus)
         assertEquals(1, acknowledgementFactory.turns.get())
 
-        val noResponseFactory = FakeLoopFactory { _, _, _, _ -> ModelReply("A substantive text answer without the terminal tool.", emptyList()) }
+        val noResponseFactory = FakeLoopFactory { _, _, _, _ -> ModelReply(ScheduledTaskProcessor.NO_REPLY, emptyList()) }
         val noResponse = processor(noResponseFactory, registry, notifications = FakeNotifications())
             .execute(task(), 1_735_776_000_200L, 1_735_776_000_300L, "run-missing-respond", CancellationToken.cancellable())
-        assertEquals("RETRYABLE", noResponse.status)
-        assertEquals("sin_task_respond", noResponse.errorCause)
+        assertEquals("SILENT", noResponse.status)
+        assertEquals("SILENT", noResponse.deliveryStatus)
         assertEquals(1, noResponseFactory.turns.get())
+    }
+
+    @Test fun onlyIfNotableSilenceDoesNotSendARecoveryNotification() {
+        val notifications = FakeNotifications()
+        val result = processor(FakeLoopFactory { _, _, _, _ ->
+            ModelReply(ScheduledTaskProcessor.NO_REPLY, emptyList())
+        }, emptyRegistry(), notifications = notifications).execute(
+            task(state = TaskState.NeedsAttention(TaskRunCause.EXECUTION_FAILED.code)),
+            1L, 2L, "run-silent-recovery", CancellationToken.cancellable())
+
+        assertEquals("SILENT", result.status)
+        assertEquals("SILENT", result.deliveryStatus)
+        assertEquals(0, notifications.resultCalls.get())
+        assertEquals(0, notifications.recoveryCalls.get())
+    }
+
+    @Test fun alwaysEmptyOrNoReplyRecordsNoVisibleResultAndNeverRetries() {
+        val notifications = FakeNotifications()
+        val empty = processor(FakeLoopFactory { _, _, _, _ -> ModelReply("", emptyList()) }, emptyRegistry(),
+            notifications = notifications).execute(task(delivery = TaskDelivery.ALWAYS), 1L, 2L,
+            "run-empty-always", CancellationToken.cancellable())
+        assertEquals("OK", empty.status)
+        assertEquals("NO_RESULT", empty.deliveryStatus)
+        assertEquals(0, notifications.resultCalls.get())
+
+        val explicitSilence = processor(FakeLoopFactory { _, _, _, _ -> ModelReply(ScheduledTaskProcessor.NO_REPLY, emptyList()) },
+            emptyRegistry(), notifications = notifications).execute(task(delivery = TaskDelivery.ALWAYS), 3L, 4L,
+            "run-no-reply-always", CancellationToken.cancellable())
+        assertEquals("OK", explicitSilence.status)
+        assertEquals("NO_RESULT", explicitSilence.deliveryStatus)
+        assertEquals(0, notifications.resultCalls.get())
+    }
+
+    @Test fun runPromptContainsTaskDataAndNoDeliveryOrTerminalToolPolicy() {
+        val factory = FakeLoopFactory { _, _, _, _ -> ModelReply("Result", emptyList()) }
+        processor(factory, emptyRegistry(), notifications = FakeNotifications()).execute(
+            task(instruction = "Verbatim instruction"), 1L, 2L, "run-data-only", CancellationToken.cancellable())
+        val user = factory.userPrompts.single()
+        assertTrue(user.contains("Task name: Diagnostic task"))
+        assertTrue(user.contains("Task instruction:\nVerbatim instruction"))
+        assertTrue(user.contains("Task current local time:"))
+        assertFalse(user.contains("Delivery policy"))
+        val system = factory.systemPrompts.single()
+        assertFalse(system.contains("task_respond"))
+        assertFalse(system.contains("ONLY_IF_NOTABLE"))
+        assertFalse(system.contains("ALWAYS"))
     }
 
     @Test fun toolOutputCannotGrantTaskManagementToolsToUnattendedRuns() {
@@ -151,16 +197,17 @@ class ScheduledTaskProcessorTest {
         assertTrue(factory.toolNames.all { names -> names == listOf(TaskRespondTool.NAME) })
     }
 
-    @Test fun noProviderSkipsWithoutCreatingLoopAndSilenceIsRecordedWithoutNotification() {
+    @Test fun noProviderNeedsAttentionAndSilenceIsRecordedWithoutNotification() {
         val registry = emptyRegistry()
         val noProviderFactory = FakeLoopFactory("no_provider") { _, _, _, _ -> error("loop must not be created") }
         val notifications = FakeNotifications()
         val processor = processor(noProviderFactory, registry, notifications = notifications)
-        val skipped = processor.execute(task(), 10L, 20L, "run-no-provider", CancellationToken.cancellable())
-        assertEquals("SKIPPED", skipped.status)
-        assertEquals("no_provider", skipped.skipReason)
+        val noProvider = processor.execute(task(), 10L, 20L, "run-no-provider", CancellationToken.cancellable())
+        assertEquals("ERROR", noProvider.status)
+        assertEquals(TaskRunCause.NO_PROVIDER, noProvider.causeCode)
         assertEquals(0, noProviderFactory.turns.get())
         assertEquals(0, notifications.resultCalls.get())
+        assertEquals(1, notifications.attentionCalls.get())
 
         val silentFactory = FakeLoopFactory { _, _, _, _ -> respond(notify = false) }
         val silentNotifications = FakeNotifications()
@@ -197,7 +244,8 @@ class ScheduledTaskProcessorTest {
         val transient = processor(transientFactory, emptyRegistry(), notifications = FakeNotifications())
             .execute(task(), 200L, 201L, "run-network", CancellationToken.cancellable())
         assertEquals("RETRYABLE", transient.status)
-        assertEquals("network", transient.errorCause)
+        assertEquals(TaskRunCause.NETWORK, transient.causeCode)
+        assertEquals("offline", transient.causeDetail)
     }
 
     @Test fun stopObservedAlongsideProviderSetupFailureIsInterruptedRatherThanRetried() {
@@ -216,7 +264,7 @@ class ScheduledTaskProcessorTest {
         val result = ScheduledTaskProcessor(context, factory, emptyRegistry(), clock = fixedClock(),
             notifications = notifications).execute(task(), 210L, 211L, "run-stop-network", workerToken)
         assertEquals("INTERRUPTED", result.status)
-        assertEquals("interrupted", result.errorCause)
+        assertEquals(TaskRunCause.INTERRUPTED, result.causeCode)
         assertEquals(1, calls.get())
         assertEquals(0, notifications.resultCalls.get())
         assertEquals(0, notifications.attentionCalls.get())
@@ -342,16 +390,8 @@ class ScheduledTaskProcessorTest {
 
     private fun fixedClock() = Clock.fixed(Instant.parse("2025-01-02T12:00:00Z"), ZoneOffset.UTC)
 
-    private fun respond(notify: Boolean, title: String = "", body: String = ""): ModelReply {
-        val args = linkedMapOf<String, Any>("notify" to notify)
-        if (notify) {
-            args["title"] = title
-            args["body"] = body
-            args["urgency"] = "normal"
-            args["suggested_replies"] = listOf(mapOf("label" to "Open", "text" to "Please explain the result"))
-        }
-        return ModelReply("", listOf(ModelReply.Call("task-response", TaskRespondTool.NAME, args)))
-    }
+    private fun respond(notify: Boolean, title: String = "", body: String = ""): ModelReply =
+        ModelReply(if (notify) body else "", emptyList())
 
     private fun registryWithCalendar(connected: Boolean): ConnectorRegistry {
         val runtime = object : ConnectorRuntime {
@@ -419,7 +459,7 @@ class ScheduledTaskProcessorTest {
             resultCalls.incrementAndGet()
             return postResult
         }
-        override fun attention(context: Context, task: ScheduledTask, reason: String): Boolean {
+        override fun attention(context: Context, task: ScheduledTask, cause: TaskRunCause): Boolean {
             attentionCalls.incrementAndGet()
             return true
         }

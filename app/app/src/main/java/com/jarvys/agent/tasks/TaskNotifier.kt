@@ -15,6 +15,7 @@ import androidx.core.app.Person
 import androidx.core.content.ContextCompat
 import com.jarvys.agent.MainActivity
 import com.jarvys.agent.R
+import com.jarvys.agent.AppLanguageRuntime
 import com.jarvys.agent.proactive.ProactiveTextSanitizer
 import com.jarvys.agent.proactive.ProactiveRedactor
 import com.jarvys.agent.proactive.ProactiveThreadMessage
@@ -24,7 +25,7 @@ interface ScheduledTaskNotifications {
     fun result(context: Context, store: com.jarvys.agent.LocalRunStore, task: ScheduledTask,
                messageId: String, title: String, body: String, urgency: String,
                suggestedReplies: List<ProactiveSuggestedReply>): Boolean
-    fun attention(context: Context, task: ScheduledTask, reason: String): Boolean
+    fun attention(context: Context, task: ScheduledTask, cause: TaskRunCause): Boolean
     fun recovered(context: Context, task: ScheduledTask): Boolean
 }
 
@@ -43,12 +44,13 @@ object TaskNotifier : ScheduledTaskNotifications {
         return post(context, task, messageId, messages, title, body, urgency, suggestedReplies)
     }
 
-    override fun attention(context: Context, task: ScheduledTask, reason: String): Boolean = post(
-        context, task, "attention-${task.id}", emptyList(),
-        context.getString(R.string.scheduled_tasks_attention_title, ProactiveTextSanitizer.sanitize(task.name)),
-        context.getString(R.string.scheduled_tasks_attention_body, ProactiveTextSanitizer.sanitize(reason)),
-        "high", emptyList(), openTask = true,
-    )
+    override fun attention(context: Context, task: ScheduledTask, cause: TaskRunCause): Boolean {
+        val localized = AppLanguageRuntime.localizedContext(context.applicationContext)
+        return post(localized, task, "attention-${task.id}", emptyList(),
+            localized.getString(R.string.scheduled_tasks_attention_title, ProactiveTextSanitizer.sanitize(task.name)),
+            localized.getString(R.string.scheduled_tasks_attention_body, cause.localized(localized)),
+            "high", emptyList(), openTask = true)
+    }
 
     override fun recovered(context: Context, task: ScheduledTask): Boolean = post(
         context, task, "recovered-${task.id}", emptyList(),

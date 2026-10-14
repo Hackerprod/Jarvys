@@ -172,6 +172,11 @@ public final class StopController {
         if (activeDispatches == 0) notifyAll();
     }
 
+    /** True while an action admitted through runIfActive/callIfActive is still running (STOP waits for it). */
+    synchronized boolean hasActiveDispatch() {
+        return activeDispatches > 0;
+    }
+
     Runnable registerCancelAction(long tokenGeneration, Runnable action) {
         synchronized (this) {
             if (isActive(tokenGeneration)) {

@@ -48,6 +48,7 @@ import com.jarvys.agent.tasks.TaskManualRunScheduler
 import com.jarvys.agent.tasks.TaskRepository
 import com.jarvys.agent.tasks.TaskRunLedger
 import com.jarvys.agent.tasks.TaskRunRecord
+import com.jarvys.agent.tasks.TaskRunCause
 import com.jarvys.agent.tasks.TaskSchedulePresentation
 import com.jarvys.agent.tasks.TaskState
 import kotlinx.coroutines.Dispatchers
@@ -142,9 +143,10 @@ fun TaskDetailScreen(
                         R.string.task_detail_origin_chat else R.string.task_detail_created_from_other),
                         style = MaterialTheme.typography.bodyMedium)
                     (task.state as? TaskState.NeedsAttention)?.let { attention ->
-                        val providerMissing = attention.reason.contains("provider", ignoreCase = true)
-                        Text(stringResource(if (providerMissing) R.string.tasks_attention_provider
-                            else R.string.tasks_attention_connectors), color = MaterialTheme.colorScheme.error,
+                        val cause = TaskRunCause.fromCode(attention.reason)
+                            ?: TaskRunCause.fromLegacy(attention.reason) ?: TaskRunCause.UNKNOWN
+                        val providerMissing = cause == TaskRunCause.NO_PROVIDER
+                        Text(cause.localized(context), color = MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.bodySmall)
                         if (providerMissing) OutlinedButton(onClick = onConfigureProvider) {
                             Text(stringResource(R.string.tasks_health_configure_provider))
@@ -236,21 +238,29 @@ private fun TaskRunHistoryItem(run: TaskRunRecord, task: ScheduledTask, presenta
             Text(stringResource(R.string.task_detail_tools_called,
                 run.toolsCalled.joinToString(", ") { it.name }.ifBlank { context.getString(R.string.task_detail_no_tools) }),
                 style = MaterialTheme.typography.bodySmall)
-            val cause = run.errorCause ?: run.reason
-            if (!cause.isNullOrBlank()) Text(stringResource(R.string.task_detail_error_cause, cause),
+            val cause = run.causeCode ?: TaskRunCause.fromLegacy(run.errorCause ?: run.skipReason ?: run.reason)
+            if (cause != null) Text(stringResource(R.string.task_detail_error_cause, cause.localized(context)),
                 color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            run.causeDetail?.let { detail ->
+                val safeDetail = com.jarvys.agent.proactive.ProactiveTextSanitizer.sanitize(
+                    com.jarvys.agent.proactive.ProactiveRedactor.redactForModel(detail))
+                if (safeDetail.isNotBlank()) Text(stringResource(R.string.task_detail_error_detail, safeDetail),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+            }
         }
     }
 }
 
 @Composable
 private fun stringResourceFromRun(context: Context, run: TaskRunRecord): String =
-    runStatusLabel(context, run.status, run.skipReason)
+    runStatusLabel(context, run.status, run.causeCode
+        ?: TaskRunCause.fromLegacy(run.errorCause ?: run.skipReason ?: run.reason))
 
 private fun deliveryLabel(context: Context, status: String): String = when (status) {
     "DELIVERED" -> context.getString(R.string.task_detail_delivery_notified)
     "CHAT_ONLY" -> context.getString(R.string.task_detail_delivery_chat_only)
     "SILENT" -> context.getString(R.string.task_detail_delivery_silent)
+    "NO_RESULT" -> context.getString(R.string.tasks_delivery_no_result)
     "NOT_APPLICABLE" -> context.getString(R.string.task_detail_delivery_not_applicable)
     else -> context.getString(R.string.task_detail_delivery_unknown)
 }
