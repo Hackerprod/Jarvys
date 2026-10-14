@@ -113,16 +113,21 @@ final class MainChatTranscriptStore {
                             }
                         }
                     } else if (turn.kind == ConversationTurn.Kind.TOOL_RESULT && batch != null) {
-                        String key = batch + ":" + turn.toolCallId;
-                        // The loop checkpoints the original result before cancellation and budget trimming.
-                        // Keep that first observation, rather than replacing it with a later omitted-output marker.
-                        if (!results.contains(key)) {
-                            String completeOutput = checkpoint.completedToolResults.get(turn.toolCallId);
-                            String output = completeOutput == null ? turn.content : completeOutput;
-                            append(new JSONObject().put("type", "model_tool_result").put("batchId", batch)
-                                    .put("callId", turn.toolCallId).put("toolName", turn.toolName)
-                                    .put("output", retain(output)));
-                            results.add(key);
+                        // Uncertain and never-launched transcript placeholders preserve protocol
+                        // shape, but they are not durable tool results. The started-call ledger
+                        // reconstructs those honestly after restart.
+                        if ("RESULT".equals(checkpoint.toolLifecycle.get(turn.toolCallId))) {
+                            String key = batch + ":" + turn.toolCallId;
+                            // Keep the first durable result, rather than replacing it with a later
+                            // omitted-output marker.
+                            if (!results.contains(key)) {
+                                String completeOutput = checkpoint.completedToolResults.get(turn.toolCallId);
+                                String output = completeOutput == null ? turn.content : completeOutput;
+                                append(new JSONObject().put("type", "model_tool_result").put("batchId", batch)
+                                        .put("callId", turn.toolCallId).put("toolName", turn.toolName)
+                                        .put("output", retain(output)));
+                                results.add(key);
+                            }
                         }
                     } else {
                         batch = null;

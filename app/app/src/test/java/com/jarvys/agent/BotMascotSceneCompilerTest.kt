@@ -493,11 +493,10 @@ class BotMascotSceneCompilerTest {
         val type = runCatching { BotMascotSceneCompiler.compileProduct(wrongType.toString()) }.exceptionOrNull()
         assertTrue(type?.message.orEmpty(), type?.message.orEmpty().contains("animations: expected object, got string"))
 
-        val decimalFrame = JSONObject(BotMascotTool.SCENE_EXAMPLE_JSON).apply {
-            getJSONObject("animations").getJSONObject("Idle").getJSONArray("tracks").getJSONObject(0)
-                .getJSONArray("keys").getJSONArray(0).put(0, 0.0)
-        }
-        val frame = runCatching { BotMascotSceneCompiler.compileProduct(decimalFrame.toString()) }.exceptionOrNull()
+        // Keep the fractional spelling in raw JSON; JSONObject may serialize 0.0 as 0.
+        val decimalFrame = BotMascotTool.SCENE_EXAMPLE_JSON.replaceFirst("\"keys\":[[0,128]", "\"keys\":[[0.0,128]")
+        assertNotEquals(BotMascotTool.SCENE_EXAMPLE_JSON, decimalFrame)
+        val frame = runCatching { BotMascotSceneCompiler.compileProduct(decimalFrame) }.exceptionOrNull()
         assertTrue(frame?.message.orEmpty(), frame?.message.orEmpty().contains("frames must be integers"))
     }
 

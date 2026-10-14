@@ -4,7 +4,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -16,7 +15,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -70,22 +68,12 @@ internal fun AutonomyPolicyRow(
     }
 
     Column {
-        if (LocalDensity.current.fontScale >= 1.6f) {
-            Column(Modifier.fillMaxWidth().testTag("$tagPrefix-row").padding(vertical = 4.dp)) {
-                AutonomyPolicyLabel(operation, Modifier.fillMaxWidth())
-                Box(Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("$tagPrefix-selector-row"),
-                    contentAlignment = Alignment.CenterEnd) {
-                    Box(Modifier.fillMaxWidth(0.8f), contentAlignment = Alignment.CenterEnd) { selector() }
-                }
-            }
-        } else {
-            ConnectorPermissionRow(modifier = Modifier.testTag("$tagPrefix-row"), content = {
-                AutonomyPolicyLabel(operation, Modifier)
-            }, permission = {
-                Box(Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("$tagPrefix-selector-row"),
-                    contentAlignment = Alignment.CenterEnd) { selector() }
-            })
-        }
+        ConnectorPermissionRow(modifier = Modifier.testTag("$tagPrefix-row"), content = {
+            AutonomyPolicyLabel(operation, Modifier)
+        }, permission = {
+            Box(Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("$tagPrefix-selector-row"),
+                contentAlignment = Alignment.CenterEnd) { selector() }
+        })
         ConnectorPolicyOriginCaption(origin,
             Modifier.fillMaxWidth().testTag("$tagPrefix-origin"))
         if (unavailable != null) Text(

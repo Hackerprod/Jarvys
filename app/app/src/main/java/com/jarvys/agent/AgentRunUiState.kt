@@ -608,9 +608,9 @@ object AgentRunUiState {
         val index = if (optimisticEventId != null) {
             current.events.indexOfLast { it.kind == "user" && it.id == optimisticEventId }
         } else {
-            current.events.indexOfLast { it.kind == "user" && it.messageId == messageId }
+            current.events.indexOfLast { it.kind == "user" && it.messageId.isBlank() }
                 .takeIf { it >= 0 }
-                ?: current.events.indexOfFirst { it.kind == "user" && it.messageId.isBlank() }
+                ?: current.events.indexOfLast { it.kind == "user" && it.messageId == messageId }
         }
         if (index < 0 || (current.events[index].messageId.isNotEmpty() && current.events[index].messageId != messageId)) return@synchronized
         val bound = current.events.mapIndexed { i, event ->

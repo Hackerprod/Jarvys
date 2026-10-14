@@ -117,7 +117,8 @@ internal class PersistedActionPolicies(private val preferences: SharedPreference
             }
         }
         if (keys.isNotEmpty()) commitOrRollback(keys.associateWith { Raw(false, null) })
-        authority.observations.clear()
+        val observationPrefix = METADATA_PREFIX + hex(connectorId) + "_"
+        authority.observations.keys.removeAll { it.startsWith(observationPrefix) }
     }
 
     private fun requireHealthy() = check(authority.healthy) {

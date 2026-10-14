@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -87,7 +86,9 @@ class ConnectedConnectorPermissionScreensTest {
                 JarvysOwnTheme(if (screen.dark) JarvysThemeMode.DARK else JarvysThemeMode.LIGHT) {
                     CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, screen.fontScale)) {
                         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background,
-                            contentColor = MaterialTheme.colorScheme.onBackground) { screen.content() }
+                            contentColor = MaterialTheme.colorScheme.onBackground) {
+                            Box(Modifier.fillMaxSize()) { screen.content() }
+                        }
                     }
                 }
             }
@@ -142,7 +143,9 @@ class ConnectedConnectorPermissionScreensTest {
         registry.register(definition)
         registry.connect(definition.id)
         assertEquals(ConnectorState.CONNECTED, registry.state(definition))
-        show(scale, dark) { androidx.compose.foundation.layout.Column(androidx.compose.ui.Modifier.fillMaxWidth().verticalScroll(androidx.compose.foundation.rememberScrollState())) { DeveloperWorkspace(registry) } }
+        show(scale, dark) {
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) { DeveloperWorkspace(registry) }
+        }
         compose.onNodeWithTag("developer-connector-${definition.id}").assertIsDisplayed()
         val read = "connector-policy-${CalendarConnector.SEARCH}"
         val write = "connector-policy-${CalendarConnector.CREATE}"
@@ -227,11 +230,7 @@ class ConnectedConnectorPermissionScreensTest {
         val fixture = connectedMcp("github", listOf(tool("get_me", "Read GitHub profile", read = true),
             tool("issue_write", "Create or update repository issue")))
         val credentials = fixture.vault.values.toMap()
-        show {
-            Column(androidx.compose.ui.Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
-                RemoteServicesSection(fixture.repository, fixture.manager, fixture.oauth, selectedId = "github")
-            }
-        }
+        show { RemoteServicesSection(fixture.repository, fixture.manager, fixture.oauth, selectedId = "github") }
         compose.onNodeWithTag("remote-policy-get_me-row").assertDoesNotExist()
         compose.onNodeWithTag("remote-policy-issue_write-row").assertDoesNotExist()
         compose.onNodeWithTag("remote-exposure-get_me-switch").assertExists()
@@ -245,7 +244,7 @@ class ConnectedConnectorPermissionScreensTest {
         assertTrue(fixture.repository.get(fixture.serverId)!!.tools.first { it.wireName == "issue_write" }.enabled)
 
         show {
-            Column(androidx.compose.ui.Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
                 RemoteMcpPolicySettings(fixture.repository, fixture.manager)
             }
         }
@@ -273,14 +272,12 @@ class ConnectedConnectorPermissionScreensTest {
         val fixture = connectedMcp("notion", listOf(tool("update_page", "Actualizar una página con un título suficientemente largo"),
             tool("delete_page", "Eliminar una página", destructive = true)))
         show(2f, true) {
-            Column(androidx.compose.ui.Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
-                RemoteServicesSection(fixture.repository, fixture.manager, fixture.oauth, selectedId = "notion")
-            }
+            RemoteServicesSection(fixture.repository, fixture.manager, fixture.oauth, selectedId = "notion")
         }
         compose.onNodeWithTag("remote-policy-update_page-row").assertDoesNotExist()
         compose.onNodeWithTag("remote-policy-delete_page-row").assertDoesNotExist()
         show(2f, true) {
-            Column(androidx.compose.ui.Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
                 RemoteMcpPolicySettings(fixture.repository, fixture.manager)
             }
         }

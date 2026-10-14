@@ -459,7 +459,7 @@ internal fun AssistantReplyView(
         }
         if (event.proactiveReplies.isNotEmpty()) SuggestedReplyActions(event, onProactiveSuggestedReply, !streamActive)
         AnimatedVisibility(
-            visible = !isError && event.stage == null && !isGeneratingAnswer,
+            visible = !isError && event.stage == null && !streamActive && !isGeneratingAnswer,
             enter = if (reducedMotion) EnterTransition.None else
                 expandVertically(JarvysMotion.expand()) + fadeIn(JarvysMotion.feedback()),
             exit = if (reducedMotion) ExitTransition.None else
