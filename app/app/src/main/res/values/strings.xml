@@ -14,8 +14,7 @@
     <string name="settings_skills">Skills</string>
     <string name="settings_connectors">Connectors</string>
     <string name="settings_developer">Developer</string>
-    <string name="settings_developer_action_policies">Connector action policies</string>
-    <string name="settings_developer_mcp_policies">MCP tool policies</string>
+    <string name="connector_action_policies">Connector action policies</string>
     <string name="settings_accessibility">Accessibility</string>
     <string name="settings_system">System</string>
     <string name="settings_light">Light</string>
@@ -1105,8 +1104,6 @@ After:
     <string name="task_management_not_cancelled">The task was not deleted.</string>
     <string name="tasks_title">Scheduled tasks</string>
     <string name="task_detail_title">Task details</string>
-    <string name="tasks_settings_entry">Scheduled tasks</string>
-    <string name="tasks_settings_entry_summary">Review, pause, or manage your tasks</string>
     <string name="tasks_pause_all">Pause all tasks</string>
     <string name="tasks_resume_all">Resume all tasks</string>
     <string name="tasks_all_paused_banner">Scheduled tasks are paused. Manual runs remain available.</string>

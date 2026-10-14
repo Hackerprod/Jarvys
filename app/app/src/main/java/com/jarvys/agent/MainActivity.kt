@@ -93,7 +93,6 @@ import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -197,6 +196,7 @@ import com.jarvys.agent.skills.SkillImportOptionsSheet
 import com.jarvys.agent.skills.SkillFileLink
 import com.jarvys.agent.skills.SkillsScreen
 import com.jarvys.agent.skills.SkillEntry
+import com.jarvys.agent.skills.userConfigurableSkillEntries
 import com.jarvys.agent.crew.CrewMode
 import com.jarvys.agent.crew.CrewManager
 import com.jarvys.agent.crew.CrewBoard
@@ -473,6 +473,7 @@ class MainActivity : ComponentActivity() {
                 if (::reflectionPreferences.isInitialized) refreshReflectionUiState(conversationSessionId)
             }
             val skillEntries by skillRepository.skills.collectAsState()
+            val configurableSkillEntries = userConfigurableSkillEntries(skillEntries)
             val systemDark = androidx.compose.foundation.isSystemInDarkTheme()
             SideEffect {
                 val dark = when (themeMode) {
@@ -538,9 +539,9 @@ class MainActivity : ComponentActivity() {
                     translationErrorMessageId = translationErrorMessageId,
                     translationError = translationError,
                     captureContextRequested = captureContextRequested,
-                    skillEnabledCount = skillEntries.count { it.enabled && it.validationError == null },
-                    skillTotalCount = skillEntries.size,
-                    availableSkills = skillEntries.filter { it.enabled && it.validationError == null &&
+                    skillEnabledCount = configurableSkillEntries.count { it.enabled && it.validationError == null },
+                    skillTotalCount = configurableSkillEntries.size,
+                    availableSkills = configurableSkillEntries.filter { it.enabled && it.validationError == null &&
                         com.jarvys.agent.skills.SkillScopePolicy.availableTo(it.metadata.id, null) },
                     selectedSkillIds = selectedSkillIds,
                     onSubmitMessage = ::submitMessage,
@@ -1966,7 +1967,6 @@ private fun JarvysApp(
                     onMemory = { navController.navigate(Routes.MEMORY) { launchSingleTop = true } },
                     archivedChatsAvailable = runHistory.any { it.archived },
                     onArchivedChats = { navController.navigate(Routes.ARCHIVED_CHATS) { launchSingleTop = true } },
-                    onScheduledTasks = { navController.navigate(Routes.TASKS) { launchSingleTop = true } },
                     onAccessibilitySettings = onAccessibilitySettings,
                     onNavigate = { destination ->
                         val path = when (destination) {

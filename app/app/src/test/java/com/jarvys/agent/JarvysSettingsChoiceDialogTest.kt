@@ -11,6 +11,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
@@ -82,6 +83,8 @@ class JarvysSettingsChoiceDialogTest {
                 }
             }
         }
+
+        compose.onAllNodesWithTag("settings-scheduled-tasks-row").assertCountEquals(0)
 
         for (localeChoice in listOf(AppLanguageChoice.ENGLISH, AppLanguageChoice.SPANISH)) {
             for (scale in listOf(1f, 2f)) {

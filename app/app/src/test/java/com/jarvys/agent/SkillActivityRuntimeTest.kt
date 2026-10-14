@@ -29,6 +29,12 @@ class SkillActivityRuntimeTest {
         assertTrue("skill activity retains the registry's visible tool label", events.all { it.displayName=="Read Skill" })
         assertEquals(1,events.map { it.executionId }.toSet().size);assertTrue(events.last().detail.contains("gardening instructions"))
     }
+    @Test fun bundledSystemSkillLoadsEvenWhenLegacyEnabledFlagIsFalse() {
+        val systemSkill = skill().copy(source = SkillSource.BUNDLED, enabled = false)
+        val events = run(skill = systemSkill)
+        assertEquals(listOf("tool_call", "tool_result"), events.map { it.stage })
+        assertTrue(events.last().detail.contains("gardening instructions"))
+    }
     @Test fun unavailableSkillFailsWithoutLoadedClaim() { assertEquals("tool_error",run(id="missing.skill").last().stage) }
     @Test fun disabledSkillFailsWithoutLoadedClaim() { assertEquals("tool_error",run(enabled=false).last().stage) }
     @Test fun oversizedSkillFailsWithoutPartialLoadedClaim() { assertEquals("tool_error",run(max=4).last().stage) }

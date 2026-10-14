@@ -86,10 +86,9 @@ class BundledSkillSeederTest {
     }
 
     @Test
-    fun bundledCreatorAndImportedSkillsAreEnabledByDefault() {
-        assertTrue(skillEnabledByDefault(SkillSource.BUNDLED, BUNDLED_SKILL_CREATOR_ID))
-        assertFalse(skillEnabledByDefault(SkillSource.BUNDLED, "com.jarvys.android-navigation"))
-        assertTrue(skillEnabledByDefault(SkillSource.IMPORTED, "com.jarvys.new-skill"))
+    fun skillOriginControlsWhetherSettingsCanConfigureIt() {
+        assertFalse(SkillSource.BUNDLED.userConfigurable)
+        assertTrue(SkillSource.IMPORTED.userConfigurable)
     }
 
     @Test

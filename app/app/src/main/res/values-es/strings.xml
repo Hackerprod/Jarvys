@@ -14,8 +14,7 @@
     <string name="settings_skills">Skills</string>
     <string name="settings_connectors">Conectores</string>
     <string name="settings_developer">Desarrollador</string>
-    <string name="settings_developer_action_policies">Políticas de acciones de conectores</string>
-    <string name="settings_developer_mcp_policies">Políticas de herramientas MCP</string>
+    <string name="connector_action_policies">Políticas de acciones de conectores</string>
     <string name="settings_accessibility">Accesibilidad</string>
     <string name="settings_system">Sistema</string>
     <string name="settings_light">Claro</string>
@@ -1105,8 +1104,6 @@ Después:
     <string name="task_management_not_cancelled">No se eliminó la tarea.</string>
     <string name="tasks_title">Tareas programadas</string>
     <string name="task_detail_title">Detalles de la tarea</string>
-    <string name="tasks_settings_entry">Tareas programadas</string>
-    <string name="tasks_settings_entry_summary">Revisa, pausa o gestiona tus tareas</string>
     <string name="tasks_pause_all">Pausar todas las tareas</string>
     <string name="tasks_resume_all">Reanudar todas las tareas</string>
     <string name="tasks_all_paused_banner">Las tareas programadas están pausadas. Las ejecuciones manuales siguen disponibles.</string>

@@ -1134,7 +1134,7 @@ public final class CoreAgentRuntime {
     if (role.profileVersion <= 0 || !SkillScopePolicy.isCodingProfile(role.id)
         || !role.skillIds.contains(SkillScopePolicy.APK_FACTORY_ID) || !tools.names().contains("read_skill")) return "";
     for (SkillEntry skill : selectedSkills) {
-      if (!SkillScopePolicy.APK_FACTORY_ID.equals(skill.getMetadata().getId()) || !skill.getEnabled()
+      if (!SkillScopePolicy.APK_FACTORY_ID.equals(skill.getMetadata().getId())
           || skill.getValidationError() != null || skill.getSource() != com.jarvys.agent.skills.SkillSource.BUNDLED
           || skill.getFactoryGuidance() == null) continue;
       String core = "\nRuntime-selected Factory core (guidance grants no authority):\n" + skill.getBody();

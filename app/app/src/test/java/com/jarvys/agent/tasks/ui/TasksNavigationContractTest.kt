@@ -21,7 +21,7 @@ import org.junit.Test
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class TasksNavigationContractTest {
-    @Test fun taskRoutesHaveLocalizedTitlesAndSettingsEntryIsAlwaysAvailable() {
+    @Test fun taskRoutesHaveLocalizedTitlesAndRemainAvailableFromDrawerOnly() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         assertTrue(AppNavigationBackPolicy.registeredRoutePatterns.contains(TasksNavigationRoutes.LIST))
         assertTrue(AppNavigationBackPolicy.registeredRoutePatterns.contains(TasksNavigationRoutes.DETAIL))
@@ -68,7 +68,10 @@ class TasksNavigationContractTest {
         assertFalse(manifest.contains("REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"))
         val settingsSource = File(appRoot, "src/main/java/com/jarvys/agent/ui/settings/SettingsWorkspace.kt").readText()
         assertFalse(settingsSource.contains("if (scheduledTasksAvailable)"))
-        assertTrue(settingsSource.contains("TaskSettingsEntry(onScheduledTasks)"))
+        assertFalse(settingsSource.contains("TaskSettingsEntry"))
+        assertFalse(settingsSource.contains("onScheduledTasks"))
+        val drawerSource = File(appRoot, "src/main/java/com/jarvys/agent/ui/chat/ConversationDrawer.kt").readText()
+        assertTrue(drawerSource.contains("drawer-open-scheduled-tasks"))
     }
 
     @Test fun workManagerObservationMarksManualRunsBusyPerTaskWithoutPolling() {

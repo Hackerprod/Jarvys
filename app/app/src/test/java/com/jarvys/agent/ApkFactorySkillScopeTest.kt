@@ -100,6 +100,45 @@ class ApkFactorySkillScopeTest {
         assertEquals(listOf(id), repo.selectedForProfile(listOf(id), "coding").map { it.metadata.id })
     }
 
+    @Test fun allSystemSkillsStayInTheAgentCatalogRegardlessOfSavedEnabledFlags() {
+        val repo = repository()
+        val systemSkills = repo.skills.value.filter { it.source == SkillSource.BUNDLED }
+        assertTrue(systemSkills.isNotEmpty())
+        assertTrue(systemSkills.all { !it.source.userConfigurable })
+        context.getSharedPreferences("jarvys_skill_settings", Context.MODE_PRIVATE).edit().also { editor ->
+            systemSkills.forEach { editor.putBoolean("enabled:${it.metadata.id}", false) }
+        }.commit()
+        repo.refresh()
+
+        val reloaded = repo.skills.value.filter { it.source == SkillSource.BUNDLED }
+        assertTrue(reloaded.all { it.enabled })
+        val principalCatalog = repo.enabledForRun().map { it.metadata.id }.toSet()
+        val codingCatalog = repo.enabledForProfile("coding").map { it.metadata.id }.toSet()
+        assertTrue(reloaded.filter { SkillScopePolicy.availableTo(it.metadata.id, null) }
+            .all { it.metadata.id in principalCatalog })
+        assertTrue(reloaded.filter { SkillScopePolicy.availableTo(it.metadata.id, "coding") }
+            .all { it.metadata.id in codingCatalog })
+        reloaded.forEach { skill -> assertThrows(IllegalArgumentException::class.java) {
+            repo.setEnabled(skill.metadata.id, false)
+        } }
+        reloaded.forEach { skill ->
+            assertThrows(IllegalArgumentException::class.java) { repo.deleteImported(skill.metadata.id) }
+            var wrote = false
+            assertThrows(IllegalArgumentException::class.java) {
+                repo.commitSkillWorkspaceWrite(skill.metadata.id, null, Runnable { wrote = true })
+            }
+            assertFalse(wrote)
+        }
+
+        val principalSkills = repo.enabledForRun().filter { it.source == SkillSource.BUNDLED }
+        val tool = LoadSkillTool(principalSkills, CorePromptBudget.standard().loadedSkillChars,
+            { key -> repo.enabledForProfile(null).any { it.metadata.id == key } })
+        principalSkills.forEach { skill ->
+            assertTrue(skill.metadata.id, tool.execute(mapOf("skill_id" to skill.metadata.id),
+                CancellationToken.uncancellable()).success)
+        }
+    }
+
     @Test fun principalConstructorAndReadSkillRejectDirectFactoryInjection() {
         val entry = factory()
         val direct = LoadSkillTool(listOf(entry), 16000)
@@ -122,9 +161,14 @@ class ApkFactorySkillScopeTest {
         assertTrue(result.content, result.success)
         assertTrue(result.completeContentRequired)
         assertEquals("Skill $id — ${selected.single().metadata.name}\n${selected.single().body}", result.content)
-        repo.setEnabled(id, false)
-        assertFalse(tool.execute(mapOf("skill_id" to id), CancellationToken.uncancellable()).success)
-        assertThrows(IllegalArgumentException::class.java) { repo.selectedForProfile(listOf(id), "coding") }
+        context.getSharedPreferences("jarvys_skill_settings", Context.MODE_PRIVATE).edit()
+            .putBoolean("enabled:$id", false).commit()
+        repo.refresh()
+        assertTrue(factory().enabled)
+        assertTrue(repo.enabledForProfile("coding").any { it.metadata.id == id })
+        assertTrue(tool.execute(mapOf("skill_id" to id), CancellationToken.uncancellable()).success)
+        assertThrows(IllegalArgumentException::class.java) { repo.setEnabled(id, false) }
+        assertTrue(repo.selectedForProfile(listOf(id), "coding").any { it.metadata.id == id })
     }
 
     @Test fun realCodingBotToolAssemblyLoadsTheReservedSkill() {
@@ -140,9 +184,12 @@ class ApkFactorySkillScopeTest {
             val result = tools.invoke("read_skill", mapOf("skill_id" to id), bot.token)
             assertTrue(result.content, result.success)
             assertTrue(result.content.endsWith(factory().body))
-            repo.setEnabled(id, false)
-            assertFalse(tools.invoke("read_skill", mapOf("skill_id" to id), bot.token).success)
-            assertTrue(bot.token.isCancellationRequested)
+            context.getSharedPreferences("jarvys_skill_settings", Context.MODE_PRIVATE).edit()
+                .putBoolean("enabled:$id", false).commit()
+            repo.refresh()
+            val stillAvailable = tools.invoke("read_skill", mapOf("skill_id" to id), bot.token)
+            assertTrue(stillAvailable.content, stillAvailable.success)
+            assertFalse(bot.token.isCancellationRequested)
         }
     }
 
@@ -159,19 +206,23 @@ class ApkFactorySkillScopeTest {
         }
     }
 
-    @Test fun disabledFactoryKeepsOrdinaryCodingUsableWithoutChangingTheTemplate() {
+    @Test fun systemFactoryIgnoresLegacyDisabledPreferenceWithoutChangingTheTemplate() {
         val repo = repository()
-        repo.setEnabled(id, false)
+        context.getSharedPreferences("jarvys_skill_settings", Context.MODE_PRIVATE).edit()
+            .putBoolean("enabled:$id", false).commit()
+        repo.refresh()
+        assertTrue(factory().enabled)
         val session = "factory-disabled-coding-${System.nanoTime()}"
         val runtime = CoreAgentRuntime(context, session, repo.enabledForRun())
         val role = runtime.resolveCrewProfile(CoreAgentRuntime.profileCapabilities(context, session), "coding")
         assertEquals(3, role.profileVersion)
         assertTrue(role.tools.containsAll(listOf("ls", "read", "write", "edit", "coding_patch")))
-        assertFalse(role.tools.contains("apk_factory"))
-        assertFalse(role.tools.contains("read_skill"))
-        assertFalse(role.skillIds.contains(id))
+        assertTrue(role.tools.contains("apk_factory"))
+        assertTrue(role.tools.contains("read_skill"))
+        assertTrue(role.skillIds.contains(id))
         assertTrue(CrewProfileRepository(context).codingProfile().skillIds.contains(id))
         assertTrue(CrewProfileRepository(context).codingProfile().capabilities.contains("apk_factory"))
+        assertThrows(IllegalArgumentException::class.java) { repo.setEnabled(id, false) }
         val empty = CoreToolRegistry(emptyList())
         CrewManager(session, empty, { _, _ -> empty }, { _, _, _ -> error("No model execution") }, null).use { manager ->
             val bot = restored(manager, role.withTools(listOf("ls")))
@@ -180,14 +231,16 @@ class ApkFactorySkillScopeTest {
             val result = tools.invoke("ls", mapOf("path" to "."), bot.token)
             assertTrue(result.content, result.success)
             assertFalse(bot.token.isCancellationRequested)
-            repo.setEnabled(id, true)
+            context.getSharedPreferences("jarvys_skill_settings", Context.MODE_PRIVATE).edit()
+                .putBoolean("enabled:$id", true).commit()
+            repo.refresh()
             val resumed = runtime.currentResumeRole(bot)
-            assertFalse("Re-enabling must not expand an existing mission", resumed.tools.contains("apk_factory"))
+            assertFalse("Changing the saved flag must not expand an existing mission", resumed.tools.contains("apk_factory"))
             assertFalse(resumed.skillIds.contains(id))
         }
     }
 
-    @Test fun disablingFactoryRevokesExistingFactoryMissionByScopeReduction() {
+    @Test fun legacyDisabledPreferenceDoesNotRevokeExistingSystemFactoryMission() {
         val repo = repository()
         val session = "factory-revoke-${System.nanoTime()}"
         val runtime = CoreAgentRuntime(context, session, repo.enabledForRun())
@@ -196,9 +249,10 @@ class ApkFactorySkillScopeTest {
         val empty = CoreToolRegistry(emptyList())
         CrewManager(session, empty, { _, _ -> empty }, { _, _, _ -> error("No model execution") }, null).use { manager ->
             val bot = restored(manager, role)
-            repo.setEnabled(id, false)
-            val rejected = assertThrows(IllegalStateException::class.java) { runtime.currentResumeRole(bot) }
-            assertTrue(rejected.message.orEmpty().contains("capabilities or skills were reduced"))
+            context.getSharedPreferences("jarvys_skill_settings", Context.MODE_PRIVATE).edit()
+                .putBoolean("enabled:$id", false).commit()
+            repo.refresh()
+            assertTrue(runtime.currentResumeRole(bot).tools.contains("apk_factory"))
             assertTrue(bot.role.tools.contains("apk_factory"))
             assertEquals(0, bot.completedCycles())
         }
@@ -383,16 +437,20 @@ class ApkFactorySkillScopeTest {
         for (profile in listOf(null, "custom-coding", "Coding")) {
             assertFalse(LoadSkillTool(listOf(factory()), 16384, { true }, profile).execute(base, CancellationToken.uncancellable()).success)
         }
-        repository().setEnabled(id, false)
-        val revoked = LoadSkillTool(listOf(factory()), 16384, { repository().enabledForProfile("coding").any { it.metadata.id == id } }, "coding")
-        assertFalse(revoked.execute(base, CancellationToken.uncancellable()).success)
+        context.getSharedPreferences("jarvys_skill_settings", Context.MODE_PRIVATE).edit()
+            .putBoolean("enabled:$id", false).commit()
+        repository().refresh()
+        val stillAvailable = LoadSkillTool(listOf(factory()), 16384,
+            { repository().enabledForProfile("coding").any { it.metadata.id == id } }, "coding")
+        assertTrue(stillAvailable.execute(base, CancellationToken.uncancellable()).success)
     }
 
-    @Test fun upgradingBundledGuidancePreservesCustomizedFilesDisabledStateUsageAndProfile() {
+    @Test fun upgradingBundledGuidancePreservesCustomizedFilesUsageAndProfile() {
         val repo = repository()
         repo.markUsed(listOf(id))
         val count = factory().usageCount
-        repo.setEnabled(id, false)
+        context.getSharedPreferences("jarvys_skill_settings", Context.MODE_PRIVATE).edit()
+            .putBoolean("enabled:$id", false).commit()
         val originalProfile = CrewProfileRepository(context).codingProfile().toJson().toString()
         val customId = "custom.guidance.${System.nanoTime()}"
         val custom = asset().replace(id, customId).replace("# APK Factory", "# PRIVATE CUSTOM GUIDANCE")
@@ -404,7 +462,7 @@ class ApkFactorySkillScopeTest {
             skillField.set(null, null)
             val reopened = repository()
             val updated = reopened.skills.value.single { it.metadata.id == id }
-            assertFalse(updated.enabled)
+            assertTrue(updated.enabled)
             assertEquals(count, updated.usageCount)
             assertEquals(FactoryGuidanceBundle.VERSION, updated.factoryGuidance!!.version)
             assertEquals("PRIVATE LEGACY OVERRIDE", override.readText())
@@ -422,7 +480,8 @@ class ApkFactorySkillScopeTest {
         assertTrue(CoreAgentRuntime.factoryGuidanceInstructions(role, tools, listOf(entry), 16384).contains("Guidance version:"))
         assertEquals("", CoreAgentRuntime.factoryGuidanceInstructions(role, tools, emptyList(), 16384))
         assertEquals("", CoreAgentRuntime.factoryGuidanceInstructions(role, CoreToolRegistry(emptyList()), listOf(entry), 16384))
-        assertEquals("", CoreAgentRuntime.factoryGuidanceInstructions(role, tools, listOf(entry.copy(enabled = false)), 16384))
+        assertTrue(CoreAgentRuntime.factoryGuidanceInstructions(role, tools,
+            listOf(entry.copy(enabled = false)), 16384).contains("Guidance version:"))
         for (name in listOf("custom-coding", "android-use", "Coding")) {
             val other = CrewRole(name, "Coding", "coding", "Review", listOf("read_skill"), null, "Review", 0, listOf(id), CrewProfile.WorkspaceMode.LEGACY_CHAT)
             assertEquals("", CoreAgentRuntime.factoryGuidanceInstructions(other, tools, listOf(entry), 16384))

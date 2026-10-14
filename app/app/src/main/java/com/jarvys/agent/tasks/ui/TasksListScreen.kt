@@ -410,17 +410,6 @@ private fun DeleteTaskDialog(
     )
 }
 
-@Composable
-internal fun TaskSettingsEntry(onClick: () -> Unit) {
-    JarvysListRow(
-        title = stringResource(R.string.tasks_settings_entry),
-        subtitle = stringResource(R.string.tasks_settings_entry_summary),
-        icon = LucideIcons.Calendar,
-        modifier = Modifier.testTag("settings-scheduled-tasks-row"),
-        onClick = onClick,
-    )
-}
-
 private fun taskStateLabel(context: Context, state: TaskState): String = when (state) {
     TaskState.Active -> context.getString(R.string.tasks_state_active)
     TaskState.Paused -> context.getString(R.string.tasks_state_paused)

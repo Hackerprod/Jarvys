@@ -8,6 +8,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -55,6 +56,7 @@ import com.jarvys.agent.R
 import com.jarvys.agent.ScrollableDialogContent
 import com.jarvys.agent.connectors.ConnectorRegistry
 import com.jarvys.agent.connectors.ConnectorState
+import com.jarvys.agent.connectors.AutonomyPolicyRow
 import com.jarvys.agent.connectors.FlavorRemoteServicesPanel
 import com.jarvys.agent.connectors.GoogleOAuthManager
 import com.jarvys.agent.connectors.GoogleOAuthProtocol
@@ -218,6 +220,7 @@ internal fun GoogleServiceCard(
     val definitions by registry.definitions.collectAsState()
     val enabled = status[connectorId] == ConnectorState.CONNECTED &&
         scopes.firstOrNull()?.first?.let(manager::isScopeGranted) == true
+    val operationDefinition = definitions.firstOrNull { it.id == connectorId }
     var setupDialog by remember(connectorId) { mutableStateOf(false) }
     var revokeDialog by remember(connectorId) { mutableStateOf(false) }
     var forgetPendingDialog by remember(connectorId) { mutableStateOf(false) }
@@ -348,6 +351,12 @@ internal fun GoogleServiceCard(
                 !manager.isScopeGranted(GoogleOAuthProtocol.GMAIL_LABELS)) {
                 Text(stringResource(R.string.full_google_legacy_labels_unverified), fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.error)
+            }
+            operationDefinition?.takeIf { it.operations.isNotEmpty() }?.let { definition ->
+                ConnectorDetailSection(stringResource(R.string.connector_action_policies),
+                    contentPadding = PaddingValues(0.dp)) {
+                    definition.operations.forEach { operation -> AutonomyPolicyRow(registry, definition, operation) }
+                }
             }
             @Composable fun ScopeRows(rows: List<Pair<String, Int>>) {
                 rows.forEach { (scope, labelId) ->

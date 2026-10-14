@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
@@ -298,7 +299,7 @@ private fun ConnectorsGoogleServicesAvailable(override: (@Composable (String?, (
 }
 
 @Composable
-private fun ConnectorDeviceDetailPage(
+internal fun ConnectorDeviceDetailPage(
     definition: ConnectorDefinition,
     state: ConnectorState,
     registry: ConnectorRegistry,
@@ -327,6 +328,16 @@ private fun ConnectorDeviceDetailPage(
         onDisconnect = onDisconnect,
         showIdentityHeader = false,
         content = {
+            val reads = definition.operations.filterNot { it.write }
+            val writes = definition.operations.filter { it.write }
+            if (reads.isNotEmpty()) ConnectorDetailSection(
+                stringResource(R.string.remote_service_read_tool), contentPadding = PaddingValues(0.dp)) {
+                reads.forEach { operation -> AutonomyPolicyRow(registry, definition, operation) }
+            }
+            if (writes.isNotEmpty()) ConnectorDetailSection(
+                stringResource(R.string.remote_service_write_tool), contentPadding = PaddingValues(0.dp)) {
+                writes.forEach { operation -> AutonomyPolicyRow(registry, definition, operation) }
+            }
             if (definition.id == LocationConnector.ID && !LocationConnector.isSystemLocationEnabled(context)) {
                 Text(stringResource(R.string.connector_location_disabled), color = MaterialTheme.colorScheme.error)
             }
@@ -363,8 +374,12 @@ private fun ConnectorDeviceDetailPage(
 }
 
 @Composable
-internal fun ConnectorDetailSection(title: String, content: @Composable ColumnScope.() -> Unit) {
-    JarvysGroup(contentPadding = androidx.compose.foundation.layout.PaddingValues(JarvysUiTokens.ScreenPadding)) {
+internal fun ConnectorDetailSection(
+    title: String,
+    contentPadding: PaddingValues = PaddingValues(JarvysUiTokens.ScreenPadding),
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    JarvysGroup(contentPadding = contentPadding) {
         JarvysSectionLabel(title)
         Spacer(Modifier.height(8.dp))
         content()

@@ -103,7 +103,7 @@ class ConnectorsScreenComposeTest {
                         composable(AppNavigationBackPolicy.SETTINGS) {
                             Text("Settings", modifier = Modifier.testTag("connectors-test-settings"))
                         }
-                        composable(AppNavigationBackPolicy.SETTINGS_DEVELOPER) { DeveloperWorkspace(registry) }
+                        composable(AppNavigationBackPolicy.SETTINGS_DEVELOPER) { DeveloperWorkspace() }
                     }
                 }
             }
@@ -206,7 +206,7 @@ class ConnectorsScreenComposeTest {
         assertEquals(ConnectorState.DISCONNECTED, registry.state(definition))
     }
 
-    @Test fun connectorActionPoliciesLiveInDeveloperSettingsInsteadOfDetails() {
+    @Test fun connectorActionPoliciesLiveInConnectorDetailsInsteadOfDeveloperSettings() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val registry = registry(context, DialerConnector.ID)
         showNavigation(registry, remote = { _, _ -> }, google = { _, _ -> })
@@ -215,13 +215,14 @@ class ConnectorsScreenComposeTest {
             .performScrollTo().performClick()
         compose.waitForIdle()
         compose.onNodeWithTag("connectors-detail-screen").assertIsDisplayed()
-        compose.onAllNodesWithTag("connector-policy-${DialerConnector.OPEN_DIALER}-row").assertCountEquals(0)
+        compose.onNodeWithTag("connector-policy-${DialerConnector.OPEN_DIALER}-row").assertExists()
+        compose.onNodeWithTag("connector-policy-${DialerConnector.PLACE_CALL}-control").assertExists()
 
         navigation.get().navigate(AppNavigationBackPolicy.SETTINGS_DEVELOPER)
         compose.waitForIdle()
         compose.onNodeWithTag("developer-settings").assertIsDisplayed()
-        compose.onNodeWithTag("connector-policy-${DialerConnector.OPEN_DIALER}-row").assertExists()
-        compose.onNodeWithTag("connector-policy-${DialerConnector.PLACE_CALL}-control").assertExists()
+        compose.onAllNodesWithTag("connector-policy-${DialerConnector.OPEN_DIALER}-row").assertCountEquals(0)
+        compose.onAllNodesWithTag("connector-policy-${DialerConnector.PLACE_CALL}-control").assertCountEquals(0)
     }
 
     @Test fun permissionAwareConnectRemainsAvailableFromDeviceDetail() {

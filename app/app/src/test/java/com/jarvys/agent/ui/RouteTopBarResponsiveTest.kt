@@ -74,7 +74,7 @@ class RouteTopBarResponsiveTest {
                 compose.onAllNodesWithTag("agent-presence-idle").assertCountEquals(0)
                 compose.onAllNodesWithTag("agent-presence-glyph", useUnmergedTree = true).assertCountEquals(0)
                 compose.onNodeWithTag("jarvys-topbar-mascot", useUnmergedTree = true).assertIsDisplayed()
-                compose.onNodeWithContentDescription(compose.activity.getString(R.string.drawer_new_chat)).assertIsDisplayed()
+                compose.onNodeWithContentDescription(compose.activity.getString(R.string.drawer_new_chat)).assertDoesNotExist()
                 compose.onAllNodesWithText(compose.activity.getString(R.string.agent_presence_idle)).assertCountEquals(0)
                 val bitmap = captureActivityBitmap(360, 90)
                 try {

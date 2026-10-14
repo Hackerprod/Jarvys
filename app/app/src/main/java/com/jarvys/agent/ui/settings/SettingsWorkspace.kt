@@ -40,7 +40,6 @@ import com.jarvys.agent.JarvysSectionLabel
 import com.jarvys.agent.JarvysChoiceOption
 import com.jarvys.agent.JarvysChoiceSheet
 import com.jarvys.agent.proactive.ProactiveStatus
-import com.jarvys.agent.tasks.ui.TaskSettingsEntry
 import java.util.Date
 
 enum class SettingsWorkspacePage { HOME, PREFERENCES, DEVELOPER }
@@ -65,7 +64,6 @@ fun SettingsWorkspace(
     onSkills: () -> Unit,
     onConnectors: () -> Unit,
     onMemory: () -> Unit,
-    onScheduledTasks: () -> Unit,
     onAccessibilitySettings: () -> Unit,
     onNavigate: (SettingsWorkspacePage) -> Unit,
     archivedChatsAvailable: Boolean = false,
@@ -84,7 +82,6 @@ fun SettingsWorkspace(
                 languageChoice = languageChoice,
                 memoryEnabled = memoryEnabled,
                 memoryUsedCharacters = memoryUsedCharacters,
-                onScheduledTasks = onScheduledTasks,
                 archivedChatsAvailable = archivedChatsAvailable,
                 onArchivedChats = onArchivedChats,
                 onMemory = onMemory,
@@ -138,7 +135,6 @@ private fun SettingsIndex(
     languageChoice: AppLanguageChoice,
     memoryEnabled: Boolean,
     memoryUsedCharacters: Int,
-    onScheduledTasks: () -> Unit,
     archivedChatsAvailable: Boolean,
     onArchivedChats: () -> Unit,
     onMemory: () -> Unit,
@@ -157,8 +153,6 @@ private fun SettingsIndex(
             R.string.memory_settings_summary_on, memoryUsedCharacters.coerceAtLeast(0), MemoryConstants.MAX_CORE_MEMORY_CHARACTERS,
         ) else stringResource(R.string.memory_settings_summary_off)
         SettingsIndexRow(LucideIcons.Brain, stringResource(R.string.memory_title), memorySubtitle, onMemory)
-        SettingsRule()
-        TaskSettingsEntry(onScheduledTasks)
         if (archivedChatsAvailable) {
             SettingsRule()
             SettingsIndexRow(LucideIcons.History, stringResource(R.string.drawer_archived_chats),

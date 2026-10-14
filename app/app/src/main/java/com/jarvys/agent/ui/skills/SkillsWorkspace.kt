@@ -68,9 +68,10 @@ import com.jarvys.agent.ui.motion.LocalReducedMotion
 @Composable
 fun SkillsCatalog(repository: SkillRepository) {
     val skills by repository.skills.collectAsState()
+    val userSkills = userConfigurableSkillEntries(skills)
     var deleteTarget by remember { mutableStateOf<SkillEntry?>(null) }
     var query by remember { mutableStateOf("") }
-    val filteredSkills = skills.filter {
+    val filteredSkills = userSkills.filter {
         query.isBlank() || it.metadata.name.contains(query.trim(), true) || it.metadata.description.contains(query.trim(), true)
     }
     Column(
@@ -78,7 +79,7 @@ fun SkillsCatalog(repository: SkillRepository) {
         verticalArrangement = Arrangement.spacedBy(0.dp),
     ) {
         Spacer(Modifier.height(4.dp))
-        if (skills.size > 8) {
+        if (userSkills.size > 8) {
             JarvysTextField(
                 value = query,
                 onValueChange = { query = it },
@@ -89,7 +90,7 @@ fun SkillsCatalog(repository: SkillRepository) {
                 singleLine = true,
             )
         }
-        if (skills.isEmpty()) {
+        if (userSkills.isEmpty()) {
             JarvysEmptyState(
                 icon = LucideIcons.WandSparkles,
                 title = stringResource(R.string.skills_empty_title),
@@ -97,7 +98,7 @@ fun SkillsCatalog(repository: SkillRepository) {
                 modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
             )
         }
-        if (skills.isNotEmpty() && filteredSkills.isEmpty()) {
+        if (userSkills.isNotEmpty() && filteredSkills.isEmpty()) {
             Text(stringResource(R.string.skills_search_empty), color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp))
         }
         if (filteredSkills.isNotEmpty()) {

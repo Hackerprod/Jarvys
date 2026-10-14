@@ -136,17 +136,11 @@ fun JarvysRouteTopBar(
             controlledMenuOpen = accountMenuOpen,
             onMenuOpenChange = { accountMenuOpen = it },
         ) { closeMenu ->
-            workspaceMenuActionTitle?.takeIf(String::isNotBlank)?.let { actionTitle ->
-                DropdownMenuItem(
-                    text = { Text(actionTitle) },
-                    enabled = conversationActionsEnabled,
-                    modifier = Modifier.testTag("workspace/topbar-action"),
-                    onClick = { closeMenu(); onWorkspaceMenuAction() },
-                )
-            }
             if (canRenameConversation && !mascotVisibleSessionId.isNullOrBlank()) {
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.drawer_rename_chat)) },
+                    leadingIcon = { Icon(LucideIcons.Pencil, contentDescription = null,
+                        modifier = Modifier.size(18.dp).testTag("topbar-rename-chat-icon")) },
                     enabled = conversationActionsEnabled,
                     modifier = Modifier.testTag("topbar-rename-chat"),
                     onClick = {
@@ -156,9 +150,45 @@ fun JarvysRouteTopBar(
                     },
                 )
             }
+            workspaceMenuActionTitle?.takeIf(String::isNotBlank)?.let { actionTitle ->
+                DropdownMenuItem(
+                    text = { Text(actionTitle) },
+                    leadingIcon = { Icon(LucideIcons.FileText, contentDescription = null,
+                        modifier = Modifier.testTag("workspace/topbar-action-icon")) },
+                    enabled = conversationActionsEnabled,
+                    modifier = Modifier.testTag("workspace/topbar-action"),
+                    onClick = { closeMenu(); onWorkspaceMenuAction() },
+                )
+            }
+            if (workspaceMenuActionTitle == null) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(if (chatWithoutMemory) R.string.memory_chat_without_off else R.string.memory_chat_without)) },
+                    leadingIcon = { Icon(LucideIcons.Eye, contentDescription = null,
+                        modifier = Modifier.testTag("topbar-memory-action-icon")) },
+                    modifier = Modifier.testTag("topbar-memory-action"),
+                    onClick = { closeMenu(); onToggleMemory() },
+                )
+                DropdownMenuItem(
+                    text = { Text(stringResource(if (compacting) R.string.compaction_running else R.string.compaction_menu)) },
+                    leadingIcon = { Icon(LucideIcons.Layers2, contentDescription = null,
+                        modifier = Modifier.testTag("topbar-compaction-action-icon")) },
+                    enabled = canCompact,
+                    modifier = Modifier.testTag("topbar-compaction-action"),
+                    onClick = { closeMenu(); onCompact() },
+                )
+                DropdownMenuItem(text = { Text(stringResource(R.string.reflection_menu)) },
+                    leadingIcon = { Icon(LucideIcons.Brain, contentDescription = null,
+                        modifier = Modifier.testTag("topbar-reflection-action-icon")) },
+                    enabled = canReflect,
+                    modifier = Modifier.testTag("topbar-reflection-action"),
+                    onClick = { closeMenu(); onReflect() })
+            }
             if (canDeleteConversation && !mascotVisibleSessionId.isNullOrBlank()) {
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.drawer_delete_action), color = androidx.compose.material3.MaterialTheme.colorScheme.error) },
+                    leadingIcon = { Icon(LucideIcons.Trash2, contentDescription = null,
+                        tint = androidx.compose.material3.MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(18.dp).testTag("topbar-delete-chat-icon")) },
                     enabled = conversationActionsEnabled,
                     modifier = Modifier.testTag("topbar-delete-chat"),
                     onClick = {
@@ -166,26 +196,6 @@ fun JarvysRouteTopBar(
                         deleteTarget = ConversationActionDialogTarget(mascotVisibleSessionId, activeConversationTitle)
                     },
                 )
-            }
-            DropdownMenuItem(text = { Text(stringResource(R.string.drawer_settings)) },
-                leadingIcon = { Icon(LucideIcons.Settings, contentDescription = null) },
-                onClick = { closeMenu(); onOpenSettings() })
-            if (workspaceMenuActionTitle == null) {
-                DropdownMenuItem(
-                    text = { Text(stringResource(if (chatWithoutMemory) R.string.memory_chat_without_off else R.string.memory_chat_without)) },
-                    leadingIcon = { Icon(LucideIcons.Eye, contentDescription = null) },
-                    onClick = { closeMenu(); onToggleMemory() },
-                )
-                DropdownMenuItem(
-                    text = { Text(stringResource(if (compacting) R.string.compaction_running else R.string.compaction_menu)) },
-                    leadingIcon = { Icon(LucideIcons.Layers2, contentDescription = null) },
-                    enabled = canCompact,
-                    onClick = { closeMenu(); onCompact() },
-                )
-                DropdownMenuItem(text = { Text(stringResource(R.string.reflection_menu)) },
-                    leadingIcon = { Icon(LucideIcons.Brain, contentDescription = null) },
-                    enabled = canReflect,
-                    onClick = { closeMenu(); onReflect() })
             }
         }
     }
@@ -205,10 +215,6 @@ fun JarvysRouteTopBar(
                     .testTag("jarvys-topbar-more-options")) {
                     Icon(LucideIcons.EllipsisVertical, contentDescription = stringResource(R.string.topbar_more_options),
                         modifier = Modifier.size(21.dp))
-                }
-                IconButton(onClick = onNewChat, modifier = Modifier.size(48.dp)) {
-                    Icon(LucideIcons.MessageCirclePlus, contentDescription = stringResource(R.string.drawer_new_chat),
-                        modifier = Modifier.size(22.dp))
                 }
             },
             colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent,
@@ -237,10 +243,6 @@ fun JarvysRouteTopBar(
                         .testTag("jarvys-topbar-more-options")) {
                         Icon(LucideIcons.EllipsisVertical, contentDescription = stringResource(R.string.topbar_more_options),
                             modifier = Modifier.size(21.dp))
-                    }
-                    IconButton(onClick = onNewChat, modifier = Modifier.size(48.dp)) {
-                        Icon(LucideIcons.MessageCirclePlus, contentDescription = stringResource(R.string.drawer_new_chat),
-                            modifier = Modifier.size(22.dp))
                     }
                 }
                 AppRouteAction.MCP_ADD -> IconButton(onClick = onAddServer, modifier = Modifier.size(48.dp)) {

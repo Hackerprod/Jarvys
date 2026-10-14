@@ -97,24 +97,23 @@ class CentralMascotScaleComposeTest {
         val menu = compose.onNodeWithTag("jarvys-account-menu")
             .assertWidthIsEqualTo(84.dp).assertHeightIsEqualTo(84.dp)
         val nav = compose.onNodeWithContentDescription(compose.activity.getString(R.string.drawer_open))
-        val create = compose.onNodeWithContentDescription(compose.activity.getString(R.string.drawer_new_chat))
         val navBounds = nav.fetchSemanticsNode().boundsInRoot
-        val createBounds = create.fetchSemanticsNode().boundsInRoot
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.drawer_new_chat)).assertDoesNotExist()
+        val moreBounds = compose.onNodeWithTag("jarvys-topbar-more-options").fetchSemanticsNode().boundsInRoot
         assertEquals(topbar.center.x, avatar.center.x, 1f)
         assertTrue(avatar.top >= topbar.top && avatar.bottom <= topbar.bottom)
-        assertTrue(navBounds.right <= avatar.left && avatar.right <= createBounds.left)
+        assertTrue(navBounds.right <= avatar.left && avatar.right <= moreBounds.left)
         assertTrue(message.top >= topbar.bottom)
         with(compose.density) { assertEquals(topbar.height, headerInset.toPx(), 1f) }
         assertEquals(120f, topbar.height, 1f)
         assertTrue(avatar.top >= 24f)
         compose.onNodeWithTag("jarvys-mascot-native").assertDoesNotExist()
         nav.performTouchInput { click() }
-        create.performTouchInput { click() }
         menu.performTouchInput { longClick() }
         awaitReactionDrawIdle(compose)
-        compose.onNodeWithText(compose.activity.getString(R.string.drawer_settings)).performTouchInput { click() }
+        compose.onNodeWithText(compose.activity.getString(R.string.drawer_settings)).assertDoesNotExist()
         assertEquals(1, drawer)
-        assertEquals(1, newChat)
-        assertEquals(1, settings)
+        assertEquals(0, newChat)
+        assertEquals(0, settings)
     }
 }

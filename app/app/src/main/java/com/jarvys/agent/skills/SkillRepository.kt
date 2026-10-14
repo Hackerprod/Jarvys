@@ -15,7 +15,12 @@ import java.io.File
 import java.io.InputStream
 import java.nio.charset.StandardCharsets
 
-enum class SkillSource { BUNDLED, IMPORTED }
+enum class SkillSource(val userConfigurable: Boolean) {
+    BUNDLED(false), IMPORTED(true)
+}
+
+internal fun userConfigurableSkillEntries(skills: Collection<SkillEntry>): List<SkillEntry> =
+    skills.filter { it.source.userConfigurable }
 
 /** Android lists child directories; archive-backed asset providers may list entrypoint paths. */
 internal fun bundledSkillDirectoryNames(listing: Collection<String>): List<String> = listing
@@ -64,7 +69,8 @@ class SkillRepository private constructor(context: Context) : WorkspaceStore.Ski
     fun enabledForRun(): List<SkillEntry> = enabledForProfile(null)
 
     fun enabledForProfile(profileId: String?): List<SkillEntry> = skills.value.filter {
-        it.enabled && it.validationError == null && SkillScopePolicy.availableTo(it.metadata.id, profileId)
+        (!it.source.userConfigurable || it.enabled) && it.validationError == null
+                && SkillScopePolicy.availableTo(it.metadata.id, profileId)
     }
 
     fun selectedForRun(ids: Collection<String>): List<SkillEntry> = selectedForProfile(ids, null)
@@ -80,6 +86,7 @@ class SkillRepository private constructor(context: Context) : WorkspaceStore.Ski
 
     fun setEnabled(id: String, enabled: Boolean) = synchronized(lock) {
         val current = _skills.value.firstOrNull { it.metadata.id == id } ?: return@synchronized
+        require(current.source.userConfigurable) { "System skills cannot be configured" }
         require(current.validationError == null || !enabled) { current.validationError ?: "Skill is invalid" }
         preferences.edit().putBoolean(enabledKey(id), enabled).apply()
         _skills.value = loadAll()
@@ -127,6 +134,8 @@ class SkillRepository private constructor(context: Context) : WorkspaceStore.Ski
 
     override fun commitSkillWorkspaceWrite(skillId: String, skillMarkdown: String?, writeFile: Runnable) = synchronized(lock) {
         require(SKILL_ID_PATTERN.matches(skillId)) { "Skill directory must use a valid skill id" }
+        val existingSkill = _skills.value.firstOrNull { it.metadata.id == skillId }
+        require(existingSkill == null || existingSkill.source.userConfigurable) { "System skills cannot be edited" }
         require(!SkillScopePolicy.isReserved(skillId)) { "Coding runtime skills cannot be overridden in the skill workspace" }
         SkillWorkspaceMutation.commit(
             skillMarkdown = skillMarkdown,
@@ -143,8 +152,7 @@ class SkillRepository private constructor(context: Context) : WorkspaceStore.Ski
             writeFile = { writeFile.run() },
             initializeEnabledState = {
                 if (skillMarkdown != null && !preferences.contains(enabledKey(skillId))) {
-                    val source = if (isBundledId(skillId)) SkillSource.BUNDLED else SkillSource.IMPORTED
-                    preferences.edit().putBoolean(enabledKey(skillId), skillEnabledByDefault(source, skillId)).apply()
+                    preferences.edit().putBoolean(enabledKey(skillId), true).apply()
                 }
             },
             rescan = { _skills.value = loadAll() },
@@ -168,7 +176,7 @@ class SkillRepository private constructor(context: Context) : WorkspaceStore.Ski
 
     fun deleteImported(id: String) = synchronized(lock) {
         val skill = _skills.value.firstOrNull { it.metadata.id == id } ?: return@synchronized
-        require(skill.source == SkillSource.IMPORTED) { "Bundled skills cannot be deleted" }
+        require(skill.source.userConfigurable) { "System skills cannot be deleted" }
         val directory = safeSkillDirectory(id)
         if (directory.exists()) check(directory.deleteRecursively()) { "Could not remove imported skill files" }
         preferences.edit().remove(enabledKey(id)).remove(usageKey(id)).apply()
@@ -229,7 +237,7 @@ class SkillRepository private constructor(context: Context) : WorkspaceStore.Ski
             metadata = parsed.metadata,
             body = parsed.body,
             source = source,
-            enabled = preferences.getBoolean(enabledKey(id), skillEnabledByDefault(source, id)),
+            enabled = !source.userConfigurable || preferences.getBoolean(enabledKey(id), true),
             usageCount = preferences.getInt(usageKey(id), 0).coerceAtLeast(0),
             validationError = validateAllowedTools(parsed.metadata.allowedTools),
         )
@@ -267,9 +275,6 @@ class SkillRepository private constructor(context: Context) : WorkspaceStore.Ski
         require(target.path.startsWith(rootCanonical.path + File.separator)) { "Skill id escaped the private skill directory" }
         return target
     }
-
-    private fun isBundledId(id: String): Boolean = id == BUNDLED_SKILL_CREATOR_ID
-            || id in bundledSkillDirectoryNames(appContext.assets.list(ASSET_ROOT).orEmpty().toList())
 
     private fun readBoundedUtf8(input: InputStream): String {
         input.use { stream ->

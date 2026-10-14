@@ -22,6 +22,7 @@ internal object LucideIcons {
 
     val Accessibility: ImageVector by lazy(LazyThreadSafetyMode.PUBLICATION) { vector("Accessibility", "M 17 4 A 1 1 0 1 0 15 4 A 1 1 0 1 0 17 4 M 0 0 m18 19 1-7-6 1 M 0 0 m5 8 3-3 5.5 3-2.36 3.5 M 0 0 M4.24 14.5a5 5 0 0 0 6.88 6 M 0 0 M13.76 17.5a5 5 0 0 0-6.88-6") }
     val Plus: ImageVector by lazy(LazyThreadSafetyMode.PUBLICATION) { vector("Plus", "M5 12h14 M 0 0 M12 5v14") }
+    val Pencil: ImageVector by lazy(LazyThreadSafetyMode.PUBLICATION) { vector("Pencil", "m16.862 4.487 2.651 2.651 M 0 0 M7.5 7.5 3 12l-1 4 4-1 4.5-4.5 M 0 0 M14 4 20 10 10 20 4 14z") }
     val EllipsisVertical: ImageVector by lazy(LazyThreadSafetyMode.PUBLICATION) { vector("EllipsisVertical", "M13 5A1 1 0 1 1 11 5A1 1 0 0 1 13 5 M 0 0 M13 12A1 1 0 1 1 11 12A1 1 0 0 1 13 12 M 0 0 M13 19A1 1 0 1 1 11 19A1 1 0 0 1 13 19") }
     val Mic: ImageVector by lazy(LazyThreadSafetyMode.PUBLICATION) { vector("Mic", "M12 19v3 M 0 0 M19 10v2a7 7 0 0 1-14 0v-2 M 0 0 M12 2 A3 3 0 0 1 15 5 V12 A3 3 0 0 1 9 12 V5 A3 3 0 0 1 12 2 Z") }
     val MessageCirclePlus: ImageVector by lazy(LazyThreadSafetyMode.PUBLICATION) { vector("MessageCirclePlus", "M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719 M 0 0 M8 12h8 M 0 0 M12 8v8") }
@@ -82,6 +83,7 @@ internal object LucideIcons {
     fun all(): List<ImageVector> = listOf(
         Accessibility,
         Plus,
+        Pencil,
         EllipsisVertical,
         Mic,
         MessageCirclePlus,

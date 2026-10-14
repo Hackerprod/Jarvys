@@ -138,7 +138,7 @@ class ConnectedGooglePermissionScreensTest {
         }
     }
     private fun showDeveloper(scale: Float = 1f, dark: Boolean = false) =
-        showScreen(scale, dark) { androidx.compose.foundation.layout.Column(androidx.compose.ui.Modifier.fillMaxWidth().verticalScroll(androidx.compose.foundation.rememberScrollState())) { DeveloperWorkspace(registry) } }
+        showScreen(scale, dark) { androidx.compose.foundation.layout.Column(androidx.compose.ui.Modifier.fillMaxWidth().verticalScroll(androidx.compose.foundation.rememberScrollState())) { DeveloperWorkspace() } }
     private fun scopeTag(scope: String) = "google-scope-${scope.removeSuffix("/").substringAfterLast('/')}"
     private fun policyTag(operation: ConnectorOperation) = "connector-policy-${operation.name}"
     private fun pick(prefix: String, label: Int) {
@@ -177,18 +177,17 @@ class ConnectedGooglePermissionScreensTest {
         compose.onNodeWithTag("$prefix-control").assertTextContains(compose.activity.getString(resource))
     private fun capture(name: String) = compose.runOnIdle { captureConnectedPermissionWindows(compose.activity, name) }
 
-    @Test fun googleActionPoliciesLiveInDeveloperAndStayOutOfGoogleDetails() {
+    @Test fun googleActionPoliciesLiveInGoogleDetailsAndStayOutOfDeveloper() {
         seed(setOf(GoogleOAuthProtocol.GMAIL_READ, GoogleOAuthProtocol.DRIVE_READ))
         val gmailWrite = gmail.operations.first { it.name == GmailConnector.SEND_DRAFT }
         show(true)
-        compose.onNodeWithTag("${policyTag(gmailWrite)}-row", useUnmergedTree = true).assertDoesNotExist()
+        compose.onNodeWithTag("${policyTag(gmailWrite)}-row", useUnmergedTree = true).assertExists()
         compose.onNodeWithTag("${scopeTag(GoogleOAuthProtocol.GMAIL_READ)}-row", useUnmergedTree = true).assertExists()
 
         showDeveloper()
-        compose.onNodeWithTag("developer-connector-${gmail.id}").assertIsDisplayed()
-        compose.onNodeWithTag("${policyTag(gmailWrite)}-row", useUnmergedTree = true).assertExists()
-        compose.onNodeWithTag("${policyTag(drive.operations.first())}-row", useUnmergedTree = true).assertExists()
-        compose.onNodeWithTag("${policyTag(gmailWrite)}-control").assertExists()
+        compose.onNodeWithTag("developer-settings").assertIsDisplayed()
+        compose.onNodeWithTag("${policyTag(gmailWrite)}-row", useUnmergedTree = true).assertDoesNotExist()
+        compose.onNodeWithTag("${policyTag(drive.operations.first())}-row", useUnmergedTree = true).assertDoesNotExist()
     }
 
     @Test fun fullGoogleRowsAppearFirstInsideServicesBeforeGitHub() {
@@ -232,7 +231,7 @@ class ConnectedGooglePermissionScreensTest {
         // Selecting the already granted value must not launch consent or widen the grant.
         pick(scopeTag(GoogleOAuthProtocol.GMAIL_READ), R.string.connector_policy_allow)
         compose.onAllNodes(hasTestTag("connector-policy-${GmailConnector.SEND_DRAFT}-row"), useUnmergedTree = true)
-            .assertCountEquals(0)
+            .assertCountEquals(1)
         assertTrue(authorizations.isEmpty()); assertTrue(policies.changes.isEmpty())
         assertEquals(setOf(GoogleOAuthProtocol.GMAIL_READ), manager.grantedScopes())
         assertTrue(authorizations.isEmpty()); assertEquals(0, requests.get()); assertEquals(0, revocations.get())
@@ -270,7 +269,7 @@ class ConnectedGooglePermissionScreensTest {
         compose.onNodeWithTag("${scopeTag(GoogleOAuthProtocol.DRIVE_READ)}-row", useUnmergedTree = true).performScrollTo()
         capture("drive-connected-scopes-es-dark-large")
         compose.onAllNodes(hasTestTag("connector-policy-${drive.operations.first().name}-row"), useUnmergedTree = true)
-            .assertCountEquals(0)
+            .assertCountEquals(1)
         assertTrue(policies.changes.isEmpty())
         assertTrue(authorizations.isEmpty())
         pick(scopeTag(GoogleOAuthProtocol.DRIVE_FILE), R.string.connector_add_permission)

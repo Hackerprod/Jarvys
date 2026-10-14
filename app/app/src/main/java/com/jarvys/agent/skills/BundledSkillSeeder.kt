@@ -6,11 +6,6 @@ import java.security.MessageDigest
 
 internal const val BUNDLED_SKILL_CREATOR_ID = "com.jarvys.skill-creator"
 
-internal fun skillEnabledByDefault(source: SkillSource, id: String): Boolean = when (source) {
-    SkillSource.BUNDLED -> id == BUNDLED_SKILL_CREATOR_ID || id == SkillScopePolicy.APK_FACTORY_ID
-    SkillSource.IMPORTED -> true
-}
-
 /** Installs bundled creator content and upgrades only files that still match their recorded seed. */
 internal class BundledSkillSeeder(
     private val skillRoot: File,

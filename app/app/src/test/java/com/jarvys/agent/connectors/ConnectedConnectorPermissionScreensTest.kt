@@ -28,7 +28,6 @@ import com.jarvys.agent.R
 import com.jarvys.agent.SecretStore
 import com.jarvys.agent.mcp.*
 import com.jarvys.agent.ui.JarvysOwnTheme
-import com.jarvys.agent.ui.settings.DeveloperWorkspace
 import com.jarvys.agent.ui.mcp.McpServerDetailPage
 import com.jarvys.agent.ui.mcp.McpServerDetailScreen
 import org.json.JSONObject
@@ -120,11 +119,14 @@ class ConnectedConnectorPermissionScreensTest {
             val visibleRow = compose.onNodeWithTag("$prefix-row", useUnmergedTree = true)
                 .fetchSemanticsNode().boundsInRoot
             assertTrue("provenance remains below the centered policy row", origin.top >= visibleRow.bottom - 1f)
+            assertEquals("provenance keeps the row's horizontal inset", visibleRow.left, origin.left, 1f)
+            assertEquals("provenance shares the row's padded width", visibleRow.right, origin.right, 1f)
+            assertTrue("provenance is inset from the container edge", origin.left > 0f)
         }
     }
     private fun capture(name: String) = compose.runOnIdle { captureConnectedPermissionWindows(compose.activity, name) }
 
-    @Test fun connectedCalendarPoliciesInDeveloperConfigureReadAndWriteOnceWithoutExecuting() = calendar(1f, false)
+    @Test fun connectedCalendarPoliciesInConnectorDetailConfigureReadAndWriteOnceWithoutExecuting() = calendar(1f, false)
 
     @Test fun largeTextPolicyLayoutDoesNotDependOnConnectorOrOperationIdentity() {
         val registry = ConnectorRegistry.createForTestsWithAutonomy(PermissionConnectionPreferences(), { true }, gate,
@@ -164,7 +166,7 @@ class ConnectedConnectorPermissionScreensTest {
     }
 
     @Test @Config(qualifiers = "es-rES-w320dp-h800dp-port-mdpi")
-    fun connectedCalendarSpanishLargeTextKeepsDeveloperPoliciesAtRightCenter() = calendar(2f, true)
+    fun connectedCalendarSpanishLargeTextKeepsConnectorPoliciesAtRightCenter() = calendar(2f, true)
 
     private fun calendar(scale: Float, dark: Boolean) {
         val registry = ConnectorRegistry.createForTestsWithAutonomy(PermissionConnectionPreferences(), { true }, gate,
@@ -182,9 +184,13 @@ class ConnectedConnectorPermissionScreensTest {
         registry.connect(definition.id)
         assertEquals(ConnectorState.CONNECTED, registry.state(definition))
         show(scale, dark) {
-            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) { DeveloperWorkspace(registry) }
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).testTag("connected-connector-detail")) {
+                ConnectorDeviceDetailPage(definition, registry.state(definition), registry,
+                    registry.autonomyRevision.value, onConnect = {}, onDisconnect = {}, openSettings = {})
+            }
         }
-        compose.onNodeWithTag("developer-connector-${definition.id}").assertIsDisplayed()
+        compose.onNodeWithTag("connected-connector-detail").assertIsDisplayed()
+        compose.onAllNodesWithTag("developer-settings").assertCountEquals(0)
         val read = "connector-policy-${CalendarConnector.SEARCH}"
         val write = "connector-policy-${CalendarConnector.CREATE}"
         compose.onNodeWithTag("$read-control").assertHasClickAction()
@@ -269,20 +275,14 @@ class ConnectedConnectorPermissionScreensTest {
             tool("issue_write", "Create or update repository issue")))
         val credentials = fixture.vault.values.toMap()
         show { RemoteServicesSection(fixture.repository, fixture.manager, fixture.oauth, selectedId = "github") }
-        compose.onNodeWithTag("remote-policy-get_me-row").assertDoesNotExist()
-        compose.onNodeWithTag("remote-policy-issue_write-row").assertDoesNotExist()
+        compose.onNodeWithTag("remote-policy-get_me-row").assertExists()
+        compose.onNodeWithTag("remote-policy-issue_write-row").assertExists()
         compose.onNodeWithTag("remote-exposure-get_me-switch").assertExists()
         compose.onNodeWithTag("remote-exposure-issue_write-switch").assertExists()
 
-        show {
-            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).testTag("developer-settings")) {
-                RemoteMcpPolicySettings(fixture.repository, fixture.manager)
-            }
-        }
         val read = "remote-policy-get_me"
         val write = "remote-policy-issue_write"
-        compose.onNodeWithTag("developer-mcp-${fixture.serverId}").assertExists()
-        compose.onNodeWithTag("remote-exposure-get_me-switch").assertDoesNotExist()
+        compose.onNodeWithTag("remote-exposure-get_me-switch").assertExists()
         compose.onNodeWithText("fixture-token-not-a-real-credential").assertDoesNotExist()
         geometry(read); geometry(write)
         capture("github-connected-read-write")
@@ -310,8 +310,8 @@ class ConnectedConnectorPermissionScreensTest {
         assertPolicy("$read-control", R.string.remote_service_policy_deny)
 
         show { RemoteServicesSection(fixture.repository, fixture.manager, fixture.oauth, selectedId = "github") }
-        compose.onNodeWithTag("remote-policy-get_me-row").assertDoesNotExist()
-        compose.onNodeWithTag("remote-policy-issue_write-row").assertDoesNotExist()
+        compose.onNodeWithTag("remote-policy-get_me-row").assertExists()
+        compose.onNodeWithTag("remote-policy-issue_write-row").assertExists()
         compose.onNodeWithTag("remote-exposure-get_me-switch").assertExists()
         compose.onNodeWithTag("remote-exposure-get_me-switch").performScrollTo().performClick()
         assertFalse(fixture.repository.get(fixture.serverId)!!.tools.first { it.wireName == "get_me" }.enabled)
@@ -333,19 +333,14 @@ class ConnectedConnectorPermissionScreensTest {
     }
 
     @Test @Config(qualifiers = "es-rES-w320dp-h800dp-port-mdpi")
-    fun developerCatalogMcpLongLabelOffersEveryModeForDestructiveTools() {
+    fun connectorDetailMcpLongLabelOffersEveryModeForDestructiveTools() {
         val fixture = connectedMcp("notion", listOf(tool("update_page", "Actualizar una página con un título suficientemente largo"),
             tool("delete_page", "Eliminar una página", destructive = true)))
         show(2f, true) {
             RemoteServicesSection(fixture.repository, fixture.manager, fixture.oauth, selectedId = "notion")
         }
-        compose.onNodeWithTag("remote-policy-update_page-row").assertDoesNotExist()
-        compose.onNodeWithTag("remote-policy-delete_page-row").assertDoesNotExist()
-        show(2f, true) {
-            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-                RemoteMcpPolicySettings(fixture.repository, fixture.manager)
-            }
-        }
+        compose.onNodeWithTag("remote-policy-update_page-row").assertExists()
+        compose.onNodeWithTag("remote-policy-delete_page-row").assertExists()
         geometry("remote-policy-update_page"); geometry("remote-policy-delete_page")
         capture("catalog-mcp-es-dark-large")
         pick("remote-policy-update_page-control", R.string.remote_service_policy_allow)

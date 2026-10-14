@@ -3,22 +3,19 @@ package com.jarvys.agent.connectors
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -26,6 +23,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.jarvys.agent.JarvysUiTokens
 import com.jarvys.agent.R
 import java.util.Locale
 
@@ -73,22 +71,17 @@ internal fun AutonomyPolicyRow(
         )
     }
 
-    Column(Modifier.fillMaxWidth()) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = JarvysUiTokens.ScreenPadding, vertical = 4.dp)) {
         BoxWithConstraints(Modifier.fillMaxWidth()) {
             val fontScale = LocalDensity.current.fontScale
             // ConnectorPermissionRow gives the selector at most half of a narrow row. At large
             // text sizes, keep the label readable above a full-width selector on compact screens.
             val stackForLargeText = fontScale >= 1.6f && maxWidth <= 224.dp * fontScale
             if (stackForLargeText) {
-                var labelHeightPx by remember(definition.id, operation.name) { mutableIntStateOf(0) }
-                val labelHeight = with(LocalDensity.current) { labelHeightPx.toDp() }
                 Column(Modifier.fillMaxWidth().testTag("$tagPrefix-row")) {
-                    AutonomyPolicyLabel(operation,
-                        Modifier.fillMaxWidth().onSizeChanged { labelHeightPx = it.height })
+                    AutonomyPolicyLabel(operation, Modifier.fillMaxWidth())
                     Box(Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("$tagPrefix-selector-row"),
                         contentAlignment = Alignment.CenterEnd) { selector() }
-                    // Keep the selector centered in the complete row, as in ConnectorPermissionRow.
-                    Spacer(Modifier.height(labelHeight))
                 }
             } else {
                 ConnectorPermissionRow(modifier = Modifier.testTag("$tagPrefix-row"), content = {

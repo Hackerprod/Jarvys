@@ -100,7 +100,7 @@ class Ux2SettingsChoiceCaptureTest {
                             onLanguageChange = {}, onThemeChange = {}, onShowAgentEventsChange = {},
                             onProactiveEnabledChange = {}, onRefreshProactiveStatus = {},
                             onNavigateRoute = {}, onMcp = {}, onSkills = {}, onConnectors = {}, onMemory = {},
-                            onScheduledTasks = {}, onAccessibilitySettings = {}, onNavigate = {},
+                            onAccessibilitySettings = {}, onNavigate = {},
                         )
                         if (stage == "after") {
                             Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.32f)))
