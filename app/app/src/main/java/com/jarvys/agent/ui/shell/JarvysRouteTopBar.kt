@@ -206,6 +206,10 @@ fun JarvysRouteTopBar(
                     Icon(LucideIcons.EllipsisVertical, contentDescription = stringResource(R.string.topbar_more_options),
                         modifier = Modifier.size(21.dp))
                 }
+                IconButton(onClick = onNewChat, modifier = Modifier.size(48.dp)) {
+                    Icon(LucideIcons.MessageCirclePlus, contentDescription = stringResource(R.string.drawer_new_chat),
+                        modifier = Modifier.size(22.dp))
+                }
             },
             colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent,
                 scrolledContainerColor = Color.Transparent),
@@ -233,6 +237,10 @@ fun JarvysRouteTopBar(
                         .testTag("jarvys-topbar-more-options")) {
                         Icon(LucideIcons.EllipsisVertical, contentDescription = stringResource(R.string.topbar_more_options),
                             modifier = Modifier.size(21.dp))
+                    }
+                    IconButton(onClick = onNewChat, modifier = Modifier.size(48.dp)) {
+                        Icon(LucideIcons.MessageCirclePlus, contentDescription = stringResource(R.string.drawer_new_chat),
+                            modifier = Modifier.size(22.dp))
                     }
                 }
                 AppRouteAction.MCP_ADD -> IconButton(onClick = onAddServer, modifier = Modifier.size(48.dp)) {
