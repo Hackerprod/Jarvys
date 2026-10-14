@@ -298,6 +298,15 @@
     <string name="connector_tool_using">Using %1$s</string>
     <string name="connector_tool_used">Used %1$s</string>
     <string name="connector_tool_failed">Failed %1$s</string>
+    <string name="connector_tool_group_running">Using %1$s +%2$d</string>
+    <plurals name="connector_tool_group_completed">
+        <item quantity="one">Used %1$d tool</item>
+        <item quantity="other">Used %1$d tools</item>
+    </plurals>
+    <plurals name="connector_tool_group_completed_failures">
+        <item quantity="one">Used %1$d tools, %2$d failed</item>
+        <item quantity="other">Used %1$d tools, %2$d failed</item>
+    </plurals>
     <string name="connector_available">Available</string>
     <string name="connector_empty">No connectors are available yet.</string>
     <string name="connector_on_device">On this device</string>
@@ -929,6 +938,7 @@ description: Explicit preferences about language, tone, style, and how to help t
     <string name="history_run_summary">%1$s · %2$d steps · %3$d turns</string>
     <string name="chat_open_tray">Open context and attachments</string>
     <string name="chat_close_tray">Close context and attachments</string>
+    <string name="tool_group_close">Close tool group</string>
     <string name="chat_send_message">Send message</string>
     <string name="chat_stop_run">Stop run</string>
     <string name="chat_tray_title">Conversation kit</string>

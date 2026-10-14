@@ -298,6 +298,15 @@
     <string name="connector_tool_using">Usando %1$s</string>
     <string name="connector_tool_used">Usó %1$s</string>
     <string name="connector_tool_failed">Falló %1$s</string>
+    <string name="connector_tool_group_running">Usando %1$s +%2$d</string>
+    <plurals name="connector_tool_group_completed">
+        <item quantity="one">Usó %1$d herramienta</item>
+        <item quantity="other">Usó %1$d herramientas</item>
+    </plurals>
+    <plurals name="connector_tool_group_completed_failures">
+        <item quantity="one">Usó %1$d herramientas, falló %2$d</item>
+        <item quantity="other">Usó %1$d herramientas, fallaron %2$d</item>
+    </plurals>
     <string name="connector_available">Disponibles</string>
     <string name="connector_empty">Todavía no hay conectores disponibles.</string>
     <string name="connector_on_device">En este dispositivo</string>
@@ -929,6 +938,7 @@ description: Preferencias explícitas sobre idioma, tono, estilo y forma de ayud
     <string name="history_run_summary">%1$s · %2$d pasos · %3$d turnos</string>
     <string name="chat_open_tray">Abrir contexto y adjuntos</string>
     <string name="chat_close_tray">Cerrar contexto y adjuntos</string>
+    <string name="tool_group_close">Cerrar el grupo de herramientas</string>
     <string name="chat_send_message">Enviar mensaje</string>
     <string name="chat_stop_run">Detener ejecución</string>
     <string name="chat_tray_title">Kit de conversación</string>

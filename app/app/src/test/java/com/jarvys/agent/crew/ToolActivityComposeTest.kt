@@ -55,8 +55,30 @@ class ToolActivityComposeTest {
         compose.runOnIdle { value=snapshot(messages=value.messages+local(activity("tool_result","Read result"),"done")) }
         compose.onNodeWithText("Used Read").assertIsDisplayed();compose.onAllNodesWithText("Using Read").assertCountEquals(0)
         compose.onAllNodesWithTag("activity-execution").assertCountEquals(1)
+        compose.onNodeWithText("Read result").assertDoesNotExist()
         compose.onNodeWithTag("activity-details-execution").performClick();compose.onNodeWithText("Read result").assertIsDisplayed()
         compose.onAllNodesWithText("To Jarvys").assertCountEquals(1)
+    }
+    @Test fun failedAndPreviewDetailsStayInsideTheExpandedRow() {
+        val failed = ToolActivity("event", "execution", "call", "read", "Read", "", "", "tool_error",
+            "Read failed with a partial result", "preview", "", "workspace", 1)
+        compose.setContent { MaterialTheme { ToolActivityLine(failed, onOpenPreview = {}) } }
+        compose.onNodeWithText(compose.activity.getString(R.string.connector_tool_failed, "Read")).assertIsDisplayed()
+        compose.onNodeWithText("Read failed with a partial result").assertDoesNotExist()
+        compose.onNodeWithText(compose.activity.getString(R.string.chat_open_preview)).assertDoesNotExist()
+        compose.onNodeWithTag("activity-details-execution").performClick()
+        compose.onNodeWithText("Read failed with a partial result").assertIsDisplayed()
+        compose.onNodeWithText(compose.activity.getString(R.string.chat_open_preview)).assertIsDisplayed()
+    }
+    @Test fun interruptionExplanationIsHiddenUntilExpanded() {
+        val interrupted = activity("tool_interrupted", "Partial execution evidence")
+        compose.setContent { MaterialTheme { ToolActivityLine(interrupted) } }
+        val explanation = compose.activity.getString(R.string.activity_unconfirmed_detail)
+        compose.onNodeWithText(explanation).assertDoesNotExist()
+        compose.onNodeWithText("Partial execution evidence").assertDoesNotExist()
+        compose.onNodeWithTag("activity-details-execution").performClick()
+        compose.onNodeWithText(explanation).assertIsDisplayed()
+        compose.onNodeWithText("Partial execution evidence").assertIsDisplayed()
     }
     @Test fun botStatusOnlyChangeMarksPendingOperationUnconfirmed() {
         val messages=listOf(local(activity()));var value by mutableStateOf(snapshot(messages=messages))

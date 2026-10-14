@@ -14,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertDoesNotExist
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithTag
@@ -106,6 +107,10 @@ class LinuxFailurePresentationCaptureTest {
         compose.waitForIdle()
         if (name == "extract_failure_detail") {
             compose.onNodeWithTag("conversation-activity-2").assertIsDisplayed()
+            val detail = compose.onNodeWithText("tar_entry=usr/bin/chfn", substring = true,
+                useUnmergedTree = true)
+            detail.assertDoesNotExist()
+            compose.onNodeWithTag("tool-output-toggle-linux-setup-call").performClick()
             compose.onNodeWithText("tar_entry=usr/bin/chfn", substring = true,
                 useUnmergedTree = true).assertIsDisplayed()
         } else {

@@ -8,7 +8,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.core.app.ApplicationProvider
 import com.jarvys.agent.connectors.ConnectorConnectionPreferences
@@ -61,6 +63,11 @@ class AgentRunRestorationComposeTest {
             }
         }
 
+        val firstToolId = timeline.first { it.kind == "tool" }.id
+        compose.onNodeWithText(context.resources.getQuantityString(
+            R.plurals.connector_tool_group_completed_failures, 1, 2, 1,
+        )).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("tool-group-$firstToolId").performClick()
         compose.onNodeWithText(context.getString(R.string.connector_tool_used, "Telegram Send Message"))
             .performScrollTo().assertIsDisplayed()
         compose.onNodeWithText(context.getString(R.string.connector_tool_failed, "Telegram Send Message"))

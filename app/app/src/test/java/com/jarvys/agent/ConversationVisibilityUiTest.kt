@@ -5,9 +5,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertDoesNotExist
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import com.jarvys.agent.connectors.ConnectorConnectionPreferences
 import com.jarvys.agent.connectors.ConnectorRegistry
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -52,5 +55,28 @@ class ConversationVisibilityUiTest {
         }
         compose.onNodeWithText("Actionable error sentinel").assertIsDisplayed()
         compose.onNodeWithText("compaction_error").assertDoesNotExist()
+    }
+
+    @Test fun toolAuditDetailErrorAndPreviewAreHiddenUntilExpanded() {
+        val event = AgentRunUiEvent.toolEvent(4L, "tool_error", "Read", "Tool error details",
+            "audit-preview-call", "preview-id", 4L).copy(toolAuditDetail = "Audit evidence sentinel")
+        val registry = ConnectorRegistry.createForTests(object : ConnectorConnectionPreferences {
+            override fun isConnected(id: String) = false
+            override fun setConnected(id: String, connected: Boolean) = Unit
+        }, { true })
+        compose.setContent {
+            MaterialTheme {
+                AgentRunScreen(conversationKey = "tool-disclosure", events = listOf(event), isRunning = false,
+                    emptyReport = null, connectorRegistry = registry, onOpenPreview = {},
+                    onOpenSkillFile = {}, chatWithoutMemory = false)
+            }
+        }
+        compose.onNodeWithText("Audit evidence sentinel").assertDoesNotExist()
+        compose.onNodeWithText("Tool error details").assertDoesNotExist()
+        compose.onNodeWithText(compose.activity.getString(R.string.chat_open_preview)).assertDoesNotExist()
+        compose.onNodeWithTag("tool-output-toggle-audit-preview-call").performClick()
+        compose.onNodeWithTag("tool-audit-4").assertIsDisplayed()
+        compose.onNodeWithText("Tool error details").assertIsDisplayed()
+        compose.onNodeWithText(compose.activity.getString(R.string.chat_open_preview)).assertIsDisplayed()
     }
 }

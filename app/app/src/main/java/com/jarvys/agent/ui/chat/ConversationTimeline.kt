@@ -27,6 +27,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.heightIn
@@ -39,6 +41,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -48,6 +52,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -145,6 +150,7 @@ fun ConversationTimeline(
     allowMessageEntrance: Boolean = true,
 ) {
     val visibleEvents = ConversationVisibility.project(events)
+    val timelineItems = ToolGrouping.project(visibleEvents)
     val latestAnswerId = visibleEvents.lastOrNull { it.kind == "assistant" && it.stage == null }?.messageId
     val latestUserEventId = visibleEvents.lastOrNull { it.kind == "user" }?.id
     val entryKeys = visibleEvents.map(ChatMessageArrivalPolicy::key)
@@ -159,41 +165,59 @@ fun ConversationTimeline(
     androidx.compose.runtime.key(conversationKey) {
         ChatMessageList(
             conversationKey = conversationKey,
-            messages = visibleEvents,
-            targetMessage = { targetMessageId != null && it.messageId == targetMessageId },
+            messages = timelineItems,
+            targetMessage = { item -> targetMessageId != null && when (item) {
+                is ConversationTimelineItem.Event -> item.event.messageId == targetMessageId
+                is ConversationTimelineItem.ToolGroup -> item.events.any { it.messageId == targetMessageId }
+            } },
             isRunning = isRunning,
-            messageKey = { it.id },
-            isUserMessage = { it.kind == "user" },
+            messageKey = { it.key },
+            messageUpdateKey = { item -> when (item) {
+                is ConversationTimelineItem.Event -> item.event.id
+                is ConversationTimelineItem.ToolGroup -> item.events.last().id
+            } },
+            isUserMessage = { it is ConversationTimelineItem.Event && it.event.kind == "user" },
             modifier = Modifier.fillMaxWidth(),
-            itemContent = { event ->
-                JarvysConversationEvent(
-                    event = event,
-                    generatedImageSessionId = generatedImageSessionId,
-                    animateEntry = ChatMessageArrivalPolicy.key(event) == newestArrivalKey,
-                    connectorRegistry = connectorRegistry,
-                    onOpenPreview = onOpenPreview,
-                    onOpenSkillFile = onOpenSkillFile,
-                    onUndoMemoryRevision = onUndoMemoryRevision,
-                    onUndoReflectionGroup = onUndoReflectionGroup,
-                    onTranslateAssistant = onTranslateAssistant,
-                    onCancelTranslation = onCancelTranslation,
-                    onHideTranslation = onHideTranslation,
-                    onDeleteAssistant = onDeleteAssistant,
-                    onRegenerateAssistant = onRegenerateAssistant,
-                    onSpeakAssistant = onSpeakAssistant,
-                    speakingMessageId = speakingMessageId,
-                    activeTranslationMessageId = activeTranslationMessageId,
-                    translationErrorMessageId = translationErrorMessageId,
-                    translationError = translationError,
-                    isLastAssistant = event.messageId.isNotEmpty() && event.messageId == latestAnswerId
-                            && !isRunning && allowRegeneration,
-                    streamActive = isRunning,
-                    isGeneratingAnswer = assistantReplyIsGenerating(event, isRunning, latestUserEventId),
-                    onOpenCrewMission = onOpenCrewMission,
-                    onSaveGeneratedImage = onSaveGeneratedImage,
-                    onShareGeneratedImage = onShareGeneratedImage,
-                    onProactiveSuggestedReply = onProactiveSuggestedReply,
-                )
+            itemContent = { item ->
+                when (item) {
+                    is ConversationTimelineItem.Event -> {
+                        val event = item.event
+                        JarvysConversationEvent(
+                            event = event,
+                            generatedImageSessionId = generatedImageSessionId,
+                            animateEntry = ChatMessageArrivalPolicy.key(event) == newestArrivalKey,
+                            connectorRegistry = connectorRegistry,
+                            onOpenPreview = onOpenPreview,
+                            onOpenSkillFile = onOpenSkillFile,
+                            onUndoMemoryRevision = onUndoMemoryRevision,
+                            onUndoReflectionGroup = onUndoReflectionGroup,
+                            onTranslateAssistant = onTranslateAssistant,
+                            onCancelTranslation = onCancelTranslation,
+                            onHideTranslation = onHideTranslation,
+                            onDeleteAssistant = onDeleteAssistant,
+                            onRegenerateAssistant = onRegenerateAssistant,
+                            onSpeakAssistant = onSpeakAssistant,
+                            speakingMessageId = speakingMessageId,
+                            activeTranslationMessageId = activeTranslationMessageId,
+                            translationErrorMessageId = translationErrorMessageId,
+                            translationError = translationError,
+                            isLastAssistant = event.messageId.isNotEmpty() && event.messageId == latestAnswerId
+                                && !isRunning && allowRegeneration,
+                            streamActive = isRunning,
+                            isGeneratingAnswer = assistantReplyIsGenerating(event, isRunning, latestUserEventId),
+                            onOpenCrewMission = onOpenCrewMission,
+                            onSaveGeneratedImage = onSaveGeneratedImage,
+                            onShareGeneratedImage = onShareGeneratedImage,
+                            onProactiveSuggestedReply = onProactiveSuggestedReply,
+                        )
+                    }
+                    is ConversationTimelineItem.ToolGroup -> {
+                        val shouldAnimate = item.events.any { ChatMessageArrivalPolicy.key(it) == newestArrivalKey }
+                        TimelineArrival(shouldAnimate) {
+                            ToolGroupLine(item, connectorRegistry, onOpenPreview, onOpenSkillFile)
+                        }
+                    }
+                }
             },
             newestItems = {
                 if (isRunning) item(key = "assistant-working") {
@@ -579,6 +603,9 @@ private fun ConnectorActivityLine(
         event.stage == "tool_error" && event.toolDisplayName?.contains("linux", ignoreCase = true) == true
             && it.contains("phase=")
     }?.removePrefix("Tool error: ")
+    val hasExpandableContent = !event.toolAuditDetail.isNullOrBlank() || !event.detail.isNullOrBlank() ||
+        event.toolActivity?.historyDetail?.isNotBlank() == true || !event.previewId.isNullOrBlank()
+    val failed = event.stage == "tool_error"
     var expanded by remember(event.id) { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth().testTag("conversation-activity-${event.id}")
         .padding(start = 4.dp, end = 4.dp, top = 2.dp, bottom = 2.dp)) {
@@ -586,53 +613,126 @@ private fun ConnectorActivityLine(
                 horizontalArrangement = Arrangement.spacedBy(9.dp)) {
                 Icon(LucideIcons.Sparkles, contentDescription = null, tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(17.dp))
-                Text(localizedToolStatus, Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurface,
+                Text(localizedToolStatus, Modifier.weight(1f), color = if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
                     style = MaterialTheme.typography.bodySmall, maxLines = if (event.toolActivity == null) 2 else Int.MAX_VALUE, overflow = TextOverflow.Ellipsis)
-                if (inlineLinuxFailureDetail == null && (!event.detail.isNullOrBlank() || event.toolActivity?.historyDetail?.isNotBlank() == true)) IconButton(onClick = { expanded = !expanded },
+                if (hasExpandableContent) IconButton(onClick = { expanded = !expanded },
                     modifier = Modifier.size(48.dp).testTag("tool-output-toggle-${event.toolCallId ?: event.id}")) {
                     Icon(if (expanded) LucideIcons.ChevronUp else LucideIcons.ChevronDown,
                         contentDescription = stringResource(if (expanded) R.string.tool_output_collapse else R.string.tool_output_expand),
                         modifier = Modifier.size(17.dp))
                 }
             }
-            event.toolAuditDetail?.takeIf(String::isNotBlank)?.let { literalDetail ->
-                SelectionContainer {
-                    Text(literalDetail, Modifier.fillMaxWidth().padding(start = 26.dp, top = 6.dp).testTag("tool-audit-${event.id}"),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall,
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
-                }
-            }
-            inlineLinuxFailureDetail?.let { detail ->
-                SelectionContainer {
-                    Text(detail, Modifier.fillMaxWidth().padding(start = 26.dp, top = 6.dp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
-                }
-            }
-            AnimatedVisibility(expanded && inlineLinuxFailureDetail == null && !event.detail.isNullOrBlank(),
+            AnimatedVisibility(expanded && hasExpandableContent,
                 enter = if (reducedMotion) EnterTransition.None else
                     expandVertically(JarvysMotion.expand()) + fadeIn(JarvysMotion.feedback()),
                 exit = if (reducedMotion) ExitTransition.None else
                     shrinkVertically(JarvysMotion.expand()) + fadeOut(JarvysMotion.feedback())) {
-                if (WebSearchTools.isSearchLabel(event.toolDisplayName)) WebSearchResultsContent(event.detail.orEmpty(), context)
-                else AssistantMarkdown(event.detail.orEmpty(), Modifier.fillMaxWidth().padding(start = 26.dp, top = 8.dp),
-                    onOpenSkillFile)
-            }
-            if (expanded && event.toolActivity?.historyDetail?.isNotBlank() == true && event.toolActivity.historyDetail != event.detail) {
-                SelectionContainer { Text(event.toolActivity.historyDetail, Modifier.fillMaxWidth().padding(start=26.dp,top=8.dp),
-                    style=MaterialTheme.typography.bodySmall) }
-            }
-            if (!expanded && event.toolActivity != null && event.stage == "tool_error" && !event.detail.isNullOrBlank()) {
-                SelectionContainer { Text(event.detail.lineSequence().firstOrNull().orEmpty().take(240),
-                    color=MaterialTheme.colorScheme.error, style=MaterialTheme.typography.bodySmall) }
-            }
-            event.previewId?.let { preview ->
-                TextButton(onClick = { onOpenPreview(preview) }, modifier = Modifier.align(Alignment.End)
-                    .testTag("tool-preview-${event.toolCallId ?: event.id}")) {
-                    Text(stringResource(if (event.previewIsCurrent) R.string.chat_open_current_preview else R.string.chat_open_preview))
+                Column(Modifier.fillMaxWidth()) {
+                    event.toolAuditDetail?.takeIf(String::isNotBlank)?.let { literalDetail ->
+                        SelectionContainer {
+                            Text(literalDetail, Modifier.fillMaxWidth().padding(start = 26.dp, top = 6.dp)
+                                .testTag("tool-audit-${event.id}"), color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                        }
+                    }
+                    if (inlineLinuxFailureDetail != null) SelectionContainer {
+                        Text(inlineLinuxFailureDetail, Modifier.fillMaxWidth().padding(start = 26.dp, top = 6.dp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                    } else if (!event.detail.isNullOrBlank()) {
+                        if (WebSearchTools.isSearchLabel(event.toolDisplayName)) WebSearchResultsContent(event.detail, context)
+                        else AssistantMarkdown(event.detail, Modifier.fillMaxWidth().padding(start = 26.dp, top = 8.dp),
+                            onOpenSkillFile)
+                    }
+                    if (event.toolActivity?.historyDetail?.isNotBlank() == true && event.toolActivity.historyDetail != event.detail) {
+                        SelectionContainer { Text(event.toolActivity.historyDetail, Modifier.fillMaxWidth().padding(start=26.dp,top=8.dp),
+                            style=MaterialTheme.typography.bodySmall) }
+                    }
+                    event.previewId?.let { preview ->
+                        TextButton(onClick = { onOpenPreview(preview) }, modifier = Modifier.align(Alignment.End)
+                            .testTag("tool-preview-${event.toolCallId ?: event.id}")) {
+                            Text(stringResource(if (event.previewIsCurrent) R.string.chat_open_current_preview else R.string.chat_open_preview))
+                        }
+                    }
                 }
             }
     }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ToolGroupLine(
+    group: ConversationTimelineItem.ToolGroup,
+    registry: ConnectorRegistry,
+    onOpenPreview: (String) -> Unit,
+    onOpenSkillFile: (SkillFileLink) -> Unit,
+) {
+    val context = LocalContext.current
+    val summary = when {
+        group.isRunning -> context.getString(R.string.connector_tool_group_running,
+            toolGroupDisplayName(group.activeEvent!!, registry, context), group.additionalToolCount)
+        group.failureCount > 0 -> context.resources.getQuantityString(R.plurals.connector_tool_group_completed_failures,
+            group.failureCount, group.toolCount, group.failureCount)
+        else -> context.resources.getQuantityString(R.plurals.connector_tool_group_completed,
+            group.toolCount, group.toolCount)
+    }
+    var expanded by rememberSaveable(group.firstEventId) { mutableStateOf(false) }
+    val sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth().clickable(role = Role.Button) { expanded = true }
+                .testTag("tool-group-${group.firstEventId}").padding(horizontal = 4.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(9.dp),
+        ) {
+            Icon(LucideIcons.Sparkles, contentDescription = null, tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(17.dp))
+            Text(summary, Modifier.weight(1f),
+                color = if (!group.isRunning && group.failureCount > 0) MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Icon(LucideIcons.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp))
+        }
+    }
+    if (expanded) ModalBottomSheet(
+        onDismissRequest = { expanded = false },
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+    ) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(summary, Modifier.weight(1f).semantics { heading() },
+                    style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                IconButton(onClick = { expanded = false }, modifier = Modifier.size(48.dp).testTag("tool-group-close")) {
+                    Icon(LucideIcons.X, contentDescription = stringResource(R.string.tool_group_close))
+                }
+            }
+            LazyColumn(
+                Modifier.fillMaxWidth().heightIn(max = 560.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 16.dp),
+            ) {
+                items(group.events, key = { it.id }) { event ->
+                    ConnectorActivityLine(event, registry, onOpenPreview, onOpenSkillFile)
+                }
+            }
+        }
+    }
+}
+
+private fun toolGroupDisplayName(
+    event: AgentRunUiEvent,
+    registry: ConnectorRegistry,
+    context: Context,
+): String {
+    event.toolActivity?.takeIf { it.skill() }?.let { return it.skillName.ifBlank { it.skillId } }
+    val operation = registry.definitions.value.asSequence().flatMap { it.operations.asSequence() }
+        .firstOrNull { it.displayLabel == event.toolDisplayName }
+    return operation?.let { if (it.displayLabelResourceId != 0) context.getString(it.displayLabelResourceId) else it.displayLabel }
+        ?: event.toolDisplayName?.takeIf(String::isNotBlank)
+        ?: event.text
 }
 
 @Composable

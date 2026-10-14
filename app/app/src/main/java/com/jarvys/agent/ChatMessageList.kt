@@ -55,13 +55,14 @@ internal fun <T> ChatMessageList(
     targetMessage: (T) -> Boolean = { false },
     itemContent: @Composable (T) -> Unit,
     newestItems: LazyListScope.() -> Unit = {},
+    messageUpdateKey: (T) -> Any = messageKey,
     fixedItems: LazyListScope.() -> Unit = {},
 ) {
     var followingEnd by remember(conversationKey) { mutableStateOf(true) }
     var followingBeforeDataChange by remember(conversationKey) { mutableStateOf(true) }
     var openingByReverseLayout by remember(conversationKey) { mutableStateOf(true) }
     val coroutineScope = rememberCoroutineScope()
-    val newestKey = messages.lastOrNull()?.let(messageKey)
+    val newestKey = messages.lastOrNull()?.let(messageUpdateKey)
     val newestIsUserMessage = messages.lastOrNull()?.let(isUserMessage) == true
     val targetIndex = messages.indexOfFirst(targetMessage)
 

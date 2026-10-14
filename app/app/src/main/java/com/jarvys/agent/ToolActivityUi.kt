@@ -29,29 +29,30 @@ fun ToolActivityLine(activity: ToolActivity, modifier: Modifier = Modifier, onOp
     var expanded by rememberSaveable(activity.executionId) { mutableStateOf(false) }
     val label = toolActivityLabel(activity)
     val failed = activity.stage == "tool_error"
+    val hasExpandableContent = activity.allDetail().isNotBlank() || activity.auditDetail.isNotBlank() ||
+        activity.stage == "tool_interrupted" || (activity.previewId.isNotBlank() && onOpenPreview != null)
     Column(modifier.fillMaxWidth().testTag("activity-${activity.executionId}")) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(label, Modifier.weight(1f).semantics { stateDescription = label; liveRegion = LiveRegionMode.Polite },
                 color = if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodySmall)
-            if (activity.allDetail().isNotBlank() || activity.auditDetail.isNotBlank()) IconButton(onClick={expanded=!expanded},
+            if (hasExpandableContent) IconButton(onClick={expanded=!expanded},
                 modifier=Modifier.size(48.dp).testTag("activity-details-${activity.executionId}")) {
                 Icon(if(expanded) LucideIcons.ChevronUp else LucideIcons.ChevronDown,
                     stringResource(if(expanded) R.string.tool_output_collapse else R.string.tool_output_expand),Modifier.size(18.dp), tint=MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-        if (failed && !expanded && activity.detail.isNotBlank()) SelectionContainer {
-            Text(activity.detail.lineSequence().firstOrNull().orEmpty().take(240), style=MaterialTheme.typography.bodySmall,
-                color=MaterialTheme.colorScheme.error)
-        }
-        if (activity.stage == "tool_interrupted") Text(stringResource(R.string.activity_unconfirmed_detail),style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
         if (expanded) SelectionContainer {
             Column {
                 if(activity.auditDetail.isNotBlank()) Text(activity.auditDetail,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
                 if(activity.allDetail().isNotBlank()) Text(activity.allDetail(),style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                if (activity.stage == "tool_interrupted") Text(stringResource(R.string.activity_unconfirmed_detail),
+                    style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                if(activity.previewId.isNotBlank() && onOpenPreview!=null) TextButton(onClick={onOpenPreview(activity.previewId)},
+                    modifier=Modifier.heightIn(min=48.dp).testTag("activity-preview-${activity.executionId}")) {
+                    Text(stringResource(R.string.chat_open_preview))
+                }
             }
         }
-        if(activity.previewId.isNotBlank() && onOpenPreview!=null) TextButton(onClick={onOpenPreview(activity.previewId)},
-            modifier=Modifier.heightIn(min=48.dp).testTag("activity-preview-${activity.executionId}")) { Text(stringResource(R.string.chat_open_preview)) }
     }
 }

@@ -13,6 +13,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertDoesNotExist
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.onAllNodesWithText
@@ -118,6 +119,8 @@ class ToolTimelineRecoveryTest {
                 }
             }
         }
+        compose.onNodeWithTag("tool-group-${timeline.first { it.kind == "tool" }.id}").performScrollTo().performClick()
+        compose.onNodeWithTag("tool-preview-reopen-preview").assertDoesNotExist()
         compose.onNodeWithTag("tool-output-toggle-reopen-write").performScrollTo().performClick()
         // Markdown parsing runs on Default; Compose idleness alone does not await publication.
         compose.waitUntil(10_000) {
@@ -125,6 +128,7 @@ class ToolTimelineRecoveryTest {
         }
         compose.waitForIdle()
         compose.onNodeWithText("Wrote index.html").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("tool-output-toggle-reopen-preview").performScrollTo().performClick()
         compose.onNodeWithTag("tool-preview-reopen-preview").performScrollTo().performClick()
         // Preview file verification runs on IO. Compose idleness alone does not await that work.
         compose.waitUntil(10_000) {
