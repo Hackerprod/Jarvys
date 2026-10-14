@@ -179,7 +179,7 @@ class SharedPreferencesConnectorAutonomyStore internal constructor(
     override fun snapshotMatching(anchor: ActionPolicySnapshot): ActionPolicySnapshot = actionPolicies.snapshotMatching(anchor)
     override fun setPolicyAndSnapshot(connectorId: String, operationName: String, policy: AutonomyPolicy): ActionPolicySnapshot =
         actionPolicies.setPolicyAndSnapshot(connectorId, operationName, policy)
-    override fun clearPolicies(connectorId: String) = actionPolicies.clearPolicies(connectorId)
+    override fun clearPolicies(connectorId: String) { actionPolicies.clearPolicies(connectorId) }
 
     override fun appendAudit(record: AutonomyAuditRecord) {
         synchronized(lock) {
