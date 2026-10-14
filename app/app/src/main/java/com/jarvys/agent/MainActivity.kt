@@ -1898,6 +1898,9 @@ private fun JarvysApp(
         })
     }
     var workspaceChatReload by remember { mutableIntStateOf(0) }
+    var workspaceOlderHistoryLoading by remember(routeWorkspaceId) { mutableStateOf(false) }
+    var workspaceOlderHistoryLoadError by remember(routeWorkspaceId) { mutableStateOf(false) }
+    var workspaceOlderHistoryRequestSerial by remember(routeWorkspaceId) { mutableLongStateOf(0L) }
     val workspaceChatActive = route == Routes.COORDINATED_WORKSPACE
     val crewRoute = route == Routes.CREW_EMPTY || route.startsWith("crew/")
     var workspaceCrewSessionId by remember { mutableStateOf<String?>(null) }
@@ -1913,13 +1916,16 @@ private fun JarvysApp(
                 return@LaunchedEffect
             }
             val previous = workspaceChatState.value
+            workspaceOlderHistoryRequestSerial++
+            workspaceOlderHistoryLoading = false
+            workspaceOlderHistoryLoadError = false
             workspaceChatState.value = WorkspaceChatUiState(routeWorkspaceId, executionSessionId,
                 previous?.title.orEmpty(), previous?.status ?: WorkspaceUiStatus.UNKNOWN,
                 previous?.events.orEmpty(), loading = true)
             AgentRunUiState.showSession(executionSessionId)
             try {
                 val loaded = withContext(Dispatchers.IO) {
-                    WorkspaceProjection.chat(context.applicationContext, routeWorkspaceId)
+                    WorkspaceProjection.chat(context.applicationContext, routeWorkspaceId, previous)
                 }
                 workspaceChatState.value = loaded
                 AgentRunUiState.restoreSession(executionSessionId, loaded.events)
@@ -2219,6 +2225,42 @@ private fun JarvysApp(
                             navController.navigate(Routes.crew(missionId))
                         },
                         onRetry = { if (!state.loading) workspaceChatReload++ },
+                        isLoadingOlderHistory = workspaceOlderHistoryLoading,
+                        olderHistoryLoadError = workspaceOlderHistoryLoadError,
+                        onLoadOlderHistory = {
+                            val sessionId = state.executionSessionId
+                            val cursor = state.olderHistoryCursor
+                            if (!workspaceOlderHistoryLoading && state.hasOlderHistory
+                                && cursor != ConversationLedgerPager.NO_CURSOR) {
+                                val requestSerial = workspaceOlderHistoryRequestSerial + 1L
+                                workspaceOlderHistoryRequestSerial = requestSerial
+                                workspaceOlderHistoryLoading = true
+                                workspaceOlderHistoryLoadError = false
+                                historyExecutor.execute {
+                                    val page = runCatching {
+                                        localRunStore.readConversationTimelinePage(
+                                            sessionId, cursor, LocalRunStore.OLDER_TIMELINE_TURNS,
+                                            state.invalidatedToolTurnMessageIds, state.projectionMarkers)
+                                    }.getOrNull()
+                                    runOnUiThread {
+                                        if (requestSerial != workspaceOlderHistoryRequestSerial
+                                            || !workspaceChatActive || routeWorkspaceId != state.workspaceId
+                                            || workspaceChatState.value?.executionSessionId != sessionId) return@runOnUiThread
+                                        if (page != null) {
+                                            AgentRunUiState.prependPersistedSession(
+                                                sessionId, page.events,
+                                                state.hiddenAssistantMessageIds,
+                                                state.hiddenTranslationMessageIds,
+                                                state.translationMessageIds)
+                                            workspaceChatState.value = workspaceChatState.value?.withOlderTimelinePage(page)
+                                        } else {
+                                            workspaceOlderHistoryLoadError = true
+                                        }
+                                        workspaceOlderHistoryLoading = false
+                                    }
+                                }
+                            }
+                        },
                     )
                 }
                 composable(Routes.COORDINATED_FILES,

@@ -32,6 +32,9 @@ fun WorkspaceDetailScreen(
     onOpenSkillFile: (SkillFileLink) -> Unit,
     onOpenCrewMission: (String) -> Unit,
     onRetry: () -> Unit = {},
+    isLoadingOlderHistory: Boolean = false,
+    olderHistoryLoadError: Boolean = false,
+    onLoadOlderHistory: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val sessionSnapshot = runSnapshot.takeIf { it.sessionId == state.executionSessionId }
@@ -68,6 +71,10 @@ fun WorkspaceDetailScreen(
                 conversationKey = state.executionSessionId,
                 generatedImageSessionId = state.executionSessionId,
                 events = events,
+                hasOlderHistory = state.hasOlderHistory,
+                isLoadingOlderHistory = isLoadingOlderHistory,
+                olderHistoryLoadError = olderHistoryLoadError,
+                onLoadOlderHistory = onLoadOlderHistory,
                 isRunning = sessionSnapshot?.running == true,
                 connectorRegistry = connectorRegistry,
                 onOpenPreview = onOpenPreview,

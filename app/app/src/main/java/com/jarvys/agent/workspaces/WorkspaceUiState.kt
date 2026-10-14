@@ -2,7 +2,9 @@ package com.jarvys.agent.workspaces
 
 import androidx.compose.runtime.Immutable
 import com.jarvys.agent.AgentRunUiEvent
+import com.jarvys.agent.LocalRunStore
 import java.util.Collections
+import java.util.LinkedHashSet
 
 /** Presentation only. The runtime supplies recorded status and exact action availability. */
 enum class WorkspaceUiStatus {
@@ -118,8 +120,19 @@ class WorkspaceChatUiState(
     events: List<AgentRunUiEvent> = emptyList(),
     val loading: Boolean = false,
     val error: String? = null,
+    val hasOlderHistory: Boolean = false,
+    val olderHistoryCursor: Long = com.jarvys.agent.ConversationLedgerPager.NO_CURSOR,
+    hiddenAssistantMessageIds: Set<String> = emptySet(),
+    hiddenTranslationMessageIds: Set<String> = emptySet(),
+    translationMessageIds: Set<String> = emptySet(),
+    invalidatedToolTurnMessageIds: Set<String> = emptySet(),
+    val projectionMarkers: LocalRunStore.TimelineProjectionMarkers = LocalRunStore.TimelineProjectionMarkers(),
 ) {
     val events: List<AgentRunUiEvent> = Collections.unmodifiableList(ArrayList(events))
+    val hiddenAssistantMessageIds: Set<String> = Collections.unmodifiableSet(LinkedHashSet(hiddenAssistantMessageIds))
+    val hiddenTranslationMessageIds: Set<String> = Collections.unmodifiableSet(LinkedHashSet(hiddenTranslationMessageIds))
+    val translationMessageIds: Set<String> = Collections.unmodifiableSet(LinkedHashSet(translationMessageIds))
+    val invalidatedToolTurnMessageIds: Set<String> = Collections.unmodifiableSet(LinkedHashSet(invalidatedToolTurnMessageIds))
 
     init {
         require(workspaceId.isNotBlank()) { "Workspace identity is required" }
@@ -127,6 +140,40 @@ class WorkspaceChatUiState(
             "Workspace conversation must use its registered execution session"
         }
     }
+
+    fun withTimelinePage(page: LocalRunStore.ConversationTimelinePage): WorkspaceChatUiState = WorkspaceChatUiState(
+        workspaceId = workspaceId,
+        executionSessionId = executionSessionId,
+        title = title,
+        status = status,
+        events = events,
+        loading = loading,
+        error = error,
+        hasOlderHistory = page.hasOlder,
+        olderHistoryCursor = page.olderCursor,
+        hiddenAssistantMessageIds = page.hiddenAssistantMessageIds,
+        hiddenTranslationMessageIds = page.hiddenTranslationMessageIds,
+        translationMessageIds = page.translationMessageIds,
+        invalidatedToolTurnMessageIds = page.invalidatedToolTurnMessageIds,
+        projectionMarkers = page.projectionMarkers,
+    )
+
+    fun withOlderTimelinePage(page: LocalRunStore.ConversationTimelinePage): WorkspaceChatUiState = WorkspaceChatUiState(
+        workspaceId = workspaceId,
+        executionSessionId = executionSessionId,
+        title = title,
+        status = status,
+        events = events,
+        loading = loading,
+        error = error,
+        hasOlderHistory = page.hasOlder,
+        olderHistoryCursor = page.olderCursor,
+        hiddenAssistantMessageIds = hiddenAssistantMessageIds + page.hiddenAssistantMessageIds,
+        hiddenTranslationMessageIds = hiddenTranslationMessageIds + page.hiddenTranslationMessageIds,
+        translationMessageIds = translationMessageIds + page.translationMessageIds,
+        invalidatedToolTurnMessageIds = invalidatedToolTurnMessageIds + page.invalidatedToolTurnMessageIds,
+        projectionMarkers = page.projectionMarkers,
+    )
 }
 
 internal fun workspaceChatUiState(
@@ -138,6 +185,24 @@ internal fun workspaceChatUiState(
     title = detail.title,
     status = detail.status,
     events = events,
+)
+
+internal fun workspaceChatUiState(
+    detail: WorkspaceDetailUiState,
+    page: LocalRunStore.ConversationTimelinePage,
+): WorkspaceChatUiState = WorkspaceChatUiState(
+    workspaceId = detail.id,
+    executionSessionId = WorkspaceIdentity.executionSessionId(detail.id),
+    title = detail.title,
+    status = detail.status,
+    events = page.events,
+    hasOlderHistory = page.hasOlder,
+    olderHistoryCursor = page.olderCursor,
+    hiddenAssistantMessageIds = page.hiddenAssistantMessageIds,
+    hiddenTranslationMessageIds = page.hiddenTranslationMessageIds,
+    translationMessageIds = page.translationMessageIds,
+    invalidatedToolTurnMessageIds = page.invalidatedToolTurnMessageIds,
+    projectionMarkers = page.projectionMarkers,
 )
 
 internal fun isWorkspaceCoordinationSession(sessionId: String): Boolean =

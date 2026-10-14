@@ -49,11 +49,17 @@ object WorkspaceProjection {
     }
 
     /** Projects chat from the execution session recorded for this workspace, never from central. */
-    fun chat(context: Context, id: String): WorkspaceChatUiState {
-        val detail = detail(context, id)
+    fun chat(context: Context, id: String, cached: WorkspaceChatUiState? = null): WorkspaceChatUiState {
+        // The chat view only displays the workspace title and aggregate status. Reuse those
+        // stable presentation fields during ledger refreshes so a message append does not
+        // rebuild assignment detail and reread all Crew snapshots.
+        val detail = if (cached != null && cached.workspaceId == id && cached.title.isNotBlank()) {
+            WorkspaceDetailUiState(id, cached.title, cached.status)
+        } else detail(context, id)
         val sessionId = WorkspaceIdentity.executionSessionId(detail.id)
-        val events = LocalRunStore(context).readConversationTimeline(sessionId)
-        return workspaceChatUiState(detail, events)
+        val page = LocalRunStore(context).readConversationTimelinePage(
+            sessionId, com.jarvys.agent.ConversationLedgerPager.NO_CURSOR, LocalRunStore.INITIAL_TIMELINE_TURNS)
+        return workspaceChatUiState(detail, page)
     }
 
     private fun assignmentNext(store: WorkspaceRegistry, id: String, records: List<WorkspaceAssignment>): String? =
