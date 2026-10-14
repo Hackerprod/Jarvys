@@ -507,7 +507,7 @@ object BotMascotSceneCompiler {
                     }
                     Primitive.STRING -> {
                         require(property.value is String) { "Expected string primitive." }
-                        writeBytes(name(property.value).toByteArray(StandardCharsets.UTF_8))
+                        writeBytes(name(property.value, "primitive").toByteArray(StandardCharsets.UTF_8))
                     }
                     Primitive.BYTES -> {
                         require(property.value is ByteArray && property.value.size <= MAX_RAW_PROPERTY_BYTES) { "Invalid bounded bytes primitive." }

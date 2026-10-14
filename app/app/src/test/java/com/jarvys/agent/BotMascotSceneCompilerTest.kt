@@ -489,11 +489,11 @@ class BotMascotSceneCompilerTest {
         val unknown = runCatching { BotMascotSceneCompiler.compileProduct(badTrack.toString()) }.exceptionOrNull()
         assertTrue(unknown?.message.orEmpty(), unknown?.message.orEmpty().contains("animations.Idle.tracks[0]: unknown field 'x'"))
 
-        val wrongType = JSONObject(BotMascotSceneCompiler.SCENE_EXAMPLE_JSON).put("animations", "{}")
+        val wrongType = JSONObject(BotMascotTool.SCENE_EXAMPLE_JSON).put("animations", "{}")
         val type = runCatching { BotMascotSceneCompiler.compileProduct(wrongType.toString()) }.exceptionOrNull()
         assertTrue(type?.message.orEmpty(), type?.message.orEmpty().contains("animations: expected object, got string"))
 
-        val decimalFrame = JSONObject(BotMascotSceneCompiler.SCENE_EXAMPLE_JSON).apply {
+        val decimalFrame = JSONObject(BotMascotTool.SCENE_EXAMPLE_JSON).apply {
             getJSONObject("animations").getJSONObject("Idle").getJSONArray("tracks").getJSONObject(0)
                 .getJSONArray("keys").getJSONArray(0).put(0, 0.0)
         }

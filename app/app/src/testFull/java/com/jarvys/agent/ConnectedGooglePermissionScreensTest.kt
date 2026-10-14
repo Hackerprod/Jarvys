@@ -177,7 +177,7 @@ class ConnectedGooglePermissionScreensTest {
         showDeveloper()
         compose.onNodeWithTag("developer-connector-${gmail.id}").assertIsDisplayed()
         compose.onNodeWithTag("${policyTag(gmailWrite)}-row", useUnmergedTree = true).assertExists()
-        compose.onNodeWithTag("${policyTag(drive.operations.first().name)}-row", useUnmergedTree = true).assertExists()
+        compose.onNodeWithTag("${policyTag(drive.operations.first())}-row", useUnmergedTree = true).assertExists()
         compose.onNodeWithTag("${policyTag(gmailWrite)}-control").assertExists()
     }
 
