@@ -14,6 +14,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.json.JSONObject;
 import org.junit.Rule;
 import org.junit.Test;
@@ -202,7 +203,8 @@ public class LocalRunAttachmentRecoveryTest {
                 throw new AssertionError("Interrupted while waiting for concurrent ledger append", error);
             }
         });
-        store.cleanupOrphanAttachments();
+        try { store.cleanupOrphanAttachments(); }
+        finally { LocalRunStore.setAttachmentCleanupScanTestHookForTests(null); }
 
         assertNull(appendFailure.get());
         assertTrue("a row appended before final validation must protect its attachment",
@@ -210,5 +212,25 @@ public class LocalRunAttachmentRecoveryTest {
         assertThrows(IllegalArgumentException.class, () -> attachments().resolve("chat", orphan));
         assertTrue("the retry should read only the append suffix, not rescan the full ledger",
                 LocalRunStore.attachmentCleanupLedgerScanBytesForTests() < 2L * ledger.length());
+    }
+
+    @Test(timeout = 10000) public void orphanCleanupSwitchesToLockedSuffixAfterRepeatedUnstableSnapshots()
+            throws Exception {
+        LocalRunStore store = store();
+        store.appendConversationMessage("chat", "user", "existing row");
+        ChatAttachment orphan = file("chat", "orphan-under-continuous-writes.txt");
+        AtomicInteger appends = new AtomicInteger();
+        LocalRunStore.setAttachmentCleanupScanTestHookForTests(() -> {
+            int sequence = appends.incrementAndGet();
+            if (sequence < 50) store.appendConversationMessage("chat", "user", "concurrent row " + sequence);
+        });
+        try {
+            store.cleanupOrphanAttachments();
+        } finally {
+            LocalRunStore.setAttachmentCleanupScanTestHookForTests(null);
+        }
+        assertTrue("the retry policy should switch strategies before the synthetic writer stops",
+                appends.get() < 50);
+        assertFalse("orphan cleanup must complete after the locked suffix read", orphan.isFile());
     }
 }

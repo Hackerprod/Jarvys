@@ -56,9 +56,11 @@ public final class LocalRunStore {
     private static final Object CREW_SNAPSHOT_CACHE_LOCK = new Object();
     private static final int MAX_CACHED_CREW_SNAPSHOT_FILES = 16;
     private static final int MAX_CACHED_CREW_SNAPSHOT_VALUES = 1024;
+    private static final long MAX_CACHED_CREW_SNAPSHOT_BYTES = 16L * 1024L * 1024L;
     private static final Object CONVERSATION_HISTORY_CACHE_LOCK = new Object();
     private static final int MAX_CACHED_CONVERSATION_HISTORY_FILES = 16;
     private static final long MAX_CONVERSATION_HISTORY_CACHE_BYTES = 16L * 1024L * 1024L;
+    private static final int MAX_HISTORY_UNSTABLE_RETRIES = 3;
     private static final Object TIMELINE_PAGE_CACHE_LOCK = new Object();
     private static final long MAX_TIMELINE_PAGE_CACHE_BYTES = 8L * 1024L * 1024L;
     private static final int MAX_INDEXED_LEDGER_FILES = 16;
@@ -72,6 +74,7 @@ public final class LocalRunStore {
     private static long crewSnapshotRowsParsedCount;
     private static long crewSnapshotCacheHitCount;
     private static int cachedCrewSnapshotValueCount;
+    private static long cachedCrewSnapshotBytes;
     private static long conversationHistoryLedgerScanBytes;
     private static long attachmentCleanupLedgerScanBytes;
     private static volatile Runnable crewSnapshotReadTestHook;
@@ -961,14 +964,18 @@ public final class LocalRunStore {
     }
 
     private void appendResultRowLocked(String session, JSONObject row, boolean allowMissingCentral, Runnable beforeWrite) {
+        File ledger = requireResultLedgerLocked(session, allowMissingCentral);
         scanResultLedgerLocked(session, allowMissingCentral, (evidence, reference, notice) -> { });
         byte[] record = losslessResultRecord(row);
         // Expensive validation and serialization precede the final live admission check. The
         // shared lock excludes ordinary deletion; only lightweight path/tombstone checks follow.
         beforeWrite.run();
-        File ledger = requireResultLedgerLocked(session, allowMissingCentral);
+        ledger = requireResultLedgerLocked(session, allowMissingCentral);
         if (allowMissingCentral) requireResultLedgerLocked(row.optString("executionSessionId"), false);
         try {
+            // The strict ledger scan above still rejects a torn tail. This final one-byte guard
+            // separates any tail change after validation before writing the new result row.
+            if (ledger.exists()) terminateUnterminatedLedgerTailLocked(ledger);
             if (ledger.exists()) requireCompleteResultTail(ledger);
             try (FileOutputStream output = new FileOutputStream(ledger, true)) {
                 output.write(record); output.flush(); output.getFD().sync();
@@ -995,6 +1002,22 @@ public final class LocalRunStore {
                 input.seek(input.length() - 1);
                 if (input.read() != '\n') throw new IOException("Incomplete result ledger tail");
             }
+        }
+    }
+
+    /** Called with SESSION_TITLE_LOCK held; separates a torn final row from the next append. */
+    private static void terminateUnterminatedLedgerTailLocked(File ledger) throws IOException {
+        if (!ledger.isFile()) return;
+        long length = ledger.length();
+        if (length == 0L) return;
+        try (java.io.RandomAccessFile input = new java.io.RandomAccessFile(ledger, "r")) {
+            input.seek(length - 1L);
+            if (input.read() == '\n') return;
+        }
+        try (FileOutputStream output = new FileOutputStream(ledger, true)) {
+            output.write('\n');
+            output.flush();
+            output.getFD().sync();
         }
     }
 
@@ -1103,8 +1126,9 @@ public final class LocalRunStore {
             }
             Runnable readHook = crewSnapshotReadTestHook;
             if (readHook != null) readHook.run();
+            CrewSnapshotCache updated = new CrewSnapshotCache(snapshot, latest);
             synchronized (CREW_SNAPSHOT_CACHE_LOCK) {
-                cacheCrewSnapshotLocked(path, new CrewSnapshotCache(snapshot, latest));
+                cacheCrewSnapshotLocked(path, updated);
             }
             synchronized (SESSION_TITLE_LOCK) {
                 if (!snapshot.matches(sessionId, ledger, conversationMetadata)) continue;
@@ -1770,9 +1794,15 @@ public final class LocalRunStore {
         return ChatAttachment.fromJsonArray(row.optJSONArray("attachments"));
     }
 
+    /**
+     * Collects attachment references incrementally. After repeated snapshots cannot be validated,
+     * it completes the remaining suffix scans under SESSION_TITLE_LOCK so an active writer cannot
+     * keep orphan cleanup retrying forever; the retry count only selects this strategy.
+     */
     public void cleanupOrphanAttachments() {
         Map<String, Set<String>> references = new LinkedHashMap<>();
         Map<String, LedgerSnapshot> snapshots = new LinkedHashMap<>();
+        int failedValidations = 0;
         while (true) {
             List<String> ledgerIds = listConversationLedgerIds();
             Set<String> currentIds = new HashSet<>(ledgerIds);
@@ -1820,11 +1850,51 @@ public final class LocalRunStore {
                         break;
                     }
                 }
-                if (!current) continue;
+                if (!current) {
+                    if (++failedValidations < MAX_HISTORY_UNSTABLE_RETRIES) continue;
+                    List<String> latestIds = listConversationLedgerIds();
+                    Set<String> latestIdSet = new HashSet<>(latestIds);
+                    references.keySet().retainAll(latestIdSet);
+                    snapshots.keySet().retainAll(latestIdSet);
+                    for (String sessionId : latestIds)
+                        refreshAttachmentReferencesUnderLock(sessionId, references, snapshots);
+                    new AttachmentStore(root.getParentFile()).cleanupOrphans(references);
+                    return;
+                }
                 new AttachmentStore(root.getParentFile()).cleanupOrphans(references);
                 return;
             }
         }
+    }
+
+    /** Must be called under SESSION_TITLE_LOCK after repeated failed snapshot validation. */
+    private void refreshAttachmentReferencesUnderLock(String sessionId,
+            Map<String, Set<String>> references, Map<String, LedgerSnapshot> snapshots) {
+        File ledger = conversationFile(sessionId);
+        LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
+        if (snapshot == null) {
+            references.remove(sessionId);
+            snapshots.remove(sessionId);
+            return;
+        }
+        LedgerSnapshot previous = snapshots.get(sessionId);
+        if (previous != null && previous.matchesFile(ledger)) return;
+        boolean extend = previous != null && previous.canExtend(snapshot);
+        long startOffset = extend ? previous.length : 0L;
+        Set<String> paths = extend ? references.get(sessionId) : null;
+        if (paths == null) paths = new HashSet<>();
+        if (snapshot.exists && snapshot.length > startOffset) {
+            synchronized (LocalRunStore.class) {
+                attachmentCleanupLedgerScanBytes += snapshot.length - startOffset;
+            }
+            Set<String> referencePaths = paths;
+            streamConversationRowsFromSnapshot(snapshot, false, row -> {
+                for (ChatAttachment attachment : attachmentsForRow(sessionId, row))
+                    referencePaths.add(attachment.relativePath);
+            }, startOffset);
+        }
+        references.put(sessionId, paths);
+        snapshots.put(sessionId, snapshot);
     }
 
     private boolean runWasDeleted(String runId) {
@@ -3815,7 +3885,7 @@ public final class LocalRunStore {
             return exists && candidate.exists
                     && ledger.getAbsolutePath().equals(candidate.ledger.getAbsolutePath())
                     && sameFileIdentity(fileIdentity, candidate.fileIdentity)
-                    && candidate.length > length && candidate.lastModified >= lastModified;
+                    && candidate.length > length;
         }
     }
 
@@ -3827,6 +3897,7 @@ public final class LocalRunStore {
         final long length;
         final long lastModified;
         final LinkedHashMap<String, CrewMissionSnapshot> latest;
+        final long estimatedBytes;
 
         CrewSnapshotCache(LedgerSnapshot snapshot, LinkedHashMap<String, CrewMissionSnapshot> latest) {
             path = snapshot.ledger.getAbsolutePath();
@@ -3835,6 +3906,7 @@ public final class LocalRunStore {
             length = snapshot.length;
             lastModified = snapshot.lastModified;
             this.latest = new LinkedHashMap<>(latest);
+            estimatedBytes = estimateCrewSnapshotCacheBytes(this.latest);
         }
 
         boolean matches(LedgerSnapshot snapshot) {
@@ -3846,7 +3918,7 @@ public final class LocalRunStore {
         boolean canExtend(LedgerSnapshot snapshot) {
             return exists && snapshot.exists && path.equals(snapshot.ledger.getAbsolutePath())
                     && sameFileIdentity(fileIdentity, snapshot.fileIdentity)
-                    && snapshot.length > length && snapshot.lastModified >= lastModified;
+                    && snapshot.length > length;
         }
 
         CrewSnapshotCache copy() {
@@ -3855,23 +3927,44 @@ public final class LocalRunStore {
         }
     }
 
+    private static long estimateCrewSnapshotCacheBytes(Map<String, CrewMissionSnapshot> latest) {
+        long bytes = 128L;
+        for (Map.Entry<String, CrewMissionSnapshot> entry : latest.entrySet()) {
+            CrewMissionSnapshot snapshot = entry.getValue();
+            long retainedObjects = 3L + snapshot.bots.size() + snapshot.messages.size();
+            long serializedChars = snapshot.toJson().toString().length();
+            bytes += 96L + stringBytes(entry.getKey()) + serializedChars * 2L + retainedObjects * 96L;
+        }
+        return bytes;
+    }
+
     private static void cacheCrewSnapshotLocked(String path, CrewSnapshotCache cache) {
         CrewSnapshotCache replaced = CREW_SNAPSHOT_CACHE.remove(path);
-        if (replaced != null) cachedCrewSnapshotValueCount -= replaced.latest.size();
-        if (cache.latest.size() > MAX_CACHED_CREW_SNAPSHOT_VALUES) return;
+        if (replaced != null) {
+            cachedCrewSnapshotValueCount -= replaced.latest.size();
+            cachedCrewSnapshotBytes -= replaced.estimatedBytes;
+        }
+        if (cache.latest.size() > MAX_CACHED_CREW_SNAPSHOT_VALUES
+                || cache.estimatedBytes > MAX_CACHED_CREW_SNAPSHOT_BYTES) return;
         CREW_SNAPSHOT_CACHE.put(path, cache);
         cachedCrewSnapshotValueCount += cache.latest.size();
+        cachedCrewSnapshotBytes += cache.estimatedBytes;
         while (CREW_SNAPSHOT_CACHE.size() > MAX_CACHED_CREW_SNAPSHOT_FILES
-                || cachedCrewSnapshotValueCount > MAX_CACHED_CREW_SNAPSHOT_VALUES) {
+                || cachedCrewSnapshotValueCount > MAX_CACHED_CREW_SNAPSHOT_VALUES
+                || cachedCrewSnapshotBytes > MAX_CACHED_CREW_SNAPSHOT_BYTES) {
             String eldest = CREW_SNAPSHOT_CACHE.keySet().iterator().next();
             CrewSnapshotCache removed = CREW_SNAPSHOT_CACHE.remove(eldest);
             cachedCrewSnapshotValueCount -= removed.latest.size();
+            cachedCrewSnapshotBytes -= removed.estimatedBytes;
         }
     }
 
     private static void removeCrewSnapshotCacheLocked(String path) {
         CrewSnapshotCache removed = CREW_SNAPSHOT_CACHE.remove(path);
-        if (removed != null) cachedCrewSnapshotValueCount -= removed.latest.size();
+        if (removed != null) {
+            cachedCrewSnapshotValueCount -= removed.latest.size();
+            cachedCrewSnapshotBytes -= removed.estimatedBytes;
+        }
     }
 
     /** Compact UI projection state; ledger bodies and JSONObject rows are never retained. */
@@ -3897,9 +3990,9 @@ public final class LocalRunStore {
         long estimatedBytes() {
             long bytes = 128L + stringBytes(ledgerTitle) + stringBytes(fallbackTitle)
                     + stringBytes(latestUserGoal);
-            for (String id : hiddenAssistantIds) bytes += 40L + stringBytes(id);
+            for (String id : hiddenAssistantIds) bytes += 64L + stringBytes(id);
             for (ConversationHistoryRow row : rows)
-                bytes += 64L + stringBytes(row.role) + stringBytes(row.messageId)
+                bytes += 80L + stringBytes(row.role) + stringBytes(row.messageId)
                         + stringBytes(row.beforeMessageId);
             return bytes;
         }
@@ -3924,7 +4017,7 @@ public final class LocalRunStore {
     }
 
     private static long stringBytes(String value) {
-        return value == null ? 0L : value.length() * 2L;
+        return value == null ? 0L : 40L + value.length() * 2L;
     }
 
     private static final class ConversationHistoryCache {
@@ -3949,7 +4042,7 @@ public final class LocalRunStore {
             return snapshot.exists && candidate.exists
                     && snapshot.ledger.getAbsolutePath().equals(candidate.ledger.getAbsolutePath())
                     && sameFileIdentity(snapshot.fileIdentity, candidate.fileIdentity)
-                    && candidate.length > snapshot.length && candidate.lastModified >= snapshot.lastModified;
+                    && candidate.length > snapshot.length;
         }
 
     }
@@ -3974,7 +4067,7 @@ public final class LocalRunStore {
             return snapshot.exists && candidate.exists
                     && snapshot.ledger.getAbsolutePath().equals(candidate.ledger.getAbsolutePath())
                     && sameFileIdentity(snapshot.fileIdentity, candidate.fileIdentity)
-                    && candidate.length > snapshot.length && candidate.lastModified >= snapshot.lastModified;
+                    && candidate.length > snapshot.length;
         }
 
         RunHistoryCache copy() { return new RunHistoryCache(snapshot, summary); }
@@ -4309,6 +4402,13 @@ public final class LocalRunStore {
         synchronized (LocalRunStore.class) { return conversationHistoryLedgerScanBytes; }
     }
 
+    static long conversationHistoryCacheBytesForTests(String path) {
+        synchronized (CONVERSATION_HISTORY_CACHE_LOCK) {
+            ConversationHistoryCache cache = CONVERSATION_HISTORY_CACHE.get(path);
+            return cache == null ? 0L : cache.estimatedBytes;
+        }
+    }
+
     static long attachmentCleanupLedgerScanBytesForTests() {
         synchronized (LocalRunStore.class) { return attachmentCleanupLedgerScanBytes; }
     }
@@ -4330,6 +4430,13 @@ public final class LocalRunStore {
 
     static long crewSnapshotCacheHitCountForTests() {
         synchronized (CREW_SNAPSHOT_CACHE_LOCK) { return crewSnapshotCacheHitCount; }
+    }
+
+    static long crewSnapshotCacheBytesForTests(String path) {
+        synchronized (CREW_SNAPSHOT_CACHE_LOCK) {
+            CrewSnapshotCache cache = CREW_SNAPSHOT_CACHE.get(path);
+            return cache == null ? 0L : cache.estimatedBytes;
+        }
     }
 
     static long toolActivityLedgerScanCountForTests() {
@@ -4873,6 +4980,8 @@ public final class LocalRunStore {
         long previousModified = ledger.isFile() ? ledger.lastModified() : 0L;
         byte[] record = "crew_snapshot".equals(row.optString("type"))
                 ? losslessResultRecord(row) : (row.toString() + "\n").getBytes(StandardCharsets.UTF_8);
+        try { terminateUnterminatedLedgerTailLocked(ledger); }
+        catch (IOException error) { throw new IllegalStateException("Could not repair conversation ledger tail", error); }
         try (FileOutputStream output = new FileOutputStream(ledger, true)) {
             output.write(record);
             output.flush();
@@ -5233,112 +5342,124 @@ public final class LocalRunStore {
     private List<JSONObject> collectConversationHistory(int boundedLimit) {
         List<JSONObject> recent = new ArrayList<>();
         if (boundedLimit == 0) return recent;
-        while (true) {
-            recent.clear();
-            boolean changed = false;
-            File[] runs = root.listFiles(File::isDirectory);
-            if (runs != null) java.util.Arrays.sort(runs, (left, right) -> right.getName().compareTo(left.getName()));
-            Set<String> initialRunDirectoryNames = new HashSet<>();
-            if (runs != null) for (File run : runs) initialRunDirectoryNames.add(run.getName());
-            Map<File, LedgerSnapshot> runSnapshots = new LinkedHashMap<>();
-            if (runs != null) for (File run : runs) {
-                try {
-                    File ledger = new File(run, "steps.jsonl");
-                    verifyRunPath(ledger);
+        // Keep every ledger's progress for this call. The process-wide LRU is only a warm-start
+        // optimization; exceeding it must not make a retry re-read earlier ledgers from byte zero.
+        Map<String, RunHistoryCache> invocationRunHistory = new HashMap<>();
+        Map<String, ConversationHistoryCache> invocationConversationHistory = new HashMap<>();
+
+        File[] runs = root.listFiles(File::isDirectory);
+        if (runs != null) java.util.Arrays.sort(runs, (left, right) -> right.getName().compareTo(left.getName()));
+        if (runs != null) for (File run : runs) {
+            File ledger = new File(run, "steps.jsonl");
+            try {
+                verifyRunPath(ledger);
+                int unstableRetries = 0;
+                while (true) {
                     LedgerSnapshot snapshot = historyLedgerSnapshot(ledger);
-                    if (!snapshot.exists) {
-                        runSnapshots.put(ledger, snapshot);
-                        continue;
-                    }
-                    JSONObject summary = runSummaryForSnapshot(run, snapshot);
+                    if (!snapshot.exists) break;
+                    JSONObject summary = runSummaryForSnapshot(run, snapshot, invocationRunHistory);
+                    boolean current;
                     synchronized (SESSION_TITLE_LOCK) {
-                        if (!run.isDirectory() || !snapshot.matchesFile(ledger)) {
-                            changed = true;
-                        } else {
-                            runSnapshots.put(ledger, snapshot);
-                            if (summary != null
-                                    && !conversationMetadata.read(summary.optString("session_id")).deleted)
-                                recent.add(copyJson(summary));
-                        }
+                        current = run.isDirectory() && snapshot.matchesFile(ledger);
+                        if (current) addRunSummaryIfVisible(recent, summary);
                     }
-                    if (changed) break;
-                } catch (Exception unsafeOrUnreadable) { }
-            }
-            if (changed) continue;
-            if (!initialRunDirectoryNames.equals(runDirectoryNames(root))) continue;
+                    if (current) break;
+                    if (++unstableRetries < MAX_HISTORY_UNSTABLE_RETRIES) continue;
 
-            List<String> sessionIds = listConversationLedgerIds();
-            Map<String, LedgerSnapshot> conversationSnapshots = new LinkedHashMap<>();
-            for (String sessionId : sessionIds) {
-                try {
-                    File ledger = conversationFile(sessionId);
-                    LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
-                    if (snapshot == null) continue;
-                    ConversationHistorySummary summary = conversationSummaryForSnapshot(sessionId, snapshot);
+                    // A sequence of snapshots that cannot be validated switches to a locked delta
+                    // read. Normal appenders share this lock, so the summary is validated before
+                    // the lock is released, even if the writer is continuously active.
                     synchronized (SESSION_TITLE_LOCK) {
-                        if (!snapshot.matches(sessionId, ledger, conversationMetadata)) {
-                            changed = true;
-                            break;
-                        }
-                        conversationSnapshots.put(sessionId, snapshot);
-                        ConversationMetadataStore.Snapshot metadata = conversationMetadata.read(sessionId);
-                        if (metadata.deleted) continue;
-                        ConversationHistoryProjection projection = projectConversationHistory(summary);
-                        if (projection.messageCount == 0) continue;
-                        String title = summary.ledgerTitle;
-                        if (title == null && summary.hasFirstUserMessage) title = summary.fallbackTitle;
-                        boolean found = false;
-                        for (JSONObject row : recent) {
-                            if (!sessionId.equals(row.optString("session_id"))) continue;
-                            found = true;
-                            if (!projection.latestGoal.isEmpty()) row.put("goal", projection.latestGoal);
-                            if (title != null) row.put("title", title);
-                            row.put("timestamp", Double.isNaN(projection.latestTimestamp)
-                                    ? row.optDouble("timestamp", 0.0) : projection.latestTimestamp);
-                            row.put("turns", Math.max(row.optInt("turns"), (projection.messageCount + 1) / 2));
-                            row.put("outcome", "CHAT").put("steps", 0);
-                        }
-                        if (!found) recent.add(new JSONObject().put("run_id", "chat_" + sessionId)
-                                .put("session_id", sessionId).put("goal", projection.latestGoal).put("title", title)
-                                .put("timestamp", Double.isNaN(projection.latestTimestamp) ? 0.0 : projection.latestTimestamp)
-                                .put("outcome", "CHAT")
-                                .put("steps", 0).put("turns", (projection.messageCount + 1) / 2));
+                        if (!run.isDirectory()) break;
+                        LedgerSnapshot latest = historyLedgerSnapshot(ledger);
+                        if (!latest.exists) break;
+                        summary = runSummaryForSnapshot(run, latest, invocationRunHistory);
+                        if (latest.matchesFile(ledger)) addRunSummaryIfVisible(recent, summary);
                     }
-                } catch (Exception unsafeOrUnreadable) { }
-            }
-            if (changed) continue;
-
-            synchronized (SESSION_TITLE_LOCK) {
-                boolean current = new HashSet<>(sessionIds).equals(new HashSet<>(listConversationLedgerIds()));
-                for (Map.Entry<File, LedgerSnapshot> entry : runSnapshots.entrySet())
-                    if (!entry.getValue().matchesFile(entry.getKey())) { current = false; break; }
-                for (Map.Entry<String, LedgerSnapshot> entry : conversationSnapshots.entrySet())
-                    if (!entry.getValue().matches(entry.getKey(), conversationFile(entry.getKey()), conversationMetadata)) {
-                        current = false;
-                        break;
-                    }
-                if (!current || !initialRunDirectoryNames.equals(runDirectoryNames(root))) continue;
-                java.util.Iterator<JSONObject> iterator = recent.iterator();
-                while (iterator.hasNext()) {
-                    JSONObject row = iterator.next();
-                    try {
-                        ConversationMetadataStore.Snapshot metadata = conversationMetadata.read(row.optString("session_id"));
-                        if (metadata.deleted) { iterator.remove(); continue; }
-                        row.put("pinned", metadata.pinned).put("archived", metadata.archived);
-                        if (metadata.title != null) row.put("title", metadata.title);
-                    } catch (Exception unsafeOrUnreadable) { iterator.remove(); }
+                    break;
                 }
-                recent.sort((left, right) -> Double.compare(right.optDouble("timestamp"), left.optDouble("timestamp")));
-                return recent.size() > boundedLimit ? new ArrayList<>(recent.subList(0, boundedLimit)) : recent;
+            } catch (Exception unsafeOrUnreadable) { }
+        }
+
+        List<String> sessionIds = listConversationLedgerIds();
+        for (String sessionId : sessionIds) {
+            try {
+                File ledger = conversationFile(sessionId);
+                int unstableRetries = 0;
+                while (true) {
+                    LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
+                    if (snapshot == null) break;
+                    ConversationHistorySummary summary = conversationSummaryForSnapshot(
+                            sessionId, snapshot, invocationConversationHistory);
+                    boolean current;
+                    synchronized (SESSION_TITLE_LOCK) {
+                        current = snapshot.matches(sessionId, ledger, conversationMetadata);
+                        if (current) addConversationSummary(recent, sessionId, summary,
+                                conversationMetadata.read(sessionId));
+                    }
+                    if (current) break;
+                    if (++unstableRetries < MAX_HISTORY_UNSTABLE_RETRIES) continue;
+
+                    // As for run ledgers, hold the shared writer lock only after repeated failed
+                    // validations and scan from this call's last validated append offset.
+                    synchronized (SESSION_TITLE_LOCK) {
+                        LedgerSnapshot latest = conversationLedgerSnapshot(sessionId, ledger);
+                        if (latest == null) break;
+                        summary = conversationSummaryForSnapshot(sessionId, latest, invocationConversationHistory);
+                        if (latest.matches(sessionId, ledger, conversationMetadata))
+                            addConversationSummary(recent, sessionId, summary, conversationMetadata.read(sessionId));
+                    }
+                    break;
+                }
+            } catch (Exception unsafeOrUnreadable) { }
+        }
+
+        synchronized (SESSION_TITLE_LOCK) {
+            java.util.Iterator<JSONObject> iterator = recent.iterator();
+            while (iterator.hasNext()) {
+                JSONObject row = iterator.next();
+                try {
+                    ConversationMetadataStore.Snapshot metadata = conversationMetadata.read(row.optString("session_id"));
+                    if (metadata.deleted) { iterator.remove(); continue; }
+                    row.put("pinned", metadata.pinned).put("archived", metadata.archived);
+                    if (metadata.title != null) row.put("title", metadata.title);
+                } catch (Exception unsafeOrUnreadable) { iterator.remove(); }
             }
         }
+        recent.sort((left, right) -> Double.compare(right.optDouble("timestamp"), left.optDouble("timestamp")));
+        return recent.size() > boundedLimit ? new ArrayList<>(recent.subList(0, boundedLimit)) : recent;
     }
 
-    private static Set<String> runDirectoryNames(File directory) {
-        Set<String> names = new HashSet<>();
-        File[] runs = directory.listFiles(File::isDirectory);
-        if (runs != null) for (File run : runs) names.add(run.getName());
-        return names;
+    private void addRunSummaryIfVisible(List<JSONObject> recent, JSONObject summary) {
+        if (summary == null) return;
+        try {
+            if (!conversationMetadata.read(summary.optString("session_id")).deleted)
+                recent.add(copyJson(summary));
+        } catch (Exception unsafeOrUnreadable) { }
+    }
+
+    private void addConversationSummary(List<JSONObject> recent, String sessionId,
+            ConversationHistorySummary summary, ConversationMetadataStore.Snapshot metadata) {
+        if (metadata.deleted) return;
+        ConversationHistoryProjection projection = projectConversationHistory(summary);
+        if (projection.messageCount == 0) return;
+        String title = summary.ledgerTitle;
+        if (title == null && summary.hasFirstUserMessage) title = summary.fallbackTitle;
+        boolean found = false;
+        for (JSONObject row : recent) {
+            if (!sessionId.equals(row.optString("session_id"))) continue;
+            found = true;
+            if (!projection.latestGoal.isEmpty()) row.put("goal", projection.latestGoal);
+            if (title != null) row.put("title", title);
+            row.put("timestamp", Double.isNaN(projection.latestTimestamp)
+                    ? row.optDouble("timestamp", 0.0) : projection.latestTimestamp);
+            row.put("turns", Math.max(row.optInt("turns"), (projection.messageCount + 1) / 2));
+            row.put("outcome", "CHAT").put("steps", 0);
+        }
+        if (!found) recent.add(new JSONObject().put("run_id", "chat_" + sessionId)
+                .put("session_id", sessionId).put("goal", projection.latestGoal).put("title", title)
+                .put("timestamp", Double.isNaN(projection.latestTimestamp) ? 0.0 : projection.latestTimestamp)
+                .put("outcome", "CHAT").put("steps", 0).put("turns", (projection.messageCount + 1) / 2));
     }
 
     private LedgerSnapshot historyLedgerSnapshot(File ledger) {
@@ -5349,12 +5470,16 @@ public final class LocalRunStore {
         }
     }
 
-    private JSONObject runSummaryForSnapshot(File run, LedgerSnapshot snapshot) {
+    private JSONObject runSummaryForSnapshot(File run, LedgerSnapshot snapshot,
+            Map<String, RunHistoryCache> invocationCache) {
         String path = snapshot.ledger.getAbsolutePath();
-        RunHistoryCache previous = null;
+        RunHistoryCache previous = invocationCache.get(path);
+        if (previous != null && !previous.matches(snapshot) && !previous.canExtend(snapshot)) previous = null;
         synchronized (CONVERSATION_HISTORY_CACHE_LOCK) {
-            RunHistoryCache cached = RUN_HISTORY_CACHE.get(path);
-            if (cached != null && (cached.matches(snapshot) || cached.canExtend(snapshot))) previous = cached.copy();
+            if (previous == null) {
+                RunHistoryCache cached = RUN_HISTORY_CACHE.get(path);
+                if (cached != null && (cached.matches(snapshot) || cached.canExtend(snapshot))) previous = cached.copy();
+            }
         }
         JSONObject summary = previous == null ? null : copyJson(previous.summary);
         long startOffset = previous != null && previous.canExtend(snapshot) ? previous.snapshot.length : snapshot.length;
@@ -5363,6 +5488,8 @@ public final class LocalRunStore {
             synchronized (LocalRunStore.class) { conversationHistoryLedgerScanBytes += snapshot.length - startOffset; }
             summary = scanRunHistorySuffix(run, snapshot, startOffset, summary);
         }
+        RunHistoryCache progress = new RunHistoryCache(snapshot, summary);
+        invocationCache.put(path, progress);
         cacheRunHistory(path, new RunHistoryCache(snapshot, summary));
         return summary;
     }
@@ -5375,14 +5502,26 @@ public final class LocalRunStore {
                 JSONObject row = new JSONObject(line);
                 String event = row.optString("event");
                 if ("run_start".equals(event) && summary == null) {
-                    String sessionId = row.optString("session_id", "");
-                    if (sessionId.isEmpty()) sessionId = row.optString("run_id", run.getName());
-                    if (sessionId.isEmpty()) sessionId = run.getName();
-                    ConversationMetadataStore.validateSessionId(sessionId);
+                    String sessionId = runStartSessionId(run, row);
                     summary = new JSONObject().put("run_id", row.optString("run_id", run.getName()))
                             .put("session_id", sessionId).put("goal", row.optString("goal", ""))
                             .put("timestamp", row.optDouble("timestamp", 0)).put("outcome", "RUNNING")
                             .put("steps", 0).put("turns", 0);
+                    // Record the first run_start before validating its owner. If it is corrupt,
+                    // later run_start rows must not replace the legacy summary's goal.
+                    ConversationMetadataStore.validateSessionId(sessionId);
+                } else if ("run_start".equals(event) && summary != null) {
+                    // Legacy projection kept the first run's goal, but a later valid owner can
+                    // make a corrupt first start displayable. Repair only the owner field.
+                    try {
+                        ConversationMetadataStore.validateSessionId(summary.optString("session_id"));
+                    } catch (Exception invalidFirstOwner) {
+                        String laterSessionId = runStartSessionId(run, row);
+                        try {
+                            ConversationMetadataStore.validateSessionId(laterSessionId);
+                            summary.put("session_id", laterSessionId);
+                        } catch (Exception invalidLaterOwner) { }
+                    }
                 } else if (summary != null && "step_start".equals(event)) {
                     summary.put("steps", summary.optInt("steps") + 1);
                 } else if (summary != null && "run_end".equals(event)) {
@@ -5396,23 +5535,42 @@ public final class LocalRunStore {
         return summary;
     }
 
-    private ConversationHistorySummary conversationSummaryForSnapshot(String sessionId, LedgerSnapshot snapshot) {
+    private static String runStartSessionId(File run, JSONObject row) {
+        String sessionId = row.optString("session_id", "");
+        if (sessionId.isEmpty()) sessionId = row.optString("run_id", run.getName());
+        if (sessionId.isEmpty()) sessionId = run.getName();
+        return sessionId;
+    }
+
+    private ConversationHistorySummary conversationSummaryForSnapshot(String sessionId, LedgerSnapshot snapshot,
+            Map<String, ConversationHistoryCache> invocationCache) {
         String path = snapshot.ledger.getAbsolutePath();
-        ConversationHistoryCache previous = null;
+        ConversationHistoryCache previous = invocationCache.get(path);
+        if (previous != null && !previous.matches(snapshot) && !previous.canExtend(snapshot)) previous = null;
         ConversationHistorySummary summary = null;
         boolean exactCacheHit = false;
         synchronized (CONVERSATION_HISTORY_CACHE_LOCK) {
-            ConversationHistoryCache cached = CONVERSATION_HISTORY_CACHE.get(path);
-            if (cached != null && cached.matches(snapshot)) {
-                previous = cached;
-                summary = cached.summary;
+            if (previous == null) {
+                ConversationHistoryCache cached = CONVERSATION_HISTORY_CACHE.get(path);
+                if (cached != null && cached.matches(snapshot)) {
+                    previous = cached;
+                    summary = cached.summary;
+                    exactCacheHit = true;
+                } else if (cached != null && cached.canExtend(snapshot)) {
+                    previous = cached;
+                    summary = cached.summary.copy();
+                }
+            } else if (previous.matches(snapshot)) {
+                summary = previous.summary;
                 exactCacheHit = true;
-            } else if (cached != null && cached.canExtend(snapshot)) {
-                previous = cached;
-                summary = cached.summary.copy();
+            } else if (previous.canExtend(snapshot)) {
+                summary = previous.summary.copy();
             }
         }
-        if (exactCacheHit) return summary;
+        if (exactCacheHit) {
+            invocationCache.put(path, previous);
+            return summary;
+        }
         if (summary == null) summary = new ConversationHistorySummary();
         long startOffset = previous != null && previous.canExtend(snapshot) ? previous.snapshot.length
                 : previous == null ? 0L : snapshot.length;
@@ -5420,7 +5578,9 @@ public final class LocalRunStore {
             synchronized (LocalRunStore.class) { conversationHistoryLedgerScanBytes += snapshot.length - startOffset; }
             scanConversationHistorySuffix(sessionId, snapshot, startOffset, summary);
         }
-        cacheConversationHistory(path, new ConversationHistoryCache(snapshot, summary));
+        ConversationHistoryCache progress = new ConversationHistoryCache(snapshot, summary);
+        invocationCache.put(path, progress);
+        cacheConversationHistory(path, progress);
         return summary;
     }
 

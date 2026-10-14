@@ -19,6 +19,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.json.JSONObject;
 import org.junit.Rule;
 import org.junit.Test;
@@ -168,6 +172,129 @@ public class LocalRunStoreConversationHistoryStreamingTest {
         assertTrue("the marker suffix itself was scanned", ledger.length() - beforeMarkers > 0L);
         assertEquals("the drawer refresh itself must not materialize the ledger", parsesBeforeDrawerRefresh,
                 LocalRunStore.conversationRowsFullParseCountForTests());
+    }
+
+    @Test(timeout = 30000) public void drawerRetainsPerCallProgressAcrossMoreLedgersThanTheGlobalLruWhileOneGrows()
+            throws Exception {
+        File files = temporary.newFolder();
+        LocalRunStore store = new LocalRunStore(files);
+        char[] payload = new char[1000];
+        Arrays.fill(payload, 'x');
+        String row = new JSONObject().put("role", "user").put("content", new String(payload))
+                .put("messageId", "bulk-row").put("timestamp", 1.0).toString() + "\n";
+        long initialBytes = 0L;
+        String writerSession = "history-stream-00";
+        for (int index = 0; index < 20; index++) {
+            String session = String.format(java.util.Locale.ROOT, "history-stream-%02d", index);
+            File ledger = conversationLedger(files, session);
+            try (BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(
+                    new FileOutputStream(ledger), StandardCharsets.UTF_8))) {
+                long writtenBytes = 0L;
+                long rowBytes = row.getBytes(StandardCharsets.UTF_8).length;
+                while (writtenBytes < 1024L * 1024L) {
+                    writer.write(row);
+                    writtenBytes += rowBytes;
+                }
+            }
+            assertTrue("each synthetic ledger must be at least 1 MiB", ledger.length() >= 1024L * 1024L);
+            initialBytes += ledger.length();
+        }
+
+        AtomicBoolean keepWriting = new AtomicBoolean(true);
+        AtomicInteger writes = new AtomicInteger();
+        CountDownLatch writerStarted = new CountDownLatch(1);
+        CountDownLatch firstAppend = new CountDownLatch(1);
+        Thread writer = new Thread(() -> {
+            writerStarted.countDown();
+            int index = 0;
+            while (keepWriting.get() && index++ < 4000) {
+                store.appendConversationMessage(writerSession, "user", "concurrent append " + index);
+                writes.incrementAndGet();
+                firstAppend.countDown();
+                try { Thread.sleep(1L); }
+                catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); return; }
+            }
+        }, "history-ledger-appender");
+        writer.start();
+        assertTrue("writer did not start", writerStarted.await(5L, TimeUnit.SECONDS));
+        assertTrue("writer did not append its first row", firstAppend.await(10L, TimeUnit.SECONDS));
+        LocalRunStore.resetHotPathMetricsForTests();
+        List<JSONObject> history = store.listConversations();
+        keepWriting.set(false);
+        writer.join(10000L);
+
+        assertTrue("the background appender must overlap the drawer read", writes.get() > 0);
+        assertTrue("drawer must include the growing ledger", findSession(history, writerSession) != null);
+        assertTrue("a drawer call must not reread all ledgers on each retry",
+                LocalRunStore.historyLedgerScanBytesForTests() < initialBytes * 3L);
+    }
+
+    @Test public void unterminatedTailIsSeparatedBeforeAppendAndFullAndIncrementalReadsAgree() throws Exception {
+        File files = temporary.newFolder();
+        LocalRunStore store = new LocalRunStore(files);
+        String session = "history-torn-tail";
+        File ledger = conversationLedger(files, session);
+        try (FileOutputStream output = new FileOutputStream(ledger)) {
+            output.write((message("user", "before", "before-id", 1.0).toString() + "\n{partial")
+                    .getBytes(StandardCharsets.UTF_8));
+        }
+
+        store.listConversations(); // Cache the snapshot before the incomplete tail.
+        store.appendConversationMessage(session, "user", "after repair");
+
+        List<JSONObject> fullMessages = store.readConversationMessages(session);
+        List<JSONObject> incrementalHistory = store.listConversations();
+        assertEquals(2, fullMessages.size());
+        assertEquals("after repair", fullMessages.get(1).optString("content"));
+        assertEquals("incremental drawer projection must see the same appended row",
+                "after repair", findSession(incrementalHistory, session).optString("goal"));
+        String ledgerText = new String(java.nio.file.Files.readAllBytes(ledger.toPath()), StandardCharsets.UTF_8);
+        assertTrue("the torn bytes must be isolated on their own line", ledgerText.contains("{partial\n{"));
+    }
+
+    @Test public void corruptFirstRunOwnerKeepsItsGoalWhenLaterRunStartSuppliesAValidOwner() throws Exception {
+        File files = temporary.newFolder();
+        LocalRunStore store = new LocalRunStore(files);
+        File runDirectory = new File(new File(files, "jarvys/runs"), "corrupt-owner-run");
+        assertTrue(runDirectory.mkdirs());
+        File ledger = new File(runDirectory, "steps.jsonl");
+        try (BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(
+                new FileOutputStream(ledger), StandardCharsets.UTF_8))) {
+            writer.write(new JSONObject().put("event", "run_start").put("run_id", "first-run")
+                    .put("session_id", "invalid/session").put("goal", "first run goal")
+                    .put("timestamp", 3.0).toString());
+            writer.write('\n');
+            writer.write(new JSONObject().put("event", "run_start").put("run_id", "later-run")
+                    .put("session_id", "valid-later-owner").put("goal", "later run goal")
+                    .put("timestamp", 9.0).toString());
+            writer.write('\n');
+        }
+
+        JSONObject summary = findSession(store.listConversations(), "valid-later-owner");
+        assertTrue("the later valid owner should allow the legacy first-run summary to display", summary != null);
+        assertEquals("first-run", summary.optString("run_id"));
+        assertEquals("first run goal", summary.optString("goal"));
+        assertEquals(3.0, summary.optDouble("timestamp"), 0.0);
+    }
+
+    @Test public void drawerCacheEstimateIncludesRetainedRowAndStringObjects() throws Exception {
+        File files = temporary.newFolder();
+        LocalRunStore store = new LocalRunStore(files);
+        String session = "history-cache-estimate";
+        File ledger = conversationLedger(files, session);
+        int rowCount = 1000;
+        try (BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(
+                new FileOutputStream(ledger), StandardCharsets.UTF_8))) {
+            for (int index = 0; index < rowCount; index++) {
+                writer.write(message("user", "cache row " + index, "measure-" + index, index + 1.0).toString());
+                writer.write('\n');
+            }
+        }
+
+        store.listConversations();
+        long estimatedBytes = LocalRunStore.conversationHistoryCacheBytesForTests(ledger.getAbsolutePath());
+        assertTrue("the estimate must include per-row and per-string retained object costs",
+                estimatedBytes >= rowCount * 200L);
     }
 
     private static List<JSONObject> legacyListConversations(File files, LocalRunStore store) throws Exception {

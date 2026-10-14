@@ -83,7 +83,9 @@ public class LocalRunStoreCrewSnapshotReadTest {
             store.appendCrewMissionSnapshot(snapshot("mission-b", session, "saved-b"));
         });
 
-        List<CrewMissionSnapshot> first = store.readCrewMissionSnapshots(session);
+        List<CrewMissionSnapshot> first;
+        try { first = store.readCrewMissionSnapshots(session); }
+        finally { LocalRunStore.setCrewSnapshotReadTestHookForTests(null); }
         long firstBytes = LocalRunStore.crewSnapshotLedgerScanBytesForTests();
         long firstScans = LocalRunStore.crewSnapshotLedgerScanCountForTests();
         assertEquals(Arrays.asList("mission-a", "mission-b"), missionIds(first));
@@ -109,6 +111,34 @@ public class LocalRunStoreCrewSnapshotReadTest {
         assertEquals(3L, LocalRunStore.crewSnapshotRowsParsedCountForTests());
     }
 
+    @Test public void crewSnapshotCacheRejectsValuesThatExceedItsEstimatedByteBudget() throws Exception {
+        File files = temporary.newFolder();
+        LocalRunStore store = new LocalRunStore(files);
+        String session = "crew-byte-budget";
+        File ledger = ledger(files, session);
+        char[] payload = new char[60 * 1024];
+        Arrays.fill(payload, 'x');
+        String synthesis = new String(payload);
+        try (BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(
+                new FileOutputStream(ledger), StandardCharsets.UTF_8))) {
+            for (int index = 0; index < 300; index++) {
+                writer.write(snapshotWithSynthesis("mission-" + index, session, synthesis).toJson().toString());
+                writer.write('\n');
+            }
+        }
+
+        LocalRunStore.resetHotPathMetricsForTests();
+        assertEquals(300, store.readCrewMissionSnapshots(session).size());
+        String path = ledger.getAbsolutePath();
+        assertEquals("a single oversized cache entry must not be retained", 0L,
+                LocalRunStore.crewSnapshotCacheBytesForTests(path));
+        long scans = LocalRunStore.crewSnapshotLedgerScanCountForTests();
+        assertEquals(300, store.readCrewMissionSnapshots(session).size());
+        assertEquals("oversized values are rescanned instead of bypassing the byte budget",
+                scans + 1L, LocalRunStore.crewSnapshotLedgerScanCountForTests());
+        assertEquals(0L, LocalRunStore.crewSnapshotCacheHitCountForTests());
+    }
+
     private static File ledger(File files, String session) {
         File directory = new File(new File(files, "jarvys"), "conversations");
         assertTrue(directory.isDirectory());
@@ -117,6 +147,11 @@ public class LocalRunStoreCrewSnapshotReadTest {
 
     private static CrewMissionSnapshot snapshot(String mission, String session, String title) {
         return new CrewMissionSnapshot(mission, session, "process", title, "DONE", "", 1L, 2L,
+                Collections.emptyList(), Collections.emptyList());
+    }
+
+    private static CrewMissionSnapshot snapshotWithSynthesis(String mission, String session, String synthesis) {
+        return new CrewMissionSnapshot(mission, session, "process", "title", "DONE", synthesis, 1L, 2L,
                 Collections.emptyList(), Collections.emptyList());
     }
 
