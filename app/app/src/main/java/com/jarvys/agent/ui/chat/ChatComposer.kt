@@ -127,6 +127,8 @@ fun ChatComposer(
     sendAllowed: Boolean = true,
     canInterrupt: Boolean = false,
     onInterruptAndSend: () -> Unit = {},
+    inputEnabled: Boolean = true,
+    disabledHint: String? = null,
 ) {
     var trayOpen by remember { mutableStateOf(false) }
     var skillsOpen by remember { mutableStateOf(false) }
@@ -142,7 +144,8 @@ fun ChatComposer(
 
     Surface(
         modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 12.dp, vertical = 8.dp)
-            .then(composerSizeMotion),
+            .then(composerSizeMotion)
+            .then(if (disabledHint != null) Modifier.testTag("workspace-chat-composer") else Modifier),
         shape = RoundedCornerShape(22.dp),
         color = MaterialTheme.colorScheme.surface.copy(alpha = FLOATING_COMPOSER_SURFACE_ALPHA),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
@@ -150,6 +153,12 @@ fun ChatComposer(
     ) {
         Column(Modifier.fillMaxWidth().padding(start = 14.dp, top = 9.dp, end = 8.dp, bottom = 7.dp)) {
             if (pendingAttachments.isNotEmpty()) PendingChatAttachments(pendingAttachments, attachmentSessionId, onRemoveAttachment, Modifier.padding(bottom = 7.dp))
+            if (!inputEnabled && !disabledHint.isNullOrBlank()) {
+                Text(disabledHint, Modifier.fillMaxWidth().padding(bottom = 4.dp)
+                    .testTag("workspace-chat-input-hint"),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall)
+            }
             if (captureContextRequested) {
                 Row(verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.padding(bottom = 3.dp)) {
@@ -164,7 +173,9 @@ fun ChatComposer(
                 TextField(
                     value = goal,
                     onValueChange = onGoalChange,
-                    modifier = Modifier.fillMaxWidth().heightIn(max = configuration.screenHeightDp.dp * 0.42f),
+                    enabled = inputEnabled,
+                    modifier = Modifier.fillMaxWidth().heightIn(max = configuration.screenHeightDp.dp * 0.42f)
+                        .testTag("chat-composer-input"),
                     placeholder = { Text(stringResource(R.string.chat_message_placeholder)) },
                     minLines = 1,
                     maxLines = if (expanded) 22 else 5,
@@ -189,7 +200,7 @@ fun ChatComposer(
                         modifier = Modifier.size(18.dp))
                 }
             }
-            if (running && canInterrupt && goal.isNotBlank() && pendingAttachments.isEmpty() && !attachmentSending) {
+            if (inputEnabled && running && canInterrupt && goal.isNotBlank() && pendingAttachments.isEmpty() && !attachmentSending) {
                 TextButton(onClick = onInterruptAndSend,
                     modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("chat-interrupt-send")) {
                     Text(stringResource(R.string.chat_interrupt_send))
@@ -197,7 +208,7 @@ fun ChatComposer(
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                IconButton(onClick = { trayOpen = !trayOpen }, enabled = !running && !attachmentSending,
+                IconButton(onClick = { trayOpen = !trayOpen }, enabled = inputEnabled && !running && !attachmentSending,
                     modifier = Modifier.size(48.dp).testTag("chat-plus-button").semantics {
                         contentDescription = trayToggleDescription
                     }) {
@@ -213,7 +224,7 @@ fun ChatComposer(
                     modelLabel = modelLabel,
                     effortLabel = effortLabel,
                     effortAppearance = effortAppearance,
-                    enabled = !running && !attachmentSending,
+                    enabled = inputEnabled && !running && !attachmentSending,
                     motionActive = effortMotionActive && !trayOpen && !skillsOpen && unavailableAction == null,
                     onClick = onSelectModel,
                     modifier = Modifier.weight(1f),
@@ -228,7 +239,7 @@ fun ChatComposer(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
                 }
                 Button(onClick = { if (running || attachmentSending) onStop() else onSend() },
-                    enabled = running || attachmentSending || sendAllowed && canSendWithAttachments(goal, pendingAttachments), shape = CircleShape,
+                    enabled = inputEnabled && (running || attachmentSending || sendAllowed && canSendWithAttachments(goal, pendingAttachments)), shape = CircleShape,
                     modifier = Modifier.size(48.dp).testTag("chat-send-stop-button"),
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) {
                     AnimatedContent(targetState = running || attachmentSending, transitionSpec = {
@@ -246,7 +257,7 @@ fun ChatComposer(
         }
     }
 
-    if (trayOpen) ContextTray(
+    if (trayOpen && inputEnabled) ContextTray(
         skillEnabledCount = skillEnabledCount,
         skillTotalCount = skillTotalCount,
         onCamera = { trayOpen = false; onAttachmentCamera() },
@@ -257,7 +268,7 @@ fun ChatComposer(
         onOpenCrew = { trayOpen = false; onOpenCrew() },
         onDismiss = { trayOpen = false },
     )
-    if (skillsOpen) RunCapabilityPicker(
+    if (skillsOpen && inputEnabled) RunCapabilityPicker(
         skills = availableSkills,
         selected = selectedSkillIds,
         onToggle = onToggleRunSkill,

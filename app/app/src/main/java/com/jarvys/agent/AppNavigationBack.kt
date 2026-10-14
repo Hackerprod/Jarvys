@@ -57,6 +57,7 @@ object AppNavigationBackPolicy {
     const val COORDINATED_WORKSPACE = "workspace/{workspaceId}"
     const val COORDINATED_FILES = "workspace/{workspaceId}/files"
     const val WORKSPACE_PREVIEW = "workspace-preview/{projectId}"
+    const val WORKSPACE_SESSION_PREVIEW = "workspace-session-preview/{sessionId}/{projectId}"
     const val ARTIFACT_PREVIEW = "artifact-preview/{sessionId}/{artifactId}"
     fun mcpServer(serverId: String) = "mcp/server/${android.net.Uri.encode(serverId)}"
     fun editMcpServer(serverId: String) = "${mcpServer(serverId)}/edit"
@@ -75,7 +76,8 @@ object AppNavigationBackPolicy {
         MCP_LIST, MCP_NEW, MCP_SERVER, MCP_SERVER_EDIT, SKILLS, CONNECTORS,
         CONNECTOR_DEVICE, CONNECTOR_REMOTE, CONNECTOR_GOOGLE, MEMORY, MEMORY_HISTORY, MEMORY_FILE,
         TASKS, TASK_DETAIL,
-        BOTS, CREW_EMPTY, CREW, CREW_BOT, COORDINATED_WORKSPACE, COORDINATED_FILES, WORKSPACE_PREVIEW, ARTIFACT_PREVIEW,
+        BOTS, CREW_EMPTY, CREW, CREW_BOT, COORDINATED_WORKSPACE, COORDINATED_FILES, WORKSPACE_PREVIEW,
+        WORKSPACE_SESSION_PREVIEW, ARTIFACT_PREVIEW,
     )
     val rootRoutes = setOf(CHAT_ROOT, WORKSPACES)
 
@@ -115,6 +117,7 @@ object AppNavigationBackPolicy {
         COORDINATED_WORKSPACE -> AppRouteMeta(context.getString(R.string.workspace_title), false)
         COORDINATED_FILES -> AppRouteMeta(context.getString(R.string.workspace_open_files), false)
         WORKSPACE_PREVIEW, ARTIFACT_PREVIEW -> AppRouteMeta(context.getString(R.string.chat_open_preview), false)
+        WORKSPACE_SESSION_PREVIEW -> AppRouteMeta(context.getString(R.string.chat_open_preview), false)
         else -> AppRouteMeta(context.getString(R.string.drawer_chat_fallback), false,
             action = AppRouteAction.HOME_FALLBACK)
     }

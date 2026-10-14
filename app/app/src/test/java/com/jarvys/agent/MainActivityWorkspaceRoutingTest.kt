@@ -189,6 +189,12 @@ class MainActivityWorkspaceRoutingTest {
         val workspace = WorkspaceRegistry(context).use {
             it.createWorkspace("navigation-detail", "Recorded navigation workspace")
         }
+        val workerMessageId = store.appendConversationMessage(workspace.executionSessionId, "user",
+            "Worker transcript question")
+        store.appendConversationToolPresentation(workspace.executionSessionId, workerMessageId,
+            "Workspace test tool", "tool_result", "workspace-test-call", "Tool output for this workspace", null, "")
+        store.appendConversationMessage(workspace.executionSessionId, "assistant", "Worker transcript answer")
+        val workerToolEvent = store.readConversationTimeline(workspace.executionSessionId).single { it.kind == "tool" }
         val original = transcript(legacy)
         start()
         await { selected() == legacy && AgentRunUiState.state.value.sessionId == legacy &&
@@ -236,21 +242,39 @@ class MainActivityWorkspaceRoutingTest {
         assertEquals(AppNavigationBackPolicy.WORKSPACES, navigation().currentDestination?.route)
         tapTag("workspace-list-row-${workspace.workspaceId}")
         awaitRoute(AppNavigationBackPolicy.COORDINATED_WORKSPACE)
-        await { compose.onAllNodesWithTag("workspace-open-files").fetchSemanticsNodes().isNotEmpty() }
+        await { AgentRunUiState.state.value.sessionId == workspace.executionSessionId
+            && compose.onAllNodesWithTag("workspace-chat-timeline").fetchSemanticsNodes().isNotEmpty() }
         settleNativeFrame()
         compose.onNodeWithTag("jarvys-back").assertIsDisplayed()
-        compose.onNodeWithText(workspace.title).assertIsDisplayed()
-        tapTag("workspace-open-files")
+        compose.onNodeWithTag("jarvys-topbar-title").assertTextContains(workspace.title)
+        compose.onNodeWithTag("chat-message-list").assertIsDisplayed()
+        compose.onNodeWithText("Worker transcript question").assertIsDisplayed()
+        compose.onNodeWithText("Worker transcript answer").assertIsDisplayed()
+        compose.onNodeWithTag("conversation-activity-${workerToolEvent.id}").assertIsDisplayed()
+        compose.onNodeWithTag("workspace-chat-composer").assertIsDisplayed()
+        compose.onNodeWithTag("chat-composer-input").assertIsNotEnabled()
+        compose.onNodeWithTag("chat-send-stop-button").assertIsNotEnabled()
+        compose.onNodeWithTag("workspace-chat-input-hint").assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.workspace_read_only_notice)).assertDoesNotExist()
+        compose.onNodeWithText(context.getString(R.string.workspace_recovery_unknown)).assertDoesNotExist()
+        compose.onNodeWithText(context.getString(R.string.workspace_result_unknown)).assertDoesNotExist()
+        tapTag("jarvys-topbar-more-options")
+        compose.onNodeWithTag("workspace/topbar-action").assertIsDisplayed()
+        compose.onNodeWithTag("topbar-rename-chat").assertDoesNotExist()
+        compose.onNodeWithTag("topbar-delete-chat").assertDoesNotExist()
+        tapTag("workspace/topbar-action")
         awaitRoute(AppNavigationBackPolicy.COORDINATED_FILES)
         compose.onNodeWithText(context.getString(R.string.workspace_file_read_only)).assertIsDisplayed()
         tapTag("jarvys-back")
         awaitRoute(AppNavigationBackPolicy.COORDINATED_WORKSPACE)
+        await { AgentRunUiState.state.value.sessionId == workspace.executionSessionId }
         systemBack()
         awaitRoute(AppNavigationBackPolicy.WORKSPACES)
         compose.onNodeWithContentDescription(context.getString(R.string.drawer_open)).assertIsDisplayed()
         compose.onNodeWithTag("jarvys-back").assertDoesNotExist()
         systemBack()
         awaitRoute(AppNavigationBackPolicy.CHAT_ROOT)
+        await { AgentRunUiState.state.value.sessionId == legacy }
         compose.onNode(hasSetTextAction()).assertTextEquals(draftText)
         compose.onNodeWithTag("pending-attachment-${draftBefore.id}").assertIsDisplayed()
         assertSame(draftOwner, ViewModelProvider(activity)[AttachmentDraftViewModel::class.java])

@@ -68,6 +68,8 @@ fun JarvysRouteTopBar(
     canDeleteConversation: Boolean = false,
     conversationActionsEnabled: Boolean = true,
     onConversationAction: (String, ConversationAction, String?) -> Unit = { _, _, _ -> },
+    workspaceMenuActionTitle: String? = null,
+    onWorkspaceMenuAction: () -> Unit = {},
 ) {
     val reducedMotion = LocalReducedMotion.current
     if (!route.showTopBar) return
@@ -134,6 +136,14 @@ fun JarvysRouteTopBar(
             controlledMenuOpen = accountMenuOpen,
             onMenuOpenChange = { accountMenuOpen = it },
         ) { closeMenu ->
+            workspaceMenuActionTitle?.takeIf(String::isNotBlank)?.let { actionTitle ->
+                DropdownMenuItem(
+                    text = { Text(actionTitle) },
+                    enabled = conversationActionsEnabled,
+                    modifier = Modifier.testTag("workspace/topbar-action"),
+                    onClick = { closeMenu(); onWorkspaceMenuAction() },
+                )
+            }
             if (canRenameConversation && !mascotVisibleSessionId.isNullOrBlank()) {
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.drawer_rename_chat)) },
@@ -160,21 +170,23 @@ fun JarvysRouteTopBar(
             DropdownMenuItem(text = { Text(stringResource(R.string.drawer_settings)) },
                 leadingIcon = { Icon(LucideIcons.Settings, contentDescription = null) },
                 onClick = { closeMenu(); onOpenSettings() })
-            DropdownMenuItem(
-                text = { Text(stringResource(if (chatWithoutMemory) R.string.memory_chat_without_off else R.string.memory_chat_without)) },
-                leadingIcon = { Icon(LucideIcons.Eye, contentDescription = null) },
-                onClick = { closeMenu(); onToggleMemory() },
-            )
-            DropdownMenuItem(
-                text = { Text(stringResource(if (compacting) R.string.compaction_running else R.string.compaction_menu)) },
-                leadingIcon = { Icon(LucideIcons.Layers2, contentDescription = null) },
-                enabled = canCompact,
-                onClick = { closeMenu(); onCompact() },
-            )
-            DropdownMenuItem(text = { Text(stringResource(R.string.reflection_menu)) },
-                leadingIcon = { Icon(LucideIcons.Brain, contentDescription = null) },
-                enabled = canReflect,
-                onClick = { closeMenu(); onReflect() })
+            if (workspaceMenuActionTitle == null) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(if (chatWithoutMemory) R.string.memory_chat_without_off else R.string.memory_chat_without)) },
+                    leadingIcon = { Icon(LucideIcons.Eye, contentDescription = null) },
+                    onClick = { closeMenu(); onToggleMemory() },
+                )
+                DropdownMenuItem(
+                    text = { Text(stringResource(if (compacting) R.string.compaction_running else R.string.compaction_menu)) },
+                    leadingIcon = { Icon(LucideIcons.Layers2, contentDescription = null) },
+                    enabled = canCompact,
+                    onClick = { closeMenu(); onCompact() },
+                )
+                DropdownMenuItem(text = { Text(stringResource(R.string.reflection_menu)) },
+                    leadingIcon = { Icon(LucideIcons.Brain, contentDescription = null) },
+                    enabled = canReflect,
+                    onClick = { closeMenu(); onReflect() })
+            }
         }
     }
     val navigationIcon: @Composable () -> Unit = {

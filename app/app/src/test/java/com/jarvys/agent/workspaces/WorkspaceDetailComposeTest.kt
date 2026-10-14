@@ -3,12 +3,14 @@ package com.jarvys.agent.workspaces
 import androidx.activity.ComponentActivity
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
-import com.jarvys.agent.R
+import com.jarvys.agent.AgentRunUiEvent
+import com.jarvys.agent.AgentRunUiSnapshot
+import com.jarvys.agent.connectors.ConnectorConnectionPreferences
+import com.jarvys.agent.connectors.ConnectorRegistry
 import kotlinx.coroutines.test.StandardTestDispatcher
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -21,142 +23,63 @@ class WorkspaceDetailComposeTest {
     @OptIn(ExperimentalTestApi::class)
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>(effectContext = StandardTestDispatcher())
 
-    private val first = WorkspaceAssignmentUi("first", 7, "Research", "Review sources", WorkspaceUiStatus.ACTIVE,
-        canCorrect = true, canPause = true)
-    private val second = WorkspaceAssignmentUi("second", 23, "Review", "Check result", WorkspaceUiStatus.PAUSED,
-        recoveryNote = "Cleanup recorded", canCorrect = true, canResume = true)
+    private val workspaceId = "11111111-1111-1111-1111-111111111111"
 
-    @Test fun actionsCarryOnlyTheirExactDisplayedTargetAndRevisionIncludingAfterReorder() {
-        val rows = mutableStateOf(listOf(first, second))
-        val calls = mutableListOf<Triple<String, String, Long>>()
-        var files = 0
+    @Test fun detailRendersTheWorkspaceSessionAsTheSharedConversationTimeline() {
+        val sessionId = WorkspaceIdentity.executionSessionId(workspaceId)
+        val user = AgentRunUiEvent(1L, "user", text = "Worker question")
+        val firstTool = AgentRunUiEvent.toolEvent(2L, "tool_result", "Read file", "Read the index", "read-1", null, 2L)
+        val secondTool = AgentRunUiEvent.toolEvent(3L, "tool_result", "Write file", "Updated the index", "write-1", null, 3L)
+        val assistant = AgentRunUiEvent(4L, "assistant", text = "Workspace answer")
+        val events = listOf(user, firstTool, secondTool, assistant)
+        val state = WorkspaceChatUiState(workspaceId, sessionId, "Workspace title", WorkspaceUiStatus.ACTIVE, events)
+        val connectors = ConnectorRegistry.createForTests(object : ConnectorConnectionPreferences {
+            override fun isConnected(id: String) = false
+            override fun setConnected(id: String, connected: Boolean) = Unit
+        }, { true })
+
         compose.setContent { MaterialTheme {
-            WorkspaceDetailScreen(WorkspaceDetailUiState("workspace", "Project", WorkspaceUiStatus.ACTIVE,
-                rows.value, canOpenFiles = true),
-                { id, revision -> calls += Triple("correct", id, revision) },
-                { id, revision -> calls += Triple("pause", id, revision) },
-                { id, revision -> calls += Triple("resume", id, revision) }, { files++ })
+            WorkspaceDetailScreen(state = state,
+                runSnapshot = AgentRunUiSnapshot(sessionId = sessionId, events = events),
+                connectorRegistry = connectors, showAgentEvents = true,
+                onOpenPreview = {}, onOpenSkillFile = {}, onOpenCrewMission = {})
         } }
-        compose.runOnIdle { assertTrue(calls.isEmpty()); assertEquals(0, files) }
-        compose.onNodeWithTag("workspace-correct-first").revealInWorkspace("assignment-first").performTouchInput { click() }
-        compose.onNodeWithTag("workspace-pause-first").revealInWorkspace("assignment-first").performTouchInput { click() }
-        compose.onNodeWithTag("workspace-resume-second").revealInWorkspace("assignment-second").performTouchInput { click() }
-        compose.runOnIdle { rows.value = listOf(second, first.copy(revision = 8)) }
-        compose.onNodeWithTag("workspace-correct-first").revealInWorkspace("assignment-first").performTouchInput { click() }
-        assertEquals(listOf(Triple("correct", "first", 7L), Triple("pause", "first", 7L),
-            Triple("resume", "second", 23L), Triple("correct", "first", 8L)), calls)
-        compose.onNodeWithTag("workspace-open-files").revealInWorkspace("workspace-summary").performTouchInput { click() }
-        assertEquals(1, files)
-        compose.onAllNodes(hasSetTextAction()).assertCountEquals(0)
+
+        compose.onNodeWithTag("workspace-chat-timeline").assertIsDisplayed()
+        compose.onNodeWithTag("chat-message-list").assertIsDisplayed()
+        compose.onNodeWithText("Worker question").assertIsDisplayed()
+        compose.onNodeWithText("Workspace answer").assertIsDisplayed()
+        compose.onNodeWithTag("tool-group-2").assertIsDisplayed()
+        compose.onNodeWithText("Mission").assertDoesNotExist()
+        compose.onNodeWithText("Recovery").assertDoesNotExist()
+        compose.onNodeWithText("Recorded result").assertDoesNotExist()
     }
 
-    /**
-     * Materialize the keyed item, then use bounded real gestures instead of ui-test 1.9.0's
-     * open-ended performScrollTo loop. A clipped/unreachable production target fails with bounds;
-     * this never invokes a callback directly, enlarges the viewport, or relaxes target assertions.
-     */
-    private fun SemanticsNodeInteraction.revealInWorkspace(itemKey: String): SemanticsNodeInteraction {
-        val list = compose.onNodeWithTag("workspace-detail")
-        // State writes and lazy-list scroll actions use the controlled effect dispatcher.
-        // Commit the current item provider before key lookup, then its new layout before bounds.
-        settleWorkspaceFrames()
-        list.performScrollToKey(itemKey)
-        settleWorkspaceFrames()
-        var lastBounds = "not observed"
-        repeat(6) { attempt ->
-            val viewport = list.fetchSemanticsNode().boundsInRoot
-            val node = fetchSemanticsNode()
-            val top = node.positionInRoot.y
-            val bottom = top + node.size.height
-            val left = node.positionInRoot.x
-            val right = left + node.size.width
-            lastBounds = "attempt=$attempt item=$itemKey viewport=$viewport target=[$left,$top,$right,$bottom] size=${node.size}"
-            // Physical-pixel rounding is harmless; substantive clipping must still fail.
-            if (node.size.height > 0 && node.size.width > 0 && left >= viewport.left - 1f &&
-                right <= viewport.right + 1f && top >= viewport.top - 1f && bottom <= viewport.bottom + 1f) {
-                assertIsDisplayed()
-                return this
-            }
-            val forward = bottom > viewport.bottom
-            list.performTouchInput {
-                val start = Offset(centerX, height * (if (forward) 0.75f else 0.25f))
-                val end = Offset(centerX, height * (if (forward) 0.25f else 0.75f))
-                swipe(start, end, durationMillis = 350)
-            }
-            compose.mainClock.advanceTimeBy(400)
-            settleWorkspaceFrames()
-        }
-        throw AssertionError("Workspace target is not fully reachable after bounded real scrolls: $lastBounds")
-    }
-
-    /** Finite recomposition/layout barriers; do not retry missing keys or unreachable targets. */
-    private fun settleWorkspaceFrames() {
-        repeat(2) {
-            compose.mainClock.advanceTimeByFrame()
-            compose.waitForIdle()
-        }
-    }
-
-    @Test fun readOnlySurfaceHasOnlyCentralCommandsAndFilesWithRuntimeAvailability() {
-        var calls = 0
+    @Test fun loadingErrorAndEmptyStatesRemainDistinctFromAnEmptyConversation() {
+        val sessionId = WorkspaceIdentity.executionSessionId(workspaceId)
+        val connectors = ConnectorRegistry.createForTests(object : ConnectorConnectionPreferences {
+            override fun isConnected(id: String) = false
+            override fun setConnected(id: String, connected: Boolean) = Unit
+        }, { true })
+        val state = mutableStateOf(WorkspaceChatUiState(workspaceId, sessionId, "Workspace title",
+            WorkspaceUiStatus.UNKNOWN, loading = true))
+        var retries = 0
         compose.setContent { MaterialTheme {
-            WorkspaceDetailScreen(WorkspaceDetailUiState("workspace", "Project", WorkspaceUiStatus.UNKNOWN,
-                listOf(first.copy(canCorrect = false, canPause = false))),
-                { _, _ -> calls++ }, { _, _ -> calls++ }, { _, _ -> calls++ }, { calls++ })
+            WorkspaceDetailScreen(state = state.value, runSnapshot = AgentRunUiSnapshot(sessionId = sessionId),
+                connectorRegistry = connectors, showAgentEvents = true,
+                onOpenPreview = {}, onOpenSkillFile = {}, onOpenCrewMission = {}, onRetry = { retries++ })
         } }
-        compose.onNodeWithTag("workspace-open-files").assertIsNotEnabled()
-        compose.onAllNodes(hasClickAction()).assertCountEquals(4)
-        listOf("correct", "pause", "resume").forEach {
-            compose.onNodeWithTag("workspace-$it-first").revealInWorkspace("assignment-first").assertIsNotEnabled()
-                .performTouchInput { click() }
-        }
-        compose.onAllNodes(hasSetTextAction()).assertCountEquals(0)
-        compose.onNodeWithTag("crew-mission-composer").assertDoesNotExist()
-        compose.onNodeWithTag("drawer-open-settings").assertDoesNotExist()
-        compose.onNodeWithText(compose.activity.getString(R.string.workspace_result_unknown)).revealInWorkspace("assignment-first").assertIsDisplayed()
-        compose.onNodeWithText(compose.activity.getString(R.string.workspace_recovery_unknown)).revealInWorkspace("assignment-first").assertIsDisplayed()
-        assertEquals(0, calls)
-    }
-
-    @Test fun loadingAndErrorDisableStaleCommandsAndDoNotPretendTheWorkspaceIsEmpty() {
-        val loading = mutableStateOf(true)
-        val error = mutableStateOf<String?>(null)
-        var calls = 0
-        compose.setContent { MaterialTheme {
-            WorkspaceDetailScreen(WorkspaceDetailUiState("workspace", "Project", WorkspaceUiStatus.INTERRUPTED,
-                listOf(first), loading.value, error.value, true),
-                { _, _ -> calls++ }, { _, _ -> calls++ }, { _, _ -> calls++ }, { calls++ })
-        } }
-        compose.onNodeWithTag("workspace-loading").assertIsDisplayed()
-        compose.onNodeWithTag("workspace-correct-first").revealInWorkspace("assignment-first").assertIsNotEnabled()
-        compose.runOnIdle { loading.value = false; error.value = "Recorded data is unavailable" }
-        compose.onNodeWithTag("workspace-error").revealInWorkspace("workspace-error").assertIsDisplayed()
-        compose.onNodeWithTag("workspace-loading").assertDoesNotExist()
-        compose.onNodeWithTag("workspace-empty").assertDoesNotExist()
-        compose.onNodeWithTag("workspace-pause-first").revealInWorkspace("assignment-first").assertIsNotEnabled()
-        compose.onNodeWithTag("workspace-open-files").revealInWorkspace("workspace-summary").assertIsNotEnabled()
-        assertEquals(0, calls)
-    }
-
-    @Test fun emptyWorkspaceShowsHonestStateWithoutWorkerControls() {
-        compose.setContent { MaterialTheme {
-            WorkspaceDetailScreen(WorkspaceDetailUiState("workspace", "Project", WorkspaceUiStatus.UNKNOWN),
-                { _, _ -> error("No assignment") }, { _, _ -> error("No assignment") },
-                { _, _ -> error("No assignment") }, {})
-        } }
-        compose.onNodeWithTag("workspace-empty").assertIsDisplayed()
-        compose.onNodeWithText(compose.activity.getString(R.string.workspace_status_unknown)).assertIsDisplayed()
-        compose.onAllNodes(hasSetTextAction()).assertCountEquals(0)
-        compose.onAllNodes(hasClickAction()).assertCountEquals(1)
-    }
-
-    @Test fun completedStatusAndAWorkerReportDoNotFabricateVerifiedEvidence() {
-        compose.setContent { MaterialTheme {
-            WorkspaceDetailScreen(WorkspaceDetailUiState("workspace", "Project", WorkspaceUiStatus.COMPLETED,
-                listOf(first.copy(status = WorkspaceUiStatus.COMPLETED, result = "Worker reported completion"))),
-                { _, _ -> }, { _, _ -> }, { _, _ -> }, {})
-        } }
-        compose.onNodeWithText(compose.activity.getString(R.string.workspace_result_unverified)).revealInWorkspace("assignment-first").assertIsDisplayed()
-        compose.onNodeWithText(compose.activity.getString(R.string.workspace_result_verified)).assertDoesNotExist()
+        compose.onNodeWithTag("workspace-chat-loading").assertIsDisplayed()
+        compose.onNodeWithTag("workspace-chat-empty").assertDoesNotExist()
+        compose.runOnIdle { state.value = WorkspaceChatUiState(workspaceId, sessionId, "Workspace title",
+            WorkspaceUiStatus.UNKNOWN, error = "Stored conversation is unavailable") }
+        compose.onNodeWithTag("workspace-chat-error").assertIsDisplayed()
+        compose.onNodeWithTag("workspace-chat-retry").performClick()
+        assertEquals(1, retries)
+        compose.runOnIdle { state.value = WorkspaceChatUiState(workspaceId, sessionId, "Workspace title",
+            WorkspaceUiStatus.UNKNOWN) }
+        compose.onNodeWithTag("workspace-chat-empty").assertIsDisplayed()
+        compose.onNodeWithTag("workspace-chat-loading").assertDoesNotExist()
+        compose.onNodeWithTag("workspace-chat-error").assertDoesNotExist()
     }
 }

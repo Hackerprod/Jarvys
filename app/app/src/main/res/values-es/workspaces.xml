@@ -6,6 +6,10 @@
     <string name="workspace_assignment">Trabajo</string>
     <string name="workspace_read_only_notice">Esta vista muestra el trabajo registrado. Las correcciones, pausas y reanudaciones pasan por Jarvys en el chat central.</string>
     <string name="workspace_open_files">Ver archivos</string>
+    <string name="workspace_chat_loading">Cargando el chat del espacio…</string>
+    <string name="workspace_chat_empty">Todavía no hay conversación registrada para este espacio.</string>
+    <string name="workspace_chat_load_error">No se pudo cargar la conversación del espacio.</string>
+    <string name="workspace_chat_input_hint">Pide a Jarvys en el chat principal que envíe una corrección o que pause o reanude este espacio.</string>
     <string name="workspace_loading">Cargando el espacio registrado…</string>
     <string name="workspace_load_error">No se pudieron cargar los datos del espacio. Las acciones no están disponibles.</string>
     <string name="workspace_empty">No hay trabajos registrados en este espacio.</string>

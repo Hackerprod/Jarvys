@@ -67,4 +67,30 @@ class ChatHeaderConversationActionsTest {
             assertEquals("conversation-id", calls.last().first)
         }
     }
+
+    @Test fun headerMenuShowsAndRunsOptionalWorkspaceAction() {
+        var actionCount = 0
+        compose.setContent { MaterialTheme {
+            CompositionLocalProvider(LocalReducedMotion provides true) {
+                JarvysRouteTopBar(
+                    route = AppRouteMeta("Workspace title", true, action = AppRouteAction.CHAT),
+                    agentSnapshot = AgentRunUiSnapshot(),
+                    onBack = {}, onOpenDrawer = {}, onOpenSettings = {}, onNewChat = {},
+                    onAddServer = {}, onImportSkill = {}, chatWithoutMemory = false,
+                    canCompact = false, compacting = false, canReflect = false,
+                    onToggleMemory = {}, onCompact = {}, onReflect = {},
+                    canRenameConversation = false,
+                    canDeleteConversation = false,
+                    workspaceMenuActionTitle = "View files",
+                    onWorkspaceMenuAction = { actionCount += 1 },
+                )
+            }
+        } }
+
+        compose.onNodeWithTag("jarvys-topbar-more-options").performClick()
+        awaitReactionDrawIdle(compose)
+        compose.onNodeWithTag("workspace/topbar-action").assertIsDisplayed()
+            .assertTextEquals("View files").performClick()
+        compose.runOnIdle { assertEquals(1, actionCount) }
+    }
 }

@@ -1,6 +1,7 @@
 package com.jarvys.agent.workspaces
 
 import androidx.compose.runtime.Immutable
+import com.jarvys.agent.AgentRunUiEvent
 import java.util.Collections
 
 /** Presentation only. The runtime supplies recorded status and exact action availability. */
@@ -106,6 +107,38 @@ class WorkspaceDetailUiState(
         }
     }
 }
+
+/** Conversation presentation comes from the workspace's execution-session ledger. */
+@Immutable
+class WorkspaceChatUiState(
+    val workspaceId: String,
+    val executionSessionId: String,
+    val title: String,
+    val status: WorkspaceUiStatus,
+    events: List<AgentRunUiEvent> = emptyList(),
+    val loading: Boolean = false,
+    val error: String? = null,
+) {
+    val events: List<AgentRunUiEvent> = Collections.unmodifiableList(ArrayList(events))
+
+    init {
+        require(workspaceId.isNotBlank()) { "Workspace identity is required" }
+        require(executionSessionId == WorkspaceIdentity.executionSessionId(workspaceId)) {
+            "Workspace conversation must use its registered execution session"
+        }
+    }
+}
+
+internal fun workspaceChatUiState(
+    detail: WorkspaceDetailUiState,
+    events: List<AgentRunUiEvent>,
+): WorkspaceChatUiState = WorkspaceChatUiState(
+    workspaceId = detail.id,
+    executionSessionId = WorkspaceIdentity.executionSessionId(detail.id),
+    title = detail.title,
+    status = detail.status,
+    events = events,
+)
 
 internal fun isWorkspaceCoordinationSession(sessionId: String): Boolean =
     WorkspaceIdentity.isCentral(sessionId) || WorkspaceIdentity.isExecutionSession(sessionId)

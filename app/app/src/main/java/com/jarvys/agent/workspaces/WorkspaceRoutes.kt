@@ -18,33 +18,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.EnumSet
 
-@Composable
-fun WorkspaceRoute(workspaceId: String, onCorrect: (String, Long) -> Unit,
-                   onPause: (String, Long) -> Unit, onResume: (String, Long) -> Unit,
-                   onOpenFiles: () -> Unit) {
-    val context = LocalContext.current
-    val revision by WorkspaceChanges.revision.collectAsState()
-    var after by rememberSaveable(workspaceId) { mutableStateOf<String?>(null) }
-    var history by rememberSaveable(workspaceId) { mutableStateOf(emptyList<String>()) }
-    var reload by remember { mutableIntStateOf(0) }
-    var state by remember(workspaceId) { mutableStateOf(WorkspaceDetailUiState(workspaceId, "", WorkspaceUiStatus.UNKNOWN, loading = true)) }
-    LaunchedEffect(workspaceId, revision, after, reload) {
-        state = WorkspaceDetailUiState(workspaceId, state.title, WorkspaceUiStatus.UNKNOWN, loading = true)
-        state = try {
-            withContext(Dispatchers.IO) { WorkspaceProjection.detail(context.applicationContext, workspaceId, after) }
-        } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-        catch (_: Exception) {
-            WorkspaceDetailUiState(workspaceId, state.title, WorkspaceUiStatus.UNKNOWN, error = context.getString(R.string.workspace_load_error))
-        }
-    }
-    WorkspaceDetailScreen(state, onCorrect, onPause, onResume, onOpenFiles,
-        canPreviousPage = history.isNotEmpty(), canFirstPage = after != null,
-        onPreviousPage = { if (!state.loading && history.isNotEmpty()) { after = history.last().ifEmpty { null }; history = history.dropLast(1); state = WorkspaceDetailUiState(workspaceId, state.title, WorkspaceUiStatus.UNKNOWN, loading = true) } },
-        onNextPage = { if (!state.loading) state.nextCursor?.let { next -> history = workspacePushCursor(history, after); after = next; state = WorkspaceDetailUiState(workspaceId, state.title, WorkspaceUiStatus.UNKNOWN, loading = true) } },
-        onFirstPage = { if (!state.loading) { after = null; history = emptyList(); state = WorkspaceDetailUiState(workspaceId, state.title, WorkspaceUiStatus.UNKNOWN, loading = true) } },
-        onRetry = { if (!state.loading) { reload++; state = WorkspaceDetailUiState(workspaceId, state.title, WorkspaceUiStatus.UNKNOWN, loading = true) } })
-}
-
 /** File viewing is scoped to the registry owner and uses existing path/identity-checked readers. */
 @Composable
 fun WorkspaceFilesRoute(workspaceId: String) {

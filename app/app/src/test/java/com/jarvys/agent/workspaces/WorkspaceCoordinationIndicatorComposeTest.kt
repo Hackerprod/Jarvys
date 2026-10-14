@@ -8,7 +8,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import com.jarvys.agent.AgentRunUiEvent
 import com.jarvys.agent.R
+import com.jarvys.agent.AgentRunUiSnapshot
+import com.jarvys.agent.connectors.ConnectorConnectionPreferences
+import com.jarvys.agent.connectors.ConnectorRegistry
 import com.jarvys.agent.ui.chat.ConversationDrawer
 import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Assert.assertEquals
@@ -52,14 +56,23 @@ class WorkspaceCoordinationIndicatorComposeTest {
         compose.onNodeWithText("model_response", substring = true).assertDoesNotExist()
     }
 
-    @Test fun reopenedHistoricalDetailShowsNoLiveReplyClaimOrNewAction() {
+    @Test fun workspaceChatUsesItsTimelineInsteadOfCoordinationEvidenceCards() {
+        val workspaceId = "11111111-1111-1111-1111-111111111111"
+        val sessionId = WorkspaceIdentity.executionSessionId(workspaceId)
+        val event = AgentRunUiEvent(1L, "assistant", text = "Conversation evidence")
+        val connectors = ConnectorRegistry.createForTests(object : ConnectorConnectionPreferences {
+            override fun isConnected(id: String) = false
+            override fun setConnected(id: String, connected: Boolean) = Unit
+        }, { true })
         compose.setContent { MaterialTheme {
-            WorkspaceDetailScreen(WorkspaceDetailUiState("space", "Project", WorkspaceUiStatus.INTERRUPTED,
-                coordination = WorkspaceCoordinationSummary(historical = 2)), { _, _ -> }, { _, _ -> }, { _, _ -> }, {})
+            WorkspaceDetailScreen(WorkspaceChatUiState(workspaceId, sessionId, "Project", WorkspaceUiStatus.INTERRUPTED,
+                listOf(event)), AgentRunUiSnapshot(sessionId = sessionId, events = listOf(event)), connectors,
+                showAgentEvents = true, onOpenPreview = {}, onOpenSkillFile = {}, onOpenCrewMission = {})
         } }
-        compose.onAllNodesWithTag("workspace-coordination-indicator", useUnmergedTree = true).assertCountEquals(1)
-        compose.onNodeWithText(quantityText(R.plurals.workspace_coordination_historical, 2)).assertExists()
-        compose.onNodeWithText(quantityText(R.plurals.workspace_coordination_live, 2)).assertDoesNotExist()
+        compose.onNodeWithTag("chat-message-list").assertIsDisplayed()
+        compose.onNodeWithText("Conversation evidence").assertIsDisplayed()
+        compose.onNodeWithTag("workspace-coordination-indicator", useUnmergedTree = true).assertDoesNotExist()
+        compose.onNodeWithText(quantityText(R.plurals.workspace_coordination_historical, 2)).assertDoesNotExist()
         compose.onAllNodes(hasSetTextAction()).assertCountEquals(0)
     }
 

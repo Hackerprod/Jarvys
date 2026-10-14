@@ -65,6 +65,8 @@ fun JarvysShellFrame(
     canDeleteConversation: Boolean = false,
     conversationActionsEnabled: Boolean = true,
     onConversationAction: (String, ConversationAction, String?) -> Unit = { _, _, _ -> },
+    workspaceMenuActionTitle: String? = null,
+    onWorkspaceMenuAction: () -> Unit = {},
     content: @Composable (PaddingValues) -> Unit,
 ) {
     val chatRoute = route.action == AppRouteAction.CHAT
@@ -120,6 +122,8 @@ fun JarvysShellFrame(
                     canDeleteConversation = canDeleteConversation,
                     conversationActionsEnabled = conversationActionsEnabled,
                     onConversationAction = onConversationAction,
+                    workspaceMenuActionTitle = workspaceMenuActionTitle,
+                    onWorkspaceMenuAction = onWorkspaceMenuAction,
                 )
                 }
             },

@@ -266,6 +266,7 @@ private object Routes {
     const val COORDINATED_WORKSPACE = AppNavigationBackPolicy.COORDINATED_WORKSPACE
     const val COORDINATED_FILES = AppNavigationBackPolicy.COORDINATED_FILES
     const val WORKSPACE_PREVIEW = AppNavigationBackPolicy.WORKSPACE_PREVIEW
+    const val WORKSPACE_SESSION_PREVIEW = AppNavigationBackPolicy.WORKSPACE_SESSION_PREVIEW
     const val ARTIFACT_PREVIEW = AppNavigationBackPolicy.ARTIFACT_PREVIEW
     fun crew(missionId: String) = CrewNavigationRoutes.mission(missionId)
     fun crewBot(missionId: String, botId: String) = CrewNavigationRoutes.bot(missionId, botId)
@@ -1703,13 +1704,61 @@ private fun JarvysApp(
     )
     val navEntry by navController.currentBackStackEntryAsState()
     val route = navEntry?.destination?.route ?: Routes.CHAT
+    val routeWorkspaceId = navEntry?.arguments?.getString("workspaceId")
+    val workspaceChatState = remember(routeWorkspaceId) {
+        mutableStateOf(routeWorkspaceId?.let { id ->
+            runCatching {
+                WorkspaceChatUiState(id, WorkspaceIdentity.executionSessionId(id), "", WorkspaceUiStatus.UNKNOWN,
+                    loading = true)
+            }.getOrNull()
+        })
+    }
+    var workspaceChatReload by remember { mutableIntStateOf(0) }
+    val workspaceChatActive = route == Routes.COORDINATED_WORKSPACE
+    val crewRoute = route == Routes.CREW_EMPTY || route.startsWith("crew/")
+    var workspaceCrewSessionId by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(route, workspaceChatActive, crewRoute) {
+        if (workspaceChatActive || !crewRoute) workspaceCrewSessionId = null
+    }
+    val activeWorkspaceCrewSessionId = workspaceCrewSessionId.takeIf { crewRoute }
+    LaunchedEffect(route, routeWorkspaceId, conversationSessionId, workspaceRevision, workspaceChatReload) {
+        if (workspaceChatActive && routeWorkspaceId != null) {
+            val executionSessionId = runCatching { WorkspaceIdentity.executionSessionId(routeWorkspaceId) }.getOrNull()
+            if (executionSessionId == null) {
+                workspaceChatState.value = null
+                return@LaunchedEffect
+            }
+            val previous = workspaceChatState.value
+            workspaceChatState.value = WorkspaceChatUiState(routeWorkspaceId, executionSessionId,
+                previous?.title.orEmpty(), previous?.status ?: WorkspaceUiStatus.UNKNOWN,
+                previous?.events.orEmpty(), loading = true)
+            AgentRunUiState.showSession(executionSessionId)
+            try {
+                val loaded = withContext(Dispatchers.IO) {
+                    WorkspaceProjection.chat(context.applicationContext, routeWorkspaceId)
+                }
+                workspaceChatState.value = loaded
+                AgentRunUiState.restoreSession(executionSessionId, loaded.events)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                workspaceChatState.value = WorkspaceChatUiState(routeWorkspaceId, executionSessionId,
+                    previous?.title.orEmpty(), previous?.status ?: WorkspaceUiStatus.UNKNOWN,
+                    previous?.events.orEmpty(), error = context.getString(R.string.workspace_chat_load_error))
+                AgentRunUiState.restoreSession(executionSessionId, previous?.events.orEmpty())
+            }
+        } else {
+            AgentRunUiState.showSession(activeWorkspaceCrewSessionId ?: conversationSessionId)
+        }
+    }
     val routeTaskId = navEntry?.arguments?.getString("taskId")
     val taskDataRevision by com.jarvys.agent.tasks.TaskDataChanges.revision.collectAsState()
     val routeTaskTitle = remember(routeTaskId, taskDataRevision) {
         routeTaskId?.let { id -> runCatching { TaskStore(context.applicationContext).get(id)?.name }.getOrNull() }
     }
     SideEffect {
-        UserDecisionUiAvailability.setChatVisible(MainActivity.isAppForeground() && route == Routes.CHAT)
+        UserDecisionUiAvailability.setChatVisible(MainActivity.isAppForeground()
+            && (route == Routes.CHAT || workspaceChatActive))
     }
     val routeMissionId = navEntry?.arguments?.getString("missionId")
     val routeBotId = navEntry?.arguments?.getString("botId")
@@ -1735,13 +1784,14 @@ private fun JarvysApp(
         it.kind == "crew_mission" && it.crewMissionSnapshot?.missionId == missionId
     }?.crewMissionSnapshot }
     val routeBotName = routeCrewMission?.bots?.firstOrNull { it.id == routeBotId }?.name
-    LaunchedEffect(conversationSessionId) {
+    val crewSessionId = activeWorkspaceCrewSessionId ?: conversationSessionId
+    LaunchedEffect(crewSessionId) {
         withContext(Dispatchers.IO) {
-            runCatching { CoreAgentRuntime.prepareCrewHistory(context.applicationContext, conversationSessionId) }
+            runCatching { CoreAgentRuntime.prepareCrewHistory(context.applicationContext, crewSessionId) }
         }
     }
-    val crewBoard = remember(conversationSessionId) {
-        CrewBoard(WorkspaceStore.forCrewBoard(context.applicationContext, conversationSessionId))
+    val crewBoard = remember(crewSessionId) {
+        CrewBoard(WorkspaceStore.forCrewBoard(context.applicationContext, crewSessionId))
     }
     var quickModelProvider by remember { mutableStateOf<ProviderSettings.Provider?>(null) }
     var showSkillImportOptions by remember { mutableStateOf(false) }
@@ -1755,6 +1805,8 @@ private fun JarvysApp(
     }
 
     val chatTitle = when {
+            workspaceChatActive -> workspaceChatState.value?.title?.takeIf(String::isNotBlank)
+                ?: stringResource(R.string.workspace_chat_loading)
             route == Routes.CHAT && selectedHistoryRunId != null -> runHistory.firstOrNull { it.id == selectedHistoryRunId }
                 ?.let { it.title ?: ConversationTitle.fromFirstMessage(it.goal) ?: it.goal }
                 ?: stringResource(R.string.chat_previous_run)
@@ -1762,23 +1814,34 @@ private fun JarvysApp(
             else -> conversationTitle ?: "Jarvys"
         }
     val routeMeta = AppNavigationBackPolicy.metadata(context, route, chatTitle, routeBotName,
-        routeDetailTitle)
+        routeDetailTitle).let { meta ->
+        if (workspaceChatActive) meta.copy(title = chatTitle, action = AppRouteAction.CHAT) else meta
+    }
 
-    val mascotLiveConversationVisible = route == Routes.CHAT && selectedHistoryRunId == null && !showingNewChat
-    val mainMascotMode = mainJarvysMascotMode(agentState, conversationSessionId, mascotLiveConversationVisible)
+    val mascotLiveConversationVisible = workspaceChatActive || route == Routes.CHAT
+        && selectedHistoryRunId == null && !showingNewChat
+    val visibleConversationSessionId = if (workspaceChatActive) workspaceChatState.value?.executionSessionId
+        ?: routeWorkspaceId?.let { runCatching { WorkspaceIdentity.executionSessionId(it) }.getOrNull() }
+        else activeWorkspaceCrewSessionId ?: conversationSessionId
+    val mainMascotMode = mainJarvysMascotMode(agentState, visibleConversationSessionId, mascotLiveConversationVisible)
     JarvysShellFrame(
         drawerState = drawerState,
         mainMascotMode = mainMascotMode,
         centralMascotCentered = route == Routes.CHAT && WorkspaceIdentity.isCentral(conversationSessionId),
-        mascotVisibleSessionId = conversationSessionId,
+        mascotVisibleSessionId = visibleConversationSessionId,
         mascotLiveConversationVisible = mascotLiveConversationVisible,
         conversationActionTitle = chatTitle,
         canRenameConversation = route == Routes.CHAT && !isReservedWorkspaceConversation(conversationSessionId),
         canDeleteConversation = route == Routes.CHAT && !isReservedWorkspaceConversation(conversationSessionId) &&
             !isManagedSystemConversation(conversationSessionId),
         conversationActionsEnabled = !conversationActionPending && !drawerNavigationPending,
+        workspaceMenuActionTitle = if (workspaceChatActive) stringResource(R.string.workspace_open_files) else null,
+        onWorkspaceMenuAction = {
+            routeWorkspaceId?.let { id -> navController.navigate("workspace/${Uri.encode(id)}/files") { launchSingleTop = true } }
+        },
         onConversationAction = onConversationAction,
-        drawerGesturesEnabled = !drawerNavigationPending && route != Routes.WORKSPACE_PREVIEW && route != Routes.ARTIFACT_PREVIEW,
+        drawerGesturesEnabled = !drawerNavigationPending && route != Routes.WORKSPACE_PREVIEW
+            && route != Routes.WORKSPACE_SESSION_PREVIEW && route != Routes.ARTIFACT_PREVIEW,
         drawerContent = {
             ConversationDrawer(
                 history = runHistory,
@@ -1840,49 +1903,53 @@ private fun JarvysApp(
         onCompact = onManualCompact,
         onReflect = onReflectionManual,
         bottomBar = {
-            if (route == Routes.CHAT) ChatComposer(
-                    goal = goal,
-                    onGoalChange = onGoalChange,
-                    onSend = onSubmitMessage,
-                    onInterruptAndSend = onInterruptAndSend,
-                    sendAllowed = agentState.interactiveOwnerSessionId == null,
-                    canInterrupt = agentState.running && agentState.sessionId == conversationSessionId
+            if (route == Routes.CHAT || workspaceChatActive) ChatComposer(
+                    goal = if (workspaceChatActive) "" else goal,
+                    onGoalChange = if (workspaceChatActive) ({ _: String -> }) else onGoalChange,
+                    onSend = if (workspaceChatActive) ({}) else onSubmitMessage,
+                    onInterruptAndSend = if (workspaceChatActive) ({}) else onInterruptAndSend,
+                    sendAllowed = !workspaceChatActive && agentState.interactiveOwnerSessionId == null,
+                    canInterrupt = !workspaceChatActive && agentState.running && agentState.sessionId == conversationSessionId
                         && agentState.interactiveOwnerSessionId == conversationSessionId
                         && MessageReactionTool.isOrdinaryChat(conversationSessionId)
                         && !agentState.reflecting,
-                    pendingAttachments = pendingAttachments,
-                    attachmentSessionId = conversationSessionId,
-                    attachmentSending = attachmentSending,
+                    pendingAttachments = if (workspaceChatActive) emptyList() else pendingAttachments,
+                    attachmentSessionId = visibleConversationSessionId.orEmpty(),
+                    attachmentSending = !workspaceChatActive && attachmentSending,
                     onRemoveAttachment = onRemoveAttachment,
                     onAttachmentCamera = onAttachmentCamera,
                     onAttachmentPhotos = onAttachmentPhotos,
                     onAttachmentFiles = onAttachmentFiles,
                     onStop = onStopRun,
-                    onSelectModel = { quickModelProvider = providersState.activeProvider },
+                    onSelectModel = { if (!workspaceChatActive) quickModelProvider = providersState.activeProvider },
                     modelLabel = composerModelName,
                     effortLabel = composerEffortLabel,
                     effortAppearance = composerEffortAppearance,
                     effortMotionActive = quickModelProvider == null && drawerState.isClosed,
                     running = agentState.running || agentState.compacting
-                            || agentState.reflecting && agentState.reflectionSessionId == conversationSessionId,
-                    captureContextRequested = captureContextRequested,
+                            || agentState.reflecting && agentState.reflectionSessionId == visibleConversationSessionId,
+                    captureContextRequested = !workspaceChatActive && captureContextRequested,
                     onCaptureContext = onCaptureContext,
                     onImportSkill = onImportSkill,
                     availableSkills = availableSkills,
-                    selectedSkillIds = selectedSkillIds,
+                    selectedSkillIds = if (workspaceChatActive) emptySet() else selectedSkillIds,
                     onToggleRunSkill = onToggleRunSkill,
                     skillEnabledCount = skillEnabledCount,
                     skillTotalCount = skillTotalCount,
-                    onManageSkills = { navController.navigate(Routes.SKILLS) { launchSingleTop = true } },
+                    onManageSkills = { if (!workspaceChatActive) navController.navigate(Routes.SKILLS) { launchSingleTop = true } },
                     crewMode = crewMode,
                     onCrewModeChange = onCrewModeChange,
                     onOpenCrew = {
-                        val latestMission = agentState.events.lastOrNull { it.kind == "crew_mission" }
-                            ?.crewMissionSnapshot
-                        navController.navigate(latestMission?.let { Routes.crew(it.missionId) } ?: Routes.CREW_EMPTY) {
-                            launchSingleTop = true
+                        if (!workspaceChatActive) {
+                            val latestMission = agentState.events.lastOrNull { it.kind == "crew_mission" }
+                                ?.crewMissionSnapshot
+                            navController.navigate(latestMission?.let { Routes.crew(it.missionId) } ?: Routes.CREW_EMPTY) {
+                                launchSingleTop = true
+                            }
                         }
                     },
+                    inputEnabled = !workspaceChatActive,
+                    disabledHint = if (workspaceChatActive) stringResource(R.string.workspace_chat_input_hint) else null,
             )
         },
     ) { padding ->
@@ -1947,20 +2014,30 @@ private fun JarvysApp(
                 composable(Routes.COORDINATED_WORKSPACE,
                     arguments = listOf(navArgument("workspaceId") { type = NavType.StringType })) { entry ->
                     val id = entry.arguments?.getString("workspaceId").orEmpty()
-                    WorkspaceRoute(id,
-                        onCorrect = { assignment, revision ->
-                            onOpenCentral(); navController.navigate(Routes.CHAT) { launchSingleTop = true }
-                            correctionWorkspace = id; correctionAssignment = assignment; correctionRevision = revision; correctionText = ""
+                    val state = workspaceChatState.value
+                    if (state == null) {
+                        JarvysEmptyState(LucideIcons.Boxes,
+                            stringResource(R.string.workspace_chat_load_error), "",
+                            modifier = Modifier.fillMaxSize().testTag("workspace-chat-error"))
+                    } else WorkspaceDetailScreen(
+                        state = state,
+                        runSnapshot = agentState,
+                        connectorRegistry = connectorRegistry,
+                        showAgentEvents = showAgentEvents,
+                        onOpenPreview = { projectId ->
+                            val sessionId = state.executionSessionId
+                            val destination = if (HtmlPreviewDescriptor.isSnapshotToken(projectId))
+                                "artifact-preview/${Uri.encode(sessionId)}/${Uri.encode(projectId.removePrefix(HtmlPreviewDescriptor.TOKEN_PREFIX))}"
+                            else "${Routes.WORKSPACE_SESSION_PREVIEW}/${Uri.encode(sessionId)}/${Uri.encode(projectId)}"
+                            navController.navigate(destination) { launchSingleTop = true }
                         },
-                        onPause = { assignment, revision ->
-                            onWorkspaceControl(id, assignment, revision, WorkspaceControlType.PAUSE, context.getString(R.string.workspace_pause_request))
-                            navController.navigate(Routes.CHAT) { launchSingleTop = true }
+                        onOpenSkillFile = { skillFileLink = it },
+                        onOpenCrewMission = { missionId ->
+                            workspaceCrewSessionId = state.executionSessionId
+                            navController.navigate(Routes.crew(missionId))
                         },
-                        onResume = { assignment, revision ->
-                            onWorkspaceControl(id, assignment, revision, WorkspaceControlType.RESUME, context.getString(R.string.workspace_resume_request))
-                            navController.navigate(Routes.CHAT) { launchSingleTop = true }
-                        },
-                        onOpenFiles = { navController.navigate("workspace/$id/files") { launchSingleTop = true } })
+                        onRetry = { if (!state.loading) workspaceChatReload++ },
+                    )
                 }
                 composable(Routes.COORDINATED_FILES,
                     arguments = listOf(navArgument("workspaceId") { type = NavType.StringType })) { entry ->
@@ -2096,17 +2173,17 @@ private fun JarvysApp(
                 crewDestinations(
                     navController = navController,
                     board = crewBoard,
-                    readOnly = { snapshot -> selectedHistoryRunId != null
-                        || CoreAgentRuntime.crewManagerForSession(conversationSessionId) == null
+                    readOnly = { snapshot -> selectedHistoryRunId != null && activeWorkspaceCrewSessionId == null
+                        || CoreAgentRuntime.crewManagerForSession(crewSessionId) == null
                         || snapshot == null },
                     missions = { agentState.events.mapNotNull { it.crewMissionSnapshot } },
-                    manager = CoreAgentRuntime.crewManagerForSession(conversationSessionId),
+                    manager = CoreAgentRuntime.crewManagerForSession(crewSessionId),
                     onStopAll = { com.jarvys.agent.crew.CrewStopActions.stopAll(onStopRun,
-                        CoreAgentRuntime.crewManagerForSession(conversationSessionId)) },
+                        CoreAgentRuntime.crewManagerForSession(crewSessionId)) },
                     onResumeBot = { botId ->
                         scope.launch {
                             try {
-                                withContext(Dispatchers.IO) { CoreAgentRuntime.resumeCrewBot(context.applicationContext, conversationSessionId, botId) }
+                                withContext(Dispatchers.IO) { CoreAgentRuntime.resumeCrewBot(context.applicationContext, crewSessionId, botId) }
                                 AgentForegroundService.ensureCrewKeepalive(context)
                             } catch (cancelled: CancellationException) { throw cancelled }
                             catch (failure: Exception) { Toast.makeText(context, failure.message ?: context.getString(R.string.crew_resume_failed), Toast.LENGTH_LONG).show() }
@@ -2119,7 +2196,9 @@ private fun JarvysApp(
                     onBoardReference = { _, reference -> crewBoardReference = reference; navController.popBackStack() },
                     onOpenPreview = { projectId ->
                         val destination = if (HtmlPreviewDescriptor.isSnapshotToken(projectId))
-                            "artifact-preview/${Uri.encode(conversationSessionId)}/${Uri.encode(projectId.removePrefix(HtmlPreviewDescriptor.TOKEN_PREFIX))}"
+                            "artifact-preview/${Uri.encode(crewSessionId)}/${Uri.encode(projectId.removePrefix(HtmlPreviewDescriptor.TOKEN_PREFIX))}"
+                        else if (activeWorkspaceCrewSessionId != null)
+                            "${Routes.WORKSPACE_SESSION_PREVIEW}/${Uri.encode(crewSessionId)}/${Uri.encode(projectId)}"
                         else "workspace-preview/${Uri.encode(projectId)}"
                         navController.navigate(destination) { launchSingleTop = true }
                     },
@@ -2129,6 +2208,14 @@ private fun JarvysApp(
                     arguments = listOf(navArgument("projectId") { type = NavType.StringType }),
                 ) { entry ->
                     WorkspacePreviewScreen(entry.arguments?.getString("projectId").orEmpty(), sessionId = conversationSessionId)
+                }
+                composable(
+                    route = Routes.WORKSPACE_SESSION_PREVIEW,
+                    arguments = listOf(navArgument("sessionId") { type = NavType.StringType },
+                        navArgument("projectId") { type = NavType.StringType }),
+                ) { entry ->
+                    WorkspacePreviewScreen(entry.arguments?.getString("projectId").orEmpty(),
+                        sessionId = entry.arguments?.getString("sessionId"))
                 }
                 composable(
                     route = Routes.ARTIFACT_PREVIEW,

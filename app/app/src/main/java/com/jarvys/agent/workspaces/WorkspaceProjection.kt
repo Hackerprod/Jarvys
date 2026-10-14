@@ -48,6 +48,14 @@ object WorkspaceProjection {
             coordination = com.jarvys.agent.WorkspaceCoordinationDelivery(context).summary(id))
     }
 
+    /** Projects chat from the execution session recorded for this workspace, never from central. */
+    fun chat(context: Context, id: String): WorkspaceChatUiState {
+        val detail = detail(context, id)
+        val sessionId = WorkspaceIdentity.executionSessionId(detail.id)
+        val events = LocalRunStore(context).readConversationTimeline(sessionId)
+        return workspaceChatUiState(detail, events)
+    }
+
     private fun assignmentNext(store: WorkspaceRegistry, id: String, records: List<WorkspaceAssignment>): String? =
         records.lastOrNull()?.assignmentId?.takeIf {
             records.size == WORKSPACE_PAGE_SIZE && store.listAssignments(id, 1, it).isNotEmpty()
