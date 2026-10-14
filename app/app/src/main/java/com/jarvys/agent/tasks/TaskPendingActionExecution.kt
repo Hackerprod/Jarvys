@@ -63,7 +63,7 @@ class TaskPendingActionExecution(
                         uncertainReceipt("result_receipt_not_durable")) }.getOrNull()?.status
                 }
                 dismissNotification(actionId)
-                if (status == TaskPendingActionStatus.EXECUTED.name) TaskPendingActionExecutionStatus.EXECUTED
+                if (status == TaskPendingActionStatus.EXECUTED) TaskPendingActionExecutionStatus.EXECUTED
                 else TaskPendingActionExecutionStatus.INTERRUPTED_UNCERTAIN
             }
         }
@@ -78,7 +78,7 @@ class TaskPendingActionExecution(
 /** Notification and detail approvals are unique WorkManager requests, independent of task runs. */
 object TaskPendingActionWork {
     fun enqueue(context: Context, action: TaskPendingAction): Boolean = runCatching {
-        val request = OneTimeWorkRequestBuilder<TaskPendingActionWorker>()
+        val request = androidx.work.OneTimeWorkRequest.Builder(TaskPendingActionWorker::class.java)
             .setInputData(Data.Builder()
                 .putString(TaskPendingActionWorker.KEY_ACTION_ID, action.id)
                 .putString(TaskPendingActionWorker.KEY_TASK_ID, action.taskId)

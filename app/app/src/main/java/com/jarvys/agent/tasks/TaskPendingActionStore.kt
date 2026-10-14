@@ -313,5 +313,3 @@ private fun String.toTaskState(): TaskState = when (this) {
     else -> TaskState.Active
 }
 
-private fun JSONObject.optNullableString(key: String): String? =
-    if (!has(key) || isNull(key)) null else getString(key)

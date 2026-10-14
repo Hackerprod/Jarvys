@@ -81,7 +81,6 @@ fun TasksListScreen(
     context: Context,
     repository: TaskRepository = remember(context) { TaskRepository(context.applicationContext) },
     ledger: TaskRunLedger = remember(context) { TaskRunLedger(context.applicationContext) },
-    pendingActionStore: TaskPendingActionStore = remember(context) { TaskPendingActionStore(context.applicationContext) },
     onOpenTask: (String) -> Unit,
     onRequestChange: (ScheduledTask) -> Unit,
     onConfigureProvider: () -> Unit,
@@ -89,6 +88,7 @@ fun TasksListScreen(
     pauseAll: (Boolean) -> Unit = { TaskScheduler.setAllPaused(context.applicationContext, it) },
     enqueueManualRun: (String) -> Unit = { TaskManualRunScheduler.enqueue(context.applicationContext, it) },
     healthIssuesOverride: ((List<ScheduledTask>) -> List<TaskHealthIssue>)? = null,
+    pendingActionStore: TaskPendingActionStore = remember(context) { TaskPendingActionStore(context.applicationContext) },
     backgroundWorkBusyForAll: Boolean? = null,
 ) {
     val revision by TaskDataChanges.revision.collectAsState()

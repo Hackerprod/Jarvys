@@ -1650,8 +1650,9 @@ public final class CoreAgentRuntime {
 
     private JSONObject deferredJson(Map<String, Object> arguments, CancellationToken token) {
       CoreToolResult queued = defer(arguments, token);
-      if (!queued.isSuccess()) throw new IllegalStateException("Could not queue pending action");
-      return new JSONObject(queued.getContent());
+      if (!queued.success) throw new IllegalStateException("Could not queue pending action");
+      try { return new JSONObject(queued.content); }
+      catch (org.json.JSONException invalid) { throw new IllegalStateException("Pending action result is not valid JSON", invalid); }
     }
   }
 
