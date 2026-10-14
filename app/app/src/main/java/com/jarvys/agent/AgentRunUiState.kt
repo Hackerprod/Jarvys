@@ -438,6 +438,19 @@ object AgentRunUiState {
             ?: AgentRunUiSnapshot(sessionId = sessionId)
     }
 
+    /** Events for a selected conversation, guarded against a stale compatibility snapshot. */
+    @JvmStatic
+    fun eventsForSession(sessionId: String): List<AgentRunUiEvent> = synchronized(lock) {
+        snapshotForSession(sessionId).takeIf { it.sessionId == sessionId }?.events.orEmpty()
+    }
+
+    @JvmStatic
+    fun containsEvent(sessionId: String, event: AgentRunUiEvent): Boolean = synchronized(lock) {
+        eventsForSession(sessionId).any {
+            it.id == event.id && it.kind == event.kind && it.messageId == event.messageId
+        }
+    }
+
     @JvmStatic
     fun isRunning(sessionId: String): Boolean = snapshotForSession(sessionId).running
 
@@ -791,21 +804,85 @@ object AgentRunUiState {
     fun prependPersistedSession(
         sessionId: String,
         olderEvents: List<AgentRunUiEvent>,
-        hiddenAssistantMessageIds: Set<String> = emptySet(),
-        hiddenTranslationMessageIds: Set<String> = emptySet(),
+        newerHiddenAssistantMessageIds: Set<String> = emptySet(),
+        newerHiddenTranslationMessageIds: Set<String> = emptySet(),
         newerTranslationMessageIds: Set<String> = emptySet(),
     ) = inSession(sessionId) { synchronized(lock) {
         val current = _state.value
         if (current.sessionId != sessionId || olderEvents.isEmpty()) return@synchronized
         val existingIds = current.events.mapTo(mutableSetOf()) { it.id }
+        val existingMessageKeys = current.events.mapNotNullTo(mutableSetOf()) { event ->
+            val identity = when (event.kind) {
+                "user", "assistant" -> event.messageId
+                "assistant_translation" -> event.detail
+                else -> null
+            }
+            identity?.takeIf(String::isNotBlank)?.let { "${event.kind}:$it" }
+        }
+        val dispatchedUserMessageIds = current.events.asSequence()
+            .filter { it.kind == "user" && it.stage != "QUEUED" }
+            .mapNotNull { it.messageId.takeIf(String::isNotBlank) }
+            .toSet()
         val uniqueOlder = olderEvents.filterNot { event ->
-            event.kind == "assistant" && event.messageId in hiddenAssistantMessageIds
+            // Page events already account for markers in their own ledger slice. These sets
+            // contain only markers from newer loaded slices and therefore suppress older rows.
+            event.kind == "assistant" && event.messageId in newerHiddenAssistantMessageIds
                 || event.kind == "assistant_translation" && event.detail != null
-                && (event.detail in hiddenTranslationMessageIds || event.detail in newerTranslationMessageIds)
+                && (event.detail in newerHiddenTranslationMessageIds || event.detail in newerTranslationMessageIds)
+                || event.kind == "user" && event.stage == "QUEUED" && event.messageId.startsWith("pending-")
+                && event.messageId.removePrefix("pending-") in dispatchedUserMessageIds
+                || timelineEventIdentity(event)?.let { it in existingMessageKeys } == true
         }.filter { existingIds.add(it.id) }
         if (uniqueOlder.isEmpty()) return@synchronized
         nextEventId = maxOf(nextEventId, (uniqueOlder.maxOfOrNull { it.id } ?: 0L) + 1L)
         _state.value = current.copy(events = uniqueOlder + current.events)
+    } }
+
+    private fun timelineEventIdentity(event: AgentRunUiEvent): String? {
+        val identity = when (event.kind) {
+            "user", "assistant" -> event.messageId
+            "assistant_translation" -> event.detail
+            else -> null
+        }?.takeIf(String::isNotBlank) ?: return null
+        return "${event.kind}:$identity"
+    }
+
+    /** Applies a durable translation to this materialized window without dropping older pages. */
+    @JvmStatic
+    fun assistantTranslationAdded(sessionId: String, translation: AgentRunUiEvent) = inSession(sessionId) { synchronized(lock) {
+        val current = _state.value
+        if (current.sessionId != sessionId || translation.kind != "assistant_translation" || translation.detail.isNullOrBlank())
+            return@synchronized
+        val anchor = current.events.indexOfLast { it.kind == "assistant" && it.messageId == translation.detail }
+        if (anchor < 0) return@synchronized
+        val events = current.events.filterNot {
+            it.kind == "assistant_translation" && it.detail == translation.detail
+        }.toMutableList()
+        val adjustedAnchor = events.indexOfLast { it.kind == "assistant" && it.messageId == translation.detail }
+        nextEventId = maxOf(nextEventId, (events.maxOfOrNull { it.id } ?: 0L) + 1L)
+        events.add((adjustedAnchor + 1).coerceAtMost(events.size), translation.copy(id = nextEventId++))
+        _state.value = current.copy(events = events)
+    } }
+
+    /** Removes the visible translation while retaining its append-only ledger marker. */
+    @JvmStatic
+    fun assistantTranslationHidden(sessionId: String, messageId: String) = inSession(sessionId) { synchronized(lock) {
+        val current = _state.value
+        if (current.sessionId != sessionId) return@synchronized
+        val events = current.events.filterNot { it.kind == "assistant_translation" && it.detail == messageId }
+        if (events.size != current.events.size) _state.value = current.copy(events = events)
+    } }
+
+    /** Removes an assistant message and its translation from the visible window. */
+    @JvmStatic
+    fun assistantMessageDeleted(sessionId: String, messageId: String) = inSession(sessionId) { synchronized(lock) {
+        val current = _state.value
+        if (current.sessionId != sessionId) return@synchronized
+        val events = current.events.filterNot {
+            it.kind == "assistant" && it.messageId == messageId
+                || it.kind == "assistant_translation" && it.detail == messageId
+        }
+        if (events.size != current.events.size) _state.value = current.copy(events = events)
     } }
 
     /** Drops materialized durable pages after an edit, then installs the refreshed recent window. */

@@ -55,6 +55,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -379,8 +380,11 @@ internal fun ConnectorDetailSection(
     contentPadding: PaddingValues = PaddingValues(JarvysUiTokens.ScreenPadding),
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    val layoutDirection = LocalLayoutDirection.current
+    val headerInset = if (contentPadding.calculateLeftPadding(layoutDirection) == 0.dp
+        && contentPadding.calculateRightPadding(layoutDirection) == 0.dp) JarvysUiTokens.ScreenPadding else 0.dp
     JarvysGroup(contentPadding = contentPadding) {
-        JarvysSectionLabel(title)
+        JarvysSectionLabel(title, Modifier.padding(horizontal = headerInset))
         Spacer(Modifier.height(8.dp))
         content()
     }

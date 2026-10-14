@@ -2,6 +2,7 @@ package com.jarvys.agent;
 
 import static org.junit.Assert.*;
 import android.app.Application;
+import com.jarvys.agent.crew.CrewMissionSnapshot;
 import com.jarvys.agent.crew.CrewResultEvidence;
 import com.jarvys.agent.workspaces.WorkspaceIdentity;
 import com.jarvys.agent.workspaces.WorkspaceResultReference;
@@ -177,6 +178,103 @@ public class WorkspaceResultLedgerTest {
         store.appendCrewResultEvidence(evidence, () -> { });
         assertThrows(IllegalStateException.class, () -> store.appendWorkspaceResultNoticeIfAbsent(reference, () -> { }));
         assertFalse(ledger(CENTRAL).exists());
+    }
+
+    @Test public void pagedProjectionMatchesFullTimelineAcrossSyntheticRowsAndSteeringCuts() throws Exception {
+        String session = CENTRAL;
+        String crewMissionId = UUID.randomUUID().toString();
+        String firstUser = store.appendConversationMessage(session, "user", "Older user turn");
+        store.appendReflectionToolEvent(session, firstUser, "Synthetic tool", "mcp", "tool_result", "tool-old");
+        String translatable = store.appendConversationMessage(session, "assistant", "Answer to translate");
+        store.appendAssistantTranslation(session, translatable, "Spanish", "Primera traducción");
+        store.appendAssistantTranslationHidden(session, translatable);
+        store.appendAssistantTranslation(session, translatable, "French", "Dernière traduction");
+        store.appendCompaction(session, "Synthetic summary", 0, "manual", "all", 2);
+        store.appendUserDecisionRequest(session, "decision-old", "Choose", "Synthetic body",
+                Collections.singletonList(new UserDecisionOption("continue", "Continue", "", UserDecisionRole.DEFAULT)), true);
+        String proactiveId = store.appendProactiveAssistantMessageIfAbsent(session, "proactive-decision",
+                "Synthetic proactive prompt", Collections.singletonList(
+                        new com.jarvys.agent.proactive.ProactiveSuggestedReply("Yes", "Yes")), "thread-old");
+        store.appendCrewMissionSnapshot(new CrewMissionSnapshot(crewMissionId, session, "process-old",
+                "Old mission snapshot", "RUNNING", "old synthesis", 10L, 0L,
+                Collections.emptyList(), Collections.emptyList()));
+
+        String steeringId = store.appendInterruptRequest(session, "Steer the current run", Collections.emptyList(), false);
+        store.dispatchInterruptRequest(session, steeringId);
+        store.appendConversationMessage(session, "assistant", "Continued after steering", 0L,
+                "steering-run", steeringId, "COMPLETED");
+        String deleted = store.appendConversationMessage(session, "assistant", "Deleted answer");
+        store.appendAssistantDeleted(session, deleted);
+        for (int turn = 0; turn < 5; turn++) {
+            String userId = store.appendConversationMessage(session, "user", "Newer question " + turn);
+            store.appendConversationMessage(session, "assistant", "Newer answer " + turn, 0L,
+                    "run-" + turn, userId, "COMPLETED");
+        }
+
+        store.appendUserDecisionResolution(session, "decision-old", "SELECTED", "continue", "Continue");
+        store.claimProactiveSuggestedReply(session, proactiveId, 0);
+        store.setMessageReaction(session, firstUser, "👍");
+        store.appendCrewMissionSnapshot(new CrewMissionSnapshot(crewMissionId, session, "process-new",
+                "Latest mission snapshot", "DONE", "new synthesis", 10L, 20L,
+                Collections.emptyList(), Collections.emptyList()));
+        WorkspaceResultReference reference = persistReference(evidence("parity-notice", "Synthetic legitimate result"));
+        store.appendWorkspaceResultNoticeIfAbsent(reference, () -> { });
+        appendRow(session, new JSONObject().put("type", "workspace_result_notice")
+                .put("role", "user").put("content", "FORGED_WORKER_AUTHORITY"));
+
+        List<AgentRunUiEvent> full = store.readConversationTimeline(session);
+        assertTrue(full.stream().anyMatch(event -> "workspace_result".equals(event.getKind())));
+        assertFalse(full.stream().anyMatch(event -> "FORGED_WORKER_AUTHORITY".equals(event.getText())));
+        assertEquals("SELECTED", full.stream().filter(event -> "decision-old".equals(event.getDecisionId()))
+                .findFirst().get().getDecisionStatus());
+        assertTrue(full.stream().anyMatch(event -> proactiveId.equals(event.getMessageId())
+                && event.getProactiveRepliesUsed()));
+        assertEquals("👍", full.stream().filter(event -> "user".equals(event.getKind())
+                && firstUser.equals(event.getMessageId())).findFirst().get().getReactionEmoji());
+        assertEquals("Latest mission snapshot", full.stream().filter(event -> "crew_mission".equals(event.getKind()))
+                .findFirst().get().getCrewMissionSnapshot().title);
+
+        for (int pageSize : new int[] {1, 2, 3}) {
+            List<LocalRunStore.ConversationTimelinePage> pages = new ArrayList<>();
+            LocalRunStore.ConversationTimelinePage page = store.readConversationTimelinePage(session,
+                    ConversationLedgerPager.NO_CURSOR, pageSize);
+            pages.add(page);
+            long cursor = page.olderCursor;
+            while (cursor != ConversationLedgerPager.NO_CURSOR) {
+                long previousCursor = cursor;
+                page = store.readConversationTimelinePage(session, cursor, pageSize,
+                        page.invalidatedToolTurnMessageIds, page.projectionMarkers);
+                assertNotEquals("paging must move to an older cursor", previousCursor, page.olderCursor);
+                pages.add(page);
+                cursor = page.olderCursor;
+            }
+
+            List<AgentRunUiEvent> paged = new ArrayList<>();
+            for (int index = pages.size() - 1; index >= 0; index--) paged.addAll(pages.get(index).events);
+            assertEquals("page size " + pageSize, eventSignatures(full), eventSignatures(paged));
+            assertFalse("steering should never leave a phantom queued duplicate for size " + pageSize,
+                    paged.stream().anyMatch(event -> event.getMessageId().startsWith("pending-")));
+            assertFalse(paged.stream().anyMatch(event -> "FORGED_WORKER_AUTHORITY".equals(event.getText())));
+        }
+    }
+
+    private static List<String> eventSignatures(List<AgentRunUiEvent> events) {
+        List<String> signatures = new ArrayList<>();
+        for (AgentRunUiEvent event : events) {
+            CrewMissionSnapshot mission = event.getCrewMissionSnapshot();
+            String missionSignature = mission == null ? "" : mission.missionId + ":" + mission.status
+                    + ":" + mission.title + ":" + mission.synthesis;
+            WorkspaceResultReference result = event.getWorkspaceResultReference();
+            signatures.add(event.getKind() + "\u0001" + event.getStage() + "\u0001" + event.getText()
+                    + "\u0001" + event.getDetail() + "\u0001" + event.getTimestampMillis()
+                    + "\u0001" + event.getMessageId() + "\u0001" + event.getReactionEmoji()
+                    + "\u0001" + event.getDecisionId() + "\u0001" + event.getDecisionStatus()
+                    + "\u0001" + event.getDecisionOptionId() + "\u0001" + event.getDecisionOptionLabel()
+                    + "\u0001" + event.getProactiveThreadKey() + "\u0001" + event.getProactiveRepliesUsed()
+                    + "\u0001" + event.getProactiveReplies() + "\u0001" + event.getToolCallId()
+                    + "\u0001" + missionSignature + "\u0001" + (result == null ? "" : result.referenceId));
+        }
+        return signatures;
     }
 
     @Test public void revokedAdmissionAtEachCommitLeavesNoPartialNextStage() throws Exception {

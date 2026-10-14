@@ -223,12 +223,13 @@ public final class ConversationLedgerPager {
         }
     }
 
-    /** Minimal scanner for top-level role and messageId fields in a JSON object. */
+    /** Minimal scanner for top-level role, content, and steering-dispatch fields. */
     private static final class JsonFieldScanner {
         private final String json;
         private int index;
         private boolean userRole;
         private boolean content;
+        private boolean steeringDispatch;
 
         JsonFieldScanner(String json) {
             this.json = json;
@@ -252,6 +253,9 @@ public final class ConversationLedgerPager {
                 } else if ("content".equals(key)) {
                     content = skipString();
                     if (!content) return false;
+                } else if ("interruptRequestId".equals(key)) {
+                    steeringDispatch = true;
+                    if (!skipValue()) return false;
                 } else if (!skipValue()) {
                     return false;
                 }
@@ -357,7 +361,10 @@ public final class ConversationLedgerPager {
 
         private boolean finishObject() {
             skipWhitespace();
-            return index == json.length() && userRole && content;
+            // A dispatched steering row is the durable representation of the request
+            // immediately before it. Treating it as a turn anchor can split the pair
+            // across adjacent pages and project the older half as a phantom pending row.
+            return index == json.length() && userRole && content && !steeringDispatch;
         }
 
         private void skipWhitespace() {

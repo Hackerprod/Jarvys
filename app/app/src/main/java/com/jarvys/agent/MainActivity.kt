@@ -322,10 +322,12 @@ class MainActivity : ComponentActivity() {
     private var timelineHasOlder by mutableStateOf(false)
     private var timelineOlderCursor by mutableLongStateOf(ConversationLedgerPager.NO_CURSOR)
     private var timelineRequestSerial = 0L
+    private var timelineOlderRequestSerial = 0L
     private var timelineHiddenAssistantMessageIds = emptySet<String>()
     private var timelineHiddenTranslationMessageIds = emptySet<String>()
     private var timelineNewerTranslationMessageIds = emptySet<String>()
     private var timelineInvalidatedToolTurnMessageIds = emptySet<String>()
+    private var timelineProjectionMarkers = LocalRunStore.TimelineProjectionMarkers()
     private var showingNewChat by mutableStateOf(false)
     private var captureContextRequested by mutableStateOf(false)
     private var selectedSkillIds by mutableStateOf<Set<String>>(emptySet())
@@ -664,7 +666,7 @@ class MainActivity : ComponentActivity() {
         proactiveTargetMessageId = intent.getStringExtra(EXTRA_OPEN_PROACTIVE_MESSAGE_ID)
         if (session != conversationSessionId) {
             conversationSessionId = session
-            persistConversationSession(session, publishUiSession = AgentRunUiState.snapshotForSession(session).events.isNotEmpty())
+            persistConversationSession(session)
         }
         selectedHistoryRunId = null
         showingNewChat = false
@@ -966,7 +968,8 @@ class MainActivity : ComponentActivity() {
 
     private fun translateAssistantMessage(event: AgentRunUiEvent, targetLanguage: String) {
         val sessionId = conversationSessionId
-        val messageId = event.messageId.ifBlank { "event-${event.id}" }
+        if (!eventBelongsToSession(sessionId, event, "assistant")) return
+        val messageId = event.messageId.takeIf(String::isNotBlank) ?: return
         val prompt = """You are a translation expert, skilled in translating various languages, and maintaining accuracy, faithfulness, and elegance in translation.
 Next, I will send you text. Please translate it into $targetLanguage, and return the translation result directly, without adding any explanations or other content.
 
@@ -989,7 +992,11 @@ ${event.text}
                     if (activeTranslationMessageId == messageId) {
                         activeTranslationMessageId = null
                         translationFuture = null
-                        refreshConversationTimeline(sessionId)
+                        AgentRunUiState.assistantTranslationAdded(sessionId,
+                            AgentRunUiEvent.translationEvent(0L, targetLanguage, text, messageId, System.currentTimeMillis()))
+                        if (conversationSessionId == sessionId) {
+                            timelineNewerTranslationMessageIds += messageId
+                        }
                     }
                 }
             } catch (error: Throwable) {
@@ -1015,22 +1022,39 @@ ${event.text}
 
     private fun hideAssistantTranslation(messageId: String) {
         val sessionId = conversationSessionId
+        if (AgentRunUiState.snapshotForSession(sessionId).events.none {
+                it.kind == "assistant_translation" && it.detail == messageId
+            }) return
         runCatching { localRunStore.appendAssistantTranslationHidden(sessionId, messageId) }
-            .onSuccess { refreshConversationTimeline(sessionId) }
+            .onSuccess {
+                AgentRunUiState.assistantTranslationHidden(sessionId, messageId)
+                if (conversationSessionId == sessionId) timelineHiddenTranslationMessageIds += messageId
+            }
             .onFailure { toast(getString(R.string.chat_footer_translation_error), Toast.LENGTH_LONG) }
     }
 
     private fun deleteAssistantMessage(event: AgentRunUiEvent) {
-        if (AgentRunUiState.state.value.running) return
         val sessionId = conversationSessionId
+        if (!eventBelongsToSession(sessionId, event, "assistant")
+            || AgentRunUiState.snapshotForSession(sessionId).running) return
+        val userMessageId = localRunStore.findUserMessageBeforeAssistant(sessionId, event.messageId)?.userMessageId
         runCatching { localRunStore.appendAssistantDeleted(sessionId, event.messageId) }
-            .onSuccess { refreshConversationTimeline(sessionId) }
+            .onSuccess {
+                AgentRunUiState.assistantMessageDeleted(sessionId, event.messageId)
+                if (conversationSessionId == sessionId) {
+                    timelineHiddenAssistantMessageIds += event.messageId
+                    timelineHiddenTranslationMessageIds += event.messageId
+                    userMessageId?.takeIf(String::isNotBlank)?.let { timelineInvalidatedToolTurnMessageIds += it }
+                }
+            }
             .onFailure { toast(getString(R.string.chat_footer_delete_error), Toast.LENGTH_LONG) }
     }
 
     private fun regenerateAssistantMessage(event: AgentRunUiEvent) {
         val sessionId = conversationSessionId
-        if (AgentRunUiState.state.value.running || AgentRunUiState.state.value.compacting
+        if (!eventBelongsToSession(sessionId, event, "assistant")) return
+        val sessionState = AgentRunUiState.snapshotForSession(sessionId)
+        if (sessionState.running || sessionState.compacting
             || !localRunStore.isLatestActiveAssistant(sessionId, event.messageId)) return
         val prompt = localRunStore.findUserMessageBeforeAssistant(sessionId, event.messageId) ?: run {
             toast(getString(R.string.chat_footer_regenerate_error), Toast.LENGTH_LONG)
@@ -1056,6 +1080,7 @@ ${event.text}
     private fun refreshConversationTimeline(sessionId: String) {
         if (conversationSessionId != sessionId) return
         val requestSerial = ++timelineRequestSerial
+        timelineOlderRequestSerial++
         timelinePageSessionId = sessionId
         timelineOlderLoading = false
         historyExecutor.execute {
@@ -1072,6 +1097,7 @@ ${event.text}
                     timelineHiddenTranslationMessageIds = page.hiddenTranslationMessageIds
                     timelineNewerTranslationMessageIds = page.translationMessageIds
                     timelineInvalidatedToolTurnMessageIds = page.invalidatedToolTurnMessageIds
+                    timelineProjectionMarkers = page.projectionMarkers
                     timelineOlderCursor = page.olderCursor
                     timelineHasOlder = page.hasOlder
                 }
@@ -1079,6 +1105,10 @@ ${event.text}
             }
         }
     }
+
+    private fun eventBelongsToSession(sessionId: String, event: AgentRunUiEvent, kind: String): Boolean =
+        event.kind == kind && event.messageId.isNotBlank()
+            && AgentRunUiState.containsEvent(sessionId, event)
 
     private fun shareGeneratedImage(sessionId: String, event: AgentRunUiEvent) {
         ChatFileRequest.generated(sessionId, event)?.let(fileTransfers::share)
@@ -1162,10 +1192,7 @@ ${event.text}
 
     private fun openCentralWorkspaceChat() {
         if (!WorkspaceIdentity.isCentral(conversationSessionId)) goalInput = ""
-        persistConversationSession(
-            WorkspaceIdentity.CENTRAL_SESSION,
-            publishUiSession = AgentRunUiState.snapshotForSession(WorkspaceIdentity.CENTRAL_SESSION).events.isNotEmpty(),
-        )
+        persistConversationSession(WorkspaceIdentity.CENTRAL_SESSION)
         conversationTitle = getString(R.string.workspace_central_chat)
         selectedHistoryRunId = null
         showingNewChat = false
@@ -1312,11 +1339,13 @@ ${event.text}
         showingNewChat = false
         if (runId == null) {
             timelineRequestSerial++
+            timelineOlderRequestSerial++
             timelinePageSessionId = conversationSessionId
             timelineHiddenAssistantMessageIds = emptySet()
             timelineHiddenTranslationMessageIds = emptySet()
             timelineNewerTranslationMessageIds = emptySet()
             timelineInvalidatedToolTurnMessageIds = emptySet()
+            timelineProjectionMarkers = LocalRunStore.TimelineProjectionMarkers()
             timelineLoading = false
             timelineOlderLoading = false
             timelineHasOlder = false
@@ -1332,16 +1361,15 @@ ${event.text}
         conversationTitle = historyItem?.title
         val sessionId = historyItem?.sessionId ?: runId
         if (WorkspaceIdentity.isExecutionSession(sessionId)) { openCentralWorkspaceChat(); return }
-        persistConversationSession(
-            sessionId,
-            publishUiSession = AgentRunUiState.snapshotForSession(sessionId).events.isNotEmpty(),
-        )
+        persistConversationSession(sessionId)
         val requestSerial = ++timelineRequestSerial
+        timelineOlderRequestSerial++
         timelinePageSessionId = sessionId
         timelineHiddenAssistantMessageIds = emptySet()
         timelineHiddenTranslationMessageIds = emptySet()
         timelineNewerTranslationMessageIds = emptySet()
         timelineInvalidatedToolTurnMessageIds = emptySet()
+        timelineProjectionMarkers = LocalRunStore.TimelineProjectionMarkers()
         timelineLoading = true
         timelineOlderLoading = false
         timelineHasOlder = false
@@ -1387,6 +1415,7 @@ ${event.text}
                     timelineHiddenTranslationMessageIds = page?.hiddenTranslationMessageIds.orEmpty()
                     timelineNewerTranslationMessageIds = page?.translationMessageIds.orEmpty()
                     timelineInvalidatedToolTurnMessageIds = page?.invalidatedToolTurnMessageIds.orEmpty()
+                    timelineProjectionMarkers = page?.projectionMarkers ?: LocalRunStore.TimelineProjectionMarkers()
                     timelineOlderCursor = page?.olderCursor ?: ConversationLedgerPager.NO_CURSOR
                     timelineHasOlder = page?.hasOlder == true
                     timelineLoading = false
@@ -1398,11 +1427,13 @@ ${event.text}
 
     private fun restoreConversationSession(sessionId: String) {
         val requestSerial = ++timelineRequestSerial
+        timelineOlderRequestSerial++
         timelinePageSessionId = sessionId
         timelineHiddenAssistantMessageIds = emptySet()
         timelineHiddenTranslationMessageIds = emptySet()
         timelineNewerTranslationMessageIds = emptySet()
         timelineInvalidatedToolTurnMessageIds = emptySet()
+        timelineProjectionMarkers = LocalRunStore.TimelineProjectionMarkers()
         timelineLoading = AgentRunUiState.snapshotForSession(sessionId).events.isEmpty()
         timelineOlderLoading = false
         timelineHasOlder = false
@@ -1425,6 +1456,7 @@ ${event.text}
                         timelineHiddenTranslationMessageIds = it.hiddenTranslationMessageIds
                         timelineNewerTranslationMessageIds = it.translationMessageIds
                         timelineInvalidatedToolTurnMessageIds = it.invalidatedToolTurnMessageIds
+                        timelineProjectionMarkers = it.projectionMarkers
                         timelineOlderCursor = it.olderCursor
                         timelineHasOlder = it.hasOlder
                     } ?: AgentRunUiState.showSession(sessionId)
@@ -1454,33 +1486,34 @@ ${event.text}
         val cursor = timelineOlderCursor
         val selectedRunId = selectedHistoryRunId
         val newerInvalidations = timelineInvalidatedToolTurnMessageIds
-        val requestSerial = ++timelineRequestSerial
+        val newerProjectionMarkers = timelineProjectionMarkers
+        val requestSerial = ++timelineOlderRequestSerial
         timelineOlderLoading = true
         historyExecutor.execute {
             val page = runCatching {
                 localRunStore.readConversationTimelinePage(
-                    sessionId, cursor, LocalRunStore.OLDER_TIMELINE_TURNS, newerInvalidations)
+                    sessionId, cursor, LocalRunStore.OLDER_TIMELINE_TURNS, newerInvalidations, newerProjectionMarkers)
             }.getOrNull()
             runOnUiThread {
-                if (requestSerial != timelineRequestSerial || conversationSessionId != sessionId
+                if (requestSerial != timelineOlderRequestSerial || conversationSessionId != sessionId
                     || timelinePageSessionId != sessionId || selectedHistoryRunId != selectedRunId) return@runOnUiThread
                 if (page != null) {
                     AgentRunUiState.prependPersistedSession(
                         sessionId,
                         page.events,
-                        timelineHiddenAssistantMessageIds + page.hiddenAssistantMessageIds,
-                        timelineHiddenTranslationMessageIds + page.hiddenTranslationMessageIds,
+                        timelineHiddenAssistantMessageIds,
+                        timelineHiddenTranslationMessageIds,
                         timelineNewerTranslationMessageIds,
                     )
                     timelineHiddenAssistantMessageIds += page.hiddenAssistantMessageIds
                     timelineHiddenTranslationMessageIds += page.hiddenTranslationMessageIds
                     timelineNewerTranslationMessageIds += page.translationMessageIds
                     timelineInvalidatedToolTurnMessageIds += page.invalidatedToolTurnMessageIds
+                    timelineProjectionMarkers = page.projectionMarkers
                     timelineOlderCursor = page.olderCursor
                     timelineHasOlder = page.hasOlder
                 } else {
-                    timelineHasOlder = false
-                    timelineOlderCursor = ConversationLedgerPager.NO_CURSOR
+                    toast(getString(R.string.chat_history_load_error), Toast.LENGTH_LONG)
                 }
                 timelineOlderLoading = false
             }
@@ -1536,9 +1569,9 @@ ${event.text}
         }
     }
 
-    private fun persistConversationSession(sessionId: String, publishUiSession: Boolean = true) {
+    private fun persistConversationSession(sessionId: String) {
         conversationSessionId = sessionId
-        if (publishUiSession) AgentRunUiState.showSession(sessionId)
+        AgentRunUiState.showSession(sessionId)
         bindMemoryObserver(sessionId)
         if (::attachmentDrafts.isInitialized) attachmentDrafts.switchSession(sessionId)
         getSharedPreferences("jarvys_chat", MODE_PRIVATE).edit()
@@ -2183,14 +2216,15 @@ private fun JarvysApp(
                     WorkspaceFilesRoute(entry.arguments?.getString("workspaceId").orEmpty())
                 }
                 composable(Routes.CHAT) {
-                    val conversationKey = selectedHistoryRunId ?: if (showingNewChat) "new" else agentState.sessionId ?: conversationSessionId
+                    val selectedSessionEvents = AgentRunUiState.eventsForSession(conversationSessionId)
+                    val conversationKey = selectedHistoryRunId ?: if (showingNewChat) "new" else conversationSessionId
                     Crossfade(targetState = conversationKey,
                         animationSpec = if (LocalReducedMotion.current) androidx.compose.animation.core.snap()
                             else JarvysMotion.placeChange(),
                         label = "chat-conversation-transition") { visibleConversationKey ->
                         val displayedEvents = when {
                             showingNewChat -> emptyList()
-                            else -> agentState.events.filter {
+                            else -> selectedSessionEvents.filter {
                                 showAgentEvents || (it.kind != "progress" && (it.kind != "tool" || it.previewId != null))
                             }
                         }

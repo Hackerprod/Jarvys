@@ -134,6 +134,48 @@ public class ConversationLedgerPagerTest {
         }
     }
 
+    @Test public void steeringRequestAndDispatchedUserRowStayInTheSamePageForSmallPageSizes() throws Exception {
+        File ledger = temporary.newFile("steering-pages.jsonl");
+        List<String> expected = new ArrayList<>();
+        expected.add(user("u0", "before steering"));
+        expected.add(assistant("a0"));
+        expected.add("{\"type\":\"main_interrupt_request\",\"requestId\":\"steer-1\",\"content\":\"change direction\"}");
+        expected.add("{\"role\":\"user\",\"content\":\"change direction\",\"messageId\":\"steer-1\",\"interruptRequestId\":\"steer-1\"}");
+        for (int turn = 1; turn < 8; turn++) {
+            expected.add(user("u" + turn, "question " + turn));
+            expected.add(assistant("a" + turn));
+        }
+        writeLines(ledger, expected);
+
+        for (int pageSize : new int[] {1, 2, 3}) {
+            List<ConversationLedgerPager.Page> pages = new ArrayList<>();
+            ConversationLedgerPager.Page page = ConversationLedgerPager.readTail(ledger, pageSize);
+            pages.add(page);
+            long cursor = page.olderCursor;
+            while (cursor != ConversationLedgerPager.NO_CURSOR) {
+                page = ConversationLedgerPager.readPrevious(ledger, cursor, pageSize);
+                pages.add(page);
+                cursor = page.olderCursor;
+            }
+            List<String> reconstructed = new ArrayList<>();
+            int requestPage = -1;
+            int dispatchPage = -1;
+            for (int pageIndex = 0; pageIndex < pages.size(); pageIndex++) {
+                List<String> lines = pages.get(pageIndex).lines;
+                reconstructed.addAll(pages.get(pages.size() - 1 - pageIndex).lines);
+                for (String line : lines) {
+                    if (line.contains("main_interrupt_request")) requestPage = pageIndex;
+                    if (line.contains("interruptRequestId")) dispatchPage = pageIndex;
+                }
+            }
+            assertEquals("page size " + pageSize, expected, reconstructed);
+            assertTrue("steering request must be present", requestPage >= 0);
+            assertTrue("steering dispatch must be present", dispatchPage >= 0);
+            assertEquals("steering request and dispatch must share a page for size " + pageSize,
+                    requestPage, dispatchPage);
+        }
+    }
+
     @Test public void longUtf8LineCrossesReverseAndForwardBlocksWithCrlfAndNoFinalNewline()
             throws Exception {
         File ledger = temporary.newFile("long-utf8.jsonl");

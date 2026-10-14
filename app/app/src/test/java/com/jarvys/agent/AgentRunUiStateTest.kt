@@ -15,6 +15,47 @@ import java.util.concurrent.atomic.AtomicReference
 
 class AgentRunUiStateTest {
     @Test
+    fun selectingUncachedSessionPublishesItsEmptyStateInsteadOfPriorConversation() {
+        val firstSession = "uncached-selection-a-${System.nanoTime()}"
+        val secondSession = "uncached-selection-b-${System.nanoTime()}"
+        val firstMessage = AgentRunUiEvent(1L, "assistant", text = "first session streaming text", messageId = "a-message")
+        AgentRunUiState.restoreSession(firstSession, listOf(
+            firstMessage,
+        ))
+        AgentRunUiState.showSession(firstSession)
+
+        AgentRunUiState.showSession(secondSession)
+
+        assertEquals(secondSession, AgentRunUiState.state.value.sessionId)
+        assertTrue(AgentRunUiState.eventsForSession(secondSession).isEmpty())
+        assertFalse(AgentRunUiState.containsEvent(secondSession, firstMessage))
+        assertEquals(listOf("first session streaming text"),
+            AgentRunUiState.snapshotForSession(firstSession).events.map { it.text })
+        AgentRunUiState.resetSession(firstSession)
+        AgentRunUiState.resetSession(secondSession)
+    }
+
+    @Test
+    fun timelineEditsPreserveOlderLoadedPagesAndAllowTranslationAfterHide() {
+        val session = "timeline-edit-pages-${System.nanoTime()}"
+        val original = AgentRunUiEvent(10L, "assistant", text = "answer", messageId = "answer-id")
+        val older = AgentRunUiEvent(5L, "user", text = "older loaded page", messageId = "older-id")
+        AgentRunUiState.restoreSession(session, listOf(older, original))
+
+        AgentRunUiState.assistantTranslationAdded(session,
+            AgentRunUiEvent(11L, "assistant_translation", stage = "fr", text = "première", detail = "answer-id"))
+        AgentRunUiState.assistantTranslationHidden(session, "answer-id")
+        AgentRunUiState.assistantTranslationAdded(session,
+            AgentRunUiEvent(12L, "assistant_translation", stage = "fr", text = "dernière", detail = "answer-id"))
+
+        assertEquals(listOf("older loaded page", "answer", "dernière"),
+            AgentRunUiState.snapshotForSession(session).events.map { it.text })
+        AgentRunUiState.assistantMessageDeleted(session, "answer-id")
+        assertEquals(listOf("older loaded page"), AgentRunUiState.snapshotForSession(session).events.map { it.text })
+        AgentRunUiState.resetSession(session)
+    }
+
+    @Test
     fun olderTimelinePagePrependsByStableIdWithoutTouchingAnotherSession() {
         val firstSession = "timeline-page-a-${System.nanoTime()}"
         val secondSession = "timeline-page-b-${System.nanoTime()}"
@@ -49,12 +90,29 @@ class AgentRunUiStateTest {
         AgentRunUiState.prependPersistedSession(
             session,
             older,
-            hiddenAssistantMessageIds = setOf("message-deleted"),
-            hiddenTranslationMessageIds = setOf("message-hidden-translation"),
+            newerHiddenAssistantMessageIds = setOf("message-deleted"),
+            newerHiddenTranslationMessageIds = setOf("message-hidden-translation"),
             newerTranslationMessageIds = setOf("message-newer-translation"),
         )
 
         assertEquals(listOf("visible older message", "new translation"),
+            AgentRunUiState.snapshotForSession(session).events.map { it.text })
+        AgentRunUiState.resetSession(session)
+    }
+
+    @Test
+    fun olderTimelinePageDeduplicatesDispatchedSteeringAndStableMessageIdentity() {
+        val session = "timeline-steering-dedupe-${System.nanoTime()}"
+        val dispatched = AgentRunUiEvent(90L, "user", text = "steering message", messageId = "request-id")
+        val pending = AgentRunUiEvent(10L, "user", stage = "QUEUED", text = "steering message",
+            messageId = "pending-request-id")
+        val duplicateDispatched = dispatched.copy(id = 11L)
+        val older = AgentRunUiEvent(5L, "assistant", text = "older reply", messageId = "older-reply")
+        AgentRunUiState.restoreSession(session, listOf(dispatched))
+
+        AgentRunUiState.prependPersistedSession(session, listOf(pending, duplicateDispatched, older))
+
+        assertEquals(listOf("older reply", "steering message"),
             AgentRunUiState.snapshotForSession(session).events.map { it.text })
         AgentRunUiState.resetSession(session)
     }

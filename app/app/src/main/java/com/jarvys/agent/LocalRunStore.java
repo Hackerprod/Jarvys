@@ -2209,9 +2209,7 @@ public final class LocalRunStore {
                 String line;
                 while ((line = reader.readLine()) != null) try {
                     JSONObject row = new JSONObject(line);
-                    if (isResultOnlyRow(row) && (!includeResultNotices
-                            || !"workspace_result_notice".equals(row.optString("type"))
-                            || row.has("role") || row.has("content"))) continue;
+                    if (!isConversationTimelineLedgerRow(row, includeResultNotices)) continue;
                     rows.add(row);
                 } catch (Exception ignored) { }
             } catch (Exception error) {
@@ -2220,6 +2218,18 @@ public final class LocalRunStore {
         }
         orderAssistantMessagesBeforeSteering(rows);
         return rows;
+    }
+
+    /** Shared allowlist rule for result-only rows in full and paged conversation projections. */
+    private static boolean isConversationTimelineLedgerRow(JSONObject row, boolean includeResultNotices) {
+        if (!isResultOnlyRow(row)) return true;
+        return includeResultNotices && isEligibleWorkspaceResultNoticeRow(row);
+    }
+
+    /** A workspace notice is eligible only in its inert, role-less and content-less ledger form. */
+    private static boolean isEligibleWorkspaceResultNoticeRow(JSONObject row) {
+        return "workspace_result_notice".equals(row.optString("type"))
+                && !row.has("role") && !row.has("content");
     }
 
     private static void orderAssistantMessagesBeforeSteering(List<JSONObject> rows) {
@@ -2587,12 +2597,15 @@ public final class LocalRunStore {
         public final Set<String> hiddenTranslationMessageIds;
         public final Set<String> translationMessageIds;
         public final Set<String> invalidatedToolTurnMessageIds;
+        /** State from this and all newer loaded pages, usable while projecting older pages. */
+        public final TimelineProjectionMarkers projectionMarkers;
 
         private ConversationTimelinePage(List<AgentRunUiEvent> events, long olderCursor, boolean hasOlder,
                                          Set<String> hiddenAssistantMessageIds,
                                          Set<String> hiddenTranslationMessageIds,
                                          Set<String> translationMessageIds,
-                                         Set<String> invalidatedToolTurnMessageIds) {
+                                         Set<String> invalidatedToolTurnMessageIds,
+                                         TimelineProjectionMarkers projectionMarkers) {
             this.events = Collections.unmodifiableList(new ArrayList<>(events));
             this.olderCursor = olderCursor;
             this.hasOlder = hasOlder;
@@ -2600,6 +2613,74 @@ public final class LocalRunStore {
             this.hiddenTranslationMessageIds = Collections.unmodifiableSet(new HashSet<>(hiddenTranslationMessageIds));
             this.translationMessageIds = Collections.unmodifiableSet(new HashSet<>(translationMessageIds));
             this.invalidatedToolTurnMessageIds = Collections.unmodifiableSet(new HashSet<>(invalidatedToolTurnMessageIds));
+            this.projectionMarkers = projectionMarkers;
+        }
+    }
+
+    /**
+     * Cross-page state that can change how rows in an older window should appear. Merge an
+     * older page with {@link #withOlderPage(TimelineProjectionMarkers)}; values already known
+     * by this instance win because they came from a newer window.
+     */
+    public static final class TimelineProjectionMarkers {
+        public static final class DecisionResolution {
+            public final String status;
+            public final String optionId;
+            public final String optionLabel;
+
+            public DecisionResolution(String status, String optionId, String optionLabel) {
+                this.status = status == null ? "UNANSWERED" : status;
+                this.optionId = optionId;
+                this.optionLabel = optionLabel;
+            }
+        }
+
+        public final Map<String, DecisionResolution> resolvedDecisions;
+        public final Set<String> consumedProactiveReplyMessageIds;
+        public final Map<String, String> reactionsByMessageId;
+        public final Map<String, CrewMissionSnapshot> latestCrewSnapshots;
+
+        public TimelineProjectionMarkers() {
+            this(Collections.emptyMap(), Collections.emptySet(), Collections.emptyMap(), Collections.emptyMap());
+        }
+
+        private TimelineProjectionMarkers(Map<String, DecisionResolution> resolvedDecisions,
+                Set<String> consumedProactiveReplyMessageIds, Map<String, String> reactionsByMessageId,
+                Map<String, CrewMissionSnapshot> latestCrewSnapshots) {
+            this.resolvedDecisions = Collections.unmodifiableMap(new LinkedHashMap<>(resolvedDecisions));
+            this.consumedProactiveReplyMessageIds = Collections.unmodifiableSet(
+                    new HashSet<>(consumedProactiveReplyMessageIds));
+            this.reactionsByMessageId = Collections.unmodifiableMap(new LinkedHashMap<>(reactionsByMessageId));
+            this.latestCrewSnapshots = Collections.unmodifiableMap(new LinkedHashMap<>(latestCrewSnapshots));
+        }
+
+        /** Returns a combined marker set where this newer page wins over the supplied older page. */
+        public TimelineProjectionMarkers withOlderPage(TimelineProjectionMarkers older) {
+            if (older == null) return this;
+            Map<String, DecisionResolution> decisions = new LinkedHashMap<>(older.resolvedDecisions);
+            decisions.putAll(resolvedDecisions);
+            Set<String> consumed = new HashSet<>(older.consumedProactiveReplyMessageIds);
+            consumed.addAll(consumedProactiveReplyMessageIds);
+            Map<String, String> reactions = new LinkedHashMap<>(older.reactionsByMessageId);
+            reactions.putAll(reactionsByMessageId);
+            Map<String, CrewMissionSnapshot> snapshots = new LinkedHashMap<>(older.latestCrewSnapshots);
+            snapshots.putAll(latestCrewSnapshots);
+            return new TimelineProjectionMarkers(decisions, consumed, reactions, snapshots);
+        }
+
+        private String cacheKey() {
+            List<String> parts = new ArrayList<>();
+            for (Map.Entry<String, DecisionResolution> entry : resolvedDecisions.entrySet()) {
+                DecisionResolution value = entry.getValue();
+                parts.add("d:" + entry.getKey() + ":" + value.status + ":" + value.optionId + ":" + value.optionLabel);
+            }
+            for (String id : consumedProactiveReplyMessageIds) parts.add("p:" + id);
+            for (Map.Entry<String, String> entry : reactionsByMessageId.entrySet())
+                parts.add("r:" + entry.getKey() + ":" + entry.getValue());
+            for (Map.Entry<String, CrewMissionSnapshot> entry : latestCrewSnapshots.entrySet())
+                parts.add("c:" + entry.getKey() + ":" + entry.getValue().toJson());
+            Collections.sort(parts);
+            return parts.toString();
         }
     }
 
@@ -2631,9 +2712,19 @@ public final class LocalRunStore {
 
     public synchronized ConversationTimelinePage readConversationTimelinePage(
             String sessionId, long beforeOffset, int turnCount, Set<String> newerInvalidatedToolTurnMessageIds) {
+        return readConversationTimelinePage(sessionId, beforeOffset, turnCount,
+                newerInvalidatedToolTurnMessageIds, new TimelineProjectionMarkers());
+    }
+
+    /** Reads a page while applying state already learned from newer loaded windows. */
+    public synchronized ConversationTimelinePage readConversationTimelinePage(
+            String sessionId, long beforeOffset, int turnCount,
+            Set<String> newerInvalidatedToolTurnMessageIds, TimelineProjectionMarkers newerProjectionMarkers) {
         if (turnCount < 1 || turnCount > 200) throw new IllegalArgumentException("Timeline page size must be 1..200");
         Set<String> newerInvalidations = newerInvalidatedToolTurnMessageIds == null
                 ? Collections.emptySet() : newerInvalidatedToolTurnMessageIds;
+        TimelineProjectionMarkers newerMarkers = newerProjectionMarkers == null
+                ? new TimelineProjectionMarkers() : newerProjectionMarkers;
         File ledger = conversationFile(sessionId);
         ConversationLedgerPager.Page rawPage;
         List<JSONObject> rows = new ArrayList<>();
@@ -2642,9 +2733,10 @@ public final class LocalRunStore {
         synchronized (SESSION_TITLE_LOCK) {
             if (conversationMetadata.read(sessionId).deleted || !ledger.isFile()) {
                 return new ConversationTimelinePage(Collections.emptyList(), ConversationLedgerPager.NO_CURSOR, false,
-                        Collections.emptySet(), Collections.emptySet(), Collections.emptySet(), Collections.emptySet());
+                        Collections.emptySet(), Collections.emptySet(), Collections.emptySet(), Collections.emptySet(),
+                        new TimelineProjectionMarkers());
             }
-            pageCacheKey = timelinePageCacheKey(ledger, beforeOffset, turnCount, newerInvalidations);
+            pageCacheKey = timelinePageCacheKey(ledger, beforeOffset, turnCount, newerInvalidations, newerMarkers);
             ConversationTimelinePage cached = cachedTimelinePage(pageCacheKey);
             if (cached != null) return cached;
             try {
@@ -2657,8 +2749,7 @@ public final class LocalRunStore {
             for (int lineIndex = 0; lineIndex < rawPage.lines.size(); lineIndex++) try {
                 String line = rawPage.lines.get(lineIndex);
                 JSONObject row = new JSONObject(line);
-                if (isResultOnlyRow(row) && (!"workspace_result_notice".equals(row.optString("type"))
-                        || !row.has("role") && !row.has("content"))) continue;
+                if (!isConversationTimelineLedgerRow(row, true)) continue;
                 rows.add(row);
                 rowOffsetsByIdentity.put(row, rawPage.lineOffsets.get(lineIndex));
             } catch (Exception ignored) { }
@@ -2666,7 +2757,10 @@ public final class LocalRunStore {
         orderAssistantMessagesBeforeSteering(rows);
         List<Long> rowOffsets = new ArrayList<>(rows.size());
         for (JSONObject row : rows) rowOffsets.add(rowOffsetsByIdentity.getOrDefault(row, 0L));
-        List<AgentRunUiEvent> events = projectConversationTimeline(sessionId, rows, rowOffsets, newerInvalidations);
+        TimelineProjectionMarkers pageMarkers = timelineProjectionMarkers(sessionId, rows);
+        TimelineProjectionMarkers combinedMarkers = newerMarkers.withOlderPage(pageMarkers);
+        List<AgentRunUiEvent> events = projectConversationTimeline(sessionId, rows, rowOffsets,
+                newerInvalidations, combinedMarkers, newerMarkers);
         Set<String> translationMessageIds = new HashSet<>();
         for (AgentRunUiEvent event : events) {
             if ("assistant_translation".equals(event.getKind()) && event.getDetail() != null && !event.getDetail().isEmpty())
@@ -2681,9 +2775,9 @@ public final class LocalRunStore {
         }
         ConversationTimelinePage result = new ConversationTimelinePage(events, rawPage.olderCursor, rawPage.hasMore,
                 hiddenAssistantIds(rows), hiddenTranslationIds(rows), translationMessageIds,
-                invalidatedToolTurnMessageIds);
+                invalidatedToolTurnMessageIds, combinedMarkers);
         synchronized (SESSION_TITLE_LOCK) {
-            if (pageCacheKey.equals(timelinePageCacheKey(ledger, beforeOffset, turnCount, newerInvalidations)))
+            if (pageCacheKey.equals(timelinePageCacheKey(ledger, beforeOffset, turnCount, newerInvalidations, newerMarkers)))
                 cacheTimelinePage(pageCacheKey, result);
         }
         return result;
@@ -2695,12 +2789,37 @@ public final class LocalRunStore {
     }
 
     private static String timelinePageCacheKey(File ledger, long beforeOffset, int turnCount,
-                                               Set<String> newerInvalidations) {
+                                               Set<String> newerInvalidations,
+                                               TimelineProjectionMarkers newerMarkers) {
         List<String> sortedInvalidations = new ArrayList<>(newerInvalidations);
         Collections.sort(sortedInvalidations);
         return ledger.getAbsolutePath() + '\u0000' + ledger.length() + '\u0000'
                 + ledger.lastModified() + '\u0000' + beforeOffset + '\u0000' + turnCount
-                + '\u0000' + sortedInvalidations;
+                + '\u0000' + sortedInvalidations + '\u0000' + newerMarkers.cacheKey();
+    }
+
+    private static TimelineProjectionMarkers timelineProjectionMarkers(String sessionId, List<JSONObject> rows) {
+        Map<String, TimelineProjectionMarkers.DecisionResolution> decisions = new LinkedHashMap<>();
+        Set<String> consumedReplies = new HashSet<>();
+        Map<String, CrewMissionSnapshot> crewSnapshots = new LinkedHashMap<>();
+        for (JSONObject row : rows) {
+            String type = row.optString("type");
+            if ("user_decision_resolution".equals(type)) {
+                String id = row.optString("decisionId", "");
+                if (!id.isEmpty()) decisions.put(id, new TimelineProjectionMarkers.DecisionResolution(
+                        row.optString("status", "UNANSWERED"),
+                        row.has("optionId") ? row.optString("optionId") : null,
+                        row.has("optionLabel") ? row.optString("optionLabel") : null));
+            } else if ("proactive_reply_used".equals(type)) {
+                String id = row.optString("messageId", "");
+                if (!id.isEmpty()) consumedReplies.add(id);
+            } else if ("crew_snapshot".equals(type)) {
+                CrewMissionSnapshot snapshot = CrewMissionSnapshot.fromJson(row);
+                if (snapshot != null && sessionId.equals(snapshot.conversationId))
+                    crewSnapshots.put(snapshot.missionId, snapshot);
+            }
+        }
+        return new TimelineProjectionMarkers(decisions, consumedReplies, readMessageReactions(rows), crewSnapshots);
     }
 
     private static ConversationTimelinePage cachedTimelinePage(String key) {
@@ -2751,6 +2870,15 @@ public final class LocalRunStore {
     private List<AgentRunUiEvent> projectConversationTimeline(
             String sessionId, List<JSONObject> rows, List<Long> rowOffsets,
             Set<String> newerInvalidatedToolTurnMessageIds) {
+        return projectConversationTimeline(sessionId, rows, rowOffsets,
+                newerInvalidatedToolTurnMessageIds, timelineProjectionMarkers(sessionId, rows),
+                new TimelineProjectionMarkers());
+    }
+
+    private List<AgentRunUiEvent> projectConversationTimeline(
+            String sessionId, List<JSONObject> rows, List<Long> rowOffsets,
+            Set<String> newerInvalidatedToolTurnMessageIds,
+            TimelineProjectionMarkers effectiveMarkers, TimelineProjectionMarkers newerMarkers) {
         List<AgentRunUiEvent> events = new ArrayList<>();
         Map<String, ChatAttachment> ownedDeliveredFiles = new LinkedHashMap<>();
         for (JSONObject row : rows) {
@@ -2761,13 +2889,9 @@ public final class LocalRunStore {
         }
         Map<String, CrewMissionSnapshot> latestCrew = new LinkedHashMap<>();
         Map<String, Integer> latestCrewRow = new LinkedHashMap<>();
-        Set<String> consumedProactiveReplies = new HashSet<>();
+        Set<String> consumedProactiveReplies = new HashSet<>(effectiveMarkers.consumedProactiveReplyMessageIds);
         for (int index = 0; index < rows.size(); index++) {
             JSONObject row = rows.get(index);
-            if ("proactive_reply_used".equals(row.optString("type"))) {
-                String usedMessageId = row.optString("messageId", "");
-                if (!usedMessageId.isEmpty()) consumedProactiveReplies.add(usedMessageId);
-            }
             if (!"crew_snapshot".equals(row.optString("type"))) continue;
             CrewMissionSnapshot snapshot = CrewMissionSnapshot.fromJson(row);
             if (snapshot != null && sessionId.equals(snapshot.conversationId)) {
@@ -2779,13 +2903,17 @@ public final class LocalRunStore {
         Map<String, Integer> latestInvalidatedToolTurnRow = new LinkedHashMap<>();
         int latestInvalidationRow = -1;
         Set<String> undoneReflectionIds = new HashSet<>();
-        Map<String, JSONObject> userDecisionResolutions = new LinkedHashMap<>();
+        Map<String, TimelineProjectionMarkers.DecisionResolution> userDecisionResolutions =
+                new LinkedHashMap<>(effectiveMarkers.resolvedDecisions);
         for (int index = 0; index < rows.size(); index++) {
             JSONObject row = rows.get(index);
             String type = row.optString("type");
             if ("user_decision_resolution".equals(type)) {
                 String decisionId = row.optString("decisionId", "");
-                if (!decisionId.isEmpty()) userDecisionResolutions.put(decisionId, row);
+                if (!decisionId.isEmpty()) userDecisionResolutions.putIfAbsent(decisionId,
+                        new TimelineProjectionMarkers.DecisionResolution(row.optString("status", "UNANSWERED"),
+                                row.has("optionId") ? row.optString("optionId") : null,
+                                row.has("optionLabel") ? row.optString("optionLabel") : null));
             }
             if ("assistant_regenerated".equals(type) || "assistant_deleted".equals(type)) {
                 latestInvalidationRow = index;
@@ -2874,6 +3002,7 @@ public final class LocalRunStore {
             dispatchedInterrupts.add(row.optString("interruptRequestId"));
         Map<String, String> reactions = MessageReactionTool.isOrdinaryChat(sessionId)
                 ? readMessageReactions(rows) : java.util.Collections.emptyMap();
+        if (MessageReactionTool.isOrdinaryChat(sessionId)) reactions.putAll(effectiveMarkers.reactionsByMessageId);
         int messageIndex = 0;
         long id = 1L;
         for (int rowIndex = 0; rowIndex < rows.size(); rowIndex++) {
@@ -3040,7 +3169,8 @@ public final class LocalRunStore {
                         (long) (row.optDouble("timestamp", 0) * 1000)));
             } else if ("crew_snapshot".equals(type)) {
                 CrewMissionSnapshot snapshot = CrewMissionSnapshot.fromJson(row);
-                if (snapshot != null && latestCrewRow.getOrDefault(snapshot.missionId, -1) == rowIndex) {
+                if (snapshot != null && !newerMarkers.latestCrewSnapshots.containsKey(snapshot.missionId)
+                        && latestCrewRow.getOrDefault(snapshot.missionId, -1) == rowIndex) {
                     events.add(AgentRunUiEvent.crewMissionEvent(id++, latestCrew.get(snapshot.missionId)));
                 }
             } else if ("user_decision_request".equals(type)) {
@@ -3050,7 +3180,8 @@ public final class LocalRunStore {
         return events;
     }
 
-    private static AgentRunUiEvent userDecisionEvent(long id, JSONObject row, JSONObject resolution) {
+    private static AgentRunUiEvent userDecisionEvent(
+            long id, JSONObject row, TimelineProjectionMarkers.DecisionResolution resolution) {
         List<UserDecisionOption> options = new ArrayList<>();
         JSONArray choices = row.optJSONArray("options");
         if (choices != null) for (int index = 0; index < choices.length(); index++) {
@@ -3065,12 +3196,12 @@ public final class LocalRunStore {
             if (!optionId.isEmpty() && !label.isEmpty()) options.add(new UserDecisionOption(optionId, label,
                     choice.optString("description", ""), role));
         }
-        String status = resolution == null ? "UNANSWERED" : resolution.optString("status", "UNANSWERED");
+        String status = resolution == null ? "UNANSWERED" : resolution.status;
         return AgentRunUiEvent.userDecisionEvent(id, row.optString("decisionId", ""),
                 row.optString("title", ""), row.optString("body", ""), options,
                 row.optBoolean("allowDismiss", true), status,
-                resolution == null ? null : resolution.optString("optionId", null),
-                resolution == null ? null : resolution.optString("optionLabel", null),
+                resolution == null ? null : resolution.optionId,
+                resolution == null ? null : resolution.optionLabel,
                 (long) (row.optDouble("timestamp", 0) * 1000));
     }
 
