@@ -17,7 +17,12 @@ import com.jarvys.agent.crew.CrewTools;
 import org.junit.Test;
 import org.junit.Rule;
 import org.junit.rules.TemporaryFolder;
+import org.junit.runner.RunWith;
+import org.robolectric.RobolectricTestRunner;
+import org.robolectric.annotation.Config;
 
+@RunWith(RobolectricTestRunner.class)
+@Config(sdk = 34)
 public class ToolArgumentValidatorTest {
     @Rule public TemporaryFolder temporary = new TemporaryFolder();
 

@@ -232,12 +232,11 @@ class MainAgentInteractionTest {
 
     @Test fun dispatchedSteeringSurvivesProviderFailureBeforeNextCheckpointAndStartsFollowUp() {
         StopController.getInstance().stopRun()
-        val controller = Robolectric.buildService(AgentForegroundService::class.java).create()
-        val service = controller.get()
         val context = ApplicationProvider.getApplicationContext<Context>()
         val session = "steering-provider-failure-${System.nanoTime()}"
         val store = LocalRunStore(context)
         val initialId = store.appendConversationMessage(session, "user", "initial")
+        val service = startManagedService(context)
         val calls = AtomicInteger()
         val followUp = CountDownLatch(1)
         val observedGoals = java.util.Collections.synchronizedList(mutableListOf<String>())
@@ -265,9 +264,8 @@ class MainAgentInteractionTest {
         }
         try {
             AgentRunUiState.resetSession(session)
-            service.onStartCommand(AgentForegroundService.storedChatMessageIntent(context, session, initialId), 0, 1)
-            org.robolectric.shadows.ShadowLooper.idleMainLooper()
-            assertTrue("A dispatched message survives a pre-checkpoint provider error", followUp.await(10, TimeUnit.SECONDS))
+            startServiceIntent(context, AgentForegroundService.storedChatMessageIntent(context, session, initialId))
+            assertTrue("A dispatched message survives a pre-checkpoint provider error", awaitServiceCallback(followUp, 10))
             worker(service).submit {}.get(10, TimeUnit.SECONDS)
             assertEquals(listOf("initial", "retry the accepted input"), observedGoals)
             val messages = store.readConversationMessages(session)
@@ -275,18 +273,17 @@ class MainAgentInteractionTest {
             assertTrue(messages.any { it.optString("role") == "user" && it.optString("content") == "retry the accepted input" })
         } finally {
             StopController.getInstance().stopRun()
-            controller.destroy()
+            stopManagedService(context)
         }
     }
 
     @Test fun newerPendingInputSupersedesFollowUpForAlreadyConsumedSteering() {
         StopController.getInstance().stopRun()
-        val controller = Robolectric.buildService(AgentForegroundService::class.java).create()
-        val service = controller.get()
         val context = ApplicationProvider.getApplicationContext<Context>()
         val session = "steering-newer-pending-${System.nanoTime()}"
         val store = LocalRunStore(context)
         val initialId = store.appendConversationMessage(session, "user", "initial request")
+        val service = startManagedService(context)
         val calls = AtomicInteger()
         val followUp = CountDownLatch(1)
         val observedGoals = java.util.Collections.synchronizedList(mutableListOf<String>())
@@ -315,9 +312,8 @@ class MainAgentInteractionTest {
         }
         try {
             AgentRunUiState.resetSession(session)
-            service.onStartCommand(AgentForegroundService.storedChatMessageIntent(context, session, initialId), 0, 1)
-            org.robolectric.shadows.ShadowLooper.idleMainLooper()
-            assertTrue("Recovery starts the newest pending input", followUp.await(10, TimeUnit.SECONDS))
+            startServiceIntent(context, AgentForegroundService.storedChatMessageIntent(context, session, initialId))
+            assertTrue("Recovery starts the newest pending input", awaitServiceCallback(followUp, 10))
             worker(service).submit {}.get(10, TimeUnit.SECONDS)
 
             assertEquals(listOf("initial request", "newer fallback input"), observedGoals)
@@ -330,7 +326,7 @@ class MainAgentInteractionTest {
             assertTrue(store.readPendingInterruptRequests(session).isEmpty())
         } finally {
             StopController.getInstance().stopRun()
-            controller.destroy()
+            stopManagedService(context)
         }
     }
 
@@ -340,12 +336,11 @@ class MainAgentInteractionTest {
 
     private fun followUpAfterUnavailableProvider(providerWasClosed: Boolean) {
         StopController.getInstance().stopRun()
-        val controller = Robolectric.buildService(AgentForegroundService::class.java).create()
-        val service = controller.get()
         val context = ApplicationProvider.getApplicationContext<Context>()
         val session = "steering-fallback-${System.nanoTime()}"
         val store = LocalRunStore(context)
         val initialId = store.appendConversationMessage(session, "user", "initial request")
+        val service = startManagedService(context)
         val calls = AtomicInteger()
         val followUp = CountDownLatch(1)
         val observedGoals = java.util.Collections.synchronizedList(mutableListOf<String>())
@@ -371,9 +366,8 @@ class MainAgentInteractionTest {
         }
         try {
             AgentRunUiState.resetSession(session)
-            service.onStartCommand(AgentForegroundService.storedChatMessageIntent(context, session, initialId), 0, 1)
-            org.robolectric.shadows.ShadowLooper.idleMainLooper()
-            assertTrue("Fallback input launches a fresh run", followUp.await(10, TimeUnit.SECONDS))
+            startServiceIntent(context, AgentForegroundService.storedChatMessageIntent(context, session, initialId))
+            assertTrue("Fallback input launches a fresh run", awaitServiceCallback(followUp, 10))
             worker(service).submit {}.get(10, TimeUnit.SECONDS)
             assertEquals(listOf("initial request", "follow up after close"), observedGoals)
             assertTrue(store.readConversationMessages(session).any {
@@ -381,23 +375,19 @@ class MainAgentInteractionTest {
             })
         } finally {
             StopController.getInstance().stopRun()
-            controller.destroy()
+            stopManagedService(context)
         }
     }
 
     @Test fun serviceRestartRecoversPendingInputsAcrossSessionsInSequence() {
         StopController.getInstance().stopRun()
-        val controller = Robolectric.buildService(AgentForegroundService::class.java).create()
-        val service = controller.get()
         val context = ApplicationProvider.getApplicationContext<Context>()
         val store = LocalRunStore(context)
         val sessionA = "recover-a-${System.nanoTime()}"
         val sessionB = "recover-b-${System.nanoTime()}"
         store.appendConversationMessage(sessionA, "user", "initial A")
         store.appendConversationMessage(sessionB, "user", "initial B")
-        store.appendInterruptRequest(sessionA, "pending A", emptyList(), false)
-        store.appendInterruptRequest(sessionB, "pending B", emptyList(), false)
-        val expected = store.readPendingInterruptRequests().map { it.optString("content") }
+        val service = startManagedService(context)
         val observed = java.util.Collections.synchronizedList(mutableListOf<String>())
         val bothStarted = CountDownLatch(2)
         service.runtimeFactory = AgentForegroundService.RuntimeFactory { _, _, _, _ ->
@@ -409,9 +399,14 @@ class MainAgentInteractionTest {
             CoreAgentLoop.Result("recovered", "visible recovery", 1, "PARTIAL")
         }
         try {
+            store.appendInterruptRequest(sessionA, "pending A", emptyList(), false)
+            store.appendInterruptRequest(sessionB, "pending B", emptyList(), false)
+            val expected = store.readPendingInterruptRequests().filter {
+                it.optString("sessionId") == sessionA || it.optString("sessionId") == sessionB
+            }.map { it.optString("content") }
             AgentRunUiState.resetSession(sessionA)
-            service.onStartCommand(android.content.Intent(context, AgentForegroundService::class.java)
-                .setAction(AgentForegroundService.ACTION_RECOVER_PENDING_INPUTS), 0, 1)
+            startServiceIntent(context, android.content.Intent(context, AgentForegroundService::class.java)
+                .setAction(AgentForegroundService.ACTION_RECOVER_PENDING_INPUTS))
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15)
             while (bothStarted.count > 0 && System.nanoTime() < deadline) {
                 org.robolectric.shadows.ShadowLooper.idleMainLooper()
@@ -424,7 +419,7 @@ class MainAgentInteractionTest {
             assertEquals("PARTIAL", store.readConversationMessages(sessionB).last().optString("status"))
         } finally {
             StopController.getInstance().stopRun()
-            controller.destroy()
+            stopManagedService(context)
         }
     }
 
@@ -467,11 +462,30 @@ class MainAgentInteractionTest {
     }
 
     @Test fun stoppingAnActiveRunDoesNotLaunchItsQueuedSteeringFollowUp() {
-        withHeldWorker { service, context, session, release ->
+        StopController.getInstance().stopRun()
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val session = "stopped-steering-${System.nanoTime()}"
+        val store = LocalRunStore(context)
+        val initialId = store.appendConversationMessage(session, "user", "original")
+        val service = startManagedService(context)
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        service.runtimeFactory = AgentForegroundService.RuntimeFactory { runtimeContext, id, skills, memoryDisabled ->
+            CoreAgentRuntime(runtimeContext, id, skills, CorePromptBudget.standard(), memoryDisabled)
+        }
+        service.mainChatRunner = AgentForegroundService.MainChatRunner { runtime, _, _, _, _, _ ->
+            entered.countDown()
+            while (release.count > 0) {
+                try { release.await() } catch (_: InterruptedException) { }
+            }
+            CoreAgentLoop.Result("stopped-owner", "owner stopped", 1, "PARTIAL")
+        }
+        try {
+            AgentRunUiState.resetSession(session)
+            startServiceIntent(context, AgentForegroundService.storedChatMessageIntent(context, session, initialId))
+            assertTrue(entered.await(5, TimeUnit.SECONDS))
             val provider = AgentForegroundService::class.java.getDeclaredField("activeSteeringProvider")
                 .apply { isAccessible = true }.get(service) as MainChatTurnContextProvider
-            val ownerToken = AgentForegroundService::class.java.getDeclaredField("activeRunToken")
-                .apply { isAccessible = true }.get(service) as CancellationToken
             provider.closeForRunExit()
             assertTrue(AgentForegroundService.interruptAndSend(context, session, "cancel with parent run", arrayListOf(), false))
             assertTrue(StopController.getInstance().stopRun())
@@ -481,11 +495,17 @@ class MainAgentInteractionTest {
             release.countDown()
             worker(service).submit {}.get(5, TimeUnit.SECONDS)
             assertEquals("A stopped owner does not start a replacement run", afterStop, generation.get())
-            val messages = LocalRunStore(context).readConversationMessages(session)
-            assertTrue(messages.any { it.optString("role") == "assistant" && it.optString("status") == "FAILED" })
-            AgentRunUiState.completeGeneration(session, ownerToken.generation(), "stopped-$session",
-                "STOPPED", "Run stopped", "", 0L)
+            val messages = store.readConversationMessages(session)
+            val queued = messages.single { it.optString("role") == "user" && it.optString("content") == "cancel with parent run" }
+            assertTrue(messages.any { it.optString("role") == "assistant" && it.optString("status") == "FAILED"
+                && it.optString("userMessageId") == queued.optString("messageId") })
+            assertTrue(store.readPendingInterruptRequests(session).isEmpty())
             assertFalse(AgentRunUiState.state.value.running)
+        } finally {
+            release.countDown()
+            StopController.getInstance().stopRun()
+            if (!worker(service).isShutdown) worker(service).submit {}.get(5, TimeUnit.SECONDS)
+            stopManagedService(context)
         }
     }
 
@@ -735,6 +755,36 @@ class MainAgentInteractionTest {
 
     private fun worker(service: AgentForegroundService) = AgentForegroundService::class.java.getDeclaredField("worker")
         .apply { isAccessible = true }.get(service) as ExecutorService
+
+    private fun startManagedService(context: Context): AgentForegroundService {
+        context.startForegroundService(android.content.Intent(context, AgentForegroundService::class.java)
+            .setAction(AgentForegroundService.ACTION_RECOVER_PENDING_INPUTS))
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
+        val field = AgentForegroundService::class.java.getDeclaredField("currentInstance")
+            .apply { isAccessible = true }
+        val service = field.get(null) as AgentForegroundService
+        worker(service).submit {}.get(5, TimeUnit.SECONDS)
+        return service
+    }
+
+    private fun startServiceIntent(context: Context, intent: android.content.Intent) {
+        context.startForegroundService(intent)
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
+    }
+
+    private fun awaitServiceCallback(latch: CountDownLatch, timeoutSeconds: Long): Boolean {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds)
+        while (latch.count > 0 && System.nanoTime() < deadline) {
+            org.robolectric.shadows.ShadowLooper.idleMainLooper()
+            if (latch.count > 0) Thread.sleep(10)
+        }
+        return latch.count == 0L
+    }
+
+    private fun stopManagedService(context: Context) {
+        context.stopService(android.content.Intent(context, AgentForegroundService::class.java))
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
+    }
 
     private fun withHeldWorker(block: (AgentForegroundService, Context, String, CountDownLatch) -> Unit) {
         StopController.getInstance().stopRun()

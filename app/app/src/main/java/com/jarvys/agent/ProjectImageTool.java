@@ -41,6 +41,10 @@ final class ProjectImageTool implements CoreTool {
         this.account = credentials == null ? "" : credentials.accountId;
         this.authorizationId = credentials == null ? "" : credentials.authorizationId;
         this.client = client == null ? new CodexImageGenerationClient(new CodexOAuthManager(secrets), settings, this::guard, account) : client;
+        spec = declarationSpec();
+    }
+
+    static ToolSpec declarationSpec() {
         Map<String,Object> properties = new LinkedHashMap<>();
         properties.put("action", enumSchema("inspect", "generate")); properties.put("path", type("string"));
         properties.put("prompt", type("string")); properties.put("expected_sha256", type("string"));
@@ -53,7 +57,7 @@ final class ProjectImageTool implements CoreTool {
         properties.put("reference_images", references);
         Map<String,Object> schema = new LinkedHashMap<>(); schema.put("type", "object"); schema.put("properties", properties);
         schema.put("required", Arrays.asList("action", "path")); schema.put("additionalProperties", false);
-        spec = new ToolSpec(NAME, "openai/codex-project-image",
+        return new ToolSpec(NAME, "openai/codex-project-image",
                 "Inspect or generate/edit a scoped project image. action=inspect with path returns actual hash, size and dimensions, never visual observation. "
                 + "action=generate requires prompt, PNG output path, expected_sha256 ('missing' only for an observed absent file), and current expected_scope_version. "
                 + "Optional reference_images selects at most five existing project images by path and current sha256; their verified snapshots are sent to OpenAI to edit. "
@@ -102,8 +106,8 @@ final class ProjectImageTool implements CoreTool {
             if (!path.toLowerCase(java.util.Locale.ROOT).endsWith(".png")) return CoreToolResult.failure("Generated output path must end in .png");
             String prompt = text(arguments, "prompt"), expected = text(arguments, "expected_sha256");
             long version = integer(arguments, "expected_scope_version", 0, Long.MAX_VALUE);
-            int maxBytes = arguments.containsKey("max_bytes") ? (int) integer(arguments, "max_bytes", 16384, ProjectImageAssets.MAX_BYTES) : ProjectImageAssets.MAX_BYTES;
-            String size = arguments.containsKey("size") ? text(arguments, "size") : null;
+            int maxBytes = maxBytesArgumentOrDefault(arguments);
+            String size = sizeArgumentOrDefault(arguments);
             if (size != null && !CodexImageGenerationClient.supportedSizes().contains(size)) return CoreToolResult.failure("Unsupported image size");
             List<Map<String,Object>> references = references(arguments.get("reference_images"));
             final ProjectImageAssets.Image[] output = new ProjectImageAssets.Image[1];
@@ -191,6 +195,14 @@ final class ProjectImageTool implements CoreTool {
         Object value = args.get(name); if (!(value instanceof Number)) throw new IllegalArgumentException(name + " requires an integer");
         try { long result = new java.math.BigDecimal(value.toString()).longValueExact(); if (result < minimum || result > maximum) throw new ArithmeticException(); return result; }
         catch (ArithmeticException | NumberFormatException invalid) { throw new IllegalArgumentException(name + " is outside its integer limits"); }
+    }
+    static String sizeArgumentOrDefault(Map<String,Object> args) {
+        return args.containsKey("size") ? text(args, "size") : null;
+    }
+    static int maxBytesArgumentOrDefault(Map<String,Object> args) {
+        return args.containsKey("max_bytes")
+                ? (int) integer(args, "max_bytes", 16384, ProjectImageAssets.MAX_BYTES)
+                : ProjectImageAssets.MAX_BYTES;
     }
     @SuppressWarnings("unchecked") private static List<Map<String,Object>> references(Object value) {
         if (value == null) return Collections.emptyList();
