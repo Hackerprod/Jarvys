@@ -192,7 +192,7 @@ class BotCreationToolTest {
         var availabilityChecks = 0
         val service = BotCreationService(repository, session, { caps }, { availableSkills },
             {
-                if (++availabilityChecks == 2) token.cancel()
+                if (++availabilityChecks == 1) token.cancel()
                 true
             },
             { _, _, _, _ -> throw AssertionError("Cancelled creation must not start icon generation") })
@@ -201,7 +201,7 @@ class BotCreationToolTest {
             BotCreationTool(service).execute(arguments("cancel-before-icon"), token)
         }
         assertEquals(1, repository.definitions().count { !it.builtIn })
-        assertEquals(2, availabilityChecks)
+        assertEquals(1, availabilityChecks)
     }
     @Test fun childrenAndScheduledOrProactiveRunsCannotCreateBots() {
         assertFalse(tool().execute(arguments(), CancellationToken.crewChild()).success)
