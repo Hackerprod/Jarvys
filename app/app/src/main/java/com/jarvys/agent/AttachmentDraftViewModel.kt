@@ -117,11 +117,11 @@ class AttachmentDraftViewModel internal constructor(
                     attempt.cancellation.throwIfCancelledBeforePersistence()
                     val attachments = attachmentsToSend.mapNotNull { it.attachment }
                     attempt.cancellation.throwIfCancelledBeforePersistence()
-                    val messageId = messageSubmitter.persistMessage(app, session, text, attachments)
+                    val messageId = messageSubmitter.persistMessage(getApplication(), session, text, attachments)
                     persisted = true
                     attempt.cancellation.markPersisted()
                     AgentRunUiState.bindCurrentUserMessage(session, messageId, optimisticEventId)
-                    messageSubmitter.startAgent(app, session, messageId, skills, memoryDisabled)
+                    messageSubmitter.startAgent(getApplication(), session, messageId, skills, memoryDisabled)
                 } catch (failure: Exception) {
                     error = message(if (failure is CancellationException && !persisted) R.string.chat_attachment_send_cancelled
                         else R.string.chat_attachment_send_failed)

@@ -359,7 +359,7 @@ object AgentRunUiState {
         }
         val working = WorkingSnapshot(sessionId, initial)
         workingSnapshot.set(working)
-        try {
+        return try {
             block()
         } finally {
             synchronized(lock) {
@@ -900,7 +900,7 @@ object AgentRunUiState {
 
     /** UI publishes only transient eligibility and locally available identities; no asset bytes cross this state. */
     @JvmStatic
-    fun headerMascotAvailabilityChanged(availability: HeaderMascotAvailability) = inSession(availability.sessionId) { synchronized(lock) {
+    fun headerMascotAvailabilityChanged(availability: HeaderMascotAvailability) = inSession(availability.sessionId.orEmpty()) { synchronized(lock) {
         val current = _state.value
         if (current.sessionId != availability.sessionId) return@synchronized
         current.headerMascotAnimationRequest?.takeIf { it.sessionId == availability.sessionId }?.let { request ->

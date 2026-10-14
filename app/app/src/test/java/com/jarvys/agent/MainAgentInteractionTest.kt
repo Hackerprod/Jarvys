@@ -933,7 +933,7 @@ class MainAgentInteractionTest {
             assertTrue(store.readPendingInterruptRequests(other).any { it.optString("content") == "steer session B" })
             val notification = AgentForegroundService::class.java.getDeclaredMethod("buildForegroundNotification")
                 .apply { isAccessible = true }.invoke(service) as android.app.Notification
-            assertEquals(2, service.getResources().getQuantityString(R.plurals.agent_notification_active_runs, 2, 2),
+            assertEquals(service.getResources().getQuantityString(R.plurals.agent_notification_active_runs, 2, 2),
                 notification.extras.getCharSequence(android.app.Notification.EXTRA_TEXT).toString())
             assertEquals(service.getString(R.string.agent_notification_stop_all), notification.actions.single().title.toString())
 
