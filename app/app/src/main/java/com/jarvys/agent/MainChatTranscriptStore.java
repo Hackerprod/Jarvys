@@ -117,15 +117,19 @@ final class MainChatTranscriptStore {
                         // The loop checkpoints the original result before cancellation and budget trimming.
                         // Keep that first observation, rather than replacing it with a later omitted-output marker.
                         if (!results.contains(key)) {
+                            String completeOutput = checkpoint.completedToolResults.get(turn.toolCallId);
+                            String output = completeOutput == null ? turn.content : completeOutput;
                             append(new JSONObject().put("type", "model_tool_result").put("batchId", batch)
                                     .put("callId", turn.toolCallId).put("toolName", turn.toolName)
-                                    .put("output", retain(turn.content)));
+                                    .put("output", retain(output)));
                             results.add(key);
                         }
                     } else {
                         batch = null;
                     }
                 }
+                // Acknowledge only after the checkpoint's durable transcript writes have succeeded.
+                store.markConversationMessagesIncorporated(sessionId, checkpoint.appliedIncomingIds);
             } catch (RuntimeException failure) { throw failure; }
             catch (Exception failure) { throw new IllegalStateException("Could not retain tool transcript", failure); }
         });

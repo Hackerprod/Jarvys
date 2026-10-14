@@ -1839,21 +1839,118 @@ public final class LocalRunStore {
         }
     }
 
-    /** Undispatched durable follow-ups, in ledger order, for service recovery after a worker exit. */
+    /** Durable acknowledgement that an existing user row entered a run transcript. */
+    public synchronized void markConversationMessagesIncorporated(String sessionId, Iterable<String> messageIds) {
+        if (sessionId == null || messageIds == null || conversationMetadata.read(sessionId).deleted) return;
+        synchronized (SESSION_TITLE_LOCK) {
+            Set<String> userIds = new HashSet<>();
+            Set<String> incorporated = new HashSet<>();
+            for (JSONObject row : readConversationRows(sessionId)) {
+                if ("user".equals(row.optString("role"))) {
+                    String id = row.optString("messageId", "");
+                    if (!id.isEmpty()) userIds.add(id);
+                } else if ("main_chat_input_incorporated".equals(row.optString("type"))) {
+                    JSONArray ids = row.optJSONArray("messageIds");
+                    if (ids != null) for (int i = 0; i < ids.length(); i++) {
+                        String id = ids.optString(i, "");
+                        if (!id.isEmpty()) incorporated.add(id);
+                    }
+                }
+            }
+            JSONArray newlyIncorporated = new JSONArray();
+            for (String id : messageIds) {
+                if (id != null && userIds.contains(id) && incorporated.add(id)) newlyIncorporated.put(id);
+            }
+            if (newlyIncorporated.length() == 0) return;
+            try {
+                JSONObject row = new JSONObject().put("type", "main_chat_input_incorporated")
+                        .put("messageIds", newlyIncorporated)
+                        .put("timestamp", System.currentTimeMillis() / 1000.0);
+                appendSessionRowLocked(conversationFile(sessionId), row);
+            } catch (Exception error) {
+                throw new IllegalStateException("Could not persist incorporated chat inputs", error);
+            }
+        }
+    }
+
+    /** Acknowledges user rows already present in the loaded context through its current owner. */
+    public synchronized void markConversationMessagesIncorporatedThrough(String sessionId, String messageId) {
+        if (sessionId == null || messageId == null || messageId.isEmpty()) return;
+        List<String> ids = new ArrayList<>();
+        boolean found = false;
+        for (JSONObject row : readConversationRows(sessionId)) {
+            if (!"user".equals(row.optString("role"))) continue;
+            String id = row.optString("messageId", "");
+            if (!id.isEmpty()) ids.add(id);
+            if (messageId.equals(id)) {
+                found = true;
+                break;
+            }
+        }
+        if (found) markConversationMessagesIncorporated(sessionId, ids);
+    }
+
+    synchronized Set<String> incorporatedConversationMessageIds(String sessionId) {
+        Set<String> incorporated = new HashSet<>();
+        for (JSONObject row : readConversationRows(sessionId)) {
+            if (!"main_chat_input_incorporated".equals(row.optString("type"))) continue;
+            JSONArray ids = row.optJSONArray("messageIds");
+            if (ids != null) for (int i = 0; i < ids.length(); i++) {
+                String id = ids.optString(i, "");
+                if (!id.isEmpty()) incorporated.add(id);
+            }
+        }
+        return Collections.unmodifiableSet(incorporated);
+    }
+
+    /** Persists an intermediate assistant turn at its logical point before the steering row already on disk. */
+    public synchronized String appendAssistantMessageBefore(String sessionId, String content,
+            String runId, String userMessageId, String beforeMessageId) {
+        if (beforeMessageId == null || beforeMessageId.isEmpty())
+            throw new IllegalArgumentException("An intermediate assistant turn needs its following user message");
+        JSONObject row = new JSONObject();
+        String messageId = java.util.UUID.randomUUID().toString();
+        try {
+            row.put("role", "assistant");
+            row.put("content", content == null ? "" : content);
+            row.put("messageId", messageId);
+            row.put("status", "COMPLETED");
+            if (runId != null && !runId.isEmpty()) row.put("runId", runId);
+            if (userMessageId != null && !userMessageId.isEmpty()) row.put("userMessageId", userMessageId);
+            row.put("beforeMessageId", beforeMessageId);
+            row.put("timestamp", System.currentTimeMillis() / 1000.0);
+            synchronized (SESSION_TITLE_LOCK) { appendSessionRowLocked(conversationFile(sessionId), row); }
+            return messageId;
+        } catch (Exception error) {
+            throw new IllegalStateException("Could not persist intermediate assistant message", error);
+        }
+    }
+
+    /** Unincorporated durable follow-ups, in ledger order, for service recovery after a worker exit. */
     public synchronized List<JSONObject> readPendingInterruptRequests(String sessionId) {
         if (sessionId == null || conversationMetadata.read(sessionId).deleted) return Collections.emptyList();
         List<JSONObject> rows = readConversationRows(sessionId);
         Set<String> dispatched = new HashSet<>();
+        Set<String> incorporated = new HashSet<>();
         for (JSONObject row : rows) {
             String id = row.optString("interruptRequestId", "");
             if (!id.isEmpty()) dispatched.add(id);
+            if ("main_chat_input_incorporated".equals(row.optString("type"))) {
+                JSONArray ids = row.optJSONArray("messageIds");
+                if (ids != null) for (int i = 0; i < ids.length(); i++) {
+                    String incorporatedId = ids.optString(i, "");
+                    if (!incorporatedId.isEmpty()) incorporated.add(incorporatedId);
+                }
+            }
         }
         List<JSONObject> pending = new ArrayList<>();
         for (JSONObject row : rows) {
             if (!"main_interrupt_request".equals(row.optString("type"))) continue;
             String id = row.optString("requestId", "");
-            if (id.isEmpty() || dispatched.contains(id)) continue;
-            try { pending.add(new JSONObject(row.toString()).put("sessionId", sessionId)); }
+            boolean alreadyDispatched = dispatched.contains(id);
+            if (id.isEmpty() || alreadyDispatched && incorporated.contains(id)) continue;
+            try { pending.add(new JSONObject(row.toString()).put("sessionId", sessionId)
+                    .put("alreadyDispatched", alreadyDispatched)); }
             catch (Exception malformed) { throw new IllegalStateException("Could not read pending chat follow-up", malformed); }
         }
         return Collections.unmodifiableList(pending);
@@ -2033,7 +2130,28 @@ public final class LocalRunStore {
                 throw new IllegalStateException("Could not read conversation ledger", error);
             }
         }
+        orderAssistantMessagesBeforeSteering(rows);
         return rows;
+    }
+
+    private static void orderAssistantMessagesBeforeSteering(List<JSONObject> rows) {
+        for (JSONObject row : new ArrayList<>(rows)) {
+            if (!"assistant".equals(row.optString("role"))) continue;
+            String beforeMessageId = row.optString("beforeMessageId", "");
+            if (beforeMessageId.isEmpty()) continue;
+            int source = rows.indexOf(row);
+            int target = -1;
+            for (int index = 0; index < rows.size(); index++) {
+                if (beforeMessageId.equals(rows.get(index).optString("messageId", ""))) {
+                    target = index;
+                    break;
+                }
+            }
+            if (source < 0 || target < 0 || source == target) continue;
+            rows.remove(source);
+            if (source < target) target--;
+            rows.add(target, row);
+        }
     }
 
     private static Set<String> hiddenAssistantIds(List<JSONObject> rows) {

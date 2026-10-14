@@ -259,6 +259,7 @@ class MainAgentInteractionTest {
                 loop.run(goal, history, attachments, token, progress)
             } else {
                 followUp.countDown()
+                progress.onInitialUserMessageIncorporated()
                 CoreAgentLoop.Result("follow-up", "follow-up retained", 1, "PARTIAL")
             }
         }
@@ -271,6 +272,189 @@ class MainAgentInteractionTest {
             val messages = store.readConversationMessages(session)
             assertTrue(messages.any { it.optString("role") == "assistant" && it.optString("status") == "PARTIAL" })
             assertTrue(messages.any { it.optString("role") == "user" && it.optString("content") == "retry the accepted input" })
+        } finally {
+            StopController.getInstance().stopRun()
+            stopManagedService(context)
+        }
+    }
+
+    @Test fun transcriptIncorporatedSteeringIsNotReplayedAfterPartialCompletion() =
+        assertIncorporatedSteeringIsNotReplayed("partial")
+
+    @Test fun transcriptIncorporatedSteeringIsNotReplayedAfterFailure() =
+        assertIncorporatedSteeringIsNotReplayed("failed")
+
+    @Test fun transcriptIncorporatedSteeringIsNotReplayedAfterTimeout() =
+        assertIncorporatedSteeringIsNotReplayed("timeout")
+
+    private fun assertIncorporatedSteeringIsNotReplayed(terminal: String) {
+        StopController.getInstance().stopRun()
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val session = "steering-consumed-$terminal-${System.nanoTime()}"
+        val store = LocalRunStore(context)
+        val initialId = store.appendConversationMessage(session, "user", "initial request")
+        val service = startManagedService(context)
+        val runCalls = AtomicInteger()
+        val modelCalls = AtomicInteger()
+        val followUp = CountDownLatch(1)
+        val observedGoals = java.util.Collections.synchronizedList(mutableListOf<String>())
+        service.runtimeFactory = AgentForegroundService.RuntimeFactory { runtimeContext, id, skills, memoryDisabled ->
+            CoreAgentRuntime(runtimeContext, id, skills, CorePromptBudget.standard(), memoryDisabled)
+        }
+        service.mainChatRunner = AgentForegroundService.MainChatRunner { runtime, goal, history, attachments, token, progress ->
+            observedGoals.add(goal)
+            if (runCalls.incrementAndGet() > 1) {
+                followUp.countDown()
+                CoreAgentLoop.Result("unexpected-follow-up", "unexpected follow-up", 1, "PARTIAL")
+            } else {
+                val provider = runtime.mainChatSteeringProvider()!!
+                val model = object : CoreAgentLoop.Model {
+                    override fun complete(transcript: List<ConversationTurn>, prompt: String,
+                        declarations: List<ToolSpec>, current: CancellationToken): ModelReply {
+                        if (modelCalls.incrementAndGet() == 1) {
+                            val requestId = store.appendInterruptRequest(
+                                session, "accepted steering", emptyList(), false)
+                            assertTrue(provider.dispatchPendingRequest(requestId))
+                            return ModelReply("Intermediate answer", emptyList())
+                        }
+                        when (terminal) {
+                            "partial" -> throw ProviderHttpException("temporary provider outage", 503, 0L, null)
+                            "failed" -> throw IllegalStateException("failure after steering was incorporated")
+                            "timeout" -> {
+                                assertTrue(current.cancelForTimeout())
+                                current.throwIfCancelled()
+                            }
+                        }
+                        return ModelReply("unexpected final answer", emptyList())
+                    }
+                }
+                CoreAgentLoop(model, CoreToolRegistry(emptyList()), "", session,
+                    CorePromptBudget.standard(), null, CoreAgentLoop.ToolResultBudget.BOUNDED, provider, null)
+                    .run(goal, history, attachments, token, progress)
+            }
+        }
+        try {
+            AgentRunUiState.resetSession(session)
+            startServiceIntent(context, AgentForegroundService.storedChatMessageIntent(context, session, initialId))
+            assertTrue("The service run finishes", awaitRunFinished(service, context))
+            assertEquals(listOf("initial request"), observedGoals)
+            assertEquals(0L, followUp.count)
+            val assistants = store.readConversationMessages(session).filter { it.optString("role") == "assistant" }
+            assertTrue(assistants.any { it.optString("status") == if (terminal == "failed") "FAILED" else "PARTIAL" })
+        } finally {
+            StopController.getInstance().stopRun()
+            stopManagedService(context)
+        }
+    }
+
+    @Test fun pickedButUnincorporatedSteeringIsFollowedUpOnceAfterCancellation() {
+        StopController.getInstance().stopRun()
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val session = "steering-picked-not-incorporated-${System.nanoTime()}"
+        val store = LocalRunStore(context)
+        val initialId = store.appendConversationMessage(session, "user", "initial request")
+        val service = startManagedService(context)
+        val runCalls = AtomicInteger()
+        val observedGoals = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val followUp = CountDownLatch(1)
+        service.runtimeFactory = AgentForegroundService.RuntimeFactory { runtimeContext, id, skills, memoryDisabled ->
+            CoreAgentRuntime(runtimeContext, id, skills, CorePromptBudget.standard(), memoryDisabled)
+        }
+        service.mainChatRunner = AgentForegroundService.MainChatRunner { runtime, goal, history, attachments, token, progress ->
+            observedGoals.add(goal)
+            if (runCalls.incrementAndGet() > 1) {
+                followUp.countDown()
+                progress.onInitialUserMessageIncorporated()
+                CoreAgentLoop.Result("follow-up", "follow-up processed", 1, "PARTIAL")
+            } else {
+                val provider = runtime.mainChatSteeringProvider()!!
+                val model = object : CoreAgentLoop.Model {
+                    override fun complete(transcript: List<ConversationTurn>, prompt: String,
+                        declarations: List<ToolSpec>, current: CancellationToken): ModelReply {
+                        val requestId = store.appendInterruptRequest(
+                            session, "picked but not incorporated", emptyList(), false)
+                        assertTrue(provider.dispatchPendingRequest(requestId))
+                        val picked = provider.takeDurableMessages()
+                        assertEquals("picked but not incorporated", picked.single().content)
+                        current.cancelForTimeout()
+                        current.throwIfCancelled()
+                        return ModelReply("unreachable", emptyList())
+                    }
+                }
+                CoreAgentLoop(model, CoreToolRegistry(emptyList()), "", session,
+                    CorePromptBudget.standard(), null, CoreAgentLoop.ToolResultBudget.BOUNDED, provider, null)
+                    .run(goal, history, attachments, token, progress)
+            }
+        }
+        try {
+            AgentRunUiState.resetSession(session)
+            startServiceIntent(context, AgentForegroundService.storedChatMessageIntent(context, session, initialId))
+            assertTrue("The unincorporated message starts a recovery turn", awaitServiceCallback(followUp, 10))
+            assertTrue("Both service turns finish", awaitRunFinished(service, context))
+            assertEquals(listOf("initial request", "picked but not incorporated"), observedGoals)
+            assertEquals(1, observedGoals.count { it == "picked but not incorporated" })
+        } finally {
+            StopController.getInstance().stopRun()
+            stopManagedService(context)
+        }
+    }
+
+    @Test fun assistantAnswerBeforeSteeringIsVisibleAndRestoredInConversationOrder() {
+        StopController.getInstance().stopRun()
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val session = "assistant-before-steering-${System.nanoTime()}"
+        val store = LocalRunStore(context)
+        val initialId = store.appendConversationMessage(session, "user", "initial request")
+        val service = startManagedService(context)
+        val modelCalls = AtomicInteger()
+        val finalAnswer = CountDownLatch(1)
+        service.runtimeFactory = AgentForegroundService.RuntimeFactory { runtimeContext, id, skills, memoryDisabled ->
+            CoreAgentRuntime(runtimeContext, id, skills, CorePromptBudget.standard(), memoryDisabled)
+        }
+        service.mainChatRunner = AgentForegroundService.MainChatRunner { runtime, goal, history, attachments, token, progress ->
+            val provider = runtime.mainChatSteeringProvider()!!
+            val loop = CoreAgentLoop(object : CoreAgentLoop.Model {
+                override fun complete(transcript: List<ConversationTurn>, prompt: String,
+                    declarations: List<ToolSpec>, current: CancellationToken): ModelReply {
+                    if (modelCalls.incrementAndGet() == 1) {
+                        val requestId = store.appendInterruptRequest(
+                            session, "steering request", emptyList(), false)
+                        assertTrue(provider.dispatchPendingRequest(requestId))
+                        return ModelReply("A1", emptyList())
+                    }
+                    val messages = transcript.filter { it.kind == ConversationTurn.Kind.MESSAGE }
+                        .map { "${it.role}:${it.content}" }
+                    assertEquals(listOf("user:initial request", "assistant:A1", "user:steering request"), messages)
+                    finalAnswer.countDown()
+                    return ModelReply("A2", emptyList())
+                }
+            }, CoreToolRegistry(emptyList()), "", session, CorePromptBudget.standard(), null,
+                CoreAgentLoop.ToolResultBudget.BOUNDED, provider, null)
+            MainChatTranscriptStore(context.filesDir, session, store).attach(loop, history)
+            loop.run(goal, history, attachments, token, progress)
+        }
+        try {
+            AgentRunUiState.resetSession(session)
+            startServiceIntent(context, AgentForegroundService.storedChatMessageIntent(context, session, initialId))
+            assertTrue("The second model answer is produced", awaitServiceCallback(finalAnswer, 10))
+            assertTrue("The service run finishes", awaitRunFinished(service, context))
+
+            val visibleMessages = store.readConversationTimeline(session)
+                .filter { it.kind == "user" || it.kind == "assistant" }
+                .map { "${it.kind}:${it.text}" }
+            assertEquals(listOf(
+                "user:initial request", "assistant:A1", "user:steering request", "assistant:A2"), visibleMessages)
+            val restoredMessages = store.loadConversationContext(session)
+                .filter { it.kind == ConversationTurn.Kind.MESSAGE }
+                .map { "${it.role}:${it.content}" }
+            assertEquals(listOf(
+                "user:initial request", "assistant:A1", "user:steering request", "assistant:A2"), restoredMessages)
+            assertEquals(1, visibleMessages.count { it == "assistant:A1" })
+            assertEquals(1, visibleMessages.count { it == "assistant:A2" })
+            val assistantRows = store.readConversationMessages(session).filter { it.optString("role") == "assistant" }
+            assertEquals(initialId, assistantRows.single { it.optString("content") == "A1" }.optString("userMessageId"))
+            assertEquals("steering request", store.readConversationMessage(session,
+                assistantRows.single { it.optString("content") == "A2" }.optString("userMessageId")))
         } finally {
             StopController.getInstance().stopRun()
             stopManagedService(context)
@@ -291,14 +475,16 @@ class MainAgentInteractionTest {
         service.runtimeFactory = AgentForegroundService.RuntimeFactory { runtimeContext, id, skills, memoryDisabled ->
             CoreAgentRuntime(runtimeContext, id, skills, CorePromptBudget.standard(), memoryDisabled)
         }
-        service.mainChatRunner = AgentForegroundService.MainChatRunner { runtime, goal, history, _, _, _ ->
+        service.mainChatRunner = AgentForegroundService.MainChatRunner { runtime, goal, history, _, _, progress ->
             observedGoals.add(goal)
             if (calls.incrementAndGet() == 1) {
                 val provider = runtime.mainChatSteeringProvider()!!
                 val olderRequestId = store.appendInterruptRequest(
                     session, "older accepted steering", emptyList(), false)
                 assertTrue(provider.dispatchPendingRequest(olderRequestId))
-                assertEquals(1, provider.takeDurableMessages().size)
+                val incorporated = provider.takeDurableMessages()
+                assertEquals(1, incorporated.size)
+                provider.durableMessagesIncorporated(incorporated)
                 provider.closeForRunExit()
 
                 assertTrue(AgentForegroundService.interruptAndSend(
@@ -307,6 +493,7 @@ class MainAgentInteractionTest {
             } else {
                 followUpHistory.set(history.toList())
                 followUp.countDown()
+                progress.onInitialUserMessageIncorporated()
                 CoreAgentLoop.Result("follow-up", "newer input handled", 1, "PARTIAL")
             }
         }
@@ -347,7 +534,7 @@ class MainAgentInteractionTest {
         service.runtimeFactory = AgentForegroundService.RuntimeFactory { _, _, _, _ ->
             CoreAgentRuntime(emptyList(), emptyList(), emptyList(), emptyList())
         }
-        service.mainChatRunner = AgentForegroundService.MainChatRunner { _, goal, _, _, _, _ ->
+        service.mainChatRunner = AgentForegroundService.MainChatRunner { _, goal, _, _, _, progress ->
             observedGoals.add(goal)
             if (calls.incrementAndGet() == 1) {
                 if (providerWasClosed) {
@@ -361,6 +548,7 @@ class MainAgentInteractionTest {
                 CoreAgentLoop.Result("initial-partial", "initial work paused", 1, "PARTIAL")
             } else {
                 followUp.countDown()
+                progress.onInitialUserMessageIncorporated()
                 CoreAgentLoop.Result("follow-up", "follow-up started", 1, "PARTIAL")
             }
         }
@@ -393,9 +581,10 @@ class MainAgentInteractionTest {
         service.runtimeFactory = AgentForegroundService.RuntimeFactory { _, _, _, _ ->
             CoreAgentRuntime(emptyList(), emptyList(), emptyList(), emptyList())
         }
-        service.mainChatRunner = AgentForegroundService.MainChatRunner { _, goal, _, _, _, _ ->
+        service.mainChatRunner = AgentForegroundService.MainChatRunner { _, goal, _, _, _, progress ->
             observed.add(goal)
             bothStarted.countDown()
+            progress.onInitialUserMessageIncorporated()
             CoreAgentLoop.Result("recovered", "visible recovery", 1, "PARTIAL")
         }
         try {
@@ -418,6 +607,46 @@ class MainAgentInteractionTest {
             assertTrue(store.readPendingInterruptRequests().isEmpty())
             assertEquals("PARTIAL", store.readConversationMessages(sessionA).last().optString("status"))
             assertEquals("PARTIAL", store.readConversationMessages(sessionB).last().optString("status"))
+        } finally {
+            StopController.getInstance().stopRun()
+            stopManagedService(context)
+        }
+    }
+
+    @Test fun dispatchedUnincorporatedSteeringRecoversOnceAfterServiceRestart() {
+        StopController.getInstance().stopRun()
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val store = LocalRunStore(context)
+        val session = "recover-dispatched-steering-${System.nanoTime()}"
+        val initialId = store.appendConversationMessage(session, "user", "initial request")
+        val requestId = store.appendInterruptRequest(session, "accepted steering", emptyList(), false)
+        assertTrue(store.dispatchInterruptRequest(session, requestId) != null)
+        val pickedProvider = MainChatTurnContextProvider(store, session, initialId)
+        assertEquals(requestId, pickedProvider.takeDurableMessages().single().id)
+        pickedProvider.closeForRunExit()
+
+        startManagedService(context)
+        stopManagedService(context)
+        val recoveredService = startManagedService(context)
+        val calls = AtomicInteger()
+        val recovered = CountDownLatch(1)
+        recoveredService.runtimeFactory = AgentForegroundService.RuntimeFactory { _, _, _, _ ->
+            CoreAgentRuntime(emptyList(), emptyList(), emptyList(), emptyList())
+        }
+        recoveredService.mainChatRunner = AgentForegroundService.MainChatRunner { _, goal, _, _, _, progress ->
+            assertEquals("accepted steering", goal)
+            calls.incrementAndGet()
+            progress.onInitialUserMessageIncorporated()
+            recovered.countDown()
+            CoreAgentLoop.Result("recovered-dispatched", "recovered once", 1, "PARTIAL")
+        }
+        try {
+            startServiceIntent(context, android.content.Intent(context, AgentForegroundService::class.java)
+                .setAction(AgentForegroundService.ACTION_RECOVER_PENDING_INPUTS))
+            assertTrue("Dispatched input is recovered after service restart", awaitServiceCallback(recovered, 10))
+            assertTrue("Recovery run finishes", awaitRunFinished(recoveredService, context))
+            assertEquals(1, calls.get())
+            assertTrue(store.readPendingInterruptRequests(session).isEmpty())
         } finally {
             StopController.getInstance().stopRun()
             stopManagedService(context)
@@ -811,6 +1040,24 @@ class MainAgentInteractionTest {
             if (latch.count > 0) Thread.sleep(10)
         }
         return latch.count == 0L
+    }
+
+    private fun awaitRunFinished(service: AgentForegroundService, context: Context): Boolean {
+        val activeToken = AgentForegroundService::class.java.getDeclaredField("activeRunToken")
+            .apply { isAccessible = true }
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+        while (System.nanoTime() < deadline) {
+            org.robolectric.shadows.ShadowLooper.idleMainLooper()
+            deliverStartedServices(context)
+            if (activeToken.get(service) == null) {
+                worker(service).submit {}.get(10, TimeUnit.SECONDS)
+                org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                deliverStartedServices(context)
+                if (activeToken.get(service) == null) return true
+            }
+            Thread.sleep(10)
+        }
+        return false
     }
 
     private fun stopManagedService(context: Context) {

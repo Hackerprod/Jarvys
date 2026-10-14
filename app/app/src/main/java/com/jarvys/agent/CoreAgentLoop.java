@@ -21,6 +21,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * One ReAct loop: model calls and tool results share a local transcript until a text answer ends the run.
@@ -47,6 +48,15 @@ public final class CoreAgentLoop {
 
         /** User-facing assistant text only, after durable tool intent and before any tool effect. */
         default void onAssistantProgress(String callId, String message) { }
+
+        /** A completed assistant turn that precedes a newly incorporated durable user message. */
+        default void onAssistantAnswerBeforeInput(String runId, String message, IncomingMessage nextInput) { }
+
+        /** Called after the initial run request has entered the transcript. */
+        default void onInitialUserMessageIncorporated() { }
+
+        /** Called after newly collected durable user messages have entered and checkpointed in the transcript. */
+        default void onDurableMessagesIncorporated(List<IncomingMessage> messages) { }
 
 
         default void onToolProgress(String stage, String callId, String displayName, String detail) {
@@ -208,6 +218,9 @@ public final class CoreAgentLoop {
         /** Stops accepting run-scoped input when a run exits without a final model checkpoint. */
         default void closeForRunExit() { }
 
+        /** Acknowledges only durable messages that were added to the loop transcript. */
+        default void durableMessagesIncorporated(List<IncomingMessage> messages) { }
+
         default List<String> completedToolIncomingIds(String toolName) {
             return Collections.emptyList();
         }
@@ -249,7 +262,7 @@ public final class CoreAgentLoop {
         final ToolActivity activity;
         final boolean hideFromProgress;
         final String preflightError;
-        final AtomicBoolean executionStarted = new AtomicBoolean(false);
+        final AtomicReference<ExecutionState> executionState = new AtomicReference<>(ExecutionState.NEW);
         volatile boolean activityStarted;
         volatile CoreToolResult returnedResult;
         volatile Thread executionThread;
@@ -260,6 +273,10 @@ public final class CoreAgentLoop {
         int repeatedFailures;
         boolean loopRecorded;
         boolean finalized;
+
+        boolean markRunning() { return executionState.compareAndSet(ExecutionState.NEW, ExecutionState.RUNNING); }
+        boolean markCancelledBeforeStart() { return executionState.compareAndSet(ExecutionState.NEW, ExecutionState.CANCELLED); }
+        boolean executionStarted() { return executionState.get() == ExecutionState.RUNNING; }
 
         PreparedToolCall(int index, ModelReply.Call call, CoreTool tool, Map<String, Object> arguments,
                          String argumentsKey, ToolActivity activity, boolean hideFromProgress,
@@ -274,6 +291,8 @@ public final class CoreAgentLoop {
             this.preflightError = preflightError;
         }
     }
+
+    private enum ExecutionState { NEW, RUNNING, CANCELLED }
 
     private static final class ToolBatchOutcome {
         int remainingResultChars;
@@ -323,6 +342,8 @@ public final class CoreAgentLoop {
         public final Map<String, String> toolLifecycle;
         public final int genuineUserIndex;
         public final Map<String, CrewInputIncorporation> incorporations;
+        /** Complete tool outputs supplied only to checkpoint persistence before transcript budgeting. */
+        public final Map<String, String> completedToolResults;
 
         public Checkpoint(List<ConversationTurn> transcript, Set<String> appliedIncomingIds, Map<String, String> toolLifecycle, int genuineUserIndex) {
             this(transcript, appliedIncomingIds, toolLifecycle, genuineUserIndex, Collections.emptyMap());
@@ -330,6 +351,12 @@ public final class CoreAgentLoop {
 
         public Checkpoint(List<ConversationTurn> transcript, Set<String> appliedIncomingIds, Map<String, String> toolLifecycle,
                 int genuineUserIndex, Map<String, CrewInputIncorporation> incorporations) {
+            this(transcript, appliedIncomingIds, toolLifecycle, genuineUserIndex, incorporations, Collections.emptyMap());
+        }
+
+        Checkpoint(List<ConversationTurn> transcript, Set<String> appliedIncomingIds, Map<String, String> toolLifecycle,
+                int genuineUserIndex, Map<String, CrewInputIncorporation> incorporations,
+                Map<String, String> completedToolResults) {
             Map<String, CrewInputIncorporation> copy = new LinkedHashMap<>();
             for (Map.Entry<String, CrewInputIncorporation> entry : incorporations.entrySet()) {
                 if (entry.getValue() == null || !entry.getValue().binding.mailboxMessageId.equals(entry.getKey())
@@ -338,6 +365,7 @@ public final class CoreAgentLoop {
                 copy.put(entry.getKey(), entry.getValue());
             }
             this.incorporations = Collections.unmodifiableMap(copy);
+            this.completedToolResults = Collections.unmodifiableMap(new LinkedHashMap<>(completedToolResults));
             this.transcript = Collections.unmodifiableList(new ArrayList<>(transcript));
             this.appliedIncomingIds = Collections.unmodifiableSet(new LinkedHashSet<>(appliedIncomingIds));
             this.toolLifecycle = Collections.unmodifiableMap(new LinkedHashMap<>(toolLifecycle));
@@ -393,7 +421,8 @@ public final class CoreAgentLoop {
                     restored.add(ConversationTurn.toolResult(call.id, call.name, recovery + ": " + ("NEVER_LAUNCHED".equals(recovery) ? "The recorded tool intent was never launched." : "Tool execution was interrupted before its result was durably recorded; effects may have occurred.") + " It was not automatically replayed. Inspect current evidence before any explicit continuation."));
                 }
             }
-            return new Checkpoint(restored, appliedIncomingIds, states, genuine == null ? -1 : restored.indexOf(genuine), incorporations);
+            return new Checkpoint(restored, appliedIncomingIds, states, genuine == null ? -1 : restored.indexOf(genuine),
+                    incorporations, completedToolResults);
         }
     }
 
@@ -437,6 +466,10 @@ public final class CoreAgentLoop {
     }
 
     private void updateTranscriptSnapshot(List<ConversationTurn> transcript) {
+        updateTranscriptSnapshot(transcript, Collections.emptyMap());
+    }
+
+    private void updateTranscriptSnapshot(List<ConversationTurn> transcript, Map<String, String> completedToolResults) {
         for (ConversationTurn turn : transcript) {
             if (turn.kind == ConversationTurn.Kind.TOOL_CALLS) {
                 for (ModelReply.Call call : turn.toolCalls) {
@@ -453,7 +486,9 @@ public final class CoreAgentLoop {
         CheckpointListener listener = checkpointListener;
         if (listener != null) {
             try {
-                listener.persist(checkpoint);
+                listener.persist(completedToolResults == null || completedToolResults.isEmpty() ? checkpoint
+                        : new Checkpoint(checkpoint.transcript, checkpoint.appliedIncomingIds, checkpoint.toolLifecycle,
+                                checkpoint.genuineUserIndex, checkpoint.incorporations, completedToolResults));
             } catch (CheckpointFailure failure) {
                 throw failure;
             } catch (RuntimeException failure) {
@@ -564,6 +599,7 @@ public final class CoreAgentLoop {
         boolean truncateToolResultsForProvider = false;
         ToolLoopDetector loopDetector = new ToolLoopDetector();
         try {
+            boolean initialUserMessageReported = false;
             while (true) {
                 token.throwIfCancelled();
                 List<ToolSpec> declarations = tools.declarations();
@@ -572,6 +608,10 @@ public final class CoreAgentLoop {
                     modelHasInput = true;
                 }
                 updateTranscriptSnapshot(transcript);
+                if (!initialUserMessageReported && requestInTranscript && hasRunRequest && listener != null) {
+                    listener.onInitialUserMessageIncorporated();
+                    initialUserMessageReported = true;
+                }
                 if (!modelHasInput) {
                     if (drainTurnContext(transcript, true)) {
                         requestInTranscript = true;
@@ -683,7 +723,7 @@ public final class CoreAgentLoop {
                         transcript.add(ConversationTurn.assistantReply(answer, reply.providerOutputItems));
                         updateTranscriptSnapshot(transcript);
                     }
-                    if (drainTurnContext(transcript, true)) {
+                    if (drainTurnContext(transcript, true, listener, answer, runId)) {
                         requestInTranscript = true;
                         modelHasInput = true;
                         prompt = "";
@@ -711,7 +751,7 @@ public final class CoreAgentLoop {
                 }
                 if (batch.executedCalls > 0 && batch.allCallsTerminal && batch.terminalText != null
                         && !batch.steeringReceived) {
-                    if (drainTurnContext(transcript, true)) {
+                    if (drainTurnContext(transcript, true, listener, batch.terminalText, runId)) {
                         requestInTranscript = true;
                         modelHasInput = true;
                         prompt = "";
@@ -781,11 +821,7 @@ public final class CoreAgentLoop {
                 token.throwIfCancelled();
                 PreparedToolCall item = prepared.get(index);
                 if (item.preflightError != null) {
-                    item.result = CoreToolResult.failure(item.preflightError);
-                    toolLifecycle.put(item.call.id, "NEVER_LAUNCHED");
-                    item.repeatedFailures = loopDetector.recordOutcome(item.call.name, item.argumentsKey,
-                            false, item.preflightError);
-                    item.loopRecorded = true;
+                    appendPreflightError(item, transcript, listener, loopDetector, outcome);
                     if (item.repeatedFailures >= ToolLoopDetector.FAILURE_THRESHOLD) {
                         outcome.noProgress = true;
                         skipUnlaunched(prepared, index + 1, "Not started after repeated identical tool errors.");
@@ -801,10 +837,13 @@ public final class CoreAgentLoop {
                 token.throwIfCancelled();
                 startPreparedTool(item, registry, transcript, token, listener, activeActivities);
                 token.throwIfCancelled();
-                item.executionStarted.set(true);
+                if (!item.markRunning()) continue;
                 executionStarted = true;
                 try {
                     item.result = invokePreparedTool(item, registry, token, listener);
+                } catch (CancellationException cancelled) {
+                    if (token.isCancellationRequested()) throw cancelled;
+                    item.result = cancelledToolResult(cancelled);
                 } catch (RuntimeException failure) {
                     throw failure;
                 }
@@ -857,7 +896,7 @@ public final class CoreAgentLoop {
                         Runnable nativeAdmission = NativeEffectDispatchScope.captureAdmission();
                         item.future = PARALLEL_TOOL_EXECUTOR.submit(() -> {
                             item.executionThread = Thread.currentThread();
-                            item.executionStarted.set(true);
+                            if (!item.markRunning()) return null;
                             try (AgentErrorReporter.Scope ignored = errorScope.install();
                                  NativeEffectDispatchScope dispatch = NativeEffectDispatchScope.enter(nativeAdmission)) {
                                 CoreToolResult result = invokePreparedTool(item, registry, token, listener);
@@ -918,7 +957,7 @@ public final class CoreAgentLoop {
                     item.repeatedFailures = loopDetector.recordOutcome(item.call.name, item.argumentsKey,
                             false, item.preflightError);
                     item.loopRecorded = true;
-                } else if (item.result != null && item.executionStarted.get()) {
+                } else if (item.result != null && item.executionStarted()) {
                     outcome.executedCalls++;
                     item.repeatedFailures = loopDetector.recordOutcome(item.call.name, item.argumentsKey,
                             item.result.success, item.result.content);
@@ -953,7 +992,7 @@ public final class CoreAgentLoop {
                         false, item.preflightError) >= ToolLoopDetector.FAILURE_THRESHOLD) outcome.noProgress = true;
                 continue;
             }
-            if (item.result == null || !item.executionStarted.get()) continue;
+            if (item.result == null || !item.executionStarted()) continue;
             appendExecutedResult(item, transcript, token, listener, loopDetector, outcome);
             activeActivities.remove(item.call.id);
         }
@@ -979,6 +1018,21 @@ public final class CoreAgentLoop {
         String detail = cancelled.getMessage();
         return CoreToolResult.failure(detail == null || detail.isEmpty()
                 ? cancelled.getClass().getSimpleName() : detail);
+    }
+
+    private void appendPreflightError(PreparedToolCall item, List<ConversationTurn> transcript,
+            ProgressListener listener, ToolLoopDetector loopDetector, ToolBatchOutcome outcome) {
+        item.result = CoreToolResult.failure(item.preflightError);
+        toolLifecycle.put(item.call.id, "NEVER_LAUNCHED");
+        item.repeatedFailures = loopDetector.recordOutcome(item.call.name, item.argumentsKey,
+                false, item.preflightError);
+        item.loopRecorded = true;
+        String content = "Tool error: " + item.preflightError;
+        transcript.add(ConversationTurn.toolResult(item.call.id, item.call.name, content));
+        item.finalized = true;
+        updateTranscriptSnapshot(transcript);
+        if (listener != null) listener.onToolActivity(item.activity.event("tool_not_started", content, null));
+        if (item.repeatedFailures >= ToolLoopDetector.FAILURE_THRESHOLD) outcome.noProgress = true;
     }
 
     private void startPreparedTool(PreparedToolCall item, CoreToolRegistry registry,
@@ -1007,6 +1061,7 @@ public final class CoreAgentLoop {
         // A self-cancelling tool may call this before submit() has published its Future.
         // Let its runner publish the returned result before cancelling that FutureTask.
         if (item.cancelAfterResult) return;
+        item.markCancelledBeforeStart();
         Future<CoreToolResult> future = item.future;
         if (future == null) {
             if (item.executionThread == Thread.currentThread()) {
@@ -1054,9 +1109,8 @@ public final class CoreAgentLoop {
         for (String id : completedIds) appliedIncomingIds.add(id);
         String content = rawContent;
         boolean crewCompaction = compactor != null && compactor.isCrew();
-        boolean preserveReturnedResult = token.isCancelled();
         boolean completeTooLargeForCrew = false;
-        if (crewCompaction && !preserveReturnedResult) {
+        if (crewCompaction) {
             try {
                 int contextWindow = model.contextWindow(token);
                 completeTooLargeForCrew = result.completeContentRequired
@@ -1065,19 +1119,14 @@ public final class CoreAgentLoop {
                     content = compactor.retainToolOutput(rawContent, contextWindow, token);
             } catch (RuntimeException cancellationDuringCompaction) {
                 if (!token.isCancelled()) throw cancellationDuringCompaction;
-                preserveReturnedResult = true;
                 content = rawContent;
             }
         }
-        if (token.isCancelled()) {
-            preserveReturnedResult = true;
-            content = rawContent;
-        }
-        if (!preserveReturnedResult && result.completeContentRequired
+        if (result.completeContentRequired
                 && (content.length() > outcome.remainingResultChars || completeTooLargeForCrew)) {
             result = CoreToolResult.failure("Complete tool output exceeds the remaining per-turn context budget or model whole-output budget; request this large result by itself. No partial output was added.");
             content = result.content;
-        } else if (!preserveReturnedResult && !crewCompaction && content.length() > outcome.remainingResultChars) {
+        } else if (!crewCompaction && content.length() > outcome.remainingResultChars) {
             content = outcome.remainingResultChars > 0
                     ? content.substring(0, outcome.remainingResultChars) + "…[truncated by per-turn budget]"
                     : "Tool output omitted because the per-turn result budget is exhausted";
@@ -1086,7 +1135,8 @@ public final class CoreAgentLoop {
         if (!result.success) content = "Tool error: " + content;
         transcript.add(ConversationTurn.toolResult(item.call.id, item.call.name, content));
         item.finalized = true;
-        updateTranscriptSnapshot(transcript);
+        String durableContent = item.result.success ? rawContent : "Tool error: " + rawContent;
+        updateTranscriptSnapshot(transcript, Collections.singletonMap(item.call.id, durableContent));
         if (listener != null && (!item.hideFromProgress || !result.success))
             listener.onToolActivity(item.activity.event(result.success ? "tool_result" : "tool_error", content, result.previewId));
         if (invalidCompletedIds != null) throw invalidCompletedIds;
@@ -1095,7 +1145,7 @@ public final class CoreAgentLoop {
     private void skipUnlaunched(List<PreparedToolCall> calls, int start, String reason) {
         for (int index = start; index < calls.size(); index++) {
             PreparedToolCall item = calls.get(index);
-            if (item.preflightError != null || item.future != null || item.executionStarted.get()) continue;
+            if (item.preflightError != null || item.future != null || item.executionStarted()) continue;
             item.skippedReason = reason;
             toolLifecycle.put(item.call.id, "NEVER_LAUNCHED");
         }
@@ -1109,8 +1159,8 @@ public final class CoreAgentLoop {
         for (PreparedToolCall item : calls) {
             if (item.finalized) continue;
             if (item.result == null && item.returnedResult != null) item.result = item.returnedResult;
-            boolean started = item.activityStarted || item.executionStarted.get();
-            if (item.result != null && item.executionStarted.get()) {
+            boolean started = item.executionStarted();
+            if (item.result != null && item.executionStarted()) {
                 try {
                     appendExecutedResult(item, transcript, token, listener, loopDetector, outcome);
                 } catch (RuntimeException failure) {
@@ -1134,7 +1184,7 @@ public final class CoreAgentLoop {
                     if (failure instanceof CheckpointFailure) throw failure;
                     firstFailure = accumulateFailure(firstFailure, failure);
                 }
-            } else if (item.skippedReason != null || !item.executionStarted.get()) {
+            } else if (item.skippedReason != null || !item.executionStarted()) {
                 toolLifecycle.put(item.call.id, "NEVER_LAUNCHED");
                 activeActivities.remove(item.call.id);
                 String skipped = item.skippedReason == null ? "Tool call was not launched before cancellation." : item.skippedReason;
@@ -1159,6 +1209,7 @@ public final class CoreAgentLoop {
                 }
             }
             item.finalized = true;
+            activeActivities.remove(item.call.id);
             try {
                 updateTranscriptSnapshot(transcript);
             } catch (RuntimeException failure) {
@@ -1219,8 +1270,25 @@ public final class CoreAgentLoop {
     }
 
     private boolean drainTurnContext(List<ConversationTurn> transcript, boolean finalCheckpoint) {
+        return drainTurnContext(transcript, finalCheckpoint, null, null, "");
+    }
+
+    private boolean drainTurnContext(List<ConversationTurn> transcript, boolean finalCheckpoint,
+            ProgressListener listener, String assistantAnswer, String runId) {
         collectTurnContext(finalCheckpoint);
         boolean appended = false;
+        List<IncomingMessage> incorporated = new ArrayList<>();
+        if (assistantAnswer != null && listener != null) {
+            IncomingMessage nextInput = null;
+            for (IncomingMessage message : pendingDurableMessages) {
+                if (message != null && !message.content.isEmpty() && !appliedIncomingIds.contains(message.id)
+                        && "main_chat".equals(message.sourceKind)) {
+                    nextInput = message;
+                    break;
+                }
+            }
+            if (nextInput != null) listener.onAssistantAnswerBeforeInput(runId, assistantAnswer, nextInput);
+        }
         for (IncomingMessage message : new ArrayList<>(pendingDurableMessages)) {
             pendingDurableMessages.remove(message);
             pendingDurableIds.remove(message.id);
@@ -1237,6 +1305,7 @@ public final class CoreAgentLoop {
                         incomingTurn.content);
             }
             appended = true;
+            incorporated.add(message);
         }
         List<String> trusted = new ArrayList<>(pendingTrustedMessages);
         pendingTrustedMessages.clear();
@@ -1258,6 +1327,11 @@ public final class CoreAgentLoop {
             appended = true;
         }
         if (appended) updateTranscriptSnapshot(transcript);
+        if (!incorporated.isEmpty()) {
+            List<IncomingMessage> confirmed = Collections.unmodifiableList(incorporated);
+            if (turnContextProvider != null) turnContextProvider.durableMessagesIncorporated(confirmed);
+            if (listener != null) listener.onDurableMessagesIncorporated(confirmed);
+        }
         return appended;
     }
 

@@ -10,6 +10,7 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.Test;
 
 public class CoreAgentLoopBatchSemanticsTest {
@@ -86,6 +87,149 @@ public class CoreAgentLoopBatchSemanticsTest {
                 && "cancel-call".equals(turn.toolCallId) && turn.content.contains("tool-local cancellation")));
         assertTrue(loop.transcriptSnapshot().stream().anyMatch(turn -> turn.kind == ConversationTurn.Kind.TOOL_RESULT
                 && "other-call".equals(turn.toolCallId) && turn.content.equals("other work completed")));
+    }
+
+    @Test public void sequentialAdmissionResultsStayInProviderCallOrder() {
+        AtomicInteger modelCalls = new AtomicInteger();
+        AtomicInteger effects = new AtomicInteger();
+        CoreTool sequential = tool("sequential", CoreTool.ExecutionMode.SEQUENTIAL, (arguments, token) -> {
+            effects.incrementAndGet();
+            return CoreToolResult.success("executed");
+        });
+        CoreAgentLoop loop = new CoreAgentLoop((transcript, prompt, declarations, token) ->
+                modelCalls.incrementAndGet() == 1
+                        ? new ModelReply("", Arrays.asList(
+                                new ModelReply.Call("invalid-first", "missing_tool", Collections.emptyMap()),
+                                new ModelReply.Call("valid-second", "sequential", Collections.emptyMap())))
+                        : new ModelReply("Finished.", Collections.emptyList()),
+                new CoreToolRegistry(Collections.singletonList(sequential)), "", "sequential-call-order");
+
+        CoreAgentLoop.Result result = loop.run("Run sequential calls", Collections.emptyList(),
+                CancellationToken.uncancellable(), null);
+
+        List<String> resultIds = new java.util.ArrayList<>();
+        for (ConversationTurn turn : loop.transcriptSnapshot())
+            if (turn.kind == ConversationTurn.Kind.TOOL_RESULT) resultIds.add(turn.toolCallId);
+        assertEquals("COMPLETED", result.outcome);
+        assertEquals(1, effects.get());
+        assertEquals(Arrays.asList("invalid-first", "valid-second"), resultIds);
+    }
+
+    @Test public void sequentialToolLocalCancellationIsOnlyThatCallsFailure() {
+        AtomicInteger modelCalls = new AtomicInteger();
+        AtomicInteger laterEffects = new AtomicInteger();
+        CoreTool cancel = tool("cancel", CoreTool.ExecutionMode.SEQUENTIAL, (arguments, token) -> {
+            throw new CancellationException("tool-local cancellation");
+        });
+        CoreTool later = tool("later", CoreTool.ExecutionMode.SEQUENTIAL, (arguments, token) -> {
+            laterEffects.incrementAndGet();
+            return CoreToolResult.success("later call completed");
+        });
+        CoreAgentLoop loop = new CoreAgentLoop((transcript, prompt, declarations, token) ->
+                modelCalls.incrementAndGet() == 1
+                        ? new ModelReply("", Arrays.asList(
+                                new ModelReply.Call("cancel-call", "cancel", Collections.emptyMap()),
+                                new ModelReply.Call("later-call", "later", Collections.emptyMap())))
+                        : new ModelReply("Continued after the tool error.", Collections.emptyList()),
+                new CoreToolRegistry(Arrays.asList(cancel, later)), "", "sequential-tool-local-cancel");
+
+        CoreAgentLoop.Result result = loop.run("Run both calls", Collections.emptyList(),
+                CancellationToken.uncancellable(), null);
+
+        assertEquals("COMPLETED", result.outcome);
+        assertEquals(1, laterEffects.get());
+        assertTrue(loop.transcriptSnapshot().stream().anyMatch(turn -> turn.kind == ConversationTurn.Kind.TOOL_RESULT
+                && "cancel-call".equals(turn.toolCallId) && turn.content.contains("tool-local cancellation")));
+    }
+
+    @Test public void cancelledParallelWorkerThatNeverClaimsExecutionIsNeverLaunched() throws Exception {
+        AtomicInteger effects = new AtomicInteger();
+        AtomicInteger interruptedEvents = new AtomicInteger();
+        CoreTool tool = tool("effect", CoreTool.ExecutionMode.PARALLEL, (arguments, token) -> {
+            effects.incrementAndGet();
+            return CoreToolResult.success("effect completed");
+        });
+        CoreAgentLoop loop = new CoreAgentLoop((transcript, prompt, declarations, token) ->
+                new ModelReply("", Collections.singletonList(
+                        new ModelReply.Call("unlaunched-call", "effect", Collections.emptyMap()))),
+                new CoreToolRegistry(Collections.singletonList(tool)), "", "never-launched-cas");
+        CancellationToken token = CancellationToken.cancellable();
+        loop.setCheckpointListener(checkpoint -> { });
+        CoreAgentLoop.Result result = loop.run("Run the call", Collections.emptyList(), token,
+                new CoreAgentLoop.ProgressListener() {
+                    @Override public void onProgress(String stage, String message) { }
+                    @Override public void onToolActivity(ToolActivity activity) {
+                        if ("tool_call".equals(activity.stage)) token.cancelForTimeout();
+                        if ("tool_interrupted".equals(activity.stage)) interruptedEvents.incrementAndGet();
+                    }
+                });
+
+        assertEquals("PARTIAL", result.outcome);
+        assertEquals(0, effects.get());
+        assertEquals(0, interruptedEvents.get());
+        assertEquals("NEVER_LAUNCHED", loop.checkpointSnapshot().toolLifecycle.get("unlaunched-call"));
+    }
+
+    @Test public void interruptedParallelActivityIsEmittedOnlyOnce() throws Exception {
+        CountDownLatch started = new CountDownLatch(1);
+        AtomicInteger interruptedEvents = new AtomicInteger();
+        CoreTool blocked = tool("blocked", CoreTool.ExecutionMode.PARALLEL, (arguments, token) -> {
+            started.countDown();
+            try {
+                new CountDownLatch(1).await();
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new CancellationException("worker interrupted");
+            }
+            return CoreToolResult.success("unreachable");
+        });
+        CoreAgentLoop loop = new CoreAgentLoop((transcript, prompt, declarations, token) ->
+                new ModelReply("", Collections.singletonList(
+                        new ModelReply.Call("blocked-call", "blocked", Collections.emptyMap()))),
+                new CoreToolRegistry(Collections.singletonList(blocked)), "", "single-interrupted-event");
+        CancellationToken token = CancellationToken.cancellable();
+        java.util.concurrent.ExecutorService runThread = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            java.util.concurrent.Future<CoreAgentLoop.Result> result = runThread.submit(() -> loop.run(
+                    "Run the blocking call", Collections.emptyList(), token,
+                    new CoreAgentLoop.ProgressListener() {
+                        @Override public void onProgress(String stage, String message) { }
+                        @Override public void onToolActivity(ToolActivity activity) {
+                            if ("tool_interrupted".equals(activity.stage)) interruptedEvents.incrementAndGet();
+                        }
+                    }));
+            assertTrue(started.await(5, java.util.concurrent.TimeUnit.SECONDS));
+            token.cancelForTimeout();
+
+            assertEquals("PARTIAL", result.get(5, java.util.concurrent.TimeUnit.SECONDS).outcome);
+            assertEquals(1, interruptedEvents.get());
+        } finally {
+            runThread.shutdownNow();
+        }
+    }
+
+    @Test public void cancelledRunStillBudgetsTranscriptButCheckpointsCompleteToolOutput() {
+        String complete = "x".repeat(400);
+        AtomicReference<CoreAgentLoop.Checkpoint> persisted = new AtomicReference<>();
+        CoreTool cancelAfterCompletion = tool("complete", CoreTool.ExecutionMode.SEQUENTIAL, (arguments, token) -> {
+            token.cancelForTimeout();
+            return CoreToolResult.success(complete);
+        });
+        CoreAgentLoop loop = new CoreAgentLoop((transcript, prompt, declarations, token) ->
+                new ModelReply("", Collections.singletonList(
+                        new ModelReply.Call("complete-call", "complete", Collections.emptyMap()))),
+                new CoreToolRegistry(Collections.singletonList(cancelAfterCompletion)), "", "cancelled-budget",
+                new CorePromptBudget(4096, 256, 1, 256, 256), null);
+        loop.setCheckpointListener(persisted::set);
+
+        CoreAgentLoop.Result result = loop.run("Complete the call", Collections.emptyList(),
+                CancellationToken.cancellable(), null);
+
+        ConversationTurn output = loop.transcriptSnapshot().stream()
+                .filter(turn -> turn.kind == ConversationTurn.Kind.TOOL_RESULT).findFirst().orElseThrow(AssertionError::new);
+        assertEquals("PARTIAL", result.outcome);
+        assertTrue(output.content.length() < complete.length());
+        assertEquals(complete, persisted.get().completedToolResults.get("complete-call"));
     }
 
     private static void assertSteeringCheckpoint(CoreTool.ExecutionMode mode, int expectedExecutions) {
