@@ -320,9 +320,9 @@ class MainAgentInteractionTest {
             assertTrue("history=${followUpHistory.get().map { it.role + ":" + it.content.take(40) }} goals=$observedGoals", followUpHistory.get().any {
                 it.role == "user" && it.content == "older accepted steering"
             })
-            assertTrue(followUpHistory.get().any {
-                it.role == "user" && it.content == "newer fallback input"
-            })
+            // The newest input is the follow-up run goal (never part of its history); it must be consumed exactly once.
+            assertEquals(1, observedGoals.count { it == "newer fallback input" } +
+                followUpHistory.get().count { it.role == "user" && it.content == "newer fallback input" })
             assertTrue(store.readPendingInterruptRequests(session).isEmpty())
         } finally {
             StopController.getInstance().stopRun()
