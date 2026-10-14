@@ -247,7 +247,9 @@ class TaskPendingActionStore private constructor(
     companion object {
         private const val SCHEMA_VERSION = 1
         private val LOCKS = ConcurrentHashMap<String, Any>()
-        private val CURRENT_PROCESS_TOKEN = "${Process.myPid()}:${UUID.randomUUID()}"
+        private val CURRENT_PROCESS_TOKEN: String by lazy {
+            "${runCatching { Process.myPid() }.getOrDefault(0)}:${UUID.randomUUID()}"
+        }
         private val UNRESOLVED_STATUSES = setOf(TaskPendingActionStatus.PENDING,
             TaskPendingActionStatus.CLAIMED, TaskPendingActionStatus.STALE,
             TaskPendingActionStatus.INTERRUPTED_UNCERTAIN)

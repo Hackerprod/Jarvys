@@ -110,11 +110,13 @@ final class MainChatTranscriptStore {
                                 append(new JSONObject().put("type", "model_tool_started")
                                         .put("batchId", batch).put("callId", call.id));
                                 started.add(key);
+                                notStarted.remove(key);
                             } else if ("NEVER_LAUNCHED".equals(checkpoint.toolLifecycle.get(call.id))
-                                    && !started.contains(key) && !notStarted.contains(key)) {
+                                    && !notStarted.contains(key)) {
                                 append(new JSONObject().put("type", "model_tool_not_started")
                                         .put("batchId", batch).put("callId", call.id));
                                 notStarted.add(key);
+                                started.remove(key);
                             }
                         }
                     } else if (turn.kind == ConversationTurn.Kind.TOOL_RESULT && batch != null) {
@@ -261,11 +263,8 @@ final class MainChatTranscriptStore {
                 states.get(batch).put(row.optString("callId"), "STARTED");
                 latestActivity.put(batch, i);
             } else if ("model_tool_not_started".equals(type) && states.containsKey(batch)) {
-                // STARTED is a durable claim. A later not-started marker from an older
-                // execution heuristic must not erase evidence that the claim won.
                 String callId = row.optString("callId");
-                if (!"STARTED".equals(states.get(batch).get(callId)))
-                    states.get(batch).put(callId, "NEVER_LAUNCHED");
+                states.get(batch).put(callId, "NEVER_LAUNCHED");
                 latestActivity.put(batch, i);
             } else if ("model_tool_result".equals(type) && outputs.containsKey(batch)) {
                 outputs.get(batch).putIfAbsent(row.optString("callId"), row);

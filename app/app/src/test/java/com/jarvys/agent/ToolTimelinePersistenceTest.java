@@ -84,7 +84,7 @@ public class ToolTimelinePersistenceTest {
         CoreTool write = MainChatToolContinuityTest.testTool("write", (args, token) -> {
             effects.incrementAndGet(); token.cancelForTimeout(); token.throwIfCancelled();
             return CoreToolResult.success("unreachable");
-        });
+        }, CoreTool.ExecutionMode.SEQUENTIAL);
         CoreAgentLoop loop = new CoreAgentLoop((history, prompt, tools, token) -> new ModelReply("", java.util.Arrays.asList(
                 new ModelReply.Call("started", "write", MainChatToolContinuityTest.arguments("path", "one.html")),
                 new ModelReply.Call("pending", "write", MainChatToolContinuityTest.arguments("path", "two.html")))),

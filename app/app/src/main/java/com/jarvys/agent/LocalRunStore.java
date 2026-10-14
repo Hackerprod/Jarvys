@@ -2653,7 +2653,13 @@ public final class LocalRunStore {
                     if (call != null) modelCalls.put(row.optString("batchId")+"/"+call.optString("id"), row);
                 }
             } else if ("model_tool_result".equals(type)) modelResults.add(toolRowKey(row,modelBatches));
-            else if ("model_tool_started".equals(type)) startedModelCalls.add(toolRowKey(row,modelBatches));
+            else if ("model_tool_started".equals(type)) {
+                String key = toolRowKey(row, modelBatches);
+                startedModelCalls.add(key);
+            } else if ("model_tool_not_started".equals(type)) {
+                String key = toolRowKey(row, modelBatches);
+                startedModelCalls.remove(key);
+            }
         }
         for(Map.Entry<String,List<ToolActivity>> group:activityGroups.entrySet()) {
             ToolActivity projected=ToolActivity.project(group.getValue(),true);
@@ -2768,8 +2774,6 @@ public final class LocalRunStore {
                     String callKey=row.optString("batchId")+"/"+callId;
                     if (typedCalls.contains(callKey)) continue;
                     if (modelResults.contains(callKey) || presentations.containsKey(callKey) || reflectionTools.containsKey(callKey)) continue;
-                    // A durable STARTED row records the successful claim and remains
-                    // authoritative even if a later legacy not-started row exists.
                     boolean started = startedModelCalls.contains(callKey);
                     String detail = started
                             ? "Execution started, but no final result was durably recorded. The run may have been interrupted; effects may have occurred. Inspect current evidence before retrying."
