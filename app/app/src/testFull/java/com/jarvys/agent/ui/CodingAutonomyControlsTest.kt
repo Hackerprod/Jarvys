@@ -6,6 +6,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.hasAnyAncestor
@@ -115,10 +116,13 @@ class CodingAutonomyControlsTest {
         compose.setContent {
             JarvysOwnTheme(JarvysThemeMode.LIGHT) {
                 CompositionLocalProvider(LocalFlavorAutonomy provides autonomy) {
-                    Column(Modifier.verticalScroll(rememberScrollState())) { FlavorAutonomyUi.ConnectorControls() }
+                    Column(Modifier.verticalScroll(rememberScrollState()).testTag("developer-autonomy-controls")) {
+                        FlavorAutonomyUi.DeveloperControls()
+                    }
                 }
             }
         }
+        compose.onNodeWithTag("developer-autonomy-controls").assertExists()
     }
 
     private fun approvalCard(cancelBeforeClick: Boolean) {

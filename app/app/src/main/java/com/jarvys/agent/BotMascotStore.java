@@ -269,8 +269,9 @@ public final class BotMascotStore {
         return directory;
     }
     private static void requireBotId(String botId) {
-        if (botId == null || !botId.matches("custom-[a-z0-9][a-z0-9._-]*"))
-            throw new IllegalArgumentException("Mascots require a stable custom bot identifier");
+        if (botId == null || !(botId.matches("custom-[a-z0-9][a-z0-9._-]*")
+                || com.jarvys.agent.crew.CrewProfileRepository.isBuiltInId(botId)))
+            throw new IllegalArgumentException("Mascots require a stable catalog bot identifier");
     }
     private void createDirectory(File directory) throws IOException {
         verify(directory);

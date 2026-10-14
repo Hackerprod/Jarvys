@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import com.jarvys.agent.AppRouteAction
 import com.jarvys.agent.AppRouteMeta
 import com.jarvys.agent.AgentRunUiSnapshot
+import com.jarvys.agent.ConversationAction
 import com.jarvys.agent.JarvysTopAppBar
 import com.jarvys.agent.JarvysMotion
 import com.jarvys.agent.JarvysUiTokens
@@ -35,6 +36,8 @@ import com.jarvys.agent.R
 import com.jarvys.agent.ui.mascot.JarvysMascotAccountMenu
 import com.jarvys.agent.ui.mascot.JarvysHeaderActivity
 import com.jarvys.agent.ui.mascot.JarvysHeaderFailureTracker
+import com.jarvys.agent.ui.chat.ConversationActionDialogTarget
+import com.jarvys.agent.ui.chat.ConversationActionDialogs
 import com.jarvys.agent.ui.motion.LocalReducedMotion
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -60,12 +63,34 @@ fun JarvysRouteTopBar(
     mascotLiveConversationVisible: Boolean = false,
     mascotSurfaceVisible: Boolean = true,
     centralMascotCentered: Boolean = false,
+    conversationActionTitle: String? = null,
+    canRenameConversation: Boolean = false,
+    canDeleteConversation: Boolean = false,
+    conversationActionsEnabled: Boolean = true,
+    onConversationAction: (String, ConversationAction, String?) -> Unit = { _, _, _ -> },
 ) {
     val reducedMotion = LocalReducedMotion.current
     if (!route.showTopBar) return
     val centeredMascot = centralMascotCentered && route.action == AppRouteAction.CHAT
     var accountMenuOpen by remember(route.action, mascotVisibleSessionId, mascotLiveConversationVisible, mascotSurfaceVisible) {
         mutableStateOf(false)
+    }
+    var renameTarget by remember(mascotVisibleSessionId) { mutableStateOf<ConversationActionDialogTarget?>(null) }
+    var deleteTarget by remember(mascotVisibleSessionId) { mutableStateOf<ConversationActionDialogTarget?>(null) }
+    var renameText by remember(mascotVisibleSessionId) { mutableStateOf("") }
+    val fallbackConversationTitle = stringResource(R.string.drawer_chat_fallback)
+    val activeConversationTitle = conversationActionTitle?.takeIf(String::isNotBlank) ?: fallbackConversationTitle
+    val conversationDialogs: @Composable () -> Unit = {
+        ConversationActionDialogs(
+            renameTarget = renameTarget,
+            deleteTarget = deleteTarget,
+            renameText = renameText,
+            onRenameTextChange = { renameText = it },
+            actionsEnabled = conversationActionsEnabled,
+            onConversationAction = onConversationAction,
+            onDismissRename = { renameTarget = null },
+            onDismissDelete = { deleteTarget = null },
+        )
     }
     // Fresh terminal events require this mounted header to have observed the same generation running.
     val terminalTracker = remember(mascotVisibleSessionId) { JarvysHeaderFailureTracker() }
@@ -109,6 +134,29 @@ fun JarvysRouteTopBar(
             controlledMenuOpen = accountMenuOpen,
             onMenuOpenChange = { accountMenuOpen = it },
         ) { closeMenu ->
+            if (canRenameConversation && !mascotVisibleSessionId.isNullOrBlank()) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.drawer_rename_chat)) },
+                    enabled = conversationActionsEnabled,
+                    modifier = Modifier.testTag("topbar-rename-chat"),
+                    onClick = {
+                        closeMenu()
+                        renameText = activeConversationTitle
+                        renameTarget = ConversationActionDialogTarget(mascotVisibleSessionId, activeConversationTitle)
+                    },
+                )
+            }
+            if (canDeleteConversation && !mascotVisibleSessionId.isNullOrBlank()) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.drawer_delete_action), color = androidx.compose.material3.MaterialTheme.colorScheme.error) },
+                    enabled = conversationActionsEnabled,
+                    modifier = Modifier.testTag("topbar-delete-chat"),
+                    onClick = {
+                        closeMenu()
+                        deleteTarget = ConversationActionDialogTarget(mascotVisibleSessionId, activeConversationTitle)
+                    },
+                )
+            }
             DropdownMenuItem(text = { Text(stringResource(R.string.drawer_settings)) },
                 leadingIcon = { Icon(LucideIcons.Settings, contentDescription = null) },
                 onClick = { closeMenu(); onOpenSettings() })
@@ -151,6 +199,7 @@ fun JarvysRouteTopBar(
                 scrolledContainerColor = Color.Transparent),
             modifier = Modifier.testTag("jarvys-central-topbar"),
         )
+        conversationDialogs()
         return
     }
     JarvysTopAppBar(
@@ -191,4 +240,5 @@ fun JarvysRouteTopBar(
         },
         transparent = true,
     )
+    conversationDialogs()
 }

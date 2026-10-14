@@ -104,6 +104,21 @@ class MainActivityWorkspaceRoutingTest {
         WorkspaceRegistry(context).use { assertTrue("Selecting central cannot create a worker workspace", it.listWorkspaces().isEmpty()) }
     }
 
+    @Test fun deletingTheCurrentChatReturnsToAgentInsteadOfCreatingAnEmptyChat() {
+        start()
+        await { selected() == legacy && AgentRunUiState.state.value.sessionId == legacy &&
+            AgentRunUiState.state.value.events.isNotEmpty() }
+        invoke("applyConversationAction",
+            arrayOf(String::class.java, ConversationAction::class.java, String::class.java),
+            arrayOf(legacy, ConversationAction.DELETE, ""))
+        await { selected() == WorkspaceIdentity.CENTRAL_SESSION &&
+            AgentRunUiState.state.value.sessionId == WorkspaceIdentity.CENTRAL_SESSION &&
+            store.readConversationMetadata(legacy).deleted }
+        awaitCentralEmpty()
+        assertEquals(AppNavigationBackPolicy.CHAT_ROOT, navigation().currentDestination?.route)
+        assertTrue(store.readConversationTimeline(legacy).isEmpty())
+    }
+
     @Test fun warmWorkerIntentRedirectsToCentralWithoutOpeningTheWorkerAsAChat() {
         store.appendConversationMessage(execution, "user", "Worker-only ledger fixture")
         val workerBefore = transcript(execution)

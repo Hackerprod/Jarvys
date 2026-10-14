@@ -1886,7 +1886,7 @@ public final class CoreAgentRuntime {
           + "Custom bot instructions are loaded only inside their own child mission. "
           + "Use generate_bot_icon only when declared and the user explicitly requests an icon/image for an existing custom bot. "
           + "First obtain the bot_id and expected_revision from list_bots; never guess them. "
-          + "Use the user's freeform theme without attaching or reusing private images. Coding and Android-use templates are immutable.");
+          + "Use the user's freeform theme without attaching or reusing private images. Coding and Android-use profile definitions are immutable; requested mascot overlays can be assigned to any enabled bot.");
     }
     if (declared.contains(BotCreationTool.NAME)) {
       prompt.append("\n\nWhen the user asks for a reusable bot, use create_bot to save it completely: "
@@ -1897,14 +1897,14 @@ public final class CoreAgentRuntime {
           + "Keep the same request_id on retries and check list_bots afterward. Never claim a generated icon unless icon_complete is true. "
           + "If icon generation is unavailable or fails, explain that the definition is saved and the icon remains incomplete; "
           + "use generate_bot_icon for that exact existing bot after resolving access, never recreate it. "
-          + "Mascot compilation is local and does not depend on the image backend. Check mascot_compiled separately from icon_complete. LOCAL_COMPILED is not verified Android playback; normal avatars remain static fallback and the saved custom bot editor offers only an explicit temporary visual test. "
-          + "If a mascot is incomplete, use compile_bot_mascot with the same existing bot identity and current revision, never recreate the profile. "
+          + "Mascot compilation is local and does not depend on the image backend. Check mascot_compiled separately from icon_complete. LOCAL_COMPILED is not verified Android playback; normal avatars remain static fallback and the saved bot editor offers only an explicit temporary visual test. "
+          + "If a mascot is incomplete, use compile_bot_mascot with the same existing bot identity and current revision, never recreate the profile. compile_bot_mascot also serves any other existing bot, including built-in Coding and Android-use, when the user requests a mascot change. "
           + "Catalog management is main-chat-only and must be performed directly even when Crew is enabled. "
           + "Do not send the user to the UI or merely output a draft when the declared creation tool can complete the request.");
     }
     if (declared.contains(BotMascotTool.NAME)) {
       prompt.append("\n\nMascot edits: compile_bot_mascot is main-chat-only and changes presentation, never capabilities. "
-          + "Use it only for a user-requested mascot or to finish the visual in an approved bot-creation request. Obtain exact bot_id/revision from list_bots. "
+          + "Use it for a user-requested mascot on any existing enabled bot, including built-in Coding and Android-use, or to finish the visual in an approved bot-creation request. Obtain exact bot_id/revision from list_bots. "
           + "Retain request_id and identical source/description on retries; changed designs require a new operation. Author all geometry/keyframes from the request, with no external assets or executable content. "
           + "The tool preserves editable source and versioned bytes. Never infer Android rendering acceptance from compilation, and preserve custom PNG fallbacks.");
     }

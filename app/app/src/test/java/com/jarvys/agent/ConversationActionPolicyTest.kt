@@ -30,6 +30,22 @@ class ConversationActionPolicyTest {
             assertFalse(conversationActionLeavesCurrent(action, "a", "b"))
         }
     }
+    @Test fun deletingTheCurrentConversationReturnsToAgent() {
+        assertTrue(conversationActionNavigatesToAgent(ConversationAction.DELETE, "a", "a"))
+        assertFalse(conversationActionNavigatesToAgent(ConversationAction.DELETE, "a", "b"))
+        assertFalse(conversationActionNavigatesToAgent(ConversationAction.ARCHIVE, "a", "a"))
+    }
+    @Test fun centralAndExecutionSessionsRejectRenameAndPinActions() {
+        val protectedActions = listOf(ConversationAction.RENAME, ConversationAction.PIN,
+            ConversationAction.DELETE, ConversationAction.ARCHIVE)
+        protectedActions.forEach { action ->
+            assertTrue(conversationActionForbiddenForWorkspace(action, com.jarvys.agent.workspaces.WorkspaceIdentity.CENTRAL_SESSION))
+            assertTrue(conversationActionForbiddenForWorkspace(action,
+                com.jarvys.agent.workspaces.WorkspaceIdentity.executionSessionId("00000000-0000-0000-0000-000000000000")))
+        }
+        assertFalse(conversationActionForbiddenForWorkspace(ConversationAction.RENAME, "ordinary"))
+        assertFalse(conversationActionForbiddenForWorkspace(ConversationAction.PIN, "ordinary"))
+    }
     @Test fun drawerSeparatesArchivedChatsAndKeepsPinsFirstWithoutDuplicates() {
         val olderPin = RunHistoryItem("1", "one", "CHAT", 0, 1, 1.0, "a", pinned = true)
         val newer = RunHistoryItem("2", "two", "CHAT", 0, 1, 4.0, "b")

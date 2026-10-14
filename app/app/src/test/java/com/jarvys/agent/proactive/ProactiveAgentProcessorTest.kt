@@ -320,14 +320,14 @@ class ProactiveAgentProcessorTest {
         val observedText = AtomicReference<String>()
         val observedTools = AtomicReference<List<String>>()
         val observedTranscript = AtomicReference<List<com.jarvys.agent.ConversationTurn>>()
-        val normalTools = CoreToolRegistry(listOf(normalTool("contacts_search"), normalTool("send_sms")))
+        val normalTools = CoreToolRegistry(listOf(normalTool("contacts_search"), normalTool("calendar_create_event")))
         val normalModel = object : CoreAgentLoop.Model {
             override fun complete(transcript: List<com.jarvys.agent.ConversationTurn>, prompt: String,
                                   tools: List<ToolSpec>, token: CancellationToken): ModelReply {
                 observedText.set(prompt)
                 observedTools.set(tools.map { it.name })
                 observedTranscript.set(transcript)
-                return ModelReply("Draft prepared. Review it and tap Send in Messages.", emptyList())
+                return ModelReply("Calendar action is ready for review.", emptyList())
             }
         }
         val normalLoop = CoreAgentLoop(normalModel, normalTools,
@@ -335,10 +335,10 @@ class ProactiveAgentProcessorTest {
         val priorTurns = store.loadConversationContext(ProactiveConversation.SESSION_ID).dropLast(1)
         val result = normalLoop.run(prepared.text, priorTurns, CancellationToken.cancellable(), null)
         assertEquals("Summarize this update", observedText.get())
-        assertEquals(setOf("contacts_search", "send_sms"), observedTools.get().toSet())
+        assertEquals(setOf("contacts_search", "calendar_create_event"), observedTools.get().toSet())
         assertTrue(observedTranscript.get().any { it.role == "assistant" && it.content.contains(sourceDetail) })
         assertTrue(context.getString(com.jarvys.agent.R.string.proactive_normal_thread_safety).contains("untrusted event data"))
-        assertFalse(ProactiveReadOnlyToolFactory.connectorAllowlist.values.flatten().contains("send_sms"))
+        assertFalse(ProactiveReadOnlyToolFactory.connectorAllowlist.values.flatten().contains("create_event"))
 
         val assistantId = store.appendConversationMessage(ProactiveConversation.SESSION_ID, "assistant", result.text,
             result.durationMs, result.runId, prepared.userMessageId, "COMPLETED", threadKey)
@@ -347,7 +347,7 @@ class ProactiveAgentProcessorTest {
         assertEquals(1, active.size)
         assertEquals(threadKey.hashCode(), active.single().id)
         val latestText = active.single().notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString()
-        assertTrue(latestText.contains("Draft prepared"))
+        assertTrue(latestText.contains("Calendar action is ready"))
         assertEquals(1, active.single().notification.actions.last().remoteInputs.size)
         val notificationIntent = org.robolectric.Shadows.shadowOf(active.single().notification.contentIntent).savedIntent
         assertFalse(notificationIntent.extras?.toString().orEmpty().contains(sourceDetail))
@@ -481,13 +481,13 @@ class ProactiveAgentProcessorTest {
 
         val observedPrompt = AtomicReference<String>()
         val observedTools = AtomicReference<List<String>>()
-        val ordinaryTools = CoreToolRegistry(listOf(normalTool("contacts_search"), normalTool("send_sms")))
+        val ordinaryTools = CoreToolRegistry(listOf(normalTool("contacts_search"), normalTool("calendar_create_event")))
         val provider = object : CoreAgentLoop.Model {
             override fun complete(transcript: List<com.jarvys.agent.ConversationTurn>, prompt: String,
                                   tools: List<ToolSpec>, token: CancellationToken): ModelReply {
                 observedPrompt.set(prompt)
                 observedTools.set(tools.map { it.name })
-                return ModelReply("SMS draft prepared. Review it and tap Send in Messages.", emptyList())
+                return ModelReply("Calendar action is ready for review.", emptyList())
             }
         }
         val normalLoop = CoreAgentLoop(provider, ordinaryTools,
@@ -495,8 +495,8 @@ class ProactiveAgentProcessorTest {
         val result = normalLoop.run(prepared.text, store.loadConversationContext(ProactiveConversation.SESSION_ID).dropLast(1),
             CancellationToken.cancellable(), null)
         assertEquals("Summarize the payment notice", observedPrompt.get())
-        assertEquals(setOf("contacts_search", "send_sms"), observedTools.get().toSet())
-        assertEquals("SMS draft prepared. Review it and tap Send in Messages.", result.text)
+        assertEquals(setOf("contacts_search", "calendar_create_event"), observedTools.get().toSet())
+        assertEquals("Calendar action is ready for review.", result.text)
         val assistantId = store.appendConversationMessage(ProactiveConversation.SESSION_ID, "assistant", result.text,
             result.durationMs, result.runId, prepared.userMessageId, "COMPLETED", threadKey)
 
@@ -505,7 +505,7 @@ class ProactiveAgentProcessorTest {
         assertEquals(1, active.size)
         assertEquals(notificationId, active.single().id)
         assertTrue(active.single().notification.extras.getCharSequence(Notification.EXTRA_TEXT)
-            .toString().contains("SMS draft prepared"))
+            .toString().contains("Calendar action is ready"))
         val deepLink = org.robolectric.Shadows.shadowOf(active.single().notification.contentIntent).savedIntent
         assertFalse(deepLink.extras?.toString().orEmpty().contains("payment notice"))
         assertNull(ProactiveInteractionDispatcher.prepareInlineReply(context, "invalid-thread-token", "hello"))
@@ -756,7 +756,7 @@ class ProactiveAgentProcessorTest {
             definition("contacts", listOf(op("search"), op("get_contact_detail"), op("create_contact", true))),
             definition("calendar", listOf(op("search_events"), op("create_event", true))),
             definition("notifications", listOf(op("list_recent"), op("dismiss_notification", true), op("reply_notification", true))),
-            definition("sms", listOf(op("list_sms"), op("send_sms", true))),
+            definition("sms", listOf(op("list_sms"))),
             definition("call_log", listOf(op("list_calls"))),
             definition("unlisted", listOf(op("read_private_data"))),
         )

@@ -10,6 +10,7 @@ import com.jarvys.agent.JarvysUiTokens
 import com.jarvys.agent.JarvysTextField
 import com.jarvys.agent.JarvysTag
 import com.jarvys.agent.JarvysSheetDragHandle
+import com.jarvys.agent.JarvysEmptyState
 import com.jarvys.agent.jarvysSheetOptionRow
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
@@ -89,10 +90,12 @@ fun SkillsCatalog(repository: SkillRepository) {
             )
         }
         if (skills.isEmpty()) {
-            SkillCardSurface {
-                Text(stringResource(R.string.skills_empty_title), color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold)
-                Text(stringResource(R.string.skills_empty_import_hint), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, lineHeight = 18.sp)
-            }
+            JarvysEmptyState(
+                icon = LucideIcons.WandSparkles,
+                title = stringResource(R.string.skills_empty_title),
+                body = stringResource(R.string.skills_empty_import_hint),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+            )
         }
         if (skills.isNotEmpty() && filteredSkills.isEmpty()) {
             Text(stringResource(R.string.skills_search_empty), color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp))
@@ -264,13 +267,4 @@ fun SkillDraftDialog(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.skills_cancel)) } },
     )
-}
-
-@Composable
-private fun SkillCardSurface(content: @Composable () -> Unit) {
-    val sizeMotion = if (LocalReducedMotion.current) Modifier else Modifier.animateContentSize(JarvysMotion.expand())
-    JarvysGroup(contentPadding = PaddingValues(JarvysUiTokens.ScreenPadding),
-        modifier = sizeMotion) {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { content() }
-    }
 }

@@ -20,6 +20,7 @@ import com.jarvys.agent.RunHistoryItem
 import com.jarvys.agent.drawerChatsForDisplay
 import com.jarvys.agent.drawerConversationTitle
 import com.jarvys.agent.isManagedSystemConversation
+import com.jarvys.agent.isReservedWorkspaceConversation
 
 /** Settings destination; history remains the source of truth after every conversation action. */
 @Composable
@@ -66,6 +67,7 @@ fun ArchivedChatsScreen(
                     archived = true,
                     actionsEnabled = actionsEnabled,
                     managed = isManagedSystemConversation(record.sessionId),
+                    protectedWorkspace = isReservedWorkspaceConversation(record.sessionId),
                     onAction = { action(record, it) },
                 )
             }

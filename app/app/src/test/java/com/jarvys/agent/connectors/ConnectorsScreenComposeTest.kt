@@ -39,6 +39,7 @@ import com.jarvys.agent.AppNavigationBackPolicy
 import com.jarvys.agent.AppRouteBackButton
 import com.jarvys.agent.JarvysTopAppBar
 import com.jarvys.agent.R
+import com.jarvys.agent.ui.settings.DeveloperWorkspace
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -102,6 +103,7 @@ class ConnectorsScreenComposeTest {
                         composable(AppNavigationBackPolicy.SETTINGS) {
                             Text("Settings", modifier = Modifier.testTag("connectors-test-settings"))
                         }
+                        composable(AppNavigationBackPolicy.SETTINGS_DEVELOPER) { DeveloperWorkspace(registry) }
                     }
                 }
             }
@@ -188,9 +190,9 @@ class ConnectorsScreenComposeTest {
 
     @Test fun disconnectingAConnectedDeviceDetailReturnsToList() {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        val registry = registry(context, EmailIntentConnector.ID)
+        val registry = registry(context, DialerConnector.ID)
         showNavigation(registry, remote = { _, _ -> }, google = { _, _ -> })
-        val definition = registry.definitions.value.first { it.id == EmailIntentConnector.ID }
+        val definition = registry.definitions.value.first { it.id == DialerConnector.ID }
         val title = context.getString(definition.displayNameResourceId)
         compose.onNodeWithText(title, useUnmergedTree = true).performScrollTo().performClick()
         compose.waitForIdle()
@@ -202,6 +204,24 @@ class ConnectorsScreenComposeTest {
         compose.waitForIdle()
         compose.onNodeWithTag("connectors-list-screen").assertIsDisplayed()
         assertEquals(ConnectorState.DISCONNECTED, registry.state(definition))
+    }
+
+    @Test fun connectorActionPoliciesLiveInDeveloperSettingsInsteadOfDetails() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val registry = registry(context, DialerConnector.ID)
+        showNavigation(registry, remote = { _, _ -> }, google = { _, _ -> })
+        val phone = registry.definitions.value.first { it.id == DialerConnector.ID }
+        compose.onNodeWithText(context.getString(phone.displayNameResourceId), useUnmergedTree = true)
+            .performScrollTo().performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("connectors-detail-screen").assertIsDisplayed()
+        compose.onAllNodesWithTag("connector-policy-${DialerConnector.OPEN_DIALER}-row").assertCountEquals(0)
+
+        navigation.get().navigate(AppNavigationBackPolicy.SETTINGS_DEVELOPER)
+        compose.waitForIdle()
+        compose.onNodeWithTag("developer-settings").assertIsDisplayed()
+        compose.onNodeWithTag("connector-policy-${DialerConnector.OPEN_DIALER}-row").assertExists()
+        compose.onNodeWithTag("connector-policy-${DialerConnector.PLACE_CALL}-control").assertExists()
     }
 
     @Test fun permissionAwareConnectRemainsAvailableFromDeviceDetail() {

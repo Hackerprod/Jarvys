@@ -240,6 +240,7 @@ private object Routes {
     const val CHAT = AppNavigationBackPolicy.CHAT_ROOT
     const val SETTINGS = AppNavigationBackPolicy.SETTINGS
     const val SETTINGS_PREFERENCES = AppNavigationBackPolicy.SETTINGS_PREFERENCES
+    const val SETTINGS_DEVELOPER = AppNavigationBackPolicy.SETTINGS_DEVELOPER
     const val ARCHIVED_CHATS = AppNavigationBackPolicy.ARCHIVED_CHATS
     const val SCHEDULED_TASKS = AppNavigationBackPolicy.SCHEDULED_TASKS
     const val PROVIDERS = AppNavigationBackPolicy.PROVIDERS
@@ -1410,8 +1411,7 @@ ${event.text}
 
     private fun applyConversationAction(sessionId: String, action: ConversationAction, title: String?) {
         if (conversationActionPending) return
-        if ((action == ConversationAction.DELETE || action == ConversationAction.ARCHIVE) &&
-            (WorkspaceIdentity.isCentral(sessionId) || WorkspaceIdentity.isExecutionSession(sessionId))) {
+        if (conversationActionForbiddenForWorkspace(action, sessionId)) {
             toast(getString(R.string.workspace_reserved_conversation)); return
         }
         if (action == ConversationAction.DELETE && isManagedSystemConversation(sessionId)) {
@@ -1451,7 +1451,11 @@ ${event.text}
                 conversationActionPending = false
                 result.onSuccess { cleaned ->
                     if (conversationActionLeavesCurrent(action, sessionId, conversationSessionId)) {
-                        newChat()
+                        if (conversationActionNavigatesToAgent(action, sessionId, conversationSessionId)) {
+                            openCentralWorkspaceChat()
+                        } else {
+                            newChat()
+                        }
                         activeNavController?.navigate(Routes.CHAT) {
                             popUpTo(Routes.CHAT) { inclusive = true }; launchSingleTop = true
                         }
@@ -1768,6 +1772,12 @@ private fun JarvysApp(
         centralMascotCentered = route == Routes.CHAT && WorkspaceIdentity.isCentral(conversationSessionId),
         mascotVisibleSessionId = conversationSessionId,
         mascotLiveConversationVisible = mascotLiveConversationVisible,
+        conversationActionTitle = chatTitle,
+        canRenameConversation = route == Routes.CHAT && !isReservedWorkspaceConversation(conversationSessionId),
+        canDeleteConversation = route == Routes.CHAT && !isReservedWorkspaceConversation(conversationSessionId) &&
+            !isManagedSystemConversation(conversationSessionId),
+        conversationActionsEnabled = !conversationActionPending && !drawerNavigationPending,
+        onConversationAction = onConversationAction,
         drawerGesturesEnabled = !drawerNavigationPending && route != Routes.WORKSPACE_PREVIEW && route != Routes.ARTIFACT_PREVIEW,
         drawerContent = {
             ConversationDrawer(
@@ -1905,6 +1915,7 @@ private fun JarvysApp(
                         val path = when (destination) {
                             JarvysSettingsPage.HOME -> Routes.SETTINGS
                             JarvysSettingsPage.PREFERENCES -> Routes.SETTINGS_PREFERENCES
+                            JarvysSettingsPage.DEVELOPER -> Routes.SETTINGS_DEVELOPER
                         }
                         navController.navigate(path) { launchSingleTop = true }
                     },
@@ -2026,6 +2037,7 @@ private fun JarvysApp(
                 composable(Routes.SCHEDULED_TASKS) { ScheduledTasksPlaceholderScreen() }
                 composable(Routes.SETTINGS) { settingsPageContent(JarvysSettingsPage.HOME) }
                 composable(Routes.SETTINGS_PREFERENCES) { settingsPageContent(JarvysSettingsPage.PREFERENCES) }
+                composable(Routes.SETTINGS_DEVELOPER) { settingsPageContent(JarvysSettingsPage.DEVELOPER) }
                 providersDestinations(navController, providersRepository)
                 mcpDestinations(navController, mcpServerRepository, mcpConnectionManager, mcpOAuthManager)
                 composable(Routes.SKILLS) { SkillsScreen(skillRepository) }
@@ -2312,16 +2324,6 @@ internal fun AgentRunScreen(
 
 internal fun approvalIntent(spec: ApprovalIntentSpec): Intent = when (spec.kind) {
     ApprovalIntentKind.DIAL -> Intent(Intent.ACTION_DIAL, Uri.parse(requireNotNull(spec.dataUri)))
-    ApprovalIntentKind.SMS_COMPOSE -> Intent(Intent.ACTION_SENDTO, Uri.parse(requireNotNull(spec.dataUri))).apply {
-        spec.extras["sms_body"]?.let { putExtra("sms_body", it) }
-    }
-    ApprovalIntentKind.EMAIL_COMPOSE -> Intent(Intent.ACTION_SENDTO, Uri.parse(requireNotNull(spec.dataUri))).apply {
-        spec.extras["to"]?.takeIf(String::isNotBlank)?.let { putExtra(Intent.EXTRA_EMAIL, it.split(',').toTypedArray()) }
-        spec.extras["cc"]?.takeIf(String::isNotBlank)?.let { putExtra(Intent.EXTRA_CC, it.split(',').toTypedArray()) }
-        spec.extras["bcc"]?.takeIf(String::isNotBlank)?.let { putExtra(Intent.EXTRA_BCC, it.split(',').toTypedArray()) }
-        spec.extras["subject"]?.let { putExtra(Intent.EXTRA_SUBJECT, it) }
-        spec.extras["body"]?.let { putExtra(Intent.EXTRA_TEXT, it) }
-    }
     ApprovalIntentKind.CONTACT_INSERT -> Intent(ContactsContract.Intents.Insert.ACTION)
         .setType(ContactsContract.RawContacts.CONTENT_TYPE).apply {
         spec.extras["name"]?.let { putExtra(ContactsContract.Intents.Insert.NAME, it) }

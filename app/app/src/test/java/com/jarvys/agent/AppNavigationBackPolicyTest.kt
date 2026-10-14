@@ -23,7 +23,7 @@ class AppNavigationBackPolicyTest {
 
     @Test fun explicitNavigationGraphHasChatAndWorkspacesRootsWithBackForEveryOtherRoute() {
         assertEquals(listOf(
-            "chat", "workspaces", "settings", "settings/preferences", "settings/archived-chats", "scheduled-tasks",
+            "chat", "workspaces", "settings", "settings/preferences", "settings/developer", "settings/archived-chats", "scheduled-tasks",
             "providers", "providers/openai", "providers/openrouter", "providers/custom", "providers/service/{serviceId}",
             "mcp", "mcp/new", "mcp/server/{serverId}", "mcp/server/{serverId}/edit",
             "skills", "connectors", "connectors/device/{connectorId}",

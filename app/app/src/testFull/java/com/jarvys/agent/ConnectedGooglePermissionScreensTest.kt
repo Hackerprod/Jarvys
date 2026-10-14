@@ -21,6 +21,7 @@ import com.jarvys.agent.SecretStore
 import com.jarvys.agent.connectors.*
 import com.jarvys.agent.flavor.GoogleServiceCard
 import com.jarvys.agent.ui.JarvysOwnTheme
+import com.jarvys.agent.ui.settings.DeveloperWorkspace
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
@@ -117,8 +118,19 @@ class ConnectedGooglePermissionScreensTest {
             }
         }
     }
+    private fun showDeveloper(scale: Float = 1f, dark: Boolean = false) {
+        currentScale = scale
+        compose.setContent {
+            JarvysOwnTheme(if (dark) JarvysThemeMode.DARK else JarvysThemeMode.LIGHT) {
+                CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, scale)) {
+                    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background,
+                        contentColor = MaterialTheme.colorScheme.onBackground) { DeveloperWorkspace(registry) }
+                }
+            }
+        }
+    }
     private fun scopeTag(scope: String) = "google-scope-${scope.removeSuffix("/").substringAfterLast('/')}"
-    private fun policyTag(operation: ConnectorOperation) = "google-policy-${operation.name}"
+    private fun policyTag(operation: ConnectorOperation) = "connector-policy-${operation.name}"
     private fun pick(prefix: String, label: Int) {
         compose.onNodeWithTag("$prefix-control").performScrollTo().performClick()
         compose.onNode(hasText(compose.activity.getString(label)) and hasAnyAncestor(isPopup())).performClick()
@@ -143,7 +155,7 @@ class ConnectedGooglePermissionScreensTest {
             assertEquals("$prefix vertical center", row.center.y, control.center.y, 1f)
         }
         assertTrue("$prefix 48 dp touch target", control.height >= 48f)
-        if (prefix.startsWith("google-policy-")) {
+        if (prefix.startsWith("connector-policy-")) {
             val origin = compose.onNodeWithTag("$prefix-origin").performScrollTo().assertIsDisplayed()
                 .fetchSemanticsNode().boundsInRoot
             val visibleRow = compose.onNodeWithTag("$prefix-row", useUnmergedTree = true)
@@ -155,10 +167,45 @@ class ConnectedGooglePermissionScreensTest {
         compose.onNodeWithTag("$prefix-control").assertTextContains(compose.activity.getString(resource))
     private fun capture(name: String) = compose.runOnIdle { captureConnectedPermissionWindows(compose.activity, name) }
 
-    @Test fun connectedGmailUsesRealScopeAndOperationRowsWithoutGrantingOnOpen() = gmailRows(1f, false)
+    @Test fun googleActionPoliciesLiveInDeveloperAndStayOutOfGoogleDetails() {
+        seed(setOf(GoogleOAuthProtocol.GMAIL_READ, GoogleOAuthProtocol.DRIVE_READ))
+        val gmailWrite = gmail.operations.first { it.name == GmailConnector.SEND_DRAFT }
+        show(true)
+        compose.onNodeWithTag("${policyTag(gmailWrite)}-row", useUnmergedTree = true).assertDoesNotExist()
+        compose.onNodeWithTag("${scopeTag(GoogleOAuthProtocol.GMAIL_READ)}-row", useUnmergedTree = true).assertExists()
+
+        showDeveloper()
+        compose.onNodeWithTag("developer-connector-${gmail.id}").assertIsDisplayed()
+        compose.onNodeWithTag("${policyTag(gmailWrite)}-row", useUnmergedTree = true).assertExists()
+        compose.onNodeWithTag("${policyTag(drive.operations.first().name)}-row", useUnmergedTree = true).assertExists()
+        compose.onNodeWithTag("${policyTag(gmailWrite)}-control").assertExists()
+    }
+
+    @Test fun fullGoogleRowsAppearFirstInsideServicesBeforeGitHub() {
+        seed(emptySet())
+        compose.setContent {
+            JarvysOwnTheme(JarvysThemeMode.LIGHT) {
+                Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background,
+                    contentColor = MaterialTheme.colorScheme.onBackground) {
+                    ConnectorsScreen(registry, onOpenDevice = {}, onOpenRemote = { _, _ -> }, onOpenGoogle = { _, _ -> })
+                }
+            }
+        }
+        val gmail = compose.activity.getString(R.string.full_google_label_gmail)
+        val drive = compose.activity.getString(R.string.full_google_label_drive)
+        val githubDefinition = requireNotNull(RemoteServiceCatalog.find("github"))
+        val github = compose.activity.getString(githubDefinition.nameResourceId)
+        val gmailBounds = compose.onNodeWithText(gmail).fetchSemanticsNode().boundsInRoot
+        val driveBounds = compose.onNodeWithText(drive).fetchSemanticsNode().boundsInRoot
+        val githubBounds = compose.onNodeWithText(github).fetchSemanticsNode().boundsInRoot
+        assertTrue("Gmail must precede Drive in Services", gmailBounds.top < driveBounds.top)
+        assertTrue("Drive must precede GitHub in Services", driveBounds.top < githubBounds.top)
+    }
+
+    @Test fun connectedGmailUsesRealScopeRowsWithoutGrantingOnOpen() = gmailRows(1f, false)
 
     @Test @Config(qualifiers = "es-rES-w320dp-h800dp-port-mdpi")
-    fun connectedGmailSpanishLargeTextKeepsScopeAndOperationPoliciesAligned() = gmailRows(2f, true)
+    fun connectedGmailSpanishLargeTextKeepsScopeRowsAligned() = gmailRows(2f, true)
 
     private fun gmailRows(scale: Float, dark: Boolean) {
         seed(setOf(GoogleOAuthProtocol.GMAIL_READ))
@@ -174,36 +221,10 @@ class ConnectedGooglePermissionScreensTest {
         capture("gmail-connected-scopes-${if (dark) "es-dark-large" else "en-light"}")
         // Selecting the already granted value must not launch consent or widen the grant.
         pick(scopeTag(GoogleOAuthProtocol.GMAIL_READ), R.string.connector_policy_allow)
-        gmail.operations.forEach { operation ->
-            geometry(policyTag(operation)); policy(policyTag(operation), R.string.connector_policy_allow)
-            if (operation.name in setOf("modify_messages", "delete_messages", "delete_label")) {
-                capture("gmail-ux31-operation-${operation.name}-${if (dark) "es-dark-large" else "en-light"}")
-            }
-        }
+        compose.onAllNodes(hasTestTag("connector-policy-${GmailConnector.SEND_DRAFT}-row"), useUnmergedTree = true)
+            .assertCountEquals(0)
         assertTrue(authorizations.isEmpty()); assertTrue(policies.changes.isEmpty())
         assertEquals(setOf(GoogleOAuthProtocol.GMAIL_READ), manager.grantedScopes())
-        val guarded = gmail.operations.first { it.name == GmailConnector.SEND_DRAFT }
-        compose.onNodeWithTag("${policyTag(guarded)}-control").performScrollTo().performClick()
-        compose.onNode(hasText(compose.activity.getString(R.string.connector_policy_allow)) and hasAnyAncestor(isPopup())).assertExists()
-        capture("gmail-guarded-operation-${if (dark) "es-dark-large" else "en-light"}")
-        compose.onNode(hasText(compose.activity.getString(R.string.connector_policy_deny)) and hasAnyAncestor(isPopup())).performClick()
-        assertEquals(listOf(Triple(gmail.id, guarded.name, AutonomyPolicy.DENY)), policies.changes)
-        // Persisted state AND visible label must update immediately after the callback.
-        policy(policyTag(guarded), R.string.connector_policy_deny)
-        gmail.operations.filter { it != guarded }.forEach { sibling ->
-            assertEquals(AutonomyPolicy.ALLOW, registry.configuredAutonomyPolicy(gmail, sibling))
-            policy(policyTag(sibling), R.string.connector_policy_allow)
-        }
-        assertEquals(setOf(GoogleOAuthProtocol.GMAIL_READ), manager.grantedScopes())
-        pick(policyTag(guarded), R.string.connector_policy_ask)
-        policy(policyTag(guarded), R.string.connector_policy_ask)
-        pick(policyTag(guarded), R.string.connector_policy_allow)
-        policy(policyTag(guarded), R.string.connector_policy_allow)
-        compose.onNodeWithTag("${policyTag(guarded)}-unavailable").performScrollTo().assertExists()
-        assertEquals(listOf(AutonomyPolicy.DENY, AutonomyPolicy.ASK, AutonomyPolicy.ALLOW), policies.changes.map { it.third })
-        assertTrue(policies.changes.all { it.first == gmail.id && it.second == guarded.name })
-        assertEquals(setOf(GoogleOAuthProtocol.GMAIL_READ), manager.grantedScopes())
-        assertFalse(manager.isScopeGranted(GoogleOAuthProtocol.GMAIL_SEND))
         assertTrue(authorizations.isEmpty()); assertEquals(0, requests.get()); assertEquals(0, revocations.get())
     }
 
@@ -238,17 +259,9 @@ class ConnectedGooglePermissionScreensTest {
         }
         compose.onNodeWithTag("${scopeTag(GoogleOAuthProtocol.DRIVE_READ)}-row", useUnmergedTree = true).performScrollTo()
         capture("drive-connected-scopes-es-dark-large")
-        drive.operations.forEach { operation ->
-            geometry(policyTag(operation))
-            policy(policyTag(operation), R.string.connector_policy_allow)
-            compose.onNodeWithTag("${policyTag(operation)}-control").performClick()
-            compose.onNode(hasText(compose.activity.getString(R.string.connector_policy_allow)) and hasAnyAncestor(isPopup())).assertExists()
-            compose.onNode(hasText(compose.activity.getString(R.string.connector_policy_ask)) and hasAnyAncestor(isPopup())).performClick()
-        }
-        assertEquals(drive.operations.size, policies.changes.size)
-        assertEquals(drive.operations.map { it.name }, policies.changes.map { it.second })
-        drive.operations.forEach { policy(policyTag(it), R.string.connector_policy_ask) }
-        assertTrue(policies.changes.all { it.third == AutonomyPolicy.ASK })
+        compose.onAllNodes(hasTestTag("connector-policy-${drive.operations.first().name}-row"), useUnmergedTree = true)
+            .assertCountEquals(0)
+        assertTrue(policies.changes.isEmpty())
         assertTrue(authorizations.isEmpty())
         pick(scopeTag(GoogleOAuthProtocol.DRIVE_FILE), R.string.connector_add_permission)
         compose.waitUntil(5_000) {
@@ -376,12 +389,13 @@ class ConnectedGooglePermissionScreensTest {
         compose.onNodeWithTag("$labelPrefix-control").assertContentDescriptionEquals(
             compose.activity.getString(R.string.full_google_scope_gmail_labels))
         capture("gmail-ux31-label-metadata-scope-es-dark-large")
+        showDeveloper(2f, true)
         for (name in listOf("delete_messages", "delete_label")) {
             val operation = gmail.operations.first { it.name == name }
             val prefix = policyTag(operation)
             geometry(prefix)
-            compose.onNodeWithTag("$prefix-control").assertContentDescriptionEquals(
-                compose.activity.getString(operation.displayLabelResourceId))
+            compose.onNode(hasText(compose.activity.getString(operation.displayLabelResourceId)) and
+                hasAnyAncestor(hasTestTag("$prefix-row")), useUnmergedTree = true).assertExists()
             val layouts = mutableListOf<TextLayoutResult>()
             compose.onNode(hasText(compose.activity.getString(R.string.connector_policy_ask)) and
                 hasAnyAncestor(hasTestTag("$prefix-control")), useUnmergedTree = true)
@@ -410,7 +424,7 @@ class ConnectedGooglePermissionScreensTest {
         registry.setAutonomyPolicy(gmail, read, AutonomyPolicy.ASK)
         registry.setAutonomyPolicy(gmail, write, AutonomyPolicy.DENY)
         policies.changes.clear()
-        show(true)
+        showDeveloper()
         policy(policyTag(read), R.string.connector_policy_ask)
         policy(policyTag(write), R.string.connector_policy_deny)
         assertEquals(AutonomyPolicy.ASK, registry.configuredAutonomyPolicy(gmail, read))

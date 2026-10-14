@@ -104,6 +104,35 @@ object BotMascotSceneCompiler {
     @JvmStatic fun validateProduct(source: String): Validation = validateProduct(encodeSource(source))
     @JvmStatic fun validateProduct(source: ByteArray): Validation = validateWithContract(source, Contract.PRODUCT)
 
+    /** Normalize the two tool wire forms before validation, preserving string source verbatim. */
+    @JvmStatic fun normalizeProductScene(value: Any?, field: String): String = when (value) {
+        is String -> value
+        is JSONObject -> value.toString()
+        is Map<*, *> -> jsonObject(value, field).toString()
+        else -> throw IllegalArgumentException("$field: expected a JSON object or JSON string.")
+    }
+
+    private fun jsonObject(value: Map<*, *>, path: String): JSONObject {
+        val result = JSONObject()
+        value.forEach { (key, child) ->
+            if (key !is String) throw IllegalArgumentException("$path: object keys must be strings.")
+            result.put(key, jsonValue(child, "$path.$key"))
+        }
+        return result
+    }
+
+    private fun jsonValue(value: Any?, path: String): Any = when (value) {
+        null -> JSONObject.NULL
+        JSONObject.NULL -> JSONObject.NULL
+        is JSONObject, is JSONArray, is String, is Boolean, is Number -> value.also {
+            if (it is Double || it is Float) require((it as Number).toDouble().isFinite()) { "$path: expected a finite JSON number." }
+        }
+        is Map<*, *> -> jsonObject(value, path)
+        is Iterable<*> -> JSONArray().also { array -> value.forEach { array.put(jsonValue(it, "$path[${array.length()}]")) } }
+        is Array<*> -> JSONArray().also { array -> value.forEach { array.put(jsonValue(it, "$path[${array.length()}]")) } }
+        else -> throw IllegalArgumentException("$path: value is not JSON-compatible.")
+    }
+
     // Test/probe bridge, not an additional production source contract.
     internal fun compileViewModelProof(source: String): CompiledScene = compileViewModelProof(encodeSource(source))
     internal fun compileViewModelProof(source: ByteArray): CompiledScene = compileWithContract(source, Contract.MODERN_PROOF)
@@ -170,44 +199,45 @@ object BotMascotSceneCompiler {
         }
         // Do not use lenient JSONTokener coercions: reject duplicates, comments, trailing
         // text, single quotes, missing values and non-JSON numbers before schema validation.
-        return objectValue(StrictJson(text, 18, maxStringChars).read(), "JSON root")
+        return objectValue(StrictJson(text, 18, maxStringChars).read(), "scene")
     }
 
     private fun parseAndValidate(source: ByteArray, contract: Contract): Scene {
         val root = parseBoundedJsonObject(source)
-        fields(root, setOf("name", "nodes", "animations") + if (contract.product) setOf("contract") else emptySet())
-        if (contract.product) require(root.opt("contract") == PRODUCT_CONTRACT) { "Unsupported mascot scene contract." }
-        val name = name(root.opt("name"))
+        fields(root, setOf("name", "nodes", "animations") + if (contract.product) setOf("contract") else emptySet(), "scene")
+        if (contract.product && root.opt("contract") != PRODUCT_CONTRACT) fail("contract", "expected '$PRODUCT_CONTRACT'.")
+        val name = name(root.opt("name"), "name")
         val rawNodes = array(root.opt("nodes"), "nodes")
-        require(rawNodes.length() in 1..MAX_NODES) { "Node count budget exceeded." }
+        if (rawNodes.length() !in 1..MAX_NODES) fail("nodes", "node count must be between 1 and $MAX_NODES.")
         val depths = linkedMapOf("Artboard" to 0)
         var maxDepth = 0
         var shapes = 0
         val nodes = (0 until rawNodes.length()).map { index ->
-            val raw = objectValue(rawNodes.opt(index), "node")
+            val path = "nodes[$index]"
+            val raw = objectValue(rawNodes.opt(index), path)
             val kind = raw.opt("kind")
-            require(kind is String && kind in setOf("group", "ellipse", "rectangle")) { "Unsupported geometry." }
+            if (kind !is String || kind !in setOf("group", "ellipse", "rectangle")) fail("$path.kind", "expected group, ellipse, or rectangle.")
             val geometryFields = if (kind == "group") emptySet() else setOf("width", "height", "color")
             val allowed = nodeFields + geometryFields + if (kind == "rectangle") setOf("radius") else emptySet()
             val required = setOf("kind", "name") + geometryFields
-            fields(raw, allowed, required)
-            val nodeName = name(raw.opt("name"))
-            require(nodeName !in depths) { "Duplicate or reserved node name." }
-            val parent = if (raw.has("parent")) name(raw.opt("parent")) else "Artboard"
-            val depth = (depths[parent] ?: throw IllegalArgumentException("Parent must exist before child.")) + 1
-            require(depth <= MAX_HIERARCHY_DEPTH) { "Hierarchy depth budget exceeded." }
+            fields(raw, allowed, path, required)
+            val nodeName = name(raw.opt("name"), "$path.name")
+            if (nodeName in depths) fail("$path.name", "duplicate or reserved node name '$nodeName'.")
+            val parent = if (raw.has("parent")) name(raw.opt("parent"), "$path.parent") else "Artboard"
+            val depth = (depths[parent] ?: fail("$path.parent", "parent '$parent' must appear before this node.")) + 1
+            if (depth > MAX_HIERARCHY_DEPTH) fail("$path.parent", "hierarchy depth exceeds $MAX_HIERARCHY_DEPTH.")
             depths[nodeName] = depth
             maxDepth = maxOf(maxDepth, depth)
             val transforms = linkedMapOf<String, Float>()
             transformIds.keys.forEach { property ->
-                if (raw.has(property)) transforms[property] = transformNumber(raw.opt(property), property)
+                if (raw.has(property)) transforms[property] = transformNumber(raw.opt(property), "$path.$property", property)
             }
             if (kind != "group") shapes++
             Node(kind, nodeName, parent, transforms,
-                if (kind != "group") number(raw.opt("width"), 1.0, 256.0) else null,
-                if (kind != "group") number(raw.opt("height"), 1.0, 256.0) else null,
-                if (kind != "group") integer(raw.opt("color"), 0, 0xffffffffL) else null,
-                if (raw.has("radius")) number(raw.opt("radius"), 0.0, 128.0).takeIf {
+                if (kind != "group") number(raw.opt("width"), 1.0, 256.0, "$path.width") else null,
+                if (kind != "group") number(raw.opt("height"), 1.0, 256.0, "$path.height") else null,
+                if (kind != "group") integer(raw.opt("color"), 0, 0xffffffffL, "$path.color") else null,
+                if (raw.has("radius")) number(raw.opt("radius"), 0.0, 128.0, "$path.radius").takeIf {
                     // Python/public proof omits numeric zero before float32 conversion.
                     // A tiny positive source radius still emits a rounded 0f property.
                     (raw.opt("radius") as Number).toDouble() != 0.0
@@ -215,7 +245,7 @@ object BotMascotSceneCompiler {
         }
         val rawAnimations = objectValue(root.opt("animations"), "animations")
         val requiredStates = if (contract.product) productModes + productModes.map { it + "Reduced" } else stateNames
-        fields(rawAnimations, requiredStates.toSet())
+        fields(rawAnimations, requiredStates.toSet(), "animations")
         val maxTotalTracks = if (contract.product) MAX_PRODUCT_TOTAL_TRACKS else MAX_TOTAL_TRACKS
         val maxTotalKeys = if (contract.product) MAX_PRODUCT_TOTAL_KEYFRAMES else MAX_TOTAL_KEYFRAMES
         var totalTracks = 0
@@ -223,53 +253,57 @@ object BotMascotSceneCompiler {
         var animatedObjects = 0
         var expectedTargets: Set<Pair<String, String>>? = null
         val animations = requiredStates.map { state ->
-            val raw = objectValue(rawAnimations.opt(state), "animation")
-            fields(raw, setOf("duration", "loop", "tracks"))
-            val duration = integer(raw.opt("duration"), 1, MAX_DURATION_FRAMES.toLong()).toInt()
+            val path = "animations.$state"
+            val raw = objectValue(rawAnimations.opt(state), path)
+            fields(raw, setOf("duration", "loop", "tracks"), path)
+            val duration = integer(raw.opt("duration"), 1, MAX_DURATION_FRAMES.toLong(), "$path.duration").toInt()
             val loop = raw.opt("loop")
-            require(loop is Boolean) { "Loop must be boolean." }
-            val rawTracks = array(raw.opt("tracks"), "tracks")
-            require(rawTracks.length() in 1..MAX_TRACKS_PER_STATE) { "Track budget exceeded." }
+            if (loop !is Boolean) fail("$path.loop", "expected boolean.")
+            val rawTracks = array(raw.opt("tracks"), "$path.tracks")
+            if (rawTracks.length() !in 1..MAX_TRACKS_PER_STATE) fail("$path.tracks", "track count must be between 1 and $MAX_TRACKS_PER_STATE.")
             val targets = linkedSetOf<Pair<String, String>>()
             val tracks = (0 until rawTracks.length()).map { index ->
-                val track = objectValue(rawTracks.opt(index), "track")
-                fields(track, setOf("node", "property", "keys"))
-                val target = name(track.opt("node"))
-                require(target != "Artboard" && target in depths) { "Missing animation target." }
+                val trackPath = "$path.tracks[$index]"
+                val track = objectValue(rawTracks.opt(index), trackPath)
+                fields(track, setOf("node", "property", "keys"), trackPath)
+                val target = name(track.opt("node"), "$trackPath.node")
+                if (target == "Artboard" || target !in depths) fail("$trackPath.node", "unknown animation target '$target'.")
                 val property = track.opt("property")
-                require(property is String && property in transformIds) { "Unsupported animated property." }
-                require(targets.add(target to property)) { "Duplicate animation track." }
-                val rawKeys = array(track.opt("keys"), "keys")
-                require(rawKeys.length() in 1..MAX_KEYS_PER_TRACK) { "Keyframe budget exceeded." }
+                if (property !is String || property !in transformIds) fail("$trackPath.property", "expected x, y, rotation, scaleX, or scaleY.")
+                if (!targets.add(target to property)) fail(trackPath, "duplicate node/property track.")
+                val rawKeys = array(track.opt("keys"), "$trackPath.keys")
+                if (rawKeys.length() !in 1..MAX_KEYS_PER_TRACK) fail("$trackPath.keys", "key count must be between 1 and $MAX_KEYS_PER_TRACK.")
                 var previous = -1
                 val keys = (0 until rawKeys.length()).map { keyIndex ->
-                    val pair = array(rawKeys.opt(keyIndex), "keyframe")
-                    require(pair.length() == 2) { "Keyframe must be [frame, value]." }
-                    val frame = integer(pair.opt(0), 0, duration.toLong()).toInt()
-                    require(frame > previous) { "Keyframes must have strictly increasing frames." }
+                    val keyPath = "$trackPath.keys[$keyIndex]"
+                    val pair = array(rawKeys.opt(keyIndex), keyPath)
+                    if (pair.length() != 2) fail(keyPath, "expected [frame, value].")
+                    val frame = integer(pair.opt(0), 0, duration.toLong(), "$keyPath[0]").toInt()
+                    if (frame <= previous) fail("$keyPath[0]", "frames must be in strictly increasing order.")
                     previous = frame
-                    Key(frame, transformNumber(pair.opt(1), property))
+                    Key(frame, transformNumber(pair.opt(1), "$keyPath[1]", property))
                 }
-                require(keys.first().frame == 0) { "Explicit frame-zero reset required." }
-                require(!(if (contract.product) state.endsWith("Reduced") else state == "Reduced") || (!loop && keys.size == 1)) { "Reduced must contain only constant tracks and must not loop." }
+                if (keys.first().frame != 0) fail("$trackPath.keys[0][0]", "frame 0 is required.")
+                if ((if (contract.product) state.endsWith("Reduced") else state == "Reduced") && (loop || keys.size != 1))
+                    fail(path, "Reduced must have loop=false and exactly one key per track.")
                 totalKeys += keys.size
-                require(totalKeys <= maxTotalKeys) { "Total keyframe budget exceeded." }
+                if (totalKeys > maxTotalKeys) fail(path, "total keyframe budget exceeded.")
                 Track(target, property, keys)
             }
             if (contract.product && !state.endsWith("Reduced")) {
-                require(tracks.any { track ->
+                if (!tracks.any { track ->
                     val initial = track.keys.first().value
                     track.keys.any { it.value != initial }
-                }) { "Every normal product animation must contain authored motion." }
+                }) fail(path, "normal product animations must contain authored motion.")
             }
             if (expectedTargets == null) expectedTargets = targets
-            else require(targets == expectedTargets) { "Every state must reset every animated target." }
+            else if (targets != expectedTargets) fail(path, "every animation must use the same node/property targets.")
             totalTracks += tracks.size
-            require(totalTracks <= maxTotalTracks) { "Total track budget exceeded." }
+            if (totalTracks > maxTotalTracks) fail(path, "total track budget exceeded.")
             animatedObjects += tracks.map { it.node }.toSet().size
             Animation(state, duration, loop, tracks)
         }
-        require(totalTracks <= maxTotalTracks && totalKeys <= maxTotalKeys) { "Total animation complexity budget exceeded." }
+        if (totalTracks > maxTotalTracks || totalKeys > maxTotalKeys) fail("animations", "total animation complexity budget exceeded.")
         // File-level VM objects precede the artboard and never change component IDs.
         val complexity = Complexity(nodes.size, shapes, maxDepth, totalTracks, totalKeys,
             2 + (if (contract.modern) 6 else 0) + nodes.size + 3 * shapes + animations.size +
@@ -278,37 +312,51 @@ object BotMascotSceneCompiler {
             contract = if (contract.product) PRODUCT_CONTRACT else null), contract)
     }
 
-    private fun fields(value: JSONObject, allowed: Set<String>, required: Set<String> = allowed) {
+    private fun fields(value: JSONObject, allowed: Set<String>, path: String, required: Set<String> = allowed) {
         val keys = value.keys().asSequence().toSet()
-        require(keys.all { it in allowed } && keys.containsAll(required)) { "Unknown or missing scene fields." }
+        keys.firstOrNull { it !in allowed }?.let { fail(path, "unknown field '$it'.") }
+        required.firstOrNull { it !in keys }?.let { fail(path, "missing field '$it'.") }
     }
     private fun objectValue(value: Any?, label: String): JSONObject {
-        require(value is JSONObject) { "$label must be an object." }
+        if (value !is JSONObject) fail(label, "expected object, got ${jsonType(value)}.")
         return value
     }
     private fun array(value: Any?, label: String): JSONArray {
-        require(value is JSONArray) { "$label must be an array." }
+        if (value !is JSONArray) fail(label, "expected array, got ${jsonType(value)}.")
         return value
     }
-    private fun name(value: Any?): String {
-        require(value is String && value.toByteArray(StandardCharsets.UTF_8).size in 1..MAX_NAME_BYTES &&
-            value.none { it.code < 32 || it.code == 127 }) { "Invalid bounded name." }
+    private fun name(value: Any?, path: String): String {
+        if (value !is String || value.toByteArray(StandardCharsets.UTF_8).size !in 1..MAX_NAME_BYTES ||
+            value.any { it.code < 32 || it.code == 127 }) fail(path, "expected a non-empty bounded name.")
         return value
     }
-    private fun integer(value: Any?, low: Long, high: Long): Long {
-        require(value is Long && value in low..high) { "Expected bounded integer." }
+    private fun integer(value: Any?, low: Long, high: Long, path: String): Long {
+        if (value !is Long) fail(path, if (path.contains(".keys[")) "frames must be integers." else "expected an integer.")
+        if (value !in low..high) fail(path, "integer must be between $low and $high.")
         return value
     }
-    private fun number(value: Any?, low: Double, high: Double): Float {
-        require(value is Long || value is Double) { "Expected numeric value." }
+    private fun number(value: Any?, low: Double, high: Double, path: String): Float {
+        if (value !is Long && value !is Double) fail(path, "expected a number, got ${jsonType(value)}.")
         val number = (value as Number).toDouble()
-        require(number.isFinite() && number in low..high) { "Non-finite or out-of-bounds number." }
+        if (!number.isFinite() || number !in low..high) fail(path, "number must be finite and between $low and $high.")
         return number.toFloat()
     }
-    private fun transformNumber(value: Any?, property: String): Float {
+    private fun transformNumber(value: Any?, path: String, property: String): Float {
         val limit = if (property.startsWith("scale")) 4.0 else 2048.0
-        return number(value, -limit, limit)
+        return number(value, -limit, limit, path)
     }
+
+    private fun jsonType(value: Any?): String = when (value) {
+        null, JSONObject.NULL -> "null"
+        is JSONObject, is Map<*, *> -> "object"
+        is JSONArray, is Iterable<*>, is Array<*> -> "array"
+        is String -> "string"
+        is Boolean -> "boolean"
+        is Number -> if (value is Long || value is Int || value is Short || value is Byte) "integer" else "number"
+        else -> "unsupported value"
+    }
+
+    private fun fail(path: String, detail: String): Nothing = throw IllegalArgumentException("$path: $detail")
 
     private fun serialize(scene: Scene): ByteArray {
         val writer = Binary()

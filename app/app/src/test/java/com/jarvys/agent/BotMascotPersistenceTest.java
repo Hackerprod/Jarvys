@@ -105,8 +105,6 @@ public class BotMascotPersistenceTest {
         BotMascotStore store = BotMascotStoreTestSupport.store(temporary.getRoot());
         BotMascotStore.ValidatedPackage prepared = prepare(store);
         assertThrows(IllegalArgumentException.class, () -> repository.setMascot(BOT, 2, prepared, "op", PAYLOAD));
-        assertThrows(IllegalArgumentException.class, () -> repository.setMascot("coding", 1, prepared, "op", PAYLOAD));
-        assertThrows(IllegalArgumentException.class, () -> repository.setMascot("android-use", 1, prepared, "op", PAYLOAD));
         BotMascotStore.ValidatedPackage otherBot = store.prepare("custom-other", DESCRIPTION, SOURCE, FIXTURE_GATE, CancellationToken.uncancellable());
         assertThrows(IllegalArgumentException.class, () -> repository.setMascot(BOT, 1, otherBot, "op", PAYLOAD));
         BotMascotStore otherStore = BotMascotStoreTestSupport.store(temporary.newFolder());
@@ -116,6 +114,40 @@ public class BotMascotPersistenceTest {
         repository.setEnabled(BOT, 1, false);
         assertThrows(IllegalArgumentException.class, () -> repository.setMascot(BOT, 2, prepared, "op", PAYLOAD));
         assertNull(repository.definition(BOT).mascot);
+    }
+
+    @Test public void builtinMascotOverlayPersistsWithItsOwnRevisionAndLoadsForRendering() throws Exception {
+        CrewProfileRepository repository = repository();
+        BotMascotStore store = BotMascotStoreTestSupport.store(temporary.getRoot());
+        for (String id : Arrays.asList("coding", "android-use")) {
+            BotDefinition original = repository.definition(id);
+            BotMascotStore.ValidatedPackage prepared = store.prepare(id, DESCRIPTION, SOURCE, FIXTURE_GATE, CancellationToken.uncancellable());
+            CrewProfileRepository.MascotAssignment assignment = repository.setMascot(id, 1, prepared, "overlay-" + id, PAYLOAD);
+            assertFalse(assignment.alreadyExisted);
+            assertTrue(assignment.definition.builtIn);
+            assertEquals(2, assignment.definition.revision);
+            assertEquals(original.profile.toJson().toString(), assignment.definition.profile.toJson().toString());
+            assertTrue(store.read(id, assignment.definition.mascot).riv().length > 0);
+            assertThrows(IllegalArgumentException.class, () -> repository.setEnabled(id, assignment.definition.revision, false));
+            assertThrows(IllegalArgumentException.class, () -> repository.setIcon(id, assignment.definition.revision, ICON));
+            assertThrows(IllegalArgumentException.class, () -> repository.save(assignment.definition, Collections.emptyList(), Collections.emptyList()));
+
+            CrewProfileRepository restarted = repository();
+            BotDefinition rendered = restarted.definition(id);
+            assertTrue(rendered.builtIn);
+            assertEquals(2, rendered.revision);
+            assertEquals(assignment.definition.mascot, rendered.mascot);
+            assertEquals(1, rendered.mascotReceipts.size());
+            assertArrayEquals(SOURCE, store.read(id, rendered.mascot).source());
+            assertTrue(restarted.mascotOperation(id, "overlay-" + id, PAYLOAD).alreadyExisted);
+            BotMascotStore.ValidatedPackage stale = store.prepare(id, DESCRIPTION, SOURCE, FIXTURE_GATE, CancellationToken.uncancellable());
+            assertThrows(IllegalArgumentException.class, () -> restarted.setMascot(id, 1, stale, "new-stale-" + id, PAYLOAD));
+            assertTrue(store.cleanupUnassigned(restarted, id, stale.descriptor().packageRef));
+        }
+        JSONObject catalog = new JSONObject(new String(Files.readAllBytes(new File(temporary.getRoot(), "crew_profiles/profiles.json").toPath()), StandardCharsets.UTF_8));
+        assertEquals(CrewProfileRepository.SCHEMA_VERSION, catalog.getInt("schemaVersion"));
+        assertEquals(2, catalog.getJSONArray("mascotOverlays").length());
+        assertEquals(0, catalog.getJSONArray("bots").length());
     }
 
     @Test public void simultaneousAssignmentsHaveOneWinnerAndCleanupCannotDeleteTheWinner() throws Exception {
@@ -221,7 +253,7 @@ public class BotMascotPersistenceTest {
 
     @Test public void pathsSymlinksOversizedBytesAndAlteredManifestsFailClosed() throws Exception {
         BotMascotStore store = BotMascotStoreTestSupport.store(temporary.getRoot());
-        for (String invalid : Arrays.asList("coding", "../other", "/tmp/x", "custom/x", "https://host", "custom-"))
+        for (String invalid : Arrays.asList("../other", "/tmp/x", "custom/x", "https://host", "custom-"))
             assertThrows(IllegalArgumentException.class, () -> store.prepare(invalid, DESCRIPTION, SOURCE, FIXTURE_GATE, CancellationToken.uncancellable()));
         assertThrows(IllegalArgumentException.class, () -> store.prepare(BOT, DESCRIPTION, new byte[BotMascotStore.MAX_SOURCE_BYTES + 1], FIXTURE_GATE, CancellationToken.uncancellable()));
         assertThrows(IllegalArgumentException.class, () -> store.prepare(BOT, DESCRIPTION, SOURCE, (s, token) -> new byte[BotMascotStore.MAX_RIV_BYTES + 1], CancellationToken.uncancellable()));
@@ -253,7 +285,7 @@ public class BotMascotPersistenceTest {
         assertEquals(12, migrated.revision); assertFalse(migrated.enabled); assertEquals(ICON, migrated.iconRef);
         assertNull(migrated.mascot); assertTrue(migrated.mascotReceipts.isEmpty());
         byte[] migratedBytes = Files.readAllBytes(catalog.toPath());
-        assertEquals(4, new JSONObject(new String(migratedBytes, StandardCharsets.UTF_8)).getInt("schemaVersion"));
+        assertEquals(5, new JSONObject(new String(migratedBytes, StandardCharsets.UTF_8)).getInt("schemaVersion"));
         repository().definitions();
         assertArrayEquals(migratedBytes, Files.readAllBytes(catalog.toPath()));
     }

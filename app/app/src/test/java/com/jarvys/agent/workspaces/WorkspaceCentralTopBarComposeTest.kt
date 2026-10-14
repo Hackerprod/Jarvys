@@ -61,6 +61,8 @@ class WorkspaceCentralTopBarComposeTest {
         compose.onNodeWithTag("jarvys-topbar-more-options")
             .assertWidthIsEqualTo(48.dp).assertHeightIsEqualTo(48.dp)
         compose.onNodeWithContentDescription(compose.activity.getString(R.string.topbar_more_options)).performClick()
+        compose.onNodeWithTag("topbar-rename-chat").assertDoesNotExist()
+        compose.onNodeWithTag("topbar-delete-chat").assertDoesNotExist()
         compose.onNodeWithText(compose.activity.getString(R.string.drawer_new_chat)).assertDoesNotExist()
         compose.onNodeWithText(compose.activity.getString(R.string.drawer_settings)).performClick()
         assertEquals(0, newChat)

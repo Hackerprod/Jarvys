@@ -44,6 +44,8 @@ import com.jarvys.agent.RunHistoryItem
 import com.jarvys.agent.drawerConversationTitle
 import com.jarvys.agent.LucideIcons
 
+internal data class ConversationActionDialogTarget(val sessionId: String, val title: String)
+
 /** Shared actions preserve validation and explicit delete confirmation in both chat lists. */
 @Composable
 internal fun ChatConversationActions(
@@ -51,40 +53,70 @@ internal fun ChatConversationActions(
     onConversationAction: (String, ConversationAction, String?) -> Unit,
     content: @Composable (action: (RunHistoryItem, ConversationAction) -> Unit) -> Unit,
 ) {
-    var renameTarget by remember { mutableStateOf<RunHistoryItem?>(null) }
-    var deleteTarget by remember { mutableStateOf<RunHistoryItem?>(null) }
+    var renameTarget by remember { mutableStateOf<ConversationActionDialogTarget?>(null) }
+    var deleteTarget by remember { mutableStateOf<ConversationActionDialogTarget?>(null) }
     var renameText by remember { mutableStateOf("") }
+    val fallbackTitle = stringResource(R.string.drawer_chat_fallback)
     fun action(record: RunHistoryItem, action: ConversationAction) {
         if (!actionsEnabled) return
         when (action) {
-            ConversationAction.RENAME -> { renameTarget = record; renameText = record.title ?: record.goal }
-            ConversationAction.DELETE -> { deleteTarget = record }
+            ConversationAction.RENAME -> {
+                renameTarget = ConversationActionDialogTarget(record.sessionId, record.title ?: record.goal)
+                renameText = record.title ?: record.goal
+            }
+            ConversationAction.DELETE -> {
+                deleteTarget = ConversationActionDialogTarget(record.sessionId,
+                    drawerConversationTitle(record.title, record.goal, fallbackTitle))
+            }
             else -> onConversationAction(record.sessionId, action, null)
         }
     }
     content(::action)
-    renameTarget?.let { record ->
-        AlertDialog(onDismissRequest = { renameTarget = null },
+    ConversationActionDialogs(
+        renameTarget = renameTarget,
+        deleteTarget = deleteTarget,
+        renameText = renameText,
+        onRenameTextChange = { renameText = it },
+        actionsEnabled = actionsEnabled,
+        onConversationAction = onConversationAction,
+        onDismissRename = { renameTarget = null },
+        onDismissDelete = { deleteTarget = null },
+    )
+}
+
+/** Rename and delete confirmation are shared by the drawer and the chat header menu. */
+@Composable
+internal fun ConversationActionDialogs(
+    renameTarget: ConversationActionDialogTarget?,
+    deleteTarget: ConversationActionDialogTarget?,
+    renameText: String,
+    onRenameTextChange: (String) -> Unit,
+    actionsEnabled: Boolean,
+    onConversationAction: (String, ConversationAction, String?) -> Unit,
+    onDismissRename: () -> Unit,
+    onDismissDelete: () -> Unit,
+) {
+    renameTarget?.let { target ->
+        AlertDialog(onDismissRequest = onDismissRename,
             title = { Text(stringResource(R.string.drawer_rename_chat)) },
             text = { ScrollableDialogContent {
-                JarvysTextField(value = renameText, onValueChange = { renameText = it }, singleLine = true,
+                JarvysTextField(value = renameText, onValueChange = onRenameTextChange, singleLine = true,
                     label = { Text(stringResource(R.string.drawer_chat_name)) })
                 if (renameText.isBlank()) Text(stringResource(R.string.drawer_name_required), color = MaterialTheme.colorScheme.error)
             } },
             confirmButton = { TextButton(enabled = actionsEnabled && renameText.isNotBlank(), onClick = {
-                renameTarget = null; onConversationAction(record.sessionId, ConversationAction.RENAME, renameText.trim())
+                onDismissRename(); onConversationAction(target.sessionId, ConversationAction.RENAME, renameText.trim())
             }) { Text(stringResource(R.string.drawer_save_name)) } },
-            dismissButton = { TextButton(onClick = { renameTarget = null }) { Text(stringResource(R.string.drawer_cancel_action)) } })
+            dismissButton = { TextButton(onClick = onDismissRename) { Text(stringResource(R.string.drawer_cancel_action)) } })
     }
-    deleteTarget?.let { record ->
-        AlertDialog(onDismissRequest = { deleteTarget = null },
+    deleteTarget?.let { target ->
+        AlertDialog(onDismissRequest = onDismissDelete,
             title = { Text(stringResource(R.string.drawer_delete_chat)) },
-            text = { ScrollableDialogContent { Text(stringResource(R.string.drawer_delete_confirmation,
-                drawerConversationTitle(record.title, record.goal, stringResource(R.string.drawer_chat_fallback)))) } },
+            text = { ScrollableDialogContent { Text(stringResource(R.string.drawer_delete_confirmation, target.title)) } },
             confirmButton = { TextButton(enabled = actionsEnabled, onClick = {
-                deleteTarget = null; onConversationAction(record.sessionId, ConversationAction.DELETE, null)
+                onDismissDelete(); onConversationAction(target.sessionId, ConversationAction.DELETE, null)
             }) { Text(stringResource(R.string.drawer_delete_action), color = MaterialTheme.colorScheme.error) } },
-            dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text(stringResource(R.string.drawer_cancel_action)) } })
+            dismissButton = { TextButton(onClick = onDismissDelete) { Text(stringResource(R.string.drawer_cancel_action)) } })
     }
 }
 
@@ -92,7 +124,8 @@ internal fun ChatConversationActions(
 @Composable
 internal fun ConversationSessionRow(title: String, selected: Boolean, active: Boolean, onClick: () -> Unit,
     pinned: Boolean, archived: Boolean, actionsEnabled: Boolean, managed: Boolean,
-    showPinnedMarker: Boolean = true, verticalOverflow: Boolean = false, onAction: (ConversationAction) -> Unit) {
+    showPinnedMarker: Boolean = true, verticalOverflow: Boolean = false,
+    protectedWorkspace: Boolean = false, onAction: (ConversationAction) -> Unit) {
     var menuOpen by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().heightIn(min = 62.dp).combinedClickable(onClick = onClick,
         onLongClick = { if (actionsEnabled) menuOpen = true })
@@ -107,22 +140,27 @@ internal fun ConversationSessionRow(title: String, selected: Boolean, active: Bo
             maxLines = 2, overflow = TextOverflow.Ellipsis)
         if (pinned && showPinnedMarker) Text(stringResource(R.string.drawer_pinned), Modifier.testTag("drawer-pinned-marker"), style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.primary)
-        Box {
-            IconButton(enabled = actionsEnabled, onClick = { menuOpen = true }, modifier = Modifier.size(48.dp)) {
-                Icon(LucideIcons.Ellipsis, contentDescription = stringResource(R.string.drawer_chat_actions, title),
-                    modifier = Modifier.size(18.dp).rotate(if (verticalOverflow) 90f else 0f)
-                        .testTag(if (verticalOverflow) "conversation-overflow-vertical" else "conversation-overflow-horizontal"))
-            }
-            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                listOf(
-                    (if (pinned) ConversationAction.UNPIN else ConversationAction.PIN) to (if (pinned) R.string.drawer_unpin else R.string.drawer_pin),
-                    ConversationAction.RENAME to R.string.drawer_rename_chat,
-                    (if (archived) ConversationAction.RESTORE else ConversationAction.ARCHIVE) to (if (archived) R.string.drawer_unarchive else R.string.drawer_archive),
-                ).forEach { (action, label) ->
-                    DropdownMenuItem(text = { Text(stringResource(label)) }, onClick = { menuOpen = false; onAction(action) }, enabled = actionsEnabled)
+        if (!protectedWorkspace) {
+            Box {
+                IconButton(enabled = actionsEnabled, onClick = { menuOpen = true }, modifier = Modifier.size(48.dp)) {
+                    Icon(LucideIcons.Ellipsis, contentDescription = stringResource(R.string.drawer_chat_actions, title),
+                        modifier = Modifier.size(18.dp).rotate(if (verticalOverflow) 90f else 0f)
+                            .testTag(if (verticalOverflow) "conversation-overflow-vertical" else "conversation-overflow-horizontal"))
                 }
-                if (!managed) DropdownMenuItem(text = { Text(stringResource(R.string.drawer_delete_action), color = MaterialTheme.colorScheme.error) },
-                    onClick = { menuOpen = false; onAction(ConversationAction.DELETE) }, enabled = actionsEnabled)
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    val availableActions = buildList {
+                        add((if (pinned) ConversationAction.UNPIN else ConversationAction.PIN) to
+                            (if (pinned) R.string.drawer_unpin else R.string.drawer_pin))
+                        add(ConversationAction.RENAME to R.string.drawer_rename_chat)
+                        add((if (archived) ConversationAction.RESTORE else ConversationAction.ARCHIVE) to
+                            (if (archived) R.string.drawer_unarchive else R.string.drawer_archive))
+                    }
+                    availableActions.forEach { (action, label) ->
+                        DropdownMenuItem(text = { Text(stringResource(label)) }, onClick = { menuOpen = false; onAction(action) }, enabled = actionsEnabled)
+                    }
+                    if (!managed) DropdownMenuItem(text = { Text(stringResource(R.string.drawer_delete_action), color = MaterialTheme.colorScheme.error) },
+                        onClick = { menuOpen = false; onAction(ConversationAction.DELETE) }, enabled = actionsEnabled)
+                }
             }
         }
     }

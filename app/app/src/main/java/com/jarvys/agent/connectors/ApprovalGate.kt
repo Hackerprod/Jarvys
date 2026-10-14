@@ -13,7 +13,7 @@ enum class ApprovalDecision {
     PERMISSION_FALLBACK_LAUNCHED, ACTION_FAILED, EXPIRED, CANCELLED,
 }
 
-enum class ApprovalIntentKind { CONTACT_INSERT, DIAL, SMS_COMPOSE, EMAIL_COMPOSE }
+enum class ApprovalIntentKind { CONTACT_INSERT, DIAL }
 
 data class ApprovalIntentSpec(
     val kind: ApprovalIntentKind,

@@ -159,6 +159,17 @@ class BotMascotPilotComposeTest {
         assertNoNativeViews()
     }
 
+    @Test fun loadedBuiltInCodingOverlayPassesPackageVerificationAndOpensStaticPilot() {
+        val repository = CrewProfileRepository(context.filesDir)
+        val assigned = assignFixture(repository.definition("coding"))
+        val loaded = CrewProfileRepository(context.filesDir).definition("coding")
+        assertTrue(loaded.builtIn)
+        assertEquals(assigned.mascot, loaded.mascot)
+        install { BotMascotPilotEntry(loaded, isNew = false) }
+        open()
+        assertStatic()
+    }
+
     @Test fun tamperedPackageKeepsGenericFallbackAndNeverOffersOpen() {
         val bot = savedFixture()
         val asset = File(context.filesDir, "bot_mascots/${bot.id}/${bot.mascot.packageRef}/asset.riv")

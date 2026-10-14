@@ -41,8 +41,6 @@ object ActionPolicyDefaults {
         register("calendar", listOf("search_events", "create_event"))
         register("contacts", listOf("search", "get_contact_detail", "create_contact"))
         register("phone", listOf("open_dialer", "place_call"))
-        register("email", listOf("compose_email"))
-        register("sms_draft", listOf("send_sms"))
         register("files", listOf("pick_document", "create_document"))
         register("location", listOf("get_current_location", "reverse_geocode_current_location"))
         register("notifications", listOf("list_recent", "dismiss_notification", "open_notification", "reply_notification"))

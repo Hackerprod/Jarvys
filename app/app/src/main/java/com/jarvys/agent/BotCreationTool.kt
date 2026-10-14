@@ -35,12 +35,18 @@ class BotCreationTool internal constructor(private val service: BotCreationServi
             "workspace_mode" to mapOf("type" to "string", "enum" to listOf("legacy_chat", "conversation_project"), "description" to "coding_* and project_* tools require conversation_project. project_exec also requires project_jobs. Skills require read_skill."),
             "icon_prompt" to text("Freeform thematic visual prompt for the requested bot's static fallback icon. No private images, attachments, URLs or paths are read.", BotIconService.MAX_PROMPT_CHARS),
             "visual_description" to text("Original mascot design and state-specific movement description, separate from bot instructions. Plain text, no control characters.", 1200),
-            "mascot_scene_json" to text(BotMascotTool.SCENE_GUIDE, BotMascotSceneCompiler.MAX_SOURCE_BYTES),
+            "mascot_scene_json" to linkedMapOf(
+                "description" to BotMascotTool.SCENE_GUIDE,
+                "anyOf" to listOf(
+                    mapOf("type" to "string", "maxLength" to BotMascotSceneCompiler.MAX_SOURCE_BYTES),
+                    mapOf("type" to "object"),
+                ),
+            ),
         )
         return ToolSpec(NAME, "jarvys/bots", "Create and persist a custom bot from the user's request, including its simple name, English instructions, original locally compiled mascot and generated static fallback icon. " +
             "This never changes connector permissions or starts a task. " +
             "Image generation uses existing signed-in Codex image access only; unavailable or failed generation returns a saved bot with an explicitly incomplete icon. " +
-            "Never claim the icon is finished unless icon_status is generated. Mascot compilation is local and independent of image access; LOCAL_COMPILED does not prove Android playback. Normal avatars remain static; only an explicit temporary visual test is available in the saved custom bot editor. Retry only with the same request_id, then inspect list_bots; never recreate to fix a visual. Main chat only.",
+            "Never claim the icon is finished unless icon_status is generated. Mascot compilation is local and independent of image access; LOCAL_COMPILED does not prove Android playback. Normal avatars remain static; only an explicit temporary visual test is available in the saved bot editor. compile_bot_mascot can also compile a mascot for any existing bot, including built-in Coding and Android-use. Retry only with the same request_id, then inspect list_bots; never recreate to fix a visual. Main chat only.",
             "bots", ToolSpec.Status.IMPLEMENTED, emptyMap(), properties.keys.toList(),
             mapOf("type" to "object", "properties" to properties, "required" to properties.keys.toList(), "additionalProperties" to false))
     }
@@ -103,9 +109,8 @@ internal class BotCreationService(
                 com.jarvys.agent.crew.BotMascotDescriptor.requireVisualDescription(value)
             } else null
             // Keep the exact source bytes in the fingerprint; do not trim or silently rewrite the agent's design.
-            val mascotScene = if (hasMascot) (arguments["mascot_scene_json"] as? String)?.also {
-                BotMascotSceneCompiler.validateProduct(it)
-            } ?: throw IllegalArgumentException("mascot_scene_json must be a bounded product scene JSON string.") else null
+            val mascotScene = if (hasMascot) BotMascotSceneCompiler.normalizeProductScene(arguments["mascot_scene_json"], "mascot_scene_json")
+                .also { BotMascotSceneCompiler.validateProduct(it) } else null
             val workspace = text("workspace_mode", 32)
             require(workspace in listOf("legacy_chat", "conversation_project")) { "Unsupported workspace_mode." }
             val description = text("description", 240)

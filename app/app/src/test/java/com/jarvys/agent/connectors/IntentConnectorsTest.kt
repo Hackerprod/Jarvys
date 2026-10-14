@@ -1,9 +1,6 @@
 package com.jarvys.agent.connectors
 
 import android.Manifest
-import android.content.Intent
-import android.net.Uri
-import com.jarvys.agent.approvalIntent
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -128,66 +125,7 @@ class IntentConnectorsTest {
         assertTrue(result.getString("message").contains("presentation is not confirmed"))
     }
 
-    @Test fun smsSchemaAndConfiguredPolicyOnlyRequestAnUnsentDraft() {
-        val definition = SmsComposerConnector.definition()
-        val schema = SmsComposerConnector.smsSchema()
-        assertEquals("string", schema.getJSONObject("properties").getJSONObject("to").getString("type"))
-        assertEquals(SmsComposerConnector.MAX_BODY_CHARS,
-            schema.getJSONObject("properties").getJSONObject("body").getInt("maxLength"))
-        assertTrue(definition.description.contains("does not read SMS", ignoreCase = true))
-        assertTrue(definition.readPermissions.isEmpty())
-        assertFalse(definition.writePermissions.contains(Manifest.permission.SEND_SMS))
-        assertEquals("send_sms", definition.operations.single().name)
-        assertTrue(definition.operations.single().autonomyAllowed)
-        assertFalse(com.jarvys.agent.proactive.ProactiveReadOnlyToolFactory.connectorAllowlist.values
-            .flatten().contains("send_sms"))
-
-        val summaries = mutableListOf<ApprovalSummary>()
-        val launched = mutableListOf<ApprovalIntentSpec>()
-        val registry = ConnectorRegistry.createForTestsWithAutonomy(
-            FakeConnectorPreferences(), { false }, rejectingApprovalGate(summaries::add),
-            InMemoryConnectorAutonomyStore(), NoopAutonomyActionNotifier, launchIntent = { launched += it },
-        )
-        registry.register(definition)
-        registry.connect(SmsComposerConnector.ID)
-        val operation = definition.operations.single()
-        registry.setAutonomyPolicy(definition, operation, AutonomyPolicy.ASK)
-        val body = "Please call me after lunch. " + "Review the details carefully. ".repeat(60)
-        val rejected = runCatching {
-            registry.invoke(definition, operation, JSONObject().put("to", "+15551234567").put("body", body), token)
-        }.exceptionOrNull()
-        assertTrue(rejected?.message.orEmpty().contains("do not retry automatically"))
-        val intent = summaries.single().activityIntent
-        assertEquals(ApprovalIntentKind.SMS_COMPOSE, intent?.kind)
-        assertEquals("smsto:+15551234567", intent?.dataUri)
-        assertEquals(body, intent?.extras?.get("sms_body"))
-        assertEquals("Message: $body", summaries.single().lines.last())
-        val externalIntent = approvalIntent(requireNotNull(intent))
-        assertEquals(Intent.ACTION_SENDTO, externalIntent.action)
-        assertEquals(Uri.parse("smsto:+15551234567"), externalIntent.data)
-        assertEquals(body, externalIntent.getStringExtra("sms_body"))
-        assertTrue(launched.isEmpty())
-        registry.setAutonomyPolicy(definition, operation, AutonomyPolicy.ALLOW)
-        val result = registry.invoke(definition, operation,
-            JSONObject().put("to", "+15551234567").put("body", body), token)
-        assertEquals(listOf(intent), launched)
-        assertEquals(1, summaries.size)
-        assertFalse(result.getBoolean("sent"))
-        assertEquals("sms_composer_launch_requested", result.getString("status"))
-        assertTrue(result.getString("message").contains("presentation is not confirmed"))
-        assertFalse(result.has("opened"))
-        assertTrue(runCatching {
-            SmsComposerConnector().prepareWrite(SmsComposerConnector.COMPOSE,
-                JSONObject().put("to", "555123").put("body", ""), token)
-        }.isFailure)
-    }
-
-    @Test fun emailDraftBuildsExactMailtoIntentAndRespectsSavedAskThenAllow() {
-        val definition = EmailIntentConnector.definition()
-        val op = definition.operations.single()
-        assertEquals(EmailIntentConnector.COMPOSE, op.name)
-        assertTrue(op.write)
-        assertTrue(op.autonomyAllowed)
+    @Test fun sharedEmailDraftPolicyBuildsMailtoAndValidatesRecipients() {
         val parsed = EmailIntentPolicy.parse("a@example.com", "Hello world", "Line one\nLine two",
             "b@example.org", "c@example.net")
         val mailto = EmailIntentPolicy.mailto(parsed)
@@ -196,36 +134,6 @@ class IntentConnectorsTest {
         assertTrue(mailto.contains("bcc=c%40example.net"))
         assertTrue(mailto.contains("subject=Hello%20world"))
         assertTrue(mailto.contains("body=Line%20one%0ALine%20two"))
-
-        val summaries = mutableListOf<ApprovalSummary>()
-        val launched = mutableListOf<ApprovalIntentSpec>()
-        val registry = ConnectorRegistry.createForTestsWithAutonomy(
-            FakeConnectorPreferences(), { false }, rejectingApprovalGate(summaries::add),
-            InMemoryConnectorAutonomyStore(), NoopAutonomyActionNotifier, launchIntent = { launched += it },
-        )
-        registry.register(definition)
-        registry.connect(EmailIntentConnector.ID)
-        registry.setAutonomyPolicy(definition, op, AutonomyPolicy.ASK)
-        val failure = runCatching {
-            registry.invoke(definition, op, JSONObject().put("to", "a@example.com")
-                .put("subject", "Sensitive subject").put("body", "A body"), token)
-        }.exceptionOrNull()
-        assertTrue(failure?.message.orEmpty().contains("do not retry automatically"))
-        assertEquals(ApprovalIntentKind.EMAIL_COMPOSE, summaries.single().activityIntent?.kind)
-        assertEquals(true, summaries.single().allowAlwaysAvailable)
-        assertTrue(summaries.single().lines.any { it.contains("Sensitive subject") })
-        assertTrue(launched.isEmpty())
-        registry.setAutonomyPolicy(definition, op, AutonomyPolicy.ALLOW)
-        val result = registry.invoke(definition, op, JSONObject().put("to", "a@example.com")
-            .put("subject", "Sensitive subject").put("body", "A body"), token)
-        assertEquals(listOf(summaries.single().activityIntent), launched)
-        assertEquals("a@example.com", launched.single().extras["to"])
-        assertEquals("Sensitive subject", launched.single().extras["subject"])
-        assertEquals("A body", launched.single().extras["body"])
-        assertEquals("email_composer_launch_requested", result.getString("status"))
-        assertFalse(result.getBoolean("sent"))
-        assertTrue(result.getString("message").contains("presentation is not confirmed"))
-        assertEquals(1, summaries.size)
         assertTrue(runCatching { EmailIntentPolicy.parse("not-an-address", "", "x") }.isFailure)
         assertTrue(runCatching { EmailIntentPolicy.parse("a@example.com\r\nBcc:x@y.com", "", "x") }.isFailure)
     }
@@ -279,13 +187,4 @@ class IntentConnectorsTest {
         assertEquals(0, gateway.opened)
     }
 
-    @Test fun smsGuidanceUsesConfiguredPolicyAndDoesNotPromisePresentation() {
-        val note = SmsComposerConnector.definition().usageNote()
-        assertTrue(note.contains("configured action policy"))
-        assertFalse(note.contains("after ApprovalGate"))
-        assertFalse(note.contains("prepared/opened"))
-        assertTrue(note.contains("launch", ignoreCase = true))
-        assertTrue(note.contains("not that the composer appeared", ignoreCase = true))
-        assertTrue(note.contains("tap Send"))
-    }
 }

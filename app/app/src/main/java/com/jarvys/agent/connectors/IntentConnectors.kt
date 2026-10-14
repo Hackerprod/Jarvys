@@ -17,7 +17,6 @@ interface PhoneCallGateway {
     fun placeCall(phoneNumber: String)
     fun openDialer(phoneNumber: String)
 }
-
 class AndroidPhoneCallGateway(context: Context) : PhoneCallGateway {
     private val appContext = context.applicationContext
 
@@ -75,7 +74,7 @@ class DialerConnector(
                     localizedTitle = localizedTitle,
                     localizedLines = listOf(ConnectorUiText(R.string.approval_summary_phone_call, listOf(number), "Request a call to $number")),
                     compactSummary = ConnectorUiText(R.string.approval_summary_compact,
-                        listOf(localizedTitle, ConnectorUiText(fallback = number)), "Place Phone Call · $number"),
+                        listOf(localizedTitle, ConnectorUiText(fallback = number)), "Place Phone Call Â· $number"),
                 ),
                 JSONObject(arguments.toString()),
                 attachment = number,
@@ -208,90 +207,5 @@ class DialerConnector(
             require(!emergencyNumber(compact)) { "Emergency numbers cannot be called by Jarvys; use the Phone app directly" }
             return compact
         }
-    }
-}
-
-class SmsComposerConnector : ConnectorRuntime {
-    override fun connect(configuration: Map<String, String>, secrets: Map<String, String>) = Unit
-    override fun disconnect() = Unit
-
-    override fun invoke(operation: String, arguments: JSONObject, token: CancellationToken): JSONObject =
-        error("SMS composition must pass through the connector action-policy gate")
-
-    override fun prepareWrite(operation: String, arguments: JSONObject, token: CancellationToken): ConnectorWritePreparation {
-        require(operation == COMPOSE) { "Unknown SMS operation: $operation" }
-        token.throwIfCancelled()
-        val number = DialerConnector.normalizePhone(arguments.optString("to"))
-        val body = arguments.optString("body")
-        require(body.isNotBlank()) { "SMS draft text cannot be empty" }
-        require(body.length <= MAX_BODY_CHARS) { "SMS draft text cannot exceed $MAX_BODY_CHARS characters" }
-        val localizedTitle = ConnectorUiText(R.string.approval_summary_sms_draft_title, fallback = "Open SMS Draft")
-        return ConnectorWritePreparation(
-            ApprovalSummary(
-                title = "Open SMS Draft",
-                lines = listOf("To: $number", "Message: $body"),
-                activityIntent = ApprovalIntentSpec(
-                    ApprovalIntentKind.SMS_COMPOSE,
-                    dataUri = "smsto:$number",
-                    extras = mapOf("sms_body" to body),
-                ),
-                localizedTitle = localizedTitle,
-                localizedLines = listOf(
-                    ConnectorUiText(R.string.approval_summary_to, listOf(number), "To: $number"),
-                    ConnectorUiText(R.string.approval_summary_message, listOf(body), "Message: $body"),
-                ),
-                compactSummary = ConnectorUiText(R.string.approval_summary_compact,
-                    listOf(localizedTitle, ConnectorUiText(fallback = number)), "Open SMS Draft · $number"),
-            ),
-            JSONObject(arguments.toString()),
-        )
-    }
-
-    override fun invokePrepared(
-        operation: String,
-        arguments: JSONObject,
-        preparation: ConnectorWritePreparation,
-        token: CancellationToken,
-    ): JSONObject {
-        token.throwIfCancelled()
-        return JSONObject().put("source", "android.sms_composer").put("untrusted_content", false)
-            .put("status", "sms_composer_launch_requested").put("sent", false)
-            .put("message", "Android accepted the messaging composer launch request; presentation is not confirmed. The user must tap Send.")
-    }
-
-    companion object {
-        const val ID = "sms_draft"
-        const val COMPOSE = "send_sms"
-        const val MAX_BODY_CHARS = 5000
-
-        fun definition() = ConnectorDefinition(
-            id = ID,
-            name = "SMS",
-            version = "1",
-            description = "Jarvys does not read SMS or send messages directly. It opens a draft in your messaging app; you tap Send there.",
-            capabilities = listOf("sms.compose_intent"),
-            operations = listOf(ConnectorOperation(
-                name = COMPOSE,
-                displayLabel = "Compose SMS",
-                description = "Normal chat only. Resolve a requested contact with contacts read tools; never choose between homonyms. According to the configured action policy, request ACTION_SENDTO with smsto: and a prefilled draft. Does not read SMS or send; the user presses Send in the system messaging app.",
-                inputSchema = smsSchema(),
-                write = true,
-                autonomyAllowed = true,
-                limits = mapOf("toChars" to DialerConnector.MAX_NUMBER_CHARS, "bodyChars" to MAX_BODY_CHARS),
-                displayLabelResourceId = R.string.connector_operation_sms_compose,
-                descriptionResourceId = R.string.connector_operation_sms_compose_description,
-            )),
-            runtime = SmsComposerConnector(),
-            displayNameResourceId = R.string.connector_label_sms_composer,
-            descriptionResourceId = R.string.connector_description_sms_composer,
-            usageNoteProvider = { "The send_sms tool requests a prefilled system messaging composer under the configured action policy. Resolve contacts using contact tools and ask the user about homonyms. A successful result proves only that Android accepted the launch request, not that the composer appeared or a message was sent. The user must tap Send in the messaging app." },
-        )
-
-        internal fun smsSchema() = JSONObject().put("type", "object")
-            .put("properties", JSONObject()
-                .put("to", JSONObject().put("type", "string").put("minLength", 1).put("maxLength", DialerConnector.MAX_NUMBER_CHARS))
-                .put("body", JSONObject().put("type", "string").put("minLength", 1).put("maxLength", MAX_BODY_CHARS)))
-            .put("required", org.json.JSONArray(listOf("to", "body")))
-            .put("additionalProperties", false)
     }
 }

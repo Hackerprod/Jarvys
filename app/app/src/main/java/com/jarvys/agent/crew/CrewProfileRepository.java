@@ -25,11 +25,11 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-/** Single private catalog for immutable runtime templates and versioned custom bot definitions. */
+/** Single private catalog for immutable runtime templates, mascot overlays, and custom definitions. */
 public final class CrewProfileRepository {
     private static final Object LOCK = new Object();
     private static final CopyOnWriteArrayList<Subscription> LISTENERS = new CopyOnWriteArrayList<>();
-    public static final int SCHEMA_VERSION = 4;
+    public static final int SCHEMA_VERSION = 5;
     private final File root;
     private final File target;
 
@@ -212,7 +212,7 @@ public final class CrewProfileRepository {
     public MascotAssignment mascotOperation(String id, String operationId, String payloadHash) {
         BotMascotDescriptor.requireOperationId(operationId);
         BotMascotDescriptor.requireHash(payloadHash);
-        synchronized (LOCK) { return existingMascotOperation(requireEditable(load(), id), operationId, payloadHash); }
+        synchronized (LOCK) { return existingMascotOperation(requireMascotEditable(load(), id), operationId, payloadHash); }
     }
 
     /**
@@ -229,7 +229,7 @@ public final class CrewProfileRepository {
         BotMascotDescriptor.Receipt receipt;
         synchronized (LOCK) {
             Map<String, BotDefinition> definitions = load();
-            BotDefinition previous = requireEditable(definitions, id);
+            BotDefinition previous = requireMascotEditable(definitions, id);
             MascotAssignment existing = existingMascotOperation(previous, operationId, payloadHash);
             if (existing != null) return existing;
             if (previous.revision != expectedRevision) throw conflict();
@@ -242,7 +242,7 @@ public final class CrewProfileRepository {
             receipt = new BotMascotDescriptor.Receipt(operationId, payloadHash, next(previous.revision), mascot);
             List<BotMascotDescriptor.Receipt> receipts = new ArrayList<>(previous.mascotReceipts);
             receipts.add(receipt);
-            saved = new BotDefinition(previous.profile, receipt.assignedRevision, previous.enabled, false,
+            saved = new BotDefinition(previous.profile, receipt.assignedRevision, previous.enabled, previous.builtIn,
                     previous.iconRef, mascot, receipts);
             definitions.put(id, saved);
             persist(definitions.values());
@@ -271,7 +271,7 @@ public final class CrewProfileRepository {
         } catch (IOException error) { throw CrewProfile.invalid("could not verify mascot cleanup scope", error); }
         synchronized (LOCK) {
             // Unknown, corrupt or unreadable catalog state throws before cleanup. Never guess.
-            BotDefinition definition = requireEditable(load(), id);
+            BotDefinition definition = requireMascotEditable(load(), id);
             if (definition.mascot != null && definition.mascot.packageRef.equals(packageRef)) return false;
             for (BotMascotDescriptor.Receipt receipt : definition.mascotReceipts)
                 if (receipt.mascot.packageRef.equals(packageRef)) return false;
@@ -317,6 +317,14 @@ public final class CrewProfileRepository {
         return definition;
     }
 
+    /** Mascot presentation has its own CAS revision and is the only writable built-in overlay. */
+    private static BotDefinition requireMascotEditable(Map<String, BotDefinition> definitions, String id) {
+        BotDefinition definition = requireDefinition(definitions, id);
+        if (!definition.builtIn && isBuiltInId(id)) throw CrewProfile.invalid("runtime templates are immutable");
+        if (definition.builtIn && !isBuiltInId(id)) throw CrewProfile.invalid("invalid runtime template identity");
+        return definition;
+    }
+
     private Map<String, BotDefinition> load() {
         try {
             verifyPaths();
@@ -350,7 +358,8 @@ public final class CrewProfileRepository {
             int schema = CrewProfile.positiveInteger(data, "schemaVersion");
             if (schema < 1 || schema > SCHEMA_VERSION) throw CrewProfile.invalid("unsupported repository schema version: " + schema);
             String field = schema >= 3 ? "bots" : "profiles";
-            CrewProfile.exactFields(data, "schemaVersion", field);
+            if (schema >= 5) CrewProfile.exactFields(data, "schemaVersion", "bots", "mascotOverlays");
+            else CrewProfile.exactFields(data, "schemaVersion", field);
             if (!(data.opt(field) instanceof JSONArray)) throw CrewProfile.invalid(field + " must be an array");
             JSONArray rows = (JSONArray) data.opt(field);
             Map<String, BotDefinition> definitions = defaults();
@@ -376,9 +385,43 @@ public final class CrewProfileRepository {
                 }
                 if (definitions.put(definition.id, definition) != null) throw CrewProfile.invalid("duplicate bot id: " + definition.id);
             }
+            if (schema >= 5) decodeMascotOverlays(data.opt("mascotOverlays"), definitions);
             return definitions;
         } catch (JSONException failure) {
             throw CrewProfile.invalid("invalid repository JSON; stored configuration was preserved", failure);
+        }
+    }
+
+    private static void decodeMascotOverlays(Object raw, Map<String, BotDefinition> definitions) {
+        if (!(raw instanceof JSONArray)) throw CrewProfile.invalid("mascotOverlays must be an array");
+        JSONArray overlays = (JSONArray) raw;
+        java.util.HashSet<String> seen = new java.util.HashSet<>();
+        for (int index = 0; index < overlays.length(); index++) {
+            Object item = overlays.opt(index);
+            if (!(item instanceof JSONObject)) throw CrewProfile.invalid("each mascot overlay must be an object");
+            JSONObject row = (JSONObject) item;
+            CrewProfile.exactFields(row, "id", "revision", "mascot", "mascotReceipts");
+            Object rawId = row.opt("id");
+            if (!(rawId instanceof String) || !isBuiltInId((String) rawId) || !seen.add((String) rawId))
+                throw CrewProfile.invalid("mascot overlay must identify one unique runtime template");
+            BotDefinition template = definitions.get(rawId);
+            if (template == null || !template.builtIn) throw CrewProfile.invalid("mascot overlay runtime template is unavailable");
+            Object rawMascot = row.opt("mascot");
+            if (!(rawMascot instanceof JSONObject)) throw CrewProfile.invalid("mascot overlay descriptor is required");
+            BotMascotDescriptor mascot = BotMascotDescriptor.fromJson((JSONObject) rawMascot);
+            Object rawReceipts = row.opt("mascotReceipts");
+            if (!(rawReceipts instanceof JSONArray)) throw CrewProfile.invalid("mascot overlay receipts must be an array");
+            JSONArray receiptRows = (JSONArray) rawReceipts;
+            if (receiptRows.length() > BotMascotDescriptor.MAX_RECEIPTS) throw CrewProfile.invalid("too many mascot overlay receipts");
+            List<BotMascotDescriptor.Receipt> receipts = new ArrayList<>();
+            for (int receiptIndex = 0; receiptIndex < receiptRows.length(); receiptIndex++) {
+                Object receipt = receiptRows.opt(receiptIndex);
+                if (!(receipt instanceof JSONObject)) throw CrewProfile.invalid("invalid mascot overlay receipt");
+                receipts.add(BotMascotDescriptor.Receipt.fromJson((JSONObject) receipt));
+            }
+            int revision = CrewProfile.positiveInteger(row, "revision");
+            definitions.put((String) rawId,
+                    new BotDefinition(template.profile, revision, true, true, "", mascot, receipts));
         }
     }
 
@@ -406,9 +449,19 @@ public final class CrewProfileRepository {
             if (!root.isDirectory() && !root.mkdirs()) throw new IOException("Could not create profile storage");
             verifyPaths();
             JSONArray rows = new JSONArray();
-            // Runtime templates live in code and cannot be overridden by stored configuration.
-            for (BotDefinition definition : definitions) if (!definition.builtIn) rows.put(definition.toJson());
-            String json = new JSONObject().put("schemaVersion", SCHEMA_VERSION).put("bots", rows).toString();
+            JSONArray mascotOverlays = new JSONArray();
+            // Runtime profiles stay code-owned; only a mascot overlay may be serialized for them.
+            for (BotDefinition definition : definitions) {
+                if (!definition.builtIn) rows.put(definition.toJson());
+                else if (definition.mascot != null) {
+                    JSONArray receipts = new JSONArray();
+                    for (BotMascotDescriptor.Receipt receipt : definition.mascotReceipts) receipts.put(receipt.toJson());
+                    mascotOverlays.put(new JSONObject().put("id", definition.id).put("revision", definition.revision)
+                            .put("mascot", definition.mascot.toJson()).put("mascotReceipts", receipts));
+                }
+            }
+            String json = new JSONObject().put("schemaVersion", SCHEMA_VERSION).put("bots", rows)
+                    .put("mascotOverlays", mascotOverlays).toString();
             stream = store.startWrite();
             stream.write(json.getBytes(StandardCharsets.UTF_8));
             store.finishWrite(stream);

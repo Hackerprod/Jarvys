@@ -37,6 +37,12 @@ class BotMascotToolTest {
     private val repository by lazy { CrewProfileRepository(temporary.root) }
     private val store by lazy { BotMascotStoreTestSupport.store(temporary.root) }
     private fun source(name:String="nimbo")=requireNotNull(javaClass.getResourceAsStream("/bot-mascot-scenes/$name.json")).bufferedReader().use { it.readText() }
+    private fun toolObject(value:Any?):Any?=when(value){
+        JSONObject.NULL->null
+        is JSONObject->value.keys().asSequence().associateWith{toolObject(value.get(it))}
+        is org.json.JSONArray->(0 until value.length()).map{toolObject(value.get(it))}
+        else->value
+    }
     private fun service(session:String="mascot-main")=BotMascotService(repository,store,session)
     private fun bot()=repository.create(CrewProfile("custom-mascot-tool",1,"Cloud","Custom helper","Follow the requested objective.",emptyList(),listOf("board_read")),listOf("board_read"),emptyList())
     private fun args(id:String="custom-mascot-tool",revision:Int=1,request:String="mascot-1",design:String="nimbo")=linkedMapOf<String,Any>(
@@ -75,10 +81,23 @@ class BotMascotToolTest {
         assertFalse(tool.execute(args(revision=2)+("visual_description" to "Changed design request"),CancellationToken.uncancellable()).success)
         assertEquals(first,repository.definition("custom-mascot-tool").mascot)
     }
-    @Test fun staleRevisionAndBuiltInOrDisabledBotDoNotCompileOrApproveAssignment() {
+    @Test fun staleRevisionAndDisabledBotDoNotCompileOrApproveAssignment() {
         val original=bot();repository.setEnabled(original.id,original.revision,false);val tool=BotMascotTool(service())
         assertFalse(tool.execute(args(),CancellationToken.uncancellable()).success)
-        assertFalse(tool.execute(args(id="coding"),CancellationToken.uncancellable()).success)
+    }
+    @Test fun builtInMascotOverlayCompilesPersistsAndIsLoadedFromTheCatalogForRendering() {
+        val tool=BotMascotTool(service())
+        val result=tool.execute(args(id="coding",revision=1,request="coding-overlay" )+ ("scene_json" to toolObject(JSONObject(source()))!!),CancellationToken.uncancellable())
+        assertTrue(result.content,result.success)
+        val value=JSONObject(result.content)
+        assertEquals(2,value.getInt("revision"));assertTrue(value.getBoolean("mascot_compiled"))
+        val reopened=CrewProfileRepository(temporary.root).definition("coding")
+        assertTrue(reopened.builtIn);assertEquals(2,reopened.revision);assertNotNull(reopened.mascot)
+        assertArrayEquals(source().toByteArray(Charsets.UTF_8),store.read("coding",reopened.mascot).source())
+        val catalog=JSONObject(BotCatalogTool(repository,"main").execute(emptyMap(),CancellationToken.uncancellable()).content)
+        val row=catalog.getJSONArray("bots").getJSONObject(0)
+        if(row.getString("bot_id")!="coding") fail("coding row expected first")
+        assertTrue(row.getBoolean("mascot_editable"));assertEquals("LOCAL_COMPILED",row.getString("mascot_status"))
     }
     @Test fun cancellationBeforeCompilationLeavesVisualUnchanged() {
         bot();val token=CancellationToken.cancellable().also { it.cancel() }
@@ -100,6 +119,14 @@ class BotMascotToolTest {
             assertFalse(tool.execute(invalid,CancellationToken.uncancellable()).success)
         assertNull(repository.definition("custom-mascot-tool").mascot)
     }
+    @Test fun compileFailureReturnsTheScenePathAndExpectedType() {
+        bot()
+        val invalidScene=JSONObject(source()).put("animations","not an object")
+        val result=BotMascotTool(service()).execute(args()+("scene_json" to invalidScene.toString()),CancellationToken.uncancellable())
+        assertFalse(result.success)
+        assertTrue(result.content,result.content.contains("animations: expected object, got string"))
+        assertNull(repository.definition("custom-mascot-tool").mascot)
+    }
     @Test fun scopeIsMainChatOnlyWithoutImageAccessOrDelegationAuthority() {
         val tool=BotMascotTool(service());assertFalse(tool.canDelegate());assertFalse(tool.execute(args(),CancellationToken.crewChild()).success)
         for(session in listOf("",ProactiveConversation.SESSION_ID,ScheduledTaskConversation.SESSION_ID))assertFalse(BotMascotTool(service(session)).execute(args(),CancellationToken.uncancellable()).success)
@@ -119,6 +146,11 @@ class BotMascotToolTest {
         val value=JSONObject(result.content);assertTrue(value.getBoolean("saved"));assertTrue(value.getBoolean("mascot_compiled"));assertFalse(value.getBoolean("icon_complete"))
         val saved=repository.definition(value.getString("bot_id"));assertNotNull(saved.mascot);assertEquals(1,saved.profile.version);assertEquals(2,saved.revision)
         val retry=JSONObject(creator().execute(createArgs(),CancellationToken.uncancellable()).content);assertTrue(retry.getBoolean("already_existed"));assertEquals(1,repository.definitions().count{!it.builtIn})
+    }
+    @Test fun createBotAcceptsSceneJsonObject() {
+        val result=creator().execute(createArgs()+("mascot_scene_json" to JSONObject(source())),CancellationToken.uncancellable())
+        assertTrue(result.content,result.success)
+        assertTrue(JSONObject(result.content).getBoolean("mascot_compiled"))
     }
     @Test fun creationVisualFailureKeepsSavedBotAndExplicitIncompleteStatus() {
         val result=creator(true).execute(createArgs(),CancellationToken.uncancellable());assertTrue(result.success)

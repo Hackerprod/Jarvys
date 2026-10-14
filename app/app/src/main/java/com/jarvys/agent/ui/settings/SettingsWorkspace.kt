@@ -43,7 +43,7 @@ import com.jarvys.agent.proactive.ProactiveStatus
 import com.jarvys.agent.tasks.ui.TaskSettingsEntry
 import java.util.Date
 
-enum class SettingsWorkspacePage { HOME, PREFERENCES }
+enum class SettingsWorkspacePage { HOME, PREFERENCES, DEVELOPER }
 
 @Composable
 fun SettingsWorkspace(
@@ -97,6 +97,7 @@ fun SettingsWorkspace(
                 onMcp = onMcp,
                 onSkills = onSkills,
                 onConnectors = onConnectors,
+                onDeveloper = { onNavigate(SettingsWorkspacePage.DEVELOPER) },
                 onAccessibility = onAccessibilitySettings,
             )
             SettingsWorkspacePage.PREFERENCES -> PreferencesWorkspace(
@@ -106,6 +107,7 @@ fun SettingsWorkspace(
                 onProactiveEnabledChange = onProactiveEnabledChange,
                 proactiveStatus = proactiveStatus,
             )
+            SettingsWorkspacePage.DEVELOPER -> DeveloperWorkspace()
         }
     }
     if (languageChoiceOpen) JarvysChoiceSheet(
@@ -150,6 +152,7 @@ private fun SettingsIndex(
     onMcp: () -> Unit,
     onSkills: () -> Unit,
     onConnectors: () -> Unit,
+    onDeveloper: () -> Unit,
     onAccessibility: () -> Unit,
 ) {
     SettingsSection(stringResource(R.string.settings_general)) {
@@ -184,6 +187,9 @@ private fun SettingsIndex(
         SettingsIndexRow(LucideIcons.WandSparkles, stringResource(R.string.settings_skills), null, onSkills)
         SettingsRule()
         SettingsIndexRow(LucideIcons.Boxes, stringResource(R.string.settings_connectors), null, onConnectors)
+        SettingsRule()
+        SettingsIndexRow(LucideIcons.Shield, stringResource(R.string.settings_developer), null, onDeveloper,
+            testTag = "settings-developer-row")
     }
     Spacer(Modifier.height(22.dp))
     SettingsSection(stringResource(R.string.settings_device)) {

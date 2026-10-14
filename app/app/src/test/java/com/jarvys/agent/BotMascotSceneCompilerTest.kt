@@ -13,6 +13,12 @@ class BotMascotSceneCompilerTest {
     private fun fixture(name: String = "miga"): String = requireNotNull(javaClass.getResourceAsStream("/bot-mascot-scenes/$name.json"))
         .use { String(it.readBytes(), StandardCharsets.UTF_8) }
     private fun scene() = JSONObject(fixture())
+    private fun toolObject(value: Any?): Any? = when (value) {
+        JSONObject.NULL -> null
+        is JSONObject -> value.keys().asSequence().associateWith { toolObject(value.get(it)) }
+        is JSONArray -> (0 until value.length()).map { toolObject(value.get(it)) }
+        else -> value
+    }
     private fun nodes(value: JSONObject) = value.getJSONArray("nodes")
     private fun animation(value: JSONObject, state: String = "Idle") = value.getJSONObject("animations").getJSONObject(state)
     private fun track(value: JSONObject, state: String = "Idle", index: Int = 0) = animation(value, state).getJSONArray("tracks").getJSONObject(index)
@@ -458,6 +464,41 @@ class BotMascotSceneCompilerTest {
         assertEquals(321, result.validation.complexity.binaryObjectCount)
         File(exportDirectory(), "contract-probe.riv").writeBytes(result.bytes)
         File(exportDirectory(), "contract-probe.json").writeText(source)
+    }
+
+    @Test fun publishedToolGuideExampleIsACompleteCompilableProductScene() {
+        val example = BotMascotTool.SCENE_EXAMPLE_JSON
+        assertEquals(18, JSONObject(example).getJSONObject("animations").length())
+        assertEquals((BotMascotSceneCompiler.productModeNames + BotMascotSceneCompiler.productModeNames.map { it + "Reduced" }).toSet(),
+            JSONObject(example).getJSONObject("animations").keys().asSequence().toSet())
+        val compiled = BotMascotSceneCompiler.compileProduct(example)
+        assertEquals("bot-mascot-v1", compiled.validation.contract)
+        assertTrue(compiled.bytes.isNotEmpty())
+    }
+
+    @Test fun productInputNormalizationAcceptsJsonObjectsAndReportsSchemaPaths() {
+        val source = BotMascotSceneCompiler.normalizeProductScene(JSONObject(BotMascotTool.SCENE_EXAMPLE_JSON), "scene_json")
+        assertEquals(BotMascotSceneCompiler.compileProduct(BotMascotTool.SCENE_EXAMPLE_JSON).sha256,
+            BotMascotSceneCompiler.compileProduct(source).sha256)
+        val mapSource = BotMascotSceneCompiler.normalizeProductScene(toolObject(JSONObject(BotMascotTool.SCENE_EXAMPLE_JSON)), "scene_json")
+        assertEquals(BotMascotSceneCompiler.compileProduct(source).sha256, BotMascotSceneCompiler.compileProduct(mapSource).sha256)
+
+        val badTrack = JSONObject(BotMascotTool.SCENE_EXAMPLE_JSON).apply {
+            getJSONObject("animations").getJSONObject("Idle").getJSONArray("tracks").getJSONObject(0).put("x", 1)
+        }
+        val unknown = runCatching { BotMascotSceneCompiler.compileProduct(badTrack.toString()) }.exceptionOrNull()
+        assertTrue(unknown?.message.orEmpty(), unknown?.message.orEmpty().contains("animations.Idle.tracks[0]: unknown field 'x'"))
+
+        val wrongType = JSONObject(BotMascotSceneCompiler.SCENE_EXAMPLE_JSON).put("animations", "{}")
+        val type = runCatching { BotMascotSceneCompiler.compileProduct(wrongType.toString()) }.exceptionOrNull()
+        assertTrue(type?.message.orEmpty(), type?.message.orEmpty().contains("animations: expected object, got string"))
+
+        val decimalFrame = JSONObject(BotMascotSceneCompiler.SCENE_EXAMPLE_JSON).apply {
+            getJSONObject("animations").getJSONObject("Idle").getJSONArray("tracks").getJSONObject(0)
+                .getJSONArray("keys").getJSONArray(0).put(0, 0.0)
+        }
+        val frame = runCatching { BotMascotSceneCompiler.compileProduct(decimalFrame.toString()) }.exceptionOrNull()
+        assertTrue(frame?.message.orEmpty(), frame?.message.orEmpty().contains("frames must be integers"))
     }
 
     @Test fun productRequiresExactlyAllEighteenTimelinesAndCompleteResets() {

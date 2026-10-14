@@ -7,7 +7,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
@@ -17,6 +19,8 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.unit.Density
@@ -35,6 +39,31 @@ import java.nio.file.Files
 @Config(sdk = [34])
 class JarvysUiKitComposeTest {
     @get:Rule val compose = createComposeRule()
+
+    @Test fun emptyStateUsesCenteredIconTreatmentAndRendersOptionalAction() {
+        val actionCount = mutableStateOf(0)
+        compose.setContent {
+            MaterialTheme {
+                JarvysEmptyState(
+                    icon = LucideIcons.Network,
+                    title = "No connections",
+                    body = "Connect a service to get started.",
+                    modifier = Modifier.fillMaxSize().testTag("empty-state-root"),
+                    action = { Button(onClick = { actionCount.value++ }) { Text("Connect") } },
+                )
+            }
+        }
+        compose.onNodeWithText("No connections").assertIsDisplayed()
+        compose.onNodeWithText("Connect a service to get started.").assertIsDisplayed()
+        compose.onNodeWithTag("jarvys-empty-state-icon-container").assertIsDisplayed()
+        compose.onNodeWithTag("jarvys-empty-state-icon").assertIsDisplayed()
+        val circle = compose.onNodeWithTag("jarvys-empty-state-icon-container").fetchSemanticsNode().boundsInRoot
+        val icon = compose.onNodeWithTag("jarvys-empty-state-icon").fetchSemanticsNode().boundsInRoot
+        assertEquals(circle.width, icon.width * 2f, 1f)
+        assertEquals(circle.height, icon.height * 2f, 1f)
+        compose.onNodeWithText("Connect").performClick()
+        assertEquals(1, actionCount.value)
+    }
 
     @Test fun listAndEditorChromeMarginsAndStickySaveRemainAlignedAtFontScaleOneAndTwo() {
         val editor = mutableStateOf(false)

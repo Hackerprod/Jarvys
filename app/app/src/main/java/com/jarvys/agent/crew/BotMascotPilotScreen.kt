@@ -43,13 +43,13 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 
 /**
- * Add only to the saved custom-bot editor. It changes no catalog avatar or runtime activity.
+ * Add only to a saved bot editor with a locally compiled mascot. It changes no catalog avatar or runtime activity.
  * Verification is non-native; there is no Rive worker/file/JNI call before an explicit Start.
  */
 @Composable
 internal fun BotMascotPilotEntry(bot: BotDefinition, isNew: Boolean, enabled: Boolean = true) {
     val descriptor = bot.mascot ?: return
-    if (isNew || immutableCatalogBot(bot)) return
+    if (isNew) return
     key(bot.id, descriptor) {
         val context = LocalContext.current.applicationContext
         var verified by remember { mutableStateOf(false) }

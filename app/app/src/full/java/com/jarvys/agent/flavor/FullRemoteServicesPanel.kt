@@ -53,7 +53,6 @@ import android.widget.Toast
 import com.jarvys.agent.LucideIcons
 import com.jarvys.agent.R
 import com.jarvys.agent.ScrollableDialogContent
-import com.jarvys.agent.connectors.AutonomyPolicy
 import com.jarvys.agent.connectors.ConnectorRegistry
 import com.jarvys.agent.connectors.ConnectorState
 import com.jarvys.agent.connectors.FlavorRemoteServicesPanel
@@ -78,7 +77,6 @@ import com.jarvys.agent.connectors.ConnectorDetailSection
 import com.jarvys.agent.connectors.ConnectorDetailScaffold
 import com.jarvys.agent.connectors.ConnectorPolicyChoice
 import com.jarvys.agent.connectors.ConnectorPolicySelector
-import com.jarvys.agent.connectors.ConnectorPolicyOriginCaption
 import com.jarvys.agent.connectors.ConnectorPermissionRow
 
 /** Display/test identifier for an actual scope, including the trailing-slash full-mail scope. */
@@ -114,7 +112,7 @@ class FullRemoteServicesPanel : FlavorRemoteServicesPanel {
 
     @Composable
     override fun Content(context: Context, selectedId: String?, onSelect: (String, String) -> Unit,
-                         onDetailExit: () -> Unit) {
+                         onDetailExit: () -> Unit, rowsOnly: Boolean) {
         val app = LocalContext.current.applicationContext
         val manager = remember(app) { GoogleOAuthManager.get(app) }
         val registry = remember(app) { ConnectorRegistry.get(app) }
@@ -122,40 +120,9 @@ class FullRemoteServicesPanel : FlavorRemoteServicesPanel {
         val gmailTitle = stringResource(R.string.full_google_label_gmail)
         val driveTitle = stringResource(R.string.full_google_label_drive)
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-          if (selectedId == null) ConnectorRowsGroup {
-            GoogleServiceCard(
-                title = stringResource(R.string.full_google_label_gmail),
-                description = stringResource(R.string.full_google_description_gmail),
-                brandIconId = "gmail",
-                connectorId = GmailConnector.ID,
-                manager = manager,
-                registry = registry,
-                scopes = listOf(
-                    GoogleOAuthProtocol.GMAIL_READ to R.string.full_google_scope_gmail_read,
-                    GoogleOAuthProtocol.GMAIL_LABELS to R.string.full_google_scope_gmail_labels,
-                    GoogleOAuthProtocol.GMAIL_MODIFY to R.string.full_google_scope_gmail_modify,
-                    GoogleOAuthProtocol.GMAIL_COMPOSE to R.string.full_google_scope_gmail_compose,
-                    GoogleOAuthProtocol.GMAIL_SEND to R.string.full_google_scope_gmail_send,
-                    GoogleOAuthProtocol.GMAIL_FULL to R.string.full_google_scope_gmail_full,
-                ),
-                selected = false,
-                onSelect = { onSelect(GmailConnector.ID, gmailTitle) },
-            )
-            ConnectorRowsDivider()
-            GoogleServiceCard(
-                title = stringResource(R.string.full_google_label_drive),
-                description = stringResource(R.string.full_google_description_drive),
-                brandIconId = "googledrive",
-                connectorId = DriveConnector.ID,
-                manager = manager,
-                registry = registry,
-                scopes = listOf(
-                    GoogleOAuthProtocol.DRIVE_READ to R.string.full_google_scope_drive_read,
-                    GoogleOAuthProtocol.DRIVE_FILE to R.string.full_google_scope_drive_file,
-                ),
-                selected = false,
-                onSelect = { onSelect(DriveConnector.ID, driveTitle) },
-            )
+          if (selectedId == null) {
+              if (rowsOnly) GoogleServiceRows(manager, registry, gmailTitle, driveTitle, onSelect)
+              else ConnectorRowsGroup { GoogleServiceRows(manager, registry, gmailTitle, driveTitle, onSelect) }
           }
           if (selectedId == GmailConnector.ID || selectedId == DriveConnector.ID) {
             val gmail = selectedId == GmailConnector.ID
@@ -191,6 +158,49 @@ class FullRemoteServicesPanel : FlavorRemoteServicesPanel {
 }
 
 @Composable
+private fun GoogleServiceRows(
+    manager: GoogleOAuthManager,
+    registry: ConnectorRegistry,
+    gmailTitle: String,
+    driveTitle: String,
+    onSelect: (String, String) -> Unit,
+) {
+    GoogleServiceCard(
+        title = stringResource(R.string.full_google_label_gmail),
+        description = stringResource(R.string.full_google_description_gmail),
+        brandIconId = "gmail",
+        connectorId = GmailConnector.ID,
+        manager = manager,
+        registry = registry,
+        scopes = listOf(
+            GoogleOAuthProtocol.GMAIL_READ to R.string.full_google_scope_gmail_read,
+            GoogleOAuthProtocol.GMAIL_LABELS to R.string.full_google_scope_gmail_labels,
+            GoogleOAuthProtocol.GMAIL_MODIFY to R.string.full_google_scope_gmail_modify,
+            GoogleOAuthProtocol.GMAIL_COMPOSE to R.string.full_google_scope_gmail_compose,
+            GoogleOAuthProtocol.GMAIL_SEND to R.string.full_google_scope_gmail_send,
+            GoogleOAuthProtocol.GMAIL_FULL to R.string.full_google_scope_gmail_full,
+        ),
+        selected = false,
+        onSelect = { onSelect(GmailConnector.ID, gmailTitle) },
+    )
+    ConnectorRowsDivider()
+    GoogleServiceCard(
+        title = stringResource(R.string.full_google_label_drive),
+        description = stringResource(R.string.full_google_description_drive),
+        brandIconId = "googledrive",
+        connectorId = DriveConnector.ID,
+        manager = manager,
+        registry = registry,
+        scopes = listOf(
+            GoogleOAuthProtocol.DRIVE_READ to R.string.full_google_scope_drive_read,
+            GoogleOAuthProtocol.DRIVE_FILE to R.string.full_google_scope_drive_file,
+        ),
+        selected = false,
+        onSelect = { onSelect(DriveConnector.ID, driveTitle) },
+    )
+}
+
+@Composable
 internal fun GoogleServiceCard(
     title: String,
     description: String,
@@ -206,7 +216,6 @@ internal fun GoogleServiceCard(
     val context = LocalContext.current
     val status by registry.states.collectAsState()
     val definitions by registry.definitions.collectAsState()
-    val autonomyRevision by registry.autonomyRevision.collectAsState()
     val enabled = status[connectorId] == ConnectorState.CONNECTED &&
         scopes.firstOrNull()?.first?.let(manager::isScopeGranted) == true
     var setupDialog by remember(connectorId) { mutableStateOf(false) }
@@ -382,57 +391,6 @@ internal fun GoogleServiceCard(
                     Text(stringResource(R.string.full_google_full_explanation), fontSize = 12.sp)
                 }
             } else if (writeScopes.isNotEmpty()) ConnectorDetailSection(stringResource(R.string.remote_service_write_tool)) { ScopeRows(writeScopes) }
-            val definition = definitions.firstOrNull { it.id == connectorId }
-            val actions = definition?.operations.orEmpty()
-            if (definition != null && actions.isNotEmpty()) ConnectorDetailSection(stringResource(R.string.connector_section_tools)) {
-                actions.forEach { operation ->
-                    var policyRefresh by remember(operation.name) { mutableStateOf(0L) }
-                    var policyError by remember(operation.name) { mutableStateOf<String?>(null) }
-                    val configured = remember(registry, definition, operation, autonomyRevision, policyRefresh) {
-                        registry.configuredAutonomyPolicy(definition, operation)
-                    }
-                    val requiredScope = if (connectorId == GmailConnector.ID) GmailConnector.requiredScope(operation.name)
-                        else DriveConnector.requiredScope(operation.name)
-                    val scopeAvailable = requiredScope != null && manager.isScopeGranted(requiredScope)
-                    val setPolicy: (AutonomyPolicy) -> Unit = { choice ->
-                        policyError = runCatching { registry.setAutonomyPolicy(definition, operation, choice) }
-                            .exceptionOrNull()?.let { it.message?.takeIf(String::isNotBlank)
-                                ?: context.getString(R.string.connector_allow_failed) }
-                        // Even a failed durable write can change or invalidate persisted state.
-                        policyRefresh++
-                    }
-                    val choices = listOf(
-                        ConnectorPolicyChoice(R.string.connector_policy_ask) { setPolicy(AutonomyPolicy.ASK) },
-                        ConnectorPolicyChoice(R.string.connector_policy_allow) { setPolicy(AutonomyPolicy.ALLOW) },
-                        ConnectorPolicyChoice(R.string.connector_policy_deny) { setPolicy(AutonomyPolicy.DENY) },
-                    )
-                    val fullLabel = if (operation.displayLabelResourceId != 0) context.getString(operation.displayLabelResourceId)
-                        else operation.displayLabel
-                    GooglePermissionRow(tagPrefix = "google-policy-${operation.name}", content = {
-                        Text(fullLabel, fontWeight = FontWeight.Medium)
-                    }, permission = {
-                        ConnectorPolicySelector(when (configured) {
-                            AutonomyPolicy.ASK -> R.string.connector_policy_ask
-                            AutonomyPolicy.ALLOW -> R.string.connector_policy_allow
-                            AutonomyPolicy.DENY -> R.string.connector_policy_deny
-                        }, choices, subjectKey = "$connectorId/${operation.name}", modifier = Modifier.testTag("google-policy-${operation.name}-control")
-                            .semantics { contentDescription = fullLabel })
-                    })
-                    ConnectorPolicyOriginCaption(registry.configuredAutonomyOrigin(definition, operation),
-                        Modifier.fillMaxWidth().testTag("google-policy-${operation.name}-origin"))
-                    policyError?.let { error -> Text(error, color = MaterialTheme.colorScheme.error,
-                        fontSize = 12.sp, modifier = Modifier.fillMaxWidth().testTag("google-policy-${operation.name}-error")) }
-                    // Keep explanatory text full-width. In the narrow label column it can make a
-                    // single 2x-text row taller than the viewport and clip the centered selector.
-                    if (!scopeAvailable) Text(stringResource(R.string.full_google_operation_scope_unavailable),
-                        fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.fillMaxWidth().testTag("google-policy-${operation.name}-unavailable"))
-                    if (connectorId == GmailConnector.ID && operation.name in setOf("delete_messages", "delete_label")) {
-                        Text(stringResource(R.string.full_google_irreversible_operation), fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.error, modifier = Modifier.fillMaxWidth())
-                    }
-                }
-            }
             if (inProgress) {
                 Text(stringResource(R.string.full_google_authorizing), fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
                 TextButton(onClick = { manager.cancelAuthorization() }) {

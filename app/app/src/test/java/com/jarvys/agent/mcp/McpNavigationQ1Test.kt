@@ -204,6 +204,8 @@ class McpNavigationQ1Test {
         showGraph()
         compose.onNodeWithTag("mcp-server-list").assertIsDisplayed()
         compose.onNodeWithText(compose.activity.getString(R.string.mcp_no_servers)).assertIsDisplayed()
+        compose.onNodeWithText(compose.activity.getString(R.string.mcp_empty_directory_body)).assertIsDisplayed()
+        compose.onNodeWithTag("jarvys-empty-state-icon-container").assertIsDisplayed()
         compose.onAllNodesWithText("Jarvys local tools").assertCountEquals(0)
         compose.onAllNodesWithText("Local device tools").assertCountEquals(0)
 

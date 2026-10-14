@@ -74,12 +74,8 @@ import com.jarvys.agent.mcp.McpOAuthManager
 import com.jarvys.agent.mcp.McpServerConfig
 import com.jarvys.agent.mcp.McpServerRepository
 import com.jarvys.agent.mcp.McpToolAccess
-import com.jarvys.agent.mcp.McpToolDefinition
 import com.jarvys.agent.mcp.McpToolSecurity
-import com.jarvys.agent.mcp.inheritedActionPolicy
 import com.jarvys.agent.mcp.RemoteMcpDisconnectFlow
-import com.jarvys.agent.connectors.AutonomyPolicy
-import org.json.JSONObject
 import java.util.concurrent.Executors
 
 /** Remote catalog UI is kept separate from device connectors and custom MCP configuration. */
@@ -91,6 +87,7 @@ internal fun RemoteServicesSection(
     selectedId: String? = null,
     onSelect: (String, String) -> Unit = { _, _ -> },
     onDetailExit: () -> Unit = {},
+    leadingContent: (@Composable () -> Unit)? = null,
     githubFlowStarter: GitHubDeviceFlowStarter = GitHubDeviceFlowStarter { request, code, complete ->
         GitHubDeviceFlowAttempt.start(request.privateRepositories, code, complete, request.additionalScopes)
     },
@@ -105,6 +102,10 @@ internal fun RemoteServicesSection(
                 modifier = Modifier.padding(start = 4.dp, top = 2.dp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
             ConnectorRowsGroup {
+                leadingContent?.let {
+                    it()
+                    ConnectorRowsDivider()
+                }
                 RemoteServiceCatalog.services.forEachIndexed { index, service ->
                     val server = servers.firstOrNull { it.catalogServiceId == service.id }
                     RemoteServiceCard(service, server, states[server?.id], repository, connections, oauthManager,
@@ -277,11 +278,11 @@ private fun RemoteServiceCard(
                             label = { Text(stringResource(R.string.remote_service_tools_search)) }, singleLine = true,
                             leadingIcon = { Icon(LucideIcons.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
                         )
-                        reads.forEach { RemoteMcpToolRow(service, server, it, repository, connections) }
+                        reads.forEach { RemoteMcpToolRow(server, it, repository) }
                     }
                 }
                 if (writes.isNotEmpty()) ConnectorDetailSection(stringResource(R.string.remote_service_write_tool)) {
-                    writes.forEach { RemoteMcpToolRow(service, server, it, repository, connections) }
+                    writes.forEach { RemoteMcpToolRow(server, it, repository) }
                 }
                 if (tools.isEmpty()) Text(stringResource(R.string.remote_service_tools_empty), color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
@@ -494,21 +495,11 @@ private fun RemoteStatusBadge(status: McpConnectionStatus) {
 
 @Composable
 private fun RemoteMcpToolRow(
-    service: RemoteServiceDefinition,
     server: McpServerConfig,
     tool: com.jarvys.agent.mcp.McpToolConfig,
     repository: McpServerRepository,
-    connections: McpConnectionManager,
 ) {
     val context = LocalContext.current
-    val access = McpToolSecurity.classify(service.id, tool.wireName, tool.annotations)
-    val definition = remember(server, tool) {
-        McpToolDefinition(server.id, server.alias, tool.wireName, tool.modelName, tool.description,
-            JSONObject(tool.inputSchemaJson), service.id, tool.annotations, access, server.inheritedActionPolicy())
-    }
-    var policySnapshot by remember(definition) { mutableStateOf(connections.writeApproval.snapshot(definition)) }
-    val policy = policySnapshot.policy
-    var showPolicyInfo by remember(server.id, tool.wireName) { mutableStateOf(true) }
     val label = remember(tool.wireName, tool.annotations?.title) {
         tool.annotations?.title?.let { McpToolSecurity.sanitizeRemoteText(it, 80) }?.takeIf(String::isNotBlank)
             ?: tool.wireName.replace(Regex("([a-z0-9])([A-Z])"), "$1 $2")
@@ -516,40 +507,16 @@ private fun RemoteMcpToolRow(
                     word.lowercase().replaceFirstChar { it.titlecase() }
                 }.take(80)
     }
-    val selectedResource = when (policy) {
-        AutonomyPolicy.ASK -> R.string.remote_service_policy_ask
-        AutonomyPolicy.ALLOW -> R.string.remote_service_policy_allow
-        AutonomyPolicy.DENY -> R.string.remote_service_policy_deny
-    }
-    val choices = listOf(
-        AutonomyPolicy.ASK to R.string.remote_service_policy_ask,
-        AutonomyPolicy.ALLOW to R.string.remote_service_policy_allow,
-        AutonomyPolicy.DENY to R.string.remote_service_policy_deny,
-    ).map { (choice, labelResource) ->
-        ConnectorPolicyChoice(labelResource) {
-            runCatching {
-                connections.writeApproval.setPolicy(definition, choice)
-                policySnapshot = connections.writeApproval.snapshot(definition)
-            }.onFailure { Toast.makeText(context, R.string.ux44_mcp_policy_save_error, Toast.LENGTH_LONG).show() }
-        }
-    }
     Column {
-        ConnectorPermissionRow(modifier = Modifier.padding(vertical = 3.dp).testTag("remote-policy-${tool.wireName}-row"), content = {
-            Text(label, maxLines = 2, overflow = TextOverflow.Ellipsis,
-                fontSize = 14.sp, fontWeight = FontWeight.Medium)
-        }, permission = { ConnectorPolicySelector(selectedResource, choices, subjectKey = "${server.id}/${tool.wireName}",
-            modifier = Modifier.testTag("remote-policy-${tool.wireName}-control")) })
+        Text(label, maxLines = 2, overflow = TextOverflow.Ellipsis,
+            fontSize = 14.sp, fontWeight = FontWeight.Medium,
+            modifier = Modifier.fillMaxWidth().testTag("remote-tool-${tool.wireName}-row"))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Text(stringResource(R.string.ux44_mcp_enabled), style = MaterialTheme.typography.bodySmall)
             Switch(checked = tool.enabled, onCheckedChange = { enabled ->
-                runCatching { repository.updateToolEnabled(server.id, tool.wireName, enabled) }.onFailure { showToolLimit(context) }
+                runCatching { repository.updateToolEnabled(server.id, tool.wireName, enabled) }
+                    .onFailure { showToolLimit(context) }
             }, modifier = Modifier.testTag("remote-exposure-${tool.wireName}-switch"))
-        }
-        val origin = policySnapshot.origin.toString()
-        if (showPolicyInfo && (origin.contains("LEGACY") || origin.contains("INVALID"))) {
-            Text(stringResource(if (origin.contains("INVALID")) R.string.ux44_mcp_invalid_policy else R.string.ux44_mcp_retained_policy),
-                style = MaterialTheme.typography.bodySmall)
-            TextButton(onClick = { showPolicyInfo = false }) { Text(stringResource(R.string.ux44_mcp_dismiss)) }
         }
     }
 }

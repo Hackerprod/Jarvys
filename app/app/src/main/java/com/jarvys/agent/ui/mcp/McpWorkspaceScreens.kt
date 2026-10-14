@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.horizontalScroll
@@ -74,6 +75,7 @@ import com.jarvys.agent.JarvysChoiceGroup
 import com.jarvys.agent.JarvysSwitchRow
 import com.jarvys.agent.JarvysPrimaryButton
 import com.jarvys.agent.JarvysUiTokens
+import com.jarvys.agent.JarvysEmptyState
 import com.jarvys.agent.R
 import com.jarvys.agent.connectors.AutonomyPolicy
 import com.jarvys.agent.connectors.ConnectorDetailScaffold
@@ -143,17 +145,19 @@ fun McpServersScreen(
             )
         }
         if (customServers.isEmpty()) {
-            Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Icon(LucideIcons.Network, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(26.dp))
-                Text(stringResource(R.string.mcp_no_servers), style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold)
-                Text(stringResource(R.string.mcp_empty_directory_body), style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
+            JarvysEmptyState(
+                icon = LucideIcons.Network,
+                title = stringResource(R.string.mcp_no_servers),
+                body = stringResource(R.string.mcp_empty_directory_body),
+                modifier = Modifier.fillMaxWidth().weight(1f).padding(horizontal = 18.dp, vertical = 16.dp),
+            )
         } else if (visibleServers.isEmpty()) {
-            Text(stringResource(R.string.mcp_server_search_empty),
-                Modifier.fillMaxWidth().padding(20.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            JarvysEmptyState(
+                icon = LucideIcons.Search,
+                title = stringResource(R.string.mcp_server_search_empty),
+                body = "",
+                modifier = Modifier.fillMaxWidth().weight(1f).padding(20.dp),
+            )
         } else LazyColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)) {
             items(visibleServers, key = { it.id }) { server ->
                 val state = states[server.id] ?: McpConnectionSnapshot()

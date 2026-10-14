@@ -7,5 +7,5 @@ import com.jarvys.agent.AgentRunUiEvent
 object FlavorAutonomyUi {
     fun handlesApproval(event: AgentRunUiEvent): Boolean = false
     @Composable fun ApprovalAction(event: AgentRunUiEvent, onStatusDetail: (ConnectorUiText) -> Unit) = Unit
-    @Composable fun ConnectorControls(): Boolean = false
+    @Composable fun DeveloperControls(): Boolean = false
 }

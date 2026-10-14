@@ -31,6 +31,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import com.jarvys.agent.AppRouteMeta
 import com.jarvys.agent.AppRouteAction
 import com.jarvys.agent.AgentRunUiSnapshot
+import com.jarvys.agent.ConversationAction
 import com.jarvys.agent.LocalChatComposerInset
 import com.jarvys.agent.LocalChatHeaderInset
 
@@ -59,6 +60,11 @@ fun JarvysShellFrame(
     mascotVisibleSessionId: String? = null,
     mascotLiveConversationVisible: Boolean = false,
     centralMascotCentered: Boolean = false,
+    conversationActionTitle: String? = null,
+    canRenameConversation: Boolean = false,
+    canDeleteConversation: Boolean = false,
+    conversationActionsEnabled: Boolean = true,
+    onConversationAction: (String, ConversationAction, String?) -> Unit = { _, _, _ -> },
     content: @Composable (PaddingValues) -> Unit,
 ) {
     val chatRoute = route.action == AppRouteAction.CHAT
@@ -109,6 +115,11 @@ fun JarvysShellFrame(
                     mascotLiveConversationVisible = mascotLiveConversationVisible,
                     mascotSurfaceVisible = drawerState.isClosed && drawerState.targetValue == DrawerValue.Closed
                         && !drawerState.isAnimationRunning,
+                    conversationActionTitle = conversationActionTitle,
+                    canRenameConversation = canRenameConversation,
+                    canDeleteConversation = canDeleteConversation,
+                    conversationActionsEnabled = conversationActionsEnabled,
+                    onConversationAction = onConversationAction,
                 )
                 }
             },

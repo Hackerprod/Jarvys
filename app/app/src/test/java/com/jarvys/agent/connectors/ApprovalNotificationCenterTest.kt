@@ -35,10 +35,9 @@ class ApprovalNotificationCenterTest {
         val id = "approval-request-1"
         val fullBody = "Full reviewed SMS body ".repeat(35)
         val summary = ApprovalSummary(
-            "Open SMS Draft",
+            "Phone action",
             listOf("To: +15551234567", "Message: $fullBody"),
-            activityIntent = ApprovalIntentSpec(ApprovalIntentKind.SMS_COMPOSE,
-                "smsto:+15551234567", mapOf("sms_body" to fullBody)),
+            activityIntent = ApprovalIntentSpec(ApprovalIntentKind.DIAL, "tel:+15551234567"),
         )
         ApprovalNotificationCenter.show(id, summary)
         val active = context.getSystemService(NotificationManager::class.java)?.activeNotifications.orEmpty().single()
@@ -63,6 +62,6 @@ class ApprovalNotificationCenterTest {
             assertFalse(actionIntent.extras?.toString().orEmpty().contains(fullBody))
             assertFalse(actionIntent.data?.toString().orEmpty().contains(fullBody))
         }
-        assertTrue(summary.activityIntent?.dataUri?.let(Uri::parse)?.scheme == "smsto")
+        assertTrue(summary.activityIntent?.dataUri?.let(Uri::parse)?.scheme == "tel")
     }
 }

@@ -70,7 +70,7 @@ object FlavorAutonomyUi {
         }
     }
 
-    @Composable fun ConnectorControls(): Boolean {
+    @Composable fun DeveloperControls(): Boolean {
         val autonomy = autonomy()
         val revision by autonomy.revision.collectAsState()
         val lifecycle = LocalLifecycleOwner.current.lifecycle

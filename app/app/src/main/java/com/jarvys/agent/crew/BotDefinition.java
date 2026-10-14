@@ -33,8 +33,8 @@ public final class BotDefinition {
         }
         if (mascotReceipts == null || mascotReceipts.size() > BotMascotDescriptor.MAX_RECEIPTS)
             throw CrewProfile.invalid("invalid mascot receipt count");
-        if ((builtIn || CrewProfileRepository.isBuiltInId(profile.id)) && (mascot != null || !mascotReceipts.isEmpty()))
-            throw CrewProfile.invalid("runtime templates cannot receive mascot metadata");
+        if ((mascot != null || !mascotReceipts.isEmpty()) && builtIn != CrewProfileRepository.isBuiltInId(profile.id))
+            throw CrewProfile.invalid("mascot metadata must belong to a runtime template overlay or custom bot");
         HashSet<String> operations = new HashSet<>();
         HashSet<String> packages = new HashSet<>();
         int lastRevision = 1;
@@ -76,13 +76,13 @@ public final class BotDefinition {
 
     static BotDefinition fromJson(JSONObject value, int schema) {
         if (schema == 3) CrewProfile.exactFields(value, "profile", "revision", "enabled", "iconRef");
-        else if (schema == 4) CrewProfile.exactFields(value, "profile", "revision", "enabled", "iconRef", "mascot", "mascotReceipts");
+        else if (schema >= 4) CrewProfile.exactFields(value, "profile", "revision", "enabled", "iconRef", "mascot", "mascotReceipts");
         else throw CrewProfile.invalid("unsupported bot definition schema");
         if (!(value.opt("profile") instanceof JSONObject) || !(value.opt("enabled") instanceof Boolean)
                 || !(value.opt("iconRef") instanceof String)) throw CrewProfile.invalid("invalid bot definition fields");
         BotMascotDescriptor mascot = null;
         List<BotMascotDescriptor.Receipt> receipts = new ArrayList<>();
-        if (schema == 4) {
+        if (schema >= 4) {
             Object raw = value.opt("mascot");
             if (raw instanceof JSONObject) mascot = BotMascotDescriptor.fromJson((JSONObject) raw);
             else if (raw != JSONObject.NULL) throw CrewProfile.invalid("invalid mascot descriptor");

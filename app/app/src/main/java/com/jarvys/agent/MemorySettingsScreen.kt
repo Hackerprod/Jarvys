@@ -650,8 +650,12 @@ private fun MemorySectionTitle(title: String, count: Int) {
 
 @Composable
 private fun MemoryEmpty() {
-    Text(stringResource(R.string.memory_empty), modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
-        color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+    JarvysEmptyState(
+        icon = LucideIcons.FileText,
+        title = stringResource(R.string.memory_empty),
+        body = "",
+        modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
+    )
 }
 
 @Composable

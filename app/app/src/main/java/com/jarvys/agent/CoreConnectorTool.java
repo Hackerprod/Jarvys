@@ -75,7 +75,6 @@ public final class CoreConnectorTool implements CoreTool {
     }
 
     public static String toolName(String connectorId, String operationName) {
-        if ("sms_draft".equals(connectorId) && "send_sms".equals(operationName)) return "send_sms";
         String raw = (connectorId + "_" + operationName).replaceAll("[^A-Za-z0-9_]", "_")
                 .replaceAll("_+", "_").toLowerCase(java.util.Locale.ROOT);
         if (raw.isEmpty() || !Character.isLetter(raw.charAt(0))) raw = "connector_" + raw;

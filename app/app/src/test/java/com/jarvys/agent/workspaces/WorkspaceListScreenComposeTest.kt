@@ -124,6 +124,7 @@ class WorkspaceListScreenComposeTest {
         settle()
         compose.onNodeWithTag("workspace-list-empty")
             .assertTextEquals(compose.activity.getString(R.string.workspace_sidebar_empty))
+        compose.onNodeWithTag("jarvys-empty-state-icon-container").assertIsDisplayed()
         compose.onNodeWithTag("workspace-first-page").assertDoesNotExist()
         compose.runOnIdle { laterPage.value = true }
         settle()

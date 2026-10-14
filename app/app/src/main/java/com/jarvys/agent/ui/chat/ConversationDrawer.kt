@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.dp
 import com.jarvys.agent.R
 import com.jarvys.agent.ConversationAction
 import com.jarvys.agent.isManagedSystemConversation
+import com.jarvys.agent.isReservedWorkspaceConversation
 import com.jarvys.agent.RunHistoryItem
 import com.jarvys.agent.drawerChatsForDisplay
 import com.jarvys.agent.drawerConversationTitle
@@ -235,7 +236,9 @@ fun ConversationDrawer(
                                 active = active, onClick = { if (active) onResumeActive() else onOpenHistory(record.id) },
                                 pinned = record.pinned, archived = false, actionsEnabled = actionsEnabled,
                                 showPinnedMarker = false, verticalOverflow = true,
-                                managed = isManagedSystemConversation(record.sessionId), onAction = { action(record, it) })
+                                managed = isManagedSystemConversation(record.sessionId),
+                                protectedWorkspace = isReservedWorkspaceConversation(record.sessionId),
+                                onAction = { action(record, it) })
                         }
                     }
                     if (currentRows.isNotEmpty()) item(key = "current-heading") {
@@ -256,7 +259,9 @@ fun ConversationDrawer(
                             active = active, onClick = { if (active) onResumeActive() else onOpenHistory(record.id) },
                             pinned = record.pinned, archived = false, actionsEnabled = actionsEnabled,
                             showPinnedMarker = false, verticalOverflow = true,
-                            managed = isManagedSystemConversation(record.sessionId), onAction = { action(record, it) })
+                            managed = isManagedSystemConversation(record.sessionId),
+                            protectedWorkspace = isReservedWorkspaceConversation(record.sessionId),
+                            onAction = { action(record, it) })
                     }
                 }
                 Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 2.dp) {

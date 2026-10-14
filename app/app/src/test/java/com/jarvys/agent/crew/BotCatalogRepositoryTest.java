@@ -175,7 +175,8 @@ public class BotCatalogRepositoryTest {
     }
 
     private static String schema(JSONObject row) throws Exception {
-        return new JSONObject().put("schemaVersion", CrewProfileRepository.SCHEMA_VERSION).put("bots", new JSONArray().put(row)).toString();
+        return new JSONObject().put("schemaVersion", CrewProfileRepository.SCHEMA_VERSION).put("bots", new JSONArray().put(row))
+                .put("mascotOverlays", new JSONArray()).toString();
     }
     private static CrewProfile profile(List<String> capabilities, List<String> skills) {
         return new CrewProfile(CrewProfileRepository.newCustomId(), 1, "Helper", "Short catalog description", "PRIVATE CHILD INSTRUCTIONS", skills, capabilities);

@@ -60,7 +60,7 @@ public class CrewProfileRecoveryTest {
         assertThrows(IllegalArgumentException.class, ()->CrewProfile.fromJson(fractional));
         JSONObject duplicate = new JSONObject().put("schemaVersion", 2).put("profiles", new JSONArray().put(CrewProfile.codingDefault().toJson()).put(CrewProfile.codingDefault().toJson()));
         assertThrows(IllegalArgumentException.class, ()->CrewProfileRepository.decode(duplicate.toString()));
-        JSONObject future = new JSONObject().put("schemaVersion", 4).put("profiles", new JSONArray());
+        JSONObject future = new JSONObject().put("schemaVersion", 6).put("profiles", new JSONArray());
         assertThrows(IllegalArgumentException.class, ()->CrewProfileRepository.decode(future.toString()));
         assertThrows(IllegalArgumentException.class, ()->new CrewProfile("coding", 1, "Name", "Description", "Prompt", Collections.emptyList(), Arrays.asList("read", "read")));
     }
@@ -80,7 +80,7 @@ public class CrewProfileRecoveryTest {
     }
 
     @Test
-    public void savingCustomChecksRevisionAndWritesSchemaFourWithoutResettingCorruptEvidence() throws Exception {
+    public void savingCustomChecksRevisionAndWritesSchemaFiveWithoutResettingCorruptEvidence() throws Exception {
         File root = temporary.newFolder();
         CrewProfileRepository repository = new CrewProfileRepository(root);
         CrewProfile initial = CrewProfile.codingDefault().withIdentity(CrewProfileRepository.newCustomId()).withVersion(1);
@@ -91,7 +91,7 @@ public class CrewProfileRecoveryTest {
         assertEquals(3, repository.codingProfile().version);
         assertThrows(IllegalArgumentException.class, ()->repository.save(initial, initial.capabilities, initial.skillIds));
         File file = new File(root, "crew_profiles/profiles.json");
-        assertEquals(4, new JSONObject(new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8)).getInt("schemaVersion"));
+        assertEquals(5, new JSONObject(new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8)).getInt("schemaVersion"));
         Files.write(file.toPath(), "broken evidence".getBytes(StandardCharsets.UTF_8));
         assertThrows(IllegalArgumentException.class, repository::codingProfile);
         assertEquals("broken evidence", new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8));

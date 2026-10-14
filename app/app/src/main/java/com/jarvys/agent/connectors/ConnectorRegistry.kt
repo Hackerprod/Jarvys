@@ -133,6 +133,10 @@ interface ConnectorConnectionPreferences {
 class ConnectorStateStore(context: Context) : ConnectorConnectionPreferences {
     private val preferences = context.applicationContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
 
+    init {
+        preferences.edit().remove("connected_email").remove("connected_sms_draft").apply()
+    }
+
     override fun isConnected(id: String): Boolean = preferences.getBoolean("connected_$id", false)
     override fun setConnected(id: String, connected: Boolean) {
         preferences.edit().putBoolean("connected_$id", connected).apply()
@@ -486,8 +490,6 @@ class ConnectorRegistry private constructor(
             CalendarConnector.definition(context),
             ContactsConnector.definition(context),
             DialerConnector.definition(context),
-            EmailIntentConnector.definition(),
-            SmsComposerConnector.definition(),
             SafDocumentConnector.definition(context),
             LocationConnector.definition(context),
             NotificationsConnector.definition(context),

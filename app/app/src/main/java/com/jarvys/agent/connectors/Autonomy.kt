@@ -158,7 +158,15 @@ class SharedPreferencesConnectorAutonomyStore internal constructor(
     private val actionPolicies = PersistedActionPolicies(preferences, authorityScope)
     private val lock = actionPolicies.lock
 
-    init { synchronized(lock) { preferences.edit().remove("autonomy_hourly_reservations").apply() } }
+    init {
+        synchronized(lock) {
+            preferences.edit().remove("autonomy_hourly_reservations").apply()
+            listOf("email", "sms_draft").forEach { connectorId ->
+                runCatching { actionPolicies.clearPolicies(connectorId) }
+            }
+            runCatching { removeRetiredConnectorAudit() }
+        }
+    }
 
     override fun policy(connectorId: String, operationName: String): AutonomyPolicy = snapshot(connectorId, operationName).policy
     override fun savedPolicy(connectorId: String, operationName: String): AutonomyPolicy? = actionPolicies.savedPolicy(connectorId, operationName)
@@ -193,6 +201,18 @@ class SharedPreferencesConnectorAutonomyStore internal constructor(
         (0 until array.length()).mapNotNull { index -> array.optJSONObject(index)?.toAuditRecord() }
     }.getOrDefault(emptyList())
 
+    private fun removeRetiredConnectorAudit() {
+        val current = JSONArray(preferences.getString(AUDIT_KEY, "[]") ?: "[]")
+        val retained = JSONArray()
+        var removed = false
+        for (index in 0 until current.length()) {
+            val record = current.opt(index)
+            if (record is JSONObject && record.optString("connectorId") in RETIRED_CONNECTOR_IDS) removed = true
+            else retained.put(record)
+        }
+        if (removed) preferences.edit().putString(AUDIT_KEY, retained.toString()).commit()
+    }
+
     private fun AutonomyAuditRecord.toJson() = JSONObject()
         .put("id", id).put("timestampMillis", timestampMillis).put("connectorId", connectorId)
         .put("connectorName", connectorName).put("operationName", operationName)
@@ -206,6 +226,7 @@ class SharedPreferencesConnectorAutonomyStore internal constructor(
 
     companion object {
         private const val AUDIT_KEY = "autonomy_audit"
+        private val RETIRED_CONNECTOR_IDS = setOf("email", "sms_draft")
     }
 }
 

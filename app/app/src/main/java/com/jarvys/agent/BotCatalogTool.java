@@ -83,7 +83,7 @@ public final class BotCatalogTool implements CoreTool {
                         .put("description", preview(bot.profile.description, 500)).put("revision", bot.revision)
                         .put("enabled", bot.enabled).put("built_in", bot.builtIn)
                         .put("icon_editable", !bot.builtIn && bot.enabled)
-                        .put("mascot_editable", !bot.builtIn && bot.enabled)
+                        .put("mascot_editable", bot.enabled)
                         .put("mascot_status", bot.mascot == null ? "none" : bot.mascot.validationLevel)
                         .put("mascot_contract", bot.mascot == null ? JSONObject.NULL : bot.mascot.contract)
                         .put("mascot_asset_hash", bot.mascot == null ? JSONObject.NULL : bot.mascot.assetHash)

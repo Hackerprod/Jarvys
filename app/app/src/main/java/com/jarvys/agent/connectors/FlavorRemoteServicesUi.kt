@@ -8,16 +8,16 @@ import androidx.compose.ui.platform.LocalContext
 /** Flavor-only service panels use a generic contract so Play has no provider API/client references. */
 interface FlavorRemoteServicesPanel {
     @Composable fun Content(context: Context, selectedId: String?, onSelect: (String, String) -> Unit,
-                            onDetailExit: () -> Unit = {})
+                            onDetailExit: () -> Unit = {}, rowsOnly: Boolean = false)
     fun supportsService(serviceId: String): Boolean
 }
 
 @Composable
 internal fun FlavorRemoteServicesContent(selectedId: String?, onSelect: (String, String) -> Unit,
-                                         onDetailExit: () -> Unit = {}) {
+                                         onDetailExit: () -> Unit = {}, rowsOnly: Boolean = false) {
     val context = LocalContext.current
     val panel = remember(context.applicationContext) { flavorPanel(context.applicationContext) }
-    panel?.Content(context, selectedId, onSelect, onDetailExit)
+    panel?.Content(context, selectedId, onSelect, onDetailExit, rowsOnly)
 }
 
 internal fun flavorSupportsRemoteService(context: Context, serviceId: String): Boolean =

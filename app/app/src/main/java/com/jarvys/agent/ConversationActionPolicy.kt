@@ -14,3 +14,15 @@ internal fun conversationRemovalBlocked(state: AgentRunUiSnapshot, sending: Bool
 
 internal fun conversationActionLeavesCurrent(action: ConversationAction, target: String, current: String): Boolean =
     target == current && (action == ConversationAction.ARCHIVE || action == ConversationAction.DELETE)
+
+internal fun conversationActionNavigatesToAgent(action: ConversationAction, target: String, current: String): Boolean =
+    action == ConversationAction.DELETE && target == current
+
+internal fun isReservedWorkspaceConversation(sessionId: String): Boolean =
+    com.jarvys.agent.workspaces.WorkspaceIdentity.isCentral(sessionId) ||
+        com.jarvys.agent.workspaces.WorkspaceIdentity.isExecutionSession(sessionId)
+
+internal fun conversationActionForbiddenForWorkspace(action: ConversationAction, sessionId: String): Boolean =
+    (action == ConversationAction.PIN || action == ConversationAction.RENAME ||
+        action == ConversationAction.DELETE || action == ConversationAction.ARCHIVE) &&
+        isReservedWorkspaceConversation(sessionId)

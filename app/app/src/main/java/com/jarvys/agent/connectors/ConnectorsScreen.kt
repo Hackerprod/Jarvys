@@ -100,9 +100,15 @@ fun ConnectorsScreen(
                     }
                 }
             }
-            FlavorAutonomyUi.ConnectorControls()
-            ConnectorsRemoteServicesHost(override = remoteServicesOverride, selectedId = null, onSelect = onOpenRemote)
-            ConnectorsGoogleServicesHost(override = googleServicesOverride, selectedId = null, onSelect = onOpenGoogle)
+            val hasGoogleRows = ConnectorsGoogleServicesAvailable(googleServicesOverride)
+            ConnectorsRemoteServicesHost(
+                override = remoteServicesOverride,
+                selectedId = null,
+                onSelect = onOpenRemote,
+                leadingContent = if (hasGoogleRows) {
+                    { ConnectorsGoogleServicesHost(googleServicesOverride, null, onOpenGoogle, rowsOnly = true) }
+                } else null,
+            )
             if (deviceDefinitions.isEmpty() && definitions.isEmpty()) Text(stringResource(R.string.connector_empty),
                 color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(8.dp), fontSize = 14.sp)
         }
@@ -140,11 +146,6 @@ internal fun ConnectorsDeviceDetailScreen(
             showPermissionMessage(ConnectorUiText(R.string.connector_permission_denied,
                 listOf(pending.localizedNameText()), "${pending.name} access was denied. Jarvys cannot use this connector until you allow it."))
         }
-    }
-    fun changePolicy(target: ConnectorDefinition, operation: ConnectorOperation, policy: AutonomyPolicy) {
-        runCatching { registry.setAutonomyPolicy(target, operation, policy) }
-            .onFailure { showPermissionMessage(ConnectorUiText(R.string.connector_allow_failed,
-                fallback = "Could not save action policy.")) }
     }
     if (definition != null) {
         Box(Modifier.fillMaxSize().testTag("connectors-detail-screen")) {
@@ -188,7 +189,6 @@ internal fun ConnectorsDeviceDetailScreen(
                 }
                 },
                 onDisconnect = { registry.disconnect(definition.id); registry.refreshStates(); onDisconnected() },
-                onPolicy = { operation, policy -> changePolicy(definition, operation, policy) },
                 openSettings = { openConnectorSettings(context, definition) },
             )
         }
@@ -261,13 +261,21 @@ internal fun ConnectorsRemoteServicesHost(
     selectedId: String?,
     onSelect: (String, String) -> Unit,
     onDetailExit: () -> Unit = {},
+    leadingContent: (@Composable () -> Unit)? = null,
 ) {
-    if (override != null) override(selectedId, onSelect) else {
+    if (override != null) {
+        if (selectedId == null && leadingContent != null) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                leadingContent()
+                override(selectedId, onSelect)
+            }
+        } else override(selectedId, onSelect)
+    } else {
         val context = LocalContext.current
         val repository = remember(context) { McpServerRepository.get(context) }
         val connections = remember(context) { McpConnectionManager.get(context) }
         val oauth = remember(repository) { McpOAuthManager.get(repository) }
-        RemoteServicesSection(repository, connections, oauth, selectedId, onSelect, onDetailExit)
+        RemoteServicesSection(repository, connections, oauth, selectedId, onSelect, onDetailExit, leadingContent)
     }
 }
 
@@ -277,9 +285,16 @@ internal fun ConnectorsGoogleServicesHost(
     selectedId: String?,
     onSelect: (String, String) -> Unit,
     onDetailExit: () -> Unit = {},
+    rowsOnly: Boolean = false,
 ) {
     if (override != null) override(selectedId, onSelect)
-    else FlavorRemoteServicesContent(selectedId, onSelect, onDetailExit)
+    else FlavorRemoteServicesContent(selectedId, onSelect, onDetailExit, rowsOnly)
+}
+
+@Composable
+private fun ConnectorsGoogleServicesAvailable(override: (@Composable (String?, (String, String) -> Unit) -> Unit)?): Boolean {
+    val context = LocalContext.current
+    return override != null || flavorSupportsRemoteService(context, "gmail")
 }
 
 @Composable
@@ -290,7 +305,6 @@ private fun ConnectorDeviceDetailPage(
     autonomyRevision: Long,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
-    onPolicy: (ConnectorOperation, AutonomyPolicy) -> Unit,
     openSettings: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -313,32 +327,6 @@ private fun ConnectorDeviceDetailPage(
         onDisconnect = onDisconnect,
         showIdentityHeader = false,
         content = {
-            val reads = definition.operations.filterNot { it.write }
-            val writes = definition.operations.filter { it.write }
-            if (reads.isNotEmpty()) ConnectorPermissionGroup(context.getString(R.string.remote_service_read_tool)) {
-                reads.forEach { operation ->
-                    AutonomyPolicyRow(
-                        connectorId = definition.id, operation = operation,
-                        origin = registry.configuredAutonomyOrigin(definition, operation),
-                        configuredPolicy = registry.configuredAutonomyPolicy(definition, operation),
-                        effectivePolicy = registry.autonomyPolicy(definition, operation),
-                        effectiveReason = registry.autonomyPolicyUnavailableUiReason(definition, operation),
-                        onPolicy = { onPolicy(operation, it) },
-                    )
-                }
-            }
-            if (writes.isNotEmpty()) ConnectorPermissionGroup(context.getString(R.string.remote_service_write_tool)) {
-                writes.forEach { operation ->
-                    AutonomyPolicyRow(
-                        connectorId = definition.id, operation = operation,
-                        origin = registry.configuredAutonomyOrigin(definition, operation),
-                        configuredPolicy = registry.configuredAutonomyPolicy(definition, operation),
-                        effectivePolicy = registry.autonomyPolicy(definition, operation),
-                        effectiveReason = registry.autonomyPolicyUnavailableUiReason(definition, operation),
-                        onPolicy = { onPolicy(operation, it) },
-                    )
-                }
-            }
             if (definition.id == LocationConnector.ID && !LocationConnector.isSystemLocationEnabled(context)) {
                 Text(stringResource(R.string.connector_location_disabled), color = MaterialTheme.colorScheme.error)
             }
@@ -382,71 +370,6 @@ internal fun ConnectorDetailSection(title: String, content: @Composable ColumnSc
         content()
     }
 }
-
-@Composable
-private fun AutonomyPolicyRow(
-    connectorId: String,
-    operation: ConnectorOperation,
-    configuredPolicy: AutonomyPolicy,
-    origin: ActionPolicyOrigin,
-    effectivePolicy: AutonomyPolicy,
-    effectiveReason: ConnectorUiText?,
-    onPolicy: (AutonomyPolicy) -> Unit,
-) {
-    val context = LocalContext.current
-    ConnectorPermissionRow(modifier = Modifier.testTag("connector-policy-${operation.name}-row"), content = {
-        Text(operation.localizedDisplayText().resolve(context), fontWeight = FontWeight.Medium,
-            maxLines = 2, overflow = TextOverflow.Ellipsis)
-    }, permission = {
-        ConnectorPolicySelector(
-            modifier = Modifier.testTag("connector-policy-${operation.name}-control"),
-            subjectKey = "$connectorId/${operation.name}",
-            selectedLabelResource = when (configuredPolicy) {
-                AutonomyPolicy.ASK -> R.string.connector_policy_ask
-                AutonomyPolicy.ALLOW -> R.string.connector_policy_allow
-                AutonomyPolicy.DENY -> R.string.connector_policy_deny
-            },
-            choices = buildList {
-                add(ConnectorPolicyChoice(R.string.connector_policy_ask) { onPolicy(AutonomyPolicy.ASK) })
-                add(ConnectorPolicyChoice(R.string.connector_policy_allow) { onPolicy(AutonomyPolicy.ALLOW) })
-                add(ConnectorPolicyChoice(R.string.connector_policy_deny) { onPolicy(AutonomyPolicy.DENY) })
-            },
-        )
-    })
-    ConnectorPolicyOriginCaption(origin,
-        Modifier.fillMaxWidth().testTag("connector-policy-${operation.name}-origin"))
-    if (effectiveReason != null) {
-        Text(
-            context.getString(R.string.connector_active_policy, effectivePolicy.label(context), effectiveReason?.resolve(context).orEmpty()),
-            color = MaterialTheme.colorScheme.error,
-            fontSize = 11.sp,
-        )
-    }
-}
-
-@Composable
-private fun ConnectorPermissionGroup(title: String, content: @Composable ColumnScope.() -> Unit) {
-    JarvysGroup(contentPadding = androidx.compose.foundation.layout.PaddingValues(JarvysUiTokens.ScreenPadding)) {
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            JarvysSectionLabel(title)
-            content()
-        }
-    }
-}
-
-@Composable
-private fun ConnectorOperationPolicyRow(operationName: String, name: String) {
-    ConnectorPermissionRow(modifier = Modifier.testTag("connector-policy-$operationName-row"), content = {
-        Text(name, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-    }, permission = { ConnectorPolicyValue(R.string.connector_policy_allow,
-        Modifier.testTag("connector-policy-$operationName-control")) })
-}
-
-private fun AutonomyPolicy.label(context: android.content.Context): String = context.getString(when (this) {
-    AutonomyPolicy.ASK -> R.string.connector_policy_ask
-    AutonomyPolicy.ALLOW -> R.string.connector_policy_allow
-    AutonomyPolicy.DENY -> R.string.connector_policy_deny
-})
 
 private fun ConnectorDefinition.localizedNameText() = ConnectorUiText(displayNameResourceId, fallback = name)
 private fun ConnectorDefinition.localizedDescriptionText() = ConnectorUiText(descriptionResourceId, fallback = description)
@@ -510,7 +433,6 @@ private fun ConnectorRow(
 private fun connectorIcon(id: String): ImageVector = when (id) {
     ContactsConnector.ID -> LucideIcons.ContactRound
     DialerConnector.ID -> LucideIcons.Smartphone
-    SmsComposerConnector.ID -> LucideIcons.MessageSquare
     NotificationsConnector.ID -> LucideIcons.Bell
     LocationConnector.ID -> LucideIcons.MapPin
     else -> LucideIcons.Calendar

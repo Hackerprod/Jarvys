@@ -14,6 +14,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.jarvys.agent.JarvysEmptyState
+import com.jarvys.agent.LucideIcons
 import com.jarvys.agent.R
 
 /** Reconstructed from delivered v95: catalog presentation does not start workspace execution. */
@@ -48,9 +50,13 @@ fun WorkspaceListScreen(
             }
         }
         if (!workspacesLoading && workspaceError == null && workspaces.isEmpty()) item(key = "workspace-empty") {
-            Text(stringResource(if (canFirstWorkspacePage) R.string.workspace_page_empty else R.string.workspace_sidebar_empty),
-                Modifier.padding(horizontal = 12.dp, vertical = 8.dp).testTag("workspace-list-empty"),
-                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            JarvysEmptyState(
+                icon = LucideIcons.Boxes,
+                title = stringResource(if (canFirstWorkspacePage) R.string.workspace_page_empty else R.string.workspace_sidebar_empty),
+                body = "",
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                titleModifier = Modifier.testTag("workspace-list-empty"),
+            )
         }
         items(workspaces, key = { "workspace-" + it.id }) { workspace ->
             Surface(shape = RoundedCornerShape(13.dp), color = MaterialTheme.colorScheme.surface) {

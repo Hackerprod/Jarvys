@@ -14,7 +14,7 @@ import java.util.concurrent.CancellationException
 class BotMascotTool internal constructor(private val service: BotMascotService) : CoreTool {
     constructor(context: Context, sessionId: String) : this(BotMascotService(context, sessionId))
     override fun canDelegate() = false
-    override fun auditDetail(arguments: Map<String, Any>?) = "Review and compile a custom bot mascot locally"
+    override fun auditDetail(arguments: Map<String, Any>?) = "Review and compile a bot mascot locally"
     override fun declaration() = SPEC
     override fun executionMode() = CoreTool.ExecutionMode.SEQUENTIAL
     override fun execute(arguments: Map<String, Any>?, token: CancellationToken): CoreToolResult {
@@ -25,7 +25,7 @@ class BotMascotTool internal constructor(private val service: BotMascotService) 
             val id = arguments["bot_id"] as? String ?: throw IllegalArgumentException("Invalid bot_id.")
             val request = arguments["request_id"] as? String ?: throw IllegalArgumentException("Invalid request_id.")
             val description = arguments["visual_description"] as? String ?: throw IllegalArgumentException("Invalid visual_description.")
-            val source = arguments["scene_json"] as? String ?: throw IllegalArgumentException("scene_json must be the original scene JSON string.")
+            val source = BotMascotSceneCompiler.normalizeProductScene(arguments["scene_json"], "scene_json")
             val rawRevision = arguments["expected_revision"]
             require(rawRevision is Number) { "expected_revision must be a positive integer from list_bots." }
             val revision = try { java.math.BigDecimal(rawRevision.toString()).intValueExact() } catch (_: RuntimeException) { 0 }
@@ -38,23 +38,41 @@ class BotMascotTool internal constructor(private val service: BotMascotService) 
     companion object {
         const val NAME = "compile_bot_mascot"
         internal val FIELDS = setOf("request_id", "bot_id", "expected_revision", "visual_description", "scene_json")
-        const val SCENE_GUIDE = "Author original geometry and choreography, not a recolored fixed character. scene_json is an object with contract=bot-mascot-v1, name, nodes, animations. " +
-            "nodes is an ordered array: each node has kind group/ellipse/rectangle, unique name, optional parent (earlier node; default Artboard), optional x/y/rotation/scaleX/scaleY; shapes require width,height (1..256) and unsigned ARGB integer color; rectangle optionally radius. " +
-            "animations must contain Idle,Thinking,Working,Queued,WaitingProvider,WaitingUser,Done,Error,Interrupted and each name plus Reduced (18 total). Each has duration (1..600 frames at 60 fps), loop boolean, tracks array. A track is {node,property,keys:[[frame,value],...]}; property is x/y/rotation/scaleX/scaleY, frames increase starting at0. " +
-            "All 18 animations must reset the same node/property target set. Each normal mode must contain at least one genuinely moving Float32 track. Each Reduced variant has loop=false and one constant key per track; retain a readable state-specific pose. Names are opaque labels. Maximum 128 KiB UTF-8 source, 96 nodes, depth 8, 64 tracks/state, 64 keys/track and 64 KiB compiled. No URLs,paths,images,fonts,scripts,audio,code or external resources."
+        private val modes = listOf("Idle", "Thinking", "Working", "Queued", "WaitingProvider", "WaitingUser", "Done", "Error", "Interrupted")
+        internal val SCENE_EXAMPLE_JSON: String = buildString {
+            append("""{"contract":"bot-mascot-v1","name":"Simple moving mascot","nodes":[{"kind":"rectangle","name":"Mascot","width":16,"height":16,"color":4294901760}],"animations":{""")
+            val states = modes.map { it to false } + modes.map { it + "Reduced" to true }
+            states.forEachIndexed { index, (state, reduced) ->
+                if (index > 0) append(',')
+                append('"').append(state).append("\":{\"duration\":1,\"loop\":").append(!reduced)
+                    .append(",\"tracks\":[{\"node\":\"Mascot\",\"property\":\"x\",\"keys\":")
+                    .append(if (reduced) "[[0,128]]" else "[[0,128],[1,129]]").append("}]}")
+            }
+            append("}}")
+        }
+        internal val SCENE_GUIDE = "Author original geometry and choreography, not a recolored fixed character. scene_json accepts either a JSON string or a JSON object. A complete minimal valid example is: " +
+            SCENE_EXAMPLE_JSON + " Root fields are contract, name, nodes, and animations. Nodes are ordered: kind is group/ellipse/rectangle, name is unique, parent is optional and must name an earlier node (default Artboard), and x/y/rotation/scaleX/scaleY are optional. Shapes require width and height from 1 through 256 and an unsigned ARGB integer color; rectangles may include radius. " +
+            "animations must contain exactly Idle, Thinking, Working, Queued, WaitingProvider, WaitingUser, Done, Error, Interrupted, plus IdleReduced, ThinkingReduced, WorkingReduced, QueuedReduced, WaitingProviderReduced, WaitingUserReduced, DoneReduced, ErrorReduced, InterruptedReduced. Each animation has duration (an integer from 1 through 600 frames at 60 fps), loop (boolean), and tracks. Each track is {node,property,keys:[[frame,value],...]}; property is x/y/rotation/scaleX/scaleY. Frames must be integers, increase strictly, and every track must start at frame 0. All 18 animations must use the same (node, property) target set. Each normal mode must contain at least one genuinely moving Float32 track. Every Reduced variant must have loop=false and exactly one key per track. Names are opaque labels. Maximum source is 128 KiB UTF-8, with 96 nodes, hierarchy depth 8, 64 tracks per state, 64 keys per track, and 64 KiB compiled output. No URLs, paths, images, fonts, scripts, audio, code, or external resources."
         private val SPEC by lazy {
             fun text(description: String, max: Int) = mapOf("type" to "string", "description" to description, "minLength" to 1, "maxLength" to max)
+            val scene = linkedMapOf<String, Any>(
+                "description" to SCENE_GUIDE,
+                "anyOf" to listOf(
+                    mapOf("type" to "string", "maxLength" to BotMascotSceneCompiler.MAX_SOURCE_BYTES),
+                    mapOf("type" to "object"),
+                ),
+            )
             val p = linkedMapOf<String, Any>(
                 "request_id" to text("Stable unique operation key. Keep identical on retries for the same scene and bot.",80),
-                "bot_id" to text("Exact existing enabled custom bot ID from list_bots.",256),
+                "bot_id" to text("Exact existing enabled bot ID from list_bots, including built-in templates.",256),
                 "expected_revision" to mapOf("type" to "integer","minimum" to 1,"description" to "Current definition revision from list_bots; stale writes cannot overwrite newer edits."),
                 "visual_description" to text("Short plain-text design and motion description requested by the user, separate from operational instructions.",1200),
-                "scene_json" to text(SCENE_GUIDE, BotMascotSceneCompiler.MAX_SOURCE_BYTES),
+                "scene_json" to scene,
             )
-            ToolSpec(NAME,"jarvys/bots","Compile and save an original animated mascot for an existing custom bot, locally on the phone, only when requested by the user. " +
+            ToolSpec(NAME,"jarvys/bots","Compile and save an original animated mascot for any existing bot, including built-in Coding and Android-use, locally on the phone, only when requested by the user. " +
                 "Original editable scene and immutable versioned bytes are saved with an idempotent receipt. No image service, CLI or new network service is used. " +
-                "LOCAL_COMPILED proves local compilation, not Android rendering acceptance. A temporary visual test is available in the saved custom bot editor; normal avatars remain the static PNG/glyph fallback. Never claim playback is verified from compilation alone. " +
-                "Read list_bots first; never guess IDs. Built-ins are immutable. This changes presentation only, not prompts, tools, permissions or running tasks. Main chat only.",
+                "LOCAL_COMPILED proves local compilation, not Android rendering acceptance. A temporary visual test is available in the saved bot editor; normal avatars remain the static PNG/glyph fallback. Never claim playback is verified from compilation alone. " +
+                "Read list_bots first; never guess IDs. This changes presentation only, not prompts, tools, permissions or running tasks. Main chat only.",
                 "bots",ToolSpec.Status.IMPLEMENTED,emptyMap(),FIELDS.toList(),mapOf("type" to "object","properties" to p,"required" to FIELDS.toList(),"additionalProperties" to false))
         }
         @JvmStatic fun isAvailable(context: Context?, depth: Int, sessionId: String?) = BotCatalogTool.isAvailable(context,depth,sessionId)
@@ -75,7 +93,7 @@ internal class BotMascotService(
         token.throwIfCancelled()
         require(available(token)) { "Mascot authoring is available only in the main chat." }
         BotMascotDescriptor.requireOperationId(request)
-        require(id.matches(Regex("[a-z][a-z0-9._-]*")) && revision > 0) { "Choose an existing custom bot and its current revision." }
+        require(id.matches(Regex("[a-z][a-z0-9._-]*")) && revision > 0) { "Choose an existing bot and its current revision." }
         BotMascotDescriptor.requireVisualDescription(description)
         require(source.length <= BotMascotSceneCompiler.MAX_SOURCE_BYTES) { "Mascot source exceeds its byte budget." }
         val buffer = try { StandardCharsets.UTF_8.newEncoder()
@@ -115,7 +133,6 @@ internal class BotMascotService(
         }
     }
     private fun editable(bot: BotDefinition, revision: Int) {
-        require(!bot.builtIn && !CrewProfileRepository.isBuiltInId(bot.id)) { "Built-in bot visuals cannot be changed." }
         require(bot.enabled) { "Enable the bot before creating its mascot." }
         require(bot.revision==revision) { "The bot changed while editing. Read list_bots before retrying this operation." }
     }
