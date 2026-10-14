@@ -88,6 +88,28 @@ public class CrewCheckpointIncorporationCodecTest {
                 && turn.toolCalls.stream().anyMatch(call -> CoreAgentLoop.INBOX_TOOL.equals(call.name))));
     }
 
+    @Test public void codecRoundTripRetainsIncomingProvenanceAndProofInMemory() throws Exception {
+        CrewInputIncorporation proof = proof();
+        ConversationTurn incoming = new ConversationTurn("user", "Bot evidence", -1,
+                new ConversationTurn.IncomingMetadata("mailbox-one", "crew", "bot-two", "FINDING",
+                        Collections.singletonList("/board/source.md"), true));
+        CoreAgentLoop.Checkpoint checkpoint = new CoreAgentLoop.Checkpoint(
+                Collections.singletonList(incoming), Collections.singleton("mailbox-one"),
+                Collections.emptyMap(), -1, Collections.singletonMap("mailbox-one", proof));
+
+        JSONObject encoded = new JSONObject(CrewCheckpointStore.encodeLoop(checkpoint).toString());
+        CoreAgentLoop.Checkpoint restored = CrewCheckpointStore.decodeLoop(encoded);
+
+        ConversationTurn message = restored.transcript.get(0);
+        assertEquals("mailbox-one", message.incomingMetadata.id);
+        assertEquals("crew", message.incomingMetadata.source);
+        assertEquals("bot-two", message.incomingMetadata.sender);
+        assertEquals("FINDING", message.incomingMetadata.type);
+        assertEquals(Collections.singletonList("/board/source.md"), message.incomingMetadata.references);
+        assertTrue(message.incomingMetadata.untrusted);
+        assertTrue(proof.samePayload(restored.incorporations.get("mailbox-one")));
+    }
+
     @Test public void duplicatesAndProofsWithoutAppliedMailboxIdsFailClosed() throws Exception {
         File root = temporary.newFolder();
         CrewCheckpointStore store = new CrewCheckpointStore(root);

@@ -16,9 +16,12 @@ public interface CoreTool {
     return true;
   }
 
-  /** Independent tools run concurrently; shared state or interactive effects opt into ordering. */
+  /**
+   * Tools keep ReAct's original call order unless their implementation explicitly opts into
+   * parallel execution after establishing that calls are independent.
+   */
   default ExecutionMode executionMode() {
-    return ExecutionMode.PARALLEL;
+    return ExecutionMode.SEQUENTIAL;
   }
 
   default String auditDetail(Map<String, Object> arguments) {

@@ -287,7 +287,7 @@ public final class AgentForegroundService extends Service {
   public static boolean interruptAndSend(Context context, String sessionId, String text,
       ArrayList<String> skills, boolean memoryDisabled) {
     AgentForegroundService service = currentInstance;
-    AgentRunUiState state = AgentRunUiState.INSTANCE.getState().getValue();
+    AgentRunUiSnapshot state = AgentRunUiState.INSTANCE.getState().getValue();
     if (!MessageReactionTool.isOrdinaryChat(sessionId) || sessionId == null
         || !sessionId.equals(state.getSessionId()) || state.getReflecting()
         || state.getInteractiveOwnerSessionId() != null

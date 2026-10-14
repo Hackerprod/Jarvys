@@ -228,6 +228,12 @@ public final class CrewContextArtifacts {
                 return new ToolSpec(READ_TOOL, "crew-context", "Read a page of this bot\'s retained context artifact. Use next_offset for remaining text. No filesystem paths or other bots\' artifacts are accessible.", "context", ToolSpec.Status.IMPLEMENTED, properties, Collections.singletonList("artifact_id"));
             }
 
+            // Artifact ownership and context-window sizing are shared by the Crew transcript.
+            @Override
+            public ExecutionMode executionMode() {
+                return ExecutionMode.SEQUENTIAL;
+            }
+
             @Override
             public CoreToolResult execute(Map<String, Object> arguments, CancellationToken token) {
                 synchronized (ConversationMetadataStore.LOCK) {

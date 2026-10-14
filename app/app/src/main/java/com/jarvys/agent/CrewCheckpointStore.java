@@ -602,7 +602,7 @@ public final class CrewCheckpointStore {
         }
     }
 
-    private static JSONObject encodeLoop(CoreAgentLoop.Checkpoint checkpoint) throws Exception {
+    static JSONObject encodeLoop(CoreAgentLoop.Checkpoint checkpoint) throws Exception {
         JSONObject jSONObject = new JSONObject();
         JSONArray jSONArray = new JSONArray();
         for (ConversationTurn turn : checkpoint.transcript) {
@@ -659,7 +659,7 @@ public final class CrewCheckpointStore {
         return jSONObject;
     }
 
-    private static CoreAgentLoop.Checkpoint decodeLoop(JSONObject value) throws Exception {
+    static CoreAgentLoop.Checkpoint decodeLoop(JSONObject value) throws Exception {
         List<ConversationTurn> transcript = new ArrayList<>();
         JSONArray rows = value.getJSONArray("transcript");
         for (int index = 0; index < rows.length(); index++) {

@@ -250,6 +250,7 @@ public final class CoreAgentLoop {
         final boolean hideFromProgress;
         final String preflightError;
         final AtomicBoolean executionStarted = new AtomicBoolean(false);
+        volatile boolean activityStarted;
         volatile CoreToolResult returnedResult;
         volatile Thread executionThread;
         volatile boolean cancelAfterResult;
@@ -770,6 +771,7 @@ public final class CoreAgentLoop {
 
         ToolBatchOutcome outcome = new ToolBatchOutcome();
         outcome.allCallsTerminal = !prepared.isEmpty();
+        // Results spend the shared turn budget in provider call order, never completion order.
         outcome.remainingResultChars = toolResultBudget.allowsCompleteToolResults()
                 ? Integer.MAX_VALUE : budget.toolResultsPerTurnChars;
         if (sequential) {
@@ -928,6 +930,7 @@ public final class CoreAgentLoop {
         }
 
         try {
+        // appendExecutedResult consumes the shared output budget while traversing provider call order.
         for (PreparedToolCall item : prepared) {
             if (item.finalized) continue;
             if (item.skippedReason != null) {
@@ -986,6 +989,8 @@ public final class CoreAgentLoop {
         updateTranscriptSnapshot(transcript);
         if (!item.hideFromProgress) {
             activeActivities.put(item.call.id, item.activity);
+            // Mark before notifying the listener: it may cancel synchronously from tool_call.
+            item.activityStarted = true;
             if (listener != null) listener.onToolActivity(item.activity);
         }
     }
@@ -1104,6 +1109,7 @@ public final class CoreAgentLoop {
         for (PreparedToolCall item : calls) {
             if (item.finalized) continue;
             if (item.result == null && item.returnedResult != null) item.result = item.returnedResult;
+            boolean started = item.activityStarted || item.executionStarted.get();
             if (item.result != null && item.executionStarted.get()) {
                 try {
                     appendExecutedResult(item, transcript, token, listener, loopDetector, outcome);
@@ -1121,15 +1127,36 @@ public final class CoreAgentLoop {
                 activeActivities.remove(item.call.id);
                 transcript.add(ConversationTurn.toolResult(item.call.id, item.call.name,
                         "NEVER_LAUNCHED: Tool error: " + item.preflightError));
+                try {
+                    if (listener != null) listener.onToolActivity(item.activity.event(
+                            started ? "tool_interrupted" : "tool_not_started", item.preflightError, null));
+                } catch (RuntimeException failure) {
+                    if (failure instanceof CheckpointFailure) throw failure;
+                    firstFailure = accumulateFailure(firstFailure, failure);
+                }
             } else if (item.skippedReason != null || !item.executionStarted.get()) {
                 toolLifecycle.put(item.call.id, "NEVER_LAUNCHED");
                 activeActivities.remove(item.call.id);
                 String skipped = item.skippedReason == null ? "Tool call was not launched before cancellation." : item.skippedReason;
                 if (!skipped.startsWith("NEVER_LAUNCHED:")) skipped = "NEVER_LAUNCHED: " + skipped;
                 transcript.add(ConversationTurn.toolResult(item.call.id, item.call.name, skipped));
+                try {
+                    if (listener != null) listener.onToolActivity(item.activity.event(
+                            started ? "tool_interrupted" : "tool_not_started", skipped, null));
+                } catch (RuntimeException failure) {
+                    if (failure instanceof CheckpointFailure) throw failure;
+                    firstFailure = accumulateFailure(firstFailure, failure);
+                }
             } else {
                 toolLifecycle.put(item.call.id, "INTERRUPTED_UNCERTAIN");
                 transcript.add(ConversationTurn.toolResult(item.call.id, item.call.name, uncertain));
+                try {
+                    if (listener != null) listener.onToolActivity(item.activity.event(
+                            "tool_interrupted", uncertain, item.activity.previewId));
+                } catch (RuntimeException failure) {
+                    if (failure instanceof CheckpointFailure) throw failure;
+                    firstFailure = accumulateFailure(firstFailure, failure);
+                }
             }
             item.finalized = true;
             try {
@@ -1141,6 +1168,12 @@ public final class CoreAgentLoop {
             }
         }
         if (firstFailure != null) throw firstFailure;
+    }
+
+    private static RuntimeException accumulateFailure(RuntimeException firstFailure, RuntimeException nextFailure) {
+        if (firstFailure == null) return nextFailure;
+        if (firstFailure != nextFailure) firstFailure.addSuppressed(nextFailure);
+        return firstFailure;
     }
 
     private static boolean recoverableProviderFailure(Throwable failure) {

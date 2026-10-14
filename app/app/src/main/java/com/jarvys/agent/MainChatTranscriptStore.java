@@ -182,6 +182,8 @@ final class MainChatTranscriptStore {
     CoreTool recoveryTool() {
         return new CoreTool() {
             @Override public boolean canDelegate() { return false; }
+            // Ownership refresh, artifact verification, and paging share the conversation archive lock.
+            @Override public ExecutionMode executionMode() { return ExecutionMode.SEQUENTIAL; }
             @Override public ToolSpec declaration() {
                 Map<String, String> properties = new LinkedHashMap<>();
                 properties.put("artifact_id", "string"); properties.put("offset", "integer"); properties.put("limit_chars", "integer");

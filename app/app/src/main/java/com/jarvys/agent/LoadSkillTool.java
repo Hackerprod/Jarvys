@@ -74,6 +74,9 @@ public final class LoadSkillTool implements CoreTool {
 
     @Override public ToolSpec declaration() { return declaration; }
 
+    // Complete skill bodies draw from one remaining per-turn result budget.
+    @Override public ExecutionMode executionMode() { return ExecutionMode.SEQUENTIAL; }
+
     @Override public CoreToolResult execute(Map<String, Object> arguments, CancellationToken token) {
         Object rawId = arguments.get("skill_id");
         if (!(rawId instanceof String)) return CoreToolResult.failure("skill_id must be a string from the available catalog");
