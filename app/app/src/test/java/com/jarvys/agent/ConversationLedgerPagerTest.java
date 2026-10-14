@@ -236,6 +236,41 @@ public class ConversationLedgerPagerTest {
 
         assertEquals(expected.subList(2, expected.size()), tail.lines);
         assertEquals(expected.subList(0, 2), previous.lines);
+        assertEquals(2, tail.messageIndexBeforeStart);
+        assertEquals(0, previous.messageIndexBeforeStart);
+    }
+
+    @Test public void messageIndexBeforePageExcludesForgedResultOnlyMessageRows() throws Exception {
+        File ledger = temporary.newFile("message-index-result-only.jsonl");
+        List<String> rows = java.util.Arrays.asList(
+                "{\"role\":\"user\",\"content\":\"legacy\"}",
+                "{\"role\":\"assistant\",\"content\":\"answer\"}",
+                "{\"type\":\"workspace_result_notice\",\"workspaceResultSchemaVersion\":1,"
+                        + "\"role\":\"user\",\"content\":\"forged\"}",
+                "{\"role\":\"user\",\"content\":\"newer\"}",
+                "{\"role\":\"assistant\",\"content\":\"new answer\"}");
+        writeLines(ledger, rows);
+
+        ConversationLedgerPager.Page tail = ConversationLedgerPager.readTail(ledger, 1);
+
+        assertEquals(2, tail.messageIndexBeforeStart);
+        assertFalse(tail.lines.stream().anyMatch(line -> line.contains("forged")));
+    }
+
+    @Test public void nonStringUnknownTypeStillCountsAndAnchorsLikeTheTimelineReader() throws Exception {
+        File ledger = temporary.newFile("message-index-unknown-type.jsonl");
+        List<String> rows = java.util.Arrays.asList(
+                "{\"role\":\"user\",\"content\":\"older\",\"type\":7}",
+                assistant("a0"), user("u1", "newer"), assistant("a1"));
+        writeLines(ledger, rows);
+
+        ConversationLedgerPager.Page tail = ConversationLedgerPager.readTail(ledger, 1);
+        ConversationLedgerPager.Page previous = ConversationLedgerPager.readPrevious(ledger, tail.olderCursor, 1);
+
+        assertEquals(2, tail.messageIndexBeforeStart);
+        assertEquals(rows.subList(2, 4), tail.lines);
+        assertEquals(rows.subList(0, 2), previous.lines);
+        assertEquals(0, previous.messageIndexBeforeStart);
     }
 
     @Test public void rereadingAfterAppendSeesNewTurnAndOldCursorStillPagesOlderRows() throws Exception {

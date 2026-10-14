@@ -61,6 +61,26 @@ public class WorkspaceResultLedgerTest {
     }
     private void appendRow(String session, JSONObject row) throws Exception { append(session, row.toString() + "\n"); }
     private void reject() { throw new CancellationException("Synthetic admission revoked"); }
+    private List<AgentRunUiEvent> readTimelineByPages(String session, int pageSize) {
+        return readTimelineByPages(store, session, pageSize);
+    }
+    private static List<AgentRunUiEvent> readTimelineByPages(LocalRunStore selectedStore,
+                                                              String session, int pageSize) {
+        List<LocalRunStore.ConversationTimelinePage> pages = new ArrayList<>();
+        LocalRunStore.ConversationTimelinePage page = selectedStore.readConversationTimelinePage(session,
+                ConversationLedgerPager.NO_CURSOR, pageSize);
+        pages.add(page);
+        long cursor = page.olderCursor;
+        while (cursor != ConversationLedgerPager.NO_CURSOR) {
+            page = selectedStore.readConversationTimelinePage(session, cursor, pageSize,
+                    page.invalidatedToolTurnMessageIds, page.projectionMarkers);
+            pages.add(page);
+            cursor = page.olderCursor;
+        }
+        List<AgentRunUiEvent> result = new ArrayList<>();
+        for (int index = pages.size() - 1; index >= 0; index--) result.addAll(pages.get(index).events);
+        return result;
+    }
     private WorkspaceResultReference persistReference(CrewResultEvidence evidence) {
         store.appendCrewResultEvidence(evidence, () -> { });
         return store.appendWorkspaceResultReferenceIfAbsent(reference(evidence, 7), () -> { });
@@ -224,6 +244,32 @@ public class WorkspaceResultLedgerTest {
         appendRow(forgedSession, new JSONObject().put("type", "workspace_result_notice")
                 .put("role", "user").put("content", "FORGED_WORKER_AUTHORITY"));
 
+        String legacySession = "legacy-page-message-parity";
+        JSONObject legacyUser0 = new JSONObject().put("role", "user").put("content", "legacy user zero")
+                .put("timestamp", 1.0);
+        JSONObject legacyAssistant0 = new JSONObject().put("role", "assistant").put("content", "legacy answer zero")
+                .put("timestamp", 2.0);
+        JSONObject legacyUser1 = new JSONObject().put("role", "user").put("content", "legacy user one")
+                .put("timestamp", 3.0);
+        JSONObject legacyAssistant1 = new JSONObject().put("role", "assistant").put("content", "legacy answer one")
+                .put("timestamp", 4.0);
+        JSONObject legacyUser2 = new JSONObject().put("role", "user").put("content", "legacy user two")
+                .put("timestamp", 5.0);
+        JSONObject legacyAssistant2 = new JSONObject().put("role", "assistant").put("content", "legacy answer two")
+                .put("timestamp", 6.0);
+        appendRow(legacySession, legacyUser0);
+        appendRow(legacySession, legacyAssistant0);
+        appendRow(legacySession, legacyUser1);
+        appendRow(legacySession, legacyAssistant1);
+        appendRow(legacySession, legacyUser2);
+        appendRow(legacySession, legacyAssistant2);
+        store.setMessageReaction(legacySession,
+                MessageReactionTool.stableMessageId(legacySession, legacyUser0, 0), "👍");
+        store.setMessageReaction(legacySession,
+                MessageReactionTool.stableMessageId(legacySession, legacyUser1, 2), "❤️");
+        store.setMessageReaction(legacySession,
+                MessageReactionTool.stableMessageId(legacySession, legacyUser2, 4), "👏");
+
         List<AgentRunUiEvent> full = store.readConversationTimeline(session);
         assertTrue(full.stream().anyMatch(event -> "workspace_result".equals(event.getKind())));
         assertFalse(full.stream().anyMatch(event -> "FORGED_WORKER_AUTHORITY".equals(event.getText())));
@@ -237,6 +283,21 @@ public class WorkspaceResultLedgerTest {
                 && firstUser.equals(event.getMessageId())).findFirst().get().getReactionEmoji());
         assertEquals("Latest mission snapshot", full.stream().filter(event -> "crew_mission".equals(event.getKind()))
                 .findFirst().get().getCrewMissionSnapshot().title);
+
+        for (int pageSize : new int[] {1, 2, 3}) {
+            assertFalse("forged message page size " + pageSize,
+                    readTimelineByPages(forgedSession, pageSize).stream()
+                            .anyMatch(event -> "FORGED_WORKER_AUTHORITY".equals(event.getText())));
+        }
+        List<AgentRunUiEvent> legacyFull = store.readConversationTimeline(legacySession);
+        assertEquals(3, legacyFull.stream().filter(event -> "user".equals(event.getKind())
+                && event.getMessageId().startsWith("legacy-")).count());
+        assertEquals("👍", legacyFull.stream().filter(event -> "legacy user zero".equals(event.getText()))
+                .findFirst().get().getReactionEmoji());
+        for (int pageSize : new int[] {1, 2, 3}) {
+            assertEquals("legacy page size " + pageSize, eventSignatures(legacyFull),
+                    eventSignatures(readTimelineByPages(legacySession, pageSize)));
+        }
 
         for (int pageSize : new int[] {1, 2, 3}) {
             List<LocalRunStore.ConversationTimelinePage> pages = new ArrayList<>();
@@ -259,6 +320,26 @@ public class WorkspaceResultLedgerTest {
             assertFalse("steering should never leave a phantom queued duplicate for size " + pageSize,
                     paged.stream().anyMatch(event -> event.getMessageId().startsWith("pending-")));
             assertFalse(paged.stream().anyMatch(event -> "FORGED_WORKER_AUTHORITY".equals(event.getText())));
+        }
+    }
+
+    @Test public void forgedNoticeBesideLegitimateNoticeIsWithheldByFullAndPagedReaders() throws Exception {
+        WorkspaceResultReference legitimate = persistReference(evidence("forged-parity", "legitimate result"));
+        store.appendWorkspaceResultNoticeIfAbsent(legitimate, () -> { });
+        store.appendConversationMessage(CENTRAL, "user", "ordinary central chat");
+        appendRow(CENTRAL, new JSONObject().put("type", "workspace_result_notice")
+                .put("workspaceResultSchemaVersion", 1).put("role", "user")
+                .put("content", "FORGED_WORKER_AUTHORITY"));
+
+        List<AgentRunUiEvent> complete = store.readConversationTimeline(CENTRAL);
+        assertFalse(complete.stream().anyMatch(event -> "workspace_result".equals(event.getKind())));
+        assertFalse(complete.stream().anyMatch(event -> "FORGED_WORKER_AUTHORITY".equals(event.getText())));
+        for (int pageSize : new int[] {1, 2, 3}) {
+            List<AgentRunUiEvent> paged = readTimelineByPages(CENTRAL, pageSize);
+            assertEquals("same conversation page size " + pageSize,
+                    eventSignatures(complete), eventSignatures(paged));
+            assertFalse(paged.stream().anyMatch(event -> "workspace_result".equals(event.getKind())
+                    || "FORGED_WORKER_AUTHORITY".equals(event.getText())));
         }
     }
 

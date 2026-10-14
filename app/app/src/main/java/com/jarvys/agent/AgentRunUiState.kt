@@ -73,6 +73,10 @@ data class AgentRunUiEvent(
     val previewIsCurrent: Boolean = false,
     val toolActivity: ToolActivity? = null,
     val toolActivityEvents: List<ToolActivity> = emptyList(),
+    /** Ledger-scoped identity for a persisted tool call (batch/call or turn/execution). */
+    val toolIdentity: String? = null,
+    /** User message that owns this persisted tool event. */
+    val toolTurnMessageId: String? = null,
     val submissionError: String? = null,
     val scheduledTaskArtifact: ScheduledTaskArtifact? = null,
  ) {
@@ -82,6 +86,9 @@ data class AgentRunUiEvent(
         copy(reactionEmoji = if (kind == "user" && proactiveThreadKey.isNullOrEmpty()) emoji else "")
     fun copyToolPresentation(auditDetail: String?, currentPreview: Boolean): AgentRunUiEvent =
         copy(toolAuditDetail = auditDetail?.takeIf(String::isNotBlank), previewIsCurrent = currentPreview)
+    fun copyToolTimelineIdentity(identity: String?, userMessageId: String?): AgentRunUiEvent =
+        copy(toolIdentity = identity?.takeIf(String::isNotBlank),
+            toolTurnMessageId = userMessageId?.takeIf(String::isNotBlank))
     fun copyStage(stage: String?): AgentRunUiEvent = copy(stage = stage)
     fun copyAttachments(attachments: List<ChatAttachment>): AgentRunUiEvent =
         copy(attachments = if (kind == "user" && proactiveThreadKey.isNullOrEmpty()) attachments.toList() else emptyList())
@@ -746,23 +753,44 @@ object AgentRunUiState {
         val current = _state.value
         if (current.sessionId != sessionId) return@synchronized
         val durableKinds = setOf("user", "assistant", "assistant_translation", "compaction", "compaction_error", "memory", "crew_mission", "tool", "user_decision", "generated_image", "delivered_file", "workspace_result")
-        val liveInFlightToolIds = if (current.running) current.events.asSequence()
-            .filter { it.kind == "tool" && it.stage in setOf("tool_call", "tool_progress", "approval_waiting") }
-            .mapNotNull { it.toolCallId }.toSet() else emptySet()
+        val liveInFlightTools = if (current.running) current.events.mapNotNull { event ->
+            if (event.kind == "tool" && event.stage in setOf("tool_call", "tool_progress", "approval_waiting"))
+                event.toolCallId?.let { event to refreshToolIdentity(event) }
+            else null
+        } else emptyList()
+        val liveInFlightToolIdentities = liveInFlightTools.mapNotNullTo(mutableSetOf()) { it.second }
+        val liveInFlightToolCallCounts = liveInFlightTools.asSequence().mapNotNull { it.first.toolCallId }
+            .groupingBy { it }.eachCount()
         // A durable missing-result observation is not a terminal outcome while this process still
         // owns that same in-flight call. Actual persisted results always supersede the live row.
-        val authoritativePersisted = persistedEvents.filterNot { event ->
-            event.kind == "tool" && event.stage in setOf("tool_interrupted", "tool_not_started")
-                && event.toolCallId in liveInFlightToolIds
+        val authoritativePersisted = persistedEvents.mapNotNull { event ->
+            val uncertainTool = event.kind == "tool"
+                && event.stage in setOf("tool_interrupted", "tool_not_started")
+            val identity = if (uncertainTool) refreshToolIdentity(event) else null
+            val matchedLiveTool = identity?.let { it in liveInFlightToolIdentities }
+                ?: (event.toolCallId != null && liveInFlightToolCallCounts[event.toolCallId] == 1)
+            if (uncertainTool && matchedLiveTool) null else event
         }
-        val persistedToolCallIds = authoritativePersisted.asSequence().filter { it.kind == "tool" }
-            .mapNotNull { it.toolCallId }.toSet()
+        val persistedToolIdentities = authoritativePersisted.mapNotNullTo(mutableSetOf()) { event ->
+            if (event.kind == "tool") refreshToolIdentity(event) else null
+        }
+        val persistedToolCallCounts = authoritativePersisted.asSequence().filter { it.kind == "tool" }
+            .mapNotNull { it.toolCallId }.groupingBy { it }.eachCount()
         val livePendingDecisionIds = if (current.running) current.events.asSequence()
             .filter { it.kind == "user_decision" && it.decisionStatus == "PENDING" }
             .mapNotNull { it.decisionId }.toSet() else emptySet()
-        val transientEvents = if (current.running) current.events.filter { event ->
+        val transientEvents = if (current.running) current.events.mapNotNull { event ->
+            val persistedToolMatch = if (event.kind == "tool") {
+                val identity = refreshToolIdentity(event)
+                when {
+                    identity != null -> identity in persistedToolIdentities
+                    event.toolCallId.isNullOrBlank() -> false
+                    else -> persistedToolCallCounts[event.toolCallId] == 1
+                }
+            } else false
+            val isTransient =
             event.kind !in durableKinds || event.kind == "tool"
-                    && (event.toolCallId.isNullOrBlank() || event.toolCallId !in persistedToolCallIds)
+                    && !persistedToolMatch
                     || event.kind == "user_decision" && event.decisionId in livePendingDecisionIds
                     || event.kind == "generated_image" && persistedEvents.none {
                         it.kind == "generated_image" && it.generatedImagePath == event.generatedImagePath
@@ -773,6 +801,7 @@ object AgentRunUiState {
                     || event.kind == "delivered_file" && persistedEvents.none {
                         it.kind == "delivered_file" && it.deliveredArtifact?.id == event.deliveredArtifact?.id
                     }
+            if (isTransient) event else null
         } else emptyList()
         val durableEvents = authoritativePersisted.filterNot { event ->
             event.kind == "user_decision" && event.decisionId in livePendingDecisionIds
@@ -850,15 +879,18 @@ object AgentRunUiState {
             "user", "assistant" -> event.messageId
             "assistant_translation" -> event.detail
             else -> null
-        }?.takeIf(String::isNotBlank) ?: return null
+        }?.takeIf(String::isNotBlank)?.takeUnless {
+            (event.kind == "user" || event.kind == "assistant") && it.startsWith("legacy-")
+        } ?: return null
         return "${event.kind}:$identity"
     }
 
     private fun refreshEventIdentity(event: AgentRunUiEvent): String? {
         val identity = when (event.kind) {
             "user", "assistant" -> event.messageId.takeIf(String::isNotBlank)
+                ?.takeUnless { it.startsWith("legacy-") }
             "assistant_translation" -> event.detail?.takeIf(String::isNotBlank)
-            "tool" -> event.toolCallId?.takeIf(String::isNotBlank)
+            "tool" -> event.toolIdentity?.takeIf(String::isNotBlank)
             "user_decision" -> event.decisionId?.takeIf(String::isNotBlank)
             "workspace_result" -> event.workspaceResultReference?.referenceId?.takeIf(String::isNotBlank)
             "delivered_file" -> event.deliveredArtifact?.id?.toString()?.takeIf(String::isNotBlank)
@@ -869,6 +901,14 @@ object AgentRunUiState {
             else -> null
         } ?: return null
         return "${event.kind}:$identity"
+    }
+
+    private fun refreshToolIdentity(event: AgentRunUiEvent): String? {
+        if (event.kind != "tool") return null
+        event.toolIdentity?.takeIf(String::isNotBlank)?.let { return "tool:$it" }
+        val executionId = event.toolActivity?.executionId
+            ?: event.toolActivityEvents.firstOrNull()?.executionId
+        return executionId?.takeIf(String::isNotBlank)?.let { "tool:execution:$it" }
     }
 
     /** Applies a durable translation to this materialized window without dropping older pages. */
@@ -899,12 +939,16 @@ object AgentRunUiState {
 
     /** Removes an assistant message and its translation from the visible window. */
     @JvmStatic
-    fun assistantMessageDeleted(sessionId: String, messageId: String) = inSession(sessionId) { synchronized(lock) {
+    fun assistantMessageDeleted(sessionId: String, messageId: String, userMessageId: String? = null) = inSession(sessionId) { synchronized(lock) {
         val current = _state.value
         if (current.sessionId != sessionId) return@synchronized
         val events = current.events.filterNot {
             it.kind == "assistant" && it.messageId == messageId
                 || it.kind == "assistant_translation" && it.detail == messageId
+                || it.kind == "tool" && userMessageId != null && it.toolTurnMessageId == userMessageId
+                || it.kind == "assistant" && it.stage == "PROGRESS"
+                    && userMessageId != null && it.toolTurnMessageId == userMessageId
+                || it.kind == "compaction"
         }
         if (events.size != current.events.size) _state.value = current.copy(events = events)
     } }
@@ -1520,7 +1564,10 @@ object AgentRunUiState {
                 LiveMascotTool(activity.executionId, eligibleToAnimate = !current.compacting)
             else -> current.liveMascotTool
         }
-        val updated = AgentRunUiEvent.activityEvent(old?.id ?: nextEventId++, projected).copy(toolActivityEvents = history)
+        val updated = AgentRunUiEvent.activityEvent(old?.id ?: nextEventId++, projected)
+            .copy(toolActivityEvents = history)
+            .copyToolTimelineIdentity("execution:${activity.executionId}",
+                events.lastOrNull { it.kind == "user" }?.messageId)
         if (index < 0) events.add(updated) else events[index] = updated
         _state.value = current.copy(events = events.takeLast(MAX_EVENTS),
             liveMascotTool = liveMascotTool, liveModelWaitId = null)

@@ -119,9 +119,12 @@ fun ConversationTimeline(
     generatedImageSessionId: String = conversationKey,
     events: List<AgentRunUiEvent>,
     isLoadingHistory: Boolean = false,
+    isRefreshingHistory: Boolean = isLoadingHistory,
     hasOlderHistory: Boolean = false,
     isLoadingOlderHistory: Boolean = false,
+    olderHistoryLoadError: Boolean = false,
     onLoadOlderHistory: () -> Unit = {},
+    onRetryOlderHistory: () -> Unit = onLoadOlderHistory,
     isRunning: Boolean,
     connectorRegistry: ConnectorRegistry,
     onOpenPreview: (String) -> Unit,
@@ -182,6 +185,8 @@ fun ConversationTimeline(
             isRunning = isRunning,
             hasOlder = hasOlderHistory,
             isLoadingOlder = isLoadingOlderHistory,
+            hasOlderLoadError = olderHistoryLoadError,
+            isRefreshingHistory = isRefreshingHistory,
             onLoadOlder = onLoadOlderHistory,
             messageKey = { it.key },
             messageUpdateKey = { item -> when (item) {
@@ -271,6 +276,12 @@ fun ConversationTimeline(
                 if (chatWithoutMemory) item(key = "memory-disabled") {
                     JarvysGroup { Text(stringResource(R.string.memory_chat_indicator), Modifier.padding(14.dp),
                         color = MaterialTheme.colorScheme.tertiary, style = MaterialTheme.typography.bodySmall) }
+                }
+                if (olderHistoryLoadError) item(key = "timeline-older-retry") {
+                    TextButton(onClick = onRetryOlderHistory,
+                        modifier = Modifier.fillMaxWidth().testTag("timeline-older-retry")) {
+                        Text(stringResource(R.string.chat_history_load_retry))
+                    }
                 }
             },
         )

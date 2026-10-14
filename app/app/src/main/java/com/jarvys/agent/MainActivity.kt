@@ -319,6 +319,7 @@ class MainActivity : ComponentActivity() {
     private var timelinePageSessionId by mutableStateOf<String?>(null)
     private var timelineLoading by mutableStateOf(false)
     private var timelineOlderLoading by mutableStateOf(false)
+    private var timelineOlderLoadError by mutableStateOf(false)
     private var timelineHasOlder by mutableStateOf(false)
     private var timelineOlderCursor by mutableLongStateOf(ConversationLedgerPager.NO_CURSOR)
     private var timelineRequestSerial = 0L
@@ -1037,10 +1038,10 @@ ${event.text}
         val sessionId = conversationSessionId
         if (!eventBelongsToSession(sessionId, event, "assistant")
             || AgentRunUiState.snapshotForSession(sessionId).running) return
-        val userMessageId = localRunStore.findUserMessageBeforeAssistant(sessionId, event.messageId)?.userMessageId
+        val userMessageId = localRunStore.assistantOwnerUserMessageId(sessionId, event.messageId)
         runCatching { localRunStore.appendAssistantDeleted(sessionId, event.messageId) }
             .onSuccess {
-                AgentRunUiState.assistantMessageDeleted(sessionId, event.messageId)
+                AgentRunUiState.assistantMessageDeleted(sessionId, event.messageId, userMessageId)
                 if (conversationSessionId == sessionId) {
                     timelineHiddenAssistantMessageIds += event.messageId
                     timelineHiddenTranslationMessageIds += event.messageId
@@ -1082,7 +1083,9 @@ ${event.text}
         val requestSerial = ++timelineRequestSerial
         timelineOlderRequestSerial++
         timelinePageSessionId = sessionId
+        timelineLoading = true
         timelineOlderLoading = false
+        timelineOlderLoadError = false
         historyExecutor.execute {
             val page = runCatching {
                 localRunStore.readConversationTimelinePage(
@@ -1348,6 +1351,7 @@ ${event.text}
             timelineProjectionMarkers = LocalRunStore.TimelineProjectionMarkers()
             timelineLoading = false
             timelineOlderLoading = false
+            timelineOlderLoadError = false
             timelineHasOlder = false
             timelineOlderCursor = ConversationLedgerPager.NO_CURSOR
             val sessionId = conversationSessionId
@@ -1372,6 +1376,7 @@ ${event.text}
         timelineProjectionMarkers = LocalRunStore.TimelineProjectionMarkers()
         timelineLoading = true
         timelineOlderLoading = false
+        timelineOlderLoadError = false
         timelineHasOlder = false
         timelineOlderCursor = ConversationLedgerPager.NO_CURSOR
         historyExecutor.execute {
@@ -1434,8 +1439,9 @@ ${event.text}
         timelineNewerTranslationMessageIds = emptySet()
         timelineInvalidatedToolTurnMessageIds = emptySet()
         timelineProjectionMarkers = LocalRunStore.TimelineProjectionMarkers()
-        timelineLoading = AgentRunUiState.snapshotForSession(sessionId).events.isEmpty()
+        timelineLoading = true
         timelineOlderLoading = false
+        timelineOlderLoadError = false
         timelineHasOlder = false
         timelineOlderCursor = ConversationLedgerPager.NO_CURSOR
         historyExecutor.execute {
@@ -1482,13 +1488,15 @@ ${event.text}
 
     private fun loadOlderConversationTimeline() {
         val sessionId = timelinePageSessionId ?: return
-        if (!timelineHasOlder || timelineOlderLoading || timelineOlderCursor == ConversationLedgerPager.NO_CURSOR) return
+        if (timelineLoading || !timelineHasOlder || timelineOlderLoading
+            || timelineOlderCursor == ConversationLedgerPager.NO_CURSOR) return
         val cursor = timelineOlderCursor
         val selectedRunId = selectedHistoryRunId
         val newerInvalidations = timelineInvalidatedToolTurnMessageIds
         val newerProjectionMarkers = timelineProjectionMarkers
         val requestSerial = ++timelineOlderRequestSerial
         timelineOlderLoading = true
+        timelineOlderLoadError = false
         historyExecutor.execute {
             val page = runCatching {
                 localRunStore.readConversationTimelinePage(
@@ -1513,7 +1521,7 @@ ${event.text}
                     timelineOlderCursor = page.olderCursor
                     timelineHasOlder = page.hasOlder
                 } else {
-                    toast(getString(R.string.chat_history_load_error), Toast.LENGTH_LONG)
+                    timelineOlderLoadError = true
                 }
                 timelineOlderLoading = false
             }
@@ -2234,9 +2242,13 @@ private fun JarvysApp(
                             events = displayedEvents,
                             isLoadingHistory = timelineLoading && timelinePageSessionId == conversationSessionId
                                 && displayedEvents.isEmpty(),
+                            isRefreshingHistory = timelineLoading && timelinePageSessionId == conversationSessionId,
                             hasOlderHistory = timelineHasOlder && timelinePageSessionId == conversationSessionId,
                             isLoadingOlderHistory = timelineOlderLoading && timelinePageSessionId == conversationSessionId,
+                            olderHistoryLoadError = timelineOlderLoadError
+                                && timelinePageSessionId == conversationSessionId,
                             onLoadOlderHistory = onLoadOlderTimeline,
+                            onRetryOlderHistory = ::loadOlderConversationTimeline,
                             targetMessageId = proactiveTargetMessageId,
                             onProactiveSuggestedReply = onProactiveSuggestedReply,
                             isRunning = agentState.running && selectedHistoryRunId == null && !showingNewChat,
@@ -2525,9 +2537,12 @@ internal fun AgentRunScreen(
     generatedImageSessionId: String = conversationKey,
     events: List<AgentRunUiEvent>,
     isLoadingHistory: Boolean = false,
+    isRefreshingHistory: Boolean = isLoadingHistory,
     hasOlderHistory: Boolean = false,
     isLoadingOlderHistory: Boolean = false,
+    olderHistoryLoadError: Boolean = false,
     onLoadOlderHistory: () -> Unit = {},
+    onRetryOlderHistory: () -> Unit = onLoadOlderHistory,
     targetMessageId: String? = null,
     onProactiveSuggestedReply: (String, Int) -> Unit = { _, _ -> },
     isRunning: Boolean,
@@ -2566,9 +2581,12 @@ internal fun AgentRunScreen(
         generatedImageSessionId = generatedImageSessionId,
         events = events,
         isLoadingHistory = isLoadingHistory,
+        isRefreshingHistory = isRefreshingHistory,
         hasOlderHistory = hasOlderHistory,
         isLoadingOlderHistory = isLoadingOlderHistory,
+        olderHistoryLoadError = olderHistoryLoadError,
         onLoadOlderHistory = onLoadOlderHistory,
+        onRetryOlderHistory = onRetryOlderHistory,
         isRunning = isRunning,
         connectorRegistry = connectorRegistry,
         onOpenPreview = onOpenPreview,

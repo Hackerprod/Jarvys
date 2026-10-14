@@ -53,6 +53,8 @@ internal fun <T> ChatMessageList(
     isUserMessage: (T) -> Boolean,
     hasOlder: Boolean = false,
     isLoadingOlder: Boolean = false,
+    hasOlderLoadError: Boolean = false,
+    isRefreshingHistory: Boolean = false,
     onLoadOlder: () -> Unit = {},
     modifier: Modifier = Modifier,
     composerInset: Dp = LocalChatComposerInset.current,
@@ -108,7 +110,7 @@ internal fun <T> ChatMessageList(
             resolvedTargetKey = targetKey
         }
     }
-    LaunchedEffect(conversationKey, hasOlder, isLoadingOlder) {
+    LaunchedEffect(conversationKey, hasOlder, isLoadingOlder, hasOlderLoadError, isRefreshingHistory) {
         snapshotFlow {
             val layout = listState.layoutInfo
             val oldestVisible = layout.visibleItemsInfo.maxByOrNull { it.index }
@@ -121,14 +123,15 @@ internal fun <T> ChatMessageList(
                     || (remainingSlots == 0 && abs(oldestVisible.offset - layout.viewportStartOffset) <= olderEdgeThresholdPx)
             }
         }.distinctUntilChanged().collect { nearOlderEdge ->
-            if (!nearOlderEdge || !hasOlder || isLoadingOlder) return@collect
+            if (!nearOlderEdge || !hasOlder || isLoadingOlder || hasOlderLoadError || isRefreshingHistory) return@collect
             delay(140)
             val layout = listState.layoutInfo
             val oldestVisible = layout.visibleItemsInfo.maxByOrNull { it.index }
             val remainingSlots = oldestVisible?.let { layout.totalItemsCount - it.index - 1 } ?: Int.MAX_VALUE
             val averageSlotHeight = layout.visibleItemsInfo.map { it.size }.average().toInt().coerceAtLeast(1)
             val stillNear = oldestVisible != null && remainingSlots * averageSlotHeight <= olderEdgeThresholdPx
-            if (stillNear && hasOlder && !isLoadingOlder) currentLoadOlder()
+            if (stillNear && hasOlder && !isLoadingOlder && !hasOlderLoadError && !isRefreshingHistory)
+                currentLoadOlder()
         }
     }
 

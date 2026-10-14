@@ -118,6 +118,63 @@ class AgentRunUiStateTest {
     }
 
     @Test
+    fun sameLegacyIdFromDifferentWindowsIsKeptWhenRowOriginsDiffer() {
+        val session = "legacy-window-origin-${System.nanoTime()}"
+        val recent = AgentRunUiEvent(80_000_001L, "user", text = "recent", messageId = "legacy-collision")
+        val older = AgentRunUiEvent(10L, "user", text = "older", messageId = "legacy-collision")
+        AgentRunUiState.restoreSession(session, listOf(recent))
+
+        AgentRunUiState.prependPersistedSession(session, listOf(older))
+
+        assertEquals(listOf("older", "recent"),
+            AgentRunUiState.snapshotForSession(session).events.map { it.text })
+        AgentRunUiState.resetSession(session)
+    }
+
+    @Test
+    fun refreshKeepsSameProviderCallIdFromDifferentTurns() {
+        val session = "tool-call-id-turn-scope-${System.nanoTime()}"
+        val oldUser = AgentRunUiEvent(10L, "user", text = "old turn", messageId = "old-user")
+        val oldTool = AgentRunUiEvent(20L, "tool", stage = "tool_result", text = "Old Tool",
+            toolCallId = "call_0", toolIdentity = "batch-old/call_0", toolTurnMessageId = "old-user")
+        val newUser = AgentRunUiEvent(80_000_001L, "user", text = "new turn", messageId = "new-user")
+        val newTool = AgentRunUiEvent(80_000_002L, "tool", stage = "tool_result", text = "New Tool",
+            toolCallId = "call_0", toolIdentity = "batch-new/call_0", toolTurnMessageId = "new-user")
+        AgentRunUiState.restoreSession(session, listOf(oldUser, oldTool))
+
+        AgentRunUiState.refreshPersistedSession(session, listOf(newUser, newTool))
+
+        val calls = AgentRunUiState.snapshotForSession(session).events.filter {
+            it.kind == "tool" && it.toolCallId == "call_0"
+        }
+        assertEquals(listOf("Old Tool", "New Tool"), calls.map { it.text })
+        assertEquals(listOf("batch-old/call_0", "batch-new/call_0"), calls.map { it.toolIdentity })
+        AgentRunUiState.resetSession(session)
+    }
+
+    @Test
+    fun deletingAssistantHidesItsTurnToolsAndPriorCompactionsInLoadedWindow() {
+        val session = "assistant-delete-turn-effects-${System.nanoTime()}"
+        val events = listOf(
+            AgentRunUiEvent(1L, "user", text = "first turn", messageId = "first-user"),
+            AgentRunUiEvent(2L, "tool", stage = "tool_result", text = "First Tool", toolCallId = "same",
+                toolIdentity = "batch-first/same", toolTurnMessageId = "first-user"),
+            AgentRunUiEvent(3L, "compaction", text = "old summary"),
+            AgentRunUiEvent(4L, "assistant", text = "deleted answer", messageId = "deleted-answer"),
+            AgentRunUiEvent(5L, "user", text = "second turn", messageId = "second-user"),
+            AgentRunUiEvent(6L, "tool", stage = "tool_result", text = "Second Tool", toolCallId = "same",
+                toolIdentity = "batch-second/same", toolTurnMessageId = "second-user"),
+        )
+        AgentRunUiState.restoreSession(session, events)
+
+        AgentRunUiState.assistantMessageDeleted(session, "deleted-answer", "first-user")
+
+        assertEquals(listOf("first turn", "second turn", "Second Tool"),
+            AgentRunUiState.snapshotForSession(session).events.map { it.text })
+        AgentRunUiState.resetSession(session)
+    }
+
+    @Test
     fun toolResultUsesLatestSharedSessionSnapshotAfterConcurrentSessionWrites() {
         val session = "shared-snapshot-${System.nanoTime()}"
         AgentRunUiState.resetSession(session)

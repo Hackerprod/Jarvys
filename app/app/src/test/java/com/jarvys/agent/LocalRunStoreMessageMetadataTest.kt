@@ -168,6 +168,25 @@ class LocalRunStoreMessageMetadataTest {
         assertFalse(store.readConversationTimeline(session).any { it.kind == "assistant_translation" })
     }
 
+    @Test fun assistantDeletionUsesTheOwnerPersistedOnTheAssistantRow() {
+        val store = LocalRunStore(temporaryFolder.newFolder())
+        val session = "delete-owner-${System.nanoTime()}"
+        val originalUser = store.appendConversationMessage(session, "user", "Original turn")
+        store.appendReflectionToolEvent(session, originalUser, "Original tool", "mcp", "tool_result", "original-tool")
+        val steeringUser = store.appendConversationMessage(session, "user", "Steer next turn")
+        store.appendReflectionToolEvent(session, steeringUser, "Steering tool", "mcp", "tool_result", "steering-tool")
+        val intermediateAnswer = store.appendAssistantMessageBefore(session, "Intermediate answer", "run",
+            originalUser, steeringUser)
+
+        assertEquals(steeringUser, store.findUserMessageBeforeAssistant(session, intermediateAnswer)?.userMessageId)
+        assertEquals(originalUser, store.assistantOwnerUserMessageId(session, intermediateAnswer))
+
+        store.appendAssistantDeleted(session, intermediateAnswer)
+        val visible = store.readConversationTimeline(session)
+        assertFalse(visible.any { it.messageId == intermediateAnswer })
+        assertEquals(listOf("steering-tool"), visible.filter { it.kind == "tool" }.map { it.toolCallId })
+    }
+
     @Test fun translationCanBeHiddenAndLaterReplacedUsingAppendOnlyRecords() {
         val store = LocalRunStore(temporaryFolder.newFolder())
         val session = "translation-hide-${System.nanoTime()}"

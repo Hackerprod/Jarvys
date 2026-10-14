@@ -76,6 +76,54 @@ public class ToolTimelinePersistenceTest {
         assertNotEquals(first, second);
         AgentRunUiState.resetSession("identity-cleanup");
     }
+
+    @Test public void repeatedProviderCallIdInAnotherTurnSurvivesPageRefresh() throws Exception {
+        File files = temporary.newFolder(); String session = "same-call-id-separate-turns";
+        LocalRunStore store = new LocalRunStore(files);
+        String oldUser = store.appendConversationMessage(session, "user", "Old turn");
+        store.appendReflectionToolEvent(session, oldUser, "Old Tool", "mcp", "tool_result", "call_0");
+        List<AgentRunUiEvent> oldPage = store.readConversationTimelinePage(
+                session, ConversationLedgerPager.NO_CURSOR, 1).events;
+        assertEquals(1, oldPage.stream().filter(event -> "tool".equals(event.getKind())).count());
+        AgentRunUiState.resetSession(session);
+        AgentRunUiState.restoreSession(session, oldPage);
+
+        String newUser = store.appendConversationMessage(session, "user", "New turn");
+        store.appendReflectionToolEvent(session, newUser, "New Tool", "mcp", "tool_result", "call_0");
+        List<AgentRunUiEvent> refreshedWindow = store.readConversationTimelinePage(
+                session, ConversationLedgerPager.NO_CURSOR, 1).events;
+        AgentRunUiState.refreshPersistedSession(session, refreshedWindow);
+
+        List<AgentRunUiEvent> tools = AgentRunUiState.INSTANCE.getState().getValue().getEvents().stream()
+                .filter(event -> "tool".equals(event.getKind()) && "call_0".equals(event.getToolCallId()))
+                .collect(java.util.stream.Collectors.toList());
+        assertEquals(2, tools.size());
+        assertEquals(java.util.Arrays.asList(oldUser + "/call_0", newUser + "/call_0"),
+                tools.stream().map(AgentRunUiEvent::getToolIdentity).collect(java.util.stream.Collectors.toList()));
+        AgentRunUiState.resetSession(session);
+    }
+
+    @Test public void repeatedProviderCallIdInDifferentBatchesKeepsBatchScopedIdentity() throws Exception {
+        File files = temporary.newFolder(); String session = "same-call-id-separate-batches";
+        LocalRunStore store = new LocalRunStore(files);
+        String user = store.appendConversationMessage(session, "user", "Run two batches");
+        for (String batchId : java.util.Arrays.asList("batch-old", "batch-new")) {
+            org.json.JSONObject call = new org.json.JSONObject().put("id", "call_0")
+                    .put("name", "search").put("arguments", new org.json.JSONObject());
+            store.appendModelTranscriptRow(session, new org.json.JSONObject()
+                    .put("type", "model_tool_calls").put("batchId", batchId)
+                    .put("userMessageId", user).put("calls", new org.json.JSONArray().put(call)));
+            store.appendReflectionToolEvent(session, user, "Search", "mcp", "tool_result", "call_0");
+        }
+
+        List<AgentRunUiEvent> tools = store.readConversationTimeline(session).stream()
+                .filter(event -> "tool".equals(event.getKind()) && "call_0".equals(event.getToolCallId()))
+                .collect(java.util.stream.Collectors.toList());
+        assertEquals(2, tools.size());
+        assertEquals(java.util.Arrays.asList("batch-old/call_0", "batch-new/call_0"),
+                tools.stream().map(AgentRunUiEvent::getToolIdentity).collect(java.util.stream.Collectors.toList()));
+    }
+
     @Test public void interruptedStartedAndUnlaunchedToolsRestoreHonestCardsWithoutReplay() throws Exception {
         File files = temporary.newFolder(); String session = "interrupted-timeline";
         LocalRunStore store = new LocalRunStore(files);

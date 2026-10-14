@@ -79,7 +79,40 @@ public final class ConversationLedgerPager {
             lineOffsets.add(value.start);
         }
         long olderCursor = hasMore ? pageStart : NO_CURSOR;
-        return new Page(lines, lineOffsets, pageStart, olderCursor, hasMore);
+        return new Page(lines, lineOffsets, pageStart, countMessageRowsBefore(channel, pageStart), olderCursor, hasMore);
+    }
+
+    /** Counts only timeline message rows before a page without constructing JSON objects. */
+    private static int countMessageRowsBefore(FileChannel channel, long endOffset) throws IOException {
+        if (endOffset <= 0L) return 0;
+        ByteBuffer buffer = ByteBuffer.allocate(FORWARD_BLOCK_SIZE);
+        ByteArrayOutputStream currentLine = new ByteArrayOutputStream();
+        long position = 0L;
+        int count = 0;
+        while (position < endOffset) {
+            buffer.clear();
+            buffer.limit((int) Math.min(buffer.capacity(), endOffset - position));
+            int read = channel.read(buffer, position);
+            if (read < 0) break;
+            if (read == 0) continue;
+            position += read;
+            buffer.flip();
+            while (buffer.hasRemaining()) {
+                byte value = buffer.get();
+                if (value == '\n') {
+                    if (isTimelineMessageRow(decodeLine(currentLine.toByteArray()))) count++;
+                    currentLine.reset();
+                } else {
+                    currentLine.write(value);
+                }
+            }
+        }
+        if (currentLine.size() > 0 && isTimelineMessageRow(decodeLine(currentLine.toByteArray()))) count++;
+        return count;
+    }
+
+    private static boolean isTimelineMessageRow(String line) {
+        return new JsonFieldScanner(line).isTimelineMessageRow();
     }
 
     /**
@@ -135,20 +168,24 @@ public final class ConversationLedgerPager {
         public final List<Long> lineOffsets;
         /** Byte offset of the first line in this page, suitable for stable slot identity. */
         public final long startOffset;
+        /** Number of projected user/assistant message rows preceding this page in ledger order. */
+        public final int messageIndexBeforeStart;
         /** Start offset of this page when an older page exists; otherwise {@link #NO_CURSOR}. */
         public final long olderCursor;
         public final boolean hasMore;
 
-        private Page(List<String> lines, List<Long> lineOffsets, long startOffset, long olderCursor, boolean hasMore) {
+        private Page(List<String> lines, List<Long> lineOffsets, long startOffset, int messageIndexBeforeStart,
+                     long olderCursor, boolean hasMore) {
             this.lines = Collections.unmodifiableList(new ArrayList<>(lines));
             this.lineOffsets = Collections.unmodifiableList(new ArrayList<>(lineOffsets));
             this.startOffset = startOffset;
+            this.messageIndexBeforeStart = messageIndexBeforeStart;
             this.olderCursor = olderCursor;
             this.hasMore = hasMore;
         }
 
         private static Page empty() {
-            return new Page(Collections.emptyList(), Collections.emptyList(), 0L, NO_CURSOR, false);
+            return new Page(Collections.emptyList(), Collections.emptyList(), 0L, 0, NO_CURSOR, false);
         }
     }
 
@@ -230,6 +267,9 @@ public final class ConversationLedgerPager {
         private boolean userRole;
         private boolean content;
         private boolean steeringDispatch;
+        private boolean assistantRole;
+        private String rowType = "";
+        private boolean resultOnly;
 
         JsonFieldScanner(String json) {
             this.json = json;
@@ -250,6 +290,16 @@ public final class ConversationLedgerPager {
                     String value = readString();
                     if (value == null) return false;
                     userRole = "user".equals(value);
+                    assistantRole = "assistant".equals(value);
+                } else if ("type".equals(key)) {
+                    if (index < json.length() && json.charAt(index) == '"') {
+                        String value = readString();
+                        if (value == null) return false;
+                        rowType = value;
+                    } else if (!skipValue()) return false;
+                } else if (isResultOnlyField(key)) {
+                    resultOnly = true;
+                    if (!skipValue()) return false;
                 } else if ("content".equals(key)) {
                     content = skipString();
                     if (!content) return false;
@@ -364,7 +414,68 @@ public final class ConversationLedgerPager {
             // A dispatched steering row is the durable representation of the request
             // immediately before it. Treating it as a turn anchor can split the pair
             // across adjacent pages and project the older half as a phantom pending row.
-            return index == json.length() && userRole && content && !steeringDispatch;
+            return index == json.length() && userRole && content && !steeringDispatch && !resultOnly
+                    && !isResultOnlyType(rowType);
+        }
+
+        boolean isTimelineMessageRow() {
+            skipWhitespace();
+            if (!take('{')) return false;
+            while (true) {
+                skipWhitespace();
+                if (take('}')) return finishMessageObject();
+                String key = readString();
+                if (key == null) return false;
+                skipWhitespace();
+                if (!take(':')) return false;
+                skipWhitespace();
+                if ("role".equals(key)) {
+                    String value = readString();
+                    if (value == null) return false;
+                    userRole = "user".equals(value);
+                    assistantRole = "assistant".equals(value);
+                } else if ("type".equals(key)) {
+                    if (index < json.length() && json.charAt(index) == '"') {
+                        String value = readString();
+                        if (value == null) return false;
+                        rowType = value;
+                    } else if (!skipValue()) return false;
+                } else if ("content".equals(key)) {
+                    if (!skipValue()) return false;
+                    content = true;
+                } else if (isResultOnlyField(key)) {
+                    resultOnly = true;
+                    if (!skipValue()) return false;
+                } else if (!skipValue()) {
+                    return false;
+                }
+                skipWhitespace();
+                if (take(',')) continue;
+                if (take('}')) return finishMessageObject();
+                return false;
+            }
+        }
+
+        private boolean finishMessageObject() {
+            skipWhitespace();
+            return index == json.length() && (userRole || assistantRole) && content && !resultOnly
+                    && !isResultOnlyType(rowType);
+        }
+
+        private static boolean isResultOnlyField(String key) {
+            return "crewCoordinationSchemaVersion".equals(key)
+                    || "workspaceCoordinationSchemaVersion".equals(key)
+                    || "workspaceCoordinationReplySchemaVersion".equals(key)
+                    || "replyId".equals(key) || "workspaceInputIncorporationSchemaVersion".equals(key)
+                    || "receiptId".equals(key) || "crewResultSchemaVersion".equals(key)
+                    || "workspaceResultSchemaVersion".equals(key) || "evidenceId".equals(key)
+                    || "referenceId".equals(key);
+        }
+
+        private static boolean isResultOnlyType(String type) {
+            return type.startsWith("crew_coordination_") || type.startsWith("workspace_coordination_")
+                    || type.startsWith("workspace_input_") || type.startsWith("crew_result_")
+                    || type.startsWith("workspace_result_");
         }
 
         private void skipWhitespace() {

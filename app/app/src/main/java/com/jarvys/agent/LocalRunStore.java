@@ -1591,6 +1591,8 @@ public final class LocalRunStore {
                     .put("auditDetail", MainChatTranscriptStore.shortText(
                             CrewCheckpointStore.sanitizeText(auditDetail == null ? "" : auditDetail), 4_000))
                     .put("timestamp", System.currentTimeMillis() / 1000.0);
+            String batchId = latestToolBatchId(sessionId, userMessageId, callId);
+            if (!batchId.isEmpty()) row.put("batchId", batchId);
             if (previewId != null) {
                 row.put("previewExpected", true);
                 if (verifiedPreview(sessionId, previewId) != null) row.put("previewId", previewId);
@@ -1696,8 +1698,38 @@ public final class LocalRunStore {
                         ? "[MCP result omitted as untrusted external data]"
                         : "[tool result omitted; only user-confirmed facts may be reflected]");
             row.put("timestamp", System.currentTimeMillis() / 1000.0);
+            String batchId = latestToolBatchId(sessionId, userMessageId, callId);
+            if (!batchId.isEmpty()) row.put("batchId", batchId);
         } catch (Exception error) { throw new IllegalStateException("Could not create reflection tool marker", error); }
         synchronized (SESSION_TITLE_LOCK) { appendSessionRowLocked(conversationFile(sessionId), row); }
+    }
+
+    /** Resolves provider call IDs against the most recent owning batch for this user turn. */
+    private String latestToolBatchId(String sessionId, String userMessageId, String callId) {
+        if (userMessageId == null || userMessageId.isEmpty() || callId == null || callId.isEmpty()) return "";
+        String latestBatchId = "";
+        for (JSONObject row : readConversationRowsInLedgerOrder(sessionId, false)) {
+            String type = row.optString("type");
+            if ("model_tool_calls".equals(type) && userMessageId.equals(row.optString("userMessageId"))) {
+                JSONArray calls = row.optJSONArray("calls");
+                if (calls == null) continue;
+                for (int index = 0; index < calls.length(); index++) {
+                    JSONObject call = calls.optJSONObject(index);
+                    if (call != null && callId.equals(call.optString("id"))) {
+                        String batchId = row.optString("batchId", "");
+                        if (!batchId.isEmpty()) latestBatchId = batchId;
+                    }
+                }
+            } else if ("tool_activity".equals(type)
+                    && userMessageId.equals(row.optString("userMessageId"))) {
+                JSONObject activity = row.optJSONObject("activity");
+                if (activity != null && callId.equals(activity.optString("callId"))) {
+                    String batchId = row.optString("batchId", "");
+                    if (!batchId.isEmpty()) latestBatchId = batchId;
+                }
+            }
+        }
+        return latestBatchId;
     }
 
     public static final class RegenerationPrompt {
@@ -1727,6 +1759,17 @@ public final class LocalRunStore {
             }
         }
         return null;
+    }
+
+    /** Returns the owner recorded on an assistant row, which is the same owner copied to its tombstone. */
+    public synchronized String assistantOwnerUserMessageId(String sessionId, String messageId) {
+        if (messageId == null || messageId.isEmpty()) return "";
+        for (JSONObject row : readConversationMessages(sessionId)) {
+            if ("assistant".equals(row.optString("role"))
+                    && messageId.equals(row.optString("messageId")))
+                return row.optString("userMessageId", "");
+        }
+        return "";
     }
 
     public synchronized boolean isLatestActiveAssistant(String sessionId, String messageId) {
@@ -2077,10 +2120,14 @@ public final class LocalRunStore {
         JSONArray calls = row.optJSONArray("calls");
         if (!row.optBoolean("assistantProgress", false) || content.isEmpty() || calls == null
                 || calls.length() == 0 || calls.optJSONObject(0) == null) return null;
-        String key = "progress-" + calls.optJSONObject(0).optString("id");
+        String scope = row.optString("batchId", "");
+        if (scope.isEmpty()) scope = row.optString("userMessageId", "");
+        String key = "progress-" + scope + "/" + calls.optJSONObject(0).optString("id");
         return AgentRunUiEvent.messageEvent(id, "assistant", WebSearchCitationMarkup.resolve(content),
                 (long) (row.optDouble("timestamp", 0) * 1000))
-                .copyMetadata(key, 0L).copyStage("PROGRESS");
+                .copyMetadata(key, 0L).copyStage("PROGRESS")
+                .copyToolTimelineIdentity("progress:" + scope + "/" + calls.optJSONObject(0).optString("id"),
+                        row.optString("userMessageId", ""));
     }
 
     public synchronized List<ConversationTurn> loadConversationContext(String sessionId) {
@@ -2201,6 +2248,12 @@ public final class LocalRunStore {
     private List<JSONObject> readConversationRows(String sessionId) { return readConversationRows(sessionId, false); }
 
     private List<JSONObject> readConversationRows(String sessionId, boolean includeResultNotices) {
+        List<JSONObject> rows = readConversationRowsInLedgerOrder(sessionId, includeResultNotices);
+        orderAssistantMessagesBeforeSteering(rows);
+        return rows;
+    }
+
+    private List<JSONObject> readConversationRowsInLedgerOrder(String sessionId, boolean includeResultNotices) {
         File ledger = conversationFile(sessionId);
         List<JSONObject> rows = new ArrayList<>();
         synchronized (SESSION_TITLE_LOCK) {
@@ -2216,8 +2269,21 @@ public final class LocalRunStore {
                 throw new IllegalStateException("Could not read conversation ledger", error);
             }
         }
-        orderAssistantMessagesBeforeSteering(rows);
         return rows;
+    }
+
+    private static List<Integer> timelineMessageIndices(List<JSONObject> rows, int firstMessageIndex) {
+        List<Integer> indices = new ArrayList<>(rows.size());
+        int messageIndex = firstMessageIndex;
+        for (JSONObject row : rows) {
+            String role = row.optString("role");
+            if (("user".equals(role) || "assistant".equals(role)) && row.has("content")) {
+                indices.add(messageIndex++);
+            } else {
+                indices.add(-1);
+            }
+        }
+        return indices;
     }
 
     /** Shared allowlist rule for result-only rows in full and paged conversation projections. */
@@ -2698,7 +2764,16 @@ public final class LocalRunStore {
 
     /** UI timeline preserves every original user/assistant row and inserts read-only compaction notices. */
     public synchronized List<AgentRunUiEvent> readConversationTimeline(String sessionId) {
-        return projectConversationTimeline(sessionId, readConversationRows(sessionId, true), null);
+        List<JSONObject> rows = readConversationRowsInLedgerOrder(sessionId, true);
+        java.util.IdentityHashMap<JSONObject, Integer> messageIndicesByIdentity = new java.util.IdentityHashMap<>();
+        List<Integer> messageIndices = timelineMessageIndices(rows, 0);
+        for (int index = 0; index < rows.size(); index++)
+            messageIndicesByIdentity.put(rows.get(index), messageIndices.get(index));
+        orderAssistantMessagesBeforeSteering(rows);
+        messageIndices.clear();
+        for (JSONObject row : rows) messageIndices.add(messageIndicesByIdentity.getOrDefault(row, -1));
+        return projectConversationTimeline(sessionId, rows, null, Collections.emptySet(),
+                timelineProjectionMarkers(sessionId, rows), new TimelineProjectionMarkers(), 0, messageIndices);
     }
 
     /**
@@ -2729,6 +2804,7 @@ public final class LocalRunStore {
         ConversationLedgerPager.Page rawPage;
         List<JSONObject> rows = new ArrayList<>();
         java.util.IdentityHashMap<JSONObject, Long> rowOffsetsByIdentity = new java.util.IdentityHashMap<>();
+        java.util.IdentityHashMap<JSONObject, Integer> messageIndicesByIdentity = new java.util.IdentityHashMap<>();
         String pageCacheKey;
         synchronized (SESSION_TITLE_LOCK) {
             if (conversationMetadata.read(sessionId).deleted || !ledger.isFile()) {
@@ -2736,9 +2812,6 @@ public final class LocalRunStore {
                         Collections.emptySet(), Collections.emptySet(), Collections.emptySet(), Collections.emptySet(),
                         new TimelineProjectionMarkers());
             }
-            pageCacheKey = timelinePageCacheKey(ledger, beforeOffset, turnCount, newerInvalidations, newerMarkers);
-            ConversationTimelinePage cached = cachedTimelinePage(pageCacheKey);
-            if (cached != null) return cached;
             try {
                 rawPage = beforeOffset == ConversationLedgerPager.NO_CURSOR
                         ? ConversationLedgerPager.readTail(ledger, turnCount)
@@ -2746,6 +2819,10 @@ public final class LocalRunStore {
             } catch (IOException error) {
                 throw new IllegalStateException("Could not read conversation timeline page", error);
             }
+            pageCacheKey = timelinePageCacheKey(ledger, beforeOffset, turnCount,
+                    rawPage.messageIndexBeforeStart, newerInvalidations, newerMarkers);
+            ConversationTimelinePage cached = cachedTimelinePage(pageCacheKey);
+            if (cached != null) return cached;
             for (int lineIndex = 0; lineIndex < rawPage.lines.size(); lineIndex++) try {
                 String line = rawPage.lines.get(lineIndex);
                 JSONObject row = new JSONObject(line);
@@ -2753,14 +2830,21 @@ public final class LocalRunStore {
                 rows.add(row);
                 rowOffsetsByIdentity.put(row, rawPage.lineOffsets.get(lineIndex));
             } catch (Exception ignored) { }
+            List<Integer> pageMessageIndices = timelineMessageIndices(rows, rawPage.messageIndexBeforeStart);
+            for (int index = 0; index < rows.size(); index++)
+                messageIndicesByIdentity.put(rows.get(index), pageMessageIndices.get(index));
         }
         orderAssistantMessagesBeforeSteering(rows);
         List<Long> rowOffsets = new ArrayList<>(rows.size());
-        for (JSONObject row : rows) rowOffsets.add(rowOffsetsByIdentity.getOrDefault(row, 0L));
+        List<Integer> rowMessageIndices = new ArrayList<>(rows.size());
+        for (JSONObject row : rows) {
+            rowOffsets.add(rowOffsetsByIdentity.getOrDefault(row, 0L));
+            rowMessageIndices.add(messageIndicesByIdentity.getOrDefault(row, -1));
+        }
         TimelineProjectionMarkers pageMarkers = timelineProjectionMarkers(sessionId, rows);
         TimelineProjectionMarkers combinedMarkers = newerMarkers.withOlderPage(pageMarkers);
         List<AgentRunUiEvent> events = projectConversationTimeline(sessionId, rows, rowOffsets,
-                newerInvalidations, combinedMarkers, newerMarkers);
+                newerInvalidations, combinedMarkers, newerMarkers, rawPage.messageIndexBeforeStart, rowMessageIndices);
         Set<String> translationMessageIds = new HashSet<>();
         for (AgentRunUiEvent event : events) {
             if ("assistant_translation".equals(event.getKind()) && event.getDetail() != null && !event.getDetail().isEmpty())
@@ -2777,7 +2861,8 @@ public final class LocalRunStore {
                 hiddenAssistantIds(rows), hiddenTranslationIds(rows), translationMessageIds,
                 invalidatedToolTurnMessageIds, combinedMarkers);
         synchronized (SESSION_TITLE_LOCK) {
-            if (pageCacheKey.equals(timelinePageCacheKey(ledger, beforeOffset, turnCount, newerInvalidations, newerMarkers)))
+            if (pageCacheKey.equals(timelinePageCacheKey(ledger, beforeOffset, turnCount,
+                    rawPage.messageIndexBeforeStart, newerInvalidations, newerMarkers)))
                 cacheTimelinePage(pageCacheKey, result);
         }
         return result;
@@ -2789,13 +2874,15 @@ public final class LocalRunStore {
     }
 
     private static String timelinePageCacheKey(File ledger, long beforeOffset, int turnCount,
+                                               int messageIndexBeforeStart,
                                                Set<String> newerInvalidations,
                                                TimelineProjectionMarkers newerMarkers) {
         List<String> sortedInvalidations = new ArrayList<>(newerInvalidations);
         Collections.sort(sortedInvalidations);
         return ledger.getAbsolutePath() + '\u0000' + ledger.length() + '\u0000'
                 + ledger.lastModified() + '\u0000' + beforeOffset + '\u0000' + turnCount
-                + '\u0000' + sortedInvalidations + '\u0000' + newerMarkers.cacheKey();
+                + '\u0000' + messageIndexBeforeStart + '\u0000' + sortedInvalidations
+                + '\u0000' + newerMarkers.cacheKey();
     }
 
     private static TimelineProjectionMarkers timelineProjectionMarkers(String sessionId, List<JSONObject> rows) {
@@ -2879,6 +2966,24 @@ public final class LocalRunStore {
             String sessionId, List<JSONObject> rows, List<Long> rowOffsets,
             Set<String> newerInvalidatedToolTurnMessageIds,
             TimelineProjectionMarkers effectiveMarkers, TimelineProjectionMarkers newerMarkers) {
+        return projectConversationTimeline(sessionId, rows, rowOffsets, newerInvalidatedToolTurnMessageIds,
+                effectiveMarkers, newerMarkers, 0);
+    }
+
+    private List<AgentRunUiEvent> projectConversationTimeline(
+            String sessionId, List<JSONObject> rows, List<Long> rowOffsets,
+            Set<String> newerInvalidatedToolTurnMessageIds,
+            TimelineProjectionMarkers effectiveMarkers, TimelineProjectionMarkers newerMarkers,
+            int firstMessageIndex) {
+        return projectConversationTimeline(sessionId, rows, rowOffsets, newerInvalidatedToolTurnMessageIds,
+                effectiveMarkers, newerMarkers, firstMessageIndex, null);
+    }
+
+    private List<AgentRunUiEvent> projectConversationTimeline(
+            String sessionId, List<JSONObject> rows, List<Long> rowOffsets,
+            Set<String> newerInvalidatedToolTurnMessageIds,
+            TimelineProjectionMarkers effectiveMarkers, TimelineProjectionMarkers newerMarkers,
+            int firstMessageIndex, List<Integer> rowMessageIndices) {
         List<AgentRunUiEvent> events = new ArrayList<>();
         Map<String, ChatAttachment> ownedDeliveredFiles = new LinkedHashMap<>();
         for (JSONObject row : rows) {
@@ -3003,7 +3108,7 @@ public final class LocalRunStore {
         Map<String, String> reactions = MessageReactionTool.isOrdinaryChat(sessionId)
                 ? readMessageReactions(rows) : java.util.Collections.emptyMap();
         if (MessageReactionTool.isOrdinaryChat(sessionId)) reactions.putAll(effectiveMarkers.reactionsByMessageId);
-        int messageIndex = 0;
+        int messageIndex = firstMessageIndex;
         long id = 1L;
         for (int rowIndex = 0; rowIndex < rows.size(); rowIndex++) {
             if (rowOffsets != null) id = Math.max(1L, rowOffsets.get(rowIndex)) * 1_000_000L + 1L;
@@ -3012,9 +3117,11 @@ public final class LocalRunStore {
             String type = row.optString("type");
             String messageId = row.optString("messageId", "");
             if (("user".equals(role) || "assistant".equals(role)) && row.has("content")) {
+                int absoluteMessageIndex = rowMessageIndices == null
+                        ? messageIndex : rowMessageIndices.get(rowIndex);
                 if ("user".equals(role) && MessageReactionTool.isOrdinaryChat(sessionId)
                         && row.optString("proactiveThreadKey").isEmpty())
-                    messageId = MessageReactionTool.stableMessageId(sessionId, row, messageIndex);
+                    messageId = MessageReactionTool.stableMessageId(sessionId, row, absoluteMessageIndex);
                 messageIndex++;
             }
             if ("user".equals(role)) {
@@ -3084,18 +3191,29 @@ public final class LocalRunStore {
                 if(!projected.previewId.isEmpty() && verifiedPreview(sessionId,projected.previewId,ownedDeliveredFiles)==null) {
                     projected=projected.unavailablePreview();
                 }
-                events.add(AgentRunUiEvent.activityEvent(id++,projected));
+                String owner = row.optString("userMessageId", "");
+                String identity = "execution:" + projected.executionId;
+                events.add(AgentRunUiEvent.activityEvent(id++,projected)
+                        .copyToolTimelineIdentity(identity, owner));
             } else if ("model_tool_calls".equals(type)) {
                 String userMessageId = row.optString("userMessageId", "");
                 if (userMessageId.isEmpty() || rowIndex < latestInvalidatedToolTurnRow.getOrDefault(userMessageId, -1)) continue;
                 AgentRunUiEvent progress = assistantProgressEvent(row, id);
-                if (progress != null) { events.add(progress); id++; }
+                if (progress != null) {
+                    String progressScope = row.optString("batchId", "");
+                    if (progressScope.isEmpty()) progressScope = userMessageId;
+                    events.add(progress.copyToolTimelineIdentity(progressScope + "/progress",
+                            row.optString("userMessageId", "")));
+                    id++;
+                }
                 JSONArray calls = row.optJSONArray("calls");
                 if (calls != null) for (int callIndex = 0; callIndex < calls.length(); callIndex++) {
                     JSONObject call = calls.optJSONObject(callIndex);
                     if (call == null) continue;
                     String callId = call.optString("id");
                     String callKey=row.optString("batchId")+"/"+callId;
+                    String scopedCallIdentity = row.optString("batchId", "");
+                    if (scopedCallIdentity.isEmpty()) scopedCallIdentity = userMessageId;
                     if (typedCalls.contains(callKey)) continue;
                     if (modelResults.contains(callKey) || presentations.containsKey(callKey) || reflectionTools.containsKey(callKey)) continue;
                     boolean started = startedModelCalls.contains(callKey);
@@ -3104,7 +3222,8 @@ public final class LocalRunStore {
                             : "This tool intent was recorded but was never launched. It was not automatically replayed.";
                     events.add(AgentRunUiEvent.toolEvent(id++, started ? "tool_interrupted" : "tool_not_started",
                             CoreToolRegistry.humanizeToolName(call.optString("name", "tool")), detail, callId, null,
-                            (long) (row.optDouble("timestamp", 0) * 1000)));
+                            (long) (row.optDouble("timestamp", 0) * 1000))
+                            .copyToolTimelineIdentity(scopedCallIdentity + "/" + callId, userMessageId));
                 }
             } else if ("tool_presentation".equals(type) || "model_tool_result".equals(type) || "reflection_tool".equals(type)) {
                 String callId = row.optString("callId", "");
@@ -3144,7 +3263,8 @@ public final class LocalRunStore {
                 events.add(AgentRunUiEvent.toolEvent(id++, stage, toolName, detail.isEmpty() ? null : detail,
                         callId.isEmpty() ? null : callId, preview,
                         (long) (row.optDouble("timestamp", 0) * 1000))
-                        .copyToolPresentation(presentation ? row.optString("auditDetail", "") : null, legacyPreview && preview != null));
+                        .copyToolPresentation(presentation ? row.optString("auditDetail", "") : null, legacyPreview && preview != null)
+                        .copyToolTimelineIdentity(callKey, userMessageId));
             } else if ("compaction".equals(type)) {
                 if (rowIndex < latestInvalidationRow) continue;
                 int count = row.optInt("summarizedMessages", 0);
