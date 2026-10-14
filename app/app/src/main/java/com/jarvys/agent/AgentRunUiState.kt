@@ -306,6 +306,7 @@ object AgentRunUiState {
 
     private data class WorkingSnapshot(val sessionId: String, var snapshot: AgentRunUiSnapshot)
     private val workingSnapshot = ThreadLocal<WorkingSnapshot?>()
+    private val approvalSessionContext = ThreadLocal<String?>()
     private val sessionSnapshots = mutableMapOf<String, AgentRunUiSnapshot>()
     private val sessionOwners = mutableMapOf<String, RunOwnership>()
     private val sessionProgress = mutableMapOf<String, MutableList<AgentRunUiEvent>>()
@@ -411,21 +412,16 @@ object AgentRunUiState {
         .map { it.key }
         .singleOrNull()
 
-    /**
-     * Legacy presenters have no run token. Prefer an explicit in-session operation, then an
-     * unambiguous active owner. With multiple owners, the visible chat is usable only when it is
-     * itself one of those owners.
-     */
+    /** Legacy approvals use the sole active owner, or the visible owner when several runs exist. */
     private fun legacyApprovalSessionLocked(): String? {
-        workingSnapshot.get()?.sessionId?.let { return it }
         val activeOwners = sessionOwners.entries
             .filter { (sessionId, ownership) -> ownership.active && ownership.sessionId == sessionId }
             .map { it.key }
-        val currentSessionId = _state.value.sessionId
+        val visible = visibleSessionId
         return when (activeOwners.size) {
-            0 -> currentSessionId
+            0 -> workingSnapshot.get()?.sessionId ?: visible
             1 -> activeOwners.single()
-            else -> currentSessionId?.takeIf { it in activeOwners }
+            else -> visible?.takeIf { it in activeOwners }
         }
     }
 
@@ -433,13 +429,20 @@ object AgentRunUiState {
         return workingSnapshot.get()?.sessionId
     }
 
-    private fun withApprovalSession(generation: Long? = null, action: () -> Unit) {
+    private fun withApprovalSession(generation: Long? = null, action: (String) -> Unit) {
         val sessionId = synchronized(lock) {
-            if (generation == null) legacyApprovalSessionLocked()
+            if (generation == null) (approvalSessionContext.get() ?: legacyApprovalSessionLocked())
             else sessionForGenerationLocked(generation) ?: fallbackForUnknownGenerationLocked()
         } ?: return
-        if (workingSnapshot.get()?.sessionId == sessionId) action()
-        else inSession(sessionId, action)
+        val previousContext = approvalSessionContext.get()
+        approvalSessionContext.set(sessionId)
+        try {
+            if (workingSnapshot.get()?.sessionId == sessionId) action(sessionId)
+            else inSession(sessionId) { action(sessionId) }
+        } finally {
+            if (previousContext == null) approvalSessionContext.remove()
+            else approvalSessionContext.set(previousContext)
+        }
     }
 
     private fun sessionForMessage(messageId: String): String? = synchronized(lock) {
@@ -1323,10 +1326,17 @@ object AgentRunUiState {
         compactSummary: com.jarvys.agent.connectors.ConnectorUiText? = null,
         requester: String? = null,
         requesterColorKey: String? = null,
-    ) = withApprovalSession {
+    ) = withApprovalSession { sessionId ->
         synchronized(lock) {
-            val current = if (ownedRunActive && _state.value.sessionId != ownedSessionId)
-                ownedLiveSnapshot ?: return@synchronized else _state.value
+            val ownership = sessionOwners[sessionId]
+            val current = if (ownership?.active == true && ownership.sessionId == sessionId) {
+                _state.value.takeIf { it.sessionId == sessionId }
+                    ?: sessionSnapshots[sessionId]
+                    ?: ownership.liveSnapshot
+                    ?: return@synchronized
+            } else {
+                _state.value.takeIf { it.sessionId == sessionId } ?: return@synchronized
+            }
             if (!current.running || current.events.any { it.approvalId == id }) return@synchronized
             val events = current.events.toMutableList()
             val pendingToolIndex = events.indexOfLast { it.kind == "tool" && it.stage == "tool_call" }
@@ -1352,10 +1362,14 @@ object AgentRunUiState {
                 approvalRequester = requester,
                 approvalRequesterColorKey = requesterColorKey,
             )
-            publishOwnedSnapshot(current.copy(events = append(events, card),
+            val updated = current.copy(events = append(events, card),
                 liveMascotTool = current.liveMascotTool?.copy(eligibleToAnimate = false),
                 liveModelWaitId = null,
-                liveUserWaitId = if (ownedRunActive && ownedSessionId == current.sessionId) "approval:$id" else null))
+                liveUserWaitId = if (ownership?.active == true && ownership.sessionId == sessionId) "approval:$id" else null)
+            if (workingSnapshot.get()?.sessionId == sessionId) _state.value = updated
+            else sessionSnapshots[sessionId] = updated
+            if (ownership?.active == true && ownership.sessionId == sessionId) ownership.liveSnapshot = updated
+            if (visibleSessionId == sessionId) publishedState.value = updated
         }
     }
 

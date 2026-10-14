@@ -17,7 +17,6 @@ import org.robolectric.annotation.Resetter
 import org.robolectric.shadows.ShadowSystemClock
 import java.time.Duration
 import java.util.concurrent.CountDownLatch
-import java.util.concurrent.ExecutorService
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
@@ -137,7 +136,7 @@ class ContinuousMissionServiceTest {
             assertEquals(CrewManager.Status.RUNNING, botRef.get().status())
             assertTrue(AgentRunUiState.state.value.running)
             if (stop) AgentForegroundService.stopRun(session) else release.countDown()
-            worker(service).submit {}.get(10, TimeUnit.SECONDS)
+            service.awaitSessionIdleForTesting(session).get(10, TimeUnit.SECONDS)
             botRef.get().awaitTermination()
             assertFalse(AgentRunUiState.state.value.running)
             assertEquals(if (stop) CrewManager.Status.STOPPED else CrewManager.Status.DONE, botRef.get().status())
@@ -149,8 +148,4 @@ class ContinuousMissionServiceTest {
             AgentForegroundService.stopRun(session); release.countDown(); crew.close(); controller.destroy()
         }
     }
-
-    private fun worker(service: AgentForegroundService): ExecutorService =
-        AgentForegroundService::class.java.getDeclaredField("worker").apply { isAccessible = true }
-            .get(service) as ExecutorService
 }

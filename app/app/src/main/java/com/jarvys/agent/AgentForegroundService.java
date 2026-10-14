@@ -101,6 +101,7 @@ public final class AgentForegroundService extends Service {
   }
   private static final class SessionLane {
     final ArrayDeque<SessionRequest> queued = new ArrayDeque<>();
+    final List<java.util.concurrent.CompletableFuture<Void>> idleWaiters = new ArrayList<>();
     boolean draining;
     ActiveRun active;
   }
@@ -135,22 +136,42 @@ public final class AgentForegroundService extends Service {
       try {
         worker.execute(() -> drainSession(sessionId, lane));
       } catch (RuntimeException rejected) {
+        final List<java.util.concurrent.CompletableFuture<Void>> idleWaiters;
         synchronized (sessionLaneLock) {
           synchronized (lane) {
             lane.draining = false;
             lane.queued.clear();
+            idleWaiters = new ArrayList<>(lane.idleWaiters);
+            lane.idleWaiters.clear();
           }
           sessionLanes.remove(sessionId, lane);
         }
+        idleWaiters.forEach(waiter -> waiter.complete(null));
         failPendingInputRecovery(sessionId);
       }
     }
     refreshForegroundNotification();
   }
 
+  /** A test synchronization seam for the physical per-session drain, including run finalization. */
+  Future<?> awaitSessionIdleForTesting(String sessionId) {
+    synchronized (sessionLaneLock) {
+      SessionLane lane = sessionLanes.get(sessionId);
+      if (lane == null) return java.util.concurrent.CompletableFuture.completedFuture(null);
+      synchronized (lane) {
+        if (!lane.draining && lane.active == null && lane.queued.isEmpty())
+          return java.util.concurrent.CompletableFuture.completedFuture(null);
+        java.util.concurrent.CompletableFuture<Void> idle = new java.util.concurrent.CompletableFuture<>();
+        lane.idleWaiters.add(idle);
+        return idle;
+      }
+    }
+  }
+
   private void drainSession(String sessionId, SessionLane lane) {
     while (!worker.isShutdown()) {
       final SessionRequest request;
+      final List<java.util.concurrent.CompletableFuture<Void>> idleWaiters;
       synchronized (sessionLaneLock) {
         synchronized (lane) {
           request = lane.queued.pollFirst();
@@ -158,9 +179,16 @@ public final class AgentForegroundService extends Service {
             lane.active = null;
             lane.draining = false;
             sessionLanes.remove(sessionId, lane);
-            break;
+            idleWaiters = new ArrayList<>(lane.idleWaiters);
+            lane.idleWaiters.clear();
+          } else {
+            idleWaiters = java.util.Collections.emptyList();
           }
         }
+      }
+      if (request == null) {
+        idleWaiters.forEach(waiter -> waiter.complete(null));
+        break;
       }
 
       StopController controller = StopController.forRun();
