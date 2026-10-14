@@ -760,7 +760,23 @@ class MainAgentInteractionTest {
     private var managedStartId = 0
 
     /** Robolectric only records startForegroundService; create the real service once and deliver the recorded starts to it. */
+    private var priorSecretStore: Any? = null
+
+    /** The real run builds repositories that need Android encrypted storage, which Robolectric lacks: use the package-local in-memory seam. */
+    private fun installInMemorySecretStore(context: Context) {
+        val field = SecretStore::class.java.getDeclaredField("singleton").apply { isAccessible = true }
+        priorSecretStore = field.get(null)
+        field.set(null, SecretStore(context.getSharedPreferences("steering-fixture-secrets", Context.MODE_PRIVATE)))
+    }
+
+    private fun restoreSecretStore() {
+        val field = SecretStore::class.java.getDeclaredField("singleton").apply { isAccessible = true }
+        field.set(null, priorSecretStore)
+        priorSecretStore = null
+    }
+
     private fun startManagedService(context: Context): AgentForegroundService {
+        installInMemorySecretStore(context)
         val controller = org.robolectric.Robolectric.buildService(AgentForegroundService::class.java).create()
         managedController = controller
         managedStartId = 0
@@ -799,6 +815,7 @@ class MainAgentInteractionTest {
     private fun stopManagedService(context: Context) {
         context.stopService(android.content.Intent(context, AgentForegroundService::class.java))
         org.robolectric.shadows.ShadowLooper.idleMainLooper()
+        restoreSecretStore()
     }
 
     private fun withHeldWorker(block: (AgentForegroundService, Context, String, CountDownLatch) -> Unit) {
