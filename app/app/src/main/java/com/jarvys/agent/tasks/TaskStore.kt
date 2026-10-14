@@ -43,7 +43,8 @@ class TaskStore(private val ledger: File) {
         ScheduledTaskValidation.validate(task)
         val current = readLatestLocked()
         val equivalent = current.rows.values.asSequence().filterNot(Snapshot::deleted).map(Snapshot::task)
-            .firstOrNull { it.name == task.name && it.instruction == task.instruction && sameTaskSchedule(it.schedule, task.schedule) }
+            .firstOrNull { it.name == task.name && it.instruction == task.instruction &&
+                it.deleteAfterRun == task.deleteAfterRun && sameTaskSchedule(it.schedule, task.schedule) }
         if (equivalent != null) return@withLock TaskCreateResult(equivalent, false)
         if (current.rows.containsKey(task.id)) throw StaleTaskRevisionException("Task ${task.id} already exists")
         val initial = task.copy(revision = 1L)
@@ -131,6 +132,8 @@ class TaskStore(private val ledger: File) {
         .put("delivery", task.delivery.name)
         .put("createdBy", task.createdBy)
         .put("creatorToolNames", JSONArray(task.creatorToolNames))
+        .putNullableString("openIncidentCause", task.openIncidentCause?.code)
+        .putNullableLong("lastIncidentRecoveredAt", task.lastIncidentRecoveredAt)
         .put("createdAt", task.createdAt)
         .put("updatedAt", task.updatedAt)
         .put("revision", task.revision)
@@ -203,11 +206,33 @@ class TaskStore(private val ledger: File) {
             delivery = TaskDelivery.valueOf(row.optString("delivery", "ALWAYS")),
             createdBy = row.optString("createdBy", "USER_UI"),
             creatorToolNames = row.optJSONArray("creatorToolNames").toStringList(),
+            openIncidentCause = TaskRunCause.fromCode(row.optNullableString("openIncidentCause"))
+                ?: (state as? TaskState.NeedsAttention)?.reason?.let(TaskRunCause::fromCode),
+            lastIncidentRecoveredAt = row.optNullableLong("lastIncidentRecoveredAt"),
             createdAt = row.getLong("createdAt"), updatedAt = row.getLong("updatedAt"),
             revision = row.optLong("revision", 1L),
         )
         ScheduledTaskValidation.validate(task)
         return Snapshot(task, row.optBoolean("deleted", false))
+    }
+
+    /** Updates incident metadata without changing the task revision: it does not alter the reviewed schedule or scope. */
+    fun openIncident(id: String, expectedRevision: Long, cause: TaskRunCause): Boolean = withLock {
+        val current = readLatestLocked().rows[id] ?: return@withLock false
+        if (current.deleted || current.task.revision != expectedRevision) return@withLock false
+        if (current.task.openIncidentCause == cause) return@withLock false
+        appendLocked(encode(current.task.copy(openIncidentCause = cause), deleted = false))
+        true
+    }
+
+    /** Clears an open incident once and records the recovery time in the same durable snapshot. */
+    fun closeIncident(id: String, expectedRevision: Long, recoveredAt: Long): Boolean = withLock {
+        val current = readLatestLocked().rows[id] ?: return@withLock false
+        if (current.deleted || current.task.revision != expectedRevision || current.task.openIncidentCause == null)
+            return@withLock false
+        appendLocked(encode(current.task.copy(openIncidentCause = null,
+            lastIncidentRecoveredAt = recoveredAt), deleted = false))
+        true
     }
 
     private fun decodeZone(value: String): TaskZone =

@@ -26,6 +26,11 @@ class TaskManagementTools @JvmOverloads constructor(
     private val clock: Clock = Clock.systemUTC(),
     private val zoneProvider: TaskZoneProvider = TaskZoneProvider { ZoneId.systemDefault() },
     private val connectorRegistry: ConnectorRegistry = ConnectorRegistry.get(context.applicationContext),
+    private val manualRunEnqueue: (Context, String, String, ScheduledTask?) -> Unit =
+        { app, taskId, occurrenceId, expectedTask ->
+            TaskManualRunScheduler.enqueue(app, taskId, occurrenceId, expectedTask)
+        },
+    private val manualRunIsActive: (Context, String) -> Boolean = TaskManualRunScheduler::isActive,
 ) {
     private val app = context.applicationContext
     private val creatorMessageId: String = runCatching {
@@ -64,11 +69,16 @@ class TaskManagementTools @JvmOverloads constructor(
                 "task_id" to stringProperty(),
                 "limit" to mapOf("type" to "integer", "minimum" to 1),
             ), listOf("task_id")), listOf("task_id"), ::taskRuns),
+        ManagementTool(RUN_TASK, "Enqueue a manual run for task_id at its current revision; returns run_id for task_runs lookup.",
+            objectSchema(linkedMapOf(
+                "task_id" to stringProperty(),
+                "revision" to mapOf("type" to "integer", "minimum" to 1),
+            ), listOf("task_id", "revision")), listOf("task_id", "revision"), ::runTask),
     )
 
     private fun scheduleTask(arguments: Map<String, Any>, token: CancellationToken): CoreToolResult {
         token.throwIfCancelled()
-        rejectUnknown(arguments, setOf("name", "instruction", "schedule", "delivery", "web", "valid_until"))
+        rejectUnknown(arguments, setOf("name", "instruction", "schedule", "delivery", "web", "valid_until", "delete_after_run"))
         val name = text(arguments, "name")
         val instruction = text(arguments, "instruction", trim = false)
         val scheduleInput = objectValue(arguments["schedule"], "schedule")
@@ -82,8 +92,10 @@ class TaskManagementTools @JvmOverloads constructor(
         }
         val taskTools = allowedCreatorTools.filter { wantsWeb || it !in WEB_TOOL_NAMES }
         val validUntil = parseValidUntil(arguments["valid_until"], zone)
+        val deleteAfterRun = boolean(arguments, "delete_after_run", false)
         val candidate = ScheduledTask(name = name.trim(), instruction = instruction.trim(), schedule = schedule,
             timePrecision = TaskTimePrecision.APPROXIMATE, validUntil = validUntil,
+            deleteAfterRun = deleteAfterRun,
             toolScope = TaskToolScope("LISTED", taskTools, wantsWeb, "DEFER"), delivery = delivery,
             createdBy = createdBy(), creatorToolNames = creatorToolNames.distinct(),
             createdAt = clock.millis())
@@ -96,7 +108,8 @@ class TaskManagementTools @JvmOverloads constructor(
             require(validUntil == null || at < validUntil) { app.getString(R.string.task_management_valid_until_before_run) }
         }
         val duplicate = repository.list().firstOrNull {
-            it.name == candidate.name && it.instruction == candidate.instruction && sameSchedule(it.schedule, candidate.schedule)
+            it.name == candidate.name && it.instruction == candidate.instruction &&
+                it.deleteAfterRun == candidate.deleteAfterRun && sameSchedule(it.schedule, candidate.schedule)
         }
         if (duplicate != null) {
             token.throwIfCancelled()
@@ -119,6 +132,7 @@ class TaskManagementTools @JvmOverloads constructor(
                         .put("state", stateName(task.state))
                         .put("schedule_human", scheduleHuman(task.schedule))
                         .put("next_run_local", next ?: JSONObject.NULL)
+                        .put("revision", task.revision)
                         .put("last_status", task.lastRun?.status ?: JSONObject.NULL)
                 }.toList()
             val result = JSONObject().put("tasks", JSONArray(rows))
@@ -159,7 +173,27 @@ class TaskManagementTools @JvmOverloads constructor(
         val hasHistory = ledger.forTask(id).isNotEmpty() || task.lastRun != null
         repository.delete(id, task.revision, beforeWrite = { token.throwIfCancelled() }, expectedTask = task)
         return success(JSONObject().put("status", "cancelled").put("task_id", id)
-            .put("history", if (hasHistory) "kept" else "none"))
+            .put("history", if (hasHistory) "kept" else "none")
+            .put("task", taskCard(task, "cancelled", null)))
+    }
+
+    private fun runTask(arguments: Map<String, Any>, token: CancellationToken): CoreToolResult {
+        token.throwIfCancelled()
+        rejectUnknown(arguments, setOf("task_id", "revision"))
+        val id = text(arguments, "task_id")
+        val expectedRevision = integer(arguments["revision"], "revision")
+        val task = repository.get(id) ?: throw IllegalArgumentException("Task $id was not found")
+        if (expectedRevision != task.revision) throw StaleTaskRevisionException(
+            "Task $id revision changed: expected $expectedRevision, found ${task.revision}")
+        if (manualRunIsActive(app, id)) throw IllegalStateException("Task $id already has a manual run in progress")
+        val runId = java.util.UUID.randomUUID().toString()
+        val occurrenceId = "manual:$id:$runId"
+        token.throwIfCancelled()
+        manualRunEnqueue(app, id, occurrenceId, task)
+        ledger.appendIfAbsent(TaskRunRecord(task.id, runId, clock.millis(), clock.millis(),
+            status = "QUEUED", deliveryStatus = "NOT_APPLICABLE", manualOccurrenceId = occurrenceId))
+        return success(JSONObject().put("status", "queued").put("task_id", id)
+            .put("run_id", runId).put("occurrence_id", occurrenceId).put("revision", task.revision))
     }
 
     private fun taskRuns(arguments: Map<String, Any>, token: CancellationToken): CoreToolResult {
@@ -181,6 +215,9 @@ class TaskManagementTools @JvmOverloads constructor(
                 .put("finished_at", run.finishedAt?.let { schedulePresentation.localTime(it, zone) } ?: JSONObject.NULL)
                 .put("status", run.status).put("delivery_status", run.deliveryStatus)
                 .put("reason", run.reason ?: JSONObject.NULL).put("notified", run.notified)
+                .put("delivered_result", run.deliveredResult ?: JSONObject.NULL)
+                .put("conversation_message_id", run.conversationMessageId ?: JSONObject.NULL)
+                .put("cause_code", run.causeCode?.code ?: JSONObject.NULL)
                 .put("model", run.model ?: JSONObject.NULL).put("usage_tokens", run.usageTokens ?: JSONObject.NULL)
                 .put("tools_called", JSONArray(run.toolsCalled.map { call -> JSONObject()
                     .put("name", call.name).put("write", call.write).put("outcome", call.outcome) }))
@@ -190,7 +227,7 @@ class TaskManagementTools @JvmOverloads constructor(
     }
 
     private fun applyPatch(task: ScheduledTask, patch: Map<String, Any>): ScheduledTask {
-        val allowed = setOf("revision", "name", "instruction", "schedule", "delivery", "web", "tools", "valid_until", "state")
+        val allowed = setOf("revision", "name", "instruction", "schedule", "delivery", "web", "tools", "valid_until", "state", "delete_after_run")
         val unknown = patch.keys - allowed
         require(unknown.isEmpty()) { "Unexpected patch field(s): ${unknown.sorted().joinToString()}" }
         var schedule = task.schedule
@@ -223,6 +260,7 @@ class TaskManagementTools @JvmOverloads constructor(
             name = if (patch.containsKey("name")) text(patch, "name").trim() else task.name,
             instruction = if (patch.containsKey("instruction")) text(patch, "instruction", false).trim() else task.instruction,
             schedule = schedule, validUntil = validUntil,
+            deleteAfterRun = boolean(patch, "delete_after_run", task.deleteAfterRun),
             toolScope = task.toolScope.copy(tools = tools, web = web), delivery = delivery, state = state,
         )
     }
@@ -302,8 +340,15 @@ class TaskManagementTools @JvmOverloads constructor(
         val next = task.nextRunAt?.let { schedulePresentation.localTime(it, taskZone(task)) }
         return JSONObject().put("status", status).put("task_id", task.id)
             .put("next_run_local", next ?: JSONObject.NULL).put("zone", taskZone(task).id)
-            .put("revision", task.revision)
+            .put("revision", task.revision).put("task", taskCard(task, status, next))
     }
+
+    private fun taskCard(task: ScheduledTask, status: String, next: String?): JSONObject = JSONObject()
+        .put("kind", "scheduled_task").put("id", task.id).put("name", task.name)
+        .put("schedule_human", scheduleHuman(task.schedule))
+        .put("next_run_local", next ?: JSONObject.NULL)
+        .put("state", stateName(task.state)).put("status", status)
+        .put("revision", task.revision)
 
     private fun zoneForTask(taskId: String): ZoneId = repository.get(taskId)?.let(::taskZone) ?: zoneProvider.deviceZone()
     private fun taskZone(task: ScheduledTask): ZoneId = schedulePresentation.zoneFor(task.schedule)
@@ -395,7 +440,7 @@ class TaskManagementTools @JvmOverloads constructor(
         return objectSchema(linkedMapOf(
             "name" to stringProperty(), "instruction" to stringProperty(), "schedule" to schedule,
             "delivery" to mapOf("type" to "string", "enum" to listOf("always", "only_if_notable")),
-            "web" to booleanProperty(), "valid_until" to stringProperty(),
+            "web" to booleanProperty(), "valid_until" to stringProperty(), "delete_after_run" to booleanProperty(),
         ), listOf("name", "instruction", "schedule"))
     }
 
@@ -410,6 +455,7 @@ class TaskManagementTools @JvmOverloads constructor(
             "delivery" to mapOf("type" to "string", "enum" to listOf("always", "only_if_notable")),
             "web" to booleanProperty(), "tools" to mapOf("type" to "array", "items" to stringProperty()),
             "valid_until" to stringProperty(),
+            "delete_after_run" to booleanProperty(),
             "state" to mapOf("type" to "string", "enum" to listOf("active", "paused")),
         ), listOf("revision")),
     ), listOf("task_id", "patch"))
@@ -427,7 +473,8 @@ class TaskManagementTools @JvmOverloads constructor(
         const val UPDATE_TASK = "update_task"
         const val CANCEL_TASK = "cancel_task"
         const val TASK_RUNS = "task_runs"
-        @JvmField val TOOL_NAMES = setOf(SCHEDULE_TASK, LIST_TASKS, UPDATE_TASK, CANCEL_TASK, TASK_RUNS)
+        const val RUN_TASK = "run_task"
+        @JvmField val TOOL_NAMES = setOf(SCHEDULE_TASK, LIST_TASKS, UPDATE_TASK, CANCEL_TASK, TASK_RUNS, RUN_TASK)
         private val WEB_TOOL_NAMES = setOf(com.jarvys.agent.WebSearchTools.SEARCH, com.jarvys.agent.WebSearchTools.FETCH)
 
         @JvmStatic fun create(context: Context, sessionId: String, creatorToolNames: List<String>): List<CoreTool> =

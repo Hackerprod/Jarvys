@@ -124,7 +124,10 @@ class TaskManualRunWorkerTest {
                 assertTrue(change, result is ListenableWorker.Result.Failure)
                 assertEquals(0, loop.calls)
                 assertEquals(0, notifications.results)
-                assertTrue(ledger.forTask(saved.id).isEmpty())
+                val rejected = ledger.forTask(saved.id).single()
+                assertEquals("REJECTED", rejected.status)
+                assertEquals(if (change == "incomplete") TaskRunCause.EXECUTION_FAILED else TaskRunCause.TASK_CHANGED,
+                    rejected.causeCode)
             }
         }
     }

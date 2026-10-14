@@ -160,4 +160,18 @@ class ConversationVisibilityTest {
 
         assertEquals(listOf(card), ConversationVisibility.project(listOf(result, card)))
     }
+
+    @Test fun successfulScheduledTaskResultProjectsAsTaskCardAndErrorRemainsToolRow() {
+        val result = AgentRunUiEvent.toolEvent(1L, "tool_result", "Task management",
+            "Task management · " + """{"status":"scheduled","task":{"kind":"scheduled_task","id":"task-1","name":"Morning brief","schedule_human":"Every morning","next_run_local":"8:00 AM","status":"scheduled"}}""",
+            "task-call", null, 1L)
+        val error = AgentRunUiEvent.toolEvent(2L, "tool_error", "Task management", "task was rejected",
+            "task-error", null, 1L)
+
+        val projectedResult = ConversationVisibility.project(listOf(result))
+        assertEquals(1, projectedResult.size)
+        assertEquals("scheduled_task", projectedResult.single().kind)
+        assertEquals("task-1", projectedResult.single().scheduledTaskArtifact?.taskId)
+        assertEquals(listOf(error), ConversationVisibility.project(listOf(error)))
+    }
 }

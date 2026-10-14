@@ -81,6 +81,8 @@ class TaskTickEngineTest {
         assertTrue(first.retryWork)
         assertTrue(ledger.read().runs.isEmpty())
         assertEquals("RETRYABLE", store.get(task.id)?.lastRun?.status)
+        assertEquals(TaskState.Active, store.get(task.id)?.state)
+        assertNull(store.get(task.id)?.openIncidentCause)
         assertEquals(anchor, store.get(task.id)?.nextRunAt)
 
         val second = TaskTickEngine(store, ledger, calculator(now), executor, clock).tick()
@@ -89,6 +91,22 @@ class TaskTickEngineTest {
         assertEquals(1, ledger.read().runs.size)
         assertEquals(anchor, ledger.read().runs.single().scheduledFor)
         assertEquals(anchor + interval, store.get(task.id)?.nextRunAt)
+    }
+
+    @Test fun permanentFailureOpensCauseIncidentAndNeedsAttention() {
+        val root = Files.createTempDirectory("task-permanent-failure").toFile()
+        val store = TaskStore(File(root, "tasks.jsonl"))
+        val ledger = TaskRunLedger(File(root, "runs.jsonl"))
+        val now = 200_000L
+        val task = store.create(task("permanent", TaskSchedule.Every(900_000L, now - 1L), nextRunAt = now - 1L))
+        val executor = TaskExecutor { _, _, _, _, _ -> TaskExecutionResult("ERROR", "CHAT_ONLY",
+            causeCode = TaskRunCause.TOOL_SCOPE_UNAVAILABLE) }
+
+        TaskTickEngine(store, ledger, calculator(now), executor, fixedClock(now)).tick()
+
+        val failed = requireNotNull(store.get(task.id))
+        assertEquals(TaskRunCause.TOOL_SCOPE_UNAVAILABLE, failed.openIncidentCause)
+        assertEquals(TaskState.NeedsAttention(TaskRunCause.TOOL_SCOPE_UNAVAILABLE.code), failed.state)
     }
 
     @Test fun stoppedTickRecordsInterruptionRearmsAndLeavesOccurrenceUnclaimedForSafeRetry() {
@@ -136,6 +154,28 @@ class TaskTickEngineTest {
         assertEquals(TaskState.Done, expired.state)
         assertNull(expired.lastRun)
         assertEquals(1, executor.occurrences().size)
+    }
+
+    @Test fun successfulDeleteAfterRunOneShotRemovesTaskAndRetainsDeliveredRunHistory() {
+        val root = Files.createTempDirectory("task-delete-after-run").toFile()
+        val store = TaskStore(File(root, "tasks.jsonl"))
+        val ledger = TaskRunLedger(File(root, "runs.jsonl"))
+        val at = 100_000L
+        val oneShot = store.create(task("delete after success",
+            TaskSchedule.At("1970-01-01T00:01:40", TaskZone.Iana("UTC")), nextRunAt = at)
+            .copy(deleteAfterRun = true))
+        val executor = TaskExecutor { _, _, _, _, _ ->
+            TaskExecutionResult("OK", "DELIVERED", deliveredResult = "The final model response.",
+                conversationMessageId = "stable-message")
+        }
+
+        TaskTickEngine(store, ledger, calculator(at), executor, fixedClock(at)).tick()
+
+        assertNull(store.get(oneShot.id))
+        val run = ledger.forTask(oneShot.id).single()
+        assertEquals("OK", run.status)
+        assertEquals("The final model response.", run.deliveredResult)
+        assertEquals("stable-message", run.conversationMessageId)
     }
 
     @Test fun allOverdueTasksRunSeriallyInScheduledOrderAndRemainingWorkIsRearmed() {

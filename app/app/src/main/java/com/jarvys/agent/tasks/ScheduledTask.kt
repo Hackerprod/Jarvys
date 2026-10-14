@@ -75,6 +75,10 @@ data class ScheduledTask(
     val delivery: TaskDelivery = TaskDelivery.ALWAYS,
     val createdBy: String = "USER_UI",
     val creatorToolNames: List<String> = emptyList(),
+    /** The most recent permanent failure cause, cleared after a successful run. */
+    val openIncidentCause: TaskRunCause? = null,
+    /** Persisted recovery marker for task health and detail history. */
+    val lastIncidentRecoveredAt: Long? = null,
     val createdAt: Long,
     val updatedAt: Long = createdAt,
     val revision: Long = 1L,

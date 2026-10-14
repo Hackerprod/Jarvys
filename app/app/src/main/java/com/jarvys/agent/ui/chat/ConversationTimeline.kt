@@ -144,6 +144,7 @@ fun ConversationTimeline(
     isReflecting: Boolean = false,
     reflectionStatus: String? = null,
     onOpenCrewMission: (String) -> Unit = {},
+    onOpenScheduledTask: (com.jarvys.agent.ScheduledTaskArtifact) -> Unit = {},
     onSaveGeneratedImage: (AgentRunUiEvent) -> Unit = {},
     onShareGeneratedImage: (AgentRunUiEvent) -> Unit = {},
     runSnapshot: AgentRunUiSnapshot? = null,
@@ -206,6 +207,7 @@ fun ConversationTimeline(
                             streamActive = isRunning,
                             isGeneratingAnswer = assistantReplyIsGenerating(event, isRunning, latestUserEventId),
                             onOpenCrewMission = onOpenCrewMission,
+                            onOpenScheduledTask = onOpenScheduledTask,
                             onSaveGeneratedImage = onSaveGeneratedImage,
                             onShareGeneratedImage = onShareGeneratedImage,
                             onProactiveSuggestedReply = onProactiveSuggestedReply,
@@ -290,6 +292,7 @@ private fun JarvysConversationEvent(
     isLastAssistant: Boolean = false,
     streamActive: Boolean = false,
     onOpenCrewMission: (String) -> Unit = {},
+    onOpenScheduledTask: (com.jarvys.agent.ScheduledTaskArtifact) -> Unit = {},
     onSaveGeneratedImage: (AgentRunUiEvent) -> Unit = {},
     onShareGeneratedImage: (AgentRunUiEvent) -> Unit = {},
     onProactiveSuggestedReply: (String, Int) -> Unit = { _, _ -> },
@@ -313,6 +316,11 @@ private fun JarvysConversationEvent(
         "user_decision" -> TimelineArrival(animateEntry) { UserDecisionEventCard(event) }
         "crew_mission" -> event.crewMissionSnapshot?.let { mission ->
             CrewMissionCard(mission, onOpen = { onOpenCrewMission(mission.missionId) })
+        }
+        "scheduled_task" -> event.scheduledTaskArtifact?.let { artifact ->
+            TimelineArrival(animateEntry) {
+                ScheduledTaskArtifactCard(artifact, onOpen = { onOpenScheduledTask(artifact) })
+            }
         }
         "workspace_result" -> TimelineArrival(animateEntry) {
             event.workspaceResultReference?.let { com.jarvys.agent.workspaces.WorkspaceResultNotice(it) }

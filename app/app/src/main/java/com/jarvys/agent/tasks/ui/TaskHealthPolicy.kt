@@ -4,7 +4,7 @@ import com.jarvys.agent.tasks.ScheduledTask
 import com.jarvys.agent.tasks.TaskRunCause
 import com.jarvys.agent.tasks.TaskState
 
-enum class TaskHealthKind { NOTIFICATIONS, BATTERY, DELAYED, ATTENTION }
+enum class TaskHealthKind { NOTIFICATIONS, BATTERY, DELAYED, ATTENTION, RECOVERED }
 
 data class TaskHealthIssue(
     val kind: TaskHealthKind,
@@ -19,6 +19,7 @@ data class TaskHealthInput(
     val batteryOptimizationIgnored: Boolean,
     val delayedTasks: List<ScheduledTask> = emptyList(),
     val attentionTasks: List<ScheduledTask> = emptyList(),
+    val recoveredTasks: List<ScheduledTask> = emptyList(),
 )
 
 /** Pure projection for the health card; delay has no invented grace interval. */
@@ -32,8 +33,10 @@ object TaskHealthPolicy {
         input.attentionTasks.forEach { task ->
             val storedCause = (task.state as? TaskState.NeedsAttention)?.reason
             add(TaskHealthIssue(TaskHealthKind.ATTENTION, task.id, task.name,
-                TaskRunCause.fromCode(storedCause) ?: TaskRunCause.fromLegacy(storedCause)))
+                task.openIncidentCause ?: TaskRunCause.fromCode(storedCause) ?: TaskRunCause.fromLegacy(storedCause)))
         }
+        input.recoveredTasks.filter { it.openIncidentCause == null && it.lastIncidentRecoveredAt != null }
+            .forEach { task -> add(TaskHealthIssue(TaskHealthKind.RECOVERED, task.id, task.name)) }
     }
 }
 

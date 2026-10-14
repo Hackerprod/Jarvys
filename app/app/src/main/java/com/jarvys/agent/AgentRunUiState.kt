@@ -74,6 +74,7 @@ data class AgentRunUiEvent(
     val toolActivity: ToolActivity? = null,
     val toolActivityEvents: List<ToolActivity> = emptyList(),
     val submissionError: String? = null,
+    val scheduledTaskArtifact: ScheduledTaskArtifact? = null,
  ) {
     fun copyMetadata(messageId: String, durationMs: Long): AgentRunUiEvent =
         copy(messageId = messageId, durationMs = durationMs)
@@ -206,6 +207,15 @@ data class AgentRunUiEvent(
         }
     }
 }
+
+/** Typed contract projected from successful task management tool results into the chat timeline. */
+data class ScheduledTaskArtifact(
+    val taskId: String,
+    val name: String,
+    val scheduleHuman: String,
+    val nextRunLocal: String?,
+    val status: String,
+)
 
 /** Transient current-run presentation evidence; never reconstructed from persisted rows. */
 data class LiveMascotTool(

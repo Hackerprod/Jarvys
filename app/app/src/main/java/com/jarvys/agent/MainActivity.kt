@@ -2083,6 +2083,13 @@ private fun JarvysApp(
                             isReflecting = agentState.reflecting && agentState.reflectionSessionId == conversationSessionId,
                             reflectionStatus = agentState.reflectionStatus,
                             onOpenCrewMission = { missionId -> navController.navigate(Routes.crew(missionId)) },
+                            onOpenScheduledTask = { task ->
+                                if (task.status == "cancelled") {
+                                    navController.navigate(Routes.TASKS) { launchSingleTop = true }
+                                } else {
+                                    openTaskDetailFromIntent(navController, task.taskId)
+                                }
+                            },
                             runSnapshot = agentState,
                             allowMessageEntrance = selectedHistoryRunId == null && !showingNewChat,
                             onSaveGeneratedImage = onSaveGeneratedImage,
@@ -2356,6 +2363,7 @@ internal fun AgentRunScreen(
     isReflecting: Boolean = false,
     reflectionStatus: String? = null,
     onOpenCrewMission: (String) -> Unit = {},
+    onOpenScheduledTask: (com.jarvys.agent.ScheduledTaskArtifact) -> Unit = {},
     onSaveGeneratedImage: (AgentRunUiEvent) -> Unit = {},
     onShareGeneratedImage: (AgentRunUiEvent) -> Unit = {},
     runSnapshot: AgentRunUiSnapshot? = null,
@@ -2391,6 +2399,7 @@ internal fun AgentRunScreen(
         isReflecting = isReflecting,
         reflectionStatus = reflectionStatus,
         onOpenCrewMission = onOpenCrewMission,
+        onOpenScheduledTask = onOpenScheduledTask,
         onSaveGeneratedImage = onSaveGeneratedImage,
         onShareGeneratedImage = onShareGeneratedImage,
         runSnapshot = runSnapshot,

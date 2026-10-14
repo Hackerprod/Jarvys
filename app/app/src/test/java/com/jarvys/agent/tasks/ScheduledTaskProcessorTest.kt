@@ -10,6 +10,7 @@ import com.jarvys.agent.CoreAgentLoop
 import com.jarvys.agent.CoreToolRegistry
 import com.jarvys.agent.CoreToolResult
 import com.jarvys.agent.ModelReply
+import com.jarvys.agent.ProviderHttpException
 import com.jarvys.agent.ProviderTransportException
 import com.jarvys.agent.ToolSpec
 import com.jarvys.agent.connectors.ApprovalGate
@@ -113,6 +114,8 @@ class ScheduledTaskProcessorTest {
             .filter { it.kind == "assistant" && it.proactiveThreadKey == ScheduledTaskConversation.threadKey(task.id) }
         assertEquals(1, taskMessages.size)
         assertTrue(taskMessages.single().text.contains("There is one event."))
+        assertEquals("There is one event.", result.deliveredResult)
+        assertEquals(taskMessages.single().messageId, result.conversationMessageId)
         assertEquals(1, notifications.resultCalls.get())
     }
 
@@ -134,7 +137,7 @@ class ScheduledTaskProcessorTest {
         assertEquals(1, noResponseFactory.turns.get())
     }
 
-    @Test fun onlyIfNotableSilenceDoesNotSendARecoveryNotification() {
+    @Test fun successfulSilentRunClosesAnIncidentAndSendsOneRecoveryNotification() {
         val notifications = FakeNotifications()
         val result = processor(FakeLoopFactory { _, _, _, _ ->
             ModelReply(ScheduledTaskProcessor.NO_REPLY, emptyList())
@@ -143,9 +146,9 @@ class ScheduledTaskProcessorTest {
             1L, 2L, "run-silent-recovery", CancellationToken.cancellable())
 
         assertEquals("SILENT", result.status)
-        assertEquals("SILENT", result.deliveryStatus)
+        assertEquals("DELIVERED", result.deliveryStatus)
         assertEquals(0, notifications.resultCalls.get())
-        assertEquals(0, notifications.recoveryCalls.get())
+        assertEquals(1, notifications.recoveryCalls.get())
     }
 
     @Test fun alwaysEmptyOrNoReplyRecordsNoVisibleResultAndNeverRetries() {
@@ -248,6 +251,57 @@ class ScheduledTaskProcessorTest {
         assertEquals("offline", transient.causeDetail)
     }
 
+    @Test fun wrappedHttpRequestTimeoutIsRetryableWithStructuredProviderCause() {
+        val root = Files.createTempDirectory("task-http-timeout").toFile()
+        val taskStore = TaskStore(java.io.File(root, "tasks.jsonl"))
+        val savedTask = taskStore.create(task())
+        val notifications = FakeNotifications()
+        val factory = FakeLoopFactory { _, _, _, _ ->
+            throw IllegalStateException("provider call failed",
+                IllegalArgumentException("HTTP response wrapper",
+                    ProviderHttpException("request timed out", 408, 0L, null)))
+        }
+        val processor = ScheduledTaskProcessor(context, factory, emptyRegistry(), clock = fixedClock(),
+            notifications = notifications, tasks = taskStore)
+
+        val result = processor.execute(savedTask, 100L, 101L, "run-http-408", CancellationToken.cancellable())
+
+        assertEquals("RETRYABLE", result.status)
+        assertEquals(TaskRunCause.PROVIDER_UNAVAILABLE, result.causeCode)
+        assertNull(taskStore.get(savedTask.id)?.openIncidentCause)
+        assertEquals(0, notifications.attentionCalls.get())
+    }
+
+    @Test fun repeatedPermanentCauseNotifiesOnlyOnceUntilASuccessfulRunClosesTheIncident() {
+        val root = Files.createTempDirectory("task-incident-notify").toFile()
+        val taskStore = TaskStore(java.io.File(root, "tasks.jsonl"))
+        val task = taskStore.create(task())
+        val notifications = FakeNotifications()
+        val unavailable = FakeLoopFactory("no_provider") { _, _, _, _ -> error("unavailable provider") }
+        val processor = ScheduledTaskProcessor(context, unavailable, emptyRegistry(), clock = fixedClock(),
+            notifications = notifications, tasks = taskStore)
+
+        assertEquals("ERROR", processor.execute(task, 100L, 101L, "failure-one",
+            CancellationToken.cancellable()).status)
+        val opened = requireNotNull(taskStore.get(task.id))
+        assertEquals(TaskRunCause.NO_PROVIDER, opened.openIncidentCause)
+        assertEquals("ERROR", processor.execute(opened, 200L, 201L, "failure-two",
+            CancellationToken.cancellable()).status)
+        assertEquals(1, notifications.attentionCalls.get())
+
+        val recoveredProcessor = ScheduledTaskProcessor(context,
+            FakeLoopFactory { _, _, _, _ -> ModelReply("Recovered output", emptyList()) },
+            emptyRegistry(), clock = fixedClock(), notifications = notifications, tasks = taskStore)
+        assertEquals("OK", recoveredProcessor.execute(requireNotNull(taskStore.get(task.id)),
+            300L, 301L, "recovery-one", CancellationToken.cancellable()).status)
+        assertNull(taskStore.get(task.id)?.openIncidentCause)
+        assertNotNull(taskStore.get(task.id)?.lastIncidentRecoveredAt)
+        recoveredProcessor.execute(requireNotNull(taskStore.get(task.id)), 400L, 401L,
+            "recovery-two", CancellationToken.cancellable())
+        assertEquals(1, notifications.attentionCalls.get())
+        assertEquals(1, notifications.recoveryCalls.get())
+    }
+
     @Test fun stopObservedAlongsideProviderSetupFailureIsInterruptedRatherThanRetried() {
         val workerToken = CancellationToken.cancellable()
         val calls = AtomicInteger()
@@ -272,12 +326,16 @@ class ScheduledTaskProcessorTest {
     }
 
     @Test fun successfulTaskAfterAttentionSendsOneRecoveryNotice() {
+        val taskStore = TaskStore(java.io.File(Files.createTempDirectory("task-recovery-legacy").toFile(), "tasks.jsonl"))
         val notifications = FakeNotifications()
-        val task = task(state = TaskState.NeedsAttention("connector_unavailable")).copy(
+        val saved = taskStore.create(task(state = TaskState.NeedsAttention(TaskRunCause.CONNECTOR_UNAVAILABLE.code)).copy(
             lastRun = TaskLastRun("previous-run", 100L, 101L, 102L, "ERROR", "CHAT_ONLY"))
-        val processor = processor(FakeLoopFactory { _, _, _, _ -> respond(true, "Recovered", "The check works again.") },
-            emptyRegistry(), notifications = notifications)
-        val result = processor.execute(task, 200L, 201L, "recovery-run", CancellationToken.cancellable())
+        )
+        val processor = ScheduledTaskProcessor(context,
+            FakeLoopFactory { _, _, _, _ -> respond(true, "Recovered", "The check works again.") },
+            emptyRegistry(), clock = fixedClock(), notifications = notifications, tasks = taskStore)
+        val result = processor.execute(requireNotNull(taskStore.get(saved.id)), 200L, 201L,
+            "recovery-run", CancellationToken.cancellable())
         assertEquals("OK", result.status)
         assertEquals(1, notifications.recoveryCalls.get())
         assertTrue(result.notified)

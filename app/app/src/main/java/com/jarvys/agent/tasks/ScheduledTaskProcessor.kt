@@ -3,6 +3,7 @@ package com.jarvys.agent.tasks
 import android.content.Context
 import com.jarvys.agent.AppLanguageRuntime
 import com.jarvys.agent.CancellationToken
+import com.jarvys.agent.CodexResponseException
 import com.jarvys.agent.CoreAgentLoop
 import com.jarvys.agent.CoreConnectorTool
 import com.jarvys.agent.CoreTool
@@ -28,6 +29,8 @@ import java.time.Clock
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.Collections
+import java.util.IdentityHashMap
 import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicReference
 
@@ -39,6 +42,7 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
     private val conversationStore: com.jarvys.agent.LocalRunStore = com.jarvys.agent.LocalRunStore(context.applicationContext),
     private val clock: Clock = Clock.systemUTC(),
     private val notifications: ScheduledTaskNotifications = TaskNotifier,
+    private val tasks: TaskStore = TaskStore(context.applicationContext),
 ) : TaskExecutor {
     private val app = context.applicationContext
     private val localized = AppLanguageRuntime.localizedContext(app)
@@ -97,13 +101,16 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
             val finalText = displayText(result.text.orEmpty())
             val noVisibleResult = finalText.isBlank() || finalText == NO_REPLY
 
-            val recovering = task.lastRun?.status == "ERROR" || task.state is TaskState.NeedsAttention
             if (noVisibleResult && task.delivery == TaskDelivery.ONLY_IF_NOTABLE) {
-                return TaskExecutionResult("SILENT", "SILENT", toolsCalled = toolCalls.toList(),
-                    model = currentModel())
+                val recovered = recoverIncident(task)
+                return TaskExecutionResult("SILENT", if (recovered) "DELIVERED" else "SILENT",
+                    notified = recovered, toolsCalled = toolCalls.toList(), model = currentModel())
             }
-            if (noVisibleResult) return TaskExecutionResult("OK", "NO_RESULT", toolsCalled = toolCalls.toList(),
-                model = currentModel())
+            if (noVisibleResult) {
+                val recovered = recoverIncident(task)
+                return TaskExecutionResult("OK", if (recovered) "DELIVERED" else "NO_RESULT",
+                    notified = recovered, toolsCalled = toolCalls.toList(), model = currentModel())
+            }
             val title = response?.title?.let(::displayText)?.takeIf(String::isNotBlank)
                 ?: displayText(task.name).ifBlank { task.name }
             val body = finalText
@@ -122,12 +129,12 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
             val committedBody = if (separator >= 0) committedText.substring(separator + 2) else committedText
             val notified = notifications.result(app, conversationStore, task, messageId, committedTitle, committedBody,
                 response?.urgency ?: "normal", response?.suggestedReplies.orEmpty())
-            val recoveredNotice = if (recovering) notifications.recovered(app, task) else false
+            val recoveredNotice = recoverIncident(task)
             return TaskExecutionResult("OK", when {
                 notified || recoveredNotice -> "DELIVERED"
                 else -> "CHAT_ONLY"
             }, toolsCalled = toolCalls.toList(), notified = notified || recoveredNotice,
-                model = currentModel())
+                model = currentModel(), deliveredResult = committedBody, conversationMessageId = messageId)
         } catch (cancelled: CancellationException) {
             val partial = toolCalls.any { it.write }
             return TaskExecutionResult(if (partial) "PARTIAL" else "INTERRUPTED", "NOT_APPLICABLE",
@@ -228,18 +235,36 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
                                  detail: String? = null,
                                  calls: List<TaskToolCallRecord>, model: String,
                                  occurrenceId: String = "task:${task.id}:$scheduledFor"): TaskExecutionResult {
-        val messageId = "$occurrenceId:attention"
-        val session = ScheduledTaskConversation.SESSION_ID
-        runCatching {
-            conversationStore.appendConversationTitleIfAbsent(session, ScheduledTaskConversation.title(localized))
-            conversationStore.appendProactiveAssistantMessageIfAbsent(session, messageId,
-                localized.getString(com.jarvys.agent.R.string.scheduled_tasks_attention_body,
-                    ProactiveTextSanitizer.sanitize(cause.localized(localized))), emptyList(), ScheduledTaskConversation.threadKey(task.id))
-        }
-        val notified = notifications.attention(app, task, cause)
+        val isNewIncident = beginIncident(task, cause)
+        val notified = if (isNewIncident) {
+            val messageId = "$occurrenceId:attention"
+            val session = ScheduledTaskConversation.SESSION_ID
+            runCatching {
+                conversationStore.appendConversationTitleIfAbsent(session, ScheduledTaskConversation.title(localized))
+                conversationStore.appendProactiveAssistantMessageIfAbsent(session, messageId,
+                    localized.getString(com.jarvys.agent.R.string.scheduled_tasks_attention_body,
+                        ProactiveTextSanitizer.sanitize(cause.localized(localized))), emptyList(), ScheduledTaskConversation.threadKey(task.id))
+            }
+            notifications.attention(app, task, cause)
+        } else false
         return TaskExecutionResult("ERROR", if (notified) "DELIVERED" else "CHAT_ONLY",
             notified = notified, toolsCalled = calls.toList(), model = model,
             causeCode = cause, causeDetail = detail)
+    }
+
+    private fun beginIncident(task: ScheduledTask, cause: TaskRunCause): Boolean {
+        if (task.openIncidentCause == cause) return false
+        if (tasks.openIncident(task.id, task.revision, cause)) return true
+        return tasks.get(task.id) == null && task.openIncidentCause != cause
+    }
+
+    private fun recoverIncident(task: ScheduledTask): Boolean {
+        val hasIncident = task.openIncidentCause != null || task.state is TaskState.NeedsAttention ||
+            task.lastRun?.status == "ERROR"
+        if (!hasIncident) return false
+        // Persist closure first; a repeated worker delivery sees a closed incident and cannot re-alert.
+        if (!tasks.closeIncident(task.id, task.revision, clock.millis())) return false
+        return notifications.recovered(app, task)
     }
 
     private fun currentModel(): String = runCatching { ProviderSettings(app).model }.getOrDefault("")
@@ -250,19 +275,32 @@ class ScheduledTaskProcessor @JvmOverloads constructor(
         ProactiveTextSanitizer.sanitize(ProactiveRedactor.redactForModel(value))
 
     private fun isTransient(error: RuntimeException): Boolean {
-        if (error is ProviderTransportException) return true
-        if (error is ProviderHttpException) return error.httpStatus == 429 || error.httpStatus in 500..599
-        var cause: Throwable? = error
-        while (cause != null) {
-            if (cause is IOException) return true
-            cause = cause.cause
-        }
-        return false
+        return retryableProviderCause(error) != null
     }
 
-    private fun transientCause(error: RuntimeException): TaskRunCause = when (error) {
-        is ProviderHttpException -> if (error.httpStatus == 429) TaskRunCause.PROVIDER_RATE_LIMITED else TaskRunCause.PROVIDER_UNAVAILABLE
-        is ProviderTransportException -> TaskRunCause.NETWORK
+    private fun retryableProviderCause(error: Throwable): Throwable? {
+        val seen = Collections.newSetFromMap(IdentityHashMap<Throwable, Boolean>())
+        var cause: Throwable? = error
+        while (cause != null && seen.add(cause)) {
+            when (cause) {
+                is ProviderTransportException, is IOException -> return cause
+                is CodexResponseException -> return cause.takeIf {
+                    it.kind == CodexResponseException.Kind.INCOMPLETE
+                }
+                is ProviderHttpException -> return cause.takeIf {
+                    it.httpStatus == 408 || it.httpStatus == 429 || it.httpStatus in 500..599
+                }
+            }
+            cause = cause.cause
+        }
+        return null
+    }
+
+    private fun transientCause(error: RuntimeException): TaskRunCause = when (val cause = retryableProviderCause(error)) {
+        is ProviderHttpException -> if (cause.httpStatus == 429) TaskRunCause.PROVIDER_RATE_LIMITED
+            else TaskRunCause.PROVIDER_UNAVAILABLE
+        is ProviderTransportException, is IOException -> TaskRunCause.NETWORK
+        is CodexResponseException -> TaskRunCause.PROVIDER_UNAVAILABLE
         else -> TaskRunCause.NETWORK
     }
 

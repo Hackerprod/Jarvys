@@ -27,6 +27,7 @@ import com.jarvys.agent.tasks.CalendarCadence
 import com.jarvys.agent.tasks.ScheduledTask
 import com.jarvys.agent.tasks.ScheduleCalculator
 import com.jarvys.agent.tasks.TaskDelivery
+import com.jarvys.agent.tasks.TaskRunCause
 import com.jarvys.agent.tasks.TaskGlobalPauseStore
 import com.jarvys.agent.tasks.TaskRepository
 import com.jarvys.agent.tasks.TaskRunLedger
@@ -213,7 +214,8 @@ class TasksScreensComposeTest {
         val task = fixture.addTask("Long history", TaskState.Active, nextRun = fixture.clock.millis() + 60_000L)
         (1..120).forEach { run ->
             fixture.ledger.appendIfAbsent(TaskRunRecord(task.id, "run-$run", run.toLong(), run.toLong(),
-                run + 1L, "OK", "DELIVERED"))
+                run + 1L, "OK", "DELIVERED",
+                deliveredResult = if (run == 1) "Delivered model summary" else null))
         }
         compose.setContent {
             MaterialTheme {
@@ -230,6 +232,8 @@ class TasksScreensComposeTest {
             .assertTextEquals(context.resources.getQuantityString(R.plurals.task_detail_run_count, 120, 120))
         compose.onNodeWithTag("task-detail-history-list").performScrollToIndex(121)
         compose.onNodeWithTag("task-run-${task.id}:1").assertIsDisplayed()
+        compose.onNodeWithTag("task-run-result-${task.id}:1").assertIsDisplayed()
+        compose.onNodeWithText("Delivered result: Delivered model summary").assertIsDisplayed()
         compose.onNodeWithTag("task-detail-history-list").performScrollToIndex(0)
         compose.onNodeWithTag("task-clear-history").performScrollTo().performClick()
         compose.onNodeWithText(context.getString(R.string.task_detail_clear_history_title)).assertIsDisplayed()
@@ -244,10 +248,19 @@ class TasksScreensComposeTest {
         val task = fixture.addTask("Late", TaskState.Active, nextRun = fixture.clock.millis() - 1L)
         val attention = fixture.addTask("Needs provider", TaskState.NeedsAttention(TaskRunCause.NO_PROVIDER.code), nextRun = null)
         val connectorAttention = fixture.addTask("Needs connector", TaskState.NeedsAttention(TaskRunCause.CONNECTOR_UNAVAILABLE.code), nextRun = null)
-        val issues = TaskHealthPolicy.evaluate(TaskHealthInput(false, false, listOf(task), listOf(attention, connectorAttention)))
-        assertEquals(5, issues.size)
-        assertEquals(listOf(TaskRunCause.NO_PROVIDER, TaskRunCause.CONNECTOR_UNAVAILABLE),
+        val openIncident = fixture.addTask("Open incident", TaskState.Active, nextRun = fixture.clock.millis() + 60_000L)
+        fixture.store.openIncident(openIncident.id, openIncident.revision, TaskRunCause.NETWORK)
+        val recovered = fixture.addTask("Recovered task", TaskState.Active, nextRun = fixture.clock.millis() + 60_000L)
+        fixture.store.openIncident(recovered.id, recovered.revision, TaskRunCause.NETWORK)
+        fixture.store.closeIncident(recovered.id, recovered.revision, fixture.clock.millis())
+        val recoveredSnapshot = requireNotNull(fixture.store.get(recovered.id))
+        val issues = TaskHealthPolicy.evaluate(TaskHealthInput(false, false, listOf(task),
+            listOf(attention, connectorAttention, requireNotNull(fixture.store.get(openIncident.id))),
+            listOf(recoveredSnapshot)))
+        assertEquals(7, issues.size)
+        assertEquals(listOf(TaskRunCause.NO_PROVIDER, TaskRunCause.CONNECTOR_UNAVAILABLE, TaskRunCause.NETWORK),
             issues.filter { it.kind == TaskHealthKind.ATTENTION }.map { it.causeCode })
+        assertEquals(listOf("Recovered task"), issues.filter { it.kind == TaskHealthKind.RECOVERED }.map { it.taskName })
         assertTrue(TaskHealthPolicy.evaluate(TaskHealthInput(true, true)).isEmpty())
         assertEquals(Settings.ACTION_APP_NOTIFICATION_SETTINGS, TaskUiIntents.notificationSettings(context).action)
         assertEquals(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS,
@@ -272,11 +285,52 @@ class TasksScreensComposeTest {
         compose.onNodeWithText(context.getString(R.string.tasks_health_open_battery)).performClick()
         compose.onNodeWithText(context.getString(R.string.tasks_open_delayed)).performClick()
         assertEquals(listOf(task.id), openedTaskIds)
-        assertEquals(1, compose.onAllNodesWithText(context.getString(R.string.tasks_health_review_task)).fetchSemanticsNodes().size)
-        compose.onNodeWithText(context.getString(R.string.tasks_health_review_task)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.tasks_health_recovered, recovered.name))
+            .performScrollTo().assertIsDisplayed()
+        assertEquals(3, compose.onAllNodesWithText(context.getString(R.string.tasks_health_review_task)).fetchSemanticsNodes().size)
         assertEquals(1, notification.get())
         assertEquals(1, battery.get())
         assertEquals(listOf(task.id), openedTaskIds)
+    }
+
+    @Test fun openAndRecoveredIncidentsAreRenderedInTaskListAndDetail() {
+        val open = fixture.addTask("Open incident", TaskState.Active, nextRun = fixture.clock.millis() + 60_000L)
+        fixture.store.openIncident(open.id, open.revision, TaskRunCause.NETWORK)
+        val recovered = fixture.addTask("Recovered incident", TaskState.Active,
+            nextRun = fixture.clock.millis() + 60_000L)
+        fixture.store.openIncident(recovered.id, recovered.revision, TaskRunCause.PROVIDER_UNAVAILABLE)
+        fixture.store.closeIncident(recovered.id, recovered.revision, fixture.clock.millis())
+
+        compose.setContent {
+            MaterialTheme {
+                TasksListScreen(context, fixture.repository, fixture.ledger,
+                    onOpenTask = {}, onRequestChange = {}, onConfigureProvider = {}, onMessage = {},
+                    backgroundWorkBusyForAll = false)
+            }
+        }
+        awaitNode("task-row-${open.id}")
+        compose.onNodeWithTag("task-row-${open.id}").assertIsDisplayed()
+        assertEquals(2, compose.onAllNodesWithText(context.getString(R.string.tasks_health_attention,
+            open.name, TaskRunCause.NETWORK.localized(context))).fetchSemanticsNodes().size)
+        compose.onNodeWithText(context.getString(R.string.tasks_incident_recovered))
+            .performScrollTo().assertIsDisplayed()
+
+        compose.setContent {
+            MaterialTheme {
+                TaskDetailScreen(context, open.id, fixture.repository, fixture.ledger,
+                    onRequestChange = {}, onConfigureProvider = {}, onMessage = {}, onMissingTask = {},
+                    backgroundWorkBusyForAll = false)
+            }
+        }
+        compose.onNodeWithText(TaskRunCause.NETWORK.localized(context)).assertIsDisplayed()
+        compose.setContent {
+            MaterialTheme {
+                TaskDetailScreen(context, recovered.id, fixture.repository, fixture.ledger,
+                    onRequestChange = {}, onConfigureProvider = {}, onMessage = {}, onMissingTask = {},
+                    backgroundWorkBusyForAll = false)
+            }
+        }
+        compose.onNodeWithText(context.getString(R.string.tasks_incident_recovered)).assertIsDisplayed()
     }
 
     private data class Fixture(

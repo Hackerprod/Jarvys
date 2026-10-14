@@ -7,6 +7,7 @@ import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -45,6 +46,8 @@ class TaskStoreTest {
             delivery = TaskDelivery.ONLY_IF_NOTABLE,
             createdBy = "AGENT_CHAT:session:message",
             creatorToolNames = listOf("read_only_tool"),
+            openIncidentCause = TaskRunCause.NETWORK,
+            lastIncidentRecoveredAt = 10_000L,
         )
         val created = store.create(input)
         val roundTrip = requireNotNull(TaskStore(file).get(created.id))
@@ -55,7 +58,33 @@ class TaskStoreTest {
         assertEquals(input.delivery, roundTrip.delivery)
         assertEquals(input.createdBy, roundTrip.createdBy)
         assertEquals(input.creatorToolNames, roundTrip.creatorToolNames)
+        assertEquals(TaskRunCause.NETWORK, roundTrip.openIncidentCause)
+        assertEquals(10_000L, roundTrip.lastIncidentRecoveredAt)
         assertTrue(roundTrip.deleteAfterRun)
+    }
+
+    @Test fun legacyTaskSnapshotsLoadWithoutIncidentFieldsAndIncidentMetadataDoesNotChangeRevision() {
+        val file = File(Files.createTempDirectory("task-incident-store").toFile(), "tasks.jsonl")
+        val store = TaskStore(file)
+        val task = store.create(task("incident"))
+        assertTrue(store.openIncident(task.id, task.revision, TaskRunCause.PROVIDER_UNAVAILABLE))
+        val open = requireNotNull(store.get(task.id))
+        assertEquals(task.revision, open.revision)
+        assertFalse(store.openIncident(task.id, task.revision, TaskRunCause.PROVIDER_UNAVAILABLE))
+        assertTrue(store.closeIncident(task.id, task.revision, 99L))
+        val recovered = requireNotNull(store.get(task.id))
+        assertNull(recovered.openIncidentCause)
+        assertEquals(99L, recovered.lastIncidentRecoveredAt)
+        assertEquals(task.revision, recovered.revision)
+
+        val oldFile = File(file.parentFile, "old-tasks.jsonl")
+        val legacySnapshot = JSONObject(file.readLines().first()).apply {
+            remove("openIncidentCause")
+            remove("lastIncidentRecoveredAt")
+        }
+        oldFile.writeText(legacySnapshot.toString() + "\n", StandardCharsets.UTF_8)
+        assertNull(TaskStore(oldFile).get(task.id)?.openIncidentCause)
+        assertNull(TaskStore(oldFile).get(task.id)?.lastIncidentRecoveredAt)
     }
 
     @Test fun malformedAndTruncatedRowsAreIgnoredAndCountedWithoutLosingPriorSnapshots() {
@@ -137,6 +166,25 @@ class TaskStoreTest {
         assertEquals("Vendor failure detail", unknown.causeDetail)
         assertEquals(TaskRunCause.PREVIOUS_OCCURRENCE_INTERRUPTED,
             result.runs.single { it.taskId == "interrupted" }.causeCode)
+    }
+
+    @Test fun runLedgerReadsDeliveredResultWhenPresentAndOldRowsWithoutIt() {
+        val file = File(Files.createTempDirectory("task-run-delivery").toFile(), "runs.jsonl")
+        val ledger = TaskRunLedger(file)
+        assertTrue(ledger.appendIfAbsent(TaskRunRecord("with-result", "run-1", 1L, 2L, 3L,
+            "OK", "DELIVERED", deliveredResult = "The model's delivered summary.",
+            conversationMessageId = "manual:one")))
+        val roundTrip = TaskRunLedger(file).read().runs.single()
+        assertEquals("The model's delivered summary.", roundTrip.deliveredResult)
+        assertEquals("manual:one", roundTrip.conversationMessageId)
+
+        val oldFile = File(file.parentFile, "legacy-runs.jsonl")
+        oldFile.writeText(
+            """{"taskId":"legacy","runId":"run-2","scheduledFor":4,"startedAt":5,"status":"OK","deliveryStatus":"CHAT_ONLY"}""" + "\n",
+            StandardCharsets.UTF_8)
+        val legacy = TaskRunLedger(oldFile).read().runs.single()
+        assertNull(legacy.deliveredResult)
+        assertNull(legacy.conversationMessageId)
     }
 
     @Test fun concurrentLedgerClaimsForOneOccurrenceGrantExactlyOneExecutor() {

@@ -2,6 +2,7 @@ package com.jarvys.agent.ui.chat
 
 import com.jarvys.agent.AgentRunUiEvent
 import com.jarvys.agent.HtmlPreviewDescriptor
+import com.jarvys.agent.ScheduledTaskArtifact
 import org.json.JSONObject
 
 /** Display-only projection. Original tool/model evidence remains available to recovery and diagnostics. */
@@ -23,11 +24,7 @@ internal object ConversationVisibility {
         return true
     }
 
-    /**
-     * Suppress successful tool rows only when their exact artifact is already represented by a
-     * first-class timeline card. This is intentionally a projection over the whole conversation:
-     * the card and tool result can be restored from separate durable rows.
-     */
+    /** Replaces successful structured tool results with their first-class timeline cards. */
     fun project(events: List<AgentRunUiEvent>): List<AgentRunUiEvent> {
         val deliveredArtifactIds = events.asSequence()
             .filter { it.kind == "delivered_file" }
@@ -38,9 +35,34 @@ internal object ConversationVisibility {
             .mapNotNull { it.generatedImagePath?.removeSuffix(".png")?.takeIf(String::isNotBlank) }
             .toSet()
 
-        return events.filter { event ->
-            visible(event) && !hasMatchingArtifactCard(event, deliveredArtifactIds, generatedImageIds)
+        return events.mapNotNull { event ->
+            if (!visible(event)) return@mapNotNull null
+            val scheduledTask = scheduledTaskArtifact(event)
+            if (scheduledTask != null) {
+                return@mapNotNull event.copy(kind = "scheduled_task", scheduledTaskArtifact = scheduledTask)
+            }
+            if (hasMatchingArtifactCard(event, deliveredArtifactIds, generatedImageIds)) return@mapNotNull null
+            event
         }
+    }
+
+    private fun scheduledTaskArtifact(event: AgentRunUiEvent): ScheduledTaskArtifact? {
+        if (event.kind != "tool" || event.stage != "tool_result") return null
+        return runCatching {
+            val detail = event.detail.orEmpty()
+            val jsonStart = detail.indexOf('{')
+            val jsonEnd = detail.lastIndexOf('}')
+            if (jsonStart < 0 || jsonEnd < jsonStart) return null
+            val result = JSONObject(detail.substring(jsonStart, jsonEnd + 1))
+            val task = result.optJSONObject("task") ?: return null
+            if (task.optString("kind") != "scheduled_task") return null
+            val id = task.optString("id").takeIf(String::isNotBlank) ?: return null
+            val name = task.optString("name").takeIf(String::isNotBlank) ?: return null
+            val schedule = task.optString("schedule_human").takeIf(String::isNotBlank) ?: return null
+            ScheduledTaskArtifact(id, name, schedule,
+                task.optString("next_run_local").takeIf { it.isNotBlank() && it != "null" },
+                task.optString("status", result.optString("status")))
+        }.getOrNull()
     }
 
     private fun hasMatchingArtifactCard(

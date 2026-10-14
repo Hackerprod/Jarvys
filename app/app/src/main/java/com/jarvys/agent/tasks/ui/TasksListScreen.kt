@@ -129,7 +129,8 @@ fun TasksListScreen(
                 notificationsAllowed = snapshot.notificationAllowed,
                 batteryOptimizationIgnored = snapshot.batteryOptimizationIgnored,
                 delayedTasks = delayed,
-                attentionTasks = snapshot.tasks.filter { it.state is TaskState.NeedsAttention },
+                attentionTasks = snapshot.tasks.filter { it.state is TaskState.NeedsAttention || it.openIncidentCause != null },
+                recoveredTasks = snapshot.tasks,
             ))
             val ordered = remember(snapshot.tasks) { orderTasks(snapshot.tasks) }
             val presentation = remember(app) { TaskSchedulePresentation(app) }
@@ -279,7 +280,7 @@ internal fun TaskHealthCard(
                             val cause = issue.causeCode ?: TaskRunCause.UNKNOWN
                             val providerMissing = cause == TaskRunCause.NO_PROVIDER
                             Text(stringResource(R.string.tasks_health_attention, issue.taskName.orEmpty(),
-                                cause.localized(context)),
+                                cause.localized(androidx.compose.ui.platform.LocalContext.current)),
                                 style = MaterialTheme.typography.bodyMedium)
                             if (providerMissing) OutlinedButton(onClick = onConfigureProvider) {
                                 Text(stringResource(R.string.tasks_health_configure_provider))
@@ -288,6 +289,13 @@ internal fun TaskHealthCard(
                                     Text(stringResource(R.string.tasks_health_review_task))
                                 }
                             }
+                        }
+                        TaskHealthKind.RECOVERED -> {
+                            Text(stringResource(R.string.tasks_health_recovered, issue.taskName.orEmpty()),
+                                color = MaterialTheme.colorScheme.tertiary, style = MaterialTheme.typography.bodyMedium)
+                            issue.taskId?.let { id -> OutlinedButton(onClick = { onOpenTask(id) }) {
+                                Text(stringResource(R.string.tasks_health_review_task))
+                            } }
                         }
                     }
                 }
@@ -344,6 +352,12 @@ private fun TaskListItem(
                 }
             }
             Text(next, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+            task.openIncidentCause?.let { cause -> Text(
+                stringResource(R.string.tasks_health_attention, task.name, cause.localized(context)),
+                color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            } ?: if (task.lastIncidentRecoveredAt != null) Text(
+                stringResource(R.string.tasks_incident_recovered), color = MaterialTheme.colorScheme.tertiary,
+                style = MaterialTheme.typography.bodySmall) else Unit
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(last, Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant,

@@ -2,9 +2,11 @@ package com.jarvys.agent.tasks
 
 import android.content.Context
 import androidx.work.ExistingWorkPolicy
+import androidx.work.BackoffPolicy
 import androidx.work.OneTimeWorkRequest
 import androidx.work.WorkManager
 import androidx.work.WorkInfo
+import androidx.work.WorkRequest
 import java.util.concurrent.TimeUnit
 
 object TaskWorkNames {
@@ -43,6 +45,7 @@ object TaskScheduler {
         }
         val request = OneTimeWorkRequest.Builder(TaskTickWorker::class.java)
             .setInitialDelay((next - nowMillis).coerceAtLeast(0L), TimeUnit.MILLISECONDS)
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, WorkRequest.MIN_BACKOFF_MILLIS, TimeUnit.MILLISECONDS)
             .build()
         manager.enqueueUniqueWork(TaskWorkNames.TICK, ExistingWorkPolicy.REPLACE, request)
     }

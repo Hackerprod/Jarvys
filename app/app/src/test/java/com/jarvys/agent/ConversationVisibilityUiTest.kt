@@ -10,6 +10,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import com.jarvys.agent.ui.chat.ScheduledTaskArtifactCard
 import com.jarvys.agent.connectors.ConnectorConnectionPreferences
 import com.jarvys.agent.connectors.ConnectorRegistry
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -101,5 +102,24 @@ class ConversationVisibilityUiTest {
 
         compose.onNodeWithTag("conversation-activity-${result.id}").assertDoesNotExist()
         compose.onNodeWithTag("delivered-file-${card.id}").assertIsDisplayed()
+    }
+
+    @Test fun scheduledTaskArtifactCardShowsScheduleAndOpensTask() {
+        var opened = false
+        compose.setContent {
+            MaterialTheme {
+                ScheduledTaskArtifactCard(
+                    ScheduledTaskArtifact("task-1", "Morning brief", "Every morning", "8:00 AM", "scheduled"),
+                    onOpen = { opened = true },
+                )
+            }
+        }
+
+        compose.onNodeWithTag("scheduled-task-card-task-1").assertIsDisplayed()
+        compose.onNodeWithText("Morning brief").assertIsDisplayed()
+        compose.onNodeWithText("Schedule: Every morning").assertIsDisplayed()
+        compose.onNodeWithText("Next run: 8:00 AM").assertIsDisplayed()
+        compose.onNodeWithTag("scheduled-task-open-task-1").performClick()
+        compose.runOnIdle { assert(opened) }
     }
 }

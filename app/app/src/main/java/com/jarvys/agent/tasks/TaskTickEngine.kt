@@ -16,6 +16,8 @@ data class TaskExecutionResult(
     val usageTokens: Int? = null,
     val causeCode: TaskRunCause? = null,
     val causeDetail: String? = null,
+    val deliveredResult: String? = null,
+    val conversationMessageId: String? = null,
 )
 
 fun interface TaskExecutor {
@@ -116,7 +118,9 @@ class TaskTickEngine(
                                     result.errorCause ?: result.skipReason ?: result.reason),
                                 causeDetail = result.causeDetail ?: TaskRunCause.legacyDetail(
                                     result.errorCause ?: result.skipReason ?: result.reason,
-                                    result.causeCode ?: TaskRunCause.fromLegacy(result.errorCause ?: result.skipReason ?: result.reason)))
+                                    result.causeCode ?: TaskRunCause.fromLegacy(result.errorCause ?: result.skipReason ?: result.reason)),
+                                deliveredResult = result.deliveredResult,
+                                conversationMessageId = result.conversationMessageId)
                             if (status in RETRYABLE_STATES && !writeMayHaveRun) TickOccurrence.Retry(record)
                             else {
                                 val saved = if (existing == null) {
@@ -150,7 +154,12 @@ class TaskTickEngine(
                     }
                     is TickOccurrence.Completed -> {
                         if (outcome.record.status == "SKIPPED") skipped++
-                        updateTask(task, stateAfter(task, outcome.record, outcome.record.finishedAt ?: now))
+                        val latest = tasks.get(task.id)?.takeIf { it.revision == task.revision } ?: task
+                        val next = stateAfter(latest, outcome.record, outcome.record.finishedAt ?: now)
+                        val autoDeleteAfterRun = task.deleteAfterRun && outcome.record.status in SUCCESS_STATES
+                        if (autoDeleteAfterRun) {
+                            runCatching { tasks.delete(task.id, latest.revision, clock.millis(), expectedTask = latest) }
+                        } else updateTask(latest, next)
                     }
                 }
             }
@@ -172,8 +181,10 @@ class TaskTickEngine(
         }
         val lastRun = if (record.status == "SKIPPED" && task.lastRun?.status == "ERROR") task.lastRun
             else record.toLastRun()
+        val incident = if (record.status == "ERROR" || record.status == "PARTIAL")
+            record.causeCode ?: task.openIncidentCause else task.openIncidentCause
         return task.copy(state = state, nextRunAt = if (state == TaskState.Active) next else null,
-            lastRun = lastRun)
+            lastRun = lastRun, openIncidentCause = incident)
     }
 
     private fun updateTask(original: ScheduledTask, updated: ScheduledTask) {
@@ -193,5 +204,6 @@ class TaskTickEngine(
 
     companion object {
         private val RETRYABLE_STATES = setOf("RETRYABLE", "INTERRUPTED")
+        private val SUCCESS_STATES = setOf("OK", "SILENT", "NO_RESULT")
     }
 }

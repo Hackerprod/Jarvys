@@ -152,6 +152,14 @@ fun TaskDetailScreen(
                             Text(stringResource(R.string.tasks_health_configure_provider))
                         }
                     }
+                    task.openIncidentCause?.let { cause ->
+                        Text(stringResource(R.string.tasks_health_attention, task.name, cause.localized(context)),
+                            color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    }
+                    if (task.openIncidentCause == null && task.lastIncidentRecoveredAt != null) {
+                        Text(stringResource(R.string.tasks_incident_recovered),
+                            color = MaterialTheme.colorScheme.tertiary, style = MaterialTheme.typography.bodySmall)
+                    }
                     Text(stringResource(R.string.task_detail_delivery), style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(stringResource(if (task.delivery == TaskDelivery.ALWAYS)
@@ -238,6 +246,13 @@ private fun TaskRunHistoryItem(run: TaskRunRecord, task: ScheduledTask, presenta
             Text(stringResource(R.string.task_detail_tools_called,
                 run.toolsCalled.joinToString(", ") { it.name }.ifBlank { context.getString(R.string.task_detail_no_tools) }),
                 style = MaterialTheme.typography.bodySmall)
+            run.deliveredResult?.takeIf(String::isNotBlank)?.let { delivered ->
+                SelectionContainer {
+                    Text(stringResource(R.string.task_detail_delivered_result, delivered),
+                        Modifier.testTag("task-run-result-${run.idempotencyKey}"),
+                        style = MaterialTheme.typography.bodySmall)
+                }
+            }
             val cause = run.causeCode ?: TaskRunCause.fromLegacy(run.errorCause ?: run.skipReason ?: run.reason)
             if (cause != null) Text(stringResource(R.string.task_detail_error_cause, cause.localized(context)),
                 color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)

@@ -33,7 +33,7 @@ class TaskManagementToolsTest {
 
     @Before fun setUp() { context = ApplicationProvider.getApplicationContext() }
 
-    @Test fun declarationsAreFiveSeparateToolsWithoutCronOrAnActionDiscriminator() {
+    @Test fun declarationsExposeSeparateTaskToolsWithoutCronOrAnActionDiscriminator() {
         val tools = fixture().tools.tools()
         assertEquals(TaskManagementTools.TOOL_NAMES, tools.map { it.declaration().name }.toSet())
         tools.forEach { assertFalse((it.declaration().jsonSchema()["properties"] as Map<*, *>).containsKey("action")) }
@@ -55,6 +55,51 @@ class TaskManagementToolsTest {
         assertEquals("existing", second.getString("status"))
         assertEquals(first.getString("task_id"), second.getString("task_id"))
         assertEquals(1, f.repository.list().size)
+    }
+
+    @Test fun runTaskEnqueuesOneRevisionBoundRunAndTaskRunsCanReadItsQueuedStatus() {
+        val f = fixture()
+        val created = payload(f.tools.tool(TaskManagementTools.SCHEDULE_TASK).execute(
+            scheduleArgs("Run the diagnostic task"), CancellationToken.uncancellable()))
+        assertEquals("created", created.getString("status"))
+        val task = requireNotNull(f.repository.get(created.getString("task_id")))
+        val result = payload(f.tools.tool(TaskManagementTools.RUN_TASK).execute(
+            mapOf("task_id" to task.id, "revision" to task.revision), CancellationToken.uncancellable()))
+
+        assertEquals("queued", result.getString("status"))
+        assertTrue(result.getString("run_id").isNotBlank())
+        assertEquals(1, f.enqueued.size)
+        assertEquals(task.id, f.enqueued.single().first)
+        assertEquals(task.revision, f.enqueued.single().second?.revision)
+        val history = payload(f.tools.tool(TaskManagementTools.TASK_RUNS).execute(
+            mapOf("task_id" to task.id), CancellationToken.uncancellable())).getJSONArray("runs")
+        assertEquals(result.getString("run_id"), history.getJSONObject(0).getString("run_id"))
+        assertEquals("QUEUED", history.getJSONObject(0).getString("status"))
+    }
+
+    @Test fun runTaskRejectsChangedRevisionAndMissingTaskWithoutEnqueueing() {
+        val f = fixture()
+        val task = f.createTask()
+        f.repository.update(task.copy(name = "Reviewed again"), task.revision)
+        val tool = f.tools.tool(TaskManagementTools.RUN_TASK)
+
+        assertTrue(runCatching { tool.execute(mapOf("task_id" to task.id, "revision" to task.revision),
+            CancellationToken.uncancellable()) }.exceptionOrNull() is StaleTaskRevisionException)
+        assertTrue(runCatching { tool.execute(mapOf("task_id" to "missing", "revision" to 1),
+            CancellationToken.uncancellable()) }.isFailure)
+        assertTrue(f.enqueued.isEmpty())
+    }
+
+    @Test fun deleteAfterRunIsExposedForCreateAndRevisionCheckedUpdate() {
+        val f = fixture()
+        val created = payload(f.tools.tool(TaskManagementTools.SCHEDULE_TASK).execute(
+            scheduleArgs("Remove after success").plus("delete_after_run" to true), CancellationToken.uncancellable()))
+        val task = requireNotNull(f.repository.get(created.getString("task_id")))
+        assertTrue(task.deleteAfterRun)
+        val updated = payload(f.tools.tool(TaskManagementTools.UPDATE_TASK).execute(mapOf("task_id" to task.id,
+            "patch" to mapOf("revision" to task.revision, "delete_after_run" to false)), CancellationToken.uncancellable()))
+        assertEquals("updated", updated.getString("status"))
+        assertFalse(f.repository.get(task.id)!!.deleteAfterRun)
     }
 
     @Test fun scheduleValidationRejectsInvalidIntervalsZonesWeekdaysAndPastAt() {
@@ -90,6 +135,20 @@ class TaskManagementToolsTest {
         assertEquals(4, payload(all).getJSONArray("runs").length())
         val limited = runsTool.execute(mapOf("task_id" to task.id, "limit" to 2), CancellationToken.uncancellable())
         assertEquals(2, payload(limited).getJSONArray("runs").length())
+    }
+
+    @Test fun taskRunsReturnsDeliveredResultAndConversationReference() {
+        val f = fixture()
+        val task = f.createTask()
+        f.ledger.appendIfAbsent(TaskRunRecord(task.id, "delivered-run", 10L, 11L, 12L,
+            "OK", "DELIVERED", deliveredResult = "The delivered answer.",
+            conversationMessageId = "message-ref"))
+
+        val run = payload(f.tools.tool(TaskManagementTools.TASK_RUNS).execute(
+            mapOf("task_id" to task.id), CancellationToken.uncancellable()))
+            .getJSONArray("runs").getJSONObject(0)
+        assertEquals("The delivered answer.", run.getString("delivered_result"))
+        assertEquals("message-ref", run.getString("conversation_message_id"))
     }
 
     @Test fun updateUsesExactRevisionAndPreservesTaskScopeLimits() {
@@ -172,6 +231,7 @@ class TaskManagementToolsTest {
         val ledger: TaskRunLedger,
         val sessionId: String,
         val creatorNames: List<String>,
+        val enqueued: MutableList<Pair<String, ScheduledTask?>>,
     ) {
         fun createTask(instruction: String = "Read the current status"): ScheduledTask = repository.create(
             "Diagnostic task", instruction,
@@ -198,8 +258,10 @@ class TaskManagementToolsTest {
             override fun isConnected(id: String) = false
             override fun setConnected(id: String, connected: Boolean) = Unit
         }, permissionGranted = { true }, approvalGate = ApprovalGate.INSTANCE)
-        return Fixture(TaskManagementTools(context, sessionId, names, repository, ledger, clock, zoneProvider, registry),
-            repository, ledger, sessionId, names)
+        val enqueued = mutableListOf<Pair<String, ScheduledTask?>>()
+        return Fixture(TaskManagementTools(context, sessionId, names, repository, ledger, clock, zoneProvider, registry,
+            { _, id, _, expected -> enqueued += id to expected }, { _, _ -> false }),
+            repository, ledger, sessionId, names, enqueued)
     }
 
     private fun scheduleArgs(instruction: String, cadence: String = "daily", interval: Int = 30,

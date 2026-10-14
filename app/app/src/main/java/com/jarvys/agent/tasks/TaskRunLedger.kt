@@ -31,6 +31,8 @@ data class TaskRunRecord(
     val manualOccurrenceId: String? = null,
     val causeCode: TaskRunCause? = null,
     val causeDetail: String? = null,
+    val deliveredResult: String? = null,
+    val conversationMessageId: String? = null,
 ) {
     val occurrenceId: String get() = manualOccurrenceId ?: "$taskId:$scheduledFor"
     val idempotencyKey: String get() = occurrenceId
@@ -157,6 +159,8 @@ class TaskRunLedger(private val ledger: File) {
         .putNullableString("errorCause", record.errorCause)
         .putNullableString("causeCode", record.causeCode?.code)
         .putNullableString("causeDetail", record.causeDetail)
+        .putNullableString("deliveredResult", record.deliveredResult)
+        .putNullableString("conversationMessageId", record.conversationMessageId)
         .putNullableString("model", record.model)
         .put("usageTokens", record.usageTokens ?: JSONObject.NULL)
         .toString()
@@ -189,6 +193,8 @@ class TaskRunLedger(private val ledger: File) {
                 it.isNotEmpty() && it != "${row.getString("taskId")}:${row.getLong("scheduledFor")}" },
             causeCode = causeCode,
             causeDetail = causeDetail,
+            deliveredResult = row.optNullableString("deliveredResult"),
+            conversationMessageId = row.optNullableString("conversationMessageId"),
         )
         return record
     }
@@ -222,6 +228,6 @@ class TaskRunLedger(private val ledger: File) {
 }
 
 private fun JSONObject.putNullableLong(key: String, value: Long?): JSONObject = put(key, value ?: JSONObject.NULL)
-private fun JSONObject.putNullableString(key: String, value: String?): JSONObject = put(key, value ?: JSONObject.NULL)
+internal fun JSONObject.putNullableString(key: String, value: String?): JSONObject = put(key, value ?: JSONObject.NULL)
 private fun JSONObject.optNullableLong(key: String): Long? = if (!has(key) || isNull(key)) null else getLong(key)
-private fun JSONObject.optNullableString(key: String): String? = if (!has(key) || isNull(key)) null else optString(key)
+internal fun JSONObject.optNullableString(key: String): String? = if (!has(key) || isNull(key)) null else optString(key)
