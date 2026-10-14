@@ -71,6 +71,7 @@ import com.jarvys.agent.mcp.McpAuthMode
 import com.jarvys.agent.mcp.McpConnectionManager
 import com.jarvys.agent.mcp.McpConnectionStatus
 import com.jarvys.agent.mcp.McpOAuthManager
+import com.jarvys.agent.mcp.inheritedActionPolicy
 import com.jarvys.agent.mcp.McpServerConfig
 import com.jarvys.agent.mcp.McpServerRepository
 import com.jarvys.agent.mcp.McpToolAccess
