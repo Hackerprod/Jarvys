@@ -1831,7 +1831,8 @@ public final class LocalRunStore {
             if (pending == null) return null;
             try {
                 JSONObject user = new JSONObject().put("role", "user").put("messageId", requestId)
-                    .put("interruptRequestId", requestId).put("content", pending.optString("content"))
+                    .put("interruptRequestId", requestId).put("mainChatAcknowledgementRequired", true)
+                    .put("content", pending.optString("content"))
                     .put("timestamp", System.currentTimeMillis() / 1000.0);
                 appendSessionRowLocked(conversationFile(sessionId), user);
                 return pending;
@@ -1845,21 +1846,21 @@ public final class LocalRunStore {
         synchronized (SESSION_TITLE_LOCK) {
             Set<String> userIds = new HashSet<>();
             Set<String> incorporated = new HashSet<>();
-            for (JSONObject row : readConversationRows(sessionId)) {
+            Set<String> resolved = new HashSet<>();
+            List<JSONObject> rows = readConversationRows(sessionId);
+            for (JSONObject row : rows) {
                 if ("user".equals(row.optString("role"))) {
                     String id = row.optString("messageId", "");
                     if (!id.isEmpty()) userIds.add(id);
                 } else if ("main_chat_input_incorporated".equals(row.optString("type"))) {
-                    JSONArray ids = row.optJSONArray("messageIds");
-                    if (ids != null) for (int i = 0; i < ids.length(); i++) {
-                        String id = ids.optString(i, "");
-                        if (!id.isEmpty()) incorporated.add(id);
-                    }
+                    addMessageIds(row, incorporated);
                 }
             }
+            addResolvedMessageIds(rows, resolved);
             JSONArray newlyIncorporated = new JSONArray();
             for (String id : messageIds) {
-                if (id != null && userIds.contains(id) && incorporated.add(id)) newlyIncorporated.put(id);
+                if (id != null && userIds.contains(id) && !resolved.contains(id) && incorporated.add(id))
+                    newlyIncorporated.put(id);
             }
             if (newlyIncorporated.length() == 0) return;
             try {
@@ -1869,6 +1870,70 @@ public final class LocalRunStore {
                 appendSessionRowLocked(conversationFile(sessionId), row);
             } catch (Exception error) {
                 throw new IllegalStateException("Could not persist incorporated chat inputs", error);
+            }
+        }
+    }
+
+    /** Resolves durable chat inputs that will not enter a run transcript. */
+    public synchronized void markConversationMessagesResolved(String sessionId, Iterable<String> messageIds) {
+        if (sessionId == null || messageIds == null || conversationMetadata.read(sessionId).deleted) return;
+        synchronized (SESSION_TITLE_LOCK) {
+            Set<String> knownIds = new HashSet<>();
+            Set<String> incorporated = new HashSet<>();
+            Set<String> resolved = new HashSet<>();
+            List<JSONObject> rows = readConversationRows(sessionId);
+            for (JSONObject row : rows) {
+                if ("user".equals(row.optString("role"))) {
+                    String id = row.optString("messageId", "");
+                    if (!id.isEmpty()) knownIds.add(id);
+                } else if ("main_interrupt_request".equals(row.optString("type"))) {
+                    String id = row.optString("requestId", "");
+                    if (!id.isEmpty()) knownIds.add(id);
+                } else if ("main_chat_input_incorporated".equals(row.optString("type"))) {
+                    addMessageIds(row, incorporated);
+                }
+            }
+            addResolvedMessageIds(rows, resolved);
+            JSONArray newlyResolved = new JSONArray();
+            for (String id : messageIds) {
+                if (id != null && knownIds.contains(id) && !incorporated.contains(id) && resolved.add(id))
+                    newlyResolved.put(id);
+            }
+            if (newlyResolved.length() == 0) return;
+            try {
+                JSONObject row = new JSONObject().put("type", "main_chat_input_resolved")
+                        .put("messageIds", newlyResolved)
+                        .put("timestamp", System.currentTimeMillis() / 1000.0);
+                appendSessionRowLocked(conversationFile(sessionId), row);
+            } catch (Exception error) {
+                throw new IllegalStateException("Could not persist resolved chat inputs", error);
+            }
+        }
+    }
+
+    private static void addMessageIds(JSONObject row, Set<String> destination) {
+        JSONArray ids = row.optJSONArray("messageIds");
+        if (ids != null) for (int i = 0; i < ids.length(); i++) {
+            String id = ids.optString(i, "");
+            if (!id.isEmpty()) destination.add(id);
+        }
+    }
+
+    private static void addResolvedMessageIds(List<JSONObject> rows, Set<String> destination) {
+        for (JSONObject row : rows) {
+            if ("user".equals(row.optString("role"))) {
+                String id = row.optString("messageId", "");
+                if (!id.isEmpty() && !row.optString("interruptRequestId", "").isEmpty()
+                        && !row.optBoolean("mainChatAcknowledgementRequired", false))
+                    destination.add(id);
+            } else if ("main_chat_input_resolved".equals(row.optString("type"))) {
+                addMessageIds(row, destination);
+            } else if ("assistant".equals(row.optString("role"))) {
+                String status = row.optString("status", "");
+                if ("FAILED".equals(status) || "PARTIAL".equals(status) || "STOPPED".equals(status)) {
+                    String ownerId = row.optString("userMessageId", "");
+                    if (!ownerId.isEmpty()) destination.add(ownerId);
+                }
             }
         }
     }
@@ -1903,6 +1968,13 @@ public final class LocalRunStore {
         return Collections.unmodifiableSet(incorporated);
     }
 
+    synchronized Set<String> resolvedConversationMessageIds(String sessionId) {
+        if (sessionId == null || conversationMetadata.read(sessionId).deleted) return Collections.emptySet();
+        Set<String> resolved = new HashSet<>();
+        addResolvedMessageIds(readConversationRows(sessionId), resolved);
+        return Collections.unmodifiableSet(resolved);
+    }
+
     /** Persists an intermediate assistant turn at its logical point before the steering row already on disk. */
     public synchronized String appendAssistantMessageBefore(String sessionId, String content,
             String runId, String userMessageId, String beforeMessageId) {
@@ -1931,10 +2003,16 @@ public final class LocalRunStore {
         if (sessionId == null || conversationMetadata.read(sessionId).deleted) return Collections.emptyList();
         List<JSONObject> rows = readConversationRows(sessionId);
         Set<String> dispatched = new HashSet<>();
+        Set<String> dispatchedRequiringAcknowledgement = new HashSet<>();
         Set<String> incorporated = new HashSet<>();
+        Set<String> resolved = new HashSet<>();
         for (JSONObject row : rows) {
             String id = row.optString("interruptRequestId", "");
-            if (!id.isEmpty()) dispatched.add(id);
+            if (!id.isEmpty()) {
+                dispatched.add(id);
+                if (row.optBoolean("mainChatAcknowledgementRequired", false))
+                    dispatchedRequiringAcknowledgement.add(id);
+            }
             if ("main_chat_input_incorporated".equals(row.optString("type"))) {
                 JSONArray ids = row.optJSONArray("messageIds");
                 if (ids != null) for (int i = 0; i < ids.length(); i++) {
@@ -1943,12 +2021,15 @@ public final class LocalRunStore {
                 }
             }
         }
+        addResolvedMessageIds(rows, resolved);
         List<JSONObject> pending = new ArrayList<>();
         for (JSONObject row : rows) {
             if (!"main_interrupt_request".equals(row.optString("type"))) continue;
             String id = row.optString("requestId", "");
-            boolean alreadyDispatched = dispatched.contains(id);
-            if (id.isEmpty() || alreadyDispatched && incorporated.contains(id)) continue;
+            boolean alreadyDispatched = dispatchedRequiringAcknowledgement.contains(id);
+            if (id.isEmpty() || resolved.contains(id)
+                    || dispatched.contains(id) && !alreadyDispatched
+                    || alreadyDispatched && incorporated.contains(id)) continue;
             try { pending.add(new JSONObject(row.toString()).put("sessionId", sessionId)
                     .put("alreadyDispatched", alreadyDispatched)); }
             catch (Exception malformed) { throw new IllegalStateException("Could not read pending chat follow-up", malformed); }

@@ -363,6 +363,7 @@ class MainAgentInteractionTest {
         val runCalls = AtomicInteger()
         val observedGoals = java.util.Collections.synchronizedList(mutableListOf<String>())
         val followUp = CountDownLatch(1)
+        val steeringId = AtomicReference("")
         service.runtimeFactory = AgentForegroundService.RuntimeFactory { runtimeContext, id, skills, memoryDisabled ->
             CoreAgentRuntime(runtimeContext, id, skills, CorePromptBudget.standard(), memoryDisabled)
         }
@@ -379,6 +380,7 @@ class MainAgentInteractionTest {
                         declarations: List<ToolSpec>, current: CancellationToken): ModelReply {
                         val requestId = store.appendInterruptRequest(
                             session, "picked but not incorporated", emptyList(), false)
+                        steeringId.set(requestId)
                         assertTrue(provider.dispatchPendingRequest(requestId))
                         val picked = provider.takeDurableMessages()
                         assertEquals("picked but not incorporated", picked.single().content)
@@ -399,6 +401,11 @@ class MainAgentInteractionTest {
             assertTrue("Both service turns finish", awaitRunFinished(service, context))
             assertEquals(listOf("initial request", "picked but not incorporated"), observedGoals)
             assertEquals(1, observedGoals.count { it == "picked but not incorporated" })
+            val messages = store.readConversationMessages(session)
+            assertFalse("The duplicate recovery must not write a spurious FAILED row", messages.any {
+                it.optString("role") == "assistant" && it.optString("status") == "FAILED"
+                    && it.optString("userMessageId") == steeringId.get()
+            })
         } finally {
             StopController.getInstance().stopRun()
             stopManagedService(context)
@@ -659,6 +666,43 @@ class MainAgentInteractionTest {
         }
     }
 
+    @Test fun legacyDispatchedSteeringWithoutMarkerIsNotRecoveredByRealService() {
+        StopController.getInstance().stopRun()
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val store = LocalRunStore(context)
+        val session = "recover-legacy-dispatch-${System.nanoTime()}"
+        store.appendConversationMessage(session, "user", "initial request")
+        val requestId = store.appendInterruptRequest(session, "old dispatched steering", emptyList(), false)
+        assertTrue(store.dispatchInterruptRequest(session, requestId) != null)
+        val ledger = java.io.File(context.filesDir, "jarvys/conversations/$session.jsonl")
+        ledger.writeText(ledger.readLines().joinToString("\n", postfix = "\n") { line ->
+            val row = org.json.JSONObject(line)
+            if (row.optString("messageId") == requestId) row.remove("mainChatAcknowledgementRequired")
+            row.toString()
+        })
+        assertTrue(store.readPendingInterruptRequests(session).isEmpty())
+
+        val service = startManagedService(context)
+        val runCalls = AtomicInteger()
+        service.runtimeFactory = AgentForegroundService.RuntimeFactory { _, _, _, _ ->
+            CoreAgentRuntime(emptyList(), emptyList(), emptyList(), emptyList())
+        }
+        service.mainChatRunner = AgentForegroundService.MainChatRunner { _, _, _, _, _, _ ->
+            runCalls.incrementAndGet()
+            CoreAgentLoop.Result("unexpected-legacy-replay", "unexpected", 1, "PARTIAL")
+        }
+        try {
+            startServiceIntent(context, android.content.Intent(context, AgentForegroundService::class.java)
+                .setAction(AgentForegroundService.ACTION_RECOVER_PENDING_INPUTS))
+            assertTrue("Legacy recovery scan finishes without a run", awaitRunFinished(service, context))
+            assertEquals(0, runCalls.get())
+            assertTrue(store.readPendingInterruptRequests(session).isEmpty())
+        } finally {
+            StopController.getInstance().stopRun()
+            stopManagedService(context)
+        }
+    }
+
     @Test fun steeringPreservesAnActiveApprovalUntilTheUserStopsTheRun() {
         withHeldWorker { service, context, session, release ->
             val cancelled = AtomicInteger()
@@ -709,7 +753,9 @@ class MainAgentInteractionTest {
         service.runtimeFactory = AgentForegroundService.RuntimeFactory { runtimeContext, id, skills, memoryDisabled ->
             CoreAgentRuntime(runtimeContext, id, skills, CorePromptBudget.standard(), memoryDisabled)
         }
-        service.mainChatRunner = AgentForegroundService.MainChatRunner { runtime, _, _, _, _, _ ->
+        val runCalls = AtomicInteger()
+        service.mainChatRunner = AgentForegroundService.MainChatRunner { _, _, _, _, _, _ ->
+            runCalls.incrementAndGet()
             entered.countDown()
             while (release.count > 0) {
                 try { release.await() } catch (_: InterruptedException) { }
@@ -720,10 +766,9 @@ class MainAgentInteractionTest {
             AgentRunUiState.resetSession(session)
             startServiceIntent(context, AgentForegroundService.storedChatMessageIntent(context, session, initialId))
             assertTrue(entered.await(5, TimeUnit.SECONDS))
-            val provider = AgentForegroundService::class.java.getDeclaredField("activeSteeringProvider")
-                .apply { isAccessible = true }.get(service) as MainChatTurnContextProvider
-            provider.closeForRunExit()
-            assertTrue(AgentForegroundService.interruptAndSend(context, session, "cancel with parent run", arrayListOf(), false))
+            val steeringMessages = listOf("cancel with parent run 1", "cancel with parent run 2", "cancel with parent run 3")
+            for (message in steeringMessages)
+                assertTrue(AgentForegroundService.interruptAndSend(context, session, message, arrayListOf(), false))
             assertTrue(StopController.getInstance().stopRun())
             val generation = StopController.getInstance().javaClass.getDeclaredField("generation")
                 .apply { isAccessible = true }.get(StopController.getInstance()) as java.util.concurrent.atomic.AtomicLong
@@ -732,15 +777,62 @@ class MainAgentInteractionTest {
             worker(service).submit {}.get(5, TimeUnit.SECONDS)
             assertEquals("A stopped owner does not start a replacement run", afterStop, generation.get())
             val messages = store.readConversationMessages(session)
-            val queued = messages.single { it.optString("role") == "user" && it.optString("content") == "cancel with parent run" }
-            assertTrue(messages.any { it.optString("role") == "assistant" && it.optString("status") == "FAILED"
-                && it.optString("userMessageId") == queued.optString("messageId") })
+            val queued = messages.filter { it.optString("role") == "user" && it.optString("content") in steeringMessages }
+            assertEquals(steeringMessages.size, queued.size)
+            for (input in queued) assertTrue(messages.any {
+                it.optString("role") == "assistant" && it.optString("status") == "FAILED"
+                    && it.optString("userMessageId") == input.optString("messageId")
+            })
+            val incorporatedIds = store.incorporatedConversationMessageIds(session)
+            assertTrue(queued.none { incorporatedIds.contains(it.optString("messageId")) })
             assertTrue(store.readPendingInterruptRequests(session).isEmpty())
             assertFalse(AgentRunUiState.state.value.running)
+            assertEquals(1, runCalls.get())
+            startServiceIntent(context, android.content.Intent(context, AgentForegroundService::class.java)
+                .setAction(AgentForegroundService.ACTION_RECOVER_PENDING_INPUTS))
+            assertTrue("The recovery scan finishes without a follow-up", awaitRunFinished(service, context))
+            assertEquals("Resolved STOP inputs never start after recovery", 1, runCalls.get())
         } finally {
             release.countDown()
             StopController.getInstance().stopRun()
             if (!worker(service).isShutdown) worker(service).submit {}.get(5, TimeUnit.SECONDS)
+            stopManagedService(context)
+        }
+    }
+
+    @Test fun deterministicRuntimeFactoryFailureWritesOneFailedResponseAndDoesNotRetry() {
+        StopController.getInstance().stopRun()
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val session = "runtime-factory-failure-${System.nanoTime()}"
+        val store = LocalRunStore(context)
+        store.appendConversationMessage(session, "user", "initial request")
+        val steeringId = store.appendInterruptRequest(session, "retry after owner exit", emptyList(), false)
+        assertTrue(store.dispatchInterruptRequest(session, steeringId) != null)
+        val service = startManagedService(context)
+        val factoryCalls = AtomicInteger()
+        val runnerCalls = AtomicInteger()
+        service.runtimeFactory = AgentForegroundService.RuntimeFactory { _, _, _, _ ->
+            factoryCalls.incrementAndGet()
+            throw IllegalStateException("deterministic runtime construction failure")
+        }
+        service.mainChatRunner = AgentForegroundService.MainChatRunner { _, _, _, _, _, _ ->
+            runnerCalls.incrementAndGet()
+            CoreAgentLoop.Result("unexpected-runner", "unexpected", 1, "PARTIAL")
+        }
+        try {
+            startServiceIntent(context, android.content.Intent(context, AgentForegroundService::class.java)
+                .setAction(AgentForegroundService.ACTION_RECOVER_PENDING_INPUTS))
+            assertTrue("The failed run and its recovery scan finish", awaitRunFinished(service, context))
+            val failures = store.readConversationMessages(session).filter {
+                it.optString("role") == "assistant" && it.optString("status") == "FAILED"
+                    && it.optString("userMessageId") == steeringId
+            }
+            assertEquals(1, factoryCalls.get())
+            assertEquals(0, runnerCalls.get())
+            assertEquals(1, failures.size)
+            assertTrue(store.readPendingInterruptRequests(session).isEmpty())
+        } finally {
+            StopController.getInstance().stopRun()
             stopManagedService(context)
         }
     }

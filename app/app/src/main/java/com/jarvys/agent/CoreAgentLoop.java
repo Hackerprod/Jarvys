@@ -58,6 +58,9 @@ public final class CoreAgentLoop {
         /** Called after newly collected durable user messages have entered and checkpointed in the transcript. */
         default void onDurableMessagesIncorporated(List<IncomingMessage> messages) { }
 
+        /** Called when a durable message is discarded before transcript insertion. */
+        default void onDurableMessagesDiscarded(List<IncomingMessage> messages) { }
+
 
         default void onToolProgress(String stage, String callId, String displayName, String detail) {
             onProgress(stage, displayName);
@@ -1287,6 +1290,7 @@ public final class CoreAgentLoop {
         collectTurnContext(finalCheckpoint);
         boolean appended = false;
         List<IncomingMessage> incorporated = new ArrayList<>();
+        List<IncomingMessage> discarded = new ArrayList<>();
         if (assistantAnswer != null && listener != null) {
             IncomingMessage nextInput = null;
             for (IncomingMessage message : pendingDurableMessages) {
@@ -1301,7 +1305,11 @@ public final class CoreAgentLoop {
         for (IncomingMessage message : new ArrayList<>(pendingDurableMessages)) {
             pendingDurableMessages.remove(message);
             pendingDurableIds.remove(message.id);
-            if (!appliedIncomingIds.add(message.id) || message.content.isEmpty()) continue;
+            if (message.content.isEmpty()) {
+                discarded.add(message);
+                continue;
+            }
+            if (!appliedIncomingIds.add(message.id)) continue;
             if (message.genuineUser) {
                 ConversationTurn userTurn = new ConversationTurn("user", message.content);
                 transcript.add(userTurn);
@@ -1341,6 +1349,8 @@ public final class CoreAgentLoop {
             if (turnContextProvider != null) turnContextProvider.durableMessagesIncorporated(confirmed);
             if (listener != null) listener.onDurableMessagesIncorporated(confirmed);
         }
+        if (!discarded.isEmpty() && listener != null)
+            listener.onDurableMessagesDiscarded(Collections.unmodifiableList(discarded));
         return appended;
     }
 

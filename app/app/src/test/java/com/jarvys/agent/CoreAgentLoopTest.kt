@@ -106,6 +106,46 @@ class CoreAgentLoopTest {
     }
 
     @Test
+    fun discardedEmptyDurableMessageIsResolvedWithoutTranscriptAcknowledgement() {
+        val message = CoreAgentLoop.IncomingMessage.mainChat("empty-durable", "")
+        var pending = listOf(message)
+        val provider = object : CoreAgentLoop.TurnContextProvider {
+            override fun takeUntrustedContext() = ""
+            override fun takeDurableMessages(): List<CoreAgentLoop.IncomingMessage> =
+                pending.also { pending = emptyList() }
+        }
+        val discarded = mutableListOf<String>()
+        var incorporatedCallbacks = 0
+        val listener = object : CoreAgentLoop.ProgressListener {
+            override fun onProgress(node: String, message: String) { }
+            override fun onDurableMessagesIncorporated(messages: List<CoreAgentLoop.IncomingMessage>) {
+                incorporatedCallbacks += messages.size
+            }
+            override fun onDurableMessagesDiscarded(messages: List<CoreAgentLoop.IncomingMessage>) {
+                discarded.addAll(messages.map { it.id })
+            }
+        }
+        val model = object : CoreAgentLoop.Model {
+            override fun complete(
+                transcript: List<ConversationTurn>,
+                prompt: String,
+                tools: List<ToolSpec>,
+                token: CancellationToken,
+            ) = ModelReply("Finished", emptyList())
+        }
+        val loop = CoreAgentLoop(model, CoreToolRegistry(emptyList()), "Instructions", "empty-durable-session",
+            CorePromptBudget.standard(), null, CoreAgentLoop.ToolResultBudget.UNBOUNDED, provider, null)
+
+        val result = loop.run("initial request", emptyList(), CancellationToken.uncancellable(), listener)
+
+        assertEquals("COMPLETED", result.outcome)
+        assertEquals(listOf("empty-durable"), discarded)
+        assertEquals(0, incorporatedCallbacks)
+        assertFalse(loop.checkpointSnapshot().appliedIncomingIds.contains("empty-durable"))
+        assertFalse(loop.transcriptSnapshot().any { it.content.isEmpty() })
+    }
+
+    @Test
     fun emptyCrewContinuationWithoutRealMessagesEndsWithoutCallingModel() {
         val provider = object : CoreAgentLoop.TurnContextProvider {
             override fun takeUntrustedContext() = ""

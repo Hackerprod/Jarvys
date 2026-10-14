@@ -15,6 +15,7 @@ final class MainChatTurnContextProvider implements CoreAgentLoop.TurnContextProv
     private String cursorMessageId;
     private final Set<String> collectedMessageIds = new HashSet<>();
     private final Set<String> incorporatedMessageIds = new HashSet<>();
+    private final Set<String> resolvedMessageIds = new HashSet<>();
     private boolean closed;
 
     MainChatTurnContextProvider(LocalRunStore store, String sessionId, String cursorMessageId) {
@@ -25,6 +26,7 @@ final class MainChatTurnContextProvider implements CoreAgentLoop.TurnContextProv
         this.initialCursorMessageId = cursorMessageId;
         this.cursorMessageId = cursorMessageId;
         this.incorporatedMessageIds.addAll(store.incorporatedConversationMessageIds(sessionId));
+        refreshResolvedMessageIds();
     }
 
     @Override public synchronized List<CoreAgentLoop.IncomingMessage> takeDurableMessages() {
@@ -54,7 +56,9 @@ final class MainChatTurnContextProvider implements CoreAgentLoop.TurnContextProv
                 acknowledged.add(message.id);
         }
         store.markConversationMessagesIncorporated(sessionId, acknowledged);
-        incorporatedMessageIds.addAll(acknowledged);
+        incorporatedMessageIds.clear();
+        incorporatedMessageIds.addAll(store.incorporatedConversationMessageIds(sessionId));
+        refreshResolvedMessageIds();
     }
 
     /** Dispatch a persisted follow-up only while this run can still consume it. */
@@ -65,10 +69,11 @@ final class MainChatTurnContextProvider implements CoreAgentLoop.TurnContextProv
 
     /** Latest persisted message that the loop has not confirmed in its transcript. */
     synchronized String latestUnincorporatedSteeringMessageId() {
+        refreshResolvedMessageIds();
         String latest = "";
         for (JSONObject row : store.readUserMessagesAfter(sessionId, initialCursorMessageId)) {
             String id = row.optString("messageId", "");
-            if (!id.isEmpty() && !incorporatedMessageIds.contains(id)) latest = id;
+            if (!id.isEmpty() && !isResolved(id)) latest = id;
         }
         return latest;
     }
@@ -78,6 +83,7 @@ final class MainChatTurnContextProvider implements CoreAgentLoop.TurnContextProv
     }
 
     private List<CoreAgentLoop.IncomingMessage> readAfterCursor() {
+        refreshResolvedMessageIds();
         List<JSONObject> rows = store.readUserMessagesAfter(sessionId, cursorMessageId);
         if (rows.isEmpty()) return Collections.emptyList();
         List<CoreAgentLoop.IncomingMessage> messages = new ArrayList<>();
@@ -85,11 +91,19 @@ final class MainChatTurnContextProvider implements CoreAgentLoop.TurnContextProv
             String id = row.optString("messageId", "");
             if (id.isEmpty()) continue;
             cursorMessageId = id;
-            if (incorporatedMessageIds.contains(id)) continue;
+            if (isResolved(id)) continue;
             messages.add(CoreAgentLoop.IncomingMessage.mainChat(id, row.optString("content", "")));
             collectedMessageIds.add(id);
         }
         return Collections.unmodifiableList(messages);
+    }
+
+    private boolean isResolved(String messageId) {
+        return incorporatedMessageIds.contains(messageId) || resolvedMessageIds.contains(messageId);
+    }
+
+    private void refreshResolvedMessageIds() {
+        resolvedMessageIds.addAll(store.resolvedConversationMessageIds(sessionId));
     }
 
     @Override public String takeUntrustedContext() { return ""; }
