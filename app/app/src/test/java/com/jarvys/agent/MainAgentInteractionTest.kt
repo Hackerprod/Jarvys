@@ -756,19 +756,33 @@ class MainAgentInteractionTest {
     private fun worker(service: AgentForegroundService) = AgentForegroundService::class.java.getDeclaredField("worker")
         .apply { isAccessible = true }.get(service) as ExecutorService
 
+    private var managedController: org.robolectric.android.controller.ServiceController<AgentForegroundService>? = null
+    private var managedStartId = 0
+
+    /** Robolectric only records startForegroundService; create the real service once and deliver the recorded starts to it. */
     private fun startManagedService(context: Context): AgentForegroundService {
-        context.startForegroundService(android.content.Intent(context, AgentForegroundService::class.java)
-            .setAction(AgentForegroundService.ACTION_RECOVER_PENDING_INPUTS))
-        org.robolectric.shadows.ShadowLooper.idleMainLooper()
-        val field = AgentForegroundService::class.java.getDeclaredField("currentInstance")
-            .apply { isAccessible = true }
-        val service = field.get(null) as AgentForegroundService
+        val controller = org.robolectric.Robolectric.buildService(AgentForegroundService::class.java).create()
+        managedController = controller
+        managedStartId = 0
+        val service = controller.get()
         worker(service).submit {}.get(5, TimeUnit.SECONDS)
+        deliverStartedServices(context)
         return service
+    }
+
+    private fun deliverStartedServices(context: Context) {
+        val service = managedController?.get() ?: return
+        val app = org.robolectric.Shadows.shadowOf(context.applicationContext as android.app.Application)
+        var intent = app.nextStartedService
+        while (intent != null) {
+            service.onStartCommand(intent, 0, ++managedStartId)
+            intent = app.nextStartedService
+        }
     }
 
     private fun startServiceIntent(context: Context, intent: android.content.Intent) {
         context.startForegroundService(intent)
+        deliverStartedServices(context)
         org.robolectric.shadows.ShadowLooper.idleMainLooper()
     }
 
@@ -776,6 +790,7 @@ class MainAgentInteractionTest {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds)
         while (latch.count > 0 && System.nanoTime() < deadline) {
             org.robolectric.shadows.ShadowLooper.idleMainLooper()
+            deliverStartedServices(androidx.test.core.app.ApplicationProvider.getApplicationContext())
             if (latch.count > 0) Thread.sleep(10)
         }
         return latch.count == 0L
