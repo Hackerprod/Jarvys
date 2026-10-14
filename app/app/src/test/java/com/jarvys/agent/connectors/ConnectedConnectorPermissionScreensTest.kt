@@ -5,6 +5,8 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
@@ -138,7 +140,7 @@ class ConnectedConnectorPermissionScreensTest {
         registry.register(definition)
         registry.connect(definition.id)
         assertEquals(ConnectorState.CONNECTED, registry.state(definition))
-        show(scale, dark) { DeveloperWorkspace(registry) }
+        show(scale, dark) { androidx.compose.foundation.layout.Column(androidx.compose.ui.Modifier.fillMaxWidth().verticalScroll(androidx.compose.foundation.rememberScrollState())) { DeveloperWorkspace(registry) } }
         compose.onNodeWithTag("developer-connector-${definition.id}").assertIsDisplayed()
         val read = "connector-policy-${CalendarConnector.SEARCH}"
         val write = "connector-policy-${CalendarConnector.CREATE}"

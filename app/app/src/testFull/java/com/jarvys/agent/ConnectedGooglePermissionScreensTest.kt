@@ -5,6 +5,8 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
@@ -136,7 +138,7 @@ class ConnectedGooglePermissionScreensTest {
         }
     }
     private fun showDeveloper(scale: Float = 1f, dark: Boolean = false) =
-        showScreen(scale, dark) { DeveloperWorkspace(registry) }
+        showScreen(scale, dark) { androidx.compose.foundation.layout.Column(androidx.compose.ui.Modifier.fillMaxWidth().verticalScroll(androidx.compose.foundation.rememberScrollState())) { DeveloperWorkspace(registry) } }
     private fun scopeTag(scope: String) = "google-scope-${scope.removeSuffix("/").substringAfterLast('/')}"
     private fun policyTag(operation: ConnectorOperation) = "connector-policy-${operation.name}"
     private fun pick(prefix: String, label: Int) {
