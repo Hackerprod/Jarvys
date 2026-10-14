@@ -34,7 +34,6 @@ final class MainChatTranscriptStore {
         this.sessionId = sessionId;
         this.archiveLock = ARCHIVE_LOCKS.computeIfAbsent(files.getAbsolutePath() + ":" + sessionId, ignored -> new Object());
         this.artifacts = new CrewContextArtifacts(files, sessionId, "main-chat-transcript");
-        refreshOwnership();
     }
 
     private void refreshOwnership() {
