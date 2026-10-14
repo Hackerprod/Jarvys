@@ -156,6 +156,8 @@ public class LocalRunStoreConversationHistoryStreamingTest {
         long beforeMarkers = ledger.length();
         String assistantId = store.appendConversationMessage(session, "assistant", "later hidden answer");
         store.appendAssistantDeleted(session, assistantId);
+        // appendAssistantDeleted resolves the owner with its own scan; only the drawer refresh is measured here.
+        long parsesBeforeDrawerRefresh = LocalRunStore.conversationRowsFullParseCountForTests();
         List<JSONObject> tombstoned = store.listConversations();
         assertEquals("a tombstone in the appended suffix retracts the assistant from counts",
                 turnsBeforeHiddenAssistant, findSession(tombstoned, session).optInt("turns"));
@@ -164,7 +166,8 @@ public class LocalRunStoreConversationHistoryStreamingTest {
                 ledger.length() - oldLength,
                 LocalRunStore.historyLedgerScanBytesForTests() - firstBytes);
         assertTrue("the marker suffix itself was scanned", ledger.length() - beforeMarkers > 0L);
-        assertEquals(0L, LocalRunStore.conversationRowsFullParseCountForTests());
+        assertEquals("the drawer refresh itself must not materialize the ledger", parsesBeforeDrawerRefresh,
+                LocalRunStore.conversationRowsFullParseCountForTests());
     }
 
     private static List<JSONObject> legacyListConversations(File files, LocalRunStore store) throws Exception {
