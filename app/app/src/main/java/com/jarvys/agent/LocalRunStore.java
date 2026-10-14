@@ -2323,7 +2323,7 @@ public final class LocalRunStore {
         synchronized (SESSION_TITLE_LOCK) { appendSessionRowLocked(conversationFile(sessionId), row); }
     }
 
-    private static boolean isResultOnlyRow(JSONObject row) {
+    static boolean isResultOnlyRow(JSONObject row) {
         String type = row.optString("type", "");
         return type.startsWith("crew_coordination_") || type.startsWith("workspace_coordination_")
                 || row.has("crewCoordinationSchemaVersion") || row.has("workspaceCoordinationSchemaVersion")
@@ -3033,6 +3033,7 @@ public final class LocalRunStore {
         java.util.IdentityHashMap<JSONObject, Long> rowOffsetsByIdentity = new java.util.IdentityHashMap<>();
         java.util.IdentityHashMap<JSONObject, Integer> messageIndicesByIdentity = new java.util.IdentityHashMap<>();
         String pageCacheKey;
+        Object snapshotIdentity;
         long snapshotLength;
         long snapshotModified;
         synchronized (SESSION_TITLE_LOCK) {
@@ -3041,9 +3042,10 @@ public final class LocalRunStore {
                         Collections.emptySet(), Collections.emptySet(), Collections.emptySet(), Collections.emptySet(),
                         new TimelineProjectionMarkers());
             }
+            snapshotIdentity = fileIdentity(ledger);
             snapshotLength = ledger.length();
             snapshotModified = ledger.lastModified();
-            pageCacheKey = timelinePageCacheKey(ledger, snapshotLength, snapshotModified,
+            pageCacheKey = timelinePageCacheKey(ledger, snapshotIdentity, snapshotLength, snapshotModified,
                     beforeOffset, turnCount, newerInvalidations, newerMarkers);
             ConversationTimelinePage cached = cachedTimelinePage(pageCacheKey);
             if (cached != null) return cached;
@@ -3096,7 +3098,8 @@ public final class LocalRunStore {
                 invalidatedToolTurnMessageIds, combinedMarkers);
         synchronized (SESSION_TITLE_LOCK) {
             if (!conversationMetadata.read(sessionId).deleted
-                    && pageCacheKey.equals(timelinePageCacheKey(ledger, ledger.length(), ledger.lastModified(),
+                    && pageCacheKey.equals(timelinePageCacheKey(ledger, fileIdentity(ledger),
+                            ledger.length(), ledger.lastModified(),
                             beforeOffset, turnCount, newerInvalidations, newerMarkers)))
                 cacheTimelinePage(pageCacheKey, result);
         }
@@ -3108,13 +3111,13 @@ public final class LocalRunStore {
         return readConversationTimelinePage(sessionId, ConversationLedgerPager.NO_CURSOR, INITIAL_TIMELINE_TURNS).events;
     }
 
-    private static String timelinePageCacheKey(File ledger, long length, long lastModified,
+    private static String timelinePageCacheKey(File ledger, Object fileIdentity, long length, long lastModified,
                                                long beforeOffset, int turnCount,
                                                Set<String> newerInvalidations,
                                                TimelineProjectionMarkers newerMarkers) {
         List<String> sortedInvalidations = new ArrayList<>(newerInvalidations);
         Collections.sort(sortedInvalidations);
-        return ledger.getAbsolutePath() + '\u0000' + length + '\u0000'
+        return ledger.getAbsolutePath() + '\u0000' + String.valueOf(fileIdentity) + '\u0000' + length + '\u0000'
                 + lastModified + '\u0000' + beforeOffset + '\u0000' + turnCount
                 + '\u0000' + sortedInvalidations
                 + '\u0000' + newerMarkers.cacheKey();

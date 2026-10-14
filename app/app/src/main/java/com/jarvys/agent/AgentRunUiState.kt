@@ -813,7 +813,13 @@ object AgentRunUiState {
         val transientEventIds = transientEvents.mapTo(mutableSetOf()) { it.id }
         val olderLoadedEvents = current.events.filter { event ->
             val identity = refreshEventIdentity(event)
+            val replacedLiveTool = event.kind == "tool"
+                && event.stage in setOf("tool_call", "tool_progress", "approval_waiting")
+                && identity == null
+                && !event.toolCallId.isNullOrBlank()
+                && persistedToolCallCounts[event.toolCallId] == 1
             event.id !in transientEventIds
+                && !replacedLiveTool
                 && (identity == null || identity !in durableEventIdentities)
                 && event.id < firstPersistedId && event.kind in durableKinds
         }

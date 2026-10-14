@@ -11,10 +11,14 @@ import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
+
+import org.json.JSONObject;
 
 /** Reads bounded, user-turn-aligned windows from a conversation's JSONL ledger. */
 public final class ConversationLedgerPager {
@@ -29,6 +33,10 @@ public final class ConversationLedgerPager {
     private static final byte[] CONTENT_TOKEN = ascii("\"content\"");
     private static final byte[] USER_TOKEN = ascii("\"user\"");
     private static final byte[] ASSISTANT_TOKEN = ascii("\"assistant\"");
+    private static final byte[] ROLE_WORD = ascii("role");
+    private static final byte[] CONTENT_WORD = ascii("content");
+    private static final byte[] USER_WORD = ascii("user");
+    private static final byte[] ASSISTANT_WORD = ascii("assistant");
     private static final Map<String, Page> PAGE_CACHE = new LinkedHashMap<String, Page>(16, 0.75f, true) {
         @Override protected boolean removeEldestEntry(Map.Entry<String, Page> eldest) {
             return size() > MAX_CACHED_PAGES;
@@ -265,7 +273,23 @@ public final class ConversationLedgerPager {
     /** Returns 1 for a timeline row with a stable ID, 2 for a legacy row, and 0 otherwise. */
     private static int classifyTimelineRow(byte[] bytes, int length) {
         if (!mightBeTimelineMessageRow(bytes, length)) return 0;
-        return new JsonByteScanner(bytes, length).timelineClassification();
+        int classification = new JsonByteScanner(bytes, length).timelineClassification();
+        return classification == JsonByteScanner.AMBIGUOUS
+                ? classifyTimelineRowWithJSONObject(bytes, length) : classification;
+    }
+
+    /** Uses the production JSONObject rule for rows the byte parser cannot classify exactly. */
+    private static int classifyTimelineRowWithJSONObject(byte[] bytes, int length) {
+        int jsonLength = length > 0 && bytes[length - 1] == '\r' ? length - 1 : length;
+        try {
+            JSONObject row = new JSONObject(new String(bytes, 0, jsonLength, StandardCharsets.UTF_8));
+            if (LocalRunStore.isResultOnlyRow(row)) return 0;
+            String role = row.optString("role", "");
+            if (!("user".equals(role) || "assistant".equals(role)) || !row.has("content")) return 0;
+            return row.optString("messageId", "").isEmpty() ? 2 : 1;
+        } catch (Exception invalidJson) {
+            return 0;
+        }
     }
 
     /** One-pass byte prefilter; escaped names or values are sent to the strict scanner too. */
@@ -276,14 +300,36 @@ public final class ConversationLedgerPager {
         boolean assistant = false;
         for (int index = 0; index < length; index++) {
             if (bytes[index] == '\\' && index + 1 < length && bytes[index + 1] == 'u') return true;
-            if (bytes[index] != '"') continue;
-            role |= matchesAt(bytes, length, index, ROLE_TOKEN);
-            content |= matchesAt(bytes, length, index, CONTENT_TOKEN);
-            user |= matchesAt(bytes, length, index, USER_TOKEN);
-            assistant |= matchesAt(bytes, length, index, ASSISTANT_TOKEN);
+            if (bytes[index] == '"') {
+                role |= matchesAt(bytes, length, index, ROLE_TOKEN);
+                content |= matchesAt(bytes, length, index, CONTENT_TOKEN);
+                user |= matchesAt(bytes, length, index, USER_TOKEN);
+                assistant |= matchesAt(bytes, length, index, ASSISTANT_TOKEN);
+            }
+            // JSONObject accepts some lenient spellings (for example single-quoted or
+            // unquoted names). Keep those rows on the candidate path for real validation.
+            switch (bytes[index]) {
+                case 'r': role |= matchesWordAt(bytes, length, index, ROLE_WORD); break;
+                case 'c': content |= matchesWordAt(bytes, length, index, CONTENT_WORD); break;
+                case 'u': user |= matchesWordAt(bytes, length, index, USER_WORD); break;
+                case 'a': assistant |= matchesWordAt(bytes, length, index, ASSISTANT_WORD); break;
+                default: break;
+            }
             if (role && content && (user || assistant)) return true;
         }
         return false;
+    }
+
+    private static boolean matchesWordAt(byte[] bytes, int length, int offset, byte[] target) {
+        if (!matchesAt(bytes, length, offset, target)) return false;
+        if (offset > 0 && isWordByte(bytes[offset - 1])) return false;
+        int end = offset + target.length;
+        return end >= length || !isWordByte(bytes[end]);
+    }
+
+    private static boolean isWordByte(byte value) {
+        return value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z'
+                || value >= '0' && value <= '9' || value == '_';
     }
 
     private static boolean matchesAt(byte[] bytes, int length, int offset, byte[] target) {
@@ -426,6 +472,7 @@ public final class ConversationLedgerPager {
 
     /** Strict structural scanner that validates candidate rows directly in their UTF-8 bytes. */
     private static final class JsonByteScanner {
+        static final int AMBIGUOUS = -1;
         private final byte[] json;
         private final int length;
         private int index;
@@ -437,6 +484,7 @@ public final class ConversationLedgerPager {
         private boolean resultOnly;
         private boolean stableMessageId;
         private boolean resultOnlyType;
+        private boolean requiresJSONObjectValidation;
 
         JsonByteScanner(byte[] json, int length) {
             this.json = json;
@@ -444,19 +492,22 @@ public final class ConversationLedgerPager {
         }
 
         int timelineClassification() {
-            if (!parseObject() || !(userRole || assistantRole) || !content || resultOnly || resultOnlyType) return 0;
+            if (!parseObject() || requiresJSONObjectValidation) return AMBIGUOUS;
+            if (!(userRole || assistantRole) || !content || resultOnly || resultOnlyType) return 0;
             return stableMessageId ? 1 : 2;
         }
 
         private boolean parseObject() {
             skipWhitespace();
             if (!take('{')) return false;
+            Set<String> keys = new HashSet<>();
             while (true) {
                 skipWhitespace();
                 if (take('}')) return finishObject();
                 if (!readString()) return false;
                 int keyStart = stringStart;
                 int keyEnd = stringEnd;
+                noteObjectKey(keys, keyStart, keyEnd);
                 skipWhitespace();
                 if (!take(':')) return false;
                 skipWhitespace();
@@ -490,7 +541,13 @@ public final class ConversationLedgerPager {
                     }
                 } else if (!skipValue()) return false;
                 skipWhitespace();
-                if (take(',')) continue;
+                if (take(',')) {
+                    int afterComma = index;
+                    skipWhitespace();
+                    if (index < length && json[index] == '}') requiresJSONObjectValidation = true;
+                    index = afterComma;
+                    continue;
+                }
                 if (take('}')) return finishObject();
                 return false;
             }
@@ -514,15 +571,22 @@ public final class ConversationLedgerPager {
             index++; // opening brace
             skipWhitespace();
             if (take('}')) return true;
+            Set<String> keys = new HashSet<>();
             while (true) {
                 if (!readString()) return false;
+                int keyStart = stringStart;
+                int keyEnd = stringEnd;
+                noteObjectKey(keys, keyStart, keyEnd);
                 skipWhitespace();
                 if (!take(':')) return false;
                 skipWhitespace();
                 if (!skipValue()) return false;
                 skipWhitespace();
                 if (take(',')) {
+                    int afterComma = index;
                     skipWhitespace();
+                    if (index < length && json[index] == '}') requiresJSONObjectValidation = true;
+                    index = afterComma;
                     continue;
                 }
                 return take('}');
@@ -537,7 +601,10 @@ public final class ConversationLedgerPager {
                 if (!skipValue()) return false;
                 skipWhitespace();
                 if (take(',')) {
+                    int afterComma = index;
                     skipWhitespace();
+                    if (index < length && json[index] == ']') requiresJSONObjectValidation = true;
+                    index = afterComma;
                     continue;
                 }
                 return take(']');
@@ -569,7 +636,29 @@ public final class ConversationLedgerPager {
                 while (index < length && isDigit(json[index])) index++;
                 if (index == exponentStart) return false;
             }
-            return index > start;
+            if (index <= start) return false;
+            try {
+                double value = Double.parseDouble(new String(json, start, index - start,
+                        StandardCharsets.US_ASCII));
+                if (Double.isInfinite(value) || Double.isNaN(value)) requiresJSONObjectValidation = true;
+            } catch (NumberFormatException uncertainNumber) {
+                requiresJSONObjectValidation = true;
+            }
+            return true;
+        }
+
+        private void noteObjectKey(Set<String> keys, int start, int end) {
+            StringBuilder key = new StringBuilder(end - start);
+            for (int cursor = start; cursor < end; cursor++) {
+                int value = json[cursor] & 0xff;
+                if (value == '\\' || value >= 0x80) {
+                    // Escaped and non-ASCII spellings need JSONObject's key normalization.
+                    requiresJSONObjectValidation = true;
+                    return;
+                }
+                key.append((char) value);
+            }
+            if (!keys.add(key.toString())) requiresJSONObjectValidation = true;
         }
 
         private boolean takeLiteral(String value) {
