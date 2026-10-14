@@ -154,10 +154,10 @@ public final class AgentForegroundService extends Service {
           sessionLanes.remove(sessionId, lane);
         }
         idleWaiters.forEach(waiter -> waiter.complete(null));
-        for (SessionRequest request : rejectedRequests) {
-          if (request.onRejected != null) {
+        for (SessionRequest queuedRequest : rejectedRequests) {
+          if (queuedRequest.onRejected != null) {
             try {
-              request.onRejected.run();
+              queuedRequest.onRejected.run();
             } catch (RuntimeException ignored) { }
           }
         }
