@@ -63,23 +63,13 @@ class FactoryPreferencesBackupActivityTest {
         source = BackupReviewControl(nonce) { true }; transfer = FileShareTransfer.reserve().complete(archive.bytes(), nonce) { true }
     }
     @After fun cleanup() {
-        var closeFailure: Throwable? = null
         val otherFailures = mutableListOf<Throwable>()
-        fun record(failure: Throwable) { if (failure !== closeFailure) otherFailures += failure }
-        try {
-            drain()
-            controllers.asReversed().forEach { controller ->
-                try { controller.pause().stop().destroy() } catch (failure: Throwable) { record(failure) }
-            }
-            drain()
-            if (::coordinator.isInitialized) {
-                coordinator.session()?.let { it.preparing = false }
-                coordinator.session()?.let { owner ->
-                    try { worker { coordinator.close(owner) {} } }
-                    catch (failure: Throwable) { closeFailure = failure.cause ?: failure }
-                }
-            }
-        } catch (failure: Throwable) { record(failure) }
+        fun record(failure: Throwable) { otherFailures += failure }
+        try { drain() } catch (failure: Throwable) { record(failure) }
+        controllers.asReversed().forEach { controller ->
+            try { controller.pause().stop().destroy() } catch (failure: Throwable) { record(failure) }
+        }
+        try { drain() } catch (failure: Throwable) { record(failure) }
         finally {
             if (::source.isInitialized) try { source.close() } catch (failure: Throwable) { record(failure) }
             if (::transfer.isInitialized) try { transfer.close() } catch (failure: Throwable) { record(failure) }
@@ -87,10 +77,9 @@ class FactoryPreferencesBackupActivityTest {
 
             var coordinatorClean = false
             if (::coordinator.isInitialized) {
-                val needsRecovery = closeFailure != null || coordinator.session() != null ||
-                    !coordinator.canBegin() || !FactoryInteractionAdmission.available(coordinator)
-                if (needsRecovery) try { worker { coordinator.restore() } }
-                catch (failure: Throwable) { record(failure) }
+                // Restore is the synthetic process-recovery boundary; it releases even a revoked
+                // session if the test failed before reaching its normal close path.
+                try { worker { coordinator.restore() } } catch (failure: Throwable) { record(failure) }
                 try { assertNull(coordinator.session()) } catch (failure: Throwable) { record(failure) }
                 try { assertTrue(coordinator.canBegin()) } catch (failure: Throwable) { record(failure) }
                 try { assertTrue(FactoryInteractionAdmission.available(coordinator)) }
@@ -98,12 +87,10 @@ class FactoryPreferencesBackupActivityTest {
                 coordinatorClean = coordinator.session() == null && coordinator.canBegin() &&
                     FactoryInteractionAdmission.available(coordinator)
 
-                if (coordinatorClean) {
-                    try {
-                        FactoryDataBackupCoordinator::class.java.getDeclaredField("instance")
-                            .apply { isAccessible = true }.set(null, null)
-                    } catch (failure: Throwable) { record(failure) }
-                }
+                if (coordinatorClean) try {
+                    FactoryDataBackupCoordinator::class.java.getDeclaredField("instance")
+                        .apply { isAccessible = true }.set(null, null)
+                } catch (failure: Throwable) { record(failure) }
             }
             if (coordinatorClean) {
                 var globalStateClean = true
@@ -114,7 +101,7 @@ class FactoryPreferencesBackupActivityTest {
                 if (globalStateClean) try { root.deleteRecursively() } catch (failure: Throwable) { record(failure) }
             }
         }
-        val primary = closeFailure ?: otherFailures.firstOrNull()
+        val primary = otherFailures.firstOrNull()
         if (primary != null) {
             otherFailures.filter { it !== primary }.forEach(primary::addSuppressed)
             throw primary
@@ -136,7 +123,13 @@ class FactoryPreferencesBackupActivityTest {
     ): ActivityController<FactoryDataBackupActivity> {
         val controller = Robolectric.buildActivity(FactoryDataBackupActivity::class.java, intent); controllers += controller
         caller?.let { shadowOf(controller.get()).setCallingPackage(it) }
-        controller.create(saved).start().resume().visible(); controller.get().onWindowFocusChanged(focused); drain(); return controller
+        controller.create(saved).start().resume()
+        if (focused) {
+            controller.visible(); controller.get().onWindowFocusChanged(true)
+        }
+        // For an unfocused fixture, leave the Activity never-visible and never-focused. Calling
+        // visible() and then reporting focus loss can revoke its prepared archive by design.
+        drain(); return controller
     }
     private fun <T : View> view(activity: Activity, name: String): T = activity.window.decorView.findViewWithTag("factory-data-backup-$name")
     private fun status(activity: Activity): TextView {

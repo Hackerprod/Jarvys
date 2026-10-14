@@ -78,35 +78,18 @@ class FactoryPreferencesBackupCoordinatorTest {
     })
     @Before fun setup() { FactoryStartupTestIsolation.releaseCompletedSharingStartup(); root.deleteRecursively(); coordinator = make() }
     @After fun cleanup() {
-        var closeFailure: Throwable? = null
         val otherFailures = mutableListOf<Throwable>()
-        val recoveryOwners = java.util.Collections.newSetFromMap(
-            java.util.IdentityHashMap<FactoryDataBackupCoordinator, Boolean>())
-        fun record(failure: Throwable) { if (failure !== closeFailure) otherFailures += failure }
-        try {
-            worker { Unit }
-            owners.asReversed().forEach { owner ->
-                owner.session()?.let { session ->
-                    session.preparing = false
-                    try { worker { owner.close(session) {} } }
-                    catch (failure: Throwable) {
-                        val closeCause = failure.cause ?: failure
-                        if (closeFailure == null) closeFailure = closeCause else record(closeCause)
-                        recoveryOwners += owner
-                    }
-                }
-            }
-        } catch (failure: Throwable) { record(failure) }
+        fun record(failure: Throwable) { otherFailures += failure }
+        try { worker { Unit } } catch (failure: Throwable) { record(failure) }
         finally {
             controls.forEach { control -> try { control.close() } catch (failure: Throwable) { record(failure) } }
             transfers.forEach { transfer -> try { transfer.close() } catch (failure: Throwable) { record(failure) } }
 
             var allOwnersClean = owners.isNotEmpty()
             owners.asReversed().forEach { owner ->
-                val needsRecovery = owner in recoveryOwners || owner.session() != null || !owner.canBegin() ||
-                    !FactoryInteractionAdmission.available(owner)
-                if (needsRecovery) try { worker { owner.restore() } }
-                catch (failure: Throwable) { record(failure) }
+                // Every synthetic owner crosses the recovery boundary, including when an
+                // assertion aborted a case while its interaction was still live.
+                try { worker { owner.restore() } } catch (failure: Throwable) { record(failure) }
                 try { assertNull(owner.session()) } catch (failure: Throwable) { record(failure) }
                 try { assertTrue(owner.canBegin()) } catch (failure: Throwable) { record(failure) }
                 try { assertTrue(FactoryInteractionAdmission.available(owner)) } catch (failure: Throwable) { record(failure) }
@@ -125,7 +108,7 @@ class FactoryPreferencesBackupCoordinatorTest {
             try { executor.shutdown(); assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS)) }
             catch (failure: Throwable) { record(failure) }
         }
-        val primary = closeFailure ?: otherFailures.firstOrNull()
+        val primary = otherFailures.firstOrNull()
         if (primary != null) {
             otherFailures.filter { it !== primary }.forEach(primary::addSuppressed)
             throw primary

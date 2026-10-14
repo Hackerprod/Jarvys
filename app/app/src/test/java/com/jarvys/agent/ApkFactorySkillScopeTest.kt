@@ -84,7 +84,9 @@ class ApkFactorySkillScopeTest {
             .contains("Never automate Android security screens or retry an uncertain commit."))
         assertTrue(parsed.body.contains("window.Jarvys"))
         assertTrue(entry.factoryGuidance!!.resources.getValue("lifecycle")
-            .contains("Legacy AndroidKeyStore keys are non-exportable; loss may block updates."))
+            .contains("Each app gets a non-exportable AndroidKeyStore RSA signing key automatically on its first signature; key loss may block updates."))
+        assertTrue(entry.factoryGuidance!!.resources.getValue("lifecycle")
+            .contains("There is no signing-key export/import. Source/APK/data backups do not restore signing keys."))
     }
 
     @Test fun repositoryExposesFactoryOnlyForExactCodingProfile() {
@@ -451,7 +453,9 @@ class ApkFactorySkillScopeTest {
             "sensors" to listOf("device-natural", "includesGravity", "16KiB", "CANCELLED", "UNAVAILABLE", "no automatic restart"),
             "biometrics" to listOf("BIOMETRIC_STRONG", "USE_BIOMETRIC", "authorizesOtherActions:false",
                 "cancellationAcknowledged:false", "2 seconds", "process restart", "fake tests establish no physical matching/closure/device acceptance"),
-            "lifecycle" to listOf("signing alone does not request install", "no global automation lock/data/key erase",
+            "lifecycle" to listOf("signing alone does not request install", "Process-local packaging gate fails busy for overlap",
+                "There is no signing-key export/import.", "Source/APK/data backups do not restore signing keys.",
+                "uncertain effects are not replayed.",
                 "unknown history needs native floor review", "no process-isolation/zero-egress proof", "Shared tests run no project JS/device",
                 "awaits final packaged validation and physical/ARM64/update/restore acceptance"))
         for ((name, phrases) in expected) for (phrase in phrases) assertTrue("$name: $phrase", modules.getValue(name).contains(phrase, true))
