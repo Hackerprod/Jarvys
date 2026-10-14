@@ -835,9 +835,11 @@ public final class CoreAgentLoop {
                     break;
                 }
                 token.throwIfCancelled();
-                startPreparedTool(item, registry, transcript, token, listener, activeActivities);
+                if (!startPreparedTool(item, transcript, token, listener, activeActivities)) {
+                    token.throwIfCancelled();
+                    continue;
+                }
                 token.throwIfCancelled();
-                if (!item.markRunning()) continue;
                 executionStarted = true;
                 try {
                     item.result = invokePreparedTool(item, registry, token, listener);
@@ -889,14 +891,16 @@ public final class CoreAgentLoop {
                         continue;
                     }
                     token.throwIfCancelled();
-                    startPreparedTool(item, registry, transcript, token, listener, activeActivities);
+                    if (!startPreparedTool(item, transcript, token, listener, activeActivities)) {
+                        token.throwIfCancelled();
+                        continue;
+                    }
                     token.throwIfCancelled();
                     try {
                         AgentErrorReporter.ScopeSnapshot errorScope = AgentErrorReporter.captureScope();
                         Runnable nativeAdmission = NativeEffectDispatchScope.captureAdmission();
                         item.future = PARALLEL_TOOL_EXECUTOR.submit(() -> {
                             item.executionThread = Thread.currentThread();
-                            if (!item.markRunning()) return null;
                             try (AgentErrorReporter.Scope ignored = errorScope.install();
                                  NativeEffectDispatchScope dispatch = NativeEffectDispatchScope.enter(nativeAdmission)) {
                                 CoreToolResult result = invokePreparedTool(item, registry, token, listener);
@@ -1035,10 +1039,14 @@ public final class CoreAgentLoop {
         if (item.repeatedFailures >= ToolLoopDetector.FAILURE_THRESHOLD) outcome.noProgress = true;
     }
 
-    private void startPreparedTool(PreparedToolCall item, CoreToolRegistry registry,
-            List<ConversationTurn> transcript, CancellationToken token, ProgressListener listener,
+    private boolean startPreparedTool(PreparedToolCall item, List<ConversationTurn> transcript,
+            CancellationToken token, ProgressListener listener,
             Map<String, ToolActivity> activeActivities) {
         token.throwIfCancelled();
+        if (!item.markRunning()) {
+            toolLifecycle.put(item.call.id, "NEVER_LAUNCHED");
+            return false;
+        }
         toolLifecycle.put(item.call.id, "STARTED");
         updateTranscriptSnapshot(transcript);
         if (!item.hideFromProgress) {
@@ -1047,6 +1055,7 @@ public final class CoreAgentLoop {
             item.activityStarted = true;
             if (listener != null) listener.onToolActivity(item.activity);
         }
+        return true;
     }
 
     private CoreToolResult invokePreparedTool(PreparedToolCall item, CoreToolRegistry registry,

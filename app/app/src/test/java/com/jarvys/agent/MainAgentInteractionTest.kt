@@ -337,8 +337,14 @@ class MainAgentInteractionTest {
             AgentRunUiState.resetSession(session)
             startServiceIntent(context, AgentForegroundService.storedChatMessageIntent(context, session, initialId))
             assertTrue("The service run finishes", awaitRunFinished(service, context))
+            worker(service).submit {}.get(10, TimeUnit.SECONDS)
+            deliverStartedServices(context)
+            worker(service).submit {}.get(10, TimeUnit.SECONDS)
+            org.robolectric.shadows.ShadowLooper.idleMainLooper()
+            deliverStartedServices(context)
             assertEquals(listOf("initial request"), observedGoals)
-            assertEquals(0L, followUp.count)
+            assertEquals(1, runCalls.get())
+            assertEquals(1L, followUp.count)
             val assistants = store.readConversationMessages(session).filter { it.optString("role") == "assistant" }
             assertTrue(assistants.any { it.optString("status") == if (terminal == "failed") "FAILED" else "PARTIAL" })
         } finally {
