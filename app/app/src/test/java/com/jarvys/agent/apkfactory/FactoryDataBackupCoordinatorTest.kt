@@ -72,7 +72,7 @@ class FactoryDataBackupCoordinatorTest {
     @Before fun setup() { FactoryStartupTestIsolation.releaseCompletedSharingStartup(); root.deleteRecursively(); coordinator = make() }
     @After fun cleanup() {
         owners.asReversed().forEach { owner ->
-            owner.session()?.let { it.preparing = false; it.abandoned = true }
+            owner.session()?.let { it.preparing = false }
         owner.session()?.let { io { owner.close(it) {} } }
         }
         controls.forEach { it.close() }; transfers.forEach { it.close() }

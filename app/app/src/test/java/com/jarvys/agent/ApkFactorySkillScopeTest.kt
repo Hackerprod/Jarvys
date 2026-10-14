@@ -264,8 +264,8 @@ class ApkFactorySkillScopeTest {
     @Test fun customBotCreationCatalogOmitsReservedToolsAndSkillsEvenWithBroadInputs() {
         val service = BotCreationService(CrewProfileRepository(context), "factory-catalog-test",
             { listOf("read_skill", "apk_factory", "board_read") }, { listOf(id, "ordinary.skill") },
-            { _, _ -> error("Catalog inspection must not request approval") }, { false },
-            { _, _, _, _, _ -> error("Catalog inspection must not generate an icon") })
+            { false },
+            { _: String, _: Int, _: String, _: CancellationToken -> error("Catalog inspection must not generate an icon") })
         assertEquals(listOf("read_skill", "board_read"), service.capabilities())
         assertEquals(listOf("ordinary.skill"), service.skills())
         val declaration = BotCreationTool(service).declaration()

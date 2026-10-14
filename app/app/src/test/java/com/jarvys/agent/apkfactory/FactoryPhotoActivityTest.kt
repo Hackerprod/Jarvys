@@ -53,7 +53,7 @@ class FactoryPhotoActivityTest {
         root.deleteRecursively()
     }
     private fun launch(saved: Bundle? = null): ActivityController<GrantedPhotoActivity> {
-        val control = Robolectric.buildActivity(GrantedPhotoActivity::class.java, Intent(context))
+        val control = Robolectric.buildActivity(GrantedPhotoActivity::class.java, Intent(context, GrantedPhotoActivity::class.java))
         controllers += control
         control.create(saved).start().resume().visible()
         return control

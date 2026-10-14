@@ -72,7 +72,7 @@ class FactoryPhotoCoordinatorTest {
     @Test fun installedEvidenceRequiresExactCurrentKnownPhotoScope() {
         val good = evidence()
         assertEquals(proof, FactoryDocumentCoordinator.verifyEvidence(proof.appId,proof.certificate,proof.apk,2,good,setOf("documents", "photos")))
-        for (bad in listOf(good.copy(existing=false),good.copy(continuityKnown=false),good.copy(lastScope=null),good.copy(lastApkSha256=null),good.copy(lastVersion=1),good.copy(fingerprint="f".repeat(64)),good.copy(recordSha256=null))) {
+        for (bad in listOf(good.copy(existing=false),good.copy(lastScope=null),good.copy(lastApkSha256=null),good.copy(lastVersion=1),good.copy(fingerprint="f".repeat(64)),good.copy(recordSha256=null))) {
             fail { FactoryDocumentCoordinator.verifyEvidence(proof.appId,proof.certificate,proof.apk,2,bad,setOf("documents", "photos")) }
         }
     }

@@ -68,7 +68,7 @@ class FactoryDataBackupActivityTest {
     }
     @After fun cleanup() {
         drain(); controllers.asReversed().forEach { runCatching { it.pause().stop().destroy() } }; drain()
-        coordinator.session()?.let { it.preparing = false; it.abandoned = true }
+        coordinator.session()?.let { it.preparing = false }
         coordinator.session()?.let { worker { coordinator.close(it) {} } }
         source.close(); transfer.close(); drain()
         FactoryDataBackupCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(null, null)

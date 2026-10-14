@@ -131,7 +131,7 @@ class FactorySignedArtifactHistoryTest {
         reject { history.verify(appId, certificate, sha(1), 2, state(2), setOf("documents")) }
         reject { history.verify(appId, certificate, sha(2), 1, state(2), setOf("documents")) }
         reject { verify(history, 2, state(2), emptySet()) }
-        for (bad in listOf(state(2).copy(existing = false), state(2).copy(continuityKnown = false),
+        for (bad in listOf(state(2).copy(existing = false),
             state(2).copy(recordSha256 = null), state(2).copy(recordSha256 = "invalid"))) reject { verify(history, 2, bad) }
     }
 

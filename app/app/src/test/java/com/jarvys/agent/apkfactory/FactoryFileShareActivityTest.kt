@@ -60,7 +60,7 @@ class FactoryFileShareActivityTest {
         FactoryInteractionAdmission::class.java.getDeclaredField("owners").apply { isAccessible = true }.let { (it.get(null) as MutableSet<*>).clear() }
         File(context.noBackupFilesDir, "factory-file-sharing").deleteRecursively()
     }
-    private fun launch(intent: Intent = Intent(context), saved: Bundle? = null): ActivityController<FactoryFileShareActivity> {
+    private fun launch(intent: Intent = Intent(context, FactoryFileShareActivity::class.java), saved: Bundle? = null): ActivityController<FactoryFileShareActivity> {
         val control = Robolectric.buildActivity(FactoryFileShareActivity::class.java, intent)
         controllers += control
         control.create(saved).start().resume().visible()
@@ -71,7 +71,7 @@ class FactoryFileShareActivityTest {
     private fun render(activity: FactoryFileShareActivity) = FactoryFileShareActivity::class.java.getDeclaredMethod("render").apply { isAccessible = true }.invoke(activity)
     private fun bind(activity: FactoryFileShareActivity, opened: Boolean = false): String {
         val owner = io { coordinator.begin(proof.appId, request) {} }
-        if (opened) { io { coordinator.prepareChooser(owner, "Test") {} }; coordinator.chooserLaunched(owner) }
+        if (opened) { io { coordinator.prepareChooser(owner, "Test") }; coordinator.chooserLaunched(owner) }
         set(activity, "token", owner); set(activity, "request", request); set(activity, "external", opened); render(activity)
         return owner
     }

@@ -60,7 +60,7 @@ class FactoryFileShareCoordinatorTest {
         root.deleteRecursively(); File(context.noBackupFilesDir,"factory-documents").deleteRecursively()
     }
     private fun begin() = io { coordinator.begin(proof.appId, request()) {} }
-    private fun prepare(owner: String) = io { coordinator.prepareChooser(owner, "Synthetic") {} }
+    private fun prepare(owner: String) = io { coordinator.prepareChooser(owner, "Synthetic") }
     @Test fun exactTypedProtocolRejectsEveryUnexpectedAuthoritySurface() {
         for (changed in listOf(
             wire().putExtra("protocolVersion", 1L), wire().putExtra("protocolVersion", 2), wire().putExtra("size", 3L),

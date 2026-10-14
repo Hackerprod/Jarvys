@@ -53,7 +53,7 @@ class FactoryDocumentActivityTest {
         root.deleteRecursively()
     }
     private fun launch(saved: Bundle? = null): ActivityController<GrantedDocumentActivity> {
-        val control = Robolectric.buildActivity(GrantedDocumentActivity::class.java, Intent(context))
+        val control = Robolectric.buildActivity(GrantedDocumentActivity::class.java, Intent(context, GrantedDocumentActivity::class.java))
         controllers += control
         control.create(saved).start().resume().visible()
         return control
