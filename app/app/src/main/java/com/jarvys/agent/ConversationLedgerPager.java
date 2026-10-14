@@ -410,7 +410,9 @@ public final class ConversationLedgerPager {
     }
 
     private static boolean isTimelineMessageRow(String line) {
-        return new JsonFieldScanner(line).isTimelineMessageRow();
+        if (line == null) return false;
+        byte[] bytes = line.getBytes(StandardCharsets.UTF_8);
+        return classifyTimelineRow(bytes, bytes.length) != 0;
     }
 
     private static final class FileSnapshot {
