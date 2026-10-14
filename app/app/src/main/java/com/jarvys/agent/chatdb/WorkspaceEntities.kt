@@ -121,6 +121,7 @@ data class WorkspaceCoordinationRef(
         ForeignKey(entity = CrewCoordinationEvidence::class, parentColumns = ["evidence_id"], childColumns = ["evidence_id"], onDelete = ForeignKey.CASCADE),
     ],
     indices = [
+        Index(name = "idx_workspace_replies_reference", value = ["conversation_id", "reference_id", "is_notice"]),
         Index(name = "idx_workspace_replies_conversation_reply", value = ["conversation_id", "reply_id"], unique = true),
         Index(name = "idx_workspace_replies_reply_id", value = ["reply_id"], unique = true),
         Index(name = "idx_workspace_replies_evidence", value = ["evidence_id"], unique = true),

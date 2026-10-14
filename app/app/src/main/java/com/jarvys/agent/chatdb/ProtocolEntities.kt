@@ -50,7 +50,7 @@ data class UserDecisionOption(
     primaryKeys = ["conversation_id", "request_id"],
     foreignKeys = [ForeignKey(entity = Conversation::class, parentColumns = ["id"], childColumns = ["conversation_id"], onDelete = ForeignKey.CASCADE)],
     indices = [
-        Index(name = "idx_interrupt_requests_pending", value = ["conversation_id"], where = "dispatched_seq IS NULL"),
+        Index(name = "idx_interrupt_requests_pending", value = ["conversation_id", "dispatched_seq"]),
         Index(name = "idx_interrupt_requests_input_state", value = ["conversation_id", "input_state", "input_state_seq"]),
         Index(name = "idx_interrupt_requests_seq", value = ["conversation_id", "seq"]),
     ],

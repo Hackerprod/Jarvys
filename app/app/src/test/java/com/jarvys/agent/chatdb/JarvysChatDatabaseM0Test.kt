@@ -180,6 +180,64 @@ class JarvysChatDatabaseM0Test {
     }
 
     @Test
+    fun activeGenerationRunKeysAreUniqueAndTerminalRunsReleaseTheKey() = onDatabaseThread {
+        val conversationId = "active-runs"
+        val messageId = "m1"
+        database.conversationDao().insert(conversation(conversationId))
+        database.messageDao().insert(message(conversationId, messageId, "stable-m1", 1, 0))
+        val sqlite = database.openHelper.writableDatabase
+        val activeTargetKey = "${conversationId.length}:$conversationId${messageId.length}:$messageId"
+
+        fun insertRun(runId: String, state: String, targetKey: String?) {
+            sqlite.execSQL(
+                "INSERT INTO generation_run(id,conversation_id,message_id,active_target_key,state,state_revision,checkpoint_seq,created_at,updated_at) " +
+                    "VALUES(?,?,?,?,?,?,?,?,?)",
+                arrayOf<Any?>(runId, conversationId, messageId, targetKey, state, 1L, 0L, 1L, 1L),
+            )
+        }
+
+        insertRun("run-1", "streaming", activeTargetKey)
+        assertConstraint { insertRun("run-duplicate", "requesting", activeTargetKey) }
+
+        sqlite.execSQL("UPDATE generation_run SET state='complete', active_target_key=NULL WHERE id='run-1'")
+        insertRun("run-2", "preparing", activeTargetKey)
+        insertRun("run-terminal-1", "complete", null)
+        insertRun("run-terminal-2", "failed", null)
+        assertEquals(4L, rowCount(sqlite, "generation_run"))
+    }
+
+    @Test
+    fun pendingInterruptIndexIsNonUniqueAndIncludesDispatchPosition() = onDatabaseThread {
+        val conversationId = "pending-interrupts"
+        database.conversationDao().insert(conversation(conversationId))
+        val sqlite = database.openHelper.writableDatabase
+        sqlite.execSQL(
+            "INSERT INTO interrupt_requests(conversation_id,request_id,seq,content,memory_disabled,dispatched_seq) VALUES(?,?,?,?,?,?)",
+            arrayOf<Any?>(conversationId, "pending-1", 1L, "first", 0, null),
+        )
+        sqlite.execSQL(
+            "INSERT INTO interrupt_requests(conversation_id,request_id,seq,content,memory_disabled,dispatched_seq) VALUES(?,?,?,?,?,?)",
+            arrayOf<Any?>(conversationId, "pending-2", 2L, "second", 0, null),
+        )
+
+        val indexSql = sqlite.query(
+            "SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_interrupt_requests_pending'"
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            cursor.getString(0)
+        }
+        assertTrue(indexSql.startsWith("CREATE INDEX "))
+        assertTrue(!indexSql.contains(" WHERE ", ignoreCase = true))
+        val indexedColumns = sqlite.query("PRAGMA index_info('idx_interrupt_requests_pending')").use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) add(cursor.getString(cursor.getColumnIndexOrThrow("name")))
+            }
+        }
+        assertEquals(listOf("conversation_id", "dispatched_seq"), indexedColumns)
+        assertEquals(2L, rowCount(sqlite, "interrupt_requests"))
+    }
+
+    @Test
     fun itemKeysetPagesCoverFiveHundredRowsWithoutGapsOrDuplicates() = onDatabaseThread {
         val id = "pages"
         database.conversationDao().insert(conversation(id))
