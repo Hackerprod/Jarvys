@@ -20,6 +20,7 @@ fun mainJarvysMascotMode(
             else -> null
         }
     }
+    if (snapshot.stopping) return 8
     return when (snapshot.outcome) {
         "COMPLETED" -> 6
         "FAILED" -> 7

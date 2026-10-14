@@ -334,12 +334,14 @@ object AgentRunUiState {
                         it.active && it.sessionId == working.sessionId && value.running
                     }?.liveSnapshot = value
                     if (visibleSessionId == working.sessionId) publishedState.value = value
+                    else refreshVisibleInteractiveOwnerLocked()
                 }
                 else {
                     synchronized(lock) {
                         publishedState.value = value
                         value.sessionId?.let { sessionSnapshots[it] = value }
                         if (visibleSessionId == null) visibleSessionId = value.sessionId
+                        refreshVisibleInteractiveOwnerLocked()
                     }
                 }
             }
@@ -362,7 +364,7 @@ object AgentRunUiState {
     private val pendingProgress: MutableList<AgentRunUiEvent>
         get() = sessionProgress.getOrPut(currentSessionId().orEmpty()) { mutableListOf() }
 
-    private inline fun <T> inSession(sessionId: String, block: () -> T): T {
+    private fun <T> inSession(sessionId: String, block: () -> T): T {
         val existing = workingSnapshot.get()
         if (existing?.sessionId == sessionId) return block()
         val initial = synchronized(lock) {
@@ -373,6 +375,9 @@ object AgentRunUiState {
         return try {
             block()
         } finally {
+            // Restore the thread context before doing any publication work. Even if publishing
+            // throws, this thread must not retain a stale session projection.
+            if (existing == null) workingSnapshot.remove() else workingSnapshot.set(existing)
             synchronized(lock) {
                 // State setters publish each working update immediately. Another thread may
                 // publish a newer stop/finalization snapshot while this block is still running,
@@ -380,8 +385,41 @@ object AgentRunUiState {
                 val latest = sessionSnapshots.getOrPut(sessionId) { working.snapshot }
                 if (visibleSessionId == sessionId) publishedState.value = latest
             }
-            workingSnapshot.set(existing)
         }
+    }
+
+    private fun activeInteractiveOwnerSessionIdLocked(preferredSessionId: String? = visibleSessionId): String? {
+        val activeOwners = sessionOwners.entries
+            .filter { (sessionId, ownership) -> ownership.active && ownership.sessionId == sessionId }
+            .map { it.key }
+        return when (activeOwners.size) {
+            0 -> null
+            1 -> activeOwners.single()
+            else -> preferredSessionId?.takeIf { it in activeOwners }
+        }
+    }
+
+    private fun refreshVisibleInteractiveOwnerLocked() {
+        val visibleSession = visibleSessionId ?: return
+        val current = publishedState.value
+        val ownerSessionId = activeInteractiveOwnerSessionIdLocked(visibleSession)
+        if (current.interactiveOwnerSessionId == ownerSessionId) return
+        val projected = current.copy(interactiveOwnerSessionId = ownerSessionId)
+        sessionSnapshots[visibleSession] = projected
+        publishedState.value = projected
+    }
+
+    private fun clearSupersededOwnershipLocked(sessionId: String) {
+        val current = sessionSnapshots[sessionId] ?: sessionOwners[sessionId]?.liveSnapshot ?: return
+        val cleared = current.copy(
+            interactiveOwnerSessionId = null,
+            liveMascotTool = null,
+            liveModelWaitId = null,
+            liveUserWaitId = null,
+            liveRunIdentity = null,
+        )
+        sessionSnapshots[sessionId] = cleared
+        if (visibleSessionId == sessionId) publishedState.value = cleared
     }
 
     /** Selects which session the compatibility StateFlow projects for Compose. */
@@ -389,7 +427,10 @@ object AgentRunUiState {
     fun showSession(sessionId: String) = synchronized(lock) {
         publishedState.value.sessionId?.let { sessionSnapshots[it] = publishedState.value }
         visibleSessionId = sessionId
-        publishedState.value = sessionSnapshots[sessionId] ?: AgentRunUiSnapshot(sessionId = sessionId)
+        val selected = (sessionSnapshots[sessionId] ?: AgentRunUiSnapshot(sessionId = sessionId))
+            .copy(interactiveOwnerSessionId = activeInteractiveOwnerSessionIdLocked(sessionId))
+        sessionSnapshots[sessionId] = selected
+        publishedState.value = selected
     }
 
     @JvmStatic
@@ -483,6 +524,10 @@ object AgentRunUiState {
         val request: HeaderMascotAnimationRequest,
         val completion: CompletableFuture<HeaderMascotAnimationResult> = CompletableFuture(),
         var waiters: Int = 0,
+    )
+    private data class HeaderMascotAdmission(
+        val pending: PendingHeaderMascotAnimation? = null,
+        val rejection: HeaderMascotAnimationResult? = null,
     )
     private val pendingHeaderMascotAnimations = mutableMapOf<String, PendingHeaderMascotAnimation>()
     val state: StateFlow<AgentRunUiSnapshot> = publishedState.asStateFlow()
@@ -798,7 +843,7 @@ object AgentRunUiState {
             resolveHeaderMascotAnimationLocked(request, "rejected", reason)
         }
         _state.value = AgentRunUiSnapshot(sessionId = sessionId,
-            interactiveOwnerSessionId = if (ownedRunActive) ownedSessionId else null, reflecting = current.reflecting,
+            interactiveOwnerSessionId = activeInteractiveOwnerSessionIdLocked(sessionId), reflecting = current.reflecting,
             reflectionSessionId = current.reflectionSessionId, reflectionStatus = current.reflectionStatus,
             reflectionLastSuccessMillis = current.reflectionLastSuccessMillis)
         } }
@@ -891,6 +936,7 @@ object AgentRunUiState {
         // A generation identifies one run; binding it again supersedes any stale owner that still carries it.
         sessionOwners.forEach { (otherSession, other) ->
             if (otherSession != sessionId && other.generation == generation) {
+                clearSupersededOwnershipLocked(otherSession)
                 other.generation = Long.MIN_VALUE
                 other.active = false
                 other.liveSnapshot = null
@@ -1002,38 +1048,47 @@ object AgentRunUiState {
         animationId: String,
         token: CancellationToken,
     ): HeaderMascotAnimationResult {
-        val pending = inSession(sessionId) { synchronized(lock) {
+        val admission = inSession(sessionId) { synchronized(lock) {
             val current = _state.value
+            fun rejected(reason: String) = HeaderMascotAdmission(
+                rejection = HeaderMascotAnimationResult(animationId, "rejected", reason),
+            )
             if (!UserDecisionUiAvailability.isChatVisible() || current.sessionId != sessionId || !current.running
                 || current.interactiveOwnerSessionId != sessionId) {
-                return HeaderMascotAnimationResult(animationId, "rejected", "The active main chat is not available.")
+                rejected("The active main chat is not available.")
+            } else {
+                val runOwner = sessionOwners[sessionId]
+                    ?.takeIf { it.active && it.sessionId == sessionId }
+                val executionId = runOwner?.let { "$sessionId:${it.generation}" }
+                    ?.takeIf { current.liveRunIdentity == it }
+                val failure = current.headerMascotAvailability.failure(animationId)
+                if (executionId == null) {
+                    rejected("The active main chat run is not available.")
+                } else if (failure != null) {
+                    rejected(failure)
+                } else {
+                    val activeRequest = current.headerMascotAnimationRequest
+                    val joined = activeRequest?.takeIf {
+                        it.sessionId == sessionId && it.executionId == executionId && it.animationId == animationId
+                    }?.let { pendingHeaderMascotAnimations[it.requestId] }
+                    if (activeRequest != null && joined == null) {
+                        rejected("Another mascot animation is already in progress.")
+                    } else {
+                        val pendingRequest = joined ?: PendingHeaderMascotAnimation(HeaderMascotAnimationRequest(
+                            java.util.UUID.randomUUID().toString(), sessionId, animationId, executionId)).also { created ->
+                            pendingHeaderMascotAnimations[created.request.requestId] = created
+                            val updated = current.copy(headerMascotAnimationRequest = created.request, headerMascotAnimationResult = null)
+                            _state.value = updated
+                            if (ownedRunActive && ownedSessionId == sessionId) ownedLiveSnapshot = updated
+                        }
+                        pendingRequest.waiters++
+                        HeaderMascotAdmission(pending = pendingRequest)
+                    }
+                }
             }
-            val runOwner = sessionOwners[sessionId]
-                ?.takeIf { it.active && it.sessionId == sessionId }
-            val executionId = runOwner?.let { "$sessionId:${it.generation}" }
-                ?.takeIf { current.liveRunIdentity == it }
-                ?: return HeaderMascotAnimationResult(animationId, "rejected", "The active main chat run is not available.")
-            current.headerMascotAvailability.failure(animationId)?.let { reason ->
-                return HeaderMascotAnimationResult(animationId, "rejected", reason)
-            }
-            val activeRequest = current.headerMascotAnimationRequest
-            val joined = activeRequest?.takeIf {
-                it.sessionId == sessionId && it.executionId == executionId && it.animationId == animationId
-            }
-                ?.let { pendingHeaderMascotAnimations[it.requestId] }
-            if (activeRequest != null && joined == null) {
-                return HeaderMascotAnimationResult(animationId, "rejected", "Another mascot animation is already in progress.")
-            }
-            val pendingRequest = joined ?: PendingHeaderMascotAnimation(HeaderMascotAnimationRequest(
-                java.util.UUID.randomUUID().toString(), sessionId, animationId, executionId)).also { created ->
-                pendingHeaderMascotAnimations[created.request.requestId] = created
-                val updated = current.copy(headerMascotAnimationRequest = created.request, headerMascotAnimationResult = null)
-                _state.value = updated
-                if (ownedRunActive && ownedSessionId == sessionId) ownedLiveSnapshot = updated
-            }
-            pendingRequest.waiters++
-            pendingRequest
         } }
+        admission.rejection?.let { return it }
+        val pending = checkNotNull(admission.pending)
 
         val waiterReleased = AtomicBoolean(false)
         fun releaseWaiter(cancelled: Boolean) {

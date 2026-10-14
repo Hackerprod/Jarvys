@@ -94,9 +94,14 @@ public final class AgentForegroundService extends Service {
   private static final class SessionRequest {
     final SessionWork work;
     final boolean interactive;
+    final Runnable onRejected;
     SessionRequest(SessionWork work, boolean interactive) {
+      this(work, interactive, null);
+    }
+    SessionRequest(SessionWork work, boolean interactive, Runnable onRejected) {
       this.work = work;
       this.interactive = interactive;
+      this.onRejected = onRejected;
     }
   }
   private static final class SessionLane {
@@ -137,9 +142,11 @@ public final class AgentForegroundService extends Service {
         worker.execute(() -> drainSession(sessionId, lane));
       } catch (RuntimeException rejected) {
         final List<java.util.concurrent.CompletableFuture<Void>> idleWaiters;
+        final List<SessionRequest> rejectedRequests;
         synchronized (sessionLaneLock) {
           synchronized (lane) {
             lane.draining = false;
+            rejectedRequests = new ArrayList<>(lane.queued);
             lane.queued.clear();
             idleWaiters = new ArrayList<>(lane.idleWaiters);
             lane.idleWaiters.clear();
@@ -147,6 +154,13 @@ public final class AgentForegroundService extends Service {
           sessionLanes.remove(sessionId, lane);
         }
         idleWaiters.forEach(waiter -> waiter.complete(null));
+        for (SessionRequest request : rejectedRequests) {
+          if (request.onRejected != null) {
+            try {
+              request.onRejected.run();
+            } catch (RuntimeException ignored) { }
+          }
+        }
         failPendingInputRecovery(sessionId);
       }
     }
@@ -668,6 +682,25 @@ public final class AgentForegroundService extends Service {
     }
   }
 
+  private void failRejectedInteractiveSubmission(String sessionId, String displayGoal,
+      boolean userMessageAlreadyRecorded, String userMessageId) {
+    String message = getString(R.string.chat_interrupt_start_failed);
+    try {
+      LocalRunStore store = new LocalRunStore(this);
+      String ownerMessageId = userMessageAlreadyRecorded
+          ? (userMessageId.isEmpty() ? store.latestUserMessageId(sessionId) : userMessageId)
+          : store.appendConversationMessage(sessionId, "user", displayGoal);
+      if (ownerMessageId == null) ownerMessageId = "";
+      store.appendConversationMessage(sessionId, "assistant", message, null, "", ownerMessageId, "FAILED");
+      if (!ownerMessageId.isEmpty())
+        store.markConversationMessagesResolved(sessionId, java.util.Collections.singletonList(ownerMessageId));
+      AgentRunUiState.refreshPersistedSession(sessionId, store.readConversationTimeline(sessionId));
+    } catch (RuntimeException ignored) {
+      // The UI still needs to release the optimistic submission if persistence is unavailable.
+    }
+    AgentRunUiState.fail(sessionId, message);
+  }
+
   private void enqueueStoredMessageFollowUp(String sessionId, String messageId) {
     if (messageId == null || messageId.isEmpty()) return;
     if (worker.isShutdown()) {
@@ -804,7 +837,8 @@ public final class AgentForegroundService extends Service {
           } catch (RuntimeException ignored) { }
           AgentRunUiState.completeGeneration(chatSessionId, active.generation, "failed-start", "FAILED", message, "", 0L);
         }
-      }, isInteractive));
+      }, isInteractive, isInteractive ? () -> failRejectedInteractiveSubmission(chatSessionId,
+          chatDisplayGoal, userMessageAlreadyRecorded, existingUserMessageId) : null));
       return START_NOT_STICKY;
     }
 

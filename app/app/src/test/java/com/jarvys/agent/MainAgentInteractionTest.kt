@@ -619,6 +619,7 @@ class MainAgentInteractionTest {
                 Thread.sleep(10)
             }
             assertEquals(0, bothStarted.count)
+            assertTrue("Both recovery runs drain", awaitRunFinished(service, context))
             assertEquals(expected, observed)
             assertTrue(store.readPendingInterruptRequests().isEmpty())
             assertEquals("PARTIAL", store.readConversationMessages(sessionA).last().optString("status"))
@@ -777,7 +778,7 @@ class MainAgentInteractionTest {
                 .apply { isAccessible = true }.get(StopController.getInstance()) as java.util.concurrent.atomic.AtomicLong
             val afterStop = generation.get()
             release.countDown()
-            worker(service).submit {}.get(5, TimeUnit.SECONDS)
+            assertTrue("The stopped session run drains", awaitRunFinished(service, context))
             assertEquals("A stopped owner does not start a replacement run", afterStop, generation.get())
             val messages = store.readConversationMessages(session)
             val queued = messages.filter { it.optString("role") == "user" && it.optString("content") in steeringMessages }
@@ -814,7 +815,9 @@ class MainAgentInteractionTest {
         val service = startManagedService(context)
         val factoryCalls = AtomicInteger()
         val runnerCalls = AtomicInteger()
+        val factoryEntered = CountDownLatch(1)
         service.runtimeFactory = AgentForegroundService.RuntimeFactory { _, _, _, _ ->
+            factoryEntered.countDown()
             factoryCalls.incrementAndGet()
             throw IllegalStateException("deterministic runtime construction failure")
         }
@@ -825,6 +828,7 @@ class MainAgentInteractionTest {
         try {
             startServiceIntent(context, android.content.Intent(context, AgentForegroundService::class.java)
                 .setAction(AgentForegroundService.ACTION_RECOVER_PENDING_INPUTS))
+            assertTrue("Pending recovery enters runtime setup", factoryEntered.await(10, TimeUnit.SECONDS))
             assertTrue("The failed run and its recovery scan finish", awaitRunFinished(service, context))
             val failures = store.readConversationMessages(session).filter {
                 it.optString("role") == "assistant" && it.optString("status") == "FAILED"
@@ -1177,25 +1181,41 @@ class MainAgentInteractionTest {
         val store = LocalRunStore(context)
         val id = store.appendConversationMessage(session, "user", "must remain recoverable")
         AgentRunUiState.beginRun(session, "must remain recoverable")
-        val started = CountDownLatch(1); val release = CountDownLatch(1)
-        if (reject) worker(service).shutdown() else {
-            worker(service).submit { started.countDown(); release.await(5, TimeUnit.SECONDS) }
-            assertTrue(started.await(5, TimeUnit.SECONDS))
+        val started = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        if (reject) {
+            worker(service).shutdown()
+        } else {
+            service.runtimeFactory = AgentForegroundService.RuntimeFactory { _, _, _, _ ->
+                CoreAgentRuntime(emptyList(), emptyList(), emptyList(), emptyList())
+            }
+            service.mainChatRunner = AgentForegroundService.MainChatRunner { _, _, _, _, token, _ ->
+                started.countDown()
+                while (release.count > 0) {
+                    try { release.await() } catch (_: InterruptedException) { }
+                }
+                token.throwIfCancelled()
+                CoreAgentLoop.Result("cancelled-before-model", "unreachable", 1, "PARTIAL")
+            }
         }
         try {
             service.onStartCommand(AgentForegroundService.storedChatMessageIntent(context, session, id), 0, 1)
             if (!reject) {
+                assertTrue("The run reaches the pre-model gate", started.await(5, TimeUnit.SECONDS))
                 assertTrue(com.jarvys.agent.proactive.BackgroundRunController.isInteractiveActive())
-                StopController.getInstance().stopRun()
+                AgentForegroundService.stopRun(session)
+                release.countDown()
             }
+            assertTrue("The session work drains", awaitRunFinished(service, context))
             assertFalse(com.jarvys.agent.proactive.BackgroundRunController.isInteractiveActive())
             assertFalse(AgentRunUiState.state.value.running)
             assertTrue(StopController.getInstance().isStopped)
             assertEquals("must remain recoverable", store.readConversationMessage(session, id))
             if (reject) assertTrue(store.readConversationMessages(session).any { it.optString("status") == "FAILED" })
         } finally {
-            StopController.getInstance().stopRun(); release.countDown()
-            if (!worker(service).isShutdown) worker(service).submit {}.get(5, TimeUnit.SECONDS)
+            AgentForegroundService.stopRun(session)
+            release.countDown()
+            if (!worker(service).isShutdown) awaitRunFinished(service, context)
             serviceController.destroy()
         }
     }
@@ -1208,13 +1228,16 @@ class MainAgentInteractionTest {
         val session = "early-setup-${System.nanoTime()}"
         val store = LocalRunStore(context)
         val id = store.appendConversationMessage(session, "user", "read only")
+        val factoryEntered = CountDownLatch(1)
         service.runtimeFactory = AgentForegroundService.RuntimeFactory { _, _, _, _ ->
+            factoryEntered.countDown()
             throw IllegalStateException("synthetic runtime initialization failure")
         }
         AgentRunUiState.beginRun(session, "read only")
         try {
             service.onStartCommand(AgentForegroundService.storedChatMessageIntent(context, session, id), 0, 1)
-            worker(service).submit {}.get(5, TimeUnit.SECONDS)
+            assertTrue("The session enters runtime setup", factoryEntered.await(10, TimeUnit.SECONDS))
+            assertTrue("The failed setup drains its session lane", awaitRunFinished(service, context))
             assertFalse(com.jarvys.agent.proactive.BackgroundRunController.isInteractiveActive())
             assertTrue(StopController.getInstance().isStopped)
             assertFalse(AgentRunUiState.state.value.running)
@@ -1350,21 +1373,29 @@ class MainAgentInteractionTest {
         com.jarvys.agent.proactive.BackgroundRunController.interactiveStarted(old.generation())
         val started = CountDownLatch(1)
         val release = CountDownLatch(1)
+        val workerExited = CountDownLatch(1)
         val future = worker(service).submit {
             started.countDown()
             try { while (release.count > 0) try { release.await() } catch (_: InterruptedException) { } }
-            finally { com.jarvys.agent.proactive.BackgroundRunController.interactiveFinished(old.generation()) }
+            finally {
+                com.jarvys.agent.proactive.BackgroundRunController.interactiveFinished(old.generation())
+                workerExited.countDown()
+            }
         }
         StopController.getInstance().attachFuture(old, future)
         assertTrue(started.await(5, TimeUnit.SECONDS))
         try { block(service, context, session, release) }
         finally {
+            AgentRunUiState.stopPendingGeneration(session, old.generation())
             StopController.getInstance().stopRun(); release.countDown()
             service.registerMainChatSteeringProvider(session, null)
             AgentForegroundService::class.java.getDeclaredField("activeRunToken").apply { isAccessible = true }.set(service, null)
             (AgentForegroundService::class.java.getDeclaredField("activeRunTokens")
                 .apply { isAccessible = true }.get(service) as MutableMap<String, CancellationToken>).remove(session, old)
-            future.get(5, TimeUnit.SECONDS)
+            assertTrue("The held worker physically exits after release", workerExited.await(5, TimeUnit.SECONDS))
+            AgentRunUiState.completeGeneration(session, old.generation(), "held-worker-stopped",
+                "STOPPED", "Run stopped", "", 0L)
+            AgentRunUiState.finishPendingGeneration(session, old.generation())
             controller.destroy()
         }
     }
