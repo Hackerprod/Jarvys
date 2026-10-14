@@ -3,10 +3,12 @@ package com.jarvys.agent.connectors
 import android.content.Context
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
@@ -225,7 +227,11 @@ class ConnectedConnectorPermissionScreensTest {
         val fixture = connectedMcp("github", listOf(tool("get_me", "Read GitHub profile", read = true),
             tool("issue_write", "Create or update repository issue")))
         val credentials = fixture.vault.values.toMap()
-        show { RemoteServicesSection(fixture.repository, fixture.manager, fixture.oauth, selectedId = "github") }
+        show {
+            Column(androidx.compose.ui.Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+                RemoteServicesSection(fixture.repository, fixture.manager, fixture.oauth, selectedId = "github")
+            }
+        }
         compose.onNodeWithTag("remote-policy-get_me-row").assertDoesNotExist()
         compose.onNodeWithTag("remote-policy-issue_write-row").assertDoesNotExist()
         compose.onNodeWithTag("remote-exposure-get_me-switch").assertExists()
@@ -238,7 +244,11 @@ class ConnectedConnectorPermissionScreensTest {
         assertFalse(fixture.repository.get(fixture.serverId)!!.tools.first { it.wireName == "get_me" }.enabled)
         assertTrue(fixture.repository.get(fixture.serverId)!!.tools.first { it.wireName == "issue_write" }.enabled)
 
-        show { RemoteMcpPolicySettings(fixture.repository, fixture.manager) }
+        show {
+            Column(androidx.compose.ui.Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+                RemoteMcpPolicySettings(fixture.repository, fixture.manager)
+            }
+        }
         val read = "remote-policy-get_me"
         val write = "remote-policy-issue_write"
         geometry(read); geometry(write)
@@ -262,16 +272,26 @@ class ConnectedConnectorPermissionScreensTest {
     fun developerCatalogMcpLongLabelOffersEveryModeForDestructiveTools() {
         val fixture = connectedMcp("notion", listOf(tool("update_page", "Actualizar una página con un título suficientemente largo"),
             tool("delete_page", "Eliminar una página", destructive = true)))
-        show(2f, true) { RemoteServicesSection(fixture.repository, fixture.manager, fixture.oauth, selectedId = "notion") }
+        show(2f, true) {
+            Column(androidx.compose.ui.Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+                RemoteServicesSection(fixture.repository, fixture.manager, fixture.oauth, selectedId = "notion")
+            }
+        }
         compose.onNodeWithTag("remote-policy-update_page-row").assertDoesNotExist()
         compose.onNodeWithTag("remote-policy-delete_page-row").assertDoesNotExist()
-        show(2f, true) { RemoteMcpPolicySettings(fixture.repository, fixture.manager) }
+        show(2f, true) {
+            Column(androidx.compose.ui.Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+                RemoteMcpPolicySettings(fixture.repository, fixture.manager)
+            }
+        }
         geometry("remote-policy-update_page"); geometry("remote-policy-delete_page")
         capture("catalog-mcp-es-dark-large")
         pick("remote-policy-update_page-control", R.string.remote_service_policy_allow)
         assertPolicy("remote-policy-update_page-control", R.string.remote_service_policy_allow)
         compose.onNodeWithTag("remote-policy-delete_page-control").performScrollTo().performClick()
         compose.onNode(hasText(compose.activity.getString(R.string.remote_service_policy_allow)) and hasAnyAncestor(isPopup())).assertExists()
+        compose.onNode(hasText(compose.activity.getString(R.string.remote_service_policy_ask)) and hasAnyAncestor(isPopup())).assertExists()
+        compose.onNode(hasText(compose.activity.getString(R.string.remote_service_policy_deny)) and hasAnyAncestor(isPopup())).assertExists()
         compose.onNode(hasText(compose.activity.getString(R.string.remote_service_policy_ask)) and hasAnyAncestor(isPopup())).performClick()
         assertEquals(listOf(AutonomyPolicy.ALLOW, AutonomyPolicy.ASK), store.changes.map { it.third })
         assertEquals(1, sessions.get()); assertEquals(0, dispatches.get()); assertTrue(fixture.vault.values.isEmpty())

@@ -43,7 +43,9 @@ internal fun AutonomyPolicyRow(
 
     Column {
         ConnectorPermissionRow(modifier = Modifier.testTag("connector-policy-${operation.name}-row"), content = {
-            Text(operation.localizedDisplayText().resolve(context), fontWeight = FontWeight.Medium,
+            Text(operation.localizedDisplayText().resolve(context),
+                modifier = Modifier.testTag("connector-policy-${operation.name}-label"),
+                fontWeight = FontWeight.Medium,
                 maxLines = 2, overflow = TextOverflow.Ellipsis)
         }, permission = {
             ConnectorPolicySelector(
