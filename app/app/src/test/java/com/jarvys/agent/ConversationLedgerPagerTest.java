@@ -18,6 +18,33 @@ import org.junit.rules.TemporaryFolder;
 public class ConversationLedgerPagerTest {
     @Rule public TemporaryFolder temporary = new TemporaryFolder();
 
+    @Test public void pageReadWorksWhenWorkerWasAlreadyInterrupted() throws Exception {
+        File ledger = temporary.newFile("interrupted-page.jsonl");
+        List<String> expected = new ArrayList<>();
+        for (int turn = 0; turn < 5; turn++) {
+            expected.add(user("u" + turn, "question " + turn));
+            expected.add(assistant("a" + turn));
+        }
+        writeLines(ledger, expected);
+
+        ConversationLedgerPager.Page uninterrupted = ConversationLedgerPager.readTail(ledger, 2);
+        ConversationLedgerPager.invalidateFile(ledger);
+
+        Thread.currentThread().interrupt();
+        try {
+            ConversationLedgerPager.Page interrupted = ConversationLedgerPager.readTail(ledger, 2);
+            assertEquals(uninterrupted.lines, interrupted.lines);
+            assertEquals(uninterrupted.lineOffsets, interrupted.lineOffsets);
+            assertEquals(uninterrupted.startOffset, interrupted.startOffset);
+            assertEquals(uninterrupted.olderCursor, interrupted.olderCursor);
+            assertEquals(uninterrupted.hasMore, interrupted.hasMore);
+            assertTrue("pager reads must retain the interrupted status",
+                    Thread.currentThread().isInterrupted());
+        } finally {
+            Thread.interrupted();
+        }
+    }
+
     @Test public void tailReadsOnlyNewestUserTurnWindowFromLargeLedger() throws Exception {
         File ledger = temporary.newFile("large.jsonl");
         List<String> expected = new ArrayList<>();

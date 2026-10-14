@@ -31,9 +31,6 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.FileReader;
 import java.io.FileWriter;
-import java.io.FileOutputStream;
-import java.io.FilterInputStream;
-import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
@@ -1140,25 +1137,23 @@ public final class LocalRunStore {
     private static void readCrewSnapshotsFromSnapshot(String sessionId, LedgerSnapshot snapshot, long startOffset,
                                                        LinkedHashMap<String, CrewMissionSnapshot> latest) {
         if (startOffset < 0L || startOffset > snapshot.length) throw new IllegalArgumentException("Invalid Crew snapshot offset");
-        try (FileInputStream input = new FileInputStream(snapshot.ledger)) {
-            input.getChannel().position(startOffset);
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(
-                    new BoundedInputStream(input, snapshot.length - startOffset), StandardCharsets.UTF_8))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    // Normal ledger rows are minified JSON. This cheap substring test avoids a
-                    // JSONObject allocation for ordinary chat, tool, task and result records.
-                    if (line.indexOf("crew_snapshot") < 0 || !hasCrewSnapshotTypeToken(line)) continue;
-                    JSONObject row;
-                    try {
-                        synchronized (CREW_SNAPSHOT_CACHE_LOCK) { crewSnapshotRowsParsedCount++; }
-                        row = new JSONObject(line);
-                    } catch (Exception ignored) { continue; }
-                    if (!"crew_snapshot".equals(row.optString("type"))) continue;
-                    CrewMissionSnapshot value = CrewMissionSnapshot.fromJson(row);
-                    if (value != null && sessionId.equals(value.conversationId))
-                        latest.put(value.missionId, value);
-                }
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+                NonInterruptibleLedgerFile.open(snapshot.ledger)
+                        .inputStream(startOffset, snapshot.length - startOffset), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                // Normal ledger rows are minified JSON. This cheap substring test avoids a
+                // JSONObject allocation for ordinary chat, tool, task and result records.
+                if (line.indexOf("crew_snapshot") < 0 || !hasCrewSnapshotTypeToken(line)) continue;
+                JSONObject row;
+                try {
+                    synchronized (CREW_SNAPSHOT_CACHE_LOCK) { crewSnapshotRowsParsedCount++; }
+                    row = new JSONObject(line);
+                } catch (Exception ignored) { continue; }
+                if (!"crew_snapshot".equals(row.optString("type"))) continue;
+                CrewMissionSnapshot value = CrewMissionSnapshot.fromJson(row);
+                if (value != null && sessionId.equals(value.conversationId))
+                    latest.put(value.missionId, value);
             }
         } catch (Exception error) {
             throw new IllegalStateException("Could not read Crew snapshots from conversation ledger", error);
@@ -1405,8 +1400,7 @@ public final class LocalRunStore {
             LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
             if (snapshot == null) return null;
             JSONObject result = null;
-            if (snapshot.exists && snapshot.length > 0L) try (java.nio.channels.FileChannel channel =
-                    java.nio.channels.FileChannel.open(ledger.toPath(), java.nio.file.StandardOpenOption.READ)) {
+            if (snapshot.exists && snapshot.length > 0L) try (NonInterruptibleLedgerFile channel = NonInterruptibleLedgerFile.open(ledger)) {
                 ReverseLedgerLineReader reader = new ReverseLedgerLineReader(channel, snapshot.length);
                 String line;
                 while ((line = reader.previousLine()) != null) try {
@@ -1544,8 +1538,7 @@ public final class LocalRunStore {
     private static ChatAttachment findChatFileInSnapshot(LedgerSnapshot snapshot, String sessionId,
             String kind, String id) {
         if (!snapshot.exists || snapshot.length <= 0L) return null;
-        try (java.nio.channels.FileChannel channel = java.nio.channels.FileChannel.open(
-                snapshot.ledger.toPath(), java.nio.file.StandardOpenOption.READ)) {
+        try (NonInterruptibleLedgerFile channel = NonInterruptibleLedgerFile.open(snapshot.ledger)) {
             ReverseLedgerLineReader reader = new ReverseLedgerLineReader(channel, snapshot.length);
             String line;
             while ((line = reader.previousLine()) != null) try {
@@ -1572,8 +1565,7 @@ public final class LocalRunStore {
             LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
             if (snapshot == null) return false;
             boolean found = false;
-            if (snapshot.exists && snapshot.length > 0L) try (java.nio.channels.FileChannel channel =
-                    java.nio.channels.FileChannel.open(ledger.toPath(), java.nio.file.StandardOpenOption.READ)) {
+            if (snapshot.exists && snapshot.length > 0L) try (NonInterruptibleLedgerFile channel = NonInterruptibleLedgerFile.open(ledger)) {
                 ReverseLedgerLineReader reader = new ReverseLedgerLineReader(channel, snapshot.length);
                 String line;
                 while ((line = reader.previousLine()) != null) try {
@@ -1718,8 +1710,7 @@ public final class LocalRunStore {
             LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
             if (snapshot == null || !snapshot.exists || snapshot.length <= 0L) return false;
             boolean found = false;
-            try (java.nio.channels.FileChannel channel = java.nio.channels.FileChannel.open(
-                    ledger.toPath(), java.nio.file.StandardOpenOption.READ)) {
+            try (NonInterruptibleLedgerFile channel = NonInterruptibleLedgerFile.open(ledger)) {
                 ReverseLedgerLineReader reader = new ReverseLedgerLineReader(channel, snapshot.length);
                 String line;
                 while ((line = reader.previousLine()) != null) try {
@@ -2088,8 +2079,7 @@ public final class LocalRunStore {
         String activityBatch = "";
         boolean activityFound = false;
         if (length > 0L) {
-            try (java.nio.channels.FileChannel channel = java.nio.channels.FileChannel.open(
-                    ledger.toPath(), java.nio.file.StandardOpenOption.READ)) {
+            try (NonInterruptibleLedgerFile channel = NonInterruptibleLedgerFile.open(ledger)) {
                 ReverseLedgerLineReader reader = new ReverseLedgerLineReader(channel, length);
                 String line;
                 while ((line = reader.previousLine()) != null) {
@@ -2305,8 +2295,7 @@ public final class LocalRunStore {
         LinkedHashMap<String, String> discovered = new LinkedHashMap<>();
         String found = "";
         if (pair != null && length > 0L) {
-            try (java.nio.channels.FileChannel channel = java.nio.channels.FileChannel.open(
-                    ledger.toPath(), java.nio.file.StandardOpenOption.READ)) {
+            try (NonInterruptibleLedgerFile channel = NonInterruptibleLedgerFile.open(ledger)) {
                 ReverseLedgerLineReader reader = new ReverseLedgerLineReader(channel, length);
                 String line;
                 while ((line = reader.previousLine()) != null) {
@@ -2581,8 +2570,7 @@ public final class LocalRunStore {
 
     private static JSONObject findPendingInterruptRequest(File ledger, String requestId, long length) {
         if (length <= 0L) return null;
-        try (java.nio.channels.FileChannel channel = java.nio.channels.FileChannel.open(
-                ledger.toPath(), java.nio.file.StandardOpenOption.READ)) {
+        try (NonInterruptibleLedgerFile channel = NonInterruptibleLedgerFile.open(ledger)) {
             ReverseLedgerLineReader reader = new ReverseLedgerLineReader(channel, length);
             String line;
             while ((line = reader.previousLine()) != null) try {
@@ -2689,8 +2677,7 @@ public final class LocalRunStore {
         InputStatus status = new InputStatus();
         if (!snapshot.exists || snapshot.length <= 0L) return status;
         Set<String> sourceRowsFound = new HashSet<>();
-        try (java.nio.channels.FileChannel channel = java.nio.channels.FileChannel.open(
-                snapshot.ledger.toPath(), java.nio.file.StandardOpenOption.READ)) {
+        try (NonInterruptibleLedgerFile channel = NonInterruptibleLedgerFile.open(snapshot.ledger)) {
             ReverseLedgerLineReader reader = new ReverseLedgerLineReader(channel, snapshot.length);
             String line;
             while ((line = reader.previousLine()) != null) try {
@@ -2748,8 +2735,7 @@ public final class LocalRunStore {
         if (!snapshot.exists || snapshot.length <= 0L) return Collections.emptyList();
         List<String> reverseIds = new ArrayList<>();
         boolean reachedTarget = false;
-        try (java.nio.channels.FileChannel channel = java.nio.channels.FileChannel.open(
-                snapshot.ledger.toPath(), java.nio.file.StandardOpenOption.READ)) {
+        try (NonInterruptibleLedgerFile channel = NonInterruptibleLedgerFile.open(snapshot.ledger)) {
             ReverseLedgerLineReader reader = new ReverseLedgerLineReader(channel, snapshot.length);
             String line;
             while ((line = reader.previousLine()) != null) try {
@@ -2948,8 +2934,7 @@ public final class LocalRunStore {
             LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
             if (snapshot == null) return null;
             AgentRunUiEvent result = null;
-            if (snapshot.exists && snapshot.length > 0L) try (java.nio.channels.FileChannel channel =
-                    java.nio.channels.FileChannel.open(ledger.toPath(), java.nio.file.StandardOpenOption.READ)) {
+            if (snapshot.exists && snapshot.length > 0L) try (NonInterruptibleLedgerFile channel = NonInterruptibleLedgerFile.open(ledger)) {
                 ReverseLedgerLineReader reader = new ReverseLedgerLineReader(channel, snapshot.length);
                 String line;
                 while ((line = reader.previousLine()) != null) try {
@@ -3069,8 +3054,7 @@ public final class LocalRunStore {
             LedgerSnapshot snapshot = conversationLedgerSnapshot(sessionId, ledger);
             if (snapshot == null || !snapshot.exists || snapshot.length <= 0L) return "";
             String result = "";
-            try (java.nio.channels.FileChannel channel = java.nio.channels.FileChannel.open(
-                    ledger.toPath(), java.nio.file.StandardOpenOption.READ)) {
+            try (NonInterruptibleLedgerFile channel = NonInterruptibleLedgerFile.open(ledger)) {
                 ReverseLedgerLineReader reader = new ReverseLedgerLineReader(channel, snapshot.length);
                 String line;
                 while ((line = reader.previousLine()) != null) try {
@@ -3206,41 +3190,8 @@ public final class LocalRunStore {
     private static BufferedReader snapshotReader(LedgerSnapshot snapshot, long startOffset) throws IOException {
         if (startOffset < 0L || startOffset > snapshot.length)
             throw new IllegalArgumentException("Invalid conversation ledger offset");
-        FileInputStream input = new FileInputStream(snapshot.ledger);
-        try {
-            input.getChannel().position(startOffset);
-            return new BufferedReader(new InputStreamReader(new BoundedInputStream(
-                    input, snapshot.length - startOffset), StandardCharsets.UTF_8));
-        } catch (IOException | RuntimeException error) {
-            try { input.close(); } catch (IOException ignored) { }
-            throw error;
-        }
-    }
-
-    /** Prevents a concurrent append from extending a read past its captured ledger length. */
-    private static final class BoundedInputStream extends FilterInputStream {
-        private long remaining;
-
-        BoundedInputStream(InputStream input, long limit) {
-            super(input);
-            remaining = Math.max(0L, limit);
-        }
-
-        @Override public int read() throws IOException {
-            if (remaining <= 0L) return -1;
-            int value = in.read();
-            if (value >= 0) remaining--;
-            return value;
-        }
-
-        @Override public int read(byte[] buffer, int offset, int length) throws IOException {
-            if (length == 0) return 0;
-            if (remaining <= 0L) return -1;
-            int requested = (int) Math.min((long) length, remaining);
-            int count = in.read(buffer, offset, requested);
-            if (count > 0) remaining -= count;
-            return count;
-        }
+        return new BufferedReader(new InputStreamReader(NonInterruptibleLedgerFile.open(snapshot.ledger)
+                .inputStream(startOffset, snapshot.length - startOffset), StandardCharsets.UTF_8));
     }
 
     private static List<Integer> timelineMessageIndices(List<JSONObject> rows, int firstMessageIndex) {
@@ -3335,8 +3286,7 @@ public final class LocalRunStore {
             if (snapshot == null) return Collections.emptyList();
             List<JSONObject> reversePending = new ArrayList<>();
             boolean cursorFound = false;
-            if (snapshot.exists && snapshot.length > 0L) try (java.nio.channels.FileChannel channel =
-                    java.nio.channels.FileChannel.open(ledger.toPath(), java.nio.file.StandardOpenOption.READ)) {
+            if (snapshot.exists && snapshot.length > 0L) try (NonInterruptibleLedgerFile channel = NonInterruptibleLedgerFile.open(ledger)) {
                 ReverseLedgerLineReader reader = new ReverseLedgerLineReader(channel, snapshot.length);
                 String line;
                 while ((line = reader.previousLine()) != null) try {
@@ -4175,14 +4125,14 @@ public final class LocalRunStore {
     /** Reads JSONL rows backwards in blocks, retaining only one candidate line at a time. */
     private static final class ReverseLedgerLineReader {
         private static final int BLOCK_SIZE = 8 * 1024;
-        private final java.nio.channels.FileChannel channel;
+        private final NonInterruptibleLedgerFile channel;
         private final byte[] block = new byte[BLOCK_SIZE];
         private long position;
         private long blockStart = -1L;
         private int blockLength;
         private long bytesRead;
 
-        ReverseLedgerLineReader(java.nio.channels.FileChannel channel, long endOffset) {
+        ReverseLedgerLineReader(NonInterruptibleLedgerFile channel, long endOffset) {
             this.channel = channel;
             this.position = endOffset;
         }
@@ -5022,7 +4972,9 @@ public final class LocalRunStore {
         File ledger = conversationFile(sessionId);
         synchronized (SESSION_TITLE_LOCK) {
             if (conversationMetadata.read(sessionId).deleted || !ledger.isFile()) return null;
-            try (BufferedReader reader = new BufferedReader(new FileReader(ledger))) {
+            try (NonInterruptibleLedgerFile input = NonInterruptibleLedgerFile.open(ledger);
+                 BufferedReader reader = new BufferedReader(new InputStreamReader(
+                         input.inputStream(0L, input.length()), StandardCharsets.UTF_8))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
                     try {
@@ -5082,7 +5034,9 @@ public final class LocalRunStore {
 
     private static String readConversationTitleLocked(File ledger) {
         if (!ledger.isFile()) return null;
-        try (BufferedReader reader = new BufferedReader(new FileReader(ledger))) {
+        try (NonInterruptibleLedgerFile input = NonInterruptibleLedgerFile.open(ledger);
+             BufferedReader reader = new BufferedReader(new InputStreamReader(
+                     input.inputStream(0L, input.length()), StandardCharsets.UTF_8))) {
             String line;
             while ((line = reader.readLine()) != null) {
                 try {

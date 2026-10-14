@@ -18,8 +18,10 @@ import com.jarvys.agent.device.ScreenData;
 import com.jarvys.agent.device.SwipeDirection;
 import com.jarvys.agent.skills.SkillEntry;
 import com.jarvys.agent.skills.SkillRepository;
-import java.util.ArrayList;
+import java.io.InterruptedIOException;
+import java.nio.channels.ClosedByInterruptException;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -81,6 +83,7 @@ public final class AgentForegroundService extends Service {
   volatile Runnable beforeInterruptAdmissionForTesting;
   volatile Runnable beforeGenerationBindForTesting;
   volatile Runnable afterPendingInputRecoveryScanForTesting;
+  volatile Runnable beforePendingInputFailureRecoveryForTesting;
 
   private final AtomicInteger activeReflectionTasks = new AtomicInteger();
   private final Map<String, SessionLane> sessionLanes = new ConcurrentHashMap<>();
@@ -284,8 +287,11 @@ public final class AgentForegroundService extends Service {
         // FutureTask.cancel(true) can mark the Future done before a non-interruptible tool returns.
         // The lane is released here, after the physical call to FutureTask.run() has unwound.
         boolean stoppedByUser = active.token.wasStoppedByUser();
+        boolean retryPendingInputRecovery = false;
+        RuntimeException recoveryFailure = null;
         if (stoppedByUser) {
-          try { failPendingInputRecovery(sessionId); }
+          try { retryPendingInputRecovery = failPendingInputRecovery(sessionId); }
+          catch (RuntimeException failure) { recoveryFailure = failure; }
           finally { releaseFollowUpClaim(sessionId, request.followUpClaimId); }
         }
         Thread.interrupted();
@@ -307,7 +313,9 @@ public final class AgentForegroundService extends Service {
         releaseFollowUpClaim(sessionId, request.followUpClaimId);
         AgentRunUiState.finishPendingGeneration(sessionId, active.generation);
         refreshForegroundNotification();
+        if (retryPendingInputRecovery) enqueuePendingInputRecovery(sessionId);
         stopServiceIfIdle();
+        if (recoveryFailure != null) throw recoveryFailure;
       }
     }
     stopServiceIfIdle();
@@ -715,26 +723,49 @@ public final class AgentForegroundService extends Service {
     }
   }
 
-  private void failPendingInputRecovery(String onlySessionId) {
-    LocalRunStore store = new LocalRunStore(this);
-    if (onlySessionId == null) {
-      Set<String> pendingSessions = new java.util.LinkedHashSet<>();
-      for (org.json.JSONObject request : store.readPendingInterruptRequests()) {
-        String sessionId = request.optString("sessionId", "");
-        if (!sessionId.isEmpty()) pendingSessions.add(sessionId);
+  private boolean failPendingInputRecovery(String onlySessionId) {
+    try {
+      Runnable hook = beforePendingInputFailureRecoveryForTesting;
+      if (hook != null) hook.run();
+      LocalRunStore store = new LocalRunStore(this);
+      if (onlySessionId == null) {
+        Set<String> pendingSessions = new java.util.LinkedHashSet<>();
+        for (org.json.JSONObject request : store.readPendingInterruptRequests()) {
+          String sessionId = request.optString("sessionId", "");
+          if (!sessionId.isEmpty()) pendingSessions.add(sessionId);
+        }
+        boolean retry = false;
+        for (String sessionId : pendingSessions) retry |= failPendingInputRecovery(sessionId);
+        return retry;
       }
-      for (String sessionId : pendingSessions) failPendingInputRecovery(sessionId);
-      return;
-    }
-    synchronized (interruptAdmissionLock(onlySessionId)) {
-      List<org.json.JSONObject> pending = store.readPendingInterruptRequests(onlySessionId);
-      for (org.json.JSONObject request : pending) {
-        String sessionId = request.optString("sessionId", onlySessionId);
-        String requestId = request.optString("requestId", "");
-        if (!onlySessionId.equals(sessionId) || requestId.isEmpty()) continue;
-        failPendingInput(sessionId, requestId);
+      synchronized (interruptAdmissionLock(onlySessionId)) {
+        List<org.json.JSONObject> pending = store.readPendingInterruptRequests(onlySessionId);
+        for (org.json.JSONObject request : pending) {
+          String sessionId = request.optString("sessionId", onlySessionId);
+          String requestId = request.optString("requestId", "");
+          if (!onlySessionId.equals(sessionId) || requestId.isEmpty()) continue;
+          failPendingInput(sessionId, requestId);
+        }
       }
+      return false;
+    } catch (RuntimeException failure) {
+      LocalDiagnostics.recoverable(this, LocalDiagnostics.Origin.SERVICE, failure);
+      if (Thread.currentThread().isInterrupted() || isInterruptedRecoveryFailure(failure)) {
+        Thread.currentThread().interrupt();
+        // Keep the durable request pending; the owning drain retries after releasing this run.
+        return true;
+      }
+      // A non-interruption ledger failure remains visible to the existing fatal-diagnostics path.
+      throw failure;
     }
+  }
+
+  private static boolean isInterruptedRecoveryFailure(Throwable failure) {
+    for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+      if (cause instanceof ClosedByInterruptException || cause instanceof InterruptedIOException) return true;
+      if (cause.getCause() == cause) break;
+    }
+    return false;
   }
 
   private void recoverPendingInputs(String onlySessionId) {

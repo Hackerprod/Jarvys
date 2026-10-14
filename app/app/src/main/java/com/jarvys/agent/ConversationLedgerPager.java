@@ -4,10 +4,8 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -108,7 +106,7 @@ public final class ConversationLedgerPager {
             CachedPage cached = PAGE_CACHE.get(cacheKey);
             if (cached != null) return cached.page;
         }
-        try (FileChannel channel = FileChannel.open(ledger.toPath(), StandardOpenOption.READ)) {
+        try (NonInterruptibleLedgerFile channel = NonInterruptibleLedgerFile.open(ledger)) {
             Page page = readWindow(channel, endOffset, turnCount, snapshot);
             cachePage(cacheKey, snapshot, page);
             return page;
@@ -176,7 +174,7 @@ public final class ConversationLedgerPager {
         if (turnCount <= 0) throw new IllegalArgumentException("turnCount must be positive");
     }
 
-    private static Page readWindow(FileChannel channel, long endOffset, int turnCount, FileSnapshot snapshot)
+    private static Page readWindow(NonInterruptibleLedgerFile channel, long endOffset, int turnCount, FileSnapshot snapshot)
             throws IOException {
         if (endOffset <= 0L) return Page.empty();
         ReverseLineReader reader = new ReverseLineReader(channel, endOffset);
@@ -224,7 +222,7 @@ public final class ConversationLedgerPager {
     }
 
     /** Counts timeline and legacy rows, resuming from sparse cached checkpoints when possible. */
-    private static PrefixCounts countRowsBefore(FileChannel channel, long endOffset, FileSnapshot snapshot)
+    private static PrefixCounts countRowsBefore(NonInterruptibleLedgerFile channel, long endOffset, FileSnapshot snapshot)
             throws IOException {
         if (endOffset <= 0L) return PrefixCounts.EMPTY;
         PrefixIndex index;
@@ -261,7 +259,7 @@ public final class ConversationLedgerPager {
         }
     }
 
-    private static PrefixCounts scanPrefix(FileChannel channel, long start, long end, PrefixCounts initialCounts,
+    private static PrefixCounts scanPrefix(NonInterruptibleLedgerFile channel, long start, long end, PrefixCounts initialCounts,
                                                 PrefixIndex index) throws IOException {
         ByteBuffer block = ByteBuffer.allocate(FORWARD_BLOCK_SIZE);
         byte[] line = new byte[256];
@@ -420,13 +418,13 @@ public final class ConversationLedgerPager {
         return value.getBytes(StandardCharsets.US_ASCII);
     }
 
-    private static int readPage(FileChannel channel, ByteBuffer target, long position) throws IOException {
+    private static int readPage(NonInterruptibleLedgerFile channel, ByteBuffer target, long position) throws IOException {
         int count = channel.read(target, position);
         if (count > 0) synchronized (ConversationLedgerPager.class) { pageBytesRead += count; }
         return count;
     }
 
-    private static int readPrefix(FileChannel channel, ByteBuffer target, long position) throws IOException {
+    private static int readPrefix(NonInterruptibleLedgerFile channel, ByteBuffer target, long position) throws IOException {
         int count = channel.read(target, position);
         if (count > 0) synchronized (ConversationLedgerPager.class) { prefixBytesRead += count; }
         return count;
@@ -463,9 +461,9 @@ public final class ConversationLedgerPager {
         int count = 0;
         ByteArrayOutputStream currentLine = new ByteArrayOutputStream();
         ByteBuffer buffer = ByteBuffer.allocate(FORWARD_BLOCK_SIZE);
-        try (FileChannel channel = FileChannel.open(ledger.toPath(), StandardOpenOption.READ)) {
+        try (NonInterruptibleLedgerFile channel = NonInterruptibleLedgerFile.open(ledger)) {
             long position = 0L;
-            long end = Math.min(endOffset, channel.size());
+            long end = Math.min(endOffset, channel.length());
             while (position < end) {
                 buffer.clear();
                 buffer.limit((int) Math.min(buffer.capacity(), end - position));
@@ -924,7 +922,7 @@ public final class ConversationLedgerPager {
         return scanner.isUserMessageAnchor();
     }
 
-    private static List<Line> readLines(FileChannel channel, long start, long end) throws IOException {
+    private static List<Line> readLines(NonInterruptibleLedgerFile channel, long start, long end) throws IOException {
         if (end <= start) return Collections.emptyList();
         List<Line> lines = new ArrayList<>();
         ByteArrayOutputStream currentLine = new ByteArrayOutputStream();
@@ -1000,14 +998,14 @@ public final class ConversationLedgerPager {
 
     /** A byte-oriented reverse reader, so it does not decode or parse earlier ledger rows. */
     private static final class ReverseLineReader {
-        private final FileChannel channel;
+        private final NonInterruptibleLedgerFile channel;
         private final byte[] block = new byte[REVERSE_BLOCK_SIZE];
         private final long endOffset;
         private long position;
         private long blockStart = -1L;
         private int blockLength;
 
-        ReverseLineReader(FileChannel channel, long endOffset) {
+        ReverseLineReader(NonInterruptibleLedgerFile channel, long endOffset) {
             this.channel = channel;
             this.endOffset = endOffset;
             this.position = endOffset;

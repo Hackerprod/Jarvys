@@ -1190,6 +1190,38 @@ class MainAgentInteractionTest {
         }
     }
 
+    @Test fun interruptedPendingInputFailureRecoveryIsLoggedAndDeferredOnAgentWorker() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val service = startManagedService(context)
+        val session = "interrupted-failure-recovery-${System.nanoTime()}"
+        val store = LocalRunStore(context)
+        val requestId = store.appendInterruptRequest(session, "keep this pending", emptyList(), false)
+        val recovery = AgentForegroundService::class.java
+            .getDeclaredMethod("failPendingInputRecovery", String::class.java).apply { isAccessible = true }
+        service.beforePendingInputFailureRecoveryForTesting = Runnable {
+            Thread.currentThread().interrupt()
+            throw IllegalStateException("synthetic interrupted ledger read",
+                java.nio.channels.ClosedByInterruptException())
+        }
+        try {
+            val workerObservedInterrupt = worker(service).submit<Boolean> {
+                try {
+                    val deferred = recovery.invoke(service, session) as Boolean
+                    deferred && Thread.currentThread().isInterrupted
+                } finally {
+                    Thread.interrupted()
+                }
+            }.get(5, TimeUnit.SECONDS)
+
+            assertTrue("Interrupted recovery is captured and the worker keeps its interrupt flag", workerObservedInterrupt)
+            assertTrue("The durable request remains available for the next drain",
+                store.readPendingInterruptRequests(session).any { it.optString("requestId") == requestId })
+        } finally {
+            service.beforePendingInputFailureRecoveryForTesting = null
+            stopManagedService(context)
+        }
+    }
+
     @Test fun approvalCardAndWaitSurviveSameChatHydration() {
         AgentRunUiState.beginRun("approval-restore", "request")
         AgentRunUiState.bindGeneration("approval-restore", 80)
