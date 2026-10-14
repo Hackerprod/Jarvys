@@ -9,8 +9,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.*
@@ -19,6 +21,7 @@ import androidx.compose.ui.unit.Density
 import com.jarvys.agent.CancellationToken
 import com.jarvys.agent.JarvysThemeMode
 import com.jarvys.agent.R
+import com.jarvys.agent.SecretStore
 import com.jarvys.agent.mcp.*
 import com.jarvys.agent.ui.JarvysOwnTheme
 import com.jarvys.agent.ui.settings.DeveloperWorkspace
@@ -27,6 +30,7 @@ import com.jarvys.agent.ui.mcp.McpServerDetailScreen
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.*
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -40,6 +44,10 @@ import java.util.concurrent.atomic.AtomicInteger
 @Config(sdk = [34], qualifiers = "en-rUS-w360dp-h800dp-port-mdpi")
 class ConnectedConnectorPermissionScreensTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
+    private val secretStoreSingleton = SecretStore::class.java.getDeclaredField("singleton").apply { isAccessible = true }
+    private val testSecretStoreConstructor = SecretStore::class.java
+        .getDeclaredConstructor(android.content.SharedPreferences::class.java).apply { isAccessible = true }
+    private var priorSecretStore: Any? = null
     private val managers = mutableListOf<McpConnectionManager>()
     private val store = RecordingPermissionStore()
     private val dispatches = AtomicInteger()
@@ -49,16 +57,38 @@ class ConnectedConnectorPermissionScreensTest {
         override fun update(id: String, decision: ApprovalDecision) = Unit
     }
     private val gate = ApprovalGate(100, presenter)
-    @After fun closeConnections() { managers.forEach { it.close() } }
+    private data class ShownContent(val fontScale: Float, val dark: Boolean, val content: @Composable () -> Unit)
+    private var shownContent: MutableState<ShownContent>? = null
+
+    @Before fun installInMemorySecretStore() {
+        priorSecretStore = secretStoreSingleton.get(null)
+        val preferences = compose.activity.getSharedPreferences("ux-permission-screen-secrets", Context.MODE_PRIVATE)
+        preferences.edit().clear().commit()
+        secretStoreSingleton.set(null, testSecretStoreConstructor.newInstance(preferences))
+    }
+
+    @After fun closeConnections() {
+        try { managers.forEach { it.close() } }
+        finally { secretStoreSingleton.set(null, priorSecretStore) }
+    }
 
     private fun show(fontScale: Float = 1f, dark: Boolean = false, content: @Composable () -> Unit) {
-        compose.setContent {
-            JarvysOwnTheme(if (dark) JarvysThemeMode.DARK else JarvysThemeMode.LIGHT) {
-                CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, fontScale)) {
-                    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background,
-                        contentColor = MaterialTheme.colorScheme.onBackground) { content() }
+        val next = ShownContent(fontScale, dark, content)
+        val existing = shownContent
+        if (existing == null) {
+            val state = mutableStateOf(next)
+            shownContent = state
+            compose.setContent {
+                val screen = state.value
+                JarvysOwnTheme(if (screen.dark) JarvysThemeMode.DARK else JarvysThemeMode.LIGHT) {
+                    CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, screen.fontScale)) {
+                        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background,
+                            contentColor = MaterialTheme.colorScheme.onBackground) { screen.content() }
+                    }
                 }
             }
+        } else {
+            compose.runOnIdle { existing.value = next }
         }
     }
     private fun pick(tag: String, resource: Int) {

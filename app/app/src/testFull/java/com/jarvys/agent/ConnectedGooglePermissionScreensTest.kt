@@ -7,7 +7,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsActions
@@ -48,6 +51,8 @@ class ConnectedGooglePermissionScreensTest {
     private val revocations = AtomicInteger()
     private lateinit var manager: GoogleOAuthManager
     private var currentScale = 1f
+    private data class ShownContent(val scale: Float, val dark: Boolean, val content: @Composable () -> Unit)
+    private var shownContent: MutableState<ShownContent>? = null
     private lateinit var registry: ConnectorRegistry
     private lateinit var gmail: ConnectorDefinition
     private lateinit var drive: ConnectorDefinition
@@ -101,34 +106,37 @@ class ConnectedGooglePermissionScreensTest {
         if (manager.isScopeGranted(GoogleOAuthProtocol.GMAIL_READ)) registry.connect(gmail.id)
         if (GoogleOAuthProtocol.DRIVE_READ in scopes) registry.connect(drive.id)
     }
-    private fun show(gmailSelected: Boolean, scale: Float = 1f, dark: Boolean = false) {
+    private fun showScreen(scale: Float = 1f, dark: Boolean = false, content: @Composable () -> Unit) {
         currentScale = scale
-        val definition = if (gmailSelected) gmail else drive
-        compose.setContent {
-            JarvysOwnTheme(if (dark) JarvysThemeMode.DARK else JarvysThemeMode.LIGHT) {
-                CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, scale)) {
-                    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background,
-                        contentColor = MaterialTheme.colorScheme.onBackground) {
-                        GoogleServiceCard(compose.activity.getString(definition.displayNameResourceId),
-                            compose.activity.getString(definition.descriptionResourceId),
-                            if (gmailSelected) "gmail" else "googledrive", definition.id, manager, registry,
-                            if (gmailSelected) gmailScopes else driveScopes, selected = true, onSelect = {})
+        val next = ShownContent(scale, dark, content)
+        val existing = shownContent
+        if (existing == null) {
+            val state = mutableStateOf(next)
+            shownContent = state
+            compose.setContent {
+                val screen = state.value
+                JarvysOwnTheme(if (screen.dark) JarvysThemeMode.DARK else JarvysThemeMode.LIGHT) {
+                    CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, screen.scale)) {
+                        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background,
+                            contentColor = MaterialTheme.colorScheme.onBackground) { screen.content() }
                     }
                 }
             }
+        } else {
+            compose.runOnIdle { existing.value = next }
         }
     }
-    private fun showDeveloper(scale: Float = 1f, dark: Boolean = false) {
-        currentScale = scale
-        compose.setContent {
-            JarvysOwnTheme(if (dark) JarvysThemeMode.DARK else JarvysThemeMode.LIGHT) {
-                CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, scale)) {
-                    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background,
-                        contentColor = MaterialTheme.colorScheme.onBackground) { DeveloperWorkspace(registry) }
-                }
-            }
+    private fun show(gmailSelected: Boolean, scale: Float = 1f, dark: Boolean = false) {
+        val definition = if (gmailSelected) gmail else drive
+        showScreen(scale, dark) {
+            GoogleServiceCard(compose.activity.getString(definition.displayNameResourceId),
+                compose.activity.getString(definition.descriptionResourceId),
+                if (gmailSelected) "gmail" else "googledrive", definition.id, manager, registry,
+                if (gmailSelected) gmailScopes else driveScopes, selected = true, onSelect = {})
         }
     }
+    private fun showDeveloper(scale: Float = 1f, dark: Boolean = false) =
+        showScreen(scale, dark) { DeveloperWorkspace(registry) }
     private fun scopeTag(scope: String) = "google-scope-${scope.removeSuffix("/").substringAfterLast('/')}"
     private fun policyTag(operation: ConnectorOperation) = "connector-policy-${operation.name}"
     private fun pick(prefix: String, label: Int) {

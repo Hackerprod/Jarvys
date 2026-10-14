@@ -439,7 +439,12 @@ object AgentRunUiState {
     }
 
     private fun fallbackForUnknownGenerationLocked(): String? {
-        return workingSnapshot.get()?.sessionId
+        workingSnapshot.get()?.sessionId?.let { return it }
+        val visible = visibleSessionId ?: return null
+        val hasActiveOwner = sessionOwners.any { (sessionId, ownership) ->
+            ownership.active && ownership.sessionId == sessionId
+        }
+        return visible.takeUnless { hasActiveOwner }
     }
 
     private fun withApprovalSession(generation: Long? = null, action: (String) -> Unit) {
