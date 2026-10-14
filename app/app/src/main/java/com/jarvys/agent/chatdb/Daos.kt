@@ -10,10 +10,10 @@ import androidx.room.Transaction
 @Dao
 interface ConversationDao {
     @Insert(onConflict = OnConflictStrategy.ABORT)
-    internal suspend fun insertConversationRow(conversation: Conversation): Long
+    suspend fun insertConversationRow(conversation: Conversation): Long
 
     @Insert(onConflict = OnConflictStrategy.ABORT)
-    internal suspend fun insertTombstoneRow(tombstone: Tombstone)
+    suspend fun insertTombstoneRow(tombstone: Tombstone)
 
     @Query("SELECT EXISTS(SELECT 1 FROM tombstones WHERE scope = 'conversation' AND entity_id = :id)")
     suspend fun isTombstoned(id: String): Boolean
@@ -29,7 +29,7 @@ interface ConversationDao {
     suspend fun getById(id: String): Conversation?
 
     @Query("DELETE FROM conversations WHERE id = :id")
-    internal suspend fun deleteConversationRow(id: String): Int
+    suspend fun deleteConversationRow(id: String): Int
 
     /** Deletes all conversation rows by CASCADE and preserves the permanent tombstone atomically. */
     @Transaction

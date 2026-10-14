@@ -249,12 +249,6 @@ object JarvysChatDatabaseProvider {
     }
 
     private fun connectionPragmasCallback(): Callback = object : Callback() {
-        override fun onConfigure(db: SupportSQLiteDatabase) {
-            super.onConfigure(db)
-            // Room's WAL connection pool invokes this once for every physical SQLite connection.
-            db.setForeignKeyConstraintsEnabled(true)
-        }
-
         override fun onCreate(db: SupportSQLiteDatabase) {
             super.onCreate(db)
             DatabaseTriggers.create(db)
@@ -262,6 +256,8 @@ object JarvysChatDatabaseProvider {
 
         override fun onOpen(db: SupportSQLiteDatabase) {
             super.onOpen(db)
+            // Applies to the whole connection pool (including reader connections opened later), unlike a plain PRAGMA.
+            db.setForeignKeyConstraintsEnabled(true)
             setPragma(db, "foreign_keys=ON")
             setPragma(db, "busy_timeout=$BUSY_TIMEOUT_MILLIS")
             setPragma(db, "synchronous=NORMAL")

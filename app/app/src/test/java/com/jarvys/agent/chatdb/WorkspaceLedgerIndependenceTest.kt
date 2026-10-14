@@ -235,10 +235,10 @@ class WorkspaceLedgerIndependenceTest {
             "evidence_id", "conversation_id", "seq", "mission_id", "bot_id", "cycle_id", "reported_status",
             "result_text", "produced_at_ms", "content_sha256",
         )
-        values += listOf(
+        values.addAll(listOf(
             evidenceId, executionConversationId, 1L, "mission-1", "bot-1", "cycle-1", "DONE",
             byteArrayOf(5, 6), 10L, "a".repeat(64),
-        )
+        ))
         val placeholders = List(columns.size) { "?" }.joinToString(",")
         database.execSQL(
             "INSERT INTO crew_result_evidence(${columns.joinToString(",")}) VALUES($placeholders)",

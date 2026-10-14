@@ -684,7 +684,7 @@ class JarvysChatDatabaseM0Test {
     )
 
     /** Inserts one valid fixture row into every entity table whose rows belong to this conversation. */
-    private fun seedEveryConversationChild(
+    private suspend fun seedEveryConversationChild(
         sqlite: SupportSQLiteDatabase,
         conversationId: String,
     ): Map<String, Map<String, Any?>> {
