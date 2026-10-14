@@ -469,7 +469,7 @@ class CrewC0Test {
         }, emptyTools, "instructions", "rate", CorePromptBudget.standard(), null,
             CoreAgentLoop.ToolResultBudget.UNBOUNDED, turnContext, waiter)
         assertEquals("after retry", loop.run("mission", emptyList(), CancellationToken.uncancellable(), null).text)
-        assertEquals(listOf(4000L, 1500L, 3000L), sleeps)
+        assertEquals(listOf(4000L, 2500L, 5000L), sleeps)
         assertEquals(listOf(true, false, true, false, true, false), waiting)
 
         val cancelSleeps = AtomicInteger()
