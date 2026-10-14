@@ -777,9 +777,16 @@ object AgentRunUiState {
         val durableEvents = authoritativePersisted.filterNot { event ->
             event.kind == "user_decision" && event.decisionId in livePendingDecisionIds
         }
+        val durableEventIdentities = durableEvents.mapNotNullTo(mutableSetOf<String>()) {
+            refreshEventIdentity(it)
+        }
         val firstPersistedId = durableEvents.minOfOrNull { it.id } ?: Long.MAX_VALUE
+        val transientEventIds = transientEvents.mapTo(mutableSetOf()) { it.id }
         val olderLoadedEvents = current.events.filter { event ->
-            event.id < firstPersistedId && event.kind in durableKinds
+            val identity = refreshEventIdentity(event)
+            event.id !in transientEventIds
+                && (identity == null || identity !in durableEventIdentities)
+                && event.id < firstPersistedId && event.kind in durableKinds
         }
         val mergedDurableEvents = (olderLoadedEvents + durableEvents).distinctBy { it.id }
         nextEventId = maxOf(nextEventId, ((mergedDurableEvents + transientEvents).maxOfOrNull { it.id } ?: 0L) + 1L)
@@ -844,6 +851,23 @@ object AgentRunUiState {
             "assistant_translation" -> event.detail
             else -> null
         }?.takeIf(String::isNotBlank) ?: return null
+        return "${event.kind}:$identity"
+    }
+
+    private fun refreshEventIdentity(event: AgentRunUiEvent): String? {
+        val identity = when (event.kind) {
+            "user", "assistant" -> event.messageId.takeIf(String::isNotBlank)
+            "assistant_translation" -> event.detail?.takeIf(String::isNotBlank)
+            "tool" -> event.toolCallId?.takeIf(String::isNotBlank)
+            "user_decision" -> event.decisionId?.takeIf(String::isNotBlank)
+            "workspace_result" -> event.workspaceResultReference?.referenceId?.takeIf(String::isNotBlank)
+            "delivered_file" -> event.deliveredArtifact?.id?.toString()?.takeIf(String::isNotBlank)
+            "generated_image" -> event.generatedImagePath?.takeIf(String::isNotBlank)
+            "crew_mission" -> event.crewMissionSnapshot?.missionId?.takeIf(String::isNotBlank)
+            "memory" -> event.memoryRevisionId?.toString()
+                ?: event.memoryRevisionIds.takeIf { it.isNotEmpty() }?.sorted()?.joinToString(",")
+            else -> null
+        } ?: return null
         return "${event.kind}:$identity"
     }
 

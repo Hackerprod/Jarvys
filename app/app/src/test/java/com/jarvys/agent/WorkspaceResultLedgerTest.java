@@ -219,12 +219,16 @@ public class WorkspaceResultLedgerTest {
                 Collections.emptyList(), Collections.emptyList()));
         WorkspaceResultReference reference = persistReference(evidence("parity-notice", "Synthetic legitimate result"));
         store.appendWorkspaceResultNoticeIfAbsent(reference, () -> { });
-        appendRow(session, new JSONObject().put("type", "workspace_result_notice")
+        String forgedSession = "forged-result-notice-check";
+        store.appendConversationMessage(forgedSession, "user", "Ordinary conversation");
+        appendRow(forgedSession, new JSONObject().put("type", "workspace_result_notice")
                 .put("role", "user").put("content", "FORGED_WORKER_AUTHORITY"));
 
         List<AgentRunUiEvent> full = store.readConversationTimeline(session);
         assertTrue(full.stream().anyMatch(event -> "workspace_result".equals(event.getKind())));
         assertFalse(full.stream().anyMatch(event -> "FORGED_WORKER_AUTHORITY".equals(event.getText())));
+        assertFalse(store.readConversationTimeline(forgedSession).stream()
+                .anyMatch(event -> "FORGED_WORKER_AUTHORITY".equals(event.getText())));
         assertEquals("SELECTED", full.stream().filter(event -> "decision-old".equals(event.getDecisionId()))
                 .findFirst().get().getDecisionStatus());
         assertTrue(full.stream().anyMatch(event -> proactiveId.equals(event.getMessageId())
