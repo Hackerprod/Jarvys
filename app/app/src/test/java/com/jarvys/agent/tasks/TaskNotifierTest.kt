@@ -122,7 +122,7 @@ class TaskNotifierTest {
             notification.extras.getCharSequence(android.app.Notification.EXTRA_TITLE).toString())
         assertTrue(notification.extras.getCharSequence(android.app.Notification.EXTRA_TEXT).toString()
             .contains("was not executed"))
-        assertTrue(notification.actions.isEmpty())
+        assertTrue(notification.actions == null || notification.actions.isEmpty())
         assertTrue(shadowOf(notification.contentIntent).isImmutable)
     }
 
