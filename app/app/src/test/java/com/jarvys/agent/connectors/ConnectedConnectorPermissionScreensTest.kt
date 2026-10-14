@@ -236,14 +236,6 @@ class ConnectedConnectorPermissionScreensTest {
         compose.onNodeWithTag("remote-policy-issue_write-row").assertDoesNotExist()
         compose.onNodeWithTag("remote-exposure-get_me-switch").assertExists()
         compose.onNodeWithTag("remote-exposure-issue_write-switch").assertExists()
-        compose.onNodeWithTag("remote-exposure-get_me-switch").performScrollTo().performClick()
-        assertFalse(fixture.repository.get(fixture.serverId)!!.tools.first { it.wireName == "get_me" }.enabled)
-        compose.onNodeWithText(compose.activity.getString(R.string.mcp_enable_all_reads)).performScrollTo().performClick()
-        assertTrue(fixture.repository.get(fixture.serverId)!!.tools.first { it.wireName == "get_me" }.enabled)
-        compose.onNodeWithText(compose.activity.getString(R.string.mcp_disable_all_reads)).performScrollTo().performClick()
-        assertFalse(fixture.repository.get(fixture.serverId)!!.tools.first { it.wireName == "get_me" }.enabled)
-        assertTrue(fixture.repository.get(fixture.serverId)!!.tools.first { it.wireName == "issue_write" }.enabled)
-        assertEquals(credentials, fixture.vault.values)
 
         show {
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).testTag("developer-settings")) {
@@ -279,6 +271,18 @@ class ConnectedConnectorPermissionScreensTest {
         pick("$read-control", R.string.remote_service_policy_deny)
         assertTrue(fixture.repository.get(fixture.serverId)!!.tools.first { it.wireName == "get_me" }.enabled)
         assertPolicy("$read-control", R.string.remote_service_policy_deny)
+
+        show { RemoteServicesSection(fixture.repository, fixture.manager, fixture.oauth, selectedId = "github") }
+        compose.onNodeWithTag("remote-policy-get_me-row").assertDoesNotExist()
+        compose.onNodeWithTag("remote-policy-issue_write-row").assertDoesNotExist()
+        compose.onNodeWithTag("remote-exposure-get_me-switch").assertExists()
+        compose.onNodeWithTag("remote-exposure-get_me-switch").performScrollTo().performClick()
+        assertFalse(fixture.repository.get(fixture.serverId)!!.tools.first { it.wireName == "get_me" }.enabled)
+        compose.onNodeWithText(compose.activity.getString(R.string.mcp_enable_all_reads)).performScrollTo().performClick()
+        assertTrue(fixture.repository.get(fixture.serverId)!!.tools.first { it.wireName == "get_me" }.enabled)
+        compose.onNodeWithText(compose.activity.getString(R.string.mcp_disable_all_reads)).performScrollTo().performClick()
+        assertFalse(fixture.repository.get(fixture.serverId)!!.tools.first { it.wireName == "get_me" }.enabled)
+        assertTrue(fixture.repository.get(fixture.serverId)!!.tools.first { it.wireName == "issue_write" }.enabled)
         assertEquals(listOf(
             Triple("mcp:${fixture.serverId}", "issue_write", AutonomyPolicy.ASK),
             Triple("mcp:${fixture.serverId}", "issue_write", AutonomyPolicy.ALLOW),

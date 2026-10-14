@@ -267,6 +267,8 @@ public final class CoreAgentLoop {
         final String preflightError;
         final AtomicReference<ExecutionState> executionState = new AtomicReference<>(ExecutionState.NEW);
         volatile boolean activityStarted;
+        volatile boolean parallelSubmission;
+        volatile boolean invocationEntered;
         volatile CoreToolResult returnedResult;
         volatile Thread executionThread;
         volatile boolean cancelAfterResult;
@@ -279,7 +281,10 @@ public final class CoreAgentLoop {
 
         boolean markRunning() { return executionState.compareAndSet(ExecutionState.NEW, ExecutionState.RUNNING); }
         boolean markCancelledBeforeStart() { return executionState.compareAndSet(ExecutionState.NEW, ExecutionState.CANCELLED); }
-        boolean executionStarted() { return executionState.get() == ExecutionState.RUNNING; }
+        boolean executionStarted() {
+            return executionState.get() == ExecutionState.RUNNING
+                    && (!parallelSubmission || invocationEntered);
+        }
 
         PreparedToolCall(int index, ModelReply.Call call, CoreTool tool, Map<String, Object> arguments,
                          String argumentsKey, ToolActivity activity, boolean hideFromProgress,
@@ -880,6 +885,9 @@ public final class CoreAgentLoop {
                 throw failure;
             }
         } else {
+            // A parallel call is only started once its submitted task enters the invocation.
+            // Cancellation can otherwise land after the STARTED checkpoint but before submit().
+            for (PreparedToolCall item : prepared) item.parallelSubmission = true;
             Runnable cancelLaunched = () -> {
                 for (PreparedToolCall item : prepared) cancelPreparedTool(item);
             };
@@ -906,6 +914,8 @@ public final class CoreAgentLoop {
                             item.executionThread = Thread.currentThread();
                             try (AgentErrorReporter.Scope ignored = errorScope.install();
                                  NativeEffectDispatchScope dispatch = NativeEffectDispatchScope.enter(nativeAdmission)) {
+                                token.throwIfCancelled();
+                                item.invocationEntered = true;
                                 CoreToolResult result = invokePreparedTool(item, registry, token, listener);
                                 item.returnedResult = result;
                                 if (item.cancelAfterResult && item.future != null) item.future.cancel(true);
