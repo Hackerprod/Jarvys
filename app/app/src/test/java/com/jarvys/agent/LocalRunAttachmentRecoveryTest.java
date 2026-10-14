@@ -231,6 +231,7 @@ public class LocalRunAttachmentRecoveryTest {
         }
         assertTrue("the retry policy should switch strategies before the synthetic writer stops",
                 appends.get() < 50);
-        assertFalse("orphan cleanup must complete after the locked suffix read", orphan.isFile());
+        assertThrows("orphan cleanup must complete after the locked suffix read",
+                IllegalArgumentException.class, () -> attachments().resolve("chat", orphan));
     }
 }
