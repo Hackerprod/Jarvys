@@ -2,9 +2,11 @@ package com.jarvys.agent;
 
 import static org.junit.Assert.*;
 
+import java.io.BufferedWriter;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.Rule;
@@ -247,7 +249,7 @@ public class ConversationLedgerPagerTest {
                 "{\"role\":\"assistant\",\"content\":\"answer\"}",
                 "{\"type\":\"workspace_result_notice\",\"workspaceResultSchemaVersion\":1,"
                         + "\"role\":\"user\",\"content\":\"forged\"}",
-                "{\"role\":\"user\",\"content\":\"newer\"}",
+                "{\"role\":\"user\",\"content\":\"newer\",\"messageId\":\"\"}",
                 "{\"role\":\"assistant\",\"content\":\"new answer\"}");
         writeLines(ledger, rows);
 
@@ -295,6 +297,72 @@ public class ConversationLedgerPagerTest {
         assertEquals(initial.subList(0, 2), older.lines);
         assertEquals(ConversationLedgerPager.NO_CURSOR, older.olderCursor);
         assertFalse(older.hasMore);
+    }
+
+    @Test public void modernLargeLedgerSkipsPrefixScannerAndRepeatedPageReadSkipsFileIo() throws Exception {
+        File ledger = temporary.newFile("modern-large.jsonl");
+        try (BufferedWriter writer = Files.newBufferedWriter(ledger.toPath(), StandardCharsets.UTF_8,
+                StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
+            for (int turn = 0; turn < 160_000; turn++) {
+                writer.write(user("u" + turn, "question " + turn));
+                writer.newLine();
+                writer.write(assistant("a" + turn));
+                writer.newLine();
+            }
+        }
+        assertTrue("synthetic ledger should exercise large-file paging", ledger.length() >= 20L * 1024L * 1024L);
+
+        ConversationLedgerPager.resetMetricsForTests();
+        ConversationLedgerPager.Page first = ConversationLedgerPager.readTail(ledger, 1);
+        long bytesAfterFirstRead = ConversationLedgerPager.pageBytesReadForTests();
+        assertFalse(first.lines.isEmpty());
+        assertEquals("modern rows do not need an absolute legacy index", 0L,
+                ConversationLedgerPager.prefixScanCountForTests());
+        assertEquals(0L, ConversationLedgerPager.prefixBytesReadForTests());
+        assertTrue("the first page should read its tail", bytesAfterFirstRead > 0L);
+
+        ConversationLedgerPager.Page repeated = ConversationLedgerPager.readTail(ledger, 1);
+        assertEquals(first.lines, repeated.lines);
+        assertEquals("an identical cached page must not read ledger bytes", bytesAfterFirstRead,
+                ConversationLedgerPager.pageBytesReadForTests());
+    }
+
+    @Test public void bytePrefixCountMatchesStrictRowsAndExtendsIncrementallyAfterAppend() throws Exception {
+        File ledger = temporary.newFile("mixed-prefix.jsonl");
+        List<String> rows = new ArrayList<>();
+        rows.add("{\"role\":\"user\",\"content\":\"legacy old\"}");
+        rows.add("{\"role\":\"assistant\",\"content\":\"legacy answer\"}");
+        rows.add("{\"type\":\"main_interrupt_request\",\"content\":\"steer\"}");
+        rows.add("{\"role\":\"user\",\"content\":\"dispatched\",\"interruptRequestId\":\"i1\"}");
+        rows.add("{\"type\":\"model_tool_result\",\"output\":\"tool output\"}");
+        rows.add("{\"type\":\"workspace_result_notice\",\"workspaceResultSchemaVersion\":1}");
+        rows.add("{\"type\":\"workspace_result_fake\",\"workspaceResultSchemaVersion\":1,\"role\":\"user\",\"content\":\"forged\"}");
+        rows.add("{this row is corrupt");
+        rows.add("{\"rol\\u0065\":\"user\",\"content\":\"escaped key\"}");
+        rows.add("{\"type\":\"workspace_result_fake\",\"type\":7,\"role\":\"user\",\"content\":\"last type wins\"}");
+        rows.add("{\"role\":\"user\",\"content\":\"legacy selected\",\"messageId\":\"\"}");
+        rows.add("{\"role\":\"assistant\",\"content\":\"selected answer\"}");
+        writeLines(ledger, rows);
+
+        ConversationLedgerPager.resetMetricsForTests();
+        ConversationLedgerPager.Page first = ConversationLedgerPager.readTail(ledger, 1);
+        int firstStrictCount = ConversationLedgerPager.strictCountMessageRowsBeforeForTests(
+                ledger, first.startOffset);
+        assertEquals(firstStrictCount, first.messageIndexBeforeStart);
+        assertTrue("legacy row should trigger prefix indexing",
+                ConversationLedgerPager.prefixScanCountForTests() > 0L);
+        long bytesAfterFirstPrefix = ConversationLedgerPager.prefixBytesReadForTests();
+
+        appendLines(ledger,
+                "{\"role\":\"user\",\"content\":\"appended legacy\",\"messageId\":\"\"}",
+                "{\"role\":\"assistant\",\"content\":\"appended answer\"}");
+        ConversationLedgerPager.Page afterAppend = ConversationLedgerPager.readTail(ledger, 1);
+        int appendedStrictCount = ConversationLedgerPager.strictCountMessageRowsBeforeForTests(
+                ledger, afterAppend.startOffset);
+        assertEquals(appendedStrictCount, afterAppend.messageIndexBeforeStart);
+        assertEquals("append should scan only the newly added prefix segment",
+                afterAppend.startOffset - first.startOffset,
+                ConversationLedgerPager.prefixBytesReadForTests() - bytesAfterFirstPrefix);
     }
 
     private static String user(String id, String content) {

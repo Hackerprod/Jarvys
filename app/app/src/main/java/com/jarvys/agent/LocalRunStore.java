@@ -38,6 +38,7 @@ import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 import java.util.LinkedHashMap;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.HashSet;
 import java.util.Set;
@@ -50,8 +51,10 @@ public final class LocalRunStore {
     private static final Object TIMELINE_PAGE_CACHE_LOCK = new Object();
     private static final long MAX_TIMELINE_PAGE_CACHE_BYTES = 8L * 1024L * 1024L;
     private static long timelinePageCacheBytes;
+    private static long timelinePagePagerCallCount;
     private static final LinkedHashMap<String, CachedTimelinePage> TIMELINE_PAGE_CACHE =
             new LinkedHashMap<>(16, 0.75f, true);
+    private static final Map<String, ToolBatchCache> TOOL_BATCH_CACHES = new HashMap<>();
     private final File root;
     private final String runBoundary;
     private final ConversationMetadataStore conversationMetadata;
@@ -1577,7 +1580,7 @@ public final class LocalRunStore {
     }
 
     /** Persist terminal presentation before publishing it to the live timeline; never used as reflection input. */
-    public synchronized void appendConversationToolPresentation(String sessionId, String userMessageId,
+    public void appendConversationToolPresentation(String sessionId, String userMessageId,
             String displayName, String stage, String callId, String detail, String previewId, String auditDetail) {
         if (!("tool_result".equals(stage) || "tool_error".equals(stage)))
             throw new IllegalArgumentException("A terminal tool presentation is required");
@@ -1591,13 +1594,11 @@ public final class LocalRunStore {
                     .put("auditDetail", MainChatTranscriptStore.shortText(
                             CrewCheckpointStore.sanitizeText(auditDetail == null ? "" : auditDetail), 4_000))
                     .put("timestamp", System.currentTimeMillis() / 1000.0);
-            String batchId = latestToolBatchId(sessionId, userMessageId, callId);
-            if (!batchId.isEmpty()) row.put("batchId", batchId);
             if (previewId != null) {
                 row.put("previewExpected", true);
                 if (verifiedPreview(sessionId, previewId) != null) row.put("previewId", previewId);
             }
-            synchronized (SESSION_TITLE_LOCK) { appendSessionRowLocked(conversationFile(sessionId), row); }
+            appendToolEventWithLatestBatch(sessionId, userMessageId, callId, row);
         } catch (Exception failure) { throw new IllegalStateException("Could not persist tool details and preview", failure); }
     }
 
@@ -1681,7 +1682,7 @@ public final class LocalRunStore {
     }
 
     /** Persists only a trust marker; connector/MCP/workspace result bodies never enter reflection storage. */
-    public synchronized void appendReflectionToolEvent(String sessionId, String userMessageId,
+    public void appendReflectionToolEvent(String sessionId, String userMessageId,
                                                        String toolName, String source, String stage, String callId) {
         String normalizedSource = source == null ? "tool" : source.toLowerCase(Locale.ROOT);
         JSONObject row = new JSONObject();
@@ -1698,38 +1699,127 @@ public final class LocalRunStore {
                         ? "[MCP result omitted as untrusted external data]"
                         : "[tool result omitted; only user-confirmed facts may be reflected]");
             row.put("timestamp", System.currentTimeMillis() / 1000.0);
-            String batchId = latestToolBatchId(sessionId, userMessageId, callId);
-            if (!batchId.isEmpty()) row.put("batchId", batchId);
         } catch (Exception error) { throw new IllegalStateException("Could not create reflection tool marker", error); }
-        synchronized (SESSION_TITLE_LOCK) { appendSessionRowLocked(conversationFile(sessionId), row); }
+        appendToolEventWithLatestBatch(sessionId, userMessageId, callId, row);
     }
 
-    /** Resolves provider call IDs against the most recent owning batch for this user turn. */
-    private String latestToolBatchId(String sessionId, String userMessageId, String callId) {
-        if (userMessageId == null || userMessageId.isEmpty() || callId == null || callId.isEmpty()) return "";
-        String latestBatchId = "";
-        for (JSONObject row : readConversationRowsInLedgerOrder(sessionId, false)) {
-            String type = row.optString("type");
-            if ("model_tool_calls".equals(type) && userMessageId.equals(row.optString("userMessageId"))) {
-                JSONArray calls = row.optJSONArray("calls");
-                if (calls == null) continue;
-                for (int index = 0; index < calls.length(); index++) {
-                    JSONObject call = calls.optJSONObject(index);
-                    if (call != null && callId.equals(call.optString("id"))) {
-                        String batchId = row.optString("batchId", "");
-                        if (!batchId.isEmpty()) latestBatchId = batchId;
-                    }
-                }
-            } else if ("tool_activity".equals(type)
-                    && userMessageId.equals(row.optString("userMessageId"))) {
-                JSONObject activity = row.optJSONObject("activity");
-                if (activity != null && callId.equals(activity.optString("callId"))) {
-                    String batchId = row.optString("batchId", "");
-                    if (!batchId.isEmpty()) latestBatchId = batchId;
-                }
+    /**
+     * Resolves provider call IDs against the most recent owning batch. Reads backward from a
+     * locked length snapshot, then publishes the result only if that append-only snapshot remains current.
+     */
+    private void appendToolEventWithLatestBatch(String sessionId, String userMessageId, String callId,
+                                                JSONObject row) {
+        File ledger = conversationFile(sessionId);
+        while (true) {
+            ToolBatchLookup lookup = latestToolBatchId(sessionId, userMessageId, callId);
+            row.remove("batchId");
+            if (!lookup.batchId.isEmpty()) {
+                try { row.put("batchId", lookup.batchId); }
+                catch (Exception error) { throw new IllegalStateException("Could not attach tool batch", error); }
+            }
+            synchronized (SESSION_TITLE_LOCK) {
+                if (!lookup.matches(ledger)) continue;
+                appendSessionRowLocked(ledger, row);
+                return;
             }
         }
-        return latestBatchId;
+    }
+
+    private ToolBatchLookup latestToolBatchId(String sessionId, String userMessageId, String callId) {
+        File ledger = conversationFile(sessionId);
+        long length;
+        long modified;
+        Object fileIdentity;
+        String path = ledger.getAbsolutePath();
+        String pair = toolBatchPairKey(userMessageId, callId);
+        synchronized (SESSION_TITLE_LOCK) {
+            if (conversationMetadata.read(sessionId).deleted || !ledger.isFile())
+                return new ToolBatchLookup(ledger, ledger.isFile(), fileIdentity(ledger),
+                        ledger.isFile() ? ledger.length() : 0L, ledger.isFile() ? ledger.lastModified() : 0L, "");
+            fileIdentity = fileIdentity(ledger);
+            length = ledger.length();
+            modified = ledger.lastModified();
+            ToolBatchCache cache = TOOL_BATCH_CACHES.get(path);
+            if (cache == null || !cache.matches(fileIdentity, length, modified)) {
+                cache = new ToolBatchCache(path, fileIdentity, length, modified);
+                TOOL_BATCH_CACHES.put(path, cache);
+            }
+            if (pair != null && cache.knownPairs.contains(pair))
+                return new ToolBatchLookup(ledger, true, fileIdentity, length, modified,
+                        cache.batchByPair.getOrDefault(pair, ""));
+        }
+
+        Map<String, String> discovered = new HashMap<>();
+        String found = "";
+        if (pair != null && length > 0L) {
+            try (java.nio.channels.FileChannel channel = java.nio.channels.FileChannel.open(
+                    ledger.toPath(), java.nio.file.StandardOpenOption.READ)) {
+                ReverseLedgerLineReader reader = new ReverseLedgerLineReader(channel, length);
+                String line;
+                while ((line = reader.previousLine()) != null) {
+                    try {
+                        JSONObject row = new JSONObject(line);
+                        String batchId = row.optString("batchId", "");
+                        if (batchId.isEmpty()) continue;
+                        String type = row.optString("type");
+                        String owner = row.optString("userMessageId", "");
+                        if (owner.isEmpty()) continue;
+                        if ("model_tool_calls".equals(type)) {
+                            JSONArray calls = row.optJSONArray("calls");
+                            if (calls == null) continue;
+                            for (int index = 0; index < calls.length(); index++) {
+                                JSONObject call = calls.optJSONObject(index);
+                                if (call == null) continue;
+                                String discoveredPair = toolBatchPairKey(owner, call.optString("id", ""));
+                                if (discoveredPair != null) discovered.putIfAbsent(discoveredPair, batchId);
+                            }
+                        } else if ("tool_activity".equals(type)) {
+                            JSONObject activity = row.optJSONObject("activity");
+                            if (activity != null) {
+                                String discoveredPair = toolBatchPairKey(owner, activity.optString("callId", ""));
+                                if (discoveredPair != null) discovered.putIfAbsent(discoveredPair, batchId);
+                            }
+                        }
+                        if (discovered.containsKey(pair)) {
+                            found = discovered.get(pair);
+                            break;
+                        }
+                    } catch (Exception ignored) { }
+                }
+            } catch (Exception error) {
+                throw new IllegalStateException("Could not find tool call batch", error);
+            }
+        }
+        synchronized (SESSION_TITLE_LOCK) {
+            if (!conversationMetadata.read(sessionId).deleted && ledger.isFile()
+                    && sameFileIdentity(fileIdentity, fileIdentity(ledger))
+                    && length == ledger.length() && modified == ledger.lastModified()) {
+                ToolBatchCache cache = TOOL_BATCH_CACHES.get(path);
+                if (cache == null || !cache.matches(fileIdentity, length, modified)) {
+                    cache = new ToolBatchCache(path, fileIdentity, length, modified);
+                    TOOL_BATCH_CACHES.put(path, cache);
+                }
+                cache.merge(discovered);
+                if (pair != null) cache.rememberLookup(pair, found);
+            }
+        }
+        return new ToolBatchLookup(ledger, true, fileIdentity, length, modified, found);
+    }
+
+    private static Object fileIdentity(File file) {
+        try {
+            return java.nio.file.Files.readAttributes(file.toPath(),
+                    java.nio.file.attribute.BasicFileAttributes.class).fileKey();
+        } catch (Exception ignored) { return null; }
+    }
+
+    private static boolean sameFileIdentity(Object expected, Object actual) {
+        return expected == null ? actual == null : expected.equals(actual);
+    }
+
+    private static String toolBatchPairKey(String userMessageId, String callId) {
+        if (userMessageId == null || userMessageId.isEmpty() || callId == null || callId.isEmpty()) return null;
+        return userMessageId + '\u0000' + callId;
     }
 
     public static final class RegenerationPrompt {
@@ -2759,6 +2849,143 @@ public final class LocalRunStore {
         }
     }
 
+    private static final class ToolBatchLookup {
+        final File ledger;
+        final boolean exists;
+        final Object fileIdentity;
+        final long length;
+        final long lastModified;
+        final String batchId;
+
+        ToolBatchLookup(File ledger, boolean exists, Object fileIdentity, long length, long lastModified, String batchId) {
+            this.ledger = ledger;
+            this.exists = exists;
+            this.fileIdentity = fileIdentity;
+            this.length = length;
+            this.lastModified = lastModified;
+            this.batchId = batchId;
+        }
+
+        boolean matches(File file) {
+            boolean fileExists = file.isFile();
+            return ledger.getAbsolutePath().equals(file.getAbsolutePath())
+                    && fileExists == exists
+                    && (!exists || (sameFileIdentity(fileIdentity, LocalRunStore.fileIdentity(file))
+                            && file.length() == length && file.lastModified() == lastModified));
+        }
+    }
+
+    /** Per-ledger pair lookups are populated newest-first and advanced by our own appends. */
+    private static final class ToolBatchCache {
+        final String path;
+        final Object fileIdentity;
+        final Map<String, String> batchByPair = new HashMap<>();
+        final Set<String> knownPairs = new HashSet<>();
+        long length;
+        long lastModified;
+
+        ToolBatchCache(String path, Object fileIdentity, long length, long lastModified) {
+            this.path = path;
+            this.fileIdentity = fileIdentity;
+            this.length = length;
+            this.lastModified = lastModified;
+        }
+
+        boolean matches(Object expectedFileIdentity, long expectedLength, long expectedModified) {
+            return sameFileIdentity(fileIdentity, expectedFileIdentity)
+                    && length == expectedLength && lastModified == expectedModified;
+        }
+
+        void merge(Map<String, String> latestPairs) {
+            for (Map.Entry<String, String> entry : latestPairs.entrySet()) {
+                rememberLookup(entry.getKey(), entry.getValue());
+            }
+        }
+
+        void rememberLookup(String pair, String batchId) {
+            knownPairs.add(pair);
+            if (batchId == null || batchId.isEmpty()) batchByPair.remove(pair);
+            else batchByPair.put(pair, batchId);
+        }
+
+        void rememberAppendedRow(JSONObject row) {
+            String batchId = row.optString("batchId", "");
+            String owner = row.optString("userMessageId", "");
+            if (batchId.isEmpty() || owner.isEmpty()) return;
+            String type = row.optString("type");
+            if ("model_tool_calls".equals(type)) {
+                JSONArray calls = row.optJSONArray("calls");
+                if (calls == null) return;
+                for (int index = 0; index < calls.length(); index++) {
+                    JSONObject call = calls.optJSONObject(index);
+                    if (call == null) continue;
+                    String pair = toolBatchPairKey(owner, call.optString("id", ""));
+                    if (pair != null) rememberLookup(pair, batchId);
+                }
+            } else if ("tool_activity".equals(type)) {
+                JSONObject activity = row.optJSONObject("activity");
+                if (activity == null) return;
+                String pair = toolBatchPairKey(owner, activity.optString("callId", ""));
+                if (pair != null) rememberLookup(pair, batchId);
+            }
+        }
+    }
+
+    /** Reads JSONL rows backwards in blocks, retaining only one candidate line at a time. */
+    private static final class ReverseLedgerLineReader {
+        private static final int BLOCK_SIZE = 8 * 1024;
+        private final java.nio.channels.FileChannel channel;
+        private final byte[] block = new byte[BLOCK_SIZE];
+        private long position;
+        private long blockStart = -1L;
+        private int blockLength;
+
+        ReverseLedgerLineReader(java.nio.channels.FileChannel channel, long endOffset) {
+            this.channel = channel;
+            this.position = endOffset;
+        }
+
+        String previousLine() throws IOException {
+            if (position <= 0L) return null;
+            long end = position;
+            if (byteAt(end - 1L) == '\n') end--;
+            long scan = end - 1L;
+            while (scan >= 0L && byteAt(scan) != '\n') scan--;
+            long start = scan + 1L;
+            position = start;
+            long length = end - start;
+            if (length > Integer.MAX_VALUE) throw new IOException("Tool batch row is too large");
+            byte[] bytes = new byte[(int) length];
+            for (int index = 0; index < bytes.length; index++) bytes[index] = byteAt(end - index - 1L);
+            for (int left = 0, right = bytes.length - 1; left < right; left++, right--) {
+                byte value = bytes[left];
+                bytes[left] = bytes[right];
+                bytes[right] = value;
+            }
+            int decodedLength = bytes.length;
+            if (decodedLength > 0 && bytes[decodedLength - 1] == '\r') decodedLength--;
+            return new String(bytes, 0, decodedLength, StandardCharsets.UTF_8);
+        }
+
+        private byte byteAt(long offset) throws IOException {
+            if (blockStart < 0L || offset < blockStart || offset >= blockStart + blockLength) {
+                blockStart = (offset / BLOCK_SIZE) * BLOCK_SIZE;
+                java.nio.ByteBuffer target = java.nio.ByteBuffer.wrap(block);
+                target.clear();
+                long readPosition = blockStart;
+                while (target.hasRemaining()) {
+                    int count = channel.read(target, readPosition);
+                    if (count <= 0) break;
+                    readPosition += count;
+                }
+                blockLength = target.position();
+            }
+            int index = (int) (offset - blockStart);
+            if (index < 0 || index >= blockLength) throw new IOException("Ledger changed while resolving tool batch");
+            return block[index];
+        }
+    }
+
     public static final int INITIAL_TIMELINE_TURNS = 40;
     public static final int OLDER_TIMELINE_TURNS = 20;
 
@@ -2780,19 +3007,19 @@ public final class LocalRunStore {
      * Reads only a recent or preceding turn window for the UI. Model context and transcript restore
      * continue to use their existing full-history readers.
      */
-    public synchronized ConversationTimelinePage readConversationTimelinePage(
+    public ConversationTimelinePage readConversationTimelinePage(
             String sessionId, long beforeOffset, int turnCount) {
         return readConversationTimelinePage(sessionId, beforeOffset, turnCount, Collections.emptySet());
     }
 
-    public synchronized ConversationTimelinePage readConversationTimelinePage(
+    public ConversationTimelinePage readConversationTimelinePage(
             String sessionId, long beforeOffset, int turnCount, Set<String> newerInvalidatedToolTurnMessageIds) {
         return readConversationTimelinePage(sessionId, beforeOffset, turnCount,
                 newerInvalidatedToolTurnMessageIds, new TimelineProjectionMarkers());
     }
 
     /** Reads a page while applying state already learned from newer loaded windows. */
-    public synchronized ConversationTimelinePage readConversationTimelinePage(
+    public ConversationTimelinePage readConversationTimelinePage(
             String sessionId, long beforeOffset, int turnCount,
             Set<String> newerInvalidatedToolTurnMessageIds, TimelineProjectionMarkers newerProjectionMarkers) {
         if (turnCount < 1 || turnCount > 200) throw new IllegalArgumentException("Timeline page size must be 1..200");
@@ -2806,23 +3033,30 @@ public final class LocalRunStore {
         java.util.IdentityHashMap<JSONObject, Long> rowOffsetsByIdentity = new java.util.IdentityHashMap<>();
         java.util.IdentityHashMap<JSONObject, Integer> messageIndicesByIdentity = new java.util.IdentityHashMap<>();
         String pageCacheKey;
+        long snapshotLength;
+        long snapshotModified;
         synchronized (SESSION_TITLE_LOCK) {
             if (conversationMetadata.read(sessionId).deleted || !ledger.isFile()) {
                 return new ConversationTimelinePage(Collections.emptyList(), ConversationLedgerPager.NO_CURSOR, false,
                         Collections.emptySet(), Collections.emptySet(), Collections.emptySet(), Collections.emptySet(),
                         new TimelineProjectionMarkers());
             }
-            try {
-                rawPage = beforeOffset == ConversationLedgerPager.NO_CURSOR
-                        ? ConversationLedgerPager.readTail(ledger, turnCount)
-                        : ConversationLedgerPager.readPrevious(ledger, beforeOffset, turnCount);
-            } catch (IOException error) {
-                throw new IllegalStateException("Could not read conversation timeline page", error);
-            }
-            pageCacheKey = timelinePageCacheKey(ledger, beforeOffset, turnCount,
-                    rawPage.messageIndexBeforeStart, newerInvalidations, newerMarkers);
+            snapshotLength = ledger.length();
+            snapshotModified = ledger.lastModified();
+            pageCacheKey = timelinePageCacheKey(ledger, snapshotLength, snapshotModified,
+                    beforeOffset, turnCount, newerInvalidations, newerMarkers);
             ConversationTimelinePage cached = cachedTimelinePage(pageCacheKey);
             if (cached != null) return cached;
+        }
+        try {
+            synchronized (TIMELINE_PAGE_CACHE_LOCK) { timelinePagePagerCallCount++; }
+            rawPage = beforeOffset == ConversationLedgerPager.NO_CURSOR
+                    ? ConversationLedgerPager.readTail(ledger, turnCount, snapshotLength)
+                    : ConversationLedgerPager.readPrevious(ledger, beforeOffset, turnCount, snapshotLength);
+        } catch (IOException error) {
+            throw new IllegalStateException("Could not read conversation timeline page", error);
+        }
+        {
             for (int lineIndex = 0; lineIndex < rawPage.lines.size(); lineIndex++) try {
                 String line = rawPage.lines.get(lineIndex);
                 JSONObject row = new JSONObject(line);
@@ -2861,28 +3095,33 @@ public final class LocalRunStore {
                 hiddenAssistantIds(rows), hiddenTranslationIds(rows), translationMessageIds,
                 invalidatedToolTurnMessageIds, combinedMarkers);
         synchronized (SESSION_TITLE_LOCK) {
-            if (pageCacheKey.equals(timelinePageCacheKey(ledger, beforeOffset, turnCount,
-                    rawPage.messageIndexBeforeStart, newerInvalidations, newerMarkers)))
+            if (!conversationMetadata.read(sessionId).deleted
+                    && pageCacheKey.equals(timelinePageCacheKey(ledger, ledger.length(), ledger.lastModified(),
+                            beforeOffset, turnCount, newerInvalidations, newerMarkers)))
                 cacheTimelinePage(pageCacheKey, result);
         }
         return result;
     }
 
     /** Recent persisted UI events for run-service refreshes; the model transcript reader is separate. */
-    public synchronized List<AgentRunUiEvent> readRecentConversationTimeline(String sessionId) {
+    public List<AgentRunUiEvent> readRecentConversationTimeline(String sessionId) {
         return readConversationTimelinePage(sessionId, ConversationLedgerPager.NO_CURSOR, INITIAL_TIMELINE_TURNS).events;
     }
 
-    private static String timelinePageCacheKey(File ledger, long beforeOffset, int turnCount,
-                                               int messageIndexBeforeStart,
+    private static String timelinePageCacheKey(File ledger, long length, long lastModified,
+                                               long beforeOffset, int turnCount,
                                                Set<String> newerInvalidations,
                                                TimelineProjectionMarkers newerMarkers) {
         List<String> sortedInvalidations = new ArrayList<>(newerInvalidations);
         Collections.sort(sortedInvalidations);
-        return ledger.getAbsolutePath() + '\u0000' + ledger.length() + '\u0000'
-                + ledger.lastModified() + '\u0000' + beforeOffset + '\u0000' + turnCount
-                + '\u0000' + messageIndexBeforeStart + '\u0000' + sortedInvalidations
+        return ledger.getAbsolutePath() + '\u0000' + length + '\u0000'
+                + lastModified + '\u0000' + beforeOffset + '\u0000' + turnCount
+                + '\u0000' + sortedInvalidations
                 + '\u0000' + newerMarkers.cacheKey();
+    }
+
+    static long timelinePagePagerCallCountForTests() {
+        synchronized (TIMELINE_PAGE_CACHE_LOCK) { return timelinePagePagerCallCount; }
     }
 
     private static TimelineProjectionMarkers timelineProjectionMarkers(String sessionId, List<JSONObject> rows) {
@@ -3383,6 +3622,9 @@ public final class LocalRunStore {
         String sessionId = ledger.getName().substring(0, ledger.getName().length() - ".jsonl".length());
         if (conversationMetadata.read(sessionId).deleted) throw new IllegalStateException("This chat has been deleted");
         conversationFile(sessionId);
+        Object previousIdentity = ledger.isFile() ? fileIdentity(ledger) : null;
+        long previousLength = ledger.isFile() ? ledger.length() : 0L;
+        long previousModified = ledger.isFile() ? ledger.lastModified() : 0L;
         byte[] record = "crew_snapshot".equals(row.optString("type"))
                 ? losslessResultRecord(row) : (row.toString() + "\n").getBytes(StandardCharsets.UTF_8);
         try (FileOutputStream output = new FileOutputStream(ledger, true)) {
@@ -3391,6 +3633,19 @@ public final class LocalRunStore {
             output.getFD().sync();
         } catch (Exception error) {
             throw new IllegalStateException("Could not append conversation ledger entry", error);
+        }
+        String path = ledger.getAbsolutePath();
+        ToolBatchCache batchCache = TOOL_BATCH_CACHES.get(path);
+        if (batchCache != null) {
+            Object appendedIdentity = fileIdentity(ledger);
+            if (batchCache.matches(previousIdentity, previousLength, previousModified)
+                    && sameFileIdentity(batchCache.fileIdentity, appendedIdentity)) {
+                batchCache.rememberAppendedRow(row);
+                batchCache.length = ledger.length();
+                batchCache.lastModified = ledger.lastModified();
+            } else {
+                TOOL_BATCH_CACHES.remove(path);
+            }
         }
         invalidateTimelinePageCache(ledger);
     }
