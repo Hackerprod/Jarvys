@@ -94,14 +94,20 @@ public final class CoreAgentRuntime {
   }
 
   public static boolean hasActiveCrewBots() {
-    for (CrewManager manager : CREWS.values()) {
-      for (CrewManager.Bot bot : manager.bots()) {
-        if (bot.status() == CrewManager.Status.QUEUED
-            || bot.status() == CrewManager.Status.RUNNING
-            || bot.status() == CrewManager.Status.WAITING) {
-          return true;
-        }
-      }
+    for (CrewManager manager : CREWS.values()) if (hasActiveCrewBots(manager)) return true;
+    return false;
+  }
+
+  public static boolean hasActiveCrewBots(String sessionId) {
+    CrewManager manager = CREWS.get(sessionId);
+    return manager != null && hasActiveCrewBots(manager);
+  }
+
+  private static boolean hasActiveCrewBots(CrewManager manager) {
+    for (CrewManager.Bot bot : manager.bots()) {
+      if (bot.status() == CrewManager.Status.QUEUED
+          || bot.status() == CrewManager.Status.RUNNING
+          || bot.status() == CrewManager.Status.WAITING) return true;
     }
     return false;
   }

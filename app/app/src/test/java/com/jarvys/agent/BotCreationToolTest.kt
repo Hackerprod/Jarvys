@@ -220,6 +220,23 @@ class BotCreationToolTest {
         assertTrue(retry.getBoolean("already_existed")); assertFalse(retry.getBoolean("icon_complete"))
         assertEquals(1, approvalCount); assertEquals(1, imageCount)
     }
+    @Test fun cancellationAfterSavingBotStopsBeforeIconGeneration() {
+        val token = CancellationToken.cancellable()
+        var availabilityChecks = 0
+        val service = BotCreationService(repository, session, { caps }, { availableSkills },
+            { _, _ -> ApprovalDecision.APPROVED },
+            {
+                if (++availabilityChecks == 2) token.cancel()
+                true
+            },
+            { _, _, _, _, _ -> throw AssertionError("Cancelled creation must not start icon generation") })
+
+        assertThrows(CancellationException::class.java) {
+            BotCreationTool(service).execute(arguments("cancel-before-icon"), token)
+        }
+        assertEquals(1, repository.definitions().count { !it.builtIn })
+        assertEquals(2, availabilityChecks)
+    }
     @Test fun childrenAndScheduledOrProactiveRunsCannotCreateBots() {
         assertFalse(tool().execute(arguments(), CancellationToken.crewChild()).success)
         for (sessionId in listOf("", ProactiveConversation.SESSION_ID, ScheduledTaskConversation.SESSION_ID))

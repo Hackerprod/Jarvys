@@ -189,8 +189,6 @@ fun ChatComposer(
                         modifier = Modifier.size(18.dp))
                 }
             }
-            if (!running && !sendAllowed) Text(stringResource(R.string.chat_other_run_active),
-                style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(vertical = 4.dp))
             if (running && canInterrupt && goal.isNotBlank() && pendingAttachments.isEmpty() && !attachmentSending) {
                 TextButton(onClick = onInterruptAndSend,
                     modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("chat-interrupt-send")) {

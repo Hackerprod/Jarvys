@@ -73,6 +73,7 @@ data class AgentRunUiEvent(
     val previewIsCurrent: Boolean = false,
     val toolActivity: ToolActivity? = null,
     val toolActivityEvents: List<ToolActivity> = emptyList(),
+    val submissionError: String? = null,
  ) {
     fun copyMetadata(messageId: String, durationMs: Long): AgentRunUiEvent =
         copy(messageId = messageId, durationMs = durationMs)
@@ -250,6 +251,7 @@ data class AgentRunUiSnapshot(
     val sessionId: String? = null,
     val goal: String = "",
     val running: Boolean = false,
+    val stopping: Boolean = false,
     val interactiveOwnerSessionId: String? = null,
     val outcome: String? = null,
     val events: List<AgentRunUiEvent> = emptyList(),
@@ -285,13 +287,127 @@ data class RunHistoryItem(
 
 /** Bridges the foreground service's existing AgentLoop progress callback into a Compose-observable StateFlow. */
 object AgentRunUiState {
-    private var activeGeneration: Long = Long.MIN_VALUE
-    private var ownedSessionId: String? = null
-    private var ownedRunActive = false
-    private var ownedLiveSnapshot: AgentRunUiSnapshot? = null
+    private data class RunOwnership(
+        var sessionId: String? = null,
+        var generation: Long = Long.MIN_VALUE,
+        var active: Boolean = false,
+        var liveSnapshot: AgentRunUiSnapshot? = null,
+        var stoppingGeneration: Long? = null,
+        var stoppedCompletion: StoppedCompletion? = null,
+    )
+
+    private data class StoppedCompletion(
+        val runId: String,
+        val outcome: String,
+        val text: String,
+        val messageId: String,
+        val durationMs: Long,
+    )
+
+    private data class WorkingSnapshot(val sessionId: String, var snapshot: AgentRunUiSnapshot)
+    private val workingSnapshot = ThreadLocal<WorkingSnapshot?>()
+    private val sessionSnapshots = mutableMapOf<String, AgentRunUiSnapshot>()
+    private val sessionOwners = mutableMapOf<String, RunOwnership>()
+    private val sessionProgress = mutableMapOf<String, MutableList<AgentRunUiEvent>>()
+    private var visibleSessionId: String? = null
+    private val publishedState = MutableStateFlow(AgentRunUiSnapshot())
+    private val _state = object {
+        var value: AgentRunUiSnapshot
+            get() = workingSnapshot.get()?.snapshot ?: publishedState.value
+            set(value) {
+                val working = workingSnapshot.get()
+                if (working != null) synchronized(lock) {
+                    working.snapshot = value
+                    sessionSnapshots[working.sessionId] = value
+                    sessionOwners[working.sessionId]?.takeIf {
+                        it.active && it.sessionId == working.sessionId && value.running
+                    }?.liveSnapshot = value
+                    if (visibleSessionId == working.sessionId) publishedState.value = value
+                }
+                else {
+                    synchronized(lock) {
+                        publishedState.value = value
+                        value.sessionId?.let { sessionSnapshots[it] = value }
+                        if (visibleSessionId == null) visibleSessionId = value.sessionId
+                    }
+                }
+            }
+    }
+
+    private fun currentSessionId(): String? = workingSnapshot.get()?.sessionId ?: _state.value.sessionId
+    private fun owner(): RunOwnership = sessionOwners.getOrPut(currentSessionId().orEmpty()) { RunOwnership() }
+    private var activeGeneration: Long
+        get() = owner().generation
+        set(value) { owner().generation = value }
+    private var ownedSessionId: String?
+        get() = owner().sessionId
+        set(value) { owner().sessionId = value }
+    private var ownedRunActive: Boolean
+        get() = owner().active
+        set(value) { owner().active = value }
+    private var ownedLiveSnapshot: AgentRunUiSnapshot?
+        get() = owner().liveSnapshot
+        set(value) { owner().liveSnapshot = value }
+    private val pendingProgress: MutableList<AgentRunUiEvent>
+        get() = sessionProgress.getOrPut(currentSessionId().orEmpty()) { mutableListOf() }
+
+    private inline fun <T> inSession(sessionId: String, block: () -> T): T {
+        val existing = workingSnapshot.get()
+        if (existing?.sessionId == sessionId) return block()
+        val initial = synchronized(lock) {
+            sessionSnapshots[sessionId] ?: AgentRunUiSnapshot(sessionId = sessionId)
+        }
+        val working = WorkingSnapshot(sessionId, initial)
+        workingSnapshot.set(working)
+        try {
+            block()
+        } finally {
+            synchronized(lock) {
+                sessionSnapshots[sessionId] = working.snapshot
+                if (visibleSessionId == sessionId) publishedState.value = working.snapshot
+            }
+            workingSnapshot.set(existing)
+        }
+    }
+
+    /** Selects which session the compatibility StateFlow projects for Compose. */
+    @JvmStatic
+    fun showSession(sessionId: String) = synchronized(lock) {
+        publishedState.value.sessionId?.let { sessionSnapshots[it] = publishedState.value }
+        visibleSessionId = sessionId
+        publishedState.value = sessionSnapshots[sessionId] ?: AgentRunUiSnapshot(sessionId = sessionId)
+    }
+
+    @JvmStatic
+    fun snapshotForSession(sessionId: String): AgentRunUiSnapshot = synchronized(lock) {
+        if (visibleSessionId == sessionId) publishedState.value else sessionSnapshots[sessionId]
+            ?: AgentRunUiSnapshot(sessionId = sessionId)
+    }
+
+    @JvmStatic
+    fun isRunning(sessionId: String): Boolean = snapshotForSession(sessionId).running
 
     private fun preserveOwnedSnapshot() {
         if (ownedRunActive && _state.value.sessionId == ownedSessionId) ownedLiveSnapshot = _state.value
+    }
+
+    private fun sessionForApproval(id: String): String? = synchronized(lock) {
+        publishedState.value.takeIf { snapshot -> snapshot.events.any { it.approvalId == id } }
+            ?.sessionId
+            ?: sessionSnapshots.entries.firstOrNull { (_, snapshot) ->
+                snapshot.events.any { it.approvalId == id }
+            }?.key
+            ?: sessionOwners.entries.firstOrNull { (_, ownership) ->
+                ownership.liveSnapshot?.events?.any { it.approvalId == id } == true
+            }?.key
+    }
+
+    private fun sessionForMessage(messageId: String): String? = synchronized(lock) {
+        publishedState.value.takeIf { snapshot -> snapshot.events.any { it.messageId == messageId } }
+            ?.sessionId
+            ?: sessionSnapshots.entries.firstOrNull { (_, snapshot) ->
+                snapshot.events.any { it.messageId == messageId }
+            }?.key
     }
 
     private fun publishOwnedSnapshot(snapshot: AgentRunUiSnapshot) {
@@ -302,55 +418,95 @@ object AgentRunUiState {
     private const val MAX_EVENTS = 300
     private var nextEventId = 1L
     private val lock = Any()
-    private val pendingProgress = mutableListOf<AgentRunUiEvent>()
     private data class PendingHeaderMascotAnimation(
         val request: HeaderMascotAnimationRequest,
         val completion: CompletableFuture<HeaderMascotAnimationResult> = CompletableFuture(),
         var waiters: Int = 0,
     )
     private val pendingHeaderMascotAnimations = mutableMapOf<String, PendingHeaderMascotAnimation>()
-    private val _state = MutableStateFlow(AgentRunUiSnapshot())
-    val state: StateFlow<AgentRunUiSnapshot> = _state.asStateFlow()
+    val state: StateFlow<AgentRunUiSnapshot> = publishedState.asStateFlow()
 
     @JvmStatic
-    fun beginRun(sessionId: String, goal: String) = beginRun(sessionId, goal, emptyList())
+    fun beginRun(sessionId: String, goal: String) { beginRunInternal(sessionId, goal, emptyList(), false, false) }
 
     @JvmStatic
-    fun beginRun(sessionId: String, goal: String, attachments: List<ChatAttachment>) = synchronized(lock) {
+    fun beginRun(sessionId: String, goal: String, attachments: List<ChatAttachment>) {
+        beginRunInternal(sessionId, goal, attachments, false, false)
+    }
+
+    /** Starts a user submission and returns the exact optimistic row identity for later binding/failure. */
+    @JvmStatic
+    fun beginChatSubmission(sessionId: String, goal: String, attachments: List<ChatAttachment>): Long =
+        requireNotNull(beginRunInternal(sessionId, goal, attachments, true, true))
+
+    private fun beginRunInternal(
+        sessionId: String,
+        goal: String,
+        attachments: List<ChatAttachment>,
+        appendUserForSameTurn: Boolean,
+        preserveActiveRun: Boolean,
+    ): Long? = run {
+        if (workingSnapshot.get() == null) showSession(sessionId)
+        inSession(sessionId) { synchronized(lock) {
+        val runStillActive = preserveActiveRun && owner().active && owner().sessionId == sessionId
+        val previousStopPending = preserveActiveRun && owner().stoppingGeneration != null
+        val preservePreviousRunState = runStillActive || previousStopPending
+        if (!preservePreviousRunState) {
+            owner().stoppingGeneration = null
+            owner().stoppedCompletion = null
+        }
         val visibleAttachments = if (isManagedSystemConversation(sessionId)) emptyList() else attachments
         val current = _state.value
         val sameTurnAlreadyStarted = current.sessionId == sessionId && current.running && current.goal == goal
+        val appendUser = !sameTurnAlreadyStarted || appendUserForSameTurn
         current.headerMascotAnimationRequest?.let { request ->
             if (request.sessionId != sessionId) resolveHeaderMascotAnimationLocked(request, "rejected", "The chat session changed.")
-            else if (!sameTurnAlreadyStarted) resolveHeaderMascotAnimationLocked(request, "rejected", "The animation request was cleared when a new run started.")
+            else if (appendUser) resolveHeaderMascotAnimationLocked(request, "rejected", "The animation request was cleared when a new run started.")
         }
-        if (!sameTurnAlreadyStarted) pendingProgress.clear()
+        if (appendUser && !preservePreviousRunState) pendingProgress.clear()
+        val optimisticUserEvent = if (appendUser) event("user", goal).copyAttachments(visibleAttachments) else null
         val events = if (current.sessionId == sessionId) {
-            if (sameTurnAlreadyStarted) current.events else append(current.events, event("user", goal).copyAttachments(visibleAttachments))
-        } else listOf(event("user", goal).copyAttachments(visibleAttachments))
+            optimisticUserEvent?.let { append(current.events, it) } ?: current.events
+        } else listOf(checkNotNull(optimisticUserEvent))
         _state.value = current.copy(
             sessionId = sessionId,
             goal = goal,
-            running = true,
-            outcome = null,
-            liveMascotTool = null,
-            liveModelWaitId = null,
-            liveUserWaitId = null,
-            liveRunIdentity = null,
-            headerMascotAnimationRequest = if (sameTurnAlreadyStarted) current.headerMascotAnimationRequest else null,
-            headerMascotAnimationResult = if (sameTurnAlreadyStarted) _state.value.headerMascotAnimationResult else null,
+            running = !previousStopPending,
+            stopping = previousStopPending || (runStillActive && current.stopping),
+            outcome = if (preservePreviousRunState) current.outcome else null,
+            liveMascotTool = if (runStillActive) current.liveMascotTool else null,
+            liveModelWaitId = if (runStillActive) current.liveModelWaitId else null,
+            liveUserWaitId = if (runStillActive) current.liveUserWaitId else null,
+            liveRunIdentity = if (runStillActive) current.liveRunIdentity else null,
+            headerMascotAnimationRequest = if (appendUser) null else current.headerMascotAnimationRequest,
+            headerMascotAnimationResult = if (appendUser) null else _state.value.headerMascotAnimationResult,
             events = events,
-            compacting = false,
-            compactionStatus = null,
+            compacting = if (runStillActive) current.compacting else false,
+            compactionStatus = if (runStillActive) current.compactionStatus else null,
         )
+        optimisticUserEvent?.id
+        } }
     }
 
     /** Bind the optimistic row once persistence returns its identity; never match reactions by text. */
     @JvmStatic
-    fun bindCurrentUserMessage(sessionId: String, messageId: String) = synchronized(lock) {
+    fun bindCurrentUserMessage(sessionId: String, messageId: String) =
+        bindCurrentUserMessageInternal(sessionId, messageId, null)
+
+    @JvmStatic
+    fun bindCurrentUserMessage(sessionId: String, messageId: String, optimisticEventId: Long) =
+        bindCurrentUserMessageInternal(sessionId, messageId, optimisticEventId)
+
+    private fun bindCurrentUserMessageInternal(sessionId: String, messageId: String, optimisticEventId: Long?) = inSession(sessionId) { synchronized(lock) {
         val current = _state.value
         if (current.sessionId != sessionId || messageId.isBlank()) return@synchronized
-        val index = current.events.indexOfLast { it.kind == "user" }
+        val index = if (optimisticEventId != null) {
+            current.events.indexOfLast { it.kind == "user" && it.id == optimisticEventId }
+        } else {
+            current.events.indexOfLast { it.kind == "user" && it.messageId == messageId }
+                .takeIf { it >= 0 }
+                ?: current.events.indexOfFirst { it.kind == "user" && it.messageId.isBlank() }
+        }
         if (index < 0 || (current.events[index].messageId.isNotEmpty() && current.events[index].messageId != messageId)) return@synchronized
         val bound = current.events.mapIndexed { i, event ->
             if (i == index && event.messageId.isEmpty()) event.copy(messageId = messageId) else event
@@ -360,19 +516,57 @@ object AgentRunUiState {
         _state.value = current.copy(events = bound.filter { event ->
             event.kind != "user" || event.messageId.isBlank() || seenUserIds.add(event.messageId)
         })
-    }
+    } }
+
+    /** Marks only the identified optimistic user row failed; this error is rendered in that row. */
+    @JvmStatic
+    fun failOptimisticUserMessage(sessionId: String, optimisticEventId: Long, message: String) =
+        inSession(sessionId) { synchronized(lock) {
+            val current = _state.value
+            var found = false
+            val events = current.events.map { event ->
+                if (event.id == optimisticEventId && event.kind == "user" && event.messageId.isBlank()) {
+                    found = true
+                    event.copy(submissionError = message)
+                } else event
+            }
+            if (!found) return@synchronized
+            val runStillActive = owner().active && owner().sessionId == sessionId
+            val previousStopPending = owner().stoppingGeneration != null && current.stopping
+            if (!runStillActive && !previousStopPending) pendingProgress.clear()
+            val anotherOptimisticSubmission = events.any {
+                it.kind == "user" && it.messageId.isBlank() && it.submissionError == null
+            }
+            val remainsRunning = runStillActive || anotherOptimisticSubmission
+            _state.value = current.copy(
+                running = remainsRunning && !previousStopPending,
+                stopping = previousStopPending || (remainsRunning && current.stopping),
+                outcome = if (runStillActive || anotherOptimisticSubmission || previousStopPending) current.outcome else "FAILED",
+                liveMascotTool = if (runStillActive) current.liveMascotTool else null,
+                liveModelWaitId = if (runStillActive) current.liveModelWaitId else null,
+                liveUserWaitId = if (runStillActive) current.liveUserWaitId else null,
+                liveRunIdentity = if (runStillActive) current.liveRunIdentity else null,
+                compacting = if (runStillActive) current.compacting else false,
+                compactionStatus = if (runStillActive) current.compactionStatus else null,
+                events = events,
+            )
+        } }
 
     @JvmStatic
-    fun messageReactionChanged(sessionId: String, messageId: String, emoji: String) = synchronized(lock) {
+    fun messageReactionChanged(sessionId: String, messageId: String, emoji: String) = inSession(sessionId) { synchronized(lock) {
         val current = _state.value
         if (current.sessionId != sessionId) return@synchronized
         _state.value = current.copy(events = current.events.map { event ->
             if (event.kind == "user" && event.messageId == messageId) event.copyReaction(emoji) else event
         })
-    }
+    } }
 
     @JvmStatic
-    fun beginRegenerationRun(sessionId: String, goal: String) = synchronized(lock) {
+    fun beginRegenerationRun(sessionId: String, goal: String) = run {
+        if (workingSnapshot.get() == null) showSession(sessionId)
+        inSession(sessionId) { synchronized(lock) {
+        owner().stoppingGeneration = null
+        owner().stoppedCompletion = null
         pendingProgress.clear()
         val current = _state.value
         current.headerMascotAnimationRequest?.let { request ->
@@ -384,6 +578,7 @@ object AgentRunUiState {
             sessionId = sessionId,
             goal = goal,
             running = true,
+            stopping = false,
             outcome = null,
             liveMascotTool = null,
             liveModelWaitId = null,
@@ -394,10 +589,13 @@ object AgentRunUiState {
             compacting = false,
             compactionStatus = null,
         )
+        } }
     }
 
     @JvmStatic
     fun restoreSession(sessionId: String, events: List<AgentRunUiEvent>) = synchronized(lock) {
+        showSession(sessionId)
+        inSession(sessionId) {
         preserveOwnedSnapshot()
         if (ownedRunActive && ownedSessionId == sessionId && ownedLiveSnapshot != null) {
             _state.value = ownedLiveSnapshot!!.copy(running = true, interactiveOwnerSessionId = ownedSessionId)
@@ -422,10 +620,11 @@ object AgentRunUiState {
             reflectionStatus = current.reflectionStatus,
             reflectionLastSuccessMillis = current.reflectionLastSuccessMillis,
         )
+        }
     }
 
     @JvmStatic
-    fun refreshPersistedSession(sessionId: String, persistedEvents: List<AgentRunUiEvent>) = synchronized(lock) {
+    fun refreshPersistedSession(sessionId: String, persistedEvents: List<AgentRunUiEvent>) = inSession(sessionId) { synchronized(lock) {
         val current = _state.value
         if (current.sessionId != sessionId) return@synchronized
         val durableKinds = setOf("user", "assistant", "assistant_translation", "compaction", "compaction_error", "memory", "crew_mission", "tool", "user_decision", "generated_image", "delivered_file", "workspace_result")
@@ -475,10 +674,11 @@ object AgentRunUiState {
                 }
             },
         )
-    }
+    } }
 
     @JvmStatic
     fun crewMissionChanged(sessionId: String, snapshot: CrewMissionSnapshot) = synchronized(lock) {
+        inSession(sessionId) {
         val current = _state.value
         if (current.sessionId != sessionId) return@synchronized
         val events = current.events.toMutableList()
@@ -492,28 +692,31 @@ object AgentRunUiState {
         } else {
             _state.value = current.copy(events = append(events, updated))
         }
+        }
     }
 
     @JvmStatic
     fun workspaceResultAdded(reference: com.jarvys.agent.workspaces.WorkspaceResultReference) = synchronized(lock) {
+        inSession(reference.ownerCentralSessionId) {
         val current = _state.value
         if (current.sessionId != reference.ownerCentralSessionId) return@synchronized
         if (current.events.any { it.kind == "workspace_result" && it.workspaceResultReference?.referenceId == reference.referenceId }) return@synchronized
         _state.value = current.copy(events = append(current.events,
             AgentRunUiEvent.workspaceResultEvent(nextEventId++, reference, System.currentTimeMillis())))
+        }
     }
 
     @JvmStatic
-    fun deliveredFileAdded(sessionId: String, artifact: ChatAttachment) = synchronized(lock) {
+    fun deliveredFileAdded(sessionId: String, artifact: ChatAttachment) = inSession(sessionId) { synchronized(lock) {
         val current = _state.value
         if (current.sessionId != sessionId) return@synchronized
         if (current.events.any { it.kind == "delivered_file" && it.deliveredArtifact?.id == artifact.id }) return@synchronized
         _state.value = current.copy(events = append(current.events,
             AgentRunUiEvent.deliveredFileEvent(nextEventId++, artifact, System.currentTimeMillis())))
-    }
+    } }
 
     @JvmStatic
-    fun generatedImageAdded(sessionId: String, image: AgentRunUiEvent) = synchronized(lock) {
+    fun generatedImageAdded(sessionId: String, image: AgentRunUiEvent) = inSession(sessionId) { synchronized(lock) {
         val current = _state.value
         if (current.sessionId != sessionId || image.kind != "generated_image") return@synchronized
         val visibleImage = image.copy(id = nextEventId++)
@@ -521,10 +724,12 @@ object AgentRunUiState {
             it.kind == "generated_image" && it.generatedImagePath == image.generatedImagePath
         }
         _state.value = current.copy(events = append(events, visibleImage))
-    }
+    } }
 
     @JvmStatic
-    fun resetSession(sessionId: String) = synchronized(lock) {
+    fun resetSession(sessionId: String) = run {
+        if (workingSnapshot.get() == null) showSession(sessionId)
+        inSession(sessionId) { synchronized(lock) {
         preserveOwnedSnapshot()
         pendingProgress.clear()
         val current = _state.value
@@ -537,48 +742,49 @@ object AgentRunUiState {
             interactiveOwnerSessionId = if (ownedRunActive) ownedSessionId else null, reflecting = current.reflecting,
             reflectionSessionId = current.reflectionSessionId, reflectionStatus = current.reflectionStatus,
             reflectionLastSuccessMillis = current.reflectionLastSuccessMillis)
+        } }
     }
 
     @JvmStatic
-    fun compactionStarted(sessionId: String, message: String) = synchronized(lock) {
+    fun compactionStarted(sessionId: String, message: String) = inSession(sessionId) { synchronized(lock) {
         val current = _state.value
         _state.value = current.copy(sessionId = sessionId, compacting = true, compactionStatus = message,
             liveMascotTool = if (current.sessionId == sessionId)
                 current.liveMascotTool?.copy(eligibleToAnimate = false) else null,
             liveModelWaitId = null, liveUserWaitId = null)
-    }
+    } }
 
     @JvmStatic
-    fun compactionFinished(sessionId: String, summary: String, summarizedMessages: Int, mode: String) = synchronized(lock) {
+    fun compactionFinished(sessionId: String, summary: String, summarizedMessages: Int, mode: String) = inSession(sessionId) { synchronized(lock) {
         val current = _state.value
         val compactEvent = AgentRunUiEvent.compactionEvent(nextEventId++, summary, summarizedMessages, mode, System.currentTimeMillis())
         _state.value = current.copy(sessionId = sessionId, compacting = false, compactionStatus = null,
             events = if (current.sessionId == sessionId) append(current.events, compactEvent) else listOf(compactEvent))
-    }
+    } }
 
     @JvmStatic
-    fun compactionFailed(sessionId: String, message: String) = synchronized(lock) {
+    fun compactionFailed(sessionId: String, message: String) = inSession(sessionId) { synchronized(lock) {
         val current = _state.value
         val warning = event("compaction_error", message)
         _state.value = current.copy(sessionId = sessionId, compacting = false, compactionStatus = null,
             events = if (current.sessionId == sessionId) append(current.events, warning) else listOf(warning))
-    }
+    } }
 
     @JvmStatic
-    fun compactionCancelled(sessionId: String) = synchronized(lock) {
+    fun compactionCancelled(sessionId: String) = inSession(sessionId) { synchronized(lock) {
         val current = _state.value
         _state.value = current.copy(sessionId = sessionId, compacting = false, compactionStatus = null)
-    }
+    } }
 
     @JvmStatic
-    fun reflectionStarted(sessionId: String, status: String) = synchronized(lock) {
+    fun reflectionStarted(sessionId: String, status: String) = inSession(sessionId) { synchronized(lock) {
         val current = _state.value
         _state.value = current.copy(reflecting = true, reflectionSessionId = sessionId, reflectionStatus = status)
-    }
+    } }
 
     @JvmStatic
     fun reflectionFinished(sessionId: String, reflectionId: String?, summary: String,
-                           revisionIds: List<Long>, status: String, successful: Boolean) = synchronized(lock) {
+                           revisionIds: List<Long>, status: String, successful: Boolean) = inSession(sessionId) { synchronized(lock) {
         val current = _state.value
         val matching = current.sessionId == sessionId
         val event = if (!reflectionId.isNullOrBlank() && revisionIds.isNotEmpty())
@@ -596,25 +802,25 @@ object AgentRunUiState {
                 else -> current.events
             },
         )
-    }
+    } }
 
     @JvmStatic
-    fun reflectionUndone(sessionId: String, reflectionId: String) = synchronized(lock) {
+    fun reflectionUndone(sessionId: String, reflectionId: String) = inSession(sessionId) { synchronized(lock) {
         val current = _state.value
         if (current.sessionId != sessionId) return@synchronized
         _state.value = current.copy(events = current.events.map { event ->
             if (event.memoryReflectionGroupId == reflectionId) event.copy(detail = "undone") else event
         })
-    }
+    } }
 
     @JvmStatic
-    fun reflectionCancelled(sessionId: String, status: String) = synchronized(lock) {
+    fun reflectionCancelled(sessionId: String, status: String) = inSession(sessionId) { synchronized(lock) {
         val current = _state.value
         _state.value = current.copy(reflecting = false, reflectionSessionId = sessionId, reflectionStatus = status)
-    }
+    } }
 
     @JvmStatic
-    fun bindGeneration(sessionId: String, generation: Long) = synchronized(lock) {
+    fun bindGeneration(sessionId: String, generation: Long) = inSession(sessionId) { synchronized(lock) {
         val generationChanged = ownedSessionId != sessionId || activeGeneration != generation
         val executionId = "$sessionId:$generation"
         _state.value.headerMascotAnimationRequest?.takeIf { it.executionId != executionId }?.let { request ->
@@ -632,37 +838,49 @@ object AgentRunUiState {
             liveUserWaitId = if (generationChanged) null else _state.value.liveUserWaitId,
             liveRunIdentity = if (_state.value.sessionId == sessionId) "$sessionId:$generation" else null)
         if (_state.value.sessionId == sessionId) _state.value = _state.value.copy(running = true, outcome = null)
-    }
+    } }
 
     @JvmStatic
     fun beginServiceRun(sessionId: String, goal: String, attachments: List<ChatAttachment>,
-        regeneration: Boolean, generation: Long) = synchronized(lock) {
+        regeneration: Boolean, generation: Long, userMessageId: String? = null) = inSession(sessionId) { synchronized(lock) {
         _state.value.headerMascotAnimationRequest?.takeIf { _state.value.sessionId != sessionId }?.let { request ->
             resolveHeaderMascotAnimationLocked(request, "rejected", "The chat session changed.")
         }
         if (_state.value.sessionId == sessionId || _state.value.sessionId == null) {
-            if (regeneration) beginRegenerationRun(sessionId, goal) else beginRun(sessionId, goal, attachments)
+            val current = _state.value
+            val alreadyShownMessage = !regeneration && !userMessageId.isNullOrBlank()
+                && current.events.any { it.kind == "user" && it.messageId == userMessageId }
+            when {
+                regeneration -> beginRegenerationRun(sessionId, goal)
+                alreadyShownMessage -> _state.value = current.copy(
+                    goal = goal,
+                    running = true,
+                    stopping = false,
+                    outcome = null,
+                )
+                else -> beginRun(sessionId, goal, attachments)
+            }
         }
         bindGeneration(sessionId, generation)
         if (_state.value.sessionId != sessionId) {
             ownedLiveSnapshot = AgentRunUiSnapshot(sessionId = sessionId, goal = goal, running = true,
                 interactiveOwnerSessionId = sessionId, liveRunIdentity = "$sessionId:$generation",
-                events = listOf(event("user", goal).copyAttachments(attachments)))
+                events = listOf(event("user", goal).copyMetadata(userMessageId.orEmpty(), 0).copyAttachments(attachments)))
         }
-    }
+    } }
 
     @JvmStatic
-    fun ownsGeneration(sessionId: String, generation: Long): Boolean = synchronized(lock) {
+    fun ownsGeneration(sessionId: String, generation: Long): Boolean = inSession(sessionId) { synchronized(lock) {
         _state.value.sessionId == sessionId && ownedSessionId == sessionId && activeGeneration == generation
-    }
+    } }
 
     @JvmStatic
-    fun withGeneration(sessionId: String, generation: Long, update: Runnable) = synchronized(lock) {
+    fun withGeneration(sessionId: String, generation: Long, update: Runnable) = inSession(sessionId) { synchronized(lock) {
         if (ownedRunActive && ownsGeneration(sessionId, generation) && _state.value.running) update.run()
-    }
+    } }
 
     @JvmStatic
-    fun rejectUnstarted(sessionId: String, events: List<AgentRunUiEvent>) = synchronized(lock) {
+    fun rejectUnstarted(sessionId: String, events: List<AgentRunUiEvent>) = inSession(sessionId) { synchronized(lock) {
         if (_state.value.sessionId != sessionId) return@synchronized
         val stillOwnsRun = ownedRunActive && ownedSessionId == sessionId
         if (!stillOwnsRun) _state.value.headerMascotAnimationRequest?.let { request ->
@@ -675,16 +893,14 @@ object AgentRunUiState {
             liveUserWaitId = if (stillOwnsRun) _state.value.liveUserWaitId else null,
             liveRunIdentity = if (stillOwnsRun) _state.value.liveRunIdentity else null)
         refreshPersistedSession(sessionId, events)
-    }
+    } }
 
     @JvmStatic
-    fun withSession(sessionId: String, update: Runnable) = synchronized(lock) {
-        if (_state.value.sessionId == sessionId) update.run()
-    }
+    fun withSession(sessionId: String, update: Runnable) = inSession(sessionId) { update.run() }
 
     /** UI publishes only transient eligibility and locally available identities; no asset bytes cross this state. */
     @JvmStatic
-    fun headerMascotAvailabilityChanged(availability: HeaderMascotAvailability) = synchronized(lock) {
+    fun headerMascotAvailabilityChanged(availability: HeaderMascotAvailability) = inSession(availability.sessionId) { synchronized(lock) {
         val current = _state.value
         if (current.sessionId != availability.sessionId) return@synchronized
         current.headerMascotAnimationRequest?.takeIf { it.sessionId == availability.sessionId }?.let { request ->
@@ -696,10 +912,10 @@ object AgentRunUiState {
         val updated = latest.copy(headerMascotAvailability = availability)
         _state.value = updated
         if (ownedRunActive && ownedSessionId == availability.sessionId) ownedLiveSnapshot = updated
-    }
+    } }
 
     @JvmStatic
-    fun clearHeaderMascotAvailability(sessionId: String) = synchronized(lock) {
+    fun clearHeaderMascotAvailability(sessionId: String) = inSession(sessionId) { synchronized(lock) {
         val current = _state.value
         if (current.sessionId != sessionId || current.headerMascotAvailability.sessionId != sessionId) return@synchronized
         current.headerMascotAnimationRequest?.takeIf { it.sessionId == sessionId }?.let { request ->
@@ -709,7 +925,7 @@ object AgentRunUiState {
         val updated = _state.value.copy(headerMascotAvailability = HeaderMascotAvailability())
         _state.value = updated
         if (ownedRunActive && ownedSessionId == sessionId) ownedLiveSnapshot = updated
-    }
+    } }
 
     /** Publishes a request and waits for a terminal result reported by the UI. */
     @JvmStatic
@@ -797,13 +1013,13 @@ object AgentRunUiState {
         requestId: String,
         outcome: String,
         reason: String? = null,
-    ) = synchronized(lock) {
+    ) = inSession(sessionId) { synchronized(lock) {
         val current = _state.value
         val request = current.headerMascotAnimationRequest?.takeIf { it.sessionId == sessionId && it.requestId == requestId }
             ?: pendingHeaderMascotAnimations[requestId]?.request?.takeIf { it.sessionId == sessionId }
             ?: return@synchronized
         resolveHeaderMascotAnimationLocked(request, outcome, reason)
-    }
+    } }
 
     /** Clearing a published UI request is a rejection so its waiting tool always completes. */
     @JvmStatic
@@ -842,7 +1058,7 @@ object AgentRunUiState {
     }
 
     @JvmStatic
-    fun stopPendingGeneration(sessionId: String, generation: Long) = synchronized(lock) {
+    fun stopPendingGeneration(sessionId: String, generation: Long) = inSession(sessionId) { synchronized(lock) {
         if (ownedRunActive && ownedSessionId == sessionId && activeGeneration == generation) {
             resolveHeaderMascotAnimationForExecutionLocked(
                 sessionId, "$sessionId:$generation", "cancelled", null,
@@ -850,14 +1066,56 @@ object AgentRunUiState {
             ownedRunActive = false
             ownedLiveSnapshot = null
             _state.value = _state.value.copy(interactiveOwnerSessionId = null, liveMascotTool = null,
-                liveModelWaitId = null, liveUserWaitId = null)
-            if (_state.value.sessionId == sessionId) _state.value = _state.value.copy(running = false, outcome = "STOPPED", events = interruptActivities(_state.value.events))
+                liveModelWaitId = null, liveUserWaitId = null, running = false, stopping = true,
+                outcome = null, events = interruptActivities(_state.value.events))
+            owner().stoppingGeneration = generation
+            owner().stoppedCompletion = null
+        } else if (_state.value.sessionId == sessionId && _state.value.compacting) {
+            _state.value = _state.value.copy(compacting = false, compactionStatus = null,
+                running = false, stopping = true, outcome = null)
+            owner().stoppingGeneration = generation
+            owner().stoppedCompletion = null
         }
-    }
+    } }
+
+    @JvmStatic
+    fun finishPendingGeneration(sessionId: String, generation: Long) = inSession(sessionId) { synchronized(lock) {
+        val ownership = owner()
+        if (ownership.stoppingGeneration != generation) return@synchronized
+        ownership.stoppingGeneration = null
+        val completion = ownership.stoppedCompletion
+        ownership.stoppedCompletion = null
+        val current = _state.value
+        if (current.sessionId != sessionId || !current.stopping) return@synchronized
+        val terminalOutcome = completion?.outcome ?: "STOPPED"
+        val events = completion?.let {
+            val assistant = event("assistant", it.text).copy(
+                stage = AgentRunUiEvent.assistantStageForOutcome(it.outcome),
+                messageId = it.messageId, durationMs = it.durationMs)
+            append(interruptActivities(current.events), assistant)
+        } ?: interruptActivities(current.events)
+        _state.value = current.copy(
+            runId = completion?.runId ?: current.runId,
+            running = false,
+            stopping = false,
+            outcome = terminalOutcome,
+            liveMascotTool = null,
+            liveModelWaitId = null,
+            liveUserWaitId = null,
+            compacting = false,
+            compactionStatus = null,
+            events = events,
+        )
+    } }
 
     @JvmStatic
     fun completeGeneration(sessionId: String, generation: Long, runId: String, outcome: String,
-        text: String, messageId: String, durationMs: Long) = synchronized(lock) {
+        text: String, messageId: String, durationMs: Long) = inSession(sessionId) { synchronized(lock) {
+        val ownership = owner()
+        if (ownership.stoppingGeneration == generation) {
+            ownership.stoppedCompletion = StoppedCompletion(runId, outcome, text, messageId, durationMs)
+            return@synchronized
+        }
         if (ownedRunActive && ownedSessionId == sessionId && activeGeneration == generation) {
             val animationOutcome = if (outcome == "STOPPED" || outcome == "CANCELLED") "cancelled" else "rejected"
             val animationReason = if (animationOutcome == "cancelled") null
@@ -865,19 +1123,21 @@ object AgentRunUiState {
             resolveHeaderMascotAnimationForExecutionLocked(sessionId, "$sessionId:$generation", animationOutcome, animationReason)
             ownedRunActive = false
             ownedLiveSnapshot = null
+            ownership.stoppingGeneration = null
+            ownership.stoppedCompletion = null
             _state.value = _state.value.copy(interactiveOwnerSessionId = null, liveMascotTool = null,
                 liveModelWaitId = null, liveUserWaitId = null)
             if (_state.value.sessionId == sessionId) complete(runId, outcome, text, messageId, durationMs)
         }
-    }
+    } }
 
     @JvmStatic
-    fun assistantProgress(sessionId: String, progress: AgentRunUiEvent) = synchronized(lock) {
+    fun assistantProgress(sessionId: String, progress: AgentRunUiEvent) = inSession(sessionId) { synchronized(lock) {
         val current = _state.value
         if (!current.running || current.sessionId != sessionId || progress.stage != "PROGRESS"
             || progress.messageId.isBlank() || current.events.any { it.messageId == progress.messageId }) return@synchronized
         _state.value = current.copy(events = append(current.events, progress.copy(id = nextEventId++)))
-    }
+    } }
 
     @JvmStatic
     fun onProgress(stage: String, message: String) = synchronized(lock) {
@@ -987,7 +1247,7 @@ object AgentRunUiState {
     }
 
     @JvmStatic
-    fun memoryChanged(revision: MemoryStore.Revision) = synchronized(lock) {
+    fun memoryChanged(revision: MemoryStore.Revision) = inSession(revision.conversationId) { synchronized(lock) {
         // Seed remains journaled by MemoryStore; only its live chat presentation is suppressed.
         if (revision.operation == "SEED") return@synchronized
         val current = _state.value
@@ -1004,7 +1264,7 @@ object AgentRunUiState {
             memoryAfter = MemoryUiLogic.shortContent(revision.newContent, 320),
         )
         _state.value = current.copy(events = append(current.events, change))
-    }
+    } }
 
     @JvmStatic
     fun showApproval(
@@ -1058,50 +1318,61 @@ object AgentRunUiState {
     }
 
     @JvmStatic
-    fun updateApproval(id: String, status: String) = synchronized(lock) {
-        val current = if (_state.value.events.any { it.approvalId == id }) _state.value
-            else ownedLiveSnapshot ?: return@synchronized
-        val index = current.events.indexOfLast { it.kind == "approval" && it.approvalId == id }
-        if (index < 0) return@synchronized
-        val events = current.events.toMutableList()
-        events[index] = events[index].copy(stage = status, approvalStatus = status)
-        publishOwnedSnapshot(current.copy(events = events,
-            liveUserWaitId = current.liveUserWaitId?.takeUnless { it == "approval:$id" && status != "PENDING" }))
+    fun updateApproval(id: String, status: String) {
+        val sessionId = sessionForApproval(id) ?: return
+        inSession(sessionId) { synchronized(lock) {
+            val current = _state.value
+            val index = current.events.indexOfLast { it.kind == "approval" && it.approvalId == id }
+            if (index < 0) return@synchronized
+            val events = current.events.toMutableList()
+            events[index] = events[index].copy(stage = status, approvalStatus = status)
+            publishOwnedSnapshot(current.copy(events = events,
+                liveUserWaitId = current.liveUserWaitId?.takeUnless { it == "approval:$id" && status != "PENDING" }))
+        } }
     }
 
     @JvmStatic
-    fun markProactiveRepliesUsed(messageId: String) = synchronized(lock) {
-        val current = _state.value
-        val index = current.events.indexOfLast { it.kind == "assistant" && it.messageId == messageId }
-        if (index < 0) return@synchronized
-        val updated = current.events.toMutableList()
-        updated[index] = updated[index].copy(proactiveRepliesUsed = true)
-        _state.value = current.copy(events = updated)
+    fun markProactiveRepliesUsed(messageId: String) {
+        val sessionId = sessionForMessage(messageId) ?: return
+        inSession(sessionId) { synchronized(lock) {
+            val current = _state.value
+            val index = current.events.indexOfLast { it.kind == "assistant" && it.messageId == messageId }
+            if (index < 0) return@synchronized
+            val updated = current.events.toMutableList()
+            updated[index] = updated[index].copy(proactiveRepliesUsed = true)
+            _state.value = current.copy(events = updated)
+        } }
     }
 
     @JvmStatic
-    fun updateApprovalDetail(id: String, detail: String) = synchronized(lock) {
-        val current = _state.value
-        val index = current.events.indexOfLast { it.kind == "approval" && it.approvalId == id }
-        if (index < 0) return@synchronized
-        val events = current.events.toMutableList()
-        events[index] = events[index].copy(approvalStatusDetail = detail, approvalStatusDetailText = null)
-        _state.value = current.copy(events = events)
+    fun updateApprovalDetail(id: String, detail: String) {
+        val sessionId = sessionForApproval(id) ?: return
+        inSession(sessionId) { synchronized(lock) {
+            val current = _state.value
+            val index = current.events.indexOfLast { it.kind == "approval" && it.approvalId == id }
+            if (index < 0) return@synchronized
+            val events = current.events.toMutableList()
+            events[index] = events[index].copy(approvalStatusDetail = detail, approvalStatusDetailText = null)
+            _state.value = current.copy(events = events)
+        } }
     }
 
     @JvmStatic
-    fun updateApprovalDetail(id: String, detail: com.jarvys.agent.connectors.ConnectorUiText) = synchronized(lock) {
-        val current = _state.value
-        val index = current.events.indexOfLast { it.kind == "approval" && it.approvalId == id }
-        if (index < 0) return@synchronized
-        val events = current.events.toMutableList()
-        events[index] = events[index].copy(approvalStatusDetail = detail.fallback, approvalStatusDetailText = detail)
-        _state.value = current.copy(events = events)
+    fun updateApprovalDetail(id: String, detail: com.jarvys.agent.connectors.ConnectorUiText) {
+        val sessionId = sessionForApproval(id) ?: return
+        inSession(sessionId) { synchronized(lock) {
+            val current = _state.value
+            val index = current.events.indexOfLast { it.kind == "approval" && it.approvalId == id }
+            if (index < 0) return@synchronized
+            val events = current.events.toMutableList()
+            events[index] = events[index].copy(approvalStatusDetail = detail.fallback, approvalStatusDetailText = detail)
+            _state.value = current.copy(events = events)
+        } }
     }
 
     @JvmStatic
     fun showUserDecision(sessionId: String, id: String, title: String, body: String,
-                         options: List<UserDecisionOption>, allowDismiss: Boolean) = synchronized(lock) {
+                         options: List<UserDecisionOption>, allowDismiss: Boolean) = inSession(sessionId) { synchronized(lock) {
         val current = _state.value
         if (!current.running || current.sessionId != sessionId
             || current.events.any { it.kind == "user_decision" && it.decisionId == id }) return@synchronized
@@ -1118,11 +1389,11 @@ object AgentRunUiState {
             liveMascotTool = current.liveMascotTool?.copy(eligibleToAnimate = false),
             liveModelWaitId = null,
             liveUserWaitId = if (ownedRunActive && ownedSessionId == current.sessionId) "decision:$id" else null)
-    }
+    } }
 
     @JvmStatic
     fun updateUserDecision(sessionId: String, id: String, status: String,
-                           optionId: String? = null, optionLabel: String? = null) = synchronized(lock) {
+                           optionId: String? = null, optionLabel: String? = null) = inSession(sessionId) { synchronized(lock) {
         val current = _state.value
         if (current.sessionId != sessionId) return@synchronized
         val index = current.events.indexOfLast { it.kind == "user_decision" && it.decisionId == id }
@@ -1132,7 +1403,7 @@ object AgentRunUiState {
             decisionOptionId = optionId, decisionOptionLabel = optionLabel)
         _state.value = current.copy(events = events,
             liveUserWaitId = current.liveUserWaitId?.takeUnless { it == "decision:$id" && status != "PENDING" })
-    }
+    } }
 
     @JvmStatic
     fun complete(runId: String, outcome: String, summary: String) = synchronized(lock) {
@@ -1149,6 +1420,7 @@ object AgentRunUiState {
         _state.value = current.copy(
             runId = runId,
             running = false,
+            stopping = false,
             outcome = outcome,
             liveMascotTool = null,
             liveModelWaitId = null,
@@ -1160,12 +1432,13 @@ object AgentRunUiState {
     }
 
     @JvmStatic
-    fun completeChatTurn(sessionId: String, turnId: String, answer: String) = synchronized(lock) {
+    fun completeChatTurn(sessionId: String, turnId: String, answer: String) = inSession(sessionId) { synchronized(lock) {
         val current = _state.value
         _state.value = current.copy(
             runId = turnId,
             sessionId = sessionId,
             running = false,
+            stopping = false,
             outcome = "COMPLETED",
             liveMascotTool = null,
             liveModelWaitId = null,
@@ -1174,7 +1447,7 @@ object AgentRunUiState {
             compactionStatus = null,
             events = append(interruptActivities(current.events), event("assistant", answer)),
         )
-    }
+    } }
 
     @JvmStatic
     fun fail(message: String) = synchronized(lock) {
@@ -1182,6 +1455,7 @@ object AgentRunUiState {
         val current = _state.value
         _state.value = current.copy(
             running = false,
+            stopping = false,
             outcome = "FAILED",
             liveMascotTool = null,
             liveModelWaitId = null,
@@ -1193,12 +1467,13 @@ object AgentRunUiState {
     }
 
     @JvmStatic
-    fun fail(sessionId: String, message: String) = synchronized(lock) {
+    fun fail(sessionId: String, message: String) = inSession(sessionId) { synchronized(lock) {
         pendingProgress.clear()
         val current = _state.value
         _state.value = current.copy(
             sessionId = sessionId,
             running = false,
+            stopping = false,
             outcome = "FAILED",
             liveMascotTool = null,
             liveModelWaitId = null,
@@ -1207,15 +1482,16 @@ object AgentRunUiState {
             compactionStatus = null,
             events = append(interruptActivities(current.events), event("result", message, "FAILED")),
         )
-    }
+    } }
 
     @JvmStatic
-    fun failChatTurn(sessionId: String, message: String) = synchronized(lock) {
+    fun failChatTurn(sessionId: String, message: String) = inSession(sessionId) { synchronized(lock) {
         pendingProgress.clear()
         val current = _state.value
         _state.value = current.copy(
             sessionId = sessionId,
             running = false,
+            stopping = false,
             outcome = "FAILED",
             liveMascotTool = null,
             liveModelWaitId = null,
@@ -1224,7 +1500,7 @@ object AgentRunUiState {
             compactionStatus = null,
             events = append(interruptActivities(current.events), event("assistant", message, "FAILED")),
         )
-    }
+    } }
 
     private fun append(existing: List<AgentRunUiEvent>, item: AgentRunUiEvent): List<AgentRunUiEvent> {
         val result = existing + item

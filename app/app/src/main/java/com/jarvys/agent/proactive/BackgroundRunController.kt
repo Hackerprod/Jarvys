@@ -46,8 +46,9 @@ object BackgroundRunController {
 
     /** Scoped reservations overlap safely while a cancelled worker unwinds. */
     fun interactiveStarted(generation: Long) = synchronized(lock) {
-        interactiveGenerations.add(generation)
-        active?.token?.cancel()
+        if (interactiveGenerations.add(generation) && interactiveGenerations.size == 1) {
+            active?.token?.cancel()
+        }
         Unit
     }
 

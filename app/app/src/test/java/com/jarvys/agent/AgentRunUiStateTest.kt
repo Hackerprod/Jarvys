@@ -2,6 +2,8 @@ package com.jarvys.agent
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlinx.coroutines.flow.first
@@ -18,6 +20,35 @@ class AgentRunUiStateTest {
         assertFalse(AgentRunUiState.state.value.compacting)
         assertFalse(AgentRunUiState.state.value.events.any { it.kind == "compaction" })
         AgentRunUiState.resetSession("compact-stop-cleanup")
+    }
+
+    @Test
+    fun visibleProjectionKeepsRunOwnershipAndStopFinalizationPerSession() {
+        AgentRunUiState.resetSession("session-a")
+        AgentRunUiState.beginRun("session-a", "first chat")
+        AgentRunUiState.bindGeneration("session-a", 101L)
+        AgentRunUiState.resetSession("session-b")
+        AgentRunUiState.beginRun("session-b", "second chat")
+        AgentRunUiState.bindGeneration("session-b", 202L)
+
+        AgentRunUiState.completeGeneration("session-a", 101L, "a-run", "COMPLETED", "A finished", "a-message", 1L)
+        assertEquals("session-b", AgentRunUiState.state.value.sessionId)
+        assertTrue(AgentRunUiState.state.value.running)
+        assertEquals("COMPLETED", AgentRunUiState.snapshotForSession("session-a").outcome)
+
+        AgentRunUiState.stopPendingGeneration("session-b", 202L)
+        assertFalse(AgentRunUiState.state.value.running)
+        assertTrue(AgentRunUiState.state.value.stopping)
+        assertNull(AgentRunUiState.state.value.outcome)
+        AgentRunUiState.completeGeneration("session-b", 202L, "b-run", "STOPPED", "B stopped", "b-message", 2L)
+        assertTrue(AgentRunUiState.state.value.stopping)
+        assertFalse(AgentRunUiState.state.value.events.any { it.text == "B stopped" })
+
+        AgentRunUiState.finishPendingGeneration("session-b", 202L)
+        assertFalse(AgentRunUiState.state.value.stopping)
+        assertEquals("STOPPED", AgentRunUiState.state.value.outcome)
+        assertEquals("B stopped", AgentRunUiState.state.value.events.last().text)
+        AgentRunUiState.resetSession("session-b-cleanup")
     }
 
     @Test
@@ -318,5 +349,109 @@ class AgentRunUiStateTest {
         assertEquals("assistant", failure.kind)
         assertEquals("FAILED", failure.stage)
         AgentRunUiState.resetSession("failed-chat-cleanup-done")
+    }
+
+    @Test
+    fun queuedOptimisticMessageSurvivesStopFinalizationAndStaleOldWorkerExit() {
+        val session = "optimistic-stop-race-${System.nanoTime()}"
+        AgentRunUiState.resetSession(session)
+        AgentRunUiState.beginRun(session, "Old task")
+        AgentRunUiState.bindGeneration(session, 701L)
+        AgentRunUiState.stopPendingGeneration(session, 701L)
+
+        val optimisticId = AgentRunUiState.beginChatSubmission(session, "New message", emptyList())
+        val messageId = "persisted-new-message"
+        AgentRunUiState.bindCurrentUserMessage(session, messageId, optimisticId)
+        assertTrue(AgentRunUiState.state.value.stopping)
+        assertFalse(AgentRunUiState.state.value.running)
+        assertEquals("New message", AgentRunUiState.state.value.events.single { it.id == optimisticId }.text)
+
+        AgentRunUiState.finishPendingGeneration(session, 701L)
+        assertFalse(AgentRunUiState.state.value.stopping)
+        assertFalse(AgentRunUiState.state.value.running)
+        assertEquals("New message", AgentRunUiState.state.value.goal)
+        assertTrue(AgentRunUiState.state.value.events.any { it.id == optimisticId })
+
+        val userEventIdsBeforeServiceStart = AgentRunUiState.state.value.events
+            .filter { it.kind == "user" }.map { it.id }
+        AgentRunUiState.beginServiceRun(session, "New message", emptyList(), false, 702L, messageId)
+        assertEquals(userEventIdsBeforeServiceStart, AgentRunUiState.state.value.events
+            .filter { it.kind == "user" }.map { it.id })
+        assertEquals(1, AgentRunUiState.state.value.events.count {
+            it.kind == "user" && it.messageId == messageId
+        })
+        AgentRunUiState.finishPendingGeneration(session, 701L)
+        AgentRunUiState.completeGeneration(session, 701L, "old-run", "STOPPED", "Late old result", "old-result", 1L)
+        assertTrue(AgentRunUiState.state.value.running)
+        assertFalse(AgentRunUiState.state.value.stopping)
+        assertEquals("New message", AgentRunUiState.state.value.goal)
+        assertEquals("$session:702", AgentRunUiState.state.value.liveRunIdentity)
+        assertTrue(AgentRunUiState.state.value.events.any { it.id == optimisticId })
+        assertFalse(AgentRunUiState.state.value.events.any { it.text == "Late old result" })
+
+        AgentRunUiState.completeGeneration(session, 702L, "new-run", "COMPLETED", "Done", "new-result", 1L)
+        AgentRunUiState.resetSession(session)
+    }
+
+    @Test
+    fun serviceStartWithoutAnExistingDurableRowStillCreatesOneUserRow() {
+        val session = "service-start-row-${System.nanoTime()}"
+        AgentRunUiState.resetSession(session)
+        AgentRunUiState.beginServiceRun(session, "Fresh request", emptyList(), false, 703L)
+
+        assertEquals(1, AgentRunUiState.state.value.events.count { it.kind == "user" })
+        assertEquals("Fresh request", AgentRunUiState.state.value.events.single { it.kind == "user" }.text)
+        AgentRunUiState.completeGeneration(session, 703L, "fresh-run", "COMPLETED", "Done", "fresh-result", 1L)
+        AgentRunUiState.resetSession(session)
+    }
+
+    @Test
+    fun optimisticSubmissionFailureIsAttachedToItsExactUserRow() {
+        val session = "optimistic-failure-${System.nanoTime()}"
+        AgentRunUiState.resetSession(session)
+        val firstId = AgentRunUiState.beginChatSubmission(session, "Repeated request", emptyList())
+        val secondId = AgentRunUiState.beginChatSubmission(session, "Repeated request", emptyList())
+        assertNotEquals(firstId, secondId)
+
+        AgentRunUiState.failOptimisticUserMessage(session, firstId, "First send was stopped.")
+
+        val afterFirstFailure = AgentRunUiState.state.value.events.filter { it.kind == "user" }
+        assertEquals("First send was stopped.", afterFirstFailure.single { it.id == firstId }.submissionError)
+        assertNull(afterFirstFailure.single { it.id == secondId }.submissionError)
+        assertTrue("another optimistic row still represents pending work", AgentRunUiState.state.value.running)
+        assertFalse(AgentRunUiState.state.value.events.any { it.kind == "assistant" })
+
+        AgentRunUiState.bindCurrentUserMessage(session, "second-message-id", secondId)
+        val failedRows = AgentRunUiState.state.value.events.filter { it.kind == "user" }
+        assertEquals("First send was stopped.", failedRows.single { it.id == firstId }.submissionError)
+        assertEquals("second-message-id", failedRows.single { it.id == secondId }.messageId)
+        assertNull(failedRows.single { it.id == secondId }.submissionError)
+        assertFalse(AgentRunUiState.state.value.events.any { it.kind == "assistant" })
+        AgentRunUiState.resetSession("$session-cleanup")
+    }
+
+    @Test
+    fun failedOptimisticSubmissionDoesNotConsumeAnOlderPendingStop() {
+        val session = "optimistic-stop-${System.nanoTime()}"
+        AgentRunUiState.resetSession(session)
+        AgentRunUiState.beginRun(session, "Existing work")
+        AgentRunUiState.bindGeneration(session, 44L)
+        AgentRunUiState.stopPendingGeneration(session, 44L)
+        val optimisticId = AgentRunUiState.beginChatSubmission(session, "Next message", emptyList())
+
+        assertFalse(AgentRunUiState.state.value.running)
+        assertTrue(AgentRunUiState.state.value.stopping)
+        AgentRunUiState.failOptimisticUserMessage(session, optimisticId, "Message stopped before start.")
+        assertFalse(AgentRunUiState.state.value.running)
+        assertTrue(AgentRunUiState.state.value.stopping)
+
+        AgentRunUiState.completeGeneration(session, 44L, "old-run", "STOPPED", "Old run stopped", "old-message", 1L)
+        AgentRunUiState.finishPendingGeneration(session, 44L)
+        assertFalse(AgentRunUiState.state.value.stopping)
+        assertEquals("STOPPED", AgentRunUiState.state.value.outcome)
+        assertEquals("Message stopped before start.",
+            AgentRunUiState.state.value.events.single { it.id == optimisticId }.submissionError)
+        assertEquals("Old run stopped", AgentRunUiState.state.value.events.last().text)
+        AgentRunUiState.resetSession("$session-cleanup")
     }
 }

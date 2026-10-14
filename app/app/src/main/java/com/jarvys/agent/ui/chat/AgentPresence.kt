@@ -4,7 +4,7 @@ import com.jarvys.agent.AgentRunUiSnapshot
 
 /** A pure projection from run data to a short-lived visual state. */
 data class AgentPresence(val state: State, val toolName: String? = null) {
-    enum class State { IDLE, THINKING, WORKING, WAITING_USER, ERROR, DONE }
+    enum class State { IDLE, THINKING, WORKING, WAITING_USER, STOPPING, ERROR, DONE }
 
     val active: Boolean get() = state == State.THINKING || state == State.WORKING
 
@@ -12,6 +12,7 @@ data class AgentPresence(val state: State, val toolName: String? = null) {
         @JvmStatic
         fun from(snapshot: AgentRunUiSnapshot): AgentPresence {
             val events = snapshot.events
+            if (snapshot.stopping) return AgentPresence(State.STOPPING)
             if (events.any { it.kind == "approval" && it.approvalStatus == "PENDING" }
                 || events.any { it.kind == "user_decision" && it.decisionStatus == "PENDING" }) {
                 return AgentPresence(State.WAITING_USER)

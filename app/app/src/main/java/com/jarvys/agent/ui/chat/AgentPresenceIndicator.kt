@@ -118,6 +118,7 @@ private fun presenceLabel(presence: AgentPresence): String = when (presence.stat
     AgentPresence.State.WORKING -> presence.toolName?.let { stringResource(R.string.agent_presence_using_tool, it) }
         ?: stringResource(R.string.chat_agent_working)
     AgentPresence.State.WAITING_USER -> stringResource(R.string.agent_presence_waiting_user)
+    AgentPresence.State.STOPPING -> stringResource(R.string.agent_presence_stopping)
     AgentPresence.State.ERROR -> stringResource(R.string.agent_presence_error)
     AgentPresence.State.DONE -> stringResource(R.string.agent_presence_done)
 }
@@ -125,7 +126,7 @@ private fun presenceLabel(presence: AgentPresence): String = when (presence.stat
 @Composable
 private fun presenceColor(state: AgentPresence.State) = when (state) {
     AgentPresence.State.IDLE -> MaterialTheme.colorScheme.onSurfaceVariant
-    AgentPresence.State.THINKING, AgentPresence.State.DONE -> MaterialTheme.colorScheme.primary
+    AgentPresence.State.THINKING, AgentPresence.State.DONE, AgentPresence.State.STOPPING -> MaterialTheme.colorScheme.primary
     AgentPresence.State.WORKING, AgentPresence.State.WAITING_USER -> MaterialTheme.colorScheme.tertiary
     AgentPresence.State.ERROR -> MaterialTheme.colorScheme.error
 }
@@ -180,6 +181,11 @@ private fun DrawScope.drawStill(state: AgentPresence.State, color: androidx.comp
             drawCircle(color.copy(alpha = 0.6f), outer, center, style = Stroke(stroke))
             drawCircle(color, 4.dp.toPx(), center)
             drawCircle(surface, 1.5.dp.toPx(), center)
+        }
+        AgentPresence.State.STOPPING -> {
+            drawCircle(color.copy(alpha = 0.6f), outer, center, style = Stroke(stroke))
+            drawLine(color, Offset(center.x - 5.dp.toPx(), center.y),
+                Offset(center.x + 5.dp.toPx(), center.y), stroke, cap = StrokeCap.Round)
         }
         AgentPresence.State.ERROR -> {
             drawCircle(color.copy(alpha = 0.18f), outer, center)

@@ -172,10 +172,12 @@ internal class BotCreationService(
                 }
             } }
             val created = checkNotNull(saved)
+            token.throwIfCancelled()
             if (duplicate) return outcome(created, true, "not_retried")
             var current = created
             var mascotStatus = if (hasMascot) "unavailable" else "not_requested_legacy"
             if (hasMascot && compileMascot != null) {
+                token.throwIfCancelled()
                 try {
                     current = compileMascot.invoke(created.id, created.revision, requestKey,
                         checkNotNull(visualDescription), checkNotNull(mascotScene), token,
@@ -183,21 +185,37 @@ internal class BotCreationService(
                     mascotStatus = "LOCAL_COMPILED"
                 } catch (cancelled: CancellationException) { throw cancelled }
                 catch (_: RuntimeException) {
+                    token.throwIfCancelled()
                     current = repository.definition(created.id); mascotStatus = "failed"
                     // Never rebase the original icon request onto a concurrent visual/profile edit.
                     if (current.revision != created.revision) return outcome(current, false, "not_started_conflict", mascotStatus)
                 }
             }
-            if (!iconAvailable()) return outcome(current, false, "unavailable", mascotStatus)
+            val canGenerateIcon = iconAvailable()
+            token.throwIfCancelled()
+            if (!canGenerateIcon) return outcome(current, false, "unavailable", mascotStatus)
             return try {
+                token.throwIfCancelled()
                 permission.requireCurrent()
                 outcome(generateIcon(current.id, current.revision, iconPrompt, token, permission), false, "generated", mascotStatus)
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (failure: BotIconService.Failure) { outcome(repository.definition(created.id), false, "failed_${failure.reason.name.lowercase()}", mascotStatus) }
-            catch (_: RuntimeException) { outcome(repository.definition(created.id), false, "failed", mascotStatus) }
+            catch (failure: BotIconService.Failure) {
+                token.throwIfCancelled()
+                outcome(repository.definition(created.id), false, "failed_${failure.reason.name.lowercase()}", mascotStatus)
+            }
+            catch (_: RuntimeException) {
+                token.throwIfCancelled()
+                outcome(repository.definition(created.id), false, "failed", mascotStatus)
+            }
         } catch (cancelled: CancellationException) { throw cancelled }
-        catch (invalid: IllegalArgumentException) { return CoreToolResult.failure(invalid.message ?: "Invalid bot definition. Nothing was changed.") }
-        catch (_: RuntimeException) { return CoreToolResult.failure("Could not finish bot creation. Use list_bots to check the catalog and retry only with the same request_id.") }
+        catch (invalid: IllegalArgumentException) {
+            token.throwIfCancelled()
+            return CoreToolResult.failure(invalid.message ?: "Invalid bot definition. Nothing was changed.")
+        }
+        catch (_: RuntimeException) {
+            token.throwIfCancelled()
+            return CoreToolResult.failure("Could not finish bot creation. Use list_bots to check the catalog and retry only with the same request_id.")
+        }
         finally { mascotAuthorization?.close(); authorization?.close() }
     }
 

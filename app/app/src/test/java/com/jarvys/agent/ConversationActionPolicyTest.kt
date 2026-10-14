@@ -15,6 +15,7 @@ class ConversationActionPolicyTest {
         val idle = AgentRunUiSnapshot()
         assertFalse(conversationRemovalBlocked(idle, false, false, true))
         assertTrue(conversationRemovalBlocked(idle.copy(running = true), false, false, true))
+        assertTrue(conversationRemovalBlocked(idle.copy(stopping = true), false, false, true))
         assertTrue(conversationRemovalBlocked(idle.copy(compacting = true), false, false, true))
         assertTrue(conversationRemovalBlocked(idle.copy(reflecting = true), false, false, true))
         assertTrue(conversationRemovalBlocked(idle, true, false, true))

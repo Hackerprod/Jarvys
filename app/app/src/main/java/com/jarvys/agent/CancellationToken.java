@@ -64,6 +64,14 @@ public final class CancellationToken {
         return generation;
     }
 
+    boolean completeRun() {
+        return controller != null && controller.completeRun(this);
+    }
+
+    boolean stopRunAsync() {
+        return controller != null && controller.stopRunAsync();
+    }
+
     public boolean isCancelled() {
         return isStoppedByUser() || timedOut.get();
     }

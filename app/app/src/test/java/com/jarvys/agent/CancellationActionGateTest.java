@@ -14,6 +14,36 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.Test;
 
 public class CancellationActionGateTest {
+    @Test public void stoppingOneRunScopeLeavesAnotherSessionActive() {
+        StopController first = StopController.forRun();
+        StopController second = StopController.forRun();
+        CancellationToken firstToken = first.beginRun();
+        CancellationToken secondToken = second.beginRun();
+        assertNotNull(firstToken);
+        assertNotNull(secondToken);
+        try {
+            assertTrue(first.stopRun());
+            assertTrue(firstToken.isCancellationRequested());
+            assertFalse(secondToken.isCancellationRequested());
+            assertFalse(secondToken.isStoppedByUser());
+        } finally {
+            first.stopRun();
+            second.stopRun();
+        }
+    }
+
+    @Test public void globalStopCancelsEveryRunScope() {
+        StopController first = StopController.forRun();
+        StopController second = StopController.forRun();
+        CancellationToken firstToken = first.beginRun();
+        CancellationToken secondToken = second.beginRun();
+        assertNotNull(firstToken);
+        assertNotNull(secondToken);
+        StopController.stopAllRuns();
+        assertTrue(firstToken.isCancellationRequested());
+        assertTrue(secondToken.isCancellationRequested());
+    }
+
     @Test public void cancelledStandaloneAndCrewTokensRejectEveryLaterDispatch() {
         for (CancellationToken token : Arrays.asList(CancellationToken.cancellable(), CancellationToken.crewChild())) {
             AtomicInteger effects = new AtomicInteger();

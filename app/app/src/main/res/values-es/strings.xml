@@ -60,6 +60,12 @@
     <string name="agent_notification_channel">Agente Jarvys</string>
     <string name="agent_notification_text">Jarvys está en ejecución en este dispositivo.</string>
     <string name="agent_notification_stop">Detener</string>
+    <string name="agent_notification_stop_all">Detener todo</string>
+    <plurals name="agent_notification_active_runs">
+        <item quantity="one">%1$d tarea en ejecución</item>
+        <item quantity="other">%1$d tareas en ejecución</item>
+    </plurals>
+    <string name="agent_notification_runs_and_crew">%1$s · %2$s</string>
     <plurals name="crew_active_bots">
         <item quantity="one">Tripulación trabajando: %1$d bot activo</item>
         <item quantity="other">Tripulación trabajando: %1$d bots activos</item>
@@ -722,6 +728,7 @@ description: Preferencias explícitas sobre idioma, tono, estilo y forma de ayud
     <string name="agent_presence_waiting_user">Esperando tu respuesta</string>
     <string name="agent_presence_error">La ejecución necesita atención</string>
     <string name="agent_presence_done">Ejecución completada</string>
+    <string name="agent_presence_stopping">Deteniendo…</string>
     <string name="chat_streaming_status">Recibiendo respuesta</string>
     <string name="chat_open_preview">Abrir vista previa</string>
     <string name="chat_current_screen_capture">Pantalla actual · se captura al iniciar la ejecución</string>
@@ -1352,7 +1359,6 @@ Se desconoce cómo terminaron. No se repiten automáticamente. Revisa los cambio
     <string name="chat_interrupt_send">Detener y enviar este mensaje</string>
     <string name="chat_interrupt_pending">Sin iniciar. Copia este mensaje para reenviarlo si lo necesitas.</string>
     <string name="chat_interrupt_failed">No se pudo guardar el mensaje pendiente. Tu borrador sigue aquí.</string>
-    <string name="chat_other_run_active">Ya hay una tarea en ejecución. Puedes detenerla en su chat o esperar para enviar.</string>
     <string name="chat_interrupt_start_failed">No se pudo completar este turno. Revisa el chat antes de intentarlo de nuevo.</string>
     <string name="crew_task_untitled">Tarea sin título</string>
     <string name="crew_settings_title">Opciones de la tarea</string>

@@ -37,9 +37,7 @@ public final class StopOverlayService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null && ACTION_STOP.equals(intent.getAction())) {
-            com.jarvys.agent.proactive.BackgroundRunController.INSTANCE.cancelAll();
-            StopController.getInstance().stopRun();
-            stopService(new Intent(this, AgentForegroundService.class));
+            requestStopAll();
             stopSelf(startId);
             return START_NOT_STICKY;
         }
@@ -72,10 +70,7 @@ public final class StopOverlayService extends Service {
         stop.setBackground(roundRect(0xFFE53935, dp(12)));
         root.addView(stop, new LinearLayout.LayoutParams(dp(150), dp(52)));
         stop.setOnClickListener(view -> {
-            // Close the action gate synchronously in the click handler, before service teardown.
-            com.jarvys.agent.proactive.BackgroundRunController.INSTANCE.cancelAll();
-            StopController.getInstance().stopRun();
-            stopService(new Intent(this, AgentForegroundService.class));
+            requestStopAll();
             stopSelf();
         });
 
@@ -95,7 +90,6 @@ public final class StopOverlayService extends Service {
         } catch (RuntimeException e) {
             root = null;
             stopSelf();
-            stopService(new Intent(this, AgentForegroundService.class));
         }
     }
 
@@ -104,6 +98,15 @@ public final class StopOverlayService extends Service {
         shape.setColor(color);
         shape.setCornerRadius(radius);
         return shape;
+    }
+
+    private void requestStopAll() {
+        // Close run gates immediately, then let the foreground service update every session and
+        // keep ownership until its workers have physically unwound.
+        StopController.stopAllRuns();
+        Intent stop = new Intent(this, AgentForegroundService.class).setAction(AgentForegroundService.ACTION_STOP);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(stop);
+        else startService(stop);
     }
 
     private int dp(int value) {

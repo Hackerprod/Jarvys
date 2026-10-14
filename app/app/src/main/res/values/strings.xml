@@ -259,6 +259,12 @@
     <string name="agent_notification_channel">Jarvys agent</string>
     <string name="agent_notification_text">Jarvys is running on this device.</string>
     <string name="agent_notification_stop">Stop</string>
+    <string name="agent_notification_stop_all">Stop all</string>
+    <plurals name="agent_notification_active_runs">
+        <item quantity="one">%1$d task running</item>
+        <item quantity="other">%1$d tasks running</item>
+    </plurals>
+    <string name="agent_notification_runs_and_crew">%1$s · %2$s</string>
     <plurals name="crew_active_bots">
         <item quantity="one">Crew working: %1$d bot</item>
         <item quantity="other">Crew working: %1$d bots</item>
@@ -722,6 +728,7 @@ description: Explicit preferences about language, tone, style, and how to help t
     <string name="agent_presence_waiting_user">Waiting for your response</string>
     <string name="agent_presence_error">Run needs attention</string>
     <string name="agent_presence_done">Run complete</string>
+    <string name="agent_presence_stopping">Stopping…</string>
     <string name="chat_streaming_status">Receiving response</string>
     <string name="chat_open_preview">Open preview</string>
     <string name="chat_current_screen_capture">Current screen · captured when the run starts</string>
@@ -1352,7 +1359,6 @@ Their exit results are unknown. Do not repeat them automatically. Review project
     <string name="chat_interrupt_send">Stop and send this message</string>
     <string name="chat_interrupt_pending">Not started. Copy this message to send it again if needed.</string>
     <string name="chat_interrupt_failed">The message could not be queued. Your draft is still here.</string>
-    <string name="chat_other_run_active">A task is already running. Open its chat to stop it, or wait before sending.</string>
     <string name="chat_interrupt_start_failed">This turn could not finish. Check the chat before trying again.</string>
     <string name="crew_task_untitled">Untitled task</string>
     <string name="crew_settings_title">Task options</string>

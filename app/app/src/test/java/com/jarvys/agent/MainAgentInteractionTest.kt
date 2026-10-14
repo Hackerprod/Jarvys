@@ -18,7 +18,10 @@ import java.util.concurrent.atomic.AtomicReference
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class MainAgentInteractionTest {
-    @After fun cleanup() { StopController.getInstance().stopRun() }
+    @After fun cleanup() {
+        StopController.stopAllRuns()
+        StopController.getInstance().stopRun()
+    }
 
     @Test fun oldGenerationCannotCompleteOrMutateNewOne() {
         AgentRunUiState.beginRun("identity", "first")
@@ -885,20 +888,107 @@ class MainAgentInteractionTest {
         assertTrue(AgentRunUiState.state.value.events.isEmpty())
     }
 
-    @Test fun activeOtherChatRejectsOrdinarySendAndCannotBeInterruptedFromOptimisticUi() {
+    @Test fun messageSentAfterStopAppearsImmediatelyAndSurvivesOldWorkerExit() {
+        val session = "stop-then-send-${System.nanoTime()}"
+        AgentRunUiState.resetSession(session)
+        AgentRunUiState.beginRun(session, "old task")
+        AgentRunUiState.bindGeneration(session, 701L)
+        AgentRunUiState.stopPendingGeneration(session, 701L)
+        assertTrue(AgentRunUiState.state.value.stopping)
+
+        AgentRunUiState.beginRun(session, "new message")
+        AgentRunUiState.bindCurrentUserMessage(session, "new-message-id")
+        assertEquals("new message", AgentRunUiState.state.value.events.last { it.kind == "user" }.text)
+        assertTrue(AgentRunUiState.state.value.running)
+        assertFalse(AgentRunUiState.state.value.stopping)
+        AgentRunUiState.finishPendingGeneration(session, 701L)
+        assertTrue(AgentRunUiState.state.value.running)
+        assertEquals("new message", AgentRunUiState.state.value.goal)
+        assertFalse(AgentRunUiState.state.value.events.any { it.kind == "assistant" && it.text == "old task stopped" })
+        AgentRunUiState.resetSession("$session-cleanup")
+    }
+
+    @Test fun otherChatRunsBesideActiveChatAndStopIsScopedToItsSession() {
         withHeldWorker { service, context, session, release ->
             val other = "$session-other"
             AgentRunUiState.resetSession(other)
             val store = LocalRunStore(context)
             val messageId = store.appendConversationMessage(other, "user", "different chat")
-            AgentRunUiState.beginRun(other, "different chat")
+            val started = CountDownLatch(1)
+            val releaseOther = CountDownLatch(1)
+            service.mainChatRunner = AgentForegroundService.MainChatRunner { _, _, _, _, _, _ ->
+                started.countDown()
+                while (releaseOther.count > 0) {
+                    try { releaseOther.await() } catch (_: InterruptedException) { }
+                }
+                CoreAgentLoop.Result("other-session-run", "other session finished", 1, "COMPLETED")
+            }
             service.onStartCommand(AgentForegroundService.storedChatMessageIntent(context, other, messageId), 0, 2)
-            assertFalse(AgentRunUiState.state.value.running)
-            assertEquals(session, AgentRunUiState.state.value.interactiveOwnerSessionId)
-            assertFalse(AgentForegroundService.interruptAndSend(context, other, "must not cancel A", arrayListOf(), false))
+            assertTrue("The second session starts while the first session is still working", started.await(5, TimeUnit.SECONDS))
+            assertTrue(AgentRunUiState.snapshotForSession(other).running)
             assertFalse(StopController.getInstance().isStopped)
-            assertTrue(store.readConversationMessages(other).any { it.optString("status") == "FAILED" })
+            assertTrue(AgentForegroundService.interruptAndSend(context, session, "steer session A", arrayListOf(), false))
+            assertTrue(AgentForegroundService.interruptAndSend(context, other, "steer session B", arrayListOf(), false))
+            assertTrue(store.readPendingInterruptRequests(session).any { it.optString("content") == "steer session A" })
+            assertTrue(store.readPendingInterruptRequests(other).any { it.optString("content") == "steer session B" })
+            val notification = AgentForegroundService::class.java.getDeclaredMethod("buildForegroundNotification")
+                .apply { isAccessible = true }.invoke(service) as android.app.Notification
+            assertEquals(2, service.getResources().getQuantityString(R.plurals.agent_notification_active_runs, 2, 2),
+                notification.extras.getCharSequence(android.app.Notification.EXTRA_TEXT).toString())
+            assertEquals(service.getString(R.string.agent_notification_stop_all), notification.actions.single().title.toString())
+
+            AgentForegroundService.stopRun(other)
+            assertTrue(AgentRunUiState.snapshotForSession(other).stopping)
+            assertFalse("Stopping the second session leaves the first session's token active", StopController.getInstance().isStopped)
+            releaseOther.countDown()
+            val activeRuns = AgentForegroundService::class.java.getDeclaredField("activeRuns")
+                .apply { isAccessible = true }.get(service) as Map<*, *>
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while ((activeRuns.containsKey(other) || AgentRunUiState.snapshotForSession(other).stopping)
+                && System.nanoTime() < deadline) Thread.sleep(10)
+            assertFalse("The stopped second session eventually unwinds", activeRuns.containsKey(other))
+            assertEquals("STOPPED", AgentRunUiState.snapshotForSession(other).outcome)
+            assertFalse(StopController.getInstance().isStopped)
             release.countDown()
+        }
+    }
+
+    @Test fun messagesForOneSessionRunInArrivalOrder() {
+        StopController.getInstance().stopRun()
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val session = "ordered-session-${System.nanoTime()}"
+        val store = LocalRunStore(context)
+        val firstId = store.appendConversationMessage(session, "user", "first message")
+        val secondId = store.appendConversationMessage(session, "user", "second message")
+        val service = startManagedService(context)
+        val firstStarted = CountDownLatch(1)
+        val releaseFirst = CountDownLatch(1)
+        val secondStarted = CountDownLatch(1)
+        val observed = java.util.Collections.synchronizedList(mutableListOf<String>())
+        service.mainChatRunner = AgentForegroundService.MainChatRunner { _, goal, _, _, _, _ ->
+            observed.add(goal)
+            if (goal == "first message") {
+                firstStarted.countDown()
+                while (releaseFirst.count > 0) {
+                    try { releaseFirst.await() } catch (_: InterruptedException) { }
+                }
+            } else if (goal == "second message") secondStarted.countDown()
+            CoreAgentLoop.Result("ordered-$goal", "finished $goal", 1, "COMPLETED")
+        }
+        try {
+            AgentRunUiState.resetSession(session)
+            service.onStartCommand(AgentForegroundService.storedChatMessageIntent(context, session, firstId), 0, 1)
+            assertTrue(firstStarted.await(5, TimeUnit.SECONDS))
+            service.onStartCommand(AgentForegroundService.storedChatMessageIntent(context, session, secondId), 0, 2)
+            assertFalse(secondStarted.await(100, TimeUnit.MILLISECONDS))
+            releaseFirst.countDown()
+            assertTrue(secondStarted.await(5, TimeUnit.SECONDS))
+            assertTrue("Both turns leave the per-session lane", awaitRunFinished(service, context))
+            assertEquals(listOf("first message", "second message"), observed.toList())
+        } finally {
+            releaseFirst.countDown()
+            StopController.stopAllRuns()
+            stopManagedService(context)
         }
     }
 
@@ -1141,21 +1231,26 @@ class MainAgentInteractionTest {
     }
 
     private fun awaitRunFinished(service: AgentForegroundService, context: Context): Boolean {
-        val activeToken = AgentForegroundService::class.java.getDeclaredField("activeRunToken")
-            .apply { isAccessible = true }
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
         while (System.nanoTime() < deadline) {
             org.robolectric.shadows.ShadowLooper.idleMainLooper()
             deliverStartedServices(context)
-            if (activeToken.get(service) == null) {
-                worker(service).submit {}.get(10, TimeUnit.SECONDS)
+            if (sessionWorkIdle(service)) {
                 org.robolectric.shadows.ShadowLooper.idleMainLooper()
                 deliverStartedServices(context)
-                if (activeToken.get(service) == null) return true
+                if (sessionWorkIdle(service)) return true
             }
             Thread.sleep(10)
         }
         return false
+    }
+
+    private fun sessionWorkIdle(service: AgentForegroundService): Boolean {
+        val active = AgentForegroundService::class.java.getDeclaredField("activeRuns")
+            .apply { isAccessible = true }.get(service) as Map<*, *>
+        val lanes = AgentForegroundService::class.java.getDeclaredField("sessionLanes")
+            .apply { isAccessible = true }.get(service) as Map<*, *>
+        return active.isEmpty() && lanes.isEmpty()
     }
 
     private fun stopManagedService(context: Context) {
@@ -1177,6 +1272,8 @@ class MainAgentInteractionTest {
         AgentRunUiState.bindGeneration(session, old.generation())
         service.registerMainChatSteeringProvider(session, MainChatTurnContextProvider(store, session, initialId))
         AgentForegroundService::class.java.getDeclaredField("activeRunToken").apply { isAccessible = true }.set(service, old)
+        (AgentForegroundService::class.java.getDeclaredField("activeRunTokens")
+            .apply { isAccessible = true }.get(service) as MutableMap<String, CancellationToken>)[session] = old
         com.jarvys.agent.proactive.BackgroundRunController.interactiveStarted(old.generation())
         val started = CountDownLatch(1)
         val release = CountDownLatch(1)
@@ -1192,8 +1289,9 @@ class MainAgentInteractionTest {
             StopController.getInstance().stopRun(); release.countDown()
             service.registerMainChatSteeringProvider(session, null)
             AgentForegroundService::class.java.getDeclaredField("activeRunToken").apply { isAccessible = true }.set(service, null)
-            if (!worker(service).isShutdown) worker(service).submit {}.get(5, TimeUnit.SECONDS)
-            else worker(service).awaitTermination(5, TimeUnit.SECONDS)
+            (AgentForegroundService::class.java.getDeclaredField("activeRunTokens")
+                .apply { isAccessible = true }.get(service) as MutableMap<String, CancellationToken>).remove(session, old)
+            future.get(5, TimeUnit.SECONDS)
             controller.destroy()
         }
     }

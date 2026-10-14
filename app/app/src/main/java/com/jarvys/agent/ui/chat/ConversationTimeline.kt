@@ -384,6 +384,19 @@ internal fun IntentMessage(event: AgentRunUiEvent, sessionId: String = "") {
                             AssistantMarkdown(markdown = event.text, onOpenSkillFile = {},
                                 textColor = MaterialTheme.colorScheme.onPrimaryContainer, userMessage = true)
                         }
+                        event.submissionError?.takeIf(String::isNotBlank)?.let { error ->
+                            Row(
+                                Modifier.fillMaxWidth().testTag("user-message-send-error-${event.id}")
+                                    .semantics { contentDescription = error },
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(LucideIcons.CircleX, contentDescription = null,
+                                    modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.error)
+                                Text(error, color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
                     }
                 }
             }

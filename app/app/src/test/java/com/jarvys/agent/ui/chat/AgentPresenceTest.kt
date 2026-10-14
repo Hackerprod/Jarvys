@@ -10,6 +10,8 @@ class AgentPresenceTest {
         assertEquals(AgentPresence.State.IDLE, AgentPresence.from(AgentRunUiSnapshot()).state)
         assertEquals(AgentPresence.State.THINKING,
             AgentPresence.from(AgentRunUiSnapshot(running = true)).state)
+        assertEquals(AgentPresence.State.STOPPING,
+            AgentPresence.from(AgentRunUiSnapshot(stopping = true)).state)
         val tool = AgentRunUiEvent.toolEvent(1L, "tool_call", "Calendar Search", null, "call-1", null, 1L)
         val working = AgentPresence.from(AgentRunUiSnapshot(running = true, events = listOf(tool)))
         assertEquals(AgentPresence.State.WORKING, working.state)

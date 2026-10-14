@@ -10,7 +10,7 @@ internal fun isManagedSystemConversation(sessionId: String): Boolean =
 
 internal fun conversationRemovalBlocked(state: AgentRunUiSnapshot, sending: Boolean,
     translating: Boolean, foregroundStopped: Boolean, crewActive: Boolean = false): Boolean =
-    state.running || state.compacting || state.reflecting || sending || translating || !foregroundStopped || crewActive
+    state.running || state.stopping || state.compacting || state.reflecting || sending || translating || !foregroundStopped || crewActive
 
 internal fun conversationActionLeavesCurrent(action: ConversationAction, target: String, current: String): Boolean =
     target == current && (action == ConversationAction.ARCHIVE || action == ConversationAction.DELETE)

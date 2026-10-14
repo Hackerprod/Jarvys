@@ -747,10 +747,6 @@ class MainActivity : ComponentActivity() {
         if (message.isBlank() && attachmentDrafts.drafts.value.isEmpty()) return
         val state = AgentRunUiState.state.value
         if (state.running || state.compacting || state.reflecting) return
-        if (!StopController.getInstance().isStopped) {
-            toast(getString(R.string.chat_other_run_active), Toast.LENGTH_LONG)
-            return
-        }
         val sessionId = conversationSessionId
         val enabledSkillIds = skillRepository.enabledForRun().filter { it.metadata.id in selectedSkillIds }.map { it.metadata.id }
         if (WorkspaceIdentity.isCentral(sessionId)) conversationTitle = getString(R.string.workspace_central_chat)
@@ -1123,14 +1119,14 @@ ${event.text}
     }
 
     private fun stopCurrentWork() {
-        WorkspaceCoordinator.cancelPendingControls()
-        attachmentDrafts.cancelSubmission()
-        ProactiveRunController.cancelAll()
-        val state = AgentRunUiState.state.value
+        attachmentDrafts.cancelSubmission(conversationSessionId)
+        val state = AgentRunUiState.snapshotForSession(conversationSessionId)
         if (state.reflecting && state.reflectionSessionId != null) {
             MemoryReflectionRuntime.cancel(state.reflectionSessionId)
         }
-        if (state.running || state.compacting) StopController.getInstance().stopRun()
+        if (state.running || state.compacting) {
+            AgentForegroundService.stopRun(conversationSessionId)
+        }
     }
 
     private fun persistCrewMode(mode: CrewMode) {
@@ -1404,6 +1400,7 @@ ${event.text}
 
     private fun persistConversationSession(sessionId: String) {
         conversationSessionId = sessionId
+        AgentRunUiState.showSession(sessionId)
         bindMemoryObserver(sessionId)
         if (::attachmentDrafts.isInitialized) attachmentDrafts.switchSession(sessionId)
         getSharedPreferences("jarvys_chat", MODE_PRIVATE).edit()
@@ -1423,9 +1420,11 @@ ${event.text}
             toast(getString(R.string.drawer_system_chat_delete))
             return
         }
-        fun blocked() = conversationRemovalBlocked(AgentRunUiState.state.value, attachmentDrafts.sending.value,
-            activeTranslationMessageId != null, StopController.getInstance().isStopped(), CoreAgentRuntime.hasActiveCrewBots()) ||
-            MemoryReflectionRuntime.isAnyRunning()
+        fun blocked() = conversationRemovalBlocked(AgentRunUiState.snapshotForSession(sessionId),
+            attachmentDrafts.isSending(sessionId), activeTranslationMessageId != null,
+            !AgentRunUiState.isRunning(sessionId) && !AgentForegroundService.hasActiveRun(sessionId),
+            CoreAgentRuntime.hasActiveCrewBots(sessionId)) ||
+            MemoryReflectionRuntime.isRunning(sessionId)
         val removal = action == ConversationAction.DELETE || action == ConversationAction.ARCHIVE
         if (removal && blocked()) { toast(getString(R.string.drawer_busy)); return }
         conversationActionPending = true

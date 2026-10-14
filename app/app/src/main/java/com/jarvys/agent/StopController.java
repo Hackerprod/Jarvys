@@ -8,18 +8,33 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.Set;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
 
 /** Process-wide synchronous latch that invalidates a run before interrupting its worker. */
 public final class StopController {
     private static final StopController INSTANCE = new StopController();
+    private static final AtomicLong NEXT_GENERATION = new AtomicLong(0L);
+    private static final Set<StopController> ACTIVE_CONTROLLERS = ConcurrentHashMap.newKeySet();
+    private static final Executor ASYNC_STOP = Executors.newCachedThreadPool(r -> {
+        Thread thread = new Thread(r, "JarvysStopController");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     private final AtomicBoolean stopped = new AtomicBoolean(true);
     private final AtomicLong generation = new AtomicLong(0L);
     private final Map<Long, List<Runnable>> cancelActions = new HashMap<>();
     private volatile Future<?> runFuture;
     private volatile CancellationToken activeToken;
+    private int activeDispatches;
 
-    private StopController() {}
+    public StopController() {}
+
+    /** Creates a cancellation scope owned by one run. */
+    public static StopController forRun() { return new StopController(); }
 
     public static StopController getInstance() {
         return INSTANCE;
@@ -29,12 +44,14 @@ public final class StopController {
         if (!stopped.get()) {
             return null;
         }
-        long runGeneration = generation.incrementAndGet();
+        long runGeneration = NEXT_GENERATION.incrementAndGet();
+        generation.set(runGeneration);
         stopped.set(false);
         runFuture = null;
         cancelActions.put(runGeneration, new ArrayList<>());
         CancellationToken token = new CancellationToken(this, runGeneration);
         activeToken = token;
+        ACTIVE_CONTROLLERS.add(this);
         return token;
     }
 
@@ -47,6 +64,15 @@ public final class StopController {
     }
 
     public boolean stopRun() {
+        return stopRun(true);
+    }
+
+    /** Invalidates this run immediately and completes lock-sensitive cleanup away from the caller. */
+    public boolean stopRunAsync() {
+        return stopRun(false);
+    }
+
+    private boolean stopRun(boolean waitForCleanup) {
         final Future<?> future;
         final List<Runnable> actions;
         synchronized (this) {
@@ -63,25 +89,43 @@ public final class StopController {
             future = runFuture;
             runFuture = null;
         }
+        ACTIVE_CONTROLLERS.remove(this);
         if (future != null) {
             future.cancel(true);
         }
-        if (actions != null) {
-            for (Runnable action : actions) {
-                try {
-                    action.run();
-                } catch (RuntimeException ignored) {
-                    // Cancellation actions are best-effort cleanup; STOP's latch is already closed.
+        Runnable cleanup = () -> {
+            awaitActiveDispatches();
+            if (actions != null) {
+                for (Runnable action : actions) {
+                    try {
+                        action.run();
+                    } catch (RuntimeException ignored) {
+                        // Cancellation actions are best-effort cleanup; STOP's latch is already closed.
+                    }
                 }
             }
-        }
+        };
+        if (waitForCleanup) cleanup.run();
+        else ASYNC_STOP.execute(cleanup);
         return true;
+    }
+
+    private void awaitActiveDispatches() {
+        boolean interrupted = false;
+        synchronized (this) {
+            while (activeDispatches > 0) {
+                try { wait(); }
+                catch (InterruptedException stopWaitInterrupted) { interrupted = true; }
+            }
+        }
+        if (interrupted) Thread.currentThread().interrupt();
     }
 
     synchronized boolean completeRun(CancellationToken token) {
         if (!isActive(token.generation())) {
             return false;
         }
+        ACTIVE_CONTROLLERS.remove(this);
         stopped.set(true);
         cancelActions.remove(token.generation());
         generation.incrementAndGet();
@@ -100,17 +144,19 @@ public final class StopController {
         return true;
     }
 
-    synchronized boolean runIfActive(long tokenGeneration, Runnable action) {
-        if (!isActive(tokenGeneration)) {
-            return false;
+    boolean runIfActive(long tokenGeneration, Runnable action) {
+        synchronized (this) {
+            if (!isActive(tokenGeneration)) return false;
+            activeDispatches++;
         }
-        action.run();
-        return true;
+        try { action.run(); return true; }
+        finally { finishDispatch(); }
     }
 
-    synchronized <T> T callIfActive(long tokenGeneration, Callable<T> action, T cancelledValue) {
-        if (!isActive(tokenGeneration)) {
-            return cancelledValue;
+    <T> T callIfActive(long tokenGeneration, Callable<T> action, T cancelledValue) {
+        synchronized (this) {
+            if (!isActive(tokenGeneration)) return cancelledValue;
+            activeDispatches++;
         }
         try {
             return action.call();
@@ -118,7 +164,12 @@ public final class StopController {
             throw e;
         } catch (Exception e) {
             throw new IllegalStateException("Action failed", e);
-        }
+        } finally { finishDispatch(); }
+    }
+
+    private synchronized void finishDispatch() {
+        activeDispatches--;
+        if (activeDispatches == 0) notifyAll();
     }
 
     Runnable registerCancelAction(long tokenGeneration, Runnable action) {
@@ -164,4 +215,14 @@ public final class StopController {
     public boolean isStopped() {
         return stopped.get();
     }
+
+    /** Process-level compatibility facade used by the notification and legacy global actions. */
+    public static void stopAllRuns() {
+        for (StopController controller : ACTIVE_CONTROLLERS.toArray(new StopController[0])) {
+            controller.stopRunAsync();
+        }
+        INSTANCE.stopRunAsync();
+    }
+
+    public static boolean hasActiveRuns() { return !ACTIVE_CONTROLLERS.isEmpty(); }
 }

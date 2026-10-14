@@ -7,6 +7,8 @@ import androidx.lifecycle.AndroidViewModel
 import com.jarvys.agent.ui.chat.PendingChatAttachment
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.CancellationException
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.channels.Channel
@@ -15,28 +17,33 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 
 /** Owns temporary attachments across activity recreation; persisted messages own their files. */
-class AttachmentDraftViewModel(application: Application) : AndroidViewModel(application) {
+class AttachmentDraftViewModel internal constructor(
+    application: Application,
+    private val messageSubmitter: AttachmentMessageSubmitter = LocalAttachmentMessageSubmitter,
+    private val submissionExecutor: ExecutorService = newSubmissionExecutor(),
+) : AndroidViewModel(application) {
     data class Submission(val sessionId: String, val text: String, val persisted: Boolean, val error: String?)
     private val app = application.applicationContext
     private val store by lazy { AttachmentStore(app) }
-    private val io = Executors.newSingleThreadExecutor { Thread(it, "JarvysAttachmentDrafts").apply { isDaemon = true } }
+    private val attachmentIo = Executors.newSingleThreadExecutor { Thread(it, "JarvysAttachmentDrafts").apply { isDaemon = true } }
     private val lock = Any()
     private val mutableDrafts = MutableStateFlow<List<PendingChatAttachment>>(emptyList())
     private val mutableSending = MutableStateFlow(false)
     private val events = Channel<Submission>(Channel.UNLIMITED)
     val drafts = mutableDrafts.asStateFlow()
+    /** Sending reflects only the currently selected conversation. */
     val sending = mutableSending.asStateFlow()
     val submissions = events.receiveAsFlow()
     private var sessionId = ""
-    private var protectedIds = emptySet<String>()
-    private val cancelSend = AtomicBoolean(false)
+    private val protectedIdsBySession = mutableMapOf<String, Set<String>>()
+    private val activeSubmissions = mutableMapOf<String, ActiveSubmission>()
     var cameraFile: File? = null
         private set
     var cameraSession: String? = null
         private set
 
     init {
-        if (startupCleanup.compareAndSet(false, true)) io.execute {
+        if (startupCleanup.compareAndSet(false, true)) attachmentIo.execute {
             runCatching { LocalRunStore(app).cleanupOrphanAttachments() }
         }
     }
@@ -44,11 +51,13 @@ class AttachmentDraftViewModel(application: Application) : AndroidViewModel(appl
     fun switchSession(next: String) = synchronized(lock) {
         if (sessionId == next) return@synchronized
         val oldSession = sessionId
+        val protectedIds = protectedIdsBySession[oldSession].orEmpty()
         val abandoned = mutableDrafts.value.filterNot { it.id in protectedIds }
         sessionId = next
         mutableDrafts.value = emptyList()
+        updateSendingProjectionLocked()
         abandoned.forEach { pending -> pending.attachment?.let { attachment ->
-            io.execute { runCatching { store.deleteAttachment(oldSession, attachment) } }
+            attachmentIo.execute { runCatching { store.deleteAttachment(oldSession, attachment) } }
         } }
     }
 
@@ -59,7 +68,7 @@ class AttachmentDraftViewModel(application: Application) : AndroidViewModel(appl
             mutableDrafts.value += PendingChatAttachment(id,
                 message(if (kind == ChatAttachment.Kind.IMAGE) R.string.chat_attachment_image else R.string.chat_attachment_file),
                 kind = kind ?: ChatAttachment.Kind.FILE, copying = true)
-            io.execute {
+            attachmentIo.execute {
                 val result = runCatching {
                     if (kind == null) store.copyFromUri(session, uri) else store.copyFromUri(session, uri, kind)
                 }
@@ -77,56 +86,97 @@ class AttachmentDraftViewModel(application: Application) : AndroidViewModel(appl
     }
 
     fun remove(id: String) = synchronized(lock) {
-        if (id in protectedIds) return@synchronized
+        if (id in protectedIdsBySession[sessionId].orEmpty()) return@synchronized
         val pending = mutableDrafts.value.firstOrNull { it.id == id } ?: return@synchronized
         val session = sessionId
         mutableDrafts.value = mutableDrafts.value.filterNot { it.id == id }
-        pending.attachment?.let { io.execute { runCatching { store.deleteAttachment(session, it) } } }
+        pending.attachment?.let { attachmentIo.execute { runCatching { store.deleteAttachment(session, it) } } }
     }
 
     fun submit(session: String, text: String, skills: ArrayList<String>, memoryDisabled: Boolean): Boolean {
         val pending = synchronized(lock) {
-            if (session != sessionId || mutableSending.value) return false
+            if (session != sessionId || session in activeSubmissions) return false
             val pending = mutableDrafts.value
             if (pending.any { it.copying || it.error != null || it.attachment == null }
                 || (text.isBlank() && pending.isEmpty())) return false
-            protectedIds = pending.map { it.id }.toSet()
-            cancelSend.set(false)
-            mutableSending.value = true
-            pending
+            protectedIdsBySession[session] = pending.map { it.id }.toSet()
+            val attempt = ActiveSubmission(session, SubmissionCancellation())
+            activeSubmissions[session] = attempt
+            updateSendingProjectionLocked()
+            pending to attempt
         }
-        io.execute {
-            var persisted = false
-            var error: String? = null
-            try {
-                if (cancelSend.get()) throw InterruptedException()
-                val attachments = pending.mapNotNull { it.attachment }
-                val messageId = LocalRunStore(app).appendConversationMessage(session, "user", text, attachments)
-                persisted = true
-                AgentRunUiState.beginRun(session, text, attachments)
-                AgentRunUiState.bindCurrentUserMessage(session, messageId)
-                if (cancelSend.get()) throw InterruptedException()
-                AgentForegroundService.startRealAgentFromStoredChatMessage(app, session, messageId, skills, memoryDisabled)
-            } catch (failure: Exception) {
-                error = message(if (failure is InterruptedException) R.string.chat_attachment_send_cancelled
-                    else R.string.chat_attachment_send_failed)
-                if (persisted) AgentRunUiState.failChatTurn(session, error)
-            } finally {
-                synchronized(lock) {
-                    if (persisted) mutableDrafts.value = mutableDrafts.value.filterNot { it.id in protectedIds }
-                    else if (session != sessionId) pending.forEach { item -> item.attachment?.let {
-                        runCatching { store.deleteAttachment(session, it) }
-                    } }
-                    protectedIds = emptySet()
-                    mutableSending.value = false
+        val (attachmentsToSend, attempt) = pending
+        // Publish the user turn before any disk work so the chat reflects the tap immediately.
+        val optimisticEventId = AgentRunUiState.beginChatSubmission(
+            session, text, attachmentsToSend.mapNotNull { it.attachment })
+        try {
+            submissionExecutor.execute {
+                var persisted = false
+                var error: String? = null
+                try {
+                    attempt.cancellation.throwIfCancelledBeforePersistence()
+                    val attachments = attachmentsToSend.mapNotNull { it.attachment }
+                    attempt.cancellation.throwIfCancelledBeforePersistence()
+                    val messageId = messageSubmitter.persistMessage(app, session, text, attachments)
+                    persisted = true
+                    attempt.cancellation.markPersisted()
+                    AgentRunUiState.bindCurrentUserMessage(session, messageId, optimisticEventId)
+                    messageSubmitter.startAgent(app, session, messageId, skills, memoryDisabled)
+                } catch (failure: Exception) {
+                    error = message(if (failure is CancellationException && !persisted) R.string.chat_attachment_send_cancelled
+                        else R.string.chat_attachment_send_failed)
+                    if (persisted) AgentRunUiState.failChatTurn(session, error)
+                    else AgentRunUiState.failOptimisticUserMessage(session, optimisticEventId, error)
+                } finally {
+                    synchronized(lock) {
+                        if (persisted && session == sessionId) {
+                            val protectedIds = protectedIdsBySession[session].orEmpty()
+                            mutableDrafts.value = mutableDrafts.value.filterNot { it.id in protectedIds }
+                        } else if (!persisted && (session != sessionId
+                            || mutableDrafts.value.none { draft -> draft.id in protectedIdsBySession[session].orEmpty() })) {
+                            attachmentsToSend.forEach { item -> item.attachment?.let {
+                                runCatching { store.deleteAttachment(session, it) }
+                            } }
+                        }
+                        protectedIdsBySession.remove(session)
+                        if (activeSubmissions[session] === attempt) activeSubmissions.remove(session)
+                        updateSendingProjectionLocked()
+                    }
+                    events.trySend(Submission(session, text, persisted, error))
                 }
-                events.trySend(Submission(session, text, persisted, error))
             }
+        } catch (failure: RuntimeException) {
+            val error = message(R.string.chat_attachment_send_failed)
+            AgentRunUiState.failOptimisticUserMessage(session, optimisticEventId, error)
+            synchronized(lock) {
+                if (session != sessionId) attachmentsToSend.forEach { item -> item.attachment?.let {
+                    runCatching { store.deleteAttachment(session, it) }
+                } }
+                protectedIdsBySession.remove(session)
+                if (activeSubmissions[session] === attempt) activeSubmissions.remove(session)
+                updateSendingProjectionLocked()
+            }
+            events.trySend(Submission(session, text, persisted = false, error = error))
         }
         return true
     }
 
-    fun cancelSubmission() { cancelSend.set(true) }
+    /** Whether this conversation has a submission being persisted or handed to the service. */
+    fun isSending(sessionId: String): Boolean = synchronized(lock) { sessionId in activeSubmissions }
+
+    /** Stop only the in-flight, unpersisted submission for the requested session. */
+    fun cancelSubmission(session: String? = null) = synchronized(lock) {
+        val targetSession = session ?: sessionId
+        val attempt = activeSubmissions[targetSession] ?: return@synchronized
+        if (!attempt.cancellation.isPersisted()) {
+            attempt.cancellation.cancelBeforePersistence()
+        }
+    }
+
+    private fun updateSendingProjectionLocked() {
+        mutableSending.value = sessionId in activeSubmissions
+    }
+
     private fun message(resource: Int) = AppLanguageRuntime.localizedContext(app).getString(resource)
 
     fun createCameraFile(session: String): File = synchronized(lock) {
@@ -145,7 +195,7 @@ class AttachmentDraftViewModel(application: Application) : AndroidViewModel(appl
             }
         } finally {
             synchronized(lock) { cameraFile = null; cameraSession = null }
-            if (file != null) io.execute { safeDeleteCamera(file) }
+            if (file != null) attachmentIo.execute { safeDeleteCamera(file) }
         }
     }
 
@@ -161,17 +211,56 @@ class AttachmentDraftViewModel(application: Application) : AndroidViewModel(appl
         }
     }
     override fun onCleared() {
-        cancelSubmission()
         synchronized(lock) {
+            activeSubmissions.values.forEach { it.cancellation.cancelBeforePersistence() }
             val session = sessionId
+            val protectedIds = protectedIdsBySession[session].orEmpty()
             mutableDrafts.value.filterNot { it.id in protectedIds }.forEach { item -> item.attachment?.let {
-                io.execute { runCatching { store.deleteAttachment(session, it) } }
+                attachmentIo.execute { runCatching { store.deleteAttachment(session, it) } }
             } }
             mutableDrafts.value = emptyList()
             sessionId = ""
+            updateSendingProjectionLocked()
             clearCameraFile()
         }
-        io.shutdown()
+        submissionExecutor.shutdown()
+        attachmentIo.shutdown()
     }
-    private companion object { val startupCleanup = AtomicBoolean(false) }
+    private class ActiveSubmission(val sessionId: String, val cancellation: SubmissionCancellation)
+
+    private class SubmissionCancellation {
+        private val cancelled = AtomicBoolean(false)
+        @Volatile private var persisted = false
+
+        fun cancelBeforePersistence() {
+            if (!persisted) cancelled.set(true)
+        }
+
+        fun throwIfCancelledBeforePersistence() {
+            if (!persisted && cancelled.get()) throw CancellationException("Submission stopped before persistence")
+        }
+
+        fun markPersisted() { persisted = true }
+        fun isPersisted() = persisted
+    }
+
+    private companion object {
+        val startupCleanup = AtomicBoolean(false)
+        fun newSubmissionExecutor() = Executors.newCachedThreadPool {
+            Thread(it, "JarvysChatSubmissions").apply { isDaemon = true }
+        }
+    }
+}
+
+internal interface AttachmentMessageSubmitter {
+    fun persistMessage(application: Application, session: String, text: String, attachments: List<ChatAttachment>): String
+    fun startAgent(application: Application, session: String, messageId: String, skills: ArrayList<String>, memoryDisabled: Boolean)
+}
+
+private object LocalAttachmentMessageSubmitter : AttachmentMessageSubmitter {
+    override fun persistMessage(application: Application, session: String, text: String, attachments: List<ChatAttachment>) =
+        LocalRunStore(application).appendConversationMessage(session, "user", text, attachments)
+
+    override fun startAgent(application: Application, session: String, messageId: String, skills: ArrayList<String>, memoryDisabled: Boolean) =
+        AgentForegroundService.startRealAgentFromStoredChatMessage(application, session, messageId, skills, memoryDisabled)
 }

@@ -128,6 +128,14 @@ class MessageReactionUiTest {
         compose.onNodeWithTag("user-message-reaction-1").assertDoesNotExist()
     }
 
+    @Test fun prePersistenceFailureIsShownInsideItsUserMessageBubble() {
+        val error = "Message stopped before the agent started."
+        install { IntentMessage(user().copy(submissionError = error)) }
+
+        compose.onNodeWithTag("user-message-send-error-1").assertIsDisplayed()
+        compose.onNodeWithText(error).assertIsDisplayed()
+    }
+
     @Test fun liveAddReplaceRepeatAndRemoveKeepsOneBadgeAndRestoresOriginalHeight() {
         var event by mutableStateOf(user())
         install { Column(Modifier.testTag("message-layout")) { IntentMessage(event) } }
