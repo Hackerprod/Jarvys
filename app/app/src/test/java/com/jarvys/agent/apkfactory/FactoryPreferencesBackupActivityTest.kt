@@ -10,18 +10,15 @@ import android.os.Parcel
 import android.os.Looper
 import android.os.SystemClock
 import android.view.View
-import android.view.WindowManager
+import android.view.ViewGroup
 import android.widget.Button
-import android.widget.CheckBox
 import android.widget.TextView
 import androidx.test.core.app.ApplicationProvider
 import com.jarvys.agent.MemoryUiAutomationGuard
 import com.jarvys.factory.runtime.BackupReviewControl
-import com.jarvys.factory.runtime.DatabaseBackupFormat
 import com.jarvys.factory.runtime.StorageBackupPlan
 import com.jarvys.factory.runtime.StorageBackupFormat
 import com.jarvys.factory.runtime.FileShareTransfer
-import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.*
@@ -66,12 +63,62 @@ class FactoryPreferencesBackupActivityTest {
         source = BackupReviewControl(nonce) { true }; transfer = FileShareTransfer.reserve().complete(archive.bytes(), nonce) { true }
     }
     @After fun cleanup() {
-        drain(); controllers.asReversed().forEach { runCatching { it.pause().stop().destroy() } }; drain()
-        coordinator.session()?.let { it.preparing = false }
-        coordinator.session()?.let { worker { coordinator.close(it) {} } }
-        source.close(); transfer.close(); drain()
-        FactoryDataBackupCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(null, null)
-        assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available()); root.deleteRecursively()
+        var closeFailure: Throwable? = null
+        val otherFailures = mutableListOf<Throwable>()
+        fun record(failure: Throwable) { if (failure !== closeFailure) otherFailures += failure }
+        try {
+            drain()
+            controllers.asReversed().forEach { controller ->
+                try { controller.pause().stop().destroy() } catch (failure: Throwable) { record(failure) }
+            }
+            drain()
+            if (::coordinator.isInitialized) {
+                coordinator.session()?.let { it.preparing = false }
+                coordinator.session()?.let { owner ->
+                    try { worker { coordinator.close(owner) {} } }
+                    catch (failure: Throwable) { closeFailure = failure.cause ?: failure }
+                }
+            }
+        } catch (failure: Throwable) { record(failure) }
+        finally {
+            if (::source.isInitialized) try { source.close() } catch (failure: Throwable) { record(failure) }
+            if (::transfer.isInitialized) try { transfer.close() } catch (failure: Throwable) { record(failure) }
+            try { drain() } catch (failure: Throwable) { record(failure) }
+
+            var coordinatorClean = false
+            if (::coordinator.isInitialized) {
+                val needsRecovery = closeFailure != null || coordinator.session() != null ||
+                    !coordinator.canBegin() || !FactoryInteractionAdmission.available(coordinator)
+                if (needsRecovery) try { worker { coordinator.restore() } }
+                catch (failure: Throwable) { record(failure) }
+                try { assertNull(coordinator.session()) } catch (failure: Throwable) { record(failure) }
+                try { assertTrue(coordinator.canBegin()) } catch (failure: Throwable) { record(failure) }
+                try { assertTrue(FactoryInteractionAdmission.available(coordinator)) }
+                catch (failure: Throwable) { record(failure) }
+                coordinatorClean = coordinator.session() == null && coordinator.canBegin() &&
+                    FactoryInteractionAdmission.available(coordinator)
+
+                if (coordinatorClean) {
+                    try {
+                        FactoryDataBackupCoordinator::class.java.getDeclaredField("instance")
+                            .apply { isAccessible = true }.set(null, null)
+                    } catch (failure: Throwable) { record(failure) }
+                }
+            }
+            if (coordinatorClean) {
+                var globalStateClean = true
+                try { assertFalse(MemoryUiAutomationGuard.isProtected()) }
+                catch (failure: Throwable) { record(failure); globalStateClean = false }
+                try { assertTrue(FactoryInteractionAdmission.available()) }
+                catch (failure: Throwable) { record(failure); globalStateClean = false }
+                if (globalStateClean) try { root.deleteRecursively() } catch (failure: Throwable) { record(failure) }
+            }
+        }
+        val primary = closeFailure ?: otherFailures.firstOrNull()
+        if (primary != null) {
+            otherFailures.filter { it !== primary }.forEach(primary::addSuppressed)
+            throw primary
+        }
     }
     private fun <T> worker(block: () -> T): T {
         val executor = FactoryDataBackupCoordinator.WORKER; executor.prestartCoreThread()
@@ -81,17 +128,41 @@ class FactoryPreferencesBackupActivityTest {
     private fun request() = Intent(context, FactoryDataBackupActivity::class.java).putExtras(Bundle().apply {
         putInt("protocolVersion", 1); putString("plan", plan.json()); putBinder("transfer", transfer); putBinder("control", source)
     })
-    private fun launch(intent: Intent = request(), saved: Bundle? = null, caller: String? = proof.proof.appId): ActivityController<FactoryDataBackupActivity> {
+    private fun launch(
+        intent: Intent = request(),
+        saved: Bundle? = null,
+        caller: String? = proof.proof.appId,
+        focused: Boolean = true,
+    ): ActivityController<FactoryDataBackupActivity> {
         val controller = Robolectric.buildActivity(FactoryDataBackupActivity::class.java, intent); controllers += controller
         caller?.let { shadowOf(controller.get()).setCallingPackage(it) }
-        controller.create(saved).start().resume().visible(); controller.get().onWindowFocusChanged(true); drain(); return controller
+        controller.create(saved).start().resume().visible(); controller.get().onWindowFocusChanged(focused); drain(); return controller
     }
     private fun <T : View> view(activity: Activity, name: String): T = activity.window.decorView.findViewWithTag("factory-data-backup-$name")
-    @Test fun explicitCancelReturnsOnlyExactIdentifiers() {
-        val activity = launch().get(); view<Button>(activity, "close").performClick(); drain()
-        assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode)
+    private fun status(activity: Activity): TextView {
+        val matches = ArrayList<View>()
+        (activity.window.decorView as ViewGroup).findViewsWithText(
+            matches, activity.getString(com.jarvys.agent.R.string.factory_data_backup_disclosure), View.FIND_VIEWS_WITH_TEXT)
+        return checkNotNull(matches.filterIsInstance<TextView>().firstOrNull())
+    }
+    private fun assertCurrentBackupSurface(activity: FactoryDataBackupActivity) {
+        val status = status(activity)
+        val column = status.parent as ViewGroup
+        assertEquals(3, column.childCount)
+        assertEquals(activity.getString(com.jarvys.agent.R.string.factory_data_backup_title), (column.getChildAt(0) as TextView).text)
+        assertSame(status, column.getChildAt(1))
+        assertSame(view<Button>(activity, "close"), column.getChildAt(2))
+        assertEquals(activity.getString(com.jarvys.agent.R.string.factory_data_backup_close), view<Button>(activity, "close").text)
+        assertTrue(status.text.contains(activity.getString(com.jarvys.agent.R.string.factory_data_backup_disclosure)))
+        assertFalse(status.isSaveEnabled); assertFalse(status.isSaveFromParentEnabled)
+    }
+    @Test fun permissionFreeImportReturnsExactReceiptWithoutUriOrGrant() {
+        val activity = launch().get(); drain()
+        assertEquals(Activity.RESULT_OK, shadowOf(activity).resultCode)
         val result = shadowOf(activity).resultIntent
-        assertEquals(setOf("nonce", "planSha256"), result.extras!!.keySet()); assertEquals(nonce, result.getStringExtra("nonce"))
+        assertEquals(setOf("nonce", "planSha256", "approved"), result.extras!!.keySet())
+        assertEquals(nonce, result.getStringExtra("nonce")); assertEquals(plan.sha256(), result.getStringExtra("planSha256"))
+        assertTrue(result.getBooleanExtra("approved", false))
         assertNull(result.data); assertNull(result.clipData); assertEquals(0, result.flags)
     }
     @Test fun invalidTransportAndMissingCallingActivityCannotStartReview() {
@@ -106,20 +177,21 @@ class FactoryPreferencesBackupActivityTest {
     }
     @Config(sdk = [26, 28, 34])
     @Test fun superclassSaveRunsButNoPrepopulatedProviderOrViewStateSurvives() {
-        val controller = launch(); val activity = controller.get()
-        val details = view<TextView>(activity, "values")
-        val consent = view<CheckBox>(activity, "acknowledgement")
-        consent.performClick()
-        assertEquals(View.GONE, consent.visibility); assertTrue(details.text.contains(plan.json()))
-        assertFalse(details.isSaveEnabled); assertFalse(details.isSaveFromParentEnabled)
-        assertFalse(consent.isSaveEnabled); assertFalse(consent.isSaveFromParentEnabled)
+        val controller = launch(focused = false); val activity = controller.get()
+        assertCurrentBackupSurface(activity)
+        val status = status(activity)
+        val owner = checkNotNull(coordinator.session())
+        assertFalse(owner.preparing)
+        val archive = checkNotNull(owner.archive)
+        assertEquals(text, archive.data().getString("notes"))
+        assertEquals(plan.sha256(), owner.plan.sha256())
         val syntheticUri = Uri.parse("content://synthetic.backup/document/private-fixture")
         var providerCalls = 0
         activity.savedStateRegistry.registerSavedStateProvider("synthetic-backup-review") {
             providerCalls++
             Bundle().apply {
-                putString("reviewValues", details.text.toString())
-                putBoolean("approvedCheckbox", consent.isChecked)
+                putString("reviewStatus", status.text.toString())
+                putString("preparedPlan", owner.plan.json())
                 putParcelable("selectedDocument", syntheticUri)
             }
         }
@@ -139,14 +211,20 @@ class FactoryPreferencesBackupActivityTest {
             assertTrue(checkNotNull(parcel.readBundle(activity.javaClass.classLoader)).isEmpty)
         } finally { parcel.recycle() }
         assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode)
-        val owner = coordinator.session()
-        val recreated = launch(saved = saved).get()
+        assertSame(owner, coordinator.session())
+        if (owner.revoked.get()) assertNull(owner.archive)
+        val recreated = launch(saved = saved, focused = false).get()
         assertTrue(recreated.isFinishing); assertEquals(Activity.RESULT_CANCELED, shadowOf(recreated).resultCode)
-        assertSame(owner, coordinator.session()) // The non-null empty state cannot replay or adopt the review.
+        assertSame(owner, coordinator.session()) // Saved state cannot replay or adopt the generated-app backup.
+        if (owner.revoked.get()) assertNull(owner.archive)
     }
     @Config(sdk = [26, 28, 34])
     @Test fun superclassSaveFailureStillClearsAllOutputStateAndPropagatesFailure() {
-        val controller = launch(); val activity = controller.get()
+        val controller = launch(focused = false); val activity = controller.get()
+        assertCurrentBackupSurface(activity)
+        val owner = checkNotNull(coordinator.session())
+        val archive = checkNotNull(owner.archive)
+        assertEquals(text, archive.data().getString("notes"))
         val saved = Bundle().apply {
             putString("preexistingArchive", plan.json())
             putBoolean("preexistingConsent", true)
@@ -160,5 +238,7 @@ class FactoryPreferencesBackupActivityTest {
         assertTrue(runCatching { controller.saveInstanceState(saved) }.isFailure)
         assertEquals(1, providerCalls); assertTrue(saved.isEmpty)
         assertEquals(Activity.RESULT_CANCELED, shadowOf(activity).resultCode)
+        assertSame(owner, coordinator.session())
+        if (owner.revoked.get()) assertNull(owner.archive)
     }
 }

@@ -11,6 +11,7 @@ import java.nio.charset.StandardCharsets
 import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.CancellationException
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** Central-only coordination. Runtime provenance is never accepted from model arguments. */
 class CentralWorkspaceTool internal constructor(
@@ -134,6 +135,7 @@ class CentralWorkspaceTool internal constructor(
         token.throwIfCancelled()
         if (!isAvailableForSession(sessionId) || token.isCrewRun)
             return CoreToolResult.failure("Workspaces are available only in the central user chat.")
+        val admissionActive = AtomicBoolean(true)
         try {
             val payload = parse(arguments)
             if (payload.isMutation) {
@@ -141,6 +143,7 @@ class CentralWorkspaceTool internal constructor(
                 validText(originalUserRequest, MAX_TEXT_BYTES, MAX_TEXT_BYTES, false)
             }
                 val admission = Runnable {
+                    check(admissionActive.get()) { "Workspace admission callback expired" }
                     token.throwIfCancelled()
                     check(isAvailableForSession(sessionId) && !token.isCrewRun)
                 }
@@ -188,6 +191,8 @@ class CentralWorkspaceTool internal constructor(
             com.jarvys.agent.LocalDiagnostics.recoverable(com.jarvys.agent.LocalDiagnostics.Origin.TOOL, failure)
             return CoreToolResult.failure("Workspace request could not complete. Check arguments. " +
                 "An effect may already have started; read current state before retrying and reuse the same key and payload.")
+        } finally {
+            admissionActive.set(false)
         }
     }
 

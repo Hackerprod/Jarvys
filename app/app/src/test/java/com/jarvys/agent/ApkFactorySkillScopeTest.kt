@@ -79,7 +79,9 @@ class ApkFactorySkillScopeTest {
         assertTrue(parsed.body.contains("Implement the requested workflow with real inspected APIs, not a canned demo."))
         assertTrue(parsed.body.contains("precompiled DEX"))
         assertTrue(parsed.body.contains("Build/sign/install/physical acceptance are separate."))
-        assertTrue(parsed.body.contains("Install only when requested, with the exact signed receipt"))
+        assertTrue(parsed.body.contains("factory.install submits the exact signed receipt to PackageInstaller."))
+        assertTrue(entry.factoryGuidance!!.resources.getValue("lifecycle")
+            .contains("Never automate Android security screens or retry an uncertain commit."))
         assertTrue(parsed.body.contains("window.Jarvys"))
         assertTrue(entry.factoryGuidance!!.resources.getValue("lifecycle")
             .contains("Legacy AndroidKeyStore keys are non-exportable; loss may block updates."))
@@ -441,7 +443,7 @@ class ApkFactorySkillScopeTest {
             "external-actions" to listOf("pageLoadConfirmed:false", "No normalization/secret detection", "Full URL reaches browser/site",
                 "Opening shares fields; recipient may change/ignore/cloud-sync/transmit", "actionConfirmed:false"),
             "contacts-calendar" to listOf("Returns only {kind,value}", "no broad query/new permission/fallback",
-                "Opening shares fields; recipient can ignore/change/save/sync", "never auto-press Save", "both UTC midnight,exclusive end"),
+                "Opening shares fields; recipient can ignore/change/save/sync", "never auto-presses Save", "both UTC midnight,exclusive end"),
             "database" to listOf("rollbackConfirmed:false", "No total disk/RAM guarantee", "no physical durability",
                 "Device/provider/restore/update acceptance remains unverified"),
             "presentation" to listOf("preferencesCommitted:true", "Android memory may already differ; readback is no disk proof",

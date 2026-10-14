@@ -47,6 +47,13 @@ class FactoryPreferencesBackupCoordinatorTest {
     private var rejectPolicyAt = Int.MAX_VALUE
     private lateinit var coordinator: FactoryDataBackupCoordinator
     private fun <T> io(action: () -> T): T = executor.submit(Callable(action)).get(5, TimeUnit.SECONDS)
+    private fun <T> worker(action: () -> T): T {
+        val backupWorker = FactoryDataBackupCoordinator.WORKER
+        backupWorker.prestartCoreThread()
+        val task = java.util.concurrent.FutureTask(Callable(action))
+        check(backupWorker.queue.offer(task, 5, TimeUnit.SECONDS))
+        return task.get(5, TimeUnit.SECONDS)
+    }
     private fun denied(action: () -> Unit) = assertTrue("Expected rejection", runCatching(action).isFailure)
     private fun make() = FactoryDataBackupCoordinator(context, currentIdentity = { policyChecks++; check(policyChecks < rejectPolicyAt && it == proof) }) { _, _ -> proof }.also { owners += it }
     private fun archive(): StorageBackupFormat.Archive = StorageBackupFormat.create(proof.proof.appId, proof.proof.certificate, 1,
@@ -71,13 +78,58 @@ class FactoryPreferencesBackupCoordinatorTest {
     })
     @Before fun setup() { FactoryStartupTestIsolation.releaseCompletedSharingStartup(); root.deleteRecursively(); coordinator = make() }
     @After fun cleanup() {
-        owners.asReversed().forEach { owner ->
-            owner.session()?.let { it.preparing = false }
-        owner.session()?.let { io { owner.close(it) {} } }
+        var closeFailure: Throwable? = null
+        val otherFailures = mutableListOf<Throwable>()
+        val recoveryOwners = java.util.Collections.newSetFromMap(
+            java.util.IdentityHashMap<FactoryDataBackupCoordinator, Boolean>())
+        fun record(failure: Throwable) { if (failure !== closeFailure) otherFailures += failure }
+        try {
+            worker { Unit }
+            owners.asReversed().forEach { owner ->
+                owner.session()?.let { session ->
+                    session.preparing = false
+                    try { worker { owner.close(session) {} } }
+                    catch (failure: Throwable) {
+                        val closeCause = failure.cause ?: failure
+                        if (closeFailure == null) closeFailure = closeCause else record(closeCause)
+                        recoveryOwners += owner
+                    }
+                }
+            }
+        } catch (failure: Throwable) { record(failure) }
+        finally {
+            controls.forEach { control -> try { control.close() } catch (failure: Throwable) { record(failure) } }
+            transfers.forEach { transfer -> try { transfer.close() } catch (failure: Throwable) { record(failure) } }
+
+            var allOwnersClean = owners.isNotEmpty()
+            owners.asReversed().forEach { owner ->
+                val needsRecovery = owner in recoveryOwners || owner.session() != null || !owner.canBegin() ||
+                    !FactoryInteractionAdmission.available(owner)
+                if (needsRecovery) try { worker { owner.restore() } }
+                catch (failure: Throwable) { record(failure) }
+                try { assertNull(owner.session()) } catch (failure: Throwable) { record(failure) }
+                try { assertTrue(owner.canBegin()) } catch (failure: Throwable) { record(failure) }
+                try { assertTrue(FactoryInteractionAdmission.available(owner)) } catch (failure: Throwable) { record(failure) }
+                allOwnersClean = allOwnersClean && owner.session() == null && owner.canBegin() &&
+                    FactoryInteractionAdmission.available(owner)
+            }
+            if (allOwnersClean) {
+                var globalStateClean = true
+                try { assertFalse(MemoryUiAutomationGuard.isProtected()) }
+                catch (failure: Throwable) { record(failure); globalStateClean = false }
+                try { assertTrue(FactoryInteractionAdmission.available()) }
+                catch (failure: Throwable) { record(failure); globalStateClean = false }
+                if (globalStateClean) try { root.deleteRecursively() }
+                catch (failure: Throwable) { record(failure) }
+            }
+            try { executor.shutdown(); assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS)) }
+            catch (failure: Throwable) { record(failure) }
         }
-        controls.forEach { it.close() }; transfers.forEach { it.close() }
-        executor.shutdown(); assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS))
-        assertFalse(MemoryUiAutomationGuard.isProtected()); assertTrue(FactoryInteractionAdmission.available()); root.deleteRecursively()
+        val primary = closeFailure ?: otherFailures.firstOrNull()
+        if (primary != null) {
+            otherFailures.filter { it !== primary }.forEach(primary::addSuppressed)
+            throw primary
+        }
     }
     @Test fun strictTransportRejectsGrantsNamesAndUnknownFields() {
         val variants = mutableListOf(intent().putExtra("extra", true), intent().putExtra("protocolVersion", 1L), intent().putExtra("plan", 1), intent().putExtra("transfer", "not binder"),

@@ -93,6 +93,14 @@ class WorkspaceCoordinationDeliveryTest {
         reconcile()
         return worker to references().single()
     }
+    private fun liveQuestionWithoutNotice(): Pair<Parked, WorkspaceCoordinationReference> {
+        val worker = Parked().also { parked = it }
+        bind(worker.bot.id)
+        val evidence = worker.question()
+        val proposed = WorkspaceCoordinationReference.create(evidence, scope.ownerCentralSessionId,
+            scope.workspaceId, target.assignmentId, target.requestId, target.revision)
+        return worker to ledger.appendWorkspaceCoordinationReferenceIfAbsent(proposed, noAdmission)
+    }
 
     @Test fun producerBeforeBindCatchesUpOnceAndNeverLeaksInternalBody() {
         val worker = Parked().also { parked = it }
@@ -206,10 +214,12 @@ class WorkspaceCoordinationDeliveryTest {
     }
 
     @Test fun replyRequiresExactNoticeThenAcceptsOnceAndHistoricalRetryNeverFindsRuntime() {
-        val (worker, r) = liveQuestion()
+        val (worker, r) = liveQuestionWithoutNotice()
         ledger.appendConversationMessage(central, "user", "An unrelated Central row is not a coordination read")
         failure { reply(r) }; assertNull(savedReply(r)); assertTrue(worker.answers().isEmpty())
+        assertTrue(notices().none { it.referenceId == r.referenceId })
         read(r)
+        assertTrue(notices().any { it.referenceId == r.referenceId })
         val accepted = reply(r)
         assertEquals("ACCEPTED_LOCAL", accepted.getString("state"))
         assertTrue(accepted.getBoolean("dispatch_accepted_locally"))

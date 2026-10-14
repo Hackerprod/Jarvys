@@ -54,7 +54,8 @@ class TaskPlatformContractTest {
             "android.permission.FOREGROUND_SERVICE_SPECIAL_USE", "android.permission.POST_NOTIFICATIONS",
             "android.permission.SYSTEM_ALERT_WINDOW", "android.permission.READ_CALENDAR",
             "android.permission.WRITE_CALENDAR", "android.permission.READ_CONTACTS", "android.permission.CALL_PHONE",
-            "android.permission.ACCESS_COARSE_LOCATION", "android.permission.ACCESS_FINE_LOCATION"), names)
+            "android.permission.ACCESS_COARSE_LOCATION", "android.permission.ACCESS_FINE_LOCATION",
+            "android.permission.REQUEST_INSTALL_PACKAGES"), names)
         // Downloads alone needs this legacy permission; scheduled tasks gain no storage capability.
         val legacyStorage = (0 until permissions.length).map { permissions.item(it) }.filter {
             it.attributes.getNamedItem("android:name")?.nodeValue == "android.permission.WRITE_EXTERNAL_STORAGE"

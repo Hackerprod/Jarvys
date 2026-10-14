@@ -311,7 +311,7 @@ open class FactoryOperationAuthorizationProvider : ContentProvider() {
         private val trustSubscription = AtomicReference<AutoCloseable?>()
         private val expired = Runnable { if (hardDeadline != null || !lease.isConnected) close() }
         val lease = NativeOperationAuthorization(nonce, binding, deadline,
-            { callerUid -> callerUid == uid && runCatching { requireCaller(context, caller, uid); true }.getOrDefault(false) },
+            { callerUid -> callerIsCurrent(callerUid) },
             object : NativeOperationAuthorization.Authority {
                 override fun status(): Int {
                     requireCurrent()
@@ -327,11 +327,19 @@ open class FactoryOperationAuthorizationProvider : ContentProvider() {
             trustSubscription.set(value)
             if (closed.get()) trustSubscription.getAndSet(null)?.close()
         }
+        private fun callerIsCurrent(callerUid: Int): Boolean {
+            if (callerUid != uid) return false
+            val valid = runCatching { requireCaller(context, caller, uid); true }.getOrDefault(false)
+            if (!valid) close()
+            return valid
+        }
+        private fun deadlineIsCurrent(): Boolean =
+            (hardDeadline == null && lease.isConnected) || SystemClock.elapsedRealtime() < deadline
         fun requireCurrent() {
-            check(!closed.get() && SystemClock.elapsedRealtime() < deadline)
+            check(!closed.get() && deadlineIsCurrent())
             check(sourceStamp(context, caller, uid) == stamp) { "Installed native caller changed" }
             trusted(proof)
-            check(!closed.get() && SystemClock.elapsedRealtime() < deadline)
+            check(!closed.get() && deadlineIsCurrent())
         }
         override fun close() { lease.close() }
         private fun finish() {

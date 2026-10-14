@@ -44,7 +44,7 @@ class FactoryGuidanceBundleTest {
 
     @Test fun factoryActionsKeepCallerAuthenticationAndSystemOwnedInteractions() {
         contract("basics", "Authenticated native operations", "installed app caller is authenticated", "Android runtime permission prompts",
-            "user selects documents, contacts, photos or recipients", "Jarvys does not add an operation approval screen",
+            "user selects documents, contacts, photos or recipients",
             "backup protocol v2", "legacy v1", "authenticated installed artifact", "no blind replay", "performed:false")
         for (text in listOf("appId+certificate", "64 recent artifacts", "retained exact signed scope", "Nonce/request/source-bound",
             "Android runtime permissions", "system selectors", "Damaged/missing evidence fails closed", "precompiled DEX",
@@ -90,7 +90,8 @@ class FactoryGuidanceBundleTest {
             "externalActivityClosedVerified:false", "location.current", "allowMock", "permissionGranularity",
             "recording.record", "RECORD_AUDIO", "contentVerified:false", "recording.stop", "recording.cancel",
             "secrets.put", "secrets.capture", "secrets.get", "explicit plaintext", "secrets.request",
-            "Response may echo secret", "Keystore", "no second network approval", "incomingShare.take",
+            "ordinary bounded network.request options", "rechecks URL/method at each redirect",
+            "Response may echo secret", "Keystore", "incomingShare.take",
             "attachmentIndices", "contentTypeVerified:false", "at-most-once", "temporary read grants")
     }
 
@@ -109,7 +110,8 @@ class FactoryGuidanceBundleTest {
             "widgets.requestPin", "widgets.update", "widgets.remove", "widgets.manage", "launcherPlacementRemoved:false",
             "oncePerGeneration", "widgets.pollActions", "widgets.acknowledgeAction", "dispatchUnknown",
             "jobs.enqueueHttp", "jobs.resume", "execution:\"now\"", "jobs.readResult", "jobs.forget",
-            "replayPossible:true", "No automatic HTTP replay", "no second network prompt", "no background JS")
+            "replayPossible:true", "Background work waits when its caller/source or Android prerequisites are unavailable",
+            "No automatic HTTP replay after reservation, even GET", "no background JS")
     }
 
     @Test fun packagedMediaBudgetsAndAdaptiveAssetsAreSourceBounded() {
@@ -121,7 +123,9 @@ class FactoryGuidanceBundleTest {
         contract("lifecycle", "adaptiveIcon:{foreground,background,insetPercent?}", "API24/25 legacy fallback",
             "API26+ adaptive", "sourceFiles128/512", "singleSourceBytes1MiB/16MiB", "totalSourceBytes8MiB/32MiB",
             "512ZIP entries", "16MiB/entry", "32MiB expanded/output", "including overhead", "fails busy",
-            "no heap guarantee", "manual Android grant", "same appId/key", "final packaged validation")
+            "no heap guarantee", "PackageInstaller", "unknown-source installer", "confirm installation",
+            "Signing alone does not request installation", "Never automate Android security screens",
+            "same appId/key", "final packaged validation")
         contract("native-services", "bounded JSON HTTP", "scoped secrets.request", "no incremental JS SSE/token callback API",
             "No native LLM engine/model weights/tool agent", "license/ABI/device")
     }
