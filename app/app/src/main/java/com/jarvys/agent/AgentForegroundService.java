@@ -29,8 +29,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -48,12 +46,6 @@ public final class AgentForegroundService extends Service {
 
   private static final String CHANNEL_ID = "jarvys_agent_run";
   private static final int NOTIFICATION_ID = 31001;
-  private static final long STOP_EXIT_DIAGNOSTIC_DELAY_MILLIS = 5000L;
-  private static final ScheduledExecutorService STOP_DIAGNOSTICS = Executors.newSingleThreadScheduledExecutor(r -> {
-    Thread thread = new Thread(r, "JarvysStopDiagnostics");
-    thread.setDaemon(true);
-    return thread;
-  });
   private static final Map<String, Object> INTERRUPT_ADMISSION_LOCKS = new ConcurrentHashMap<>();
   private static final Map<String, Set<String>> FOLLOW_UP_CLAIMS = new ConcurrentHashMap<>();
   private static final int TEST_STEPS = 120;
@@ -117,7 +109,6 @@ public final class AgentForegroundService extends Service {
     final StopController controller;
     final CancellationToken token;
     final long generation;
-    final AtomicBoolean stopDiagnosticScheduled = new AtomicBoolean(false);
     volatile Future<?> future;
     ActiveRun(String sessionId, StopController controller, CancellationToken token) {
       this.sessionId = sessionId;
@@ -231,7 +222,6 @@ public final class AgentForegroundService extends Service {
     if (active != null) {
       AgentRunUiState.stopPendingGeneration(sessionId, active.generation);
       active.controller.stopRunAsync();
-      scheduleStopDiagnostic(active);
       return;
     }
     // Retain the legacy single-run seam for older in-process callers and test harnesses.
@@ -243,15 +233,6 @@ public final class AgentForegroundService extends Service {
       AgentRunUiState.stopPendingGeneration(sessionId, legacy.generation());
       legacy.stopRunAsync();
     }
-  }
-
-  private void scheduleStopDiagnostic(ActiveRun active) {
-    if (!active.stopDiagnosticScheduled.compareAndSet(false, true)) return;
-    STOP_DIAGNOSTICS.schedule(() -> {
-      if (activeRuns.get(active.sessionId) == active) {
-        android.util.Log.w("JarvysAgentRun", "A stopped chat run is still unwinding in its worker.");
-      }
-    }, STOP_EXIT_DIAGNOSTIC_DELAY_MILLIS, TimeUnit.MILLISECONDS);
   }
 
   @Override
@@ -1304,7 +1285,6 @@ public final class AgentForegroundService extends Service {
         CoreAgentRuntime::stopAllCrews);
     for (ActiveRun active : activeRuns.values()) {
       AgentRunUiState.stopPendingGeneration(active.sessionId, active.generation);
-      scheduleStopDiagnostic(active);
     }
     stopServiceIfIdle();
   }

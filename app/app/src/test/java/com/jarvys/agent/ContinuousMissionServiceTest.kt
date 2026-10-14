@@ -18,6 +18,7 @@ import org.robolectric.shadows.ShadowSystemClock
 import java.time.Duration
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutorService
+import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
@@ -128,6 +129,8 @@ class ContinuousMissionServiceTest {
             val didEnter = entered.await(5, TimeUnit.SECONDS)
             assertTrue("Crew worker entered its model; local failures=${LocalErrorReporter.failures}", didEnter)
             assertFalse(prefs.contains("agent_timeout_seconds"))
+            assertTrue("No hidden elapsed-time scheduler survives", AgentForegroundService::class.java.declaredFields
+                .none { ScheduledExecutorService::class.java.isAssignableFrom(it.type) })
             ShadowSystemClock.advanceBy(Duration.ofDays(3))
             assertFalse(captain.get().isCancellationRequested)
             assertFalse(botRef.get().token.isCancellationRequested)
