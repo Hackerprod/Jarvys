@@ -191,12 +191,11 @@ class BotCreationToolTest {
         val token = CancellationToken.cancellable()
         var availabilityChecks = 0
         val service = BotCreationService(repository, session, { caps }, { availableSkills },
-            { _, _ -> ApprovalDecision.APPROVED },
             {
                 if (++availabilityChecks == 2) token.cancel()
                 true
             },
-            { _, _, _, _, _ -> throw AssertionError("Cancelled creation must not start icon generation") })
+            { _, _, _, _ -> throw AssertionError("Cancelled creation must not start icon generation") })
 
         assertThrows(CancellationException::class.java) {
             BotCreationTool(service).execute(arguments("cancel-before-icon"), token)
