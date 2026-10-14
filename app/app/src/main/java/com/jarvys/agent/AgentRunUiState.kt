@@ -364,8 +364,11 @@ object AgentRunUiState {
             block()
         } finally {
             synchronized(lock) {
-                sessionSnapshots[sessionId] = working.snapshot
-                if (visibleSessionId == sessionId) publishedState.value = working.snapshot
+                // State setters publish each working update immediately. Another thread may
+                // publish a newer stop/finalization snapshot while this block is still running,
+                // so never replace that shared snapshot with this thread's stale local copy.
+                val latest = sessionSnapshots.getOrPut(sessionId) { working.snapshot }
+                if (visibleSessionId == sessionId) publishedState.value = latest
             }
             workingSnapshot.set(existing)
         }

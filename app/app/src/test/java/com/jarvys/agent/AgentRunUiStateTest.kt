@@ -8,6 +8,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicReference
 
 class AgentRunUiStateTest {
@@ -49,6 +50,68 @@ class AgentRunUiStateTest {
         assertEquals("STOPPED", AgentRunUiState.state.value.outcome)
         assertEquals("B stopped", AgentRunUiState.state.value.events.last().text)
         AgentRunUiState.resetSession("session-b-cleanup")
+    }
+
+    @Test
+    fun stoppedGenerationCompletionIsPublishedForVisibleAndNonVisibleSessions() {
+        val visibleSession = "stopped-visible-${System.nanoTime()}"
+        val nonVisibleSession = "stopped-hidden-${System.nanoTime()}"
+
+        fun completeStoppedGenerationWhileWorkerSessionIsOpen(sessionId: String, generation: Long) {
+            val workerEnteredSession = CountDownLatch(1)
+            val allowWorkerToComplete = CountDownLatch(1)
+            val workerFailure = AtomicReference<Throwable?>()
+            val worker = Thread {
+                try {
+                    AgentRunUiState.withSession(sessionId, Runnable {
+                        workerEnteredSession.countDown()
+                        allowWorkerToComplete.await()
+                        AgentRunUiState.completeGeneration(
+                            sessionId, generation, "$sessionId-run", "STOPPED", "Run stopped",
+                            "$sessionId-message", 1L,
+                        )
+                    })
+                } catch (failure: Throwable) {
+                    workerFailure.set(failure)
+                    workerEnteredSession.countDown()
+                }
+            }
+            worker.start()
+            workerEnteredSession.await()
+            try {
+                AgentRunUiState.stopPendingGeneration(sessionId, generation)
+            } finally {
+                allowWorkerToComplete.countDown()
+            }
+            worker.join()
+            assertNull(workerFailure.get())
+            AgentRunUiState.finishPendingGeneration(sessionId, generation)
+        }
+
+        AgentRunUiState.resetSession(visibleSession)
+        AgentRunUiState.beginRun(visibleSession, "Stop this run")
+        AgentRunUiState.bindGeneration(visibleSession, 301L)
+        completeStoppedGenerationWhileWorkerSessionIsOpen(visibleSession, 301L)
+        assertFalse(AgentRunUiState.state.value.running)
+        assertEquals("STOPPED", AgentRunUiState.state.value.outcome)
+
+        AgentRunUiState.resetSession(nonVisibleSession)
+        AgentRunUiState.beginRun(nonVisibleSession, "Stop this run")
+        AgentRunUiState.bindGeneration(nonVisibleSession, 302L)
+        AgentRunUiState.showSession(visibleSession)
+        completeStoppedGenerationWhileWorkerSessionIsOpen(nonVisibleSession, 302L)
+
+        val visible = AgentRunUiState.state.value
+        val nonVisible = AgentRunUiState.snapshotForSession(nonVisibleSession)
+        assertEquals(visibleSession, visible.sessionId)
+        assertFalse(visible.running)
+        assertEquals("STOPPED", visible.outcome)
+        assertEquals(nonVisibleSession, nonVisible.sessionId)
+        assertFalse(nonVisible.running)
+        assertEquals("STOPPED", nonVisible.outcome)
+        assertEquals("Run stopped", nonVisible.events.last().text)
+
+        AgentRunUiState.resetSession("$visibleSession-cleanup")
     }
 
     @Test
