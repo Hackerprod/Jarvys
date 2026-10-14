@@ -32,7 +32,7 @@ public final class NotificationScheduleMachine {
         if (terminal(current) || current == State.DISPATCH_RESERVED || current == State.ARMING) return none(current, "terminal_or_in_flight");
         if (nowEpochMs > request.expiresAtEpochMs) return none(State.EXPIRED, "delivery_window_ended");
         Plan blocked = unavailable(sessionStatus); if (blocked != null) return blocked;
-        if (nowEpochMs >= request.atEpochMs) return fire(request, current, nowEpochMs, policy, notificationsReady);
+        if (nowEpochMs >= request.atEpochMs) return fire(request, current, nowEpochMs, sessionStatus, notificationsReady);
         if (request.precision == NotificationScheduleRequest.Precision.EXACT && !exactAvailable)
             return none(State.QUEUED_EXACT_PERMISSION, "android_exact_alarm_unavailable");
         return new Plan(State.ARMING, Effect.ARM, "live_authorization_required_at_arm");

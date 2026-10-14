@@ -57,7 +57,7 @@ open class FactoryContactActivity : ComponentActivity() {
         val caller = callingPackage
         val incoming = if (savedInstanceState == null && caller != null) runCatching { FactoryContactCoordinator.Request.parse(intent) }.getOrNull() else null
         if (incoming == null) { finish(); return }
-        val column = PrivateReviewColumn(this).apply { orientation = android.widget.LinearLayout.VERTICAL; setPadding(24, 32, 24, 32) }
+        val column = android.widget.LinearLayout(this).apply { orientation = android.widget.LinearLayout.VERTICAL; setPadding(24, 32, 24, 32) }
         column.addView(TextView(this).apply { setText(R.string.factory_contacts_title); textSize = 22f; privateContact() })
         status = TextView(this).apply { textSize = 16f; privateContact(); autoLinkMask = 0 }; column.addView(status)
         column.addView(TextView(this).apply { setText(R.string.factory_contacts_value); privateContact() })

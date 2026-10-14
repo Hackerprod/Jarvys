@@ -25,6 +25,7 @@ internal class FactoryFileShareCoordinator(
     private val receive: ((Request, () -> Unit) -> FactoryFileShareStore.Snapshot)? = null,
     private val clean: (() -> Unit)? = null,
 ) {
+    private val application = context.applicationContext
     data class Request(val nonce: String, val filename: String, val mimeType: String, val size: Long, val sha256: String, val transfer: IBinder, val protocolVersion: Int = 1) {
         constructor(nonce: String, filename: String, mimeType: String, size: Int, sha256: String, transfer: IBinder) : this(nonce, filename, mimeType, size.toLong(), sha256, transfer, 1)
         companion object {
@@ -131,7 +132,7 @@ internal class FactoryFileShareCoordinator(
         synchronized(this) { check(canBegin()); require(value.nonce != nonce) { "Replayed file sharing request" } }
         val identity = verify(callingPackage)
         check(identity.appId == callingPackage); checkActive()
-        val authority = FactoryDocumentCoordinator.captureTrustedAuthority(context.applicationContext, identity, setOf("documents", "share"))
+        val authority = FactoryDocumentCoordinator.captureTrustedAuthority(application, identity, setOf("documents", "share"))
         require(value.protocolVersion == 1 || value.protocolVersion == 2)
         require(value.size in 1..identity.resources.fileShare.sourceBytes) { "File-share source exceeds signed budget" }
         if (value.protocolVersion == 1) require(value.size <= FileShareTransfer.MAX_BYTES)

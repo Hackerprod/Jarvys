@@ -1,6 +1,8 @@
 package com.jarvys.agent
 
 import android.content.Context
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 
 /** Runs a memory effect against the trusted store selected by app routing. */
 internal class MemoryNativeActions {
@@ -40,4 +42,21 @@ internal class MemoryNativeActions {
 
         override fun close() = Unit
     }
+}
+
+/** Effect lifetime follows the screen/selection, not a content refresh. */
+@androidx.compose.runtime.Composable
+internal fun rememberMemoryEffectToken(vararg keys: Any?): CancellationToken {
+    val owner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    var generation by androidx.compose.runtime.remember(*keys) { androidx.compose.runtime.mutableIntStateOf(0) }
+    val token = androidx.compose.runtime.remember(*keys, owner, generation) { CancellationToken.cancellable() }
+    androidx.compose.runtime.DisposableEffect(token, owner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_PAUSE || event == androidx.lifecycle.Lifecycle.Event.ON_STOP) token.cancel()
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME && token.isCancellationRequested) generation++
+        }
+        owner.lifecycle.addObserver(observer)
+        onDispose { owner.lifecycle.removeObserver(observer); token.cancel() }
+    }
+    return token
 }

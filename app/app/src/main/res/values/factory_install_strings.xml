@@ -11,6 +11,6 @@
     <string name="factory_install_not_success">Android has not confirmed a successful installation for this session.</string>
     <string name="factory_install_interrupted">Android could not complete the installation request. Submit a new request to continue.</string>
     <string name="factory_install_permission_required">Android requires permission for Jarvys to install apps from this source. Open Android settings for Jarvys, enable this permission, return here, and submit a new installation request.</string>
-    <string name="factory_install_permission_unavailable">Android's install permission could not be checked, so Jarvys did not start an installer session. Resolve the device setting and submit a new request.</string>
+    <string name="factory_install_permission_unavailable">The Android install permission could not be checked, so Jarvys did not start an installer session. Resolve the device setting and submit a new request.</string>
     <string name="factory_install_unavailable">Android installation is unavailable in this distribution or on this device. The signed APK remains in the project.</string>
 </resources>

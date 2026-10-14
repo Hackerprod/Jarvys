@@ -390,8 +390,7 @@ internal fun MemoryEditorDestination(
         { value -> runCatching { uiProtection.draftChanged(); name = value }.onFailure { error=it.message; uiProtection.invalidate() } },
         { value -> runCatching { uiProtection.draftChanged(); description = value }.onFailure { error=it.message; uiProtection.invalidate() } },
         { value -> runCatching { uiProtection.draftChanged(); body = value }.onFailure { error=it.message; uiProtection.invalidate() } },
-        { save() }, { delete() }, { status = null }, uiProtection.captureReviewNeeded,
-        { runCatching { uiProtection.approveDraftCapture() }.onFailure { error = it.message } })
+        { save() }, { delete() }, { status = null })
     if (discardDialog) AlertDialog(onDismissRequest = { discardDialog = false },
         title = { Text(stringResource(R.string.memory_unsaved_title)) },
         text = { ScrollableDialogContent { Text(stringResource(R.string.memory_unsaved_text)) } },
@@ -692,14 +691,9 @@ private fun MemoryEditor(
     onSave: () -> Unit,
     onDelete: () -> Unit,
     onClearStatus: () -> Unit,
-    captureReviewNeeded: Boolean,
-    onApproveCapture: () -> Unit,
 ) {
     val context = LocalContext.current
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        if (captureReviewNeeded) Button(onClick = onApproveCapture, modifier = Modifier.testTag("memory-draft-capture-approve")) {
-            Text(stringResource(R.string.memory_native_draft_capture_once))
-        }
         Text(path, fontFamily = FontFamily.Monospace, fontSize = 12.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
         if (!isIndex) {

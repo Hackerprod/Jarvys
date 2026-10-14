@@ -5,5 +5,4 @@
     <string name="memory_native_export_destination_unavailable">The selected destination cannot be opened</string>
     <string name="memory_native_export_success">Memory exported</string>
     <string name="memory_native_export_incomplete">Export did not complete. Inspect the selected file before retrying.</string>
-    <string name="memory_native_draft_capture_once">Allow capture of this updated draft once</string>
 </resources>

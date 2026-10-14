@@ -152,7 +152,7 @@ internal class WorkspaceInputIncorporationDelivery(
                 WorkspaceInputIncorporation.SourceKind.NATIVE_CORRECT, control.requestId)
             if (receipt != null) read(WorkspaceInputSources.correction(owner, assignment, control,
                 receipt.admissionCycleId), Runnable { })
-            AppLanguageRuntime.localizedContext(app).getString(if (receipt != null)
+            return AppLanguageRuntime.localizedContext(app).getString(if (receipt != null)
                 R.string.workspace_correction_checkpoint_incorporated else R.string.workspace_correction_checkpoint_unverified)
     }
 

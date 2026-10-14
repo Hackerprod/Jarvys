@@ -197,7 +197,10 @@ internal open class FactorySigningIdentity(
     }
 
     private fun normalizeLegacyRecord(saved: JSONObject) {
-        saved.put("schemaVersion", 3).remove("mode").remove("continuityKnown").remove("continuityResolution")
+        saved.put("schemaVersion", 3)
+        saved.remove("mode")
+        saved.remove("continuityKnown")
+        saved.remove("continuityResolution")
     }
 
     private fun exactInt(saved: JSONObject, name: String): Int {

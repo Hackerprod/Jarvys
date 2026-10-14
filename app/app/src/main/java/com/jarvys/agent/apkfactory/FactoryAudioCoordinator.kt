@@ -213,7 +213,7 @@ internal class FactoryAudioCoordinator(
     fun close(value: Session?, active: () -> Unit): Intent? {
         worker(); check(!busy && !restoring); active()
         check(value != null && current === value && open && !broken)
-        val owned = current
+        val owned = requireNotNull(current)
         check(owned?.preparing?.get() != true && owned?.playerClean?.get() != false) { "Native audio cleanup remains unconfirmed" }
         owned?.revoke(); owned?.registration?.close(); owned?.registration = null
         // No feeder may still read this descriptor. Failed closes retain ownership/admission.

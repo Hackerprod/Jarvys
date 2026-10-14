@@ -249,6 +249,7 @@ internal class FactoryProjectService(
                 }
             }
         }
+    }
     /** Installation delegates the final confirmation and result to Android PackageInstaller. */
     fun installation(action: String, inputPath: String, expectedSha: String, expectedVersion: Long, token: CancellationToken): JSONObject =
         if (action != "install") installationOwned(action, inputPath, expectedSha, expectedVersion, token) else

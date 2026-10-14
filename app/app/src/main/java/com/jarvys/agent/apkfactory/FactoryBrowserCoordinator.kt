@@ -155,7 +155,7 @@ internal class FactoryBrowserCoordinator(
     fun close(value: Session?, active: () -> Unit): Intent? {
         worker(); check(!busy && !restoring); active()
         check(value != null && current === value && open && !broken)
-        val owned = current
+        val owned = requireNotNull(current)
         check(owned?.preparing != true) { "Native browser preparation is still active" }
         owned?.revoke(); owned?.registration?.close(); owned?.registration = null
         active()

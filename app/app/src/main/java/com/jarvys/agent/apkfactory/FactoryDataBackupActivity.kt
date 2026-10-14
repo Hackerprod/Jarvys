@@ -98,6 +98,7 @@ open class FactoryDataBackupActivity : ComponentActivity() {
                     }
                 }
             }
+        }
         render()
     }
     private fun awaitStartup(action: () -> Unit) {
