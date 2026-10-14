@@ -184,7 +184,7 @@ class ConnectedConnectorPermissionScreensTest {
         registry.connect(definition.id)
         assertEquals(ConnectorState.CONNECTED, registry.state(definition))
         show(scale, dark) {
-            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).testTag("connected-connector-detail")) {
+            Column(Modifier.fillMaxSize().testTag("connected-connector-detail")) {
                 ConnectorDeviceDetailPage(definition, registry.state(definition), registry,
                     registry.autonomyRevision.value, onConnect = {}, onDisconnect = {}, openSettings = {})
             }

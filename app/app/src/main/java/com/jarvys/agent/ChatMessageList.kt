@@ -22,6 +22,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -31,6 +32,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
+import kotlin.math.abs
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
@@ -48,11 +51,14 @@ internal fun <T> ChatMessageList(
     isRunning: Boolean,
     messageKey: (T) -> Any,
     isUserMessage: (T) -> Boolean,
+    hasOlder: Boolean = false,
+    isLoadingOlder: Boolean = false,
+    onLoadOlder: () -> Unit = {},
     modifier: Modifier = Modifier,
     composerInset: Dp = LocalChatComposerInset.current,
     headerInset: Dp = LocalChatHeaderInset.current,
     listState: LazyListState = rememberLazyListState(),
-    targetMessage: (T) -> Boolean = { false },
+    targetMessage: ((T) -> Boolean)? = null,
     itemContent: @Composable (T) -> Unit,
     newestItems: LazyListScope.() -> Unit = {},
     messageUpdateKey: (T) -> Any = messageKey,
@@ -61,10 +67,14 @@ internal fun <T> ChatMessageList(
     var followingEnd by remember(conversationKey) { mutableStateOf(true) }
     var followingBeforeDataChange by remember(conversationKey) { mutableStateOf(true) }
     var openingByReverseLayout by remember(conversationKey) { mutableStateOf(true) }
+    var resolvedTargetKey by remember(conversationKey) { mutableStateOf<Any?>(null) }
     val coroutineScope = rememberCoroutineScope()
+    val currentLoadOlder by rememberUpdatedState(onLoadOlder)
+    val olderEdgeThresholdPx = with(androidx.compose.ui.platform.LocalDensity.current) { 240.dp.roundToPx() }
     val newestKey = messages.lastOrNull()?.let(messageUpdateKey)
     val newestIsUserMessage = messages.lastOrNull()?.let(isUserMessage) == true
-    val targetIndex = messages.indexOfFirst(targetMessage)
+    val targetIndex = targetMessage?.let(messages::indexOfFirst) ?: -1
+    val targetKey = messages.getOrNull(targetIndex)?.let(messageKey)
 
     LaunchedEffect(conversationKey) {
         val opened = ChatScrollPolicy.decide(ChatScrollTrigger.CONVERSATION_OPENED, false, true)
@@ -92,8 +102,34 @@ internal fun <T> ChatMessageList(
             if (decision.animate) listState.animateScrollToItem(0) else listState.scrollToItem(0)
         }
     }
-    LaunchedEffect(conversationKey, messages.size, targetIndex) {
-        if (targetIndex >= 0) listState.scrollToItem(messages.lastIndex - targetIndex)
+    LaunchedEffect(conversationKey, targetKey) {
+        if (targetIndex >= 0 && targetKey != null && resolvedTargetKey != targetKey) {
+            listState.scrollToItem(messages.lastIndex - targetIndex)
+            resolvedTargetKey = targetKey
+        }
+    }
+    LaunchedEffect(conversationKey, hasOlder, isLoadingOlder) {
+        snapshotFlow {
+            val layout = listState.layoutInfo
+            val oldestVisible = layout.visibleItemsInfo.maxByOrNull { it.index }
+            if (oldestVisible == null || layout.totalItemsCount == 0) false
+            else {
+                val remainingSlots = layout.totalItemsCount - oldestVisible.index - 1
+                val averageSlotHeight = layout.visibleItemsInfo.map { it.size }.average().toInt().coerceAtLeast(1)
+                val estimatedDistance = remainingSlots * averageSlotHeight
+                estimatedDistance <= olderEdgeThresholdPx
+                    || (remainingSlots == 0 && abs(oldestVisible.offset - layout.viewportStartOffset) <= olderEdgeThresholdPx)
+            }
+        }.distinctUntilChanged().collect { nearOlderEdge ->
+            if (!nearOlderEdge || !hasOlder || isLoadingOlder) return@collect
+            delay(140)
+            val layout = listState.layoutInfo
+            val oldestVisible = layout.visibleItemsInfo.maxByOrNull { it.index }
+            val remainingSlots = oldestVisible?.let { layout.totalItemsCount - it.index - 1 } ?: Int.MAX_VALUE
+            val averageSlotHeight = layout.visibleItemsInfo.map { it.size }.average().toInt().coerceAtLeast(1)
+            val stillNear = oldestVisible != null && remainingSlots * averageSlotHeight <= olderEdgeThresholdPx
+            if (stillNear && hasOlder && !isLoadingOlder) currentLoadOlder()
+        }
     }
 
     Box(modifier.fillMaxSize()) {

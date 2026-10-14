@@ -764,14 +764,19 @@ object AgentRunUiState {
         val durableEvents = authoritativePersisted.filterNot { event ->
             event.kind == "user_decision" && event.decisionId in livePendingDecisionIds
         }
-        nextEventId = maxOf(nextEventId, ((durableEvents + transientEvents).maxOfOrNull { it.id } ?: 0L) + 1L)
-        val usedIds = durableEvents.mapTo(mutableSetOf()) { it.id }
+        val firstPersistedId = durableEvents.minOfOrNull { it.id } ?: Long.MAX_VALUE
+        val olderLoadedEvents = current.events.filter { event ->
+            event.id < firstPersistedId && event.kind in durableKinds
+        }
+        val mergedDurableEvents = (olderLoadedEvents + durableEvents).distinctBy { it.id }
+        nextEventId = maxOf(nextEventId, ((mergedDurableEvents + transientEvents).maxOfOrNull { it.id } ?: 0L) + 1L)
+        val usedIds = mergedDurableEvents.mapTo(mutableSetOf()) { it.id }
         val uniqueTransient = transientEvents.map { live ->
             if (usedIds.add(live.id)) live else live.copy(id = nextEventId++).also { usedIds.add(it.id) }
         }
         _state.value = current.copy(
             goal = persistedEvents.lastOrNull { it.kind == "user" }?.text ?: current.goal,
-            events = durableEvents + uniqueTransient,
+            events = mergedDurableEvents + uniqueTransient,
             liveMascotTool = current.liveMascotTool?.takeUnless { live ->
                 authoritativePersisted.any { event ->
                     event.kind == "tool" && event.toolCallId == live.executionId
@@ -779,6 +784,45 @@ object AgentRunUiState {
                 }
             },
         )
+    } }
+
+    /** Prepends a durable older window while preserving this session's live and cached events. */
+    @JvmStatic
+    fun prependPersistedSession(
+        sessionId: String,
+        olderEvents: List<AgentRunUiEvent>,
+        hiddenAssistantMessageIds: Set<String> = emptySet(),
+        hiddenTranslationMessageIds: Set<String> = emptySet(),
+        newerTranslationMessageIds: Set<String> = emptySet(),
+    ) = inSession(sessionId) { synchronized(lock) {
+        val current = _state.value
+        if (current.sessionId != sessionId || olderEvents.isEmpty()) return@synchronized
+        val existingIds = current.events.mapTo(mutableSetOf()) { it.id }
+        val uniqueOlder = olderEvents.filterNot { event ->
+            event.kind == "assistant" && event.messageId in hiddenAssistantMessageIds
+                || event.kind == "assistant_translation" && event.detail != null
+                && (event.detail in hiddenTranslationMessageIds || event.detail in newerTranslationMessageIds)
+        }.filter { existingIds.add(it.id) }
+        if (uniqueOlder.isEmpty()) return@synchronized
+        nextEventId = maxOf(nextEventId, (uniqueOlder.maxOfOrNull { it.id } ?: 0L) + 1L)
+        _state.value = current.copy(events = uniqueOlder + current.events)
+    } }
+
+    /** Drops materialized durable pages after an edit, then installs the refreshed recent window. */
+    @JvmStatic
+    fun replacePersistedTimelineWindow(sessionId: String, persistedEvents: List<AgentRunUiEvent>) = inSession(sessionId) { synchronized(lock) {
+        val current = _state.value
+        if (current.sessionId != sessionId) return@synchronized
+        val durableKinds = setOf("user", "assistant", "assistant_translation", "compaction", "compaction_error",
+            "memory", "crew_mission", "tool", "user_decision", "generated_image", "delivered_file", "workspace_result")
+        val activeToolStages = setOf("tool_call", "tool_progress", "approval_waiting")
+        val liveEvents = current.events.filter { event ->
+            event.kind !in durableKinds
+                || event.kind == "tool" && event.stage in activeToolStages
+                || event.kind == "user_decision" && event.decisionStatus == "PENDING"
+        }
+        _state.value = current.copy(events = liveEvents)
+        refreshPersistedSession(sessionId, persistedEvents)
     } }
 
     @JvmStatic

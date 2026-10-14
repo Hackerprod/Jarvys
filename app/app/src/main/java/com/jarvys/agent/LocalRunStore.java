@@ -47,6 +47,11 @@ public final class LocalRunStore {
     private static final Object SESSION_TITLE_LOCK = new Object();
     private static final Set<String> SESSION_TITLES_IN_PROGRESS = new HashSet<>();
     private static final Map<String, String> CREW_SNAPSHOT_DIGESTS = new LinkedHashMap<>();
+    private static final Object TIMELINE_PAGE_CACHE_LOCK = new Object();
+    private static final long MAX_TIMELINE_PAGE_CACHE_BYTES = 8L * 1024L * 1024L;
+    private static long timelinePageCacheBytes;
+    private static final LinkedHashMap<String, CachedTimelinePage> TIMELINE_PAGE_CACHE =
+            new LinkedHashMap<>(16, 0.75f, true);
     private final File root;
     private final String runBoundary;
     private final ConversationMetadataStore conversationMetadata;
@@ -1373,6 +1378,7 @@ public final class LocalRunStore {
         File ledger = conversationFile(sessionId);
         synchronized (SESSION_TITLE_LOCK) {
             conversationMetadata.update(sessionId, "deleted", true);
+            invalidateTimelinePageCache(ledger);
             SESSION_TITLES_IN_PROGRESS.remove(sessionId);
             boolean complete = true;
             try { complete &= !ledger.exists() || ledger.delete(); }
@@ -2249,6 +2255,16 @@ public final class LocalRunStore {
         return hidden;
     }
 
+    private static Set<String> hiddenTranslationIds(List<JSONObject> rows) {
+        Set<String> hidden = new HashSet<>();
+        for (JSONObject row : rows) {
+            if (!"assistant_translation_hidden".equals(row.optString("type"))) continue;
+            String id = row.optString("messageId", "");
+            if (!id.isEmpty()) hidden.add(id);
+        }
+        return hidden;
+    }
+
     public synchronized List<JSONObject> readActiveConversationMessages(String sessionId) {
         List<JSONObject> rows = readConversationRows(sessionId);
         Set<String> hidden = hiddenAssistantIds(rows);
@@ -2562,10 +2578,180 @@ public final class LocalRunStore {
         return candidate==null ? owner+"/"+call : candidate;
     }
 
+    /** A materialized UI window and the byte cursor for the next older turn window. */
+    public static final class ConversationTimelinePage {
+        public final List<AgentRunUiEvent> events;
+        public final long olderCursor;
+        public final boolean hasOlder;
+        public final Set<String> hiddenAssistantMessageIds;
+        public final Set<String> hiddenTranslationMessageIds;
+        public final Set<String> translationMessageIds;
+        public final Set<String> invalidatedToolTurnMessageIds;
+
+        private ConversationTimelinePage(List<AgentRunUiEvent> events, long olderCursor, boolean hasOlder,
+                                         Set<String> hiddenAssistantMessageIds,
+                                         Set<String> hiddenTranslationMessageIds,
+                                         Set<String> translationMessageIds,
+                                         Set<String> invalidatedToolTurnMessageIds) {
+            this.events = Collections.unmodifiableList(new ArrayList<>(events));
+            this.olderCursor = olderCursor;
+            this.hasOlder = hasOlder;
+            this.hiddenAssistantMessageIds = Collections.unmodifiableSet(new HashSet<>(hiddenAssistantMessageIds));
+            this.hiddenTranslationMessageIds = Collections.unmodifiableSet(new HashSet<>(hiddenTranslationMessageIds));
+            this.translationMessageIds = Collections.unmodifiableSet(new HashSet<>(translationMessageIds));
+            this.invalidatedToolTurnMessageIds = Collections.unmodifiableSet(new HashSet<>(invalidatedToolTurnMessageIds));
+        }
+    }
+
+    private static final class CachedTimelinePage {
+        final ConversationTimelinePage page;
+        final long estimatedBytes;
+        CachedTimelinePage(ConversationTimelinePage page, long estimatedBytes) {
+            this.page = page;
+            this.estimatedBytes = estimatedBytes;
+        }
+    }
+
+    public static final int INITIAL_TIMELINE_TURNS = 40;
+    public static final int OLDER_TIMELINE_TURNS = 20;
+
     /** UI timeline preserves every original user/assistant row and inserts read-only compaction notices. */
     public synchronized List<AgentRunUiEvent> readConversationTimeline(String sessionId) {
+        return projectConversationTimeline(sessionId, readConversationRows(sessionId, true), null);
+    }
+
+    /**
+     * Reads only a recent or preceding turn window for the UI. Model context and transcript restore
+     * continue to use their existing full-history readers.
+     */
+    public synchronized ConversationTimelinePage readConversationTimelinePage(
+            String sessionId, long beforeOffset, int turnCount) {
+        return readConversationTimelinePage(sessionId, beforeOffset, turnCount, Collections.emptySet());
+    }
+
+    public synchronized ConversationTimelinePage readConversationTimelinePage(
+            String sessionId, long beforeOffset, int turnCount, Set<String> newerInvalidatedToolTurnMessageIds) {
+        if (turnCount < 1 || turnCount > 200) throw new IllegalArgumentException("Timeline page size must be 1..200");
+        Set<String> newerInvalidations = newerInvalidatedToolTurnMessageIds == null
+                ? Collections.emptySet() : newerInvalidatedToolTurnMessageIds;
+        File ledger = conversationFile(sessionId);
+        ConversationLedgerPager.Page rawPage;
+        List<JSONObject> rows = new ArrayList<>();
+        java.util.IdentityHashMap<JSONObject, Long> rowOffsetsByIdentity = new java.util.IdentityHashMap<>();
+        String pageCacheKey;
+        synchronized (SESSION_TITLE_LOCK) {
+            if (conversationMetadata.read(sessionId).deleted || !ledger.isFile()) {
+                return new ConversationTimelinePage(Collections.emptyList(), ConversationLedgerPager.NO_CURSOR, false,
+                        Collections.emptySet(), Collections.emptySet(), Collections.emptySet(), Collections.emptySet());
+            }
+            pageCacheKey = timelinePageCacheKey(ledger, beforeOffset, turnCount, newerInvalidations);
+            ConversationTimelinePage cached = cachedTimelinePage(pageCacheKey);
+            if (cached != null) return cached;
+            try {
+                rawPage = beforeOffset == ConversationLedgerPager.NO_CURSOR
+                        ? ConversationLedgerPager.readTail(ledger, turnCount)
+                        : ConversationLedgerPager.readPrevious(ledger, beforeOffset, turnCount);
+            } catch (IOException error) {
+                throw new IllegalStateException("Could not read conversation timeline page", error);
+            }
+            for (int lineIndex = 0; lineIndex < rawPage.lines.size(); lineIndex++) try {
+                String line = rawPage.lines.get(lineIndex);
+                JSONObject row = new JSONObject(line);
+                if (isResultOnlyRow(row) && (!"workspace_result_notice".equals(row.optString("type"))
+                        || !row.has("role") && !row.has("content"))) continue;
+                rows.add(row);
+                rowOffsetsByIdentity.put(row, rawPage.lineOffsets.get(lineIndex));
+            } catch (Exception ignored) { }
+        }
+        orderAssistantMessagesBeforeSteering(rows);
+        List<Long> rowOffsets = new ArrayList<>(rows.size());
+        for (JSONObject row : rows) rowOffsets.add(rowOffsetsByIdentity.getOrDefault(row, 0L));
+        List<AgentRunUiEvent> events = projectConversationTimeline(sessionId, rows, rowOffsets, newerInvalidations);
+        Set<String> translationMessageIds = new HashSet<>();
+        for (AgentRunUiEvent event : events) {
+            if ("assistant_translation".equals(event.kind) && event.detail != null && !event.detail.isEmpty())
+                translationMessageIds.add(event.detail);
+        }
+        Set<String> invalidatedToolTurnMessageIds = new HashSet<>(newerInvalidations);
+        for (JSONObject row : rows) {
+            String type = row.optString("type");
+            String userMessageId = row.optString("userMessageId", "");
+            if (("assistant_regenerated".equals(type) || "assistant_deleted".equals(type))
+                    && !userMessageId.isEmpty()) invalidatedToolTurnMessageIds.add(userMessageId);
+        }
+        ConversationTimelinePage result = new ConversationTimelinePage(events, rawPage.olderCursor, rawPage.hasMore,
+                hiddenAssistantIds(rows), hiddenTranslationIds(rows), translationMessageIds,
+                invalidatedToolTurnMessageIds);
+        synchronized (SESSION_TITLE_LOCK) {
+            if (pageCacheKey.equals(timelinePageCacheKey(ledger, beforeOffset, turnCount, newerInvalidations)))
+                cacheTimelinePage(pageCacheKey, result);
+        }
+        return result;
+    }
+
+    /** Recent persisted UI events for run-service refreshes; the model transcript reader is separate. */
+    public synchronized List<AgentRunUiEvent> readRecentConversationTimeline(String sessionId) {
+        return readConversationTimelinePage(sessionId, ConversationLedgerPager.NO_CURSOR, INITIAL_TIMELINE_TURNS).events;
+    }
+
+    private static String timelinePageCacheKey(File ledger, long beforeOffset, int turnCount,
+                                               Set<String> newerInvalidations) {
+        List<String> sortedInvalidations = new ArrayList<>(newerInvalidations);
+        Collections.sort(sortedInvalidations);
+        return ledger.getAbsolutePath() + '\u0000' + ledger.length() + '\u0000'
+                + ledger.lastModified() + '\u0000' + beforeOffset + '\u0000' + turnCount
+                + '\u0000' + sortedInvalidations;
+    }
+
+    private static ConversationTimelinePage cachedTimelinePage(String key) {
+        synchronized (TIMELINE_PAGE_CACHE_LOCK) {
+            CachedTimelinePage cached = TIMELINE_PAGE_CACHE.get(key);
+            return cached == null ? null : cached.page;
+        }
+    }
+
+    private static void cacheTimelinePage(String key, ConversationTimelinePage page) {
+        long weight = 256L;
+        for (AgentRunUiEvent event : page.events) {
+            weight += 384L + 2L * (event.getText().length()
+                    + (event.getDetail() == null ? 0 : event.getDetail().length()));
+        }
+        if (weight > MAX_TIMELINE_PAGE_CACHE_BYTES) return;
+        synchronized (TIMELINE_PAGE_CACHE_LOCK) {
+            CachedTimelinePage old = TIMELINE_PAGE_CACHE.put(key, new CachedTimelinePage(page, weight));
+            if (old != null) timelinePageCacheBytes -= old.estimatedBytes;
+            timelinePageCacheBytes += weight;
+            java.util.Iterator<Map.Entry<String, CachedTimelinePage>> iterator = TIMELINE_PAGE_CACHE.entrySet().iterator();
+            while (timelinePageCacheBytes > MAX_TIMELINE_PAGE_CACHE_BYTES && iterator.hasNext()) {
+                CachedTimelinePage evicted = iterator.next().getValue();
+                timelinePageCacheBytes -= evicted.estimatedBytes;
+                iterator.remove();
+            }
+        }
+    }
+
+    private static void invalidateTimelinePageCache(File ledger) {
+        String prefix = ledger.getAbsolutePath() + '\u0000';
+        synchronized (TIMELINE_PAGE_CACHE_LOCK) {
+            java.util.Iterator<Map.Entry<String, CachedTimelinePage>> iterator = TIMELINE_PAGE_CACHE.entrySet().iterator();
+            while (iterator.hasNext()) {
+                Map.Entry<String, CachedTimelinePage> entry = iterator.next();
+                if (!entry.getKey().startsWith(prefix)) continue;
+                timelinePageCacheBytes -= entry.getValue().estimatedBytes;
+                iterator.remove();
+            }
+        }
+    }
+
+    private List<AgentRunUiEvent> projectConversationTimeline(
+            String sessionId, List<JSONObject> rows, List<Long> rowOffsets) {
+        return projectConversationTimeline(sessionId, rows, rowOffsets, Collections.emptySet());
+    }
+
+    private List<AgentRunUiEvent> projectConversationTimeline(
+            String sessionId, List<JSONObject> rows, List<Long> rowOffsets,
+            Set<String> newerInvalidatedToolTurnMessageIds) {
         List<AgentRunUiEvent> events = new ArrayList<>();
-        List<JSONObject> rows = readConversationRows(sessionId, true);
         Map<String, ChatAttachment> ownedDeliveredFiles = new LinkedHashMap<>();
         for (JSONObject row : rows) {
             if ("delivered_file".equals(row.optString("type"))) {
@@ -2607,6 +2793,10 @@ public final class LocalRunStore {
                 if (!userMessageId.isEmpty()) latestInvalidatedToolTurnRow.put(userMessageId, index);
             }
             if ("reflection_undo".equals(type)) undoneReflectionIds.add(rows.get(index).optString("reflectionId", ""));
+        }
+        for (String userMessageId : newerInvalidatedToolTurnMessageIds) {
+            if (userMessageId != null && !userMessageId.isEmpty())
+                latestInvalidatedToolTurnRow.put(userMessageId, rows.size());
         }
         Map<String, Integer> translationHiddenAt = new LinkedHashMap<>();
         Map<String, Integer> latestTranslation = new LinkedHashMap<>();
@@ -2685,8 +2875,9 @@ public final class LocalRunStore {
         Map<String, String> reactions = MessageReactionTool.isOrdinaryChat(sessionId)
                 ? readMessageReactions(rows) : java.util.Collections.emptyMap();
         int messageIndex = 0;
-        long id = 1;
+        long id = 1L;
         for (int rowIndex = 0; rowIndex < rows.size(); rowIndex++) {
+            if (rowOffsets != null) id = Math.max(1L, rowOffsets.get(rowIndex)) * 1_000_000L + 1L;
             JSONObject row = rows.get(rowIndex);
             String role = row.optString("role");
             String type = row.optString("type");
@@ -2950,6 +3141,7 @@ public final class LocalRunStore {
         } catch (Exception error) {
             throw new IllegalStateException("Could not append conversation ledger entry", error);
         }
+        invalidateTimelinePageCache(ledger);
     }
 
     public String readFirstUserMessage(String sessionId) {

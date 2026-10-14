@@ -15,6 +15,51 @@ import java.util.concurrent.atomic.AtomicReference
 
 class AgentRunUiStateTest {
     @Test
+    fun olderTimelinePagePrependsByStableIdWithoutTouchingAnotherSession() {
+        val firstSession = "timeline-page-a-${System.nanoTime()}"
+        val secondSession = "timeline-page-b-${System.nanoTime()}"
+        val old = AgentRunUiEvent(10L, "user", text = "older")
+        val newest = AgentRunUiEvent(80_000_001L, "assistant", text = "newest", messageId = "newest")
+        val other = AgentRunUiEvent(30L, "user", text = "other session")
+        AgentRunUiState.restoreSession(firstSession, listOf(newest))
+        AgentRunUiState.restoreSession(secondSession, listOf(other))
+
+        AgentRunUiState.prependPersistedSession(firstSession, listOf(old, newest))
+        AgentRunUiState.refreshPersistedSession(firstSession, listOf(newest))
+
+        assertEquals(listOf("older", "newest"), AgentRunUiState.snapshotForSession(firstSession).events.map { it.text })
+        assertEquals(listOf("other session"), AgentRunUiState.snapshotForSession(secondSession).events.map { it.text })
+        AgentRunUiState.resetSession(firstSession)
+        AgentRunUiState.resetSession(secondSession)
+    }
+
+    @Test
+    fun olderTimelinePageHonorsNewerHideMarkersAndTranslations() {
+        val session = "timeline-markers-${System.nanoTime()}"
+        val newest = AgentRunUiEvent(80_000_001L, "assistant_translation", text = "new translation",
+            detail = "message-newer-translation")
+        val older = listOf(
+            AgentRunUiEvent(10L, "assistant", text = "deleted", messageId = "message-deleted"),
+            AgentRunUiEvent(20L, "assistant_translation", text = "hidden translation", detail = "message-hidden-translation"),
+            AgentRunUiEvent(30L, "assistant_translation", text = "stale translation", detail = "message-newer-translation"),
+            AgentRunUiEvent(40L, "user", text = "visible older message"),
+        )
+        AgentRunUiState.restoreSession(session, listOf(newest))
+
+        AgentRunUiState.prependPersistedSession(
+            session,
+            older,
+            hiddenAssistantMessageIds = setOf("message-deleted"),
+            hiddenTranslationMessageIds = setOf("message-hidden-translation"),
+            newerTranslationMessageIds = setOf("message-newer-translation"),
+        )
+
+        assertEquals(listOf("visible older message", "new translation"),
+            AgentRunUiState.snapshotForSession(session).events.map { it.text })
+        AgentRunUiState.resetSession(session)
+    }
+
+    @Test
     fun toolResultUsesLatestSharedSessionSnapshotAfterConcurrentSessionWrites() {
         val session = "shared-snapshot-${System.nanoTime()}"
         AgentRunUiState.resetSession(session)

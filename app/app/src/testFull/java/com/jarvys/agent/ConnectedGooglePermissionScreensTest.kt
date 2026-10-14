@@ -398,7 +398,7 @@ class ConnectedGooglePermissionScreensTest {
         compose.onNodeWithTag("$labelPrefix-control").assertContentDescriptionEquals(
             compose.activity.getString(R.string.full_google_scope_gmail_labels))
         capture("gmail-ux31-label-metadata-scope-es-dark-large")
-        showDeveloper(2f, true)
+        show(true, 2f, true)
         for (name in listOf("delete_messages", "delete_label")) {
             val operation = gmail.operations.first { it.name == name }
             val prefix = policyTag(operation)
@@ -433,7 +433,7 @@ class ConnectedGooglePermissionScreensTest {
         registry.setAutonomyPolicy(gmail, read, AutonomyPolicy.ASK)
         registry.setAutonomyPolicy(gmail, write, AutonomyPolicy.DENY)
         policies.changes.clear()
-        showDeveloper()
+        show(true)
         policy(policyTag(read), R.string.connector_policy_ask)
         policy(policyTag(write), R.string.connector_policy_deny)
         assertEquals(AutonomyPolicy.ASK, registry.configuredAutonomyPolicy(gmail, read))

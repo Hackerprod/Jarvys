@@ -633,12 +633,12 @@ public final class AgentForegroundService extends Service {
       if (provider == null && service != null && ownerToken != null
           && ownerToken == service.activeRunToken) provider = service.activeSteeringProvider;
       if (activeInteractiveRun && provider != null && provider.dispatchPendingRequest(requestId)) {
-        AgentRunUiState.refreshPersistedSession(sessionId, store.readConversationTimeline(sessionId));
+        AgentRunUiState.refreshPersistedSession(sessionId, store.readRecentConversationTimeline(sessionId));
         return true;
       }
       if (ownerToken != null && ownerToken.wasStoppedByUser()) {
         service.failPendingInputRecovery(sessionId);
-        AgentRunUiState.refreshPersistedSession(sessionId, store.readConversationTimeline(sessionId));
+        AgentRunUiState.refreshPersistedSession(sessionId, store.readRecentConversationTimeline(sessionId));
         return true;
       }
       if (service == null) {
@@ -652,21 +652,21 @@ public final class AgentForegroundService extends Service {
                 null, "", requestId, "FAILED");
             store.markConversationMessagesResolved(sessionId, java.util.Collections.singletonList(requestId));
           }
-          AgentRunUiState.refreshPersistedSession(sessionId, store.readConversationTimeline(sessionId));
+          AgentRunUiState.refreshPersistedSession(sessionId, store.readRecentConversationTimeline(sessionId));
         }
         return true;
       }
       if (activeInteractiveRun && !service.worker.isShutdown()) {
         // The active worker's finally block owns the ordered follow-up scan (or STOP failure).
-        AgentRunUiState.refreshPersistedSession(sessionId, store.readConversationTimeline(sessionId));
+          AgentRunUiState.refreshPersistedSession(sessionId, store.readRecentConversationTimeline(sessionId));
         return true;
       }
       if (service.enqueuePendingInputRecovery(sessionId)) {
-        AgentRunUiState.refreshPersistedSession(sessionId, store.readConversationTimeline(sessionId));
+        AgentRunUiState.refreshPersistedSession(sessionId, store.readRecentConversationTimeline(sessionId));
         return true;
       }
       service.failPendingInput(sessionId, requestId);
-      AgentRunUiState.refreshPersistedSession(sessionId, store.readConversationTimeline(sessionId));
+      AgentRunUiState.refreshPersistedSession(sessionId, store.readRecentConversationTimeline(sessionId));
       return true;
     }
   }
@@ -835,7 +835,7 @@ public final class AgentForegroundService extends Service {
         store.markConversationMessagesResolved(sessionId, java.util.Collections.singletonList(requestId));
         releaseFollowUpClaim(sessionId, requestId);
       }
-      AgentRunUiState.refreshPersistedSession(sessionId, store.readConversationTimeline(sessionId));
+      AgentRunUiState.refreshPersistedSession(sessionId, store.readRecentConversationTimeline(sessionId));
     } catch (RuntimeException ignored) {
       // The durable request remains available for the next service recovery attempt.
     } finally {
@@ -855,7 +855,7 @@ public final class AgentForegroundService extends Service {
       store.appendConversationMessage(sessionId, "assistant", message, null, "", ownerMessageId, "FAILED");
       if (!ownerMessageId.isEmpty())
         store.markConversationMessagesResolved(sessionId, java.util.Collections.singletonList(ownerMessageId));
-      AgentRunUiState.refreshPersistedSession(sessionId, store.readConversationTimeline(sessionId));
+      AgentRunUiState.refreshPersistedSession(sessionId, store.readRecentConversationTimeline(sessionId));
     } catch (RuntimeException ignored) {
       // The UI still needs to release the optimistic submission if persistence is unavailable.
     }
@@ -878,7 +878,7 @@ public final class AgentForegroundService extends Service {
       store.appendConversationMessage(sessionId, "assistant", message, null, "", ownerMessageId, "FAILED");
       if (!ownerMessageId.isEmpty())
         store.markConversationMessagesResolved(sessionId, java.util.Collections.singletonList(ownerMessageId));
-      timeline = store.readConversationTimeline(sessionId);
+      timeline = store.readRecentConversationTimeline(sessionId);
     } catch (RuntimeException ignored) {
       timeline = AgentRunUiState.INSTANCE.snapshotForSession(sessionId).getEvents();
     }
@@ -893,7 +893,7 @@ public final class AgentForegroundService extends Service {
       String message = AppLanguageRuntime.localizedContext(this).getString(R.string.agent_run_stopped);
       store.appendConversationMessage(sessionId, "assistant", message, null, "", requestId, "FAILED");
       store.markConversationMessagesResolved(sessionId, java.util.Collections.singletonList(requestId));
-      AgentRunUiState.refreshPersistedSession(sessionId, store.readConversationTimeline(sessionId));
+      AgentRunUiState.refreshPersistedSession(sessionId, store.readRecentConversationTimeline(sessionId));
     } catch (RuntimeException ignored) {
       // Service recovery can resolve the durable request if persistence is temporarily unavailable.
     }
@@ -1279,7 +1279,7 @@ public final class AgentForegroundService extends Service {
               conversationStore.appendAssistantMessageBefore(sessionId, message, runId,
                   assistantOwnerMessageId.get(), nextInput.id);
               AgentRunUiState.refreshPersistedSession(sessionId,
-                  conversationStore.readConversationTimeline(sessionId));
+                  conversationStore.readRecentConversationTimeline(sessionId));
             }
 
             @Override
@@ -1306,7 +1306,7 @@ public final class AgentForegroundService extends Service {
               if (resolvedIds.isEmpty()) return;
               conversationStore.markConversationMessagesResolved(sessionId, resolvedIds);
               AgentRunUiState.refreshPersistedSession(sessionId,
-                  conversationStore.readConversationTimeline(sessionId));
+                  conversationStore.readRecentConversationTimeline(sessionId));
             }
 
             @Override
@@ -1642,7 +1642,7 @@ public final class AgentForegroundService extends Service {
             .cancelled(sessionId, getString(R.string.reflection_cancelled));
         try {
           AgentRunUiState.refreshPersistedSession(
-              sessionId, new LocalRunStore(this).readConversationTimeline(sessionId));
+              sessionId, new LocalRunStore(this).readRecentConversationTimeline(sessionId));
         } catch (RuntimeException ignored) {
         }
         AgentRunUiState.reflectionCancelled(sessionId, getString(R.string.reflection_cancelled));

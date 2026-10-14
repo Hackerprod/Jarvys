@@ -118,6 +118,10 @@ fun ConversationTimeline(
     conversationKey: String,
     generatedImageSessionId: String = conversationKey,
     events: List<AgentRunUiEvent>,
+    isLoadingHistory: Boolean = false,
+    hasOlderHistory: Boolean = false,
+    isLoadingOlderHistory: Boolean = false,
+    onLoadOlderHistory: () -> Unit = {},
     isRunning: Boolean,
     connectorRegistry: ConnectorRegistry,
     onOpenPreview: (String) -> Unit,
@@ -150,11 +154,13 @@ fun ConversationTimeline(
     runSnapshot: AgentRunUiSnapshot? = null,
     allowMessageEntrance: Boolean = true,
 ) {
-    val visibleEvents = ConversationVisibility.project(events)
-    val timelineItems = ToolGrouping.project(visibleEvents)
-    val latestAnswerId = visibleEvents.lastOrNull { it.kind == "assistant" && it.stage == null }?.messageId
-    val latestUserEventId = visibleEvents.lastOrNull { it.kind == "user" }?.id
-    val entryKeys = visibleEvents.map(ChatMessageArrivalPolicy::key)
+    val visibleEvents = remember(events) { ConversationVisibility.project(events) }
+    val timelineItems = remember(visibleEvents) { ToolGrouping.project(visibleEvents) }
+    val latestAnswerId = remember(visibleEvents) {
+        visibleEvents.lastOrNull { it.kind == "assistant" && it.stage == null }?.messageId
+    }
+    val latestUserEventId = remember(visibleEvents) { visibleEvents.lastOrNull { it.kind == "user" }?.id }
+    val entryKeys = remember(visibleEvents) { visibleEvents.map(ChatMessageArrivalPolicy::key) }
     val snapshotAllowsArrival = runSnapshot?.let { it.running || it.outcome != null } ?: isRunning
     val canAnimateArrival = allowMessageEntrance && snapshotAllowsArrival
     val seenEntryKeys = remember(conversationKey) { entryKeys.toMutableSet() }
@@ -167,11 +173,16 @@ fun ConversationTimeline(
         ChatMessageList(
             conversationKey = conversationKey,
             messages = timelineItems,
-            targetMessage = { item -> targetMessageId != null && when (item) {
-                is ConversationTimelineItem.Event -> item.event.messageId == targetMessageId
-                is ConversationTimelineItem.ToolGroup -> item.events.any { it.messageId == targetMessageId }
-            } },
+            targetMessage = targetMessageId?.let { targetId ->
+                { item: ConversationTimelineItem -> when (item) {
+                    is ConversationTimelineItem.Event -> item.event.messageId == targetId
+                    is ConversationTimelineItem.ToolGroup -> item.events.any { it.messageId == targetId }
+                } }
+            },
             isRunning = isRunning,
+            hasOlder = hasOlderHistory,
+            isLoadingOlder = isLoadingOlderHistory,
+            onLoadOlder = onLoadOlderHistory,
             messageKey = { it.key },
             messageUpdateKey = { item -> when (item) {
                 is ConversationTimelineItem.Event -> item.event.id
@@ -227,6 +238,26 @@ fun ConversationTimeline(
                 }
             },
             fixedItems = {
+                if (isLoadingHistory && visibleEvents.isEmpty()) item(key = "timeline-history-loading") {
+                    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        repeat(3) { index ->
+                            Surface(color = MaterialTheme.colorScheme.surfaceVariant,
+                                shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth(if (index == 1) 0.78f else 0.94f)) {
+                                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Surface(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
+                                        shape = RoundedCornerShape(4.dp), modifier = Modifier.fillMaxWidth(0.62f).heightIn(min = 12.dp)) {}
+                                    Surface(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f),
+                                        shape = RoundedCornerShape(4.dp), modifier = Modifier.fillMaxWidth().heightIn(min = 12.dp)) {}
+                                }
+                            }
+                        }
+                    }
+                }
+                if (isLoadingOlderHistory) item(key = "timeline-older-loading") {
+                    Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(10.dp)) {
+                        Spacer(Modifier.fillMaxWidth().heightIn(min = 8.dp))
+                    }
+                }
                 emptyReport?.let { report -> item(key = "run-report") {
                     JarvysConversationEvent(AgentRunUiEvent(0L, "result", stringResource(R.string.chat_latest_run_title), report),
                         connectorRegistry, onOpenPreview, onOpenSkillFile)

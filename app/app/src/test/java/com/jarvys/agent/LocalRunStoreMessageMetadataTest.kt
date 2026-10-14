@@ -12,6 +12,48 @@ import java.io.File
 class LocalRunStoreMessageMetadataTest {
     @Rule @JvmField val temporaryFolder = TemporaryFolder()
 
+    @Test fun pagedTimelineCacheRefreshesAfterAppendAndEditRows() {
+        val store = LocalRunStore(temporaryFolder.newFolder())
+        val session = "paged-refresh-${System.nanoTime()}"
+        val userId = store.appendConversationMessage(session, "user", "First question")
+        val assistantId = store.appendConversationMessage(session, "assistant", "First answer", null, "", userId)
+
+        val initial = store.readRecentConversationTimeline(session)
+        assertTrue(initial.any { it.text == "First answer" })
+
+        store.appendAssistantTranslation(session, assistantId, "Spanish", "Primera respuesta")
+        assertTrue(store.readRecentConversationTimeline(session).any { it.kind == "assistant_translation" })
+
+        store.appendAssistantTranslationHidden(session, assistantId)
+        val refreshed = store.readRecentConversationTimeline(session)
+        assertTrue(refreshed.any { it.text == "First answer" })
+        assertFalse(refreshed.any { it.kind == "assistant_translation" })
+
+        val nextUser = store.appendConversationMessage(session, "user", "Second question")
+        store.appendConversationMessage(session, "assistant", "Second answer", null, "", nextUser)
+        assertEquals(listOf("First question", "First answer", "Second question", "Second answer"),
+            store.readRecentConversationTimeline(session).filter { it.kind == "user" || it.kind == "assistant" }.map { it.text })
+    }
+
+    @Test fun olderTimelinePageHonorsNewerAssistantDeletionForToolRows() {
+        val store = LocalRunStore(temporaryFolder.newFolder())
+        val session = "paged-tool-invalidation-${System.nanoTime()}"
+        val oldUserId = store.appendConversationMessage(session, "user", "Old request")
+        store.appendReflectionToolEvent(session, oldUserId, "Old tool", "mcp", "tool_result", "old-call")
+        val oldAssistantId = store.appendConversationMessage(session, "assistant", "Old answer", 0L,
+            "old-run", oldUserId, "COMPLETED")
+        store.appendConversationMessage(session, "user", "New request")
+        store.appendConversationMessage(session, "assistant", "New answer")
+        store.appendAssistantDeleted(session, oldAssistantId)
+
+        val newest = store.readConversationTimelinePage(session, ConversationLedgerPager.NO_CURSOR, 1)
+        val older = store.readConversationTimelinePage(session, newest.olderCursor, 1,
+            newest.invalidatedToolTurnMessageIds)
+
+        assertTrue(oldUserId in newest.invalidatedToolTurnMessageIds)
+        assertFalse(older.events.any { it.kind == "tool" })
+    }
+
     @Test fun messageDurationAndTranslationSurviveTimelineRestoreWithoutEnteringModelContext() {
         val store = LocalRunStore(temporaryFolder.newFolder())
         val session = "footer-test-${System.nanoTime()}"

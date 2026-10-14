@@ -3,7 +3,9 @@ package com.jarvys.agent.connectors
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
@@ -11,11 +13,13 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -78,10 +82,15 @@ internal fun AutonomyPolicyRow(
             // text sizes, keep the label readable above a full-width selector on compact screens.
             val stackForLargeText = fontScale >= 1.6f && maxWidth <= 224.dp * fontScale
             if (stackForLargeText) {
+                var labelHeightPx by remember(definition.id, operation.name) { mutableIntStateOf(0) }
+                val labelHeight = with(LocalDensity.current) { labelHeightPx.toDp() }
                 Column(Modifier.fillMaxWidth().testTag("$tagPrefix-row")) {
-                    AutonomyPolicyLabel(operation, Modifier.fillMaxWidth())
+                    AutonomyPolicyLabel(operation,
+                        Modifier.fillMaxWidth().onSizeChanged { labelHeightPx = it.height })
                     Box(Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("$tagPrefix-selector-row"),
                         contentAlignment = Alignment.CenterEnd) { selector() }
+                    // Balance the label's height below the selector so it stays centered in the row.
+                    Spacer(Modifier.height(labelHeight))
                 }
             } else {
                 ConnectorPermissionRow(modifier = Modifier.testTag("$tagPrefix-row"), content = {
