@@ -78,4 +78,28 @@ class ConversationVisibilityUiTest {
         compose.onNodeWithText("Tool error details").assertIsDisplayed()
         compose.onNodeWithText(compose.activity.getString(R.string.chat_open_preview)).assertIsDisplayed()
     }
+
+    @Test fun successfulToolRowWithDeliveredCardProjectsAsOneTimelineRepresentation() {
+        val artifactId = "11111111-2222-3333-4444-555555555555"
+        val artifact = ChatAttachment(artifactId, "index.html", "text/html", 42L,
+            ChatAttachment.Kind.FILE, "$artifactId-index.html")
+        val result = AgentRunUiEvent.toolEvent(1L, "tool_result", "Build output",
+            "{\"artifact_id\":\"delivered:$artifactId\"}", "call-1",
+            HtmlPreviewDescriptor.TOKEN_PREFIX + artifactId, 1L)
+        val card = AgentRunUiEvent.deliveredFileEvent(2L, artifact, 2L)
+        val registry = ConnectorRegistry.createForTests(object : ConnectorConnectionPreferences {
+            override fun isConnected(id: String) = false
+            override fun setConnected(id: String, connected: Boolean) = Unit
+        }, { true })
+        compose.setContent {
+            MaterialTheme {
+                AgentRunScreen(conversationKey = "artifact-card-ui", events = listOf(result, card), isRunning = false,
+                    emptyReport = null, connectorRegistry = registry, onOpenPreview = {},
+                    onOpenSkillFile = {}, chatWithoutMemory = false)
+            }
+        }
+
+        compose.onNodeWithTag("conversation-activity-${result.id}").assertDoesNotExist()
+        compose.onNodeWithTag("delivered-file-${card.id}").assertIsDisplayed()
+    }
 }
