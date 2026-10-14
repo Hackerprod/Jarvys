@@ -317,7 +317,7 @@ class MainAgentInteractionTest {
             worker(service).submit {}.get(10, TimeUnit.SECONDS)
 
             assertEquals(listOf("initial request", "newer fallback input"), observedGoals)
-            assertTrue(followUpHistory.get().any {
+            assertTrue("history=${followUpHistory.get().map { it.role + ":" + it.content.take(40) }} goals=$observedGoals", followUpHistory.get().any {
                 it.role == "user" && it.content == "older accepted steering"
             })
             assertTrue(followUpHistory.get().any {
@@ -410,6 +410,7 @@ class MainAgentInteractionTest {
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15)
             while (bothStarted.count > 0 && System.nanoTime() < deadline) {
                 org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                deliverStartedServices(context)
                 Thread.sleep(10)
             }
             assertEquals(0, bothStarted.count)
