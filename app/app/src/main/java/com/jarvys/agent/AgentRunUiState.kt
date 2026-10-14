@@ -302,7 +302,6 @@ object AgentRunUiState {
         var generation: Long = Long.MIN_VALUE,
         var active: Boolean = false,
         var liveSnapshot: AgentRunUiSnapshot? = null,
-        var activationOrder: Long = 0L,
         var stoppingGeneration: Long? = null,
         var stoppedCompletion: StoppedCompletion? = null,
     )
@@ -322,7 +321,6 @@ object AgentRunUiState {
     private val sessionOwners = mutableMapOf<String, RunOwnership>()
     private val sessionProgress = mutableMapOf<String, MutableList<AgentRunUiEvent>>()
     private var visibleSessionId: String? = null
-    private var nextOwnerActivationOrder = 1L
     private val publishedState = MutableStateFlow(AgentRunUiSnapshot())
     private val _state = object {
         var value: AgentRunUiSnapshot
@@ -335,13 +333,13 @@ object AgentRunUiState {
                     sessionOwners[working.sessionId]?.takeIf {
                         it.active && it.sessionId == working.sessionId && value.running
                     }?.liveSnapshot = value
-                    if (visibleSessionId == working.sessionId) publishedState.value = projectVisibleSnapshot(value)
+                    if (visibleSessionId == working.sessionId) publishedState.value = value
                 }
                 else {
                     synchronized(lock) {
+                        publishedState.value = value
                         value.sessionId?.let { sessionSnapshots[it] = value }
                         if (visibleSessionId == null) visibleSessionId = value.sessionId
-                        if (visibleSessionId == value.sessionId) publishedState.value = projectVisibleSnapshot(value)
                     }
                 }
             }
@@ -380,8 +378,7 @@ object AgentRunUiState {
                 // publish a newer stop/finalization snapshot while this block is still running,
                 // so never replace that shared snapshot with this thread's stale local copy.
                 val latest = sessionSnapshots.getOrPut(sessionId) { working.snapshot }
-                if (visibleSessionId == sessionId) publishedState.value = projectVisibleSnapshot(latest)
-                else publishVisibleProjectionLocked()
+                if (visibleSessionId == sessionId) publishedState.value = latest
             }
             workingSnapshot.set(existing)
         }
@@ -390,14 +387,15 @@ object AgentRunUiState {
     /** Selects which session the compatibility StateFlow projects for Compose. */
     @JvmStatic
     fun showSession(sessionId: String) = synchronized(lock) {
+        publishedState.value.sessionId?.let { sessionSnapshots[it] = publishedState.value }
         visibleSessionId = sessionId
-        val snapshot = sessionSnapshots[sessionId] ?: AgentRunUiSnapshot(sessionId = sessionId)
-        publishedState.value = projectVisibleSnapshot(snapshot)
+        publishedState.value = sessionSnapshots[sessionId] ?: AgentRunUiSnapshot(sessionId = sessionId)
     }
 
     @JvmStatic
     fun snapshotForSession(sessionId: String): AgentRunUiSnapshot = synchronized(lock) {
-        sessionSnapshots[sessionId] ?: AgentRunUiSnapshot(sessionId = sessionId)
+        if (visibleSessionId == sessionId) publishedState.value else sessionSnapshots[sessionId]
+            ?: AgentRunUiSnapshot(sessionId = sessionId)
     }
 
     @JvmStatic
@@ -405,44 +403,6 @@ object AgentRunUiState {
 
     private fun preserveOwnedSnapshot() {
         if (ownedRunActive && _state.value.sessionId == ownedSessionId) ownedLiveSnapshot = _state.value
-    }
-
-    private fun activeOwnerSessionId(): String? = sessionOwners.entries
-        .filter { (sessionId, ownership) -> ownership.active && ownership.sessionId == sessionId }
-        .maxByOrNull { it.value.activationOrder }
-        ?.key
-
-    /** Keep each session's full snapshot in the map; hide live evidence when another run owns the UI. */
-    private fun projectVisibleSnapshot(snapshot: AgentRunUiSnapshot): AgentRunUiSnapshot {
-        val activeOwner = activeOwnerSessionId()
-        val localOwnerActive = snapshot.sessionId?.let { sessionId ->
-            sessionOwners[sessionId]?.let { it.active && it.sessionId == sessionId }
-        } == true
-        return when {
-            localOwnerActive -> snapshot.copy(interactiveOwnerSessionId = snapshot.sessionId)
-            activeOwner != null -> snapshot.copy(
-                interactiveOwnerSessionId = activeOwner,
-                liveMascotTool = null,
-                liveModelWaitId = null,
-                liveUserWaitId = null,
-                liveRunIdentity = null,
-                headerMascotAnimationRequest = null,
-            )
-            else -> snapshot.copy(
-                interactiveOwnerSessionId = null,
-                liveMascotTool = null,
-                liveModelWaitId = null,
-                liveUserWaitId = null,
-                liveRunIdentity = null,
-                headerMascotAnimationRequest = null,
-            )
-        }
-    }
-
-    private fun publishVisibleProjectionLocked() {
-        val visible = visibleSessionId ?: return
-        val snapshot = sessionSnapshots[visible] ?: AgentRunUiSnapshot(sessionId = visible)
-        publishedState.value = projectVisibleSnapshot(snapshot)
     }
 
     private fun sessionForApproval(id: String): String? = synchronized(lock) {
@@ -840,7 +800,7 @@ object AgentRunUiState {
             resolveHeaderMascotAnimationLocked(request, "rejected", reason)
         }
         _state.value = AgentRunUiSnapshot(sessionId = sessionId,
-            interactiveOwnerSessionId = activeOwnerSessionId(), reflecting = current.reflecting,
+            interactiveOwnerSessionId = if (ownedRunActive) ownedSessionId else null, reflecting = current.reflecting,
             reflectionSessionId = current.reflectionSessionId, reflectionStatus = current.reflectionStatus,
             reflectionLastSuccessMillis = current.reflectionLastSuccessMillis)
         } }
@@ -924,19 +884,12 @@ object AgentRunUiState {
     fun bindGeneration(sessionId: String, generation: Long) = inSession(sessionId) { synchronized(lock) {
         val generationChanged = ownedSessionId != sessionId || activeGeneration != generation
         val executionId = "$sessionId:$generation"
-        sessionOwners.forEach { (ownerSessionId, ownership) ->
-            if (ownerSessionId != sessionId && ownership.active && ownership.generation == generation) {
-                ownership.active = false
-                ownership.liveSnapshot = null
-            }
-        }
         _state.value.headerMascotAnimationRequest?.takeIf { it.executionId != executionId }?.let { request ->
             val reason = if (request.sessionId != sessionId) "The chat session changed."
             else "The animation request belonged to a previous run."
             resolveHeaderMascotAnimationLocked(request, "rejected", reason)
         }
         if (generationChanged) ownedLiveSnapshot = null
-        if (generationChanged || !ownedRunActive) owner().activationOrder = nextOwnerActivationOrder++
         ownedSessionId = sessionId
         activeGeneration = generation
         ownedRunActive = true
@@ -1045,8 +998,7 @@ object AgentRunUiState {
     ): HeaderMascotAnimationResult {
         val pending = inSession(sessionId) { synchronized(lock) {
             val current = _state.value
-            if (!UserDecisionUiAvailability.isChatVisible() || visibleSessionId != sessionId
-                || current.sessionId != sessionId || !current.running
+            if (!UserDecisionUiAvailability.isChatVisible() || current.sessionId != sessionId || !current.running
                 || current.interactiveOwnerSessionId != sessionId) {
                 return HeaderMascotAnimationResult(animationId, "rejected", "The active main chat is not available.")
             }
@@ -1430,7 +1382,7 @@ object AgentRunUiState {
             if (workingSnapshot.get()?.sessionId == sessionId) _state.value = updated
             else sessionSnapshots[sessionId] = updated
             if (ownership?.active == true && ownership.sessionId == sessionId) ownership.liveSnapshot = updated
-            if (visibleSessionId == sessionId) publishedState.value = projectVisibleSnapshot(updated)
+            if (visibleSessionId == sessionId) publishedState.value = updated
         }
     }
 
