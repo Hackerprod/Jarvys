@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 1,
-    "identityHash": "c3eb68a88eb3eb866f79866597899efb",
+    "identityHash": "3fab4efb24b308cfdb471d7c0a7ce9dc",
     "entities": [
       {
         "tableName": "conversations",
@@ -1154,10 +1154,11 @@
             "name": "idx_interrupt_requests_pending",
             "unique": false,
             "columnNames": [
-              "conversation_id"
+              "conversation_id",
+              "dispatched_seq"
             ],
             "orders": [],
-            "createSql": "CREATE INDEX IF NOT EXISTS `idx_interrupt_requests_pending` ON `${TABLE_NAME}` (`conversation_id`)"
+            "createSql": "CREATE INDEX IF NOT EXISTS `idx_interrupt_requests_pending` ON `${TABLE_NAME}` (`conversation_id`, `dispatched_seq`)"
           },
           {
             "name": "idx_interrupt_requests_input_state",
@@ -4111,6 +4112,17 @@
         },
         "indices": [
           {
+            "name": "idx_workspace_replies_reference",
+            "unique": false,
+            "columnNames": [
+              "conversation_id",
+              "reference_id",
+              "is_notice"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `idx_workspace_replies_reference` ON `${TABLE_NAME}` (`conversation_id`, `reference_id`, `is_notice`)"
+          },
+          {
             "name": "idx_workspace_replies_conversation_reply",
             "unique": true,
             "columnNames": [
@@ -4510,7 +4522,7 @@
       },
       {
         "tableName": "generation_run",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `conversation_id` TEXT NOT NULL, `message_id` TEXT NOT NULL, `state` TEXT NOT NULL, `state_revision` INTEGER NOT NULL, `checkpoint_seq` INTEGER NOT NULL, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, `terminal_at` INTEGER, `error_code` TEXT, PRIMARY KEY(`id`), FOREIGN KEY(`conversation_id`) REFERENCES `conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`conversation_id`, `message_id`) REFERENCES `messages`(`conversation_id`, `message_id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `conversation_id` TEXT NOT NULL, `message_id` TEXT NOT NULL, `state` TEXT NOT NULL, `state_revision` INTEGER NOT NULL, `checkpoint_seq` INTEGER NOT NULL, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, `terminal_at` INTEGER, `error_code` TEXT, `active_target_key` TEXT, PRIMARY KEY(`id`), FOREIGN KEY(`conversation_id`) REFERENCES `conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`conversation_id`, `message_id`) REFERENCES `messages`(`conversation_id`, `message_id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
         "fields": [
           {
             "fieldPath": "id",
@@ -4569,6 +4581,11 @@
             "fieldPath": "error_code",
             "columnName": "error_code",
             "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "active_target_key",
+            "columnName": "active_target_key",
+            "affinity": "TEXT"
           }
         ],
         "primaryKey": {
@@ -4579,14 +4596,23 @@
         },
         "indices": [
           {
-            "name": "idx_generation_run_active_message",
+            "name": "idx_generation_run_active_target",
             "unique": true,
+            "columnNames": [
+              "active_target_key"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `idx_generation_run_active_target` ON `${TABLE_NAME}` (`active_target_key`)"
+          },
+          {
+            "name": "idx_generation_run_message",
+            "unique": false,
             "columnNames": [
               "conversation_id",
               "message_id"
             ],
             "orders": [],
-            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `idx_generation_run_active_message` ON `${TABLE_NAME}` (`conversation_id`, `message_id`)"
+            "createSql": "CREATE INDEX IF NOT EXISTS `idx_generation_run_message` ON `${TABLE_NAME}` (`conversation_id`, `message_id`)"
           },
           {
             "name": "idx_generation_run_state_updated",
@@ -4654,7 +4680,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'c3eb68a88eb3eb866f79866597899efb')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '3fab4efb24b308cfdb471d7c0a7ce9dc')"
     ]
   }
 }

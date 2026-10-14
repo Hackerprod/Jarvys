@@ -238,11 +238,11 @@ object JarvysChatDatabaseProvider {
     private fun connectionPragmasCallback(): Callback = object : Callback() {
         override fun onOpen(db: SupportSQLiteDatabase) {
             super.onOpen(db)
-            db.execSQL("PRAGMA foreign_keys=ON")
-            db.execSQL("PRAGMA busy_timeout=$BUSY_TIMEOUT_MILLIS")
-            db.execSQL("PRAGMA synchronous=NORMAL")
-            db.execSQL("PRAGMA wal_autocheckpoint=$WAL_AUTOCHECKPOINT_PAGES")
-            db.execSQL("PRAGMA journal_size_limit=$JOURNAL_SIZE_LIMIT_BYTES")
+            setPragma(db, "foreign_keys=ON")
+            setPragma(db, "busy_timeout=$BUSY_TIMEOUT_MILLIS")
+            setPragma(db, "synchronous=NORMAL")
+            setPragma(db, "wal_autocheckpoint=$WAL_AUTOCHECKPOINT_PAGES")
+            setPragma(db, "journal_size_limit=$JOURNAL_SIZE_LIMIT_BYTES")
             verifyPragma(db, "journal_mode", "wal")
             verifyPragma(db, "foreign_keys", "1")
             verifyPragma(db, "busy_timeout", BUSY_TIMEOUT_MILLIS.toString())
@@ -250,6 +250,11 @@ object JarvysChatDatabaseProvider {
             verifyPragma(db, "wal_autocheckpoint", WAL_AUTOCHECKPOINT_PAGES.toString())
             verifyPragma(db, "journal_size_limit", JOURNAL_SIZE_LIMIT_BYTES.toString())
         }
+    }
+
+    /** Some PRAGMA assignments return a row; Android rejects those through execSQL, so they go through query. */
+    private fun setPragma(db: SupportSQLiteDatabase, assignment: String) {
+        db.query("PRAGMA $assignment").use { cursor -> cursor.moveToFirst() }
     }
 
     private fun verifyPragma(db: SupportSQLiteDatabase, pragma: String, expected: String) {
