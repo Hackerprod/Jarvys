@@ -55,6 +55,10 @@ data class ApprovalSummary(
 interface ApprovalPresenter {
     fun show(id: String, summary: ApprovalSummary)
     fun update(id: String, decision: ApprovalDecision)
+
+    /** Run-aware overloads keep existing presenters source-compatible while allowing UI routing. */
+    fun show(id: String, summary: ApprovalSummary, token: CancellationToken) = show(id, summary)
+    fun update(id: String, decision: ApprovalDecision, token: CancellationToken) = update(id, decision)
 }
 
 /** Blocks the tool worker, never the UI thread. Only the first resolution has effect. */
@@ -81,7 +85,7 @@ class ApprovalGate(
         }
         synchronized(lock) { pending[request.id] = request }
         try {
-            presenter.show(request.id, summary)
+            presenter.show(request.id, summary, token)
             val unregisterCancellation = token.registerCancelAction { complete(request.id, ApprovalDecision.CANCELLED) }
             try {
                 if (!request.latch.await(timeoutMillis, TimeUnit.MILLISECONDS)) complete(request.id, ApprovalDecision.EXPIRED)
@@ -153,7 +157,7 @@ class ApprovalGate(
 
     private fun finish(request: Pending, decision: ApprovalDecision) {
         request.decision.set(decision)
-        try { presenter.update(request.id, decision) } finally { request.latch.countDown() }
+        try { presenter.update(request.id, decision, request.token) } finally { request.latch.countDown() }
     }
 
     /** Trusted internal cancellation/expiry/test resolution must never depend on user-surface readiness. */
@@ -169,7 +173,14 @@ class ApprovalGate(
     companion object {
         const val DEFAULT_TIMEOUT_MILLIS = 120_000L
         @JvmField val INSTANCE: ApprovalGate = ApprovalGate(presenter = object : ApprovalPresenter {
-            override fun show(id: String, summary: ApprovalSummary) = AgentRunUiState.showApproval(
+            override fun show(id: String, summary: ApprovalSummary) = showOnCurrentSession(id, summary)
+
+            override fun show(id: String, summary: ApprovalSummary, token: CancellationToken) {
+                AgentRunUiState.showApprovalForGeneration(token.generation(), id, summary)
+                ApprovalNotificationCenter.show(id, summary)
+            }
+
+            private fun showOnCurrentSession(id: String, summary: ApprovalSummary) = AgentRunUiState.showApproval(
                 id, summary.title, summary.lines, summary.permission, summary.activityIntent,
                 summary.permissionDeniedIntent, summary.allowAlwaysAvailable,
                 summary.autonomyConnectorId, summary.autonomyOperationName,
@@ -179,6 +190,11 @@ class ApprovalGate(
 
             override fun update(id: String, decision: ApprovalDecision) {
                 AgentRunUiState.updateApproval(id, decision.name)
+                ApprovalNotificationCenter.dismiss(id)
+            }
+
+            override fun update(id: String, decision: ApprovalDecision, token: CancellationToken) {
+                AgentRunUiState.updateApprovalForGeneration(token.generation(), id, decision.name)
                 ApprovalNotificationCenter.dismiss(id)
             }
         })

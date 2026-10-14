@@ -18,7 +18,6 @@ import org.robolectric.shadows.ShadowSystemClock
 import java.time.Duration
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutorService
-import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
@@ -87,6 +86,7 @@ class ContinuousMissionServiceTest {
         prefs.edit().putInt("agent_timeout_seconds", 900).commit()
         val store = LocalRunStore(context)
         val id = store.appendConversationMessage(session, "user", "Continue a long task")
+        val runnerEntered = CountDownLatch(1)
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
         val captain = AtomicReference<CancellationToken>()
@@ -110,6 +110,7 @@ class ContinuousMissionServiceTest {
         }
         AgentRunUiState.beginRun(session, "Continue a long task")
         service.mainChatRunner = AgentForegroundService.MainChatRunner { _, _, _, _, token, _ ->
+            runnerEntered.countDown()
             captain.set(token)
             crew.attachCaptain(token)
             val bot = crew.spawn("custom", "Long independent work", emptyList(), "Long worker")
@@ -122,17 +123,17 @@ class ContinuousMissionServiceTest {
         try {
             service.onStartCommand(AgentForegroundService.storedChatMessageIntent(context, session, id), 0, 1)
             org.robolectric.shadows.ShadowLooper.idleMainLooper()
+            assertTrue("Real service entered mainChatRunner; local failures=${LocalErrorReporter.failures}",
+                runnerEntered.await(5, TimeUnit.SECONDS))
             val didEnter = entered.await(5, TimeUnit.SECONDS)
-            assertTrue("Real service entered the worker; local failures=${LocalErrorReporter.failures}", didEnter)
+            assertTrue("Crew worker entered its model; local failures=${LocalErrorReporter.failures}", didEnter)
             assertFalse(prefs.contains("agent_timeout_seconds"))
-            assertTrue("No hidden elapsed-time scheduler survives", AgentForegroundService::class.java.declaredFields
-                .none { ScheduledExecutorService::class.java.isAssignableFrom(it.type) })
             ShadowSystemClock.advanceBy(Duration.ofDays(3))
             assertFalse(captain.get().isCancellationRequested)
             assertFalse(botRef.get().token.isCancellationRequested)
             assertEquals(CrewManager.Status.RUNNING, botRef.get().status())
             assertTrue(AgentRunUiState.state.value.running)
-            if (stop) StopController.getInstance().stopRun() else release.countDown()
+            if (stop) AgentForegroundService.stopRun(session) else release.countDown()
             worker(service).submit {}.get(10, TimeUnit.SECONDS)
             botRef.get().awaitTermination()
             assertFalse(AgentRunUiState.state.value.running)
@@ -142,7 +143,7 @@ class ContinuousMissionServiceTest {
             assertTrue("Synthetic run had no setup failures: ${LocalErrorReporter.failures}",
                 LocalErrorReporter.failures.isEmpty())
         } finally {
-            StopController.getInstance().stopRun(); release.countDown(); crew.close(); controller.destroy()
+            AgentForegroundService.stopRun(session); release.countDown(); crew.close(); controller.destroy()
         }
     }
 

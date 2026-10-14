@@ -392,6 +392,10 @@ object AgentRunUiState {
     }
 
     private fun sessionForApproval(id: String): String? = synchronized(lock) {
+        sessionForApprovalLocked(id)
+    }
+
+    private fun sessionForApprovalLocked(id: String): String? {
         publishedState.value.takeIf { snapshot -> snapshot.events.any { it.approvalId == id } }
             ?.sessionId
             ?: sessionSnapshots.entries.firstOrNull { (_, snapshot) ->
@@ -400,6 +404,42 @@ object AgentRunUiState {
             ?: sessionOwners.entries.firstOrNull { (_, ownership) ->
                 ownership.liveSnapshot?.events?.any { it.approvalId == id } == true
             }?.key
+    }
+
+    private fun sessionForGenerationLocked(generation: Long): String? = sessionOwners.entries
+        .filter { (sessionId, ownership) -> ownership.sessionId == sessionId && ownership.generation == generation }
+        .map { it.key }
+        .singleOrNull()
+
+    /**
+     * Legacy presenters have no run token. Prefer an explicit in-session operation, then an
+     * unambiguous active owner. With multiple owners, the visible chat is usable only when it is
+     * itself one of those owners.
+     */
+    private fun legacyApprovalSessionLocked(): String? {
+        workingSnapshot.get()?.sessionId?.let { return it }
+        val activeOwners = sessionOwners.entries
+            .filter { (sessionId, ownership) -> ownership.active && ownership.sessionId == sessionId }
+            .map { it.key }
+        val currentSessionId = _state.value.sessionId
+        return when (activeOwners.size) {
+            0 -> currentSessionId
+            1 -> activeOwners.single()
+            else -> currentSessionId?.takeIf { it in activeOwners }
+        }
+    }
+
+    private fun fallbackForUnknownGenerationLocked(): String? {
+        return workingSnapshot.get()?.sessionId
+    }
+
+    private fun withApprovalSession(generation: Long? = null, action: () -> Unit) {
+        val sessionId = synchronized(lock) {
+            if (generation == null) legacyApprovalSessionLocked()
+            else sessionForGenerationLocked(generation) ?: fallbackForUnknownGenerationLocked()
+        } ?: return
+        if (workingSnapshot.get()?.sessionId == sessionId) action()
+        else inSession(sessionId, action)
     }
 
     private fun sessionForMessage(messageId: String): String? = synchronized(lock) {
@@ -1283,43 +1323,71 @@ object AgentRunUiState {
         compactSummary: com.jarvys.agent.connectors.ConnectorUiText? = null,
         requester: String? = null,
         requesterColorKey: String? = null,
-    ) = synchronized(lock) {
-        val current = if (ownedRunActive && _state.value.sessionId != ownedSessionId)
-            ownedLiveSnapshot ?: return@synchronized else _state.value
-        if (!current.running || current.events.any { it.approvalId == id }) return@synchronized
-        val events = current.events.toMutableList()
-        val pendingToolIndex = events.indexOfLast { it.kind == "tool" && it.stage == "tool_call" }
-        if (pendingToolIndex >= 0) {
-            val tool = events[pendingToolIndex]
-            events[pendingToolIndex] = tool.copy(
-                stage = "approval_waiting",
-                toolStatusResourceId = com.jarvys.agent.R.string.connector_tool_waiting_for_approval,
+    ) = withApprovalSession {
+        synchronized(lock) {
+            val current = if (ownedRunActive && _state.value.sessionId != ownedSessionId)
+                ownedLiveSnapshot ?: return@synchronized else _state.value
+            if (!current.running || current.events.any { it.approvalId == id }) return@synchronized
+            val events = current.events.toMutableList()
+            val pendingToolIndex = events.indexOfLast { it.kind == "tool" && it.stage == "tool_call" }
+            if (pendingToolIndex >= 0) {
+                val tool = events[pendingToolIndex]
+                events[pendingToolIndex] = tool.copy(
+                    stage = "approval_waiting",
+                    toolStatusResourceId = com.jarvys.agent.R.string.connector_tool_waiting_for_approval,
+                )
+            }
+            val card = AgentRunUiEvent(
+                id = nextEventId++, kind = "approval", stage = "PENDING", text = title,
+                approvalId = id, approvalLines = lines.toList(), approvalStatus = "PENDING",
+                approvalPermission = permission, approvalIntent = activityIntent,
+                approvalPermissionDeniedIntent = permissionDeniedIntent,
+                approvalAllowAlwaysAvailable = allowAlwaysAvailable,
+                approvalAutonomyConnectorId = autonomyConnectorId,
+                approvalAutonomyOperationName = autonomyOperationName,
+                approvalLocalizedTitle = localizedTitle,
+                approvalLocalizedLines = localizedLines,
+                approvalPermissionLabel = permissionLabel,
+                approvalCompactSummary = compactSummary,
+                approvalRequester = requester,
+                approvalRequesterColorKey = requesterColorKey,
+            )
+            publishOwnedSnapshot(current.copy(events = append(events, card),
+                liveMascotTool = current.liveMascotTool?.copy(eligibleToAnimate = false),
+                liveModelWaitId = null,
+                liveUserWaitId = if (ownedRunActive && ownedSessionId == current.sessionId) "approval:$id" else null))
+        }
+    }
+
+    /** Presents a gate request in the session whose current run generation requested it. */
+    @JvmStatic
+    fun showApprovalForGeneration(generation: Long, id: String, summary: com.jarvys.agent.connectors.ApprovalSummary) =
+        withApprovalSession(generation) {
+            showApproval(
+                id, summary.title, summary.lines, summary.permission, summary.activityIntent,
+                summary.permissionDeniedIntent, summary.allowAlwaysAvailable,
+                summary.autonomyConnectorId, summary.autonomyOperationName,
+                summary.localizedTitle, summary.localizedLines, summary.permissionLabel,
+                summary.compactSummary, summary.requester, summary.requesterColorKey,
             )
         }
-        val card = AgentRunUiEvent(
-            id = nextEventId++, kind = "approval", stage = "PENDING", text = title,
-            approvalId = id, approvalLines = lines.toList(), approvalStatus = "PENDING",
-            approvalPermission = permission, approvalIntent = activityIntent,
-            approvalPermissionDeniedIntent = permissionDeniedIntent,
-            approvalAllowAlwaysAvailable = allowAlwaysAvailable,
-            approvalAutonomyConnectorId = autonomyConnectorId,
-            approvalAutonomyOperationName = autonomyOperationName,
-            approvalLocalizedTitle = localizedTitle,
-            approvalLocalizedLines = localizedLines,
-            approvalPermissionLabel = permissionLabel,
-            approvalCompactSummary = compactSummary,
-            approvalRequester = requester,
-            approvalRequesterColorKey = requesterColorKey,
-        )
-        publishOwnedSnapshot(current.copy(events = append(events, card),
-            liveMascotTool = current.liveMascotTool?.copy(eligibleToAnimate = false),
-            liveModelWaitId = null,
-            liveUserWaitId = if (ownedRunActive && ownedSessionId == current.sessionId) "approval:$id" else null))
-    }
 
     @JvmStatic
     fun updateApproval(id: String, status: String) {
         val sessionId = sessionForApproval(id) ?: return
+        updateApprovalInSession(sessionId, id, status)
+    }
+
+    /** Resolves a gate update using its run owner, falling back to the already-attributed card. */
+    @JvmStatic
+    fun updateApprovalForGeneration(generation: Long, id: String, status: String) {
+        val sessionId = synchronized(lock) {
+            sessionForGenerationLocked(generation) ?: sessionForApprovalLocked(id)
+        } ?: return
+        updateApprovalInSession(sessionId, id, status)
+    }
+
+    private fun updateApprovalInSession(sessionId: String, id: String, status: String) =
         inSession(sessionId) { synchronized(lock) {
             val current = _state.value
             val index = current.events.indexOfLast { it.kind == "approval" && it.approvalId == id }

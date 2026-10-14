@@ -1019,6 +1019,79 @@ class MainAgentInteractionTest {
         AgentRunUiState.completeGeneration("approval-owner", 81, "r", "STOPPED", "stopped", "m", 0)
     }
 
+    @Test fun concurrentGateApprovalsStayWithTheirRunSessions() {
+        val sessionA = "approval-concurrent-a"
+        val sessionB = "approval-concurrent-b"
+        val controllerA = StopController.forRun()
+        val controllerB = StopController.forRun()
+        val tokenA = controllerA.beginRun() ?: error("first run token unavailable")
+        val tokenB = controllerB.beginRun() ?: error("second run token unavailable")
+        AgentRunUiState.resetSession(sessionA)
+        AgentRunUiState.beginRun(sessionA, "first approval")
+        AgentRunUiState.bindGeneration(sessionA, tokenA.generation())
+        AgentRunUiState.resetSession(sessionB)
+        AgentRunUiState.beginRun(sessionB, "second approval")
+        AgentRunUiState.bindGeneration(sessionB, tokenB.generation())
+        AgentRunUiState.resetSession("approval-unrelated-visible")
+        AgentRunUiState.showApproval("legacy-ambiguous", "Unattributed action", listOf("details"), null)
+        assertFalse(AgentRunUiState.snapshotForSession(sessionA).events.any { it.approvalId == "legacy-ambiguous" })
+        assertFalse(AgentRunUiState.snapshotForSession(sessionB).events.any { it.approvalId == "legacy-ambiguous" })
+        AgentRunUiState.showSession(sessionB)
+
+        val ids = java.util.concurrent.ConcurrentHashMap<String, String>()
+        val shown = CountDownLatch(2)
+        val gate = com.jarvys.agent.connectors.ApprovalGate(10_000, object : com.jarvys.agent.connectors.ApprovalPresenter {
+            override fun show(id: String, summary: com.jarvys.agent.connectors.ApprovalSummary) {
+                AgentRunUiState.showApproval(id, summary.title, summary.lines, summary.permission)
+            }
+            override fun update(id: String, decision: com.jarvys.agent.connectors.ApprovalDecision) {
+                AgentRunUiState.updateApproval(id, decision.name)
+            }
+            override fun show(id: String, summary: com.jarvys.agent.connectors.ApprovalSummary, token: CancellationToken) {
+                ids[summary.title] = id
+                AgentRunUiState.showApprovalForGeneration(token.generation(), id, summary)
+                shown.countDown()
+            }
+            override fun update(id: String, decision: com.jarvys.agent.connectors.ApprovalDecision, token: CancellationToken) {
+                AgentRunUiState.updateApprovalForGeneration(token.generation(), id, decision.name)
+            }
+        })
+        val workers = java.util.concurrent.Executors.newFixedThreadPool(2)
+        try {
+            val resultA = workers.submit<com.jarvys.agent.connectors.ApprovalDecision> {
+                gate.request(com.jarvys.agent.connectors.ApprovalSummary("approval A", listOf("A details")), tokenA)
+            }
+            val resultB = workers.submit<com.jarvys.agent.connectors.ApprovalDecision> {
+                gate.request(com.jarvys.agent.connectors.ApprovalSummary("approval B", listOf("B details")), tokenB)
+            }
+            assertTrue("both requests reached their presenter", shown.await(5, TimeUnit.SECONDS))
+
+            val idA = ids.getValue("approval A")
+            val idB = ids.getValue("approval B")
+            assertNotEquals(idA, idB)
+            assertEquals(listOf(idA), AgentRunUiState.snapshotForSession(sessionA).events.mapNotNull { it.approvalId })
+            assertEquals(listOf(idB), AgentRunUiState.snapshotForSession(sessionB).events.mapNotNull { it.approvalId })
+            assertEquals(idB, AgentRunUiState.state.value.events.single { it.kind == "approval" }.approvalId)
+
+            assertTrue(gate.resolve(idA, com.jarvys.agent.connectors.ApprovalDecision.DENIED))
+            assertEquals(com.jarvys.agent.connectors.ApprovalDecision.DENIED, resultA.get(5, TimeUnit.SECONDS))
+            assertTrue(gate.isPending(idB))
+            assertEquals("PENDING", AgentRunUiState.snapshotForSession(sessionB).events.single { it.approvalId == idB }.approvalStatus)
+
+            assertTrue(gate.resolve(idB, com.jarvys.agent.connectors.ApprovalDecision.APPROVED))
+            assertEquals(com.jarvys.agent.connectors.ApprovalDecision.APPROVED, resultB.get(5, TimeUnit.SECONDS))
+            assertEquals("DENIED", AgentRunUiState.snapshotForSession(sessionA).events.single { it.approvalId == idA }.approvalStatus)
+            assertEquals("APPROVED", AgentRunUiState.snapshotForSession(sessionB).events.single { it.approvalId == idB }.approvalStatus)
+        } finally {
+            workers.shutdownNow()
+            AgentRunUiState.completeGeneration(sessionA, tokenA.generation(), "run-a", "STOPPED", "stopped", "", 0)
+            AgentRunUiState.completeGeneration(sessionB, tokenB.generation(), "run-b", "STOPPED", "stopped", "", 0)
+            controllerA.stopRun()
+            controllerB.stopRun()
+            AgentRunUiState.resetSession("approval-concurrent-cleanup")
+        }
+    }
+
     @Test fun steeringKeepsAnActiveApprovalResolvable() = approvalSteering(gap = false, stopAfterSteering = false)
     @Test fun explicitStopBlocksApprovalDuringPresenterRegistrationGap() = approvalSteering(gap = true, stopAfterSteering = true)
 
