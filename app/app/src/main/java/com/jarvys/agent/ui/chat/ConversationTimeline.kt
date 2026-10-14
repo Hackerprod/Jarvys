@@ -434,7 +434,7 @@ internal fun AssistantReplyView(
     translationError: String? = null,
     streamActive: Boolean = false,
     onProactiveSuggestedReply: (String, Int) -> Unit = { _, _ -> },
-    isGeneratingAnswer: Boolean = false,
+    isGeneratingAnswer: Boolean = streamActive,
 ) {
     val context = LocalContext.current
     val reducedMotion = LocalReducedMotion.current
@@ -459,7 +459,7 @@ internal fun AssistantReplyView(
         }
         if (event.proactiveReplies.isNotEmpty()) SuggestedReplyActions(event, onProactiveSuggestedReply, !streamActive)
         AnimatedVisibility(
-            visible = !isError && event.stage == null && !streamActive && !isGeneratingAnswer,
+            visible = !isError && event.stage == null && !isGeneratingAnswer,
             enter = if (reducedMotion) EnterTransition.None else
                 expandVertically(JarvysMotion.expand()) + fadeIn(JarvysMotion.feedback()),
             exit = if (reducedMotion) ExitTransition.None else
