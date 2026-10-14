@@ -270,7 +270,7 @@ class MainAgentInteractionTest {
             AgentRunUiState.resetSession(session)
             startServiceIntent(context, AgentForegroundService.storedChatMessageIntent(context, session, initialId))
             assertTrue("A dispatched message survives a pre-checkpoint provider error", awaitServiceCallback(followUp, 10))
-            worker(service).submit {}.get(10, TimeUnit.SECONDS)
+            service.awaitSessionIdleForTesting(session).get(10, TimeUnit.SECONDS)
             assertEquals(listOf("initial", "retry the accepted input"), observedGoals)
             val messages = store.readConversationMessages(session)
             assertTrue(messages.any { it.optString("role") == "assistant" && it.optString("status") == "PARTIAL" })
@@ -517,7 +517,7 @@ class MainAgentInteractionTest {
             AgentRunUiState.resetSession(session)
             startServiceIntent(context, AgentForegroundService.storedChatMessageIntent(context, session, initialId))
             assertTrue("Recovery starts the newest pending input", awaitServiceCallback(followUp, 10))
-            worker(service).submit {}.get(10, TimeUnit.SECONDS)
+            service.awaitSessionIdleForTesting(session).get(10, TimeUnit.SECONDS)
 
             assertEquals(listOf("initial request", "newer fallback input"), observedGoals)
             assertTrue("history=${followUpHistory.get().map { it.role + ":" + it.content.take(40) }} goals=$observedGoals", followUpHistory.get().any {
@@ -773,13 +773,14 @@ class MainAgentInteractionTest {
             val steeringMessages = listOf("cancel with parent run 1", "cancel with parent run 2", "cancel with parent run 3")
             for (message in steeringMessages)
                 assertTrue(AgentForegroundService.interruptAndSend(context, session, message, arrayListOf(), false))
-            assertTrue(StopController.getInstance().stopRun())
-            val generation = StopController.getInstance().javaClass.getDeclaredField("generation")
-                .apply { isAccessible = true }.get(StopController.getInstance()) as java.util.concurrent.atomic.AtomicLong
-            val afterStop = generation.get()
+            val nextGeneration = StopController::class.java.getDeclaredField("NEXT_GENERATION")
+                .apply { isAccessible = true }.get(null) as java.util.concurrent.atomic.AtomicLong
+            AgentForegroundService.stopRun(session)
+            assertTrue(AgentRunUiState.snapshotForSession(session).stopping)
+            val afterStop = nextGeneration.get()
             release.countDown()
-            assertTrue("The stopped session run drains", awaitRunFinished(service, context))
-            assertEquals("A stopped owner does not start a replacement run", afterStop, generation.get())
+            service.awaitSessionIdleForTesting(session).get(10, TimeUnit.SECONDS)
+            assertEquals("A stopped owner does not start a replacement run", afterStop, nextGeneration.get())
             val messages = store.readConversationMessages(session)
             val queued = messages.filter { it.optString("role") == "user" && it.optString("content") in steeringMessages }
             assertEquals(steeringMessages.size, queued.size)
@@ -798,8 +799,8 @@ class MainAgentInteractionTest {
             assertEquals("Resolved STOP inputs never start after recovery", 1, runCalls.get())
         } finally {
             release.countDown()
-            StopController.getInstance().stopRun()
-            if (!worker(service).isShutdown) worker(service).submit {}.get(5, TimeUnit.SECONDS)
+            AgentForegroundService.stopRun(session)
+            if (!worker(service).isShutdown) service.awaitSessionIdleForTesting(session).get(5, TimeUnit.SECONDS)
             stopManagedService(context)
         }
     }
@@ -828,7 +829,7 @@ class MainAgentInteractionTest {
         try {
             startServiceIntent(context, android.content.Intent(context, AgentForegroundService::class.java)
                 .setAction(AgentForegroundService.ACTION_RECOVER_PENDING_INPUTS))
-            assertTrue("Pending recovery enters runtime setup", factoryEntered.await(10, TimeUnit.SECONDS))
+            assertTrue("Pending recovery enters runtime setup", awaitServiceCallback(factoryEntered, 10))
             assertTrue("The failed run and its recovery scan finish", awaitRunFinished(service, context))
             val failures = store.readConversationMessages(session).filter {
                 it.optString("role") == "assistant" && it.optString("status") == "FAILED"
@@ -945,11 +946,9 @@ class MainAgentInteractionTest {
             assertTrue(AgentRunUiState.snapshotForSession(other).stopping)
             assertFalse("Stopping the second session leaves the first session's token active", StopController.getInstance().isStopped)
             releaseOther.countDown()
+            service.awaitSessionIdleForTesting(other).get(5, TimeUnit.SECONDS)
             val activeRuns = AgentForegroundService::class.java.getDeclaredField("activeRuns")
                 .apply { isAccessible = true }.get(service) as Map<*, *>
-            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-            while ((activeRuns.containsKey(other) || AgentRunUiState.snapshotForSession(other).stopping)
-                && System.nanoTime() < deadline) Thread.sleep(10)
             assertFalse("The stopped second session eventually unwinds", activeRuns.containsKey(other))
             assertEquals("STOPPED", AgentRunUiState.snapshotForSession(other).outcome)
             assertFalse(StopController.getInstance().isStopped)

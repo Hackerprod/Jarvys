@@ -95,13 +95,18 @@ public final class AgentForegroundService extends Service {
     final SessionWork work;
     final boolean interactive;
     final Runnable onRejected;
+    final String followUpClaimId;
     SessionRequest(SessionWork work, boolean interactive) {
-      this(work, interactive, null);
+      this(work, interactive, null, "");
     }
     SessionRequest(SessionWork work, boolean interactive, Runnable onRejected) {
+      this(work, interactive, onRejected, "");
+    }
+    SessionRequest(SessionWork work, boolean interactive, Runnable onRejected, String followUpClaimId) {
       this.work = work;
       this.interactive = interactive;
       this.onRejected = onRejected;
+      this.followUpClaimId = followUpClaimId == null ? "" : followUpClaimId;
     }
   }
   private static final class SessionLane {
@@ -212,6 +217,7 @@ public final class AgentForegroundService extends Service {
       activeRuns.put(sessionId, active);
       activeRunTokens.put(sessionId, token);
       activeRunToken = token;
+      releaseFollowUpClaim(sessionId, request.followUpClaimId);
       synchronized (lane) { lane.active = active; }
       if (request.interactive) {
         com.jarvys.agent.proactive.BackgroundRunController.INSTANCE.interactiveStarted(active.generation);
@@ -818,7 +824,6 @@ public final class AgentForegroundService extends Service {
       return START_NOT_STICKY;
     }
     if (realAgent || compactConversation) {
-      if (realAgent) releaseFollowUpClaim(chatSessionId, existingUserMessageId);
       final boolean isInteractive = realAgent;
       enqueueSessionRun(chatSessionId, new SessionRequest(active -> {
         try {
@@ -838,7 +843,8 @@ public final class AgentForegroundService extends Service {
           AgentRunUiState.completeGeneration(chatSessionId, active.generation, "failed-start", "FAILED", message, "", 0L);
         }
       }, isInteractive, isInteractive ? () -> failRejectedInteractiveSubmission(chatSessionId,
-          chatDisplayGoal, userMessageAlreadyRecorded, existingUserMessageId) : null));
+          chatDisplayGoal, userMessageAlreadyRecorded, existingUserMessageId) : null,
+          isInteractive ? existingUserMessageId : ""));
       return START_NOT_STICKY;
     }
 
