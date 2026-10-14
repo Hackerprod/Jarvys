@@ -70,7 +70,7 @@ class WorkspaceCoordinationIndicatorComposeTest {
                 showAgentEvents = true, onOpenPreview = {}, onOpenSkillFile = {}, onOpenCrewMission = {})
         } }
         compose.onNodeWithTag("chat-message-list").assertIsDisplayed()
-        compose.onNodeWithTag("chat-message-list").performScrollToNode(hasText("Conversation evidence"))
+        compose.waitUntil(10_000) { compose.onAllNodesWithText("Conversation evidence", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("Conversation evidence", useUnmergedTree = true).assertIsDisplayed()
         compose.onNodeWithTag("workspace-coordination-indicator", useUnmergedTree = true).assertDoesNotExist()
         compose.onNodeWithText(quantityText(R.plurals.workspace_coordination_historical, 2)).assertDoesNotExist()

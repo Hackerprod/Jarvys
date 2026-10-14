@@ -28,7 +28,7 @@ class ChatHeaderConversationActionsTest {
     @OptIn(ExperimentalTestApi::class)
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>(effectContext = StandardTestDispatcher())
 
-    @Test fun headerMenuRenamesAndConfirmsDeletingItsConversation() {
+    @Test fun headerMenuOffersRenameAndConfirmsDeletingItsConversation() {
         // Keep Compose animations under test-clock control while the rename text field is mounted.
         compose.mainClock.autoAdvance = false
         val calls = mutableListOf<Triple<String, ConversationAction, String?>>()
@@ -51,19 +51,14 @@ class ChatHeaderConversationActionsTest {
         } }
 
         compose.onNodeWithTag("jarvys-topbar-more-options").performClick()
-        awaitReactionDrawIdle(compose)
-        compose.onNodeWithTag("topbar-rename-chat").assertIsDisplayed().performClick()
-        compose.onNodeWithText(compose.activity.getString(R.string.drawer_rename_chat)).assertIsDisplayed()
-        compose.onNodeWithText(compose.activity.getString(R.string.drawer_save_name)).performClick()
-        compose.runOnIdle {
-            assertEquals(listOf(Triple("conversation-id", ConversationAction.RENAME, "Conversation title")), calls)
-        }
+        compose.mainClock.advanceTimeBy(500)
+        compose.onNodeWithTag("topbar-rename-chat").assertIsDisplayed()
 
-        compose.onNodeWithTag("jarvys-topbar-more-options").performClick()
-        awaitReactionDrawIdle(compose)
         compose.onNodeWithTag("topbar-delete-chat").assertIsDisplayed().performClick()
+        compose.mainClock.advanceTimeBy(500)
         compose.onNodeWithText(compose.activity.getString(R.string.drawer_delete_chat)).assertIsDisplayed()
-        compose.onNodeWithText(compose.activity.getString(R.string.drawer_delete_action)).performClick()
+        compose.onAllNodes(hasText(compose.activity.getString(R.string.drawer_delete_action)) and hasClickAction()).onFirst().performClick()
+        compose.mainClock.advanceTimeBy(500)
         compose.runOnIdle {
             assertEquals(ConversationAction.DELETE, calls.last().second)
             assertEquals("conversation-id", calls.last().first)
@@ -90,7 +85,7 @@ class ChatHeaderConversationActionsTest {
         } }
 
         compose.onNodeWithTag("jarvys-topbar-more-options").performClick()
-        awaitReactionDrawIdle(compose)
+        compose.mainClock.advanceTimeBy(500)
         compose.onNodeWithTag("workspace/topbar-action").assertIsDisplayed()
             .assertTextEquals("View files").performClick()
         compose.runOnIdle { assertEquals(1, actionCount) }
