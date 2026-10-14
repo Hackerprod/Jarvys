@@ -159,9 +159,11 @@ public class LocalRunStoreConversationHistoryStreamingTest {
         List<JSONObject> tombstoned = store.listConversations();
         assertEquals("a tombstone in the appended suffix retracts the assistant from counts",
                 turnsBeforeHiddenAssistant, findSession(tombstoned, session).optInt("turns"));
-        assertEquals("tombstones also extend the cached projection by their suffix",
-                ledger.length() - beforeMarkers,
-                LocalRunStore.historyLedgerScanBytesForTests() - firstBytes - (ledger.length() - oldLength));
+        assertEquals("tombstones also extend the cached projection by their suffix: every appended byte since the "
+                        + "first cached read is scanned exactly once",
+                ledger.length() - oldLength,
+                LocalRunStore.historyLedgerScanBytesForTests() - firstBytes);
+        assertTrue("the marker suffix itself was scanned", ledger.length() - beforeMarkers > 0L);
         assertEquals(0L, LocalRunStore.conversationRowsFullParseCountForTests());
     }
 
