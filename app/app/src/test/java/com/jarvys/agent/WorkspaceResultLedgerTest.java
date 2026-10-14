@@ -57,7 +57,10 @@ public class WorkspaceResultLedgerTest {
     private File ledger(String session) { return new File(files, "jarvys/conversations/" + session + ".jsonl"); }
     private byte[] bytes(String session) throws Exception { return Files.readAllBytes(ledger(session).toPath()); }
     private void append(String session, String text) throws Exception {
-        Files.write(ledger(session).toPath(), text.getBytes(StandardCharsets.UTF_8), StandardOpenOption.APPEND);
+        File target = ledger(session);
+        Files.createDirectories(target.getParentFile().toPath());
+        Files.write(target.toPath(), text.getBytes(StandardCharsets.UTF_8),
+                StandardOpenOption.CREATE, StandardOpenOption.APPEND);
     }
     private void appendRow(String session, JSONObject row) throws Exception { append(session, row.toString() + "\n"); }
     private void reject() { throw new CancellationException("Synthetic admission revoked"); }
