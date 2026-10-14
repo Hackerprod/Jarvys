@@ -552,7 +552,7 @@ public final class AgentForegroundService extends Service {
 
   private boolean enqueuePendingInputRecovery(String sessionId) {
     if (worker.isShutdown()) return false;
-    CancellationToken ownerToken = activeRunTokens.get(sessionId);
+    CancellationToken ownerToken = sessionId == null ? null : activeRunTokens.get(sessionId);
     try {
       worker.execute(() -> {
         if (ownerToken != null && ownerToken.wasStoppedByUser()) {
@@ -674,7 +674,7 @@ public final class AgentForegroundService extends Service {
       failPendingInputRecovery(sessionId);
       return;
     }
-    CancellationToken ownerToken = activeRunTokens.get(sessionId);
+    CancellationToken ownerToken = sessionId == null ? null : activeRunTokens.get(sessionId);
     try {
       worker.execute(() -> {
         if (ownerToken != null && ownerToken.wasStoppedByUser()) {
