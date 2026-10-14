@@ -5439,7 +5439,8 @@ public final class LocalRunStore {
     }
 
     private void addConversationSummary(List<JSONObject> recent, String sessionId,
-            ConversationHistorySummary summary, ConversationMetadataStore.Snapshot metadata) {
+            ConversationHistorySummary summary, ConversationMetadataStore.Snapshot metadata)
+            throws org.json.JSONException {
         if (metadata.deleted) return;
         ConversationHistoryProjection projection = projectConversationHistory(summary);
         if (projection.messageCount == 0) return;
