@@ -100,6 +100,75 @@ public class ConversationLedgerPagerTest {
         assertEquals(ConversationLedgerPager.NO_CURSOR, previous.olderCursor);
     }
 
+    @Test public void allPagesReconstructLedgerForDifferentPageSizes() throws Exception {
+        File ledger = temporary.newFile("all-pages.jsonl");
+        List<String> expected = new ArrayList<>();
+        expected.add("");
+        expected.add("{\"role\":\"user\",\"messageId\":\"missing-content\"}");
+        for (int turn = 0; turn < 13; turn++) {
+            expected.add(user("u" + turn, "question " + turn));
+            if (turn % 3 == 0) expected.add("{malformed " + turn);
+            expected.add(assistant("a" + turn));
+        }
+        writeLines(ledger, expected);
+
+        for (int pageSize : new int[] {1, 2, 3, 5, 20}) {
+            List<ConversationLedgerPager.Page> pages = new ArrayList<>();
+            ConversationLedgerPager.Page page = ConversationLedgerPager.readTail(ledger, pageSize);
+            pages.add(page);
+            long cursor = page.olderCursor;
+            int pageCount = 1;
+            while (cursor != ConversationLedgerPager.NO_CURSOR) {
+                assertTrue("paging must make progress", pageCount++ <= expected.size());
+                page = ConversationLedgerPager.readPrevious(ledger, cursor, pageSize);
+                assertFalse("a live cursor must return an older page", page.lines.isEmpty());
+                pages.add(page);
+                cursor = page.olderCursor;
+            }
+
+            List<String> reconstructed = new ArrayList<>();
+            for (int index = pages.size() - 1; index >= 0; index--) {
+                reconstructed.addAll(pages.get(index).lines);
+            }
+            assertEquals("page size " + pageSize, expected, reconstructed);
+        }
+    }
+
+    @Test public void longUtf8LineCrossesReverseAndForwardBlocksWithCrlfAndNoFinalNewline()
+            throws Exception {
+        File ledger = temporary.newFile("long-utf8.jsonl");
+        final int reverseBlockSize = 8 * 1024;
+        final int forwardBlockSize = 16 * 1024;
+        String prefix = "{\"role\":\"user\",\"content\":\"";
+        String longRow = prefix
+                + repeatAscii(reverseBlockSize - 1 - prefix.length())
+                + "\u03bb"
+                + repeatAscii(forwardBlockSize - 1 - (reverseBlockSize - 1 + 2))
+                + "\uD83C\uDF1F"
+                + "\",\"messageId\":\"long\"}";
+        byte[] longRowBytes = longRow.getBytes(StandardCharsets.UTF_8);
+        assertEquals((byte) 0xCE, longRowBytes[reverseBlockSize - 1]);
+        assertEquals((byte) 0xBB, longRowBytes[reverseBlockSize]);
+        assertEquals((byte) 0xF0, longRowBytes[forwardBlockSize - 1]);
+        assertTrue(longRowBytes.length > forwardBlockSize);
+
+        List<String> expected = java.util.Arrays.asList(
+                longRow, assistant("a-long"), user("u1", "latest"), assistant("a1"));
+        String crlfLedger = String.join("\r\n", expected); // deliberately no final newline
+        Files.write(ledger.toPath(), crlfLedger.getBytes(StandardCharsets.UTF_8));
+
+        ConversationLedgerPager.Page tail = ConversationLedgerPager.readTail(ledger, 1);
+        ConversationLedgerPager.Page previous = ConversationLedgerPager.readPrevious(
+                ledger, tail.olderCursor, 1);
+
+        assertEquals(expected.subList(2, 4), tail.lines);
+        assertEquals(expected.subList(0, 2), previous.lines);
+        assertEquals(0L, previous.startOffset);
+        assertEquals((long) longRowBytes.length + 2L, (long) previous.lineOffsets.get(1));
+        assertFalse(previous.hasMore);
+        assertEquals(ConversationLedgerPager.NO_CURSOR, previous.olderCursor);
+    }
+
     @Test public void emptyLedgerHasNoWindowOrCursor() throws Exception {
         File ledger = temporary.newFile("empty.jsonl");
 
@@ -166,6 +235,12 @@ public class ConversationLedgerPagerTest {
     private static void appendLines(File file, String... lines) throws Exception {
         String value = String.join("\n", lines) + "\n";
         Files.write(file.toPath(), value.getBytes(StandardCharsets.UTF_8), java.nio.file.StandardOpenOption.APPEND);
+    }
+
+    private static String repeatAscii(int count) {
+        char[] chars = new char[count];
+        java.util.Arrays.fill(chars, 'x');
+        return new String(chars);
     }
 
     private static long offsetOf(File file, List<String> lines, int lineIndex) {

@@ -67,8 +67,10 @@ public final class ConversationLedgerPager {
             }
         }
 
-        // If there are fewer anchors than requested, expose all available ledger rows.
-        if (pageStart < 0L) pageStart = 0L;
+        // When no older page exists, expose the whole remaining prefix. In particular,
+        // the first selected anchor may have malformed or otherwise unanchored rows
+        // before it; those rows still belong to the history and must not be dropped.
+        if (!hasMore) pageStart = 0L;
         List<Line> readLines = readLines(channel, pageStart, endOffset);
         List<String> lines = new ArrayList<>(readLines.size());
         List<Long> lineOffsets = new ArrayList<>(readLines.size());
@@ -174,12 +176,13 @@ public final class ConversationLedgerPager {
         }
 
         Line previousLine() throws IOException {
-            // A trailing line delimiter terminates the preceding record; it is not an
-            // additional empty record. Also skip consecutive blank records at the tail.
-            while (position > 0L && byteAt(position - 1L) == '\n') position--;
             if (position <= 0L) return null;
 
+            // The delimiter immediately before position belongs to the preceding line.
+            // Skip only that delimiter: further adjacent delimiters encode empty lines
+            // and must be returned just like any other ledger row.
             long end = position;
+            if (byteAt(end - 1L) == '\n') end--;
             long scan = end - 1L;
             while (scan >= 0L && byteAt(scan) != '\n') scan--;
             long start = scan + 1L;
