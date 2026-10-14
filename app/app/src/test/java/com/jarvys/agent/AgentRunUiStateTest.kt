@@ -6,8 +6,10 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicReference
 
@@ -133,7 +135,9 @@ class AgentRunUiStateTest {
         try {
             first.start()
             val firstRequest = runBlocking {
-                AgentRunUiState.state.first { it.headerMascotAnimationRequest != null }.headerMascotAnimationRequest!!
+                withTimeout(10_000) {
+                    AgentRunUiState.state.first { it.headerMascotAnimationRequest != null }.headerMascotAnimationRequest!!
+                }
             }
             AgentRunUiState.completeHeaderMascotAnimationRequest(session, firstRequest.requestId, "finished")
             first.join()
@@ -149,7 +153,9 @@ class AgentRunUiStateTest {
             }
             second.start()
             val secondRequest = runBlocking {
-                AgentRunUiState.state.first { it.headerMascotAnimationRequest != null }.headerMascotAnimationRequest!!
+                withTimeout(10_000) {
+                    AgentRunUiState.state.first { it.headerMascotAnimationRequest != null }.headerMascotAnimationRequest!!
+                }
             }
             AgentRunUiState.clearHeaderMascotAvailability(session)
             second.join()
@@ -183,7 +189,9 @@ class AgentRunUiStateTest {
         try {
             waiter.start()
             val request = runBlocking {
-                AgentRunUiState.state.first { it.headerMascotAnimationRequest != null }.headerMascotAnimationRequest!!
+                withTimeout(10_000) {
+                    AgentRunUiState.state.first { it.headerMascotAnimationRequest != null }.headerMascotAnimationRequest!!
+                }
             }
 
             AgentRunUiState.completeGeneration(session, generation - 1, "stale", "COMPLETED", "stale", "", 0L)
@@ -199,6 +207,89 @@ class AgentRunUiStateTest {
             UserDecisionUiAvailability.setChatVisible(false)
             AgentRunUiState.stopPendingGeneration(session, generation)
             AgentRunUiState.resetSession("$session-cleanup")
+        }
+    }
+
+    @Test
+    fun mascotAnimationRequestsStayWithTheirSessionAcrossVisibleProjectionChanges() {
+        val sessionA = "mascot-session-a"
+        val sessionB = "mascot-session-b"
+        val generationA = 211L
+        val generationB = 212L
+        AgentRunUiState.resetSession(sessionA)
+        AgentRunUiState.beginRun(sessionA, "Play for A")
+        AgentRunUiState.bindGeneration(sessionA, generationA)
+        AgentRunUiState.headerMascotAvailabilityChanged(HeaderMascotAvailability(
+            sessionId = sessionA, visible = true, resumed = true, availableAnimationIds = setOf("working"),
+        ))
+        AgentRunUiState.resetSession(sessionB)
+        AgentRunUiState.beginRun(sessionB, "Play for B")
+        AgentRunUiState.bindGeneration(sessionB, generationB)
+        AgentRunUiState.headerMascotAvailabilityChanged(HeaderMascotAvailability(
+            sessionId = sessionB, visible = true, resumed = true, availableAnimationIds = setOf("working"),
+        ))
+        UserDecisionUiAvailability.setChatVisible(true)
+
+        val resultA = AtomicReference<HeaderMascotAnimationResult>()
+        val waiterA = Thread {
+            resultA.set(AgentRunUiState.requestHeaderMascotAnimation(
+                sessionA, "working", CancellationToken.uncancellable(),
+            ))
+        }
+        val resultB = AtomicReference<HeaderMascotAnimationResult>()
+        val waiterB = Thread {
+            resultB.set(AgentRunUiState.requestHeaderMascotAnimation(
+                sessionB, "working", CancellationToken.uncancellable(),
+            ))
+        }
+        try {
+            AgentRunUiState.showSession(sessionA)
+            waiterA.start()
+            val requestA = runBlocking {
+                withTimeout(10_000) {
+                    AgentRunUiState.state.first { it.headerMascotAnimationRequest?.sessionId == sessionA }
+                        .headerMascotAnimationRequest!!
+                }
+            }
+            assertNull(AgentRunUiState.snapshotForSession(sessionB).headerMascotAnimationRequest)
+            AgentRunUiState.completeHeaderMascotAnimationRequest(sessionA, requestA.requestId, "finished")
+            waiterA.join()
+            assertEquals(requestA.requestId, resultA.get().requestId)
+            assertEquals("finished", resultA.get().outcome)
+
+            waiterB.start()
+            val requestB = runBlocking {
+                withTimeout(10_000) {
+                    var request: HeaderMascotAnimationRequest? = null
+                    while (request == null) {
+                        request = AgentRunUiState.snapshotForSession(sessionB).headerMascotAnimationRequest
+                        if (request == null) delay(1)
+                    }
+                    request!!
+                }
+            }
+            assertNull(AgentRunUiState.snapshotForSession(sessionA).headerMascotAnimationRequest)
+            assertEquals(sessionA, AgentRunUiState.state.value.sessionId)
+            assertNull(AgentRunUiState.state.value.headerMascotAnimationRequest)
+            AgentRunUiState.showSession(sessionB)
+            val publishedRequestB = runBlocking {
+                withTimeout(10_000) {
+                    AgentRunUiState.state.first { it.headerMascotAnimationRequest?.requestId == requestB.requestId }
+                        .headerMascotAnimationRequest!!
+                }
+            }
+            assertEquals(requestB, publishedRequestB)
+            AgentRunUiState.completeHeaderMascotAnimationRequest(sessionB, requestB.requestId, "finished")
+            waiterB.join()
+            assertEquals(requestB.requestId, resultB.get().requestId)
+            assertEquals("finished", resultB.get().outcome)
+        } finally {
+            AgentRunUiState.stopPendingGeneration(sessionA, generationA)
+            AgentRunUiState.stopPendingGeneration(sessionB, generationB)
+            waiterA.join()
+            waiterB.join()
+            UserDecisionUiAvailability.setChatVisible(false)
+            AgentRunUiState.resetSession("mascot-session-cleanup")
         }
     }
 

@@ -932,7 +932,8 @@ object AgentRunUiState {
 
     @JvmStatic
     fun ownsGeneration(sessionId: String, generation: Long): Boolean = inSession(sessionId) { synchronized(lock) {
-        _state.value.sessionId == sessionId && ownedSessionId == sessionId && activeGeneration == generation
+        _state.value.sessionId == sessionId && ownedRunActive && ownedSessionId == sessionId
+            && activeGeneration == generation
     } }
 
     @JvmStatic
@@ -995,14 +996,16 @@ object AgentRunUiState {
         animationId: String,
         token: CancellationToken,
     ): HeaderMascotAnimationResult {
-        val pending = synchronized(lock) {
+        val pending = inSession(sessionId) { synchronized(lock) {
             val current = _state.value
             if (!UserDecisionUiAvailability.isChatVisible() || current.sessionId != sessionId || !current.running
                 || current.interactiveOwnerSessionId != sessionId) {
                 return HeaderMascotAnimationResult(animationId, "rejected", "The active main chat is not available.")
             }
-            val executionId = current.liveRunIdentity
-                ?.takeIf { ownedRunActive && ownedSessionId == sessionId }
+            val runOwner = sessionOwners[sessionId]
+                ?.takeIf { it.active && it.sessionId == sessionId }
+            val executionId = runOwner?.let { "$sessionId:${it.generation}" }
+                ?.takeIf { current.liveRunIdentity == it }
                 ?: return HeaderMascotAnimationResult(animationId, "rejected", "The active main chat run is not available.")
             current.headerMascotAvailability.failure(animationId)?.let { reason ->
                 return HeaderMascotAnimationResult(animationId, "rejected", reason)
@@ -1024,7 +1027,7 @@ object AgentRunUiState {
             }
             pendingRequest.waiters++
             pendingRequest
-        }
+        } }
 
         val waiterReleased = AtomicBoolean(false)
         fun releaseWaiter(cancelled: Boolean) {
@@ -1089,18 +1092,10 @@ object AgentRunUiState {
 
     private fun resolveHeaderMascotAnimationLocked(request: HeaderMascotAnimationRequest, outcome: String, reason: String?) {
         val result = HeaderMascotAnimationResult(request.animationId, outcome, reason, request.requestId)
-        val current = _state.value
-        val matchesCurrent = current.sessionId == request.sessionId
-            && current.headerMascotAnimationRequest?.requestId == request.requestId
-        if (matchesCurrent) {
-            val updated = current.copy(headerMascotAnimationRequest = null, headerMascotAnimationResult = result)
-            _state.value = updated
-            if (ownedRunActive && ownedSessionId == request.sessionId) ownedLiveSnapshot = updated
-        } else {
-            val owned = ownedLiveSnapshot
-            if (owned?.sessionId == request.sessionId
-                && owned.headerMascotAnimationRequest?.requestId == request.requestId) {
-                ownedLiveSnapshot = owned.copy(headerMascotAnimationRequest = null, headerMascotAnimationResult = result)
+        inSession(request.sessionId) {
+            val current = _state.value
+            if (current.headerMascotAnimationRequest?.requestId == request.requestId) {
+                _state.value = current.copy(headerMascotAnimationRequest = null, headerMascotAnimationResult = result)
             }
         }
         pendingHeaderMascotAnimations.remove(request.requestId)?.completion?.complete(result)
