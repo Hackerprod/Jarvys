@@ -139,6 +139,7 @@ val prepareApkFactoryTemplate by tasks.registering {
     }
 }
 android.sourceSets.getByName("main").assets.srcDir(factoryAssets)
+android.sourceSets["test"].assets.srcDir("$projectDir/schemas")
 tasks.configureEach {
     if ((name.startsWith("merge") && name.endsWith("Assets")) || name.startsWith("lintAnalyze") ||
         name.startsWith("lintVitalAnalyze") || name.endsWith("LintVitalReportModel") ||
