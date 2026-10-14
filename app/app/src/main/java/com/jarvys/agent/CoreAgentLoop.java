@@ -606,7 +606,7 @@ public final class CoreAgentLoop {
             while (true) {
                 token.throwIfCancelled();
                 List<ToolSpec> declarations = tools.declarations();
-                if (drainTurnContext(transcript)) {
+                if (drainTurnContext(transcript, false, listener, null, "")) {
                     requestInTranscript = true;
                     modelHasInput = true;
                 }
@@ -616,7 +616,7 @@ public final class CoreAgentLoop {
                     initialUserMessageReported = true;
                 }
                 if (!modelHasInput) {
-                    if (drainTurnContext(transcript, true)) {
+                    if (drainTurnContext(transcript, true, listener, null, "")) {
                         requestInTranscript = true;
                         modelHasInput = true;
                         prompt = "";
@@ -713,7 +713,7 @@ public final class CoreAgentLoop {
                         }
                         transcript.add(ConversationTurn.assistantReply("", reply.providerOutputItems));
                         updateTranscriptSnapshot(transcript);
-                        if (drainTurnContext(transcript, true)) {
+                        if (drainTurnContext(transcript, true, listener, null, "")) {
                             requestInTranscript = true;
                             modelHasInput = true;
                             prompt = "";

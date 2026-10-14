@@ -402,7 +402,7 @@ class MainAgentInteractionTest {
             assertEquals(listOf("initial request", "picked but not incorporated"), observedGoals)
             assertEquals(1, observedGoals.count { it == "picked but not incorporated" })
             val messages = store.readConversationMessages(session)
-            assertFalse("The duplicate recovery must not write a spurious FAILED row", messages.any {
+            assertFalse("The duplicate recovery must not write a spurious FAILED row: $messages", messages.any {
                 it.optString("role") == "assistant" && it.optString("status") == "FAILED"
                     && it.optString("userMessageId") == steeringId.get()
             })

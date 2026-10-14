@@ -396,6 +396,7 @@ public final class AgentForegroundService extends Service {
     synchronized (INTERRUPT_ADMISSION_LOCK) {
       List<org.json.JSONObject> currentPending = onlySessionId == null
           ? store.readPendingInterruptRequests() : store.readPendingInterruptRequests(onlySessionId);
+      if (!StopController.getInstance().isStopped()) return;
       if (currentPending.isEmpty() || !FOLLOW_UP_CLAIMS.isEmpty()) return;
       sessionId = currentPending.get(0).optString("sessionId", onlySessionId == null ? "" : onlySessionId);
       for (org.json.JSONObject request : currentPending) {
