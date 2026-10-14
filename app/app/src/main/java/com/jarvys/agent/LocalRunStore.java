@@ -2669,8 +2669,8 @@ public final class LocalRunStore {
         List<AgentRunUiEvent> events = projectConversationTimeline(sessionId, rows, rowOffsets, newerInvalidations);
         Set<String> translationMessageIds = new HashSet<>();
         for (AgentRunUiEvent event : events) {
-            if ("assistant_translation".equals(event.kind) && event.detail != null && !event.detail.isEmpty())
-                translationMessageIds.add(event.detail);
+            if ("assistant_translation".equals(event.getKind()) && event.getDetail() != null && !event.getDetail().isEmpty())
+                translationMessageIds.add(event.getDetail());
         }
         Set<String> invalidatedToolTurnMessageIds = new HashSet<>(newerInvalidations);
         for (JSONObject row : rows) {
