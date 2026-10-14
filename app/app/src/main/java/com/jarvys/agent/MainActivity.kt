@@ -2236,16 +2236,16 @@ private fun JarvysApp(
                                 workspaceOlderHistoryRequestSerial = requestSerial
                                 workspaceOlderHistoryLoading = true
                                 workspaceOlderHistoryLoadError = false
-                                historyExecutor.execute {
+                                scope.launch(Dispatchers.IO) {
                                     val page = runCatching {
-                                        localRunStore.readConversationTimelinePage(
+                                        LocalRunStore(context).readConversationTimelinePage(
                                             sessionId, cursor, LocalRunStore.OLDER_TIMELINE_TURNS,
                                             state.invalidatedToolTurnMessageIds, state.projectionMarkers)
                                     }.getOrNull()
-                                    runOnUiThread {
+                                    withContext(Dispatchers.Main) {
                                         if (requestSerial != workspaceOlderHistoryRequestSerial
                                             || !workspaceChatActive || routeWorkspaceId != state.workspaceId
-                                            || workspaceChatState.value?.executionSessionId != sessionId) return@runOnUiThread
+                                            || workspaceChatState.value?.executionSessionId != sessionId) return@withContext
                                         if (page != null) {
                                             AgentRunUiState.prependPersistedSession(
                                                 sessionId, page.events,
